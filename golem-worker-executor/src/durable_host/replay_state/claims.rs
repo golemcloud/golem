@@ -1,7 +1,44 @@
 use super::*;
+use crate::durable_host::tool::operation::OwnerToolOperation;
+use golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal;
+
+pub(super) type AdmissionRefusal = (OwnerToolOperation, String);
+
+pub(super) fn matching_admission_refusal(
+    admission: Option<&AdmissionRefusal>,
+    claim: &StartClaim,
+) -> Result<Option<(SerializableToolAdmissionRefusal, OplogIndex)>, WorkerExecutorError> {
+    let Some((operation, initiating_function)) = admission else {
+        return Ok(None);
+    };
+    let Some((expected, terminal_index)) = operation.expected_admission_refusal() else {
+        return Ok(None);
+    };
+    let matches = match &expected {
+        SerializableToolAdmissionRefusal::BeforeStart {
+            initiating_function: function,
+            claim: encoded,
+        } => {
+            function == initiating_function
+                && desert_rust::deserialize::<StartClaim>(encoded).map_err(|error| {
+                    WorkerExecutorError::runtime(format!(
+                        "invalid recorded admission claim: {error}"
+                    ))
+                })? == *claim
+        }
+        SerializableToolAdmissionRefusal::AtRecordedOplogEntry { .. }
+        | SerializableToolAdmissionRefusal::BeforePositional { .. }
+        | SerializableToolAdmissionRefusal::BeforeInputRead { .. }
+        | SerializableToolAdmissionRefusal::BeforeAttachmentDisposal { .. } => false,
+    };
+    Ok(
+        (matches || operation.observed_admission_refusal().is_some())
+            .then_some((expected, terminal_index)),
+    )
+}
 
 /// Whether a claimed `Start` records a durable call or opens a durable scope.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, desert_rust::BinaryCodec)]
 pub(crate) enum StartKind {
     /// A durable call `Start`, which carries a request.
     Call,
@@ -17,7 +54,7 @@ pub(crate) enum StartKind {
 /// several `Start`s with the same function name, such as the retries of one request or the chunks
 /// of one stream; they are recorded one after another, so they are claimed in oplog order. The
 /// durable function type, the parent `Start` and the observational owner must match as well.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, desert_rust::BinaryCodec)]
 pub(crate) struct StartClaim {
     function_name: HostFunctionName,
     /// The function of the `Start` a tool invocation records when it rejects the call before
@@ -213,19 +250,69 @@ pub(crate) enum ReplayStartClaimOutcome {
 }
 
 impl ReplayState {
+    /// Retires a claimed incomplete call without recording cancellation or advancing replay.
+    pub(crate) async fn retire_incomplete_admission_claim(
+        &self,
+        start_index: OplogIndex,
+    ) -> Result<bool, WorkerExecutorError> {
+        self.run_owned_cursor_op(move |state| async move {
+            if state.has_visible_terminal(start_index).await {
+                return Ok(false);
+            }
+            let mut st = state.cursor.state.lock().await;
+            if st.skipped_regions.is_in_deleted_region(start_index)
+                || !st.concurrent_resolver.has_claim(start_index)
+            {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "claimed incomplete admission Start",
+                    format!("Start {start_index} is deleted or has no pending resolver"),
+                ));
+            }
+            st.concurrent_resolver.unregister_incomplete(start_index);
+            drop(st);
+            state.cursor.progress.notify_waiters();
+            Ok(true)
+        })
+        .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn has_unclaimed_start_before(
+        &self,
+        claim: StartClaim,
+        terminal_index: OplogIndex,
+    ) -> Result<bool, WorkerExecutorError> {
+        self.run_owned_cursor_op(move |state| async move {
+            state
+                .cursor
+                .state
+                .lock()
+                .await
+                .has_unclaimed_start_before(&state.cursor, &claim, terminal_index)
+                .await
+        })
+        .await
+    }
+
     /// Waits until a blocked claim may run again.
-    async fn wait_while_blocked(
+    pub(super) async fn wait_while_blocked(
         &self,
         blocked: BlockedOn,
         progress: std::pin::Pin<&mut tokio::sync::futures::Notified<'_>>,
-    ) {
+    ) -> Result<(), WorkerExecutorError> {
         #[cfg(test)]
         if matches!(blocked, BlockedOn::ActiveBody(_)) {
             self.cursor
                 .active_body_waits
                 .send_modify(|waits| *waits += 1);
         }
-        blocked.wait(progress).await
+        tokio::select! {
+            biased;
+            failure = self.cursor.owner_tool_operations.wait_for_owner_failure() => {
+                Err(super::cursor::historical_reconstruction_owner_failure(failure))
+            }
+            _ = blocked.wait(progress) => Ok(()),
+        }
     }
 
     /// Runs a [`StartClaim`] as an owned cursor operation: acquire a cursor transaction, claim
@@ -264,8 +351,8 @@ impl ReplayState {
     /// Claims a recorded `Start`, reports that the same cursor transaction observed replay already
     /// ended, or identifies a matching `Start` removed by a replay jump. A missing match while an
     /// active entity body owns the cursor head waits for that body or for cursor progress (see
-    /// [`CursorTx::active_body_owning_head`]); every other missing match while replay is active
-    /// remains strict divergence.
+    /// [`CursorTx::active_body_owning_head`]); any other missing match is decided by
+    /// [`CursorTx::decide_missing_start`].
     pub(crate) async fn claim_start_or_replay_end(
         &self,
         claim: StartClaim,
@@ -297,6 +384,17 @@ impl ReplayState {
         store_live: bool,
         on_claim: impl Fn(OplogIndex, &OplogEntry) + Clone + Send + Sync + 'static,
     ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
+        self.claim_start_for_store_with_admission(claim, store_live, on_claim, None)
+            .await
+    }
+
+    pub(crate) async fn claim_start_for_store_with_admission(
+        &self,
+        claim: StartClaim,
+        store_live: bool,
+        on_claim: impl Fn(OplogIndex, &OplogEntry) + Clone + Send + Sync + 'static,
+        admission: Option<AdmissionRefusal>,
+    ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
         enum Missing {
             ReplayEnded,
             DeletedRegion,
@@ -309,6 +407,7 @@ impl ReplayState {
 
             let owned_claim = claim.clone();
             let on_claim = on_claim.clone();
+            let admission = admission.clone();
             let (claimed, blocked, missing) = self
                 .run_owned_cursor_op(move |state| async move {
                     let gated = async |tx: &mut super::cursor::CursorTx<'_>| {
@@ -339,11 +438,12 @@ impl ReplayState {
                                         Ok((None, Some(BlockedOn::CursorProgress), None))
                                     }
                                     Some(_) => Ok((None, None, Some(Missing::DeletedRegion))),
-                                    None => Err(WorkerExecutorError::unexpected_oplog_entry(
-                                        owned_claim.expected_description(),
-                                        "no matching Start between the replay cursor and the replay target"
-                                            .to_string(),
-                                    )),
+                                    None => match tx.decide_missing_start(&owned_claim).await? {
+                                        MissingStart::ReplayEnded => {
+                                            Ok((None, None, Some(Missing::ReplayEnded)))
+                                        }
+                                        MissingStart::Blocked(on) => Ok((None, Some(on), None)),
+                                    },
                                 }
                             }
                             Ok(StartClaimAttempt::MissingSettling { .. }) => unreachable!(
@@ -353,8 +453,9 @@ impl ReplayState {
                         }
                     };
                     state
-                        .with_claim_tx(
+                        .with_claim_tx_admission(
                             &owned_claim,
+                            admission.as_ref(),
                             |handle, entry| {
                                 on_claim(handle.start_idx(), &entry);
                                 (Some((handle, entry)), None, None)
@@ -382,7 +483,7 @@ impl ReplayState {
                 blocked.expect("an undecided Start claim is blocked"),
                 progress,
             )
-            .await;
+            .await?;
         }
     }
 
@@ -594,7 +695,7 @@ impl ReplayState {
                     debug_assert!(recover_missing);
                     return Ok(ScopeStartClaimOutcome::MissingSettling { replay_target });
                 }
-                StartClaimAttempt::Blocked(on) => self.wait_while_blocked(on, progress).await,
+                StartClaimAttempt::Blocked(on) => self.wait_while_blocked(on, progress).await?,
             }
         }
     }

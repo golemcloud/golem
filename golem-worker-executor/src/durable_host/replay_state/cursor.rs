@@ -1,6 +1,12 @@
-use super::claims::StartClaim;
+use super::claims::{AdmissionRefusal, StartClaim, matching_admission_refusal};
 use super::*;
 use crate::durable_host::PositionalRead;
+use crate::durable_host::tool::operation::OwnerToolOperation;
+use golem_common::model::oplog::payload::types::{
+    SerializableToolAdmissionRefusal, SerializableToolPositionalRequest,
+};
+
+type PositionalAdmission = (OwnerToolOperation, SerializableToolPositionalRequest);
 
 impl ReplayCursor {
     fn begin_settling(&self) {
@@ -274,6 +280,9 @@ impl RetainedClaims<'_> {
                 retained.terminal.map(|(terminal_idx, _)| terminal_idx),
             );
             self.publish_deferred_events(retained.deferred_events);
+            if let Some(wallet) = &self.cursor.wallet {
+                wallet.finish_replayed_entity(idx);
+            }
         }
         self.publish_retained_count();
         self.st.custom_subtrees.insert(root, members);
@@ -293,6 +302,17 @@ impl CursorTx<'_> {
     }
 
     fn retain_start(&mut self, idx: OplogIndex, entry: OplogEntry) {
+        if matches!(
+            &entry,
+            OplogEntry::Start {
+                function_name: HostFunctionName::GolemEntityInvoke
+                    | HostFunctionName::GolemToolInvocationRejected,
+                ..
+            }
+        ) && let Some(wallet) = &self.cursor.wallet
+        {
+            wallet.register_replayed_entity(idx);
+        }
         self.st.retained_starts.insert(
             idx,
             RetainedStart {
@@ -361,6 +381,9 @@ impl CursorTx<'_> {
                 unreachable!("only Start entries are retained");
             };
             abandoned.record_start(idx, function_name.clone(), *parent_start_index);
+            if let Some(wallet) = &self.cursor.wallet {
+                wallet.finish_replayed_entity(idx);
+            }
             if let Some((terminal_idx, terminal)) = &retained.terminal {
                 abandoned.record_terminal(idx, *terminal_idx, terminal_kind(terminal))?;
             }
@@ -442,10 +465,10 @@ impl RetainedClaims<'_> {
             .await?;
         Ok(result.map(|(mut handle, entry)| {
             if claim.is_reconstruction_claim() {
-                let reconstruction = self
-                    .st
-                    .concurrent_resolver
-                    .register_reconstruction(handle.start_idx());
+                let reconstruction = self.st.concurrent_resolver.register_reconstruction(
+                    handle.start_idx(),
+                    self.cursor.wallet.as_ref().map(Arc::downgrade),
+                );
                 handle.attach_historical_reconstruction(reconstruction);
             }
             if claim.is_custom_invocation() {
@@ -527,7 +550,19 @@ impl CursorTx<'_> {
     /// Drops retained `Start`s (and detaches retained terminals and deferred replay events) that
     /// `deleted` now hides.
     fn prune_retained_starts(&mut self, mut deleted: impl FnMut(OplogIndex) -> bool) {
-        self.st.retained_starts.retain(|idx, _| !deleted(*idx));
+        if let Some(wallet) = &self.cursor.wallet {
+            wallet.prune_entity_prefixes(&mut deleted);
+        }
+        self.st.retained_starts.retain(|idx, _| {
+            if deleted(*idx) {
+                if let Some(wallet) = &self.cursor.wallet {
+                    wallet.finish_replayed_entity(*idx);
+                }
+                false
+            } else {
+                true
+            }
+        });
         for retained in self.st.retained_starts.values_mut() {
             if retained
                 .terminal
@@ -824,6 +859,9 @@ impl CursorTx<'_> {
                 // calls are observational records only: consume their Starts without registering
                 // resolver awaiters or waiting for terminals.
                 self.commit_consumed_entry(read_idx, &entry).await?;
+                if let Some(wallet) = &self.cursor.wallet {
+                    wallet.finish_replayed_entity(read_idx);
+                }
                 self.st
                     .custom_subtrees
                     .get_mut(&root)
@@ -842,6 +880,9 @@ impl CursorTx<'_> {
                 // Nested calls, scopes, and custom invocations therefore belong to the same replay-
                 // inert tree through their ordinary parent identity, irrespective of interleaving.
                 self.commit_consumed_entry(read_idx, &entry).await?;
+                if let Some(wallet) = &self.cursor.wallet {
+                    wallet.finish_replayed_entity(read_idx);
+                }
                 self.st
                     .custom_subtrees
                     .get_mut(&root)
@@ -1015,6 +1056,7 @@ impl CursorTx<'_> {
         HeadDrainFacts {
             claimed_ahead: self.st.claimed_starts.contains(&index),
             awaited_terminal: self.is_awaited_terminal(index, entry),
+            guest_observation: self.is_stream_observation(index),
         }
     }
 
@@ -1061,6 +1103,216 @@ impl CursorTx<'_> {
         missing_start_waits_for(head_body, claiming_body, claim_is_live).map(|_| bodies)
     }
 
+    /// Decides a `Start` claim that found no matching `Start` before the replay target while the
+    /// cursor replays, after [`Self::active_body_owning_head`] found no active body that owns the
+    /// head.
+    ///
+    /// A crash prefix can hold the `Start` of one concurrent guest call and not the `Start` of
+    /// another: guest calls reserve their invocation ids in guest call order, but append their
+    /// `Start`s in host scheduling order. On replay the call without a `Start` can reach its claim
+    /// before its sibling claims the recorded one, so a sibling's unclaimed `Start` at the head is
+    /// not evidence of divergence. Like every reader that must make progress, the claim neither
+    /// consumes nor waits on such a `Start`: the cursor retains it for its owner's claim, and a
+    /// retained `Start` that nobody claims is reported at the invocation end. Which records the
+    /// claim moves past is decided by [`Self::sibling_record_at_head`], so that the decision is
+    /// the same whether or not the sibling has already claimed its own records.
+    ///
+    /// The claim is decided against the entry the cursor stops at: the replay target ends replay,
+    /// a delivery boundary, an entry of an active body, or an entry of the body of a retained
+    /// entity invocation waits for its owner, and anything else is divergence. A `Start` recorded
+    /// with the claim's own invocation id belongs to the claiming guest call itself, so it is
+    /// divergence before the cursor moves.
+    pub(super) async fn decide_missing_start(
+        &mut self,
+        claim: &StartClaim,
+    ) -> Result<MissingStart, WorkerExecutorError> {
+        if let Some(invocation_id) = claim.expected_invocation_id()
+            && self.unclaimed_start_with_invocation_id(invocation_id).await
+        {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                claim.expected_description(),
+                "no matching Start; a Start with the same invocation id exists but does not match"
+                    .to_string(),
+            ));
+        }
+
+        loop {
+            self.try_get_oplog_entry_leaving_unclaimed_starts(|_| false)
+                .await?;
+            if self.cursor.is_live() {
+                return Ok(MissingStart::ReplayEnded);
+            }
+            if self.blocked_on_completion_delivery {
+                return Ok(MissingStart::Blocked(BlockedOn::CursorProgress));
+            }
+            match self.sibling_record_at_head().await {
+                SiblingRecord::Retain(index, entry) => {
+                    self.retain_start(index, entry.clone());
+                    self.commit_retained_entry(index, &entry).await?;
+                }
+                SiblingRecord::BodyOfRetainedInvocation => {
+                    return Ok(MissingStart::Blocked(BlockedOn::CursorProgress));
+                }
+                SiblingRecord::None => break,
+            }
+        }
+        match self.active_body_owning_head(
+            self.buffered_head_owner(),
+            claim.expected_parent_start_index(),
+        ) {
+            Some(bodies) => Ok(MissingStart::Blocked(BlockedOn::ActiveBody(bodies))),
+            None => Err(WorkerExecutorError::unexpected_oplog_entry(
+                claim.expected_description(),
+                "no matching Start between the replay cursor and the replay target".to_string(),
+            )),
+        }
+    }
+
+    /// Classifies the entry buffered at the cursor head for [`Self::decide_missing_start`], as
+    /// its owner would treat it once it claimed the records it owns:
+    ///
+    /// - a top-level `Start` recorded under an invocation id belongs to a guest call, and is
+    ///   retained;
+    /// - a `Start` under a retained or claimed `Start` with the same invocation id belongs to the
+    ///   same guest call (the call of a scope, the child of a host call, a tool invocation of the
+    ///   import that dispatched it), and is retained;
+    /// - a record in the subtree of a retained custom invocation, through retained parents and
+    ///   observational owners, is retained: the custom invocation adopts its retained subtree
+    ///   when it is claimed;
+    /// - a record of the body of a retained entity invocation waits: that body consumes it once
+    ///   its invocation is claimed;
+    /// - anything else is not a sibling's record.
+    async fn sibling_record_at_head(&self) -> SiblingRecord {
+        let next = self.cursor.last_replayed_index().next();
+        let Some((index, entry)) = self.st.replay_buffer.front() else {
+            return SiblingRecord::None;
+        };
+        if *index != next || self.st.claimed_starts.contains(index) {
+            return SiblingRecord::None;
+        }
+        let retained = |index: &OplogIndex| self.st.retained_starts.get(index).map(|r| &r.entry);
+        let owner = match head_owner(entry) {
+            HeadOwner::EntityBody(owner) | HeadOwner::ParentStart(owner) => Some(owner),
+            HeadOwner::Agent | HeadOwner::Unattributed => None,
+        };
+        if owner
+            .and_then(|owner| retained(&owner))
+            .is_some_and(is_entity_invocation_start)
+        {
+            return SiblingRecord::BodyOfRetainedInvocation;
+        }
+        if !Self::is_retainable_start(entry) {
+            return SiblingRecord::None;
+        }
+        let OplogEntry::Start {
+            invocation_id,
+            parent_start_index,
+            observational_owner,
+            ..
+        } = entry
+        else {
+            return SiblingRecord::None;
+        };
+        let retain =
+            if self.under_retained_custom_invocation(*parent_start_index, *observational_owner) {
+                true
+            } else if observational_owner.is_some() {
+                false
+            } else {
+                match (invocation_id, parent_start_index) {
+                    (Some(_), None) => true,
+                    (_, Some(parent)) => match retained(parent) {
+                        Some(parent) => {
+                            invocation_id.is_some() && start_invocation_id(parent) == *invocation_id
+                        }
+                        None => {
+                            invocation_id.is_some()
+                                && self.st.concurrent_resolver.has_claim(*parent)
+                                && start_invocation_id(&self.cursor.oplog.read(*parent).await)
+                                    == *invocation_id
+                        }
+                    },
+                    (None, None) => false,
+                }
+            };
+        if retain {
+            SiblingRecord::Retain(*index, entry.clone())
+        } else {
+            SiblingRecord::None
+        }
+    }
+
+    /// Whether a record with `parent` and `observer` lies in the subtree of a retained custom
+    /// invocation, through retained parents and observers, as the custom invocation adopts its
+    /// retained subtree when it is claimed (`register_custom_subtree_root`).
+    fn under_retained_custom_invocation(
+        &self,
+        parent: Option<OplogIndex>,
+        observer: Option<OplogIndex>,
+    ) -> bool {
+        let mut ancestors: Vec<OplogIndex> = parent.into_iter().chain(observer).collect();
+        while let Some(index) = ancestors.pop() {
+            let Some(retained) = self.st.retained_starts.get(&index) else {
+                continue;
+            };
+            if is_custom_invocation_start(&retained.entry) {
+                return true;
+            }
+            if let OplogEntry::Start {
+                parent_start_index,
+                observational_owner,
+                ..
+            } = &retained.entry
+            {
+                ancestors.extend(
+                    parent_start_index
+                        .iter()
+                        .chain(observational_owner)
+                        .filter(|ancestor| **ancestor < index),
+                );
+            }
+        }
+        false
+    }
+
+    /// Whether a `Start` nobody has claimed yet carries `invocation_id`: a retained one, or one
+    /// between the cursor and the replay target.
+    async fn unclaimed_start_with_invocation_id(&self, invocation_id: DurableInvocationId) -> bool {
+        let carries_id = |entry: &OplogEntry| match entry {
+            OplogEntry::Start {
+                invocation_id: Some(recorded),
+                ..
+            } => *recorded == invocation_id,
+            _ => false,
+        };
+        if self
+            .st
+            .retained_starts
+            .values()
+            .any(|retained| carries_id(&retained.entry))
+        {
+            return true;
+        }
+        let start = self.cursor.last_replayed_index().next();
+        let claimed = &self.st.claimed_starts;
+        matches!(
+            self.cursor
+                .scan_oplog(
+                    start,
+                    self.cursor.replay_target().next(),
+                    &self.st.skipped_regions,
+                    self.st.skipped_regions.find_next_deleted_region(start),
+                    OplogIndex::NONE,
+                    |entry, _, index: &OplogIndex| carries_id(entry) && !claimed.contains(index),
+                    |_, _, _| true,
+                    OplogIndex::NONE,
+                    |_, index, state| *state = index,
+                )
+                .await,
+            OplogEntryLookupResult::Found { .. }
+        )
+    }
+
     /// Whether `entry` is an `End`/`Cancelled` whose `start_index` currently has a registered
     /// resolver awaiter (and is therefore an *awaited terminal* the cursor auto-drains to its owner
     /// rather than handing to a positional reader).
@@ -1096,17 +1348,7 @@ impl CursorTx<'_> {
     }
 
     fn is_stream_observation(&self, index: OplogIndex) -> bool {
-        self.cursor
-            .stream_observations
-            .lock()
-            .unwrap()
-            .get(&index)
-            .is_some_and(|parent| {
-                parent.is_none_or(|parent| {
-                    !self.st.skipped_regions.is_in_deleted_region(parent)
-                        && self.custom_subtree_root(parent).is_none()
-                })
-            })
+        is_active_stream_observation(self.cursor, &self.st, index)
     }
 
     /// Commits a just-read entry: apply its commit-only side effects, publish the cursor advance,
@@ -1280,14 +1522,51 @@ impl CursorTx<'_> {
         read_idx: OplogIndex,
         oplog_entry: &OplogEntry,
     ) -> Result<(), WorkerExecutorError> {
+        if let Some(wallet) = &self.cursor.wallet {
+            if let Some(parent) = oplog_entry.entity_parent_start_index() {
+                // Hints can precede even the claim of their future entity Start. Validate the
+                // exact reference before retaining its prefix; a released claim cannot recreate it.
+                if wallet.entity_replay_wallet(parent).is_err()
+                    && !self.st.claimed_starts.contains(&parent)
+                    && self.custom_subtree_root(parent).is_none()
+                    && self
+                        .future_entity_start_can_be_claimed(read_idx, parent)
+                        .await
+                {
+                    wallet.register_replayed_entity(parent);
+                }
+                wallet.capture_entity_prefix(parent);
+            }
+            if matches!(
+                oplog_entry,
+                OplogEntry::Start {
+                    function_name: HostFunctionName::GolemEntityInvoke
+                        | HostFunctionName::GolemToolInvocationRejected,
+                    ..
+                }
+            ) {
+                wallet.capture_entity_prefix(read_idx);
+            }
+        }
+        {
+            let mut attachments = self.cursor.tool_attachment_reconstruction.lock().unwrap();
+            if let Some(control) = attachments.history.controls.get(&read_idx) {
+                let attachment = control.attachment;
+                attachments.crossed_controls.insert(read_idx);
+                attachments.refresh_controller(attachment)?;
+            }
+        }
         // record side effects that need to be applied at the next opportunity
         if let OplogEntry::SuccessfulUpdate {
             target_revision, ..
         } = oplog_entry
         {
-            self.record_replay_event(ReplayEvent::UpdateReplayed {
-                new_revision: *target_revision,
-            });
+            self.record_wallet_replay_event(
+                read_idx,
+                ReplayEvent::UpdateReplayed {
+                    new_revision: *target_revision,
+                },
+            );
         }
         // The sequential adapter persists GolemApiFork as a matched
         // `Start { function_name: GolemApiFork, .. }` + `End { response: Some(..), .. }`
@@ -1296,29 +1575,48 @@ impl CursorTx<'_> {
         // if necessary.
         match oplog_entry {
             OplogEntry::AgentInvocationStarted { wallet_pin, .. } => {
-                self.record_replay_event(ReplayEvent::InvocationWalletPinned {
-                    wallet_pin: wallet_pin.as_ref().clone(),
-                });
+                self.record_wallet_replay_event(
+                    read_idx,
+                    ReplayEvent::InvocationWalletPinned {
+                        oplog_index: read_idx,
+                        wallet_pin: wallet_pin.as_ref().clone(),
+                    },
+                );
             }
             OplogEntry::CardInstalled {
                 card,
                 wallet_generation,
                 ..
             } => {
-                self.record_replay_event(ReplayEvent::CardInstalled {
-                    card: card.as_ref().clone(),
-                    wallet_generation: *wallet_generation,
-                });
+                self.record_wallet_replay_event(
+                    read_idx,
+                    ReplayEvent::CardInstalled {
+                        card: card.as_ref().clone(),
+                        wallet_generation: *wallet_generation,
+                    },
+                );
             }
             OplogEntry::CardDerived {
                 card,
                 wallet_generation,
+                entity_parent_start_index,
                 ..
             } => {
-                self.record_replay_event(ReplayEvent::CardDerived {
-                    card: card.as_ref().clone(),
-                    wallet_generation: *wallet_generation,
-                });
+                self.record_wallet_replay_event(
+                    read_idx,
+                    ReplayEvent::CardDerived {
+                        card: card.as_ref().clone(),
+                        wallet_generation: *wallet_generation,
+                    },
+                );
+                if let Some(wallet) = &self.cursor.wallet {
+                    wallet.record_derivation(*entity_parent_start_index, card.as_ref().clone())?;
+                }
+            }
+            OplogEntry::AgentInvocationFinished { .. } => {
+                if let Some(wallet) = &self.cursor.wallet {
+                    wallet.finish_replayed_invocation();
+                }
             }
             OplogEntry::CardTransferStarted {
                 transfer_id,
@@ -1328,13 +1626,16 @@ impl CursorTx<'_> {
                 source_wallet_generation,
                 ..
             } => {
-                self.record_replay_event(ReplayEvent::CardTransferStarted {
-                    transfer_id: *transfer_id,
-                    card_id: *card_id,
-                    source_holder: source_holder.clone(),
-                    target_holder: target_holder.clone(),
-                    source_wallet_generation: *source_wallet_generation,
-                });
+                self.record_wallet_replay_event(
+                    read_idx,
+                    ReplayEvent::CardTransferStarted {
+                        transfer_id: *transfer_id,
+                        card_id: *card_id,
+                        source_holder: source_holder.clone(),
+                        target_holder: target_holder.clone(),
+                        source_wallet_generation: *source_wallet_generation,
+                    },
+                );
             }
             OplogEntry::CardTransferred {
                 transfer_id,
@@ -1345,14 +1646,17 @@ impl CursorTx<'_> {
                 target_wallet_generation,
                 ..
             } => {
-                self.record_replay_event(ReplayEvent::CardTransferred {
-                    transfer_id: *transfer_id,
-                    source_card_id: *source_card_id,
-                    installed_card_id: *installed_card_id,
-                    target_holder: target_holder.clone(),
-                    card: card.as_ref().clone(),
-                    target_wallet_generation: *target_wallet_generation,
-                });
+                self.record_wallet_replay_event(
+                    read_idx,
+                    ReplayEvent::CardTransferred {
+                        transfer_id: *transfer_id,
+                        source_card_id: *source_card_id,
+                        installed_card_id: *installed_card_id,
+                        target_holder: target_holder.clone(),
+                        card: card.as_ref().clone(),
+                        target_wallet_generation: *target_wallet_generation,
+                    },
+                );
             }
             OplogEntry::CardTransferConfirmed {
                 transfer_id,
@@ -1361,42 +1665,54 @@ impl CursorTx<'_> {
                 target_holder,
                 ..
             } => {
-                self.record_replay_event(ReplayEvent::CardTransferConfirmed {
-                    transfer_id: *transfer_id,
-                    source_card_id: *source_card_id,
-                    installed_card_id: *installed_card_id,
-                    target_holder: target_holder.clone(),
-                });
+                self.record_wallet_replay_event(
+                    read_idx,
+                    ReplayEvent::CardTransferConfirmed {
+                        transfer_id: *transfer_id,
+                        source_card_id: *source_card_id,
+                        installed_card_id: *installed_card_id,
+                        target_holder: target_holder.clone(),
+                    },
+                );
             }
             OplogEntry::CardRevokedCascade {
                 revoked_card_ids,
                 local_wallet_generation,
                 ..
             } => {
-                self.record_replay_event(ReplayEvent::CardRevokedCascade {
-                    card_ids: revoked_card_ids.clone(),
-                    local_wallet_generation: *local_wallet_generation,
-                });
+                self.record_wallet_replay_event(
+                    read_idx,
+                    ReplayEvent::CardRevokedCascade {
+                        card_ids: revoked_card_ids.clone(),
+                        local_wallet_generation: *local_wallet_generation,
+                    },
+                );
             }
             OplogEntry::CardRevoked {
                 card_id,
                 wallet_generation,
                 ..
             } => {
-                self.record_replay_event(ReplayEvent::CardRevoked {
-                    card_id: *card_id,
-                    wallet_generation: *wallet_generation,
-                });
+                self.record_wallet_replay_event(
+                    read_idx,
+                    ReplayEvent::CardRevoked {
+                        card_id: *card_id,
+                        wallet_generation: *wallet_generation,
+                    },
+                );
             }
             OplogEntry::CardExpired {
                 card_id,
                 wallet_generation,
                 ..
             } => {
-                self.record_replay_event(ReplayEvent::CardExpired {
-                    card_id: *card_id,
-                    wallet_generation: *wallet_generation,
-                });
+                self.record_wallet_replay_event(
+                    read_idx,
+                    ReplayEvent::CardExpired {
+                        card_id: *card_id,
+                        wallet_generation: *wallet_generation,
+                    },
+                );
             }
             OplogEntry::Start { function_name, .. }
                 if function_name == &HostFunctionName::GolemApiFork =>
@@ -1464,6 +1780,11 @@ impl CursorTx<'_> {
         let was_replay = self.cursor.is_replay();
         self.cursor.position.last_replayed_index.set(new_idx);
         self.get_out_of_skipped_region().await;
+        if self.cursor.is_live()
+            && let Some(wallet) = &self.cursor.wallet
+        {
+            wallet.finish_replay_prefix();
+        }
         if was_replay && self.cursor.is_live() {
             self.record_replay_event(ReplayEvent::ReplayFinished);
         }
@@ -1525,24 +1846,30 @@ impl CursorTx<'_> {
                 .read_exact(next, CHUNK_SIZE.min(remaining))
                 .await;
             let last_read = *entries.last_key_value().unwrap().0;
-            for entry in entries.into_values() {
+            for (index, entry) in entries {
                 match entry {
                     OplogEntry::CardInstalled {
                         card,
                         wallet_generation,
                         ..
-                    } => self.record_replay_event(ReplayEvent::CardInstalled {
-                        card: *card,
-                        wallet_generation,
-                    }),
+                    } => self.record_wallet_replay_event(
+                        index,
+                        ReplayEvent::CardInstalled {
+                            card: *card,
+                            wallet_generation,
+                        },
+                    ),
                     OplogEntry::CardDerived {
                         card,
                         wallet_generation,
                         ..
-                    } => self.record_replay_event(ReplayEvent::CardDerived {
-                        card: *card,
-                        wallet_generation,
-                    }),
+                    } => self.record_wallet_replay_event(
+                        index,
+                        ReplayEvent::CardDerived {
+                            card: *card,
+                            wallet_generation,
+                        },
+                    ),
                     OplogEntry::CardTransferStarted {
                         transfer_id,
                         card_id,
@@ -1550,13 +1877,16 @@ impl CursorTx<'_> {
                         target_holder,
                         source_wallet_generation,
                         ..
-                    } => self.record_replay_event(ReplayEvent::CardTransferStarted {
-                        transfer_id,
-                        card_id,
-                        source_holder,
-                        target_holder,
-                        source_wallet_generation,
-                    }),
+                    } => self.record_wallet_replay_event(
+                        index,
+                        ReplayEvent::CardTransferStarted {
+                            transfer_id,
+                            card_id,
+                            source_holder,
+                            target_holder,
+                            source_wallet_generation,
+                        },
+                    ),
                     OplogEntry::CardTransferred {
                         transfer_id,
                         source_card_id,
@@ -1565,50 +1895,65 @@ impl CursorTx<'_> {
                         card,
                         target_wallet_generation,
                         ..
-                    } => self.record_replay_event(ReplayEvent::CardTransferred {
-                        transfer_id,
-                        source_card_id,
-                        installed_card_id,
-                        target_holder,
-                        card: *card,
-                        target_wallet_generation,
-                    }),
+                    } => self.record_wallet_replay_event(
+                        index,
+                        ReplayEvent::CardTransferred {
+                            transfer_id,
+                            source_card_id,
+                            installed_card_id,
+                            target_holder,
+                            card: *card,
+                            target_wallet_generation,
+                        },
+                    ),
                     OplogEntry::CardTransferConfirmed {
                         transfer_id,
                         source_card_id,
                         installed_card_id,
                         target_holder,
                         ..
-                    } => self.record_replay_event(ReplayEvent::CardTransferConfirmed {
-                        transfer_id,
-                        source_card_id,
-                        installed_card_id,
-                        target_holder,
-                    }),
+                    } => self.record_wallet_replay_event(
+                        index,
+                        ReplayEvent::CardTransferConfirmed {
+                            transfer_id,
+                            source_card_id,
+                            installed_card_id,
+                            target_holder,
+                        },
+                    ),
                     OplogEntry::CardRevokedCascade {
                         revoked_card_ids,
                         local_wallet_generation,
                         ..
-                    } => self.record_replay_event(ReplayEvent::CardRevokedCascade {
-                        card_ids: revoked_card_ids,
-                        local_wallet_generation,
-                    }),
+                    } => self.record_wallet_replay_event(
+                        index,
+                        ReplayEvent::CardRevokedCascade {
+                            card_ids: revoked_card_ids,
+                            local_wallet_generation,
+                        },
+                    ),
                     OplogEntry::CardRevoked {
                         card_id,
                         wallet_generation,
                         ..
-                    } => self.record_replay_event(ReplayEvent::CardRevoked {
-                        card_id,
-                        wallet_generation,
-                    }),
+                    } => self.record_wallet_replay_event(
+                        index,
+                        ReplayEvent::CardRevoked {
+                            card_id,
+                            wallet_generation,
+                        },
+                    ),
                     OplogEntry::CardExpired {
                         card_id,
                         wallet_generation,
                         ..
-                    } => self.record_replay_event(ReplayEvent::CardExpired {
-                        card_id,
-                        wallet_generation,
-                    }),
+                    } => self.record_wallet_replay_event(
+                        index,
+                        ReplayEvent::CardExpired {
+                            card_id,
+                            wallet_generation,
+                        },
+                    ),
                     _ => {}
                 }
             }
@@ -1690,6 +2035,17 @@ impl CursorTx<'_> {
     /// retained `Start` is being committed past on its owner's behalf, the event is deferred to
     /// that `Start` instead (see [`RetainedStart::deferred_events`]); `ReplayFinished` describes
     /// the cursor rather than an entry and is never deferred.
+    fn record_wallet_replay_event(&mut self, index: OplogIndex, event: ReplayEvent) {
+        let event = match &self.cursor.wallet {
+            Some(owner) => ReplayEvent::Projected {
+                receipt: owner.reserve_replay_event(index, &event),
+                event: Box::new(event),
+            },
+            None => event,
+        };
+        self.record_replay_event(event);
+    }
+
     pub(super) fn record_replay_event(&mut self, event: ReplayEvent) {
         if let Some((start_idx, entry_idx)) = self.retaining_for
             && !matches!(event, ReplayEvent::ReplayFinished)
@@ -1804,6 +2160,89 @@ impl RetainedClaims<'_> {
         }
         *self.notify_progress = true;
         Ok(ReplayCallHandle::new(start_idx, receiver))
+    }
+}
+
+impl CursorState {
+    async fn positional_admission_refusal(
+        &self,
+        cursor: &ReplayCursor,
+        scope: Option<OplogIndex>,
+        admission: Option<&PositionalAdmission>,
+    ) -> Option<SerializableToolAdmissionRefusal> {
+        let (operation, request) = admission?;
+        let owner = scope?;
+        let (expected, terminal_index) = operation.expected_admission_refusal()?;
+        if expected != (SerializableToolAdmissionRefusal::BeforePositional { request: *request })
+            && operation.observed_admission_refusal().is_none()
+        {
+            return None;
+        }
+        let next = cursor.last_replayed_index().next();
+        let end = terminal_index.min(cursor.replay_target().next());
+        let remaining = cursor
+            .scan_oplog(
+                next,
+                end,
+                &self.skipped_regions,
+                self.skipped_regions.find_next_deleted_region(next),
+                OplogIndex::NONE,
+                |entry, _, _| {
+                    positional_reader_accepts(Some(owner))(entry)
+                        && !entry.is_hint()
+                        && !matches!(entry, OplogEntry::End { .. } | OplogEntry::Cancelled { .. })
+                },
+                |_, _, _| true,
+                (),
+                |_, _, _| {},
+            )
+            .await;
+        // Any earlier positional record wins, including a different kind that must still
+        // produce ordinary positional divergence rather than being hidden by the refusal.
+        matches!(remaining, OplogEntryLookupResult::NotFound { .. }).then_some(expected)
+    }
+
+    /// Probes for a remaining claim without consuming delivery or observation boundaries.
+    /// Admission-refusal replay must prefer every recorded occurrence of an identical call,
+    /// including an occurrence whose normal claim is currently blocked on another task.
+    pub(super) async fn has_unclaimed_start_before(
+        &self,
+        cursor: &ReplayCursor,
+        claim: &StartClaim,
+        terminal_index: OplogIndex,
+    ) -> Result<bool, WorkerExecutorError> {
+        for (index, retained) in &self.retained_starts {
+            if *index < terminal_index
+                && !self.skipped_regions.is_in_deleted_region(*index)
+                && claim.matches_start_identity(&retained.entry)
+            {
+                return Ok(true);
+            }
+        }
+        let end = terminal_index.min(cursor.replay_target().next());
+        let next = cursor.last_replayed_index().next();
+        if next < end {
+            let candidate = cursor
+                .scan_oplog(
+                    next,
+                    end,
+                    &self.skipped_regions,
+                    self.skipped_regions.find_next_deleted_region(next),
+                    OplogIndex::NONE,
+                    |entry, _, index: &OplogIndex| {
+                        !self.claimed_starts.contains(index) && claim.matches_start_identity(entry)
+                    },
+                    |_, _, _| true,
+                    OplogIndex::NONE,
+                    |_, index, current| *current = index,
+                )
+                .await;
+            match candidate {
+                OplogEntryLookupResult::Found { .. } => return Ok(true),
+                OplogEntryLookupResult::NotFound { .. } => {}
+            }
+        }
+        Ok(false)
     }
 }
 
@@ -1978,10 +2417,10 @@ impl CursorTx<'_> {
             other => return Ok(other),
         };
         if claim.is_reconstruction_claim() {
-            let reconstruction = self
-                .st
-                .concurrent_resolver
-                .register_reconstruction(handle.start_idx());
+            let reconstruction = self.st.concurrent_resolver.register_reconstruction(
+                handle.start_idx(),
+                self.cursor.wallet.as_ref().map(Arc::downgrade),
+            );
             handle.attach_historical_reconstruction(reconstruction);
         }
         if claim.is_custom_invocation() {
@@ -2107,6 +2546,9 @@ impl CursorTx<'_> {
             ));
         }
 
+        // The permitted suffix still contains committed wallet hints. Consume it through the
+        // normal cursor so reconstruction observes them before the missing scope becomes live.
+        while self.try_get_oplog_entry(|_| true).await?.is_some() {}
         self.cursor.begin_settling();
         Ok(StartClaimAttempt::MissingSettling { replay_target })
     }
@@ -2244,27 +2686,569 @@ impl CursorTx<'_> {
 }
 
 impl ReplayState {
+    /// Finds the original logical input and its retained boundary's native read attempt.
+    pub(crate) fn tool_attachment_observation(
+        &self,
+        attachment: golem_common::model::oplog::attachment::ToolAttachmentId,
+        invocation: &golem_common::model::IdempotencyKey,
+        ordinal: u64,
+    ) -> Option<(OplogIndex, Option<(OplogIndex, u64)>)> {
+        let index = self.cursor.tool_attachment_reconstruction.lock().unwrap();
+        let (original, boundary) = index
+            .logical_observations
+            .get(&(attachment, invocation.clone(), ordinal))
+            .copied()?;
+        Some((
+            original,
+            boundary.map(|boundary| {
+                (
+                    boundary,
+                    index.history.observations[&boundary].read_attempt_ordinal,
+                )
+            }),
+        ))
+    }
+
+    /// Downloads the original body while retaining the requested boundary's observation metadata.
+    pub(crate) async fn hydrate_tool_attachment_observation(
+        &self,
+        mut source: OplogIndex,
+        max_bytes: u64,
+    ) -> Result<
+        (
+            OplogIndex,
+            golem_common::model::oplog::attachment::ToolAttachmentReadObservation,
+            Option<Vec<u8>>,
+        ),
+        WorkerExecutorError,
+    > {
+        let requested_index = source;
+        let (requested_read, read) = {
+            let index = self.cursor.tool_attachment_reconstruction.lock().unwrap();
+            let history = &index.history;
+            let read = history
+                .observations
+                .get(&source)
+                .ok_or_else(|| WorkerExecutorError::runtime("missing attachment observation"))?;
+            history.validate_read(source, read).map_err(|error| {
+                WorkerExecutorError::runtime(format!("invalid attachment observation: {error:?}"))
+            })?;
+            while let Some(original) = history.observations[&source].reobserves {
+                source = original;
+            }
+            use golem_common::model::oplog::attachment::ToolAttachmentReadOutcome;
+            let length = match history.observations[&source].outcome {
+                ToolAttachmentReadOutcome::TypedChunk(end) => history.writes[&end.0]
+                    .accepted_length
+                    .expect("validated acceptance"),
+                ToolAttachmentReadOutcome::RawBytes { length, .. } => length,
+                _ => 0,
+            };
+            if length > max_bytes {
+                return Err(WorkerExecutorError::runtime(
+                    "recorded attachment observation exceeds its hydration capacity",
+                ));
+            }
+            (read.clone(), history.observations[&source].clone())
+        };
+        let entries = self.cursor.oplog.read_exact(source, 1).await;
+        let Some(OplogEntry::ToolAttachmentRead {
+            observation,
+            payload,
+            ..
+        }) = entries.get(&source)
+        else {
+            return Err(WorkerExecutorError::runtime(
+                "missing original attachment entry",
+            ));
+        };
+        if observation.as_ref() != &read {
+            return Err(WorkerExecutorError::runtime(
+                "changed attachment observation",
+            ));
+        }
+        let bytes = match payload {
+            Some(payload) => Some(
+                self.cursor
+                    .oplog
+                    .download_payload(payload.clone())
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?,
+            ),
+            None => None,
+        };
+        // Re-read acceptance after the download: a Jump can remove it while hydration awaits.
+        let current = self.cursor.tool_attachment_reconstruction.lock().unwrap();
+        if current.history.observations.get(&source) != Some(&read)
+            || current.history.observations.get(&requested_index) != Some(&requested_read)
+        {
+            return Err(WorkerExecutorError::runtime(
+                "attachment observation outside replay target",
+            ));
+        }
+        current
+            .history
+            .validate_read_payload(source, &read, bytes.as_deref())
+            .map_err(|error| {
+                WorkerExecutorError::runtime(format!("invalid attachment body: {error:?}"))
+            })?;
+        if let golem_common::model::oplog::attachment::ToolAttachmentReadOutcome::TypedChunk(end) =
+            read.outcome
+        {
+            let write = &current.history.writes[&end.0];
+            let request = current.requests.get(&write.start).ok_or_else(|| {
+                WorkerExecutorError::runtime("missing accepted attachment write request")
+            })?;
+            if !request.matches_input(bytes.as_deref().expect("validated typed payload")) {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "attachment body matching the accepted write digest",
+                    format!("attachment observation at {source} differs from its accepted write"),
+                ));
+            }
+        }
+        drop(current);
+        let bytes = bytes.map(|bytes| bytes.into_boxed_slice().into_vec());
+        Ok((source, requested_read, bytes))
+    }
+
+    pub(crate) fn historical_tool_attachment_write(
+        &self,
+        request: &golem_common::model::oplog::payload::tool_attachment::ToolAttachmentWriteRequest,
+    ) -> Result<Option<super::HistoricalAttachmentWrite>, WorkerExecutorError> {
+        use golem_common::model::oplog::attachment::{
+            AcceptedAttachmentWriteEnd, ToolAttachmentReadOutcome,
+        };
+
+        let index = self.cursor.tool_attachment_reconstruction.lock().unwrap();
+        let Some(start) = index
+            .accepted_by_operation
+            .get(&(request.attachment, request.operation_ordinal))
+        else {
+            return Ok(None);
+        };
+        let start = start.ok_or_else(|| {
+            WorkerExecutorError::unexpected_oplog_entry(
+                "one retained acceptance for an attachment operation",
+                "multiple accepted writes share an attachment operation ordinal",
+            )
+        })?;
+        if index.requests.get(&start) != Some(request) {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "regenerated attachment argument matching its retained request",
+                format!("attachment write differs from Start at {start}"),
+            ));
+        }
+        let end = AcceptedAttachmentWriteEnd(index.accepted[&start]);
+        let original_typed_read = index
+            .source_observations
+            .get(&end.0)
+            .into_iter()
+            .flatten()
+            .find(|read| {
+                index.history.observations[read].outcome
+                    == ToolAttachmentReadOutcome::TypedChunk(end)
+            })
+            .copied();
+        Ok(Some(super::HistoricalAttachmentWrite {
+            start,
+            end,
+            original_typed_read,
+        }))
+    }
+
+    pub(crate) fn deferred_tool_attachment_body(
+        &self,
+        read: OplogIndex,
+        expected: golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd,
+    ) -> impl std::future::Future<Output = anyhow::Result<Vec<u8>>> + Send + 'static {
+        let cursor = std::sync::Arc::downgrade(&self.cursor);
+        async move {
+            let replay = Self {
+                cursor: cursor
+                    .upgrade()
+                    .ok_or_else(|| anyhow::anyhow!("attachment replay owner no longer exists"))?,
+            };
+            let max_bytes = replay
+                .cursor
+                .tool_attachment_reconstruction
+                .lock()
+                .unwrap()
+                .history
+                .writes
+                .get(&expected.0)
+                .and_then(|write| write.accepted_length)
+                .ok_or_else(|| anyhow::anyhow!("attachment backing has no accepted length"))?;
+            let (_, observation, bytes) = replay
+                .hydrate_tool_attachment_observation(read, max_bytes)
+                .await?;
+            anyhow::ensure!(
+                observation.outcome == golem_common::model::oplog::attachment::ToolAttachmentReadOutcome::TypedChunk(expected),
+                "attachment backing changed its accepted write"
+            );
+            bytes.ok_or_else(|| anyhow::anyhow!("attachment backing has no body"))
+        }
+    }
+
+    pub(crate) fn accepted_tool_attachment_write_end(
+        &self,
+        start: OplogIndex,
+    ) -> Result<
+        golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd,
+        WorkerExecutorError,
+    > {
+        self.cursor
+            .tool_attachment_reconstruction
+            .lock()
+            .unwrap()
+            .accepted
+            .get(&start)
+            .copied()
+            .map(golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd)
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime(format!(
+                    "tool attachment write at {start} has no retained acceptance"
+                ))
+            })
+    }
+
+    pub(crate) fn selected_tool_attachment_terminal_end(
+        &self,
+        start: OplogIndex,
+        attachment: golem_common::model::oplog::attachment::ToolAttachmentId,
+        terminal: &golem_common::model::oplog::attachment::ToolAttachmentTerminal,
+    ) -> Result<OplogIndex, WorkerExecutorError> {
+        use golem_common::model::oplog::attachment::ToolAttachmentControl;
+
+        let index = self.cursor.tool_attachment_reconstruction.lock().unwrap();
+        index
+            .history
+            .controls
+            .iter()
+            .find_map(|(end, control)| {
+                (control.retained
+                    && control.producer_start == Some(start)
+                    && control.attachment == attachment
+                    && matches!(&control.transition,
+                        ToolAttachmentControl::TerminalSelected(selected) if selected == terminal))
+                .then_some(*end)
+            })
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime(format!(
+                    "tool attachment terminal at {start} has no matching retained selection"
+                ))
+            })
+    }
+
+    pub(crate) fn has_restorable_tool_attachment_terminal(
+        &self,
+        attachment: golem_common::model::oplog::attachment::ToolAttachmentId,
+    ) -> bool {
+        let index = self.cursor.tool_attachment_reconstruction.lock().unwrap();
+        index
+            .controls_by_attachment
+            .get(&attachment)
+            .into_iter()
+            .flatten()
+            .any(|end| {
+                matches!(
+                    index.history.controls[end].transition,
+                    golem_common::model::oplog::attachment::ToolAttachmentControl::TerminalSelected(
+                        _
+                    )
+                )
+            })
+    }
+
+    /// Restores a retained terminal only after its boundary is crossed. An absent terminal
+    /// can be repaired only at the natural tail, after all historical producers have run.
+    pub(crate) async fn await_tool_attachment_terminal(
+        &self,
+        attachment: golem_common::model::oplog::attachment::ToolAttachmentId,
+    ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
+        let terminal = {
+            let index = self.cursor.tool_attachment_reconstruction.lock().unwrap();
+            index.history.controls.iter().find_map(|(end, control)| {
+                (control.retained && control.attachment == attachment
+                    && matches!(control.transition,
+                        golem_common::model::oplog::attachment::ToolAttachmentControl::TerminalSelected(_)))
+                    .then_some(*end)
+            })
+        };
+        let Some(terminal) = terminal else {
+            self.await_natural_tail_end(None).await?;
+            return Ok(None);
+        };
+        loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+            self.run_owned_cursor_op(move |state| async move {
+                state
+                    .with_tx(async |tx| {
+                        tx.try_get_oplog_entry(|_| false).await?;
+                        Ok(())
+                    })
+                    .await
+            })
+            .await?;
+            if self.last_replayed_index() >= terminal {
+                return Ok(Some(terminal));
+            }
+            progress.await;
+        }
+    }
+
+    pub(crate) fn prepare_tool_attachment_range_validation(
+        &self,
+        source: golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd,
+        bytes: &[u8],
+    ) -> Result<Vec<super::AttachmentRangeValidation>, WorkerExecutorError> {
+        use golem_common::model::oplog::attachment::ToolAttachmentReadOutcome;
+        let index = self.cursor.tool_attachment_reconstruction.lock().unwrap();
+        let write = index
+            .history
+            .writes
+            .get(&source.0)
+            .ok_or_else(|| WorkerExecutorError::runtime("missing accepted attachment write"))?;
+        let request = index.requests.get(&write.start).ok_or_else(|| {
+            WorkerExecutorError::runtime("missing accepted attachment write request")
+        })?;
+        if !write.retained || !request.matches_input(bytes) {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "regenerated attachment bytes matching the retained accepted write",
+                format!(
+                    "regenerated attachment differs from accepted write at {}",
+                    source.0
+                ),
+            ));
+        }
+        let mut validations = Vec::new();
+        for read_index in index
+            .source_observations
+            .get(&source.0)
+            .into_iter()
+            .flatten()
+        {
+            let read = &index.history.observations[read_index];
+            let ToolAttachmentReadOutcome::RawBytes { offset, length, .. } = read.outcome else {
+                continue;
+            };
+            let range = usize::try_from(offset)
+                .ok()
+                .zip(usize::try_from(length).ok())
+                .and_then(|(offset, length)| {
+                    offset
+                        .checked_add(length)
+                        .and_then(|end| bytes.get(offset..end))
+                })
+                .ok_or_else(|| {
+                    WorkerExecutorError::runtime(
+                        "attachment observation exceeds regenerated source",
+                    )
+                })?;
+            validations.push(super::AttachmentRangeValidation {
+                index: *read_index,
+                observation: read.clone(),
+                digest: *blake3::hash(range).as_bytes(),
+            });
+        }
+        Ok(validations)
+    }
+
+    pub(crate) async fn validate_tool_attachment_ranges(
+        &self,
+        validations: Vec<super::AttachmentRangeValidation>,
+    ) -> Result<(), WorkerExecutorError> {
+        for validation in validations {
+            let _slot = self
+                .cursor
+                .attachment_validation_slot
+                .acquire()
+                .await
+                .expect("attachment validation slot is never closed");
+            let golem_common::model::oplog::attachment::ToolAttachmentReadOutcome::RawBytes {
+                length,
+                ..
+            } = validation.observation.outcome
+            else {
+                unreachable!("only raw ranges require deferred validation")
+            };
+            let (_, read, payload) = self
+                .hydrate_tool_attachment_observation(validation.index, length)
+                .await?;
+            if read != validation.observation
+                || payload
+                    .as_deref()
+                    .is_none_or(|bytes| blake3::hash(bytes).as_bytes() != &validation.digest)
+            {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "recorded attachment bytes equal regenerated source range",
+                    format!(
+                        "attachment observation at {} differs from regenerated source",
+                        validation.index
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn validate_tool_attachment_regenerated_bytes(
+        &self,
+        source: golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd,
+        bytes: &[u8],
+    ) -> Result<(), WorkerExecutorError> {
+        let validations = self.prepare_tool_attachment_range_validation(source, bytes)?;
+        self.validate_tool_attachment_ranges(validations).await
+    }
+
+    /// Prefetched terminals identify outcomes, but do not authorize their resident effects.
+    pub(crate) async fn await_tool_attachment_acceptance(
+        &self,
+        start: OplogIndex,
+    ) -> Result<
+        golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd,
+        WorkerExecutorError,
+    > {
+        loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+            let end = self.accepted_tool_attachment_write_end(start)?;
+            if self.last_replayed_index() >= end.0 {
+                return Ok(end);
+            }
+            self.run_owned_cursor_op(move |state| async move {
+                state
+                    .with_tx(async |tx| {
+                        tx.try_get_oplog_entry(|_| false).await?;
+                        Ok(())
+                    })
+                    .await
+            })
+            .await?;
+            if self.last_replayed_index() >= end.0 {
+                return Ok(end);
+            }
+            progress.await;
+        }
+    }
+
+    pub(crate) fn register_tool_attachment(
+        &self,
+        identity: golem_common::model::oplog::attachment::ToolAttachmentId,
+        controller: &crate::durable_host::tool::attachment::AttachmentController,
+    ) -> Result<(), WorkerExecutorError> {
+        let mut attachments = self.cursor.tool_attachment_reconstruction.lock().unwrap();
+        attachments
+            .resident
+            .insert(identity, controller.downgrade());
+        attachments.refresh_controller(identity)
+    }
+
+    pub(crate) fn has_open_tool_attachments(&self) -> bool {
+        let attachments = self.cursor.tool_attachment_reconstruction.lock().unwrap();
+        attachments
+            .resident
+            .values()
+            .filter_map(|controller| controller.upgrade())
+            .any(|controller| controller.has_open_endpoints())
+            || attachments
+                .pending_writes
+                .values()
+                .any(|writes| !writes.is_empty())
+    }
+
+    /// Marks an accepted output write's regenerated arguments validated and its resident
+    /// output restored. This must precede the write's acknowledgment delivery gate.
+    pub fn complete_tool_attachment_reconstruction(
+        &self,
+        start: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        let mut attachments = self.cursor.tool_attachment_reconstruction.lock().unwrap();
+        if let Some(end) = attachments.accepted.get(&start).copied() {
+            attachments.completed.insert(start);
+            let identity = attachments.history.writes[&end].attachment;
+            if let Some(pending) = attachments.pending_writes.get_mut(&identity) {
+                pending.remove(&end);
+            }
+            attachments.refresh_controller(identity)?;
+        }
+        drop(attachments);
+        self.cursor.progress.notify_waiters();
+        Ok(())
+    }
+
+    /// Waits for retained accepted output writes beneath the root, including unclaimed
+    /// Starts and descendants through durable scopes and nested entity bodies.
+    pub async fn await_tool_attachment_reconstruction(
+        &self,
+        root: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+            if let Some(failure) = self.cursor.delivery_failure.lock().unwrap().clone() {
+                return Err(WorkerExecutorError::runtime(failure));
+            }
+            if let Some(failure) = self.cursor.owner_tool_operations.selected_owner_failure() {
+                return Err(historical_reconstruction_owner_failure(failure));
+            }
+            if !self
+                .cursor
+                .tool_attachment_reconstruction
+                .lock()
+                .unwrap()
+                .pending_under(root)
+            {
+                return Ok(());
+            }
+            tokio::select! {
+                biased;
+                failure = self.cursor.owner_tool_operations.wait_for_owner_failure() => {
+                    return Err(historical_reconstruction_owner_failure(failure));
+                }
+                _ = progress => {}
+            }
+        }
+    }
+
     pub(crate) async fn new_for_owner(
         owned_agent_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
         skipped_regions: DeletedRegions,
         initial_snapshot_skip_end: Option<OplogIndex>,
         owner_tool_operations: Arc<crate::durable_host::tool::operation::OwnerToolOperations>,
+        last_oplog_index: OplogIndex,
+        wallet: Option<Arc<crate::worker::owner_wallet::OwnerWallet>>,
     ) -> Result<Self, WorkerExecutorError> {
         let next_skipped_region = skipped_regions.find_next_deleted_region(OplogIndex::NONE);
-        let last_oplog_index = oplog.current_oplog_index().await;
+        let mut tool_attachment_reconstruction = ToolAttachmentReconstruction::default();
+        let metadata_floor = recovery_metadata_floor(&skipped_regions, initial_snapshot_skip_end);
         let (completion_markers, stream_observations) = Self::scan_completion_markers(
             &oplog,
-            OplogIndex::INITIAL,
+            metadata_floor,
             last_oplog_index,
             &skipped_regions,
+            &mut tool_attachment_reconstruction,
         )
         .await?;
+        crate::metrics::workers::record_replay_metadata_scan(
+            if metadata_floor == OplogIndex::INITIAL {
+                "initial"
+            } else {
+                "snapshot"
+            },
+            (last_oplog_index.as_u64() + 1).saturating_sub(metadata_floor.as_u64()),
+        );
         let concurrent_resolver = ConcurrentReplayResolver::default();
         let reconstruction_claims = concurrent_resolver.reconstruction_claims();
         let cursor = ReplayCursor {
             owned_agent_id,
             oplog,
+            wallet,
             owner_tool_operations,
             advance_gate: Arc::new(tokio::sync::Mutex::new(())),
             delivery_failure: std::sync::Mutex::new(None),
@@ -2291,6 +3275,8 @@ impl ReplayState {
             unclaimed_retained_starts: RetainedStartCounts::default(),
             reconstruction_claims,
             completion_markers: std::sync::Mutex::new(completion_markers),
+            tool_attachment_reconstruction: std::sync::Mutex::new(tool_attachment_reconstruction),
+            attachment_validation_slot: tokio::sync::Semaphore::new(1),
             log_hashes: std::sync::Mutex::new(HashMap::new()),
             pending_replay_events: std::sync::Mutex::new(Vec::new()),
             progress: Notify::new(),
@@ -2324,6 +3310,7 @@ impl ReplayState {
         from: OplogIndex,
         to: OplogIndex,
         skipped_regions: &DeletedRegions,
+        attachments: &mut ToolAttachmentReconstruction,
     ) -> Result<(CompletionMarkers, StreamObservationPositions), WorkerExecutorError> {
         const CHUNK_SIZE: u64 = 1024;
         let mut markers = HashMap::new();
@@ -2337,15 +3324,236 @@ impl ReplayState {
                 if marker_idx > to {
                     break;
                 }
-                if skipped_regions.is_in_deleted_region(marker_idx) {
+                if let OplogEntry::ToolAttachmentRead {
+                    observation,
+                    payload,
+                    ..
+                } = &entry
+                {
+                    observation
+                        .validate_payload_presence(payload.is_some())
+                        .map_err(|error| {
+                            WorkerExecutorError::runtime(format!(
+                                "invalid attachment payload at {marker_idx}: {error:?}"
+                            ))
+                        })?;
+                    attachments
+                        .history
+                        .observations
+                        .insert(marker_idx, *observation.clone());
+                }
+                if skipped_regions.is_in_deleted_region(marker_idx)
+                    && !matches!(
+                        entry,
+                        OplogEntry::Start { .. }
+                            | OplogEntry::End { .. }
+                            | OplogEntry::ToolAttachmentControl { .. }
+                    )
+                {
                     continue;
                 }
                 let marker = match entry {
+                    OplogEntry::Start {
+                        function_name,
+                        parent_start_index,
+                        observational_owner,
+                        invocation_id,
+                        request,
+                        ..
+                    } => {
+                        let attachment_write = matches!(
+                            function_name,
+                            HostFunctionName::GolemToolOutputWrite
+                                | HostFunctionName::GolemToolStdinWrite
+                        );
+                        if attachment_write {
+                            let request = request.ok_or_else(|| {
+                                WorkerExecutorError::runtime("output write Start has no request")
+                            })?;
+                            let request = oplog
+                                .download_payload(request)
+                                .await
+                                .map_err(WorkerExecutorError::runtime)?;
+                            let request = golem_common::model::oplog::HostRequestToolAttachmentWrite::try_from(request)
+                                .map_err(WorkerExecutorError::runtime)?;
+                            attachments.requests.insert(marker_idx, request.request);
+                        } else if matches!(
+                            function_name,
+                            HostFunctionName::GolemToolOutputFinish
+                                | HostFunctionName::GolemToolStdinFinish
+                                | HostFunctionName::GolemToolOutputFail
+                                | HostFunctionName::GolemToolStdinFail
+                        ) {
+                            let request = request.ok_or_else(|| {
+                                WorkerExecutorError::runtime(
+                                    "attachment terminal Start has no request",
+                                )
+                            })?;
+                            let request = oplog
+                                .download_payload(request)
+                                .await
+                                .map_err(WorkerExecutorError::runtime)?;
+                            let attachment = if matches!(
+                                function_name,
+                                HostFunctionName::GolemToolOutputFail
+                                    | HostFunctionName::GolemToolStdinFail
+                            ) {
+                                golem_common::model::oplog::HostRequestToolAttachmentFail::try_from(
+                                    request,
+                                )
+                                .map_err(WorkerExecutorError::runtime)?
+                                .attachment
+                            } else {
+                                golem_common::model::oplog::HostRequestToolAttachmentFinish::try_from(request)
+                                    .map_err(WorkerExecutorError::runtime)?.attachment
+                            };
+                            attachments.terminal_requests.insert(marker_idx, attachment);
+                        }
+                        attachments.starts.insert(
+                            marker_idx,
+                            super::AttachmentStartOwnership {
+                                parent: parent_start_index,
+                                observational_owner,
+                                custom_root: matches!(function_name, HostFunctionName::Custom(_))
+                                    && invocation_id.is_some(),
+                            },
+                        );
+                        None
+                    }
+                    OplogEntry::End {
+                        start_index,
+                        response,
+                        ..
+                    } if attachments.requests.contains_key(&start_index) => {
+                        let response = response.ok_or_else(|| {
+                            WorkerExecutorError::runtime(format!(
+                                "output write End at {marker_idx} has no response"
+                            ))
+                        })?;
+                        let response = oplog
+                            .download_payload(response)
+                            .await
+                            .map_err(WorkerExecutorError::runtime)?;
+                        let response =
+                            golem_common::model::oplog::HostResponseToolAttachmentWrite::try_from(
+                                response,
+                            )
+                            .map_err(WorkerExecutorError::runtime)?;
+                        let request = attachments.requests.get(&start_index).ok_or_else(|| {
+                            WorkerExecutorError::runtime("output write End has no indexed request")
+                        })?;
+                        let metadata = response
+                            .outcome
+                            .metadata(request, start_index, true)
+                            .ok_or_else(|| {
+                                WorkerExecutorError::runtime("invalid output write outcome")
+                            })?;
+                        if request.attachment.creation_start >= start_index
+                            || start_index >= marker_idx
+                            || !request.attachment.creation_start.is_defined()
+                        {
+                            return Err(WorkerExecutorError::runtime(
+                                "invalid output write chronology",
+                            ));
+                        }
+                        attachments.history.writes.insert(marker_idx, metadata);
+                        if response.outcome == golem_common::model::oplog::payload::tool_attachment::ToolAttachmentWriteOutcome::HostResourceExhausted {
+                            use golem_common::model::oplog::attachment::{ToolAttachmentControlMetadata, ToolAttachmentControl, ToolAttachmentTerminal};
+                            attachments.history.controls.insert(marker_idx, ToolAttachmentControlMetadata {
+                                attachment: request.attachment,
+                                producer_start: Some(start_index),
+                                entity_parent_start: None,
+                                transition: ToolAttachmentControl::TerminalSelected(ToolAttachmentTerminal::HostResourceExhausted),
+                                retained: true,
+                            });
+                        }
+                        if matches!(response.outcome, golem_common::model::oplog::payload::tool_attachment::ToolAttachmentWriteOutcome::Accepted) {
+                            let mut ancestor = start_index;
+                            while let Some(parent) = attachments.starts.get(&ancestor).and_then(|ownership| ownership.parent) {
+                                if parent >= ancestor {
+                                    return Err(WorkerExecutorError::runtime(
+                                        "invalid accepted tool output ancestor",
+                                    ));
+                                }
+                                ancestor = parent;
+                            }
+                            attachments.accepted.insert(start_index, marker_idx);
+                        }
+                        None
+                    }
+                    OplogEntry::End {
+                        start_index,
+                        response,
+                        ..
+                    } if attachments.terminal_requests.contains_key(&start_index) => {
+                        use golem_common::model::oplog::attachment::{
+                            ToolAttachmentControl, ToolAttachmentControlMetadata,
+                        };
+                        use golem_common::model::oplog::payload::tool_attachment::ToolAttachmentTerminalOutcome;
+                        let response = response.ok_or_else(|| {
+                            WorkerExecutorError::runtime("attachment terminal End has no response")
+                        })?;
+                        let response = oplog
+                            .download_payload(response)
+                            .await
+                            .map_err(WorkerExecutorError::runtime)?;
+                        let response = golem_common::model::oplog::HostResponseToolAttachmentTerminalResult::try_from(response)
+                            .map_err(WorkerExecutorError::runtime)?;
+                        if let ToolAttachmentTerminalOutcome::Selected(terminal) = response.outcome
+                        {
+                            attachments.history.controls.insert(
+                                marker_idx,
+                                ToolAttachmentControlMetadata {
+                                    attachment: attachments.terminal_requests[&start_index],
+                                    producer_start: Some(start_index),
+                                    entity_parent_start: None,
+                                    transition: ToolAttachmentControl::TerminalSelected(terminal),
+                                    retained: true,
+                                },
+                            );
+                        }
+                        None
+                    }
                     OplogEntry::CompletionDelivered { start_index, .. } => {
                         Some((start_index, CompletionMarker::Delivered(marker_idx)))
                     }
                     OplogEntry::CompletionDiscarded { start_index, .. } => {
                         Some((start_index, CompletionMarker::Discarded(marker_idx)))
+                    }
+                    OplogEntry::ToolAttachmentControl {
+                        attachment,
+                        transition,
+                        entity_parent_start_index,
+                        ..
+                    } => {
+                        attachments.history.controls.insert(
+                            marker_idx,
+                            golem_common::model::oplog::attachment::ToolAttachmentControlMetadata {
+                                attachment,
+                                producer_start: None,
+                                entity_parent_start: entity_parent_start_index,
+                                transition,
+                                retained: true,
+                            },
+                        );
+                        None
+                    }
+                    OplogEntry::ToolAttachmentRead {
+                        observation,
+                        entity_parent_start_index,
+                        ..
+                    } => {
+                        attachments.boundaries.insert(marker_idx);
+                        let parent = match observation.observation {
+                            golem_common::model::durable_stream::StreamConsumerObservation::Guest {
+                                parent_start_index,
+                            } => parent_start_index,
+                            golem_common::model::durable_stream::StreamConsumerObservation::Host => {
+                                entity_parent_start_index
+                            }
+                        };
+                        stream_observations.insert(marker_idx, parent);
+                        None
                     }
                     OplogEntry::StreamSession { record, .. } => {
                         use golem_common::model::durable_stream::{
@@ -2402,6 +3610,15 @@ impl ReplayState {
             }
             next = last_read.next();
         }
+        attachments.history.retain_history(skipped_regions);
+        attachments.retain(|index| !skipped_regions.is_in_deleted_region(index));
+        attachments
+            .history
+            .validate_observations(skipped_regions)
+            .map_err(|error| {
+                WorkerExecutorError::runtime(format!("invalid attachment history: {error:?}"))
+            })?;
+        attachments.index_logical_observations();
         Ok((markers, stream_observations))
     }
 
@@ -2504,6 +3721,17 @@ impl ReplayState {
         on_retained: impl FnOnce(ReplayCallHandle, Box<OplogEntry>) -> R,
         gated: impl AsyncFnOnce(&mut CursorTx<'_>) -> Result<R, WorkerExecutorError>,
     ) -> Result<R, WorkerExecutorError> {
+        self.with_claim_tx_admission(claim, None, on_retained, gated)
+            .await
+    }
+
+    pub(super) async fn with_claim_tx_admission<R>(
+        &self,
+        claim: &StartClaim,
+        admission: Option<&AdmissionRefusal>,
+        on_retained: impl FnOnce(ReplayCallHandle, Box<OplogEntry>) -> R,
+        gated: impl AsyncFnOnce(&mut CursorTx<'_>) -> Result<R, WorkerExecutorError>,
+    ) -> Result<R, WorkerExecutorError> {
         let mut on_retained = Some(on_retained);
         let gate = self.cursor.advance_gate.clone().lock_owned();
         tokio::pin!(gate);
@@ -2517,6 +3745,20 @@ impl ReplayState {
             let mut st = self.cursor.state.lock().await;
             if let Some(failure) = self.cursor.delivery_failure.lock().unwrap().clone() {
                 return Err(WorkerExecutorError::runtime(failure));
+            }
+            if let Some((refusal, terminal_index)) = matching_admission_refusal(admission, claim)?
+                && !st
+                    .has_unclaimed_start_before(&self.cursor, claim, terminal_index)
+                    .await?
+            {
+                drop(st);
+                let error = admission
+                    .unwrap()
+                    .0
+                    .reproduce_admission_refusal(refusal)
+                    .await;
+                self.cursor.progress.notify_waiters();
+                return Err(error);
             }
             let mut notify_progress = false;
             let mut resolved_retained_claim = None;
@@ -2548,6 +3790,21 @@ impl ReplayState {
             }
         };
         let mut tx = self.cursor.tx_with_gate(gate).await?;
+        if let Some((refusal, terminal_index)) = matching_admission_refusal(admission, claim)?
+            && !tx
+                .st
+                .has_unclaimed_start_before(&self.cursor, claim, terminal_index)
+                .await?
+        {
+            self.cursor.finish_tx(tx);
+            let error = admission
+                .unwrap()
+                .0
+                .reproduce_admission_refusal(refusal)
+                .await;
+            self.cursor.progress.notify_waiters();
+            return Err(error);
+        }
         let result = gated(&mut tx).await;
         self.cursor.finish_tx(tx);
         result
@@ -2618,6 +3875,24 @@ impl ReplayState {
             .await
     }
 
+    /// Ends a failed replay without publishing its incomplete authority state for live use.
+    pub(in crate::durable_host) async fn abandon_replay_for_failure(
+        &self,
+    ) -> Result<(), WorkerExecutorError> {
+        self.run_owned_cursor_op(|state| async move {
+            state
+                .with_tx(async |tx| {
+                    if let Some(wallet) = &tx.cursor.wallet {
+                        wallet.retire();
+                    }
+                    tx.switch_to_live();
+                    Ok(())
+                })
+                .await
+        })
+        .await
+    }
+
     pub(super) async fn switch_cursor_to_live(&self) -> Result<OplogIndex, WorkerExecutorError> {
         self.run_owned_cursor_op(|state| async move {
             let replay_target = state
@@ -2683,6 +3958,21 @@ impl ReplayState {
         linear_memory: &crate::services::linear_memory::LinearMemoryTracker,
         role: ReplayToLiveRole,
     ) -> Result<ReplayToLiveOutcome, WorkerExecutorError> {
+        self.run_owned_cursor_op(|state| async move {
+            state
+                .with_tx(async |tx| {
+                    tx.try_get_oplog_entry(|_| false).await?;
+                    if tx.cursor.is_replay() {
+                        return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            "consumed replay prefix before live authority publication",
+                            "unconsumed positional entry or delivery boundary",
+                        ));
+                    }
+                    Ok(())
+                })
+                .await
+        })
+        .await?;
         if role == ReplayToLiveRole::PrimaryAgent {
             let replay_target = self.begin_primary_settling().await?;
             self.finish_settling_to_live(linear_memory, role, replay_target)
@@ -2866,6 +4156,20 @@ impl ReplayState {
                         tx.st.skipped_regions.add(region);
                     }
                     let skipped_regions = tx.st.skipped_regions.clone();
+                    {
+                        let mut attachments =
+                            tx.cursor.tool_attachment_reconstruction.lock().unwrap();
+                        attachments.history.retain_history(&skipped_regions);
+                        attachments
+                            .history
+                            .validate_observations(&skipped_regions)
+                            .map_err(|error| {
+                                WorkerExecutorError::runtime(format!(
+                                    "invalid attachment history after Jump: {error:?}"
+                                ))
+                            })?;
+                        attachments.retain(|index| !skipped_regions.is_in_deleted_region(index));
+                    }
                     tx.cursor
                         .stream_observations
                         .lock()
@@ -2913,7 +4217,7 @@ impl ReplayState {
             .map(|(_, entry)| entry)
     }
 
-    async fn visible_terminal_record(
+    pub(crate) async fn visible_terminal_record(
         &self,
         start_index: OplogIndex,
     ) -> Option<(OplogIndex, OplogEntry)> {
@@ -3033,7 +4337,9 @@ impl ReplayState {
                         if !included {
                             return Ok(None);
                         }
-                        if is_auto_skippable_hint(&entry) {
+                        if is_auto_skippable_hint(&entry)
+                            && !is_active_stream_observation(cursor, &st, index)
+                        {
                             return Ok(None);
                         }
                         if terminal_start_index(&entry).is_some_and(|start_index| {
@@ -3195,6 +4501,11 @@ impl ReplayState {
         let cursor = &*self.cursor;
         self.with_tx(async |tx| {
             let old_target = cursor.replay_target();
+            if new_target != old_target
+                && let Some(wallet) = &cursor.wallet
+            {
+                wallet.reopen_replay_prefix()?;
+            }
             match new_target.cmp(&old_target) {
                 std::cmp::Ordering::Equal => {}
                 std::cmp::Ordering::Less => {
@@ -3206,13 +4517,17 @@ impl ReplayState {
                         .unwrap()
                         .retain(|_, marker| marker.index() <= new_target);
                     cursor.stream_observations.lock().unwrap().retain(|index, _| *index <= new_target);
+                    cursor.tool_attachment_reconstruction.lock().unwrap()
+                        .truncate(new_target);
                 }
                 std::cmp::Ordering::Greater => {
+                    let mut attachments = cursor.tool_attachment_reconstruction.lock().unwrap().clone();
                     let (additions, stream_observations) = Self::scan_completion_markers(
                         &cursor.oplog,
                         old_target.next(),
                         new_target,
                         &tx.st.skipped_regions,
+                        &mut attachments,
                     )
                     .await?;
                     if !additions.is_empty() {
@@ -3237,6 +4552,14 @@ impl ReplayState {
                         markers.extend(additions);
                     }
                     cursor.stream_observations.lock().unwrap().extend(stream_observations);
+                    let mut current = cursor.tool_attachment_reconstruction.lock().unwrap();
+                    current.starts.extend(attachments.starts);
+                    current.accepted.extend(attachments.accepted);
+                    current.requests = attachments.requests;
+                    current.terminal_requests = attachments.terminal_requests;
+                    current.history = attachments.history;
+                    current.boundaries = attachments.boundaries;
+                    current.index_logical_observations();
                 }
             }
             if new_target > cursor.last_replayed_index() {
@@ -3250,6 +4573,11 @@ impl ReplayState {
                     .retain(|event| !matches!(event, ReplayEvent::ReplayFinished));
             }
             cursor.replay_target.set(new_target);
+            if cursor.is_live()
+                && let Some(wallet) = &cursor.wallet
+            {
+                wallet.finish_replay_prefix();
+            }
             if new_target != old_target {
                 tx.notify_progress = true;
             }
@@ -3403,6 +4731,11 @@ impl ReplayState {
             if released.is_empty() {
                 return Ok(());
             }
+            if let Some(wallet) = &state.cursor.wallet {
+                for index in released.keys() {
+                    wallet.finish_replayed_entity(*index);
+                }
+            }
             {
                 let mut pending = state.cursor.pending_replay_events.lock().unwrap();
                 for retained in released.values() {
@@ -3450,15 +4783,36 @@ impl ReplayState {
         self.cursor.is_replay()
     }
 
+    #[cfg(test)]
     pub fn take_new_replay_events(&self) -> Vec<ReplayEvent> {
+        self.take_new_replay_events_for(true)
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) fn test_stage_replay_events(&self, events: Vec<ReplayEvent>) {
+        self.cursor
+            .pending_replay_events
+            .lock()
+            .unwrap()
+            .extend(events);
+    }
+
+    pub(crate) fn take_new_replay_events_for(&self, root: bool) -> Vec<ReplayEvent> {
         let mut pending = self.cursor.pending_replay_events.lock().unwrap();
-        if self.is_live_published() {
+        if root && self.is_live_published() {
             std::mem::take(&mut *pending)
         } else {
             let events = std::mem::take(&mut *pending);
             let mut ready = Vec::with_capacity(events.len());
             for event in events {
-                if matches!(event, ReplayEvent::ReplayFinished) {
+                if matches!(event.kind(), ReplayEvent::ReplayFinished)
+                    || (!root
+                        && matches!(
+                            event.kind(),
+                            ReplayEvent::UpdateReplayed { .. }
+                                | ReplayEvent::InvocationWalletPinned { .. }
+                        ))
+                {
                     pending.push(event);
                 } else {
                     ready.push(event);
@@ -3475,7 +4829,7 @@ impl ReplayState {
             .unwrap()
             .iter()
             .rev()
-            .find_map(|event| match event {
+            .find_map(|event| match event.kind() {
                 ReplayEvent::CardDerived {
                     card,
                     wallet_generation,
@@ -3527,30 +4881,77 @@ impl ReplayState {
     /// Atomically classifies the next positional read as either an entry or the replay tail.
     /// A reserved completion-delivery boundary or another Store's entry at the head is waited out
     /// rather than mistaken for the tail.
-    pub async fn get_oplog_entry_or_replay_end(
+    pub(crate) async fn get_oplog_entry_or_replay_end_with_admission(
         &self,
         scope: Option<OplogIndex>,
+        admission: Option<PositionalAdmission>,
     ) -> Result<PositionalRead, WorkerExecutorError> {
         loop {
             let progress = self.cursor.progress.notified();
             tokio::pin!(progress);
             progress.as_mut().enable();
-            let read = self
-                .with_tx(async |tx| {
-                    let entry = tx
-                        .try_get_oplog_entry(positional_reader_accepts(scope))
-                        .await?;
-                    Ok(match entry {
-                        Some((index, entry)) => Some(PositionalRead::Entry(index, entry)),
-                        None if tx.cursor.is_live() => Some(PositionalRead::ReplayEnded),
-                        None => {
-                            tx.check_parked_positional_read(PositionalReader::Ordinary)
-                                .await?;
-                            None
-                        }
-                    })
+            let gate = self.cursor.advance_gate.clone().lock_owned();
+            tokio::pin!(gate);
+            let gate = loop {
+                let changed = self.cursor.progress.notified();
+                tokio::pin!(changed);
+                changed.as_mut().enable();
+                let st = self.cursor.state.lock().await;
+                if let Some(failure) = self.cursor.delivery_failure.lock().unwrap().clone() {
+                    return Err(WorkerExecutorError::runtime(failure));
+                }
+                let refusal = st
+                    .positional_admission_refusal(&self.cursor, scope, admission.as_ref())
+                    .await;
+                drop(st);
+                if let Some(refusal) = refusal {
+                    let error = admission
+                        .as_ref()
+                        .unwrap()
+                        .0
+                        .reproduce_admission_refusal(refusal)
+                        .await;
+                    self.cursor.progress.notify_waiters();
+                    return Err(error);
+                }
+                tokio::select! {
+                    guard = &mut gate => break guard,
+                    _ = changed => {},
+                }
+            };
+            let mut tx = self.cursor.tx_with_gate(gate).await?;
+            if let Some(refusal) = tx
+                .st
+                .positional_admission_refusal(&self.cursor, scope, admission.as_ref())
+                .await
+            {
+                self.cursor.finish_tx(tx);
+                let error = admission
+                    .as_ref()
+                    .unwrap()
+                    .0
+                    .reproduce_admission_refusal(refusal)
+                    .await;
+                self.cursor.progress.notify_waiters();
+                return Err(error);
+            }
+            let read: Result<Option<PositionalRead>, WorkerExecutorError> = async {
+                let entry = tx
+                    .try_get_oplog_entry(positional_reader_accepts(scope))
+                    .await?;
+                Ok(match entry {
+                    Some((index, entry)) => Some(PositionalRead::Entry(index, entry)),
+                    None if tx.cursor.is_live() => Some(PositionalRead::ReplayEnded),
+                    None => {
+                        tx.check_parked_positional_read(PositionalReader::Ordinary)
+                            .await?;
+                        None
+                    }
                 })
-                .await?;
+            }
+            .await;
+            self.cursor.finish_tx(tx);
+            let read: Option<PositionalRead> = read?;
             if let Some(read) = read {
                 return Ok(read);
             }
@@ -3932,8 +5333,56 @@ fn positional_reader_accepts(scope: Option<OplogIndex>) -> impl FnMut(&OplogEntr
     }
 }
 
+/// The first oplog index whose recovery metadata a new replay generation can need.
+///
+/// A start from an execution snapshot replaces the history `INITIAL.next()..=snapshot_end` with
+/// the loaded state and skips it. A snapshot is taken only at a clean boundary: no durable call,
+/// scope or atomic region is open, and no tool attachment endpoint or unread accepted output
+/// remains (`PrivateDurableWorkerState::snapshot_boundary_blocker`). Therefore no `Start`,
+/// terminal, delivery marker, attachment write, attachment control or attachment re-observation
+/// after the snapshot refers to metadata before it, and the scan starts after the snapshot. A
+/// consumer stream re-observation reads its original record directly, wherever it is.
+///
+/// Jump and revert regions after the snapshot stay in the scanned range, because a later
+/// re-observation can refer to an observation that such a region removed. When the skipped
+/// regions do not cover the whole replaced prefix, the history before the snapshot is still
+/// replayed, and the scan starts at `INITIAL`.
+pub(super) fn recovery_metadata_floor(
+    skipped_regions: &DeletedRegions,
+    snapshot_end: Option<OplogIndex>,
+) -> OplogIndex {
+    snapshot_end
+        .filter(|end| {
+            skipped_regions
+                .regions()
+                .any(|region| region.start <= OplogIndex::INITIAL.next() && region.end >= *end)
+        })
+        .map_or(OplogIndex::INITIAL, |end| end.next())
+}
+
 pub(super) fn is_auto_skippable_hint(entry: &OplogEntry) -> bool {
     entry.is_hint() && !matches!(entry, OplogEntry::CompletionDelivered { .. })
+}
+
+fn is_active_stream_observation(
+    cursor: &ReplayCursor,
+    state: &CursorState,
+    index: OplogIndex,
+) -> bool {
+    cursor
+        .stream_observations
+        .lock()
+        .unwrap()
+        .get(&index)
+        .is_some_and(|parent| {
+            parent.is_none_or(|parent| {
+                !state.skipped_regions.is_in_deleted_region(parent)
+                    && !state
+                        .custom_subtrees
+                        .values()
+                        .any(|members| members.contains(&parent))
+            })
+        })
 }
 
 pub(super) fn scope_entry_owner(
@@ -3948,6 +5397,12 @@ pub(super) fn scope_entry_owner(
 
     match entry {
         OplogEntry::Start { .. } => Some(index),
+        OplogEntry::ToolAttachmentRead { observation, .. } => match observation.observation {
+            golem_common::model::durable_stream::StreamConsumerObservation::Guest {
+                parent_start_index,
+            } => parent_start_index,
+            golem_common::model::durable_stream::StreamConsumerObservation::Host => None,
+        },
         OplogEntry::End { start_index, .. }
         | OplogEntry::Cancelled { start_index, .. }
         | OplogEntry::CompletionDiscarded { start_index, .. }
@@ -4019,6 +5474,7 @@ pub(super) fn scope_entry_owner(
         | OplogEntry::CardTransferred { .. }
         | OplogEntry::CardRevokedCascade { .. }
         | OplogEntry::CardTransferConfirmed { .. }
+        | OplogEntry::ToolAttachmentControl { .. }
         | OplogEntry::StreamRegistered { .. }
         | OplogEntry::StreamItems { .. }
         | OplogEntry::StreamEnd { .. }
@@ -4027,7 +5483,7 @@ pub(super) fn scope_entry_owner(
     }
 }
 
-fn historical_reconstruction_owner_failure(
+pub(super) fn historical_reconstruction_owner_failure(
     failure: crate::durable_host::tool::operation::OwnerFailureWinner,
 ) -> WorkerExecutorError {
     match failure {
@@ -4109,6 +5565,8 @@ pub(super) fn terminal_start_index(entry: &OplogEntry) -> Option<OplogIndex> {
         | OplogEntry::CardRevokedCascade { .. }
         | OplogEntry::CardTransferConfirmed { .. }
         | OplogEntry::HostStreamFrame { .. }
+        | OplogEntry::ToolAttachmentControl { .. }
+        | OplogEntry::ToolAttachmentRead { .. }
         | OplogEntry::StreamRegistered { .. }
         | OplogEntry::StreamItems { .. }
         | OplogEntry::StreamEnd { .. }
@@ -4130,6 +5588,51 @@ pub(super) enum HeadOwner {
     /// A nested `Start`: the durable call, scope or entity invocation whose `Start` is at this
     /// index owns it.
     ParentStart(OplogIndex),
+}
+
+/// What [`CursorTx::decide_missing_start`] does with the entry at the cursor head.
+enum SiblingRecord {
+    /// A `Start` that a concurrent guest call recorded: the cursor retains it for its owner.
+    Retain(OplogIndex, OplogEntry),
+    /// A record of the body of a retained entity invocation, which that body consumes once its
+    /// invocation is claimed.
+    BodyOfRetainedInvocation,
+    /// Not a record of a concurrent guest call.
+    None,
+}
+
+/// The invocation id of a `Start` entry.
+fn start_invocation_id(entry: &OplogEntry) -> Option<DurableInvocationId> {
+    match entry {
+        OplogEntry::Start { invocation_id, .. } => *invocation_id,
+        _ => None,
+    }
+}
+
+/// Whether `entry` is the `Start` of an entity invocation, accepted or rejected.
+fn is_entity_invocation_start(entry: &OplogEntry) -> bool {
+    matches!(
+        entry,
+        OplogEntry::Start {
+            function_name: HostFunctionName::GolemEntityInvoke
+                | HostFunctionName::GolemToolInvocationRejected,
+            ..
+        }
+    )
+}
+
+/// Whether `entry` is the `Start` of a custom durable invocation: a numbered call `Start` of a
+/// guest-named function. Scopes share the naming but record no request.
+fn is_custom_invocation_start(entry: &OplogEntry) -> bool {
+    matches!(
+        entry,
+        OplogEntry::Start {
+            function_name: HostFunctionName::Custom(_),
+            invocation_id: Some(_),
+            request: Some(_),
+            ..
+        }
+    )
 }
 
 /// Decides the owner of `entry` when it is at the cursor head. Positional reads use it to decide
@@ -4156,13 +5659,16 @@ pub(super) struct HeadDrainFacts {
     pub(super) claimed_ahead: bool,
     /// The entry is an `End` or `Cancelled` that a registered awaiter owns.
     pub(super) awaited_terminal: bool,
+    /// A native guest read must acknowledge this active observation before advancement.
+    pub(super) guest_observation: bool,
 }
 
 /// Whether the head path drains `entry` instead of stopping at it: a hint, a `Start` claimed
 /// ahead of the cursor, or a terminal a registered awaiter owns. A scan that passes the cursor
 /// head uses it to find the entry the head path would stop at.
 pub(super) fn is_drained_at_head(entry: &OplogEntry, facts: HeadDrainFacts) -> bool {
-    is_auto_skippable_hint(entry) || facts.claimed_ahead || facts.awaited_terminal
+    !facts.guest_observation
+        && (is_auto_skippable_hint(entry) || facts.claimed_ahead || facts.awaited_terminal)
 }
 
 /// The `parent_start_index` of a `Start` entry.

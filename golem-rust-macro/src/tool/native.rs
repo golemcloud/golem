@@ -47,6 +47,14 @@ pub fn native_tool_definition_impl(
     if let Err(error) = remove_cancellation_parameters(&mut descriptor_ir) {
         return error.to_compile_error().into();
     }
+    // Context parameters affect native routing, but not the shared tool metadata.
+    for command in &mut descriptor_ir.commands {
+        if let Some(subtree) = &mut command.subtree
+            && let Some(segment) = subtree.path.segments.last_mut()
+        {
+            segment.arguments = syn::PathArguments::None;
+        }
+    }
     let descriptor_canonical = syn::Ident::new("golem_rust", Span::call_site());
     let resolve = |tokens| {
         let tokens = resolve_generated_sdk_paths(tokens, native, &descriptor_canonical, &preserved);
@@ -398,7 +406,7 @@ fn synthesize_native_invoke(
         fn __native_tool_invoke<'a>(
             &'a self,
             __context: &'a mut #context_ty,
-            mut __invocation: golem_native_tool::NativeToolInvocation,
+            mut __invocation: golem_native_tool::NativeToolInvocation<#context_ty>,
         ) -> golem_native_tool::NativeToolFuture<'a, golem_native_tool::HostError>
         where Self: Sync + 'a
         {
@@ -469,19 +477,21 @@ pub fn native_tool_implementation_impl(
         .collect::<String>();
     let wrapper = format_ident!("__GolemNativeToolInvoker{identity}");
     let canonical = syn::Ident::new("golem_native_tool", Span::call_site());
+    let generics = &item_impl.generics;
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     let generated = quote! {
         #item_impl
-        pub struct #wrapper(pub #self_ty);
-        impl #wrapper {
+        pub struct #wrapper #impl_generics (pub #self_ty) #where_clause;
+        impl #impl_generics #wrapper #ty_generics #where_clause {
             pub fn new(implementation: #self_ty) -> Self { Self(implementation) }
         }
-        impl golem_native_tool::NativeToolInvoker<#context_ty, golem_native_tool::HostError> for #wrapper {
+        impl #impl_generics golem_native_tool::NativeToolInvoker<#context_ty, golem_native_tool::HostError> for #wrapper #ty_generics #where_clause {
             fn metadata(&self) -> golem_native_tool::Tool { <#self_ty as #trait_path>::__native_tool_descriptor() }
-            fn invoke<'a>(&'a self, context: &'a mut #context_ty, invocation: golem_native_tool::NativeToolInvocation) -> golem_native_tool::NativeToolFuture<'a, golem_native_tool::HostError> {
+            fn invoke<'a>(&'a self, context: &'a mut #context_ty, invocation: golem_native_tool::NativeToolInvocation<#context_ty>) -> golem_native_tool::NativeToolFuture<'a, golem_native_tool::HostError> {
                 <#self_ty as #trait_path>::__native_tool_invoke(&self.0, context, invocation)
             }
         }
-        impl #self_ty {
+        impl #impl_generics #self_ty #where_clause {
             pub fn native_tool_invoker(self) -> impl golem_native_tool::NativeToolInvoker<#context_ty, golem_native_tool::HostError> {
                 #wrapper::new(self)
             }

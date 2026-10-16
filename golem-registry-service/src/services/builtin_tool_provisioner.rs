@@ -90,7 +90,7 @@ static BUILTIN_EXPORTS: &[BuiltinExportDescriptor] = &[
         component_name: "python",
         artifact_id: "python",
         export_name: "python",
-        release_version: "0.1.0",
+        release_version: "0.1.1",
         kind: BuiltinExportKind::Tool,
     },
     BuiltinExportDescriptor {
@@ -139,7 +139,7 @@ static BUILTIN_EXPORTS: &[BuiltinExportDescriptor] = &[
         component_name: "javascript-tools",
         artifact_id: "javascript_tools",
         export_name: "node",
-        release_version: "0.1.8",
+        release_version: "0.1.9",
         kind: BuiltinExportKind::Tool,
     },
     BuiltinExportDescriptor {
@@ -174,7 +174,7 @@ static BUILTIN_EXPORTS: &[BuiltinExportDescriptor] = &[
         component_name: "git-tool",
         artifact_id: "git_tool",
         export_name: "git",
-        release_version: "0.1.13",
+        release_version: "0.1.14",
         kind: BuiltinExportKind::Tool,
     },
 ];

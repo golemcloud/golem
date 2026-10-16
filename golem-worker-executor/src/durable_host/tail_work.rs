@@ -98,6 +98,12 @@ impl TailActivity {
         Self { counter }
     }
 
+    pub fn tracker(&self) -> TailWorkTracker {
+        TailWorkTracker {
+            active: self.counter.clone(),
+        }
+    }
+
     /// Awaits `fut` with this task marked inactive: use it around — and only
     /// around — safe park points (see the module documentation). The task is
     /// re-marked active before this returns, and stays balanced if the task

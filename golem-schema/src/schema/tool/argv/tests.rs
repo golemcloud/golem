@@ -1250,3 +1250,236 @@ fn help_lists_the_arguments_and_the_values_of_an_enum() {
     };
     assert!(help.lines().any(|line| line == "  <chain>"), "{help}");
 }
+
+/// A command shaped like `node`, `tsc` or `python`: a `--cwd` option, a flag, and a verbatim
+/// tail after `--` as its only positional surface.
+fn implicit_tail_body(min: u32, max: Option<u32>) -> CommandBody {
+    let mut b = body();
+    let mut cwd = option("cwd", OptionShape::Scalar(SchemaType::string()));
+    cwd.short = Some('c');
+    cwd.default = Some(SchemaValue::String("/workspace".into()));
+    b.options.push(cwd);
+    b.flags
+        .push(flag("verbose", 'v', FlagShape::CountFlag(None)));
+    b.positionals.tail = Some(TailPositional {
+        name: "args".into(),
+        doc: Doc::default(),
+        value_name: None,
+        item_type: SchemaType::string(),
+        min,
+        max,
+        separator: Some("--".into()),
+        verbatim: true,
+        accepts_stdio: false,
+    });
+    b
+}
+
+fn strings(items: &[&str]) -> SchemaValue {
+    SchemaValue::List {
+        elements: items
+            .iter()
+            .map(|item| SchemaValue::String(item.to_string()))
+            .collect(),
+    }
+}
+
+#[test]
+fn a_verbatim_dash_dash_tail_starts_at_the_first_token_that_is_not_the_commands() {
+    let t = tool(implicit_tail_body(0, None));
+    let cases: Vec<(Vec<&str>, &str, u32, Vec<&str>)> = vec![
+        (vec![], "/workspace", 0, vec![]),
+        (vec!["--"], "/workspace", 0, vec![]),
+        (vec!["fib.ts"], "/workspace", 0, vec!["fib.ts"]),
+        (
+            vec!["--noEmit", "fib.ts"],
+            "/workspace",
+            0,
+            vec!["--noEmit", "fib.ts"],
+        ),
+        (
+            vec!["-e", "console.log(1)"],
+            "/workspace",
+            0,
+            vec!["-e", "console.log(1)"],
+        ),
+        (vec!["--cwd", "/p", "fib.ts"], "/p", 0, vec!["fib.ts"]),
+        (vec!["-vc/p", "-v", "x"], "/p", 2, vec!["x"]),
+        (
+            vec!["--cwd=/p", "fib.ts", "--cwd", "/q", "-v", "--help", "--"],
+            "/p",
+            0,
+            vec!["fib.ts", "--cwd", "/q", "-v", "--help", "--"],
+        ),
+        // A cluster with a character the command does not declare is not the command's.
+        (vec!["-v", "-vx", "-v"], "/workspace", 1, vec!["-vx", "-v"]),
+        (vec!["-", "-1"], "/workspace", 0, vec!["-", "-1"]),
+        (
+            vec!["-v", "--", "--cwd", "/q"],
+            "/workspace",
+            1,
+            vec!["--cwd", "/q"],
+        ),
+        (vec!["--", "--"], "/workspace", 0, vec!["--"]),
+    ];
+    for (args, cwd, verbose, tail) in cases {
+        assert_eq!(
+            values(&t, &args),
+            vec![
+                strings(&tail),
+                SchemaValue::String(cwd.into()),
+                SchemaValue::U32(verbose),
+            ],
+            "{args:?}"
+        );
+    }
+    for args in [
+        vec!["--help"],
+        vec!["-h"],
+        vec!["-v", "-vh"],
+        vec!["-v", "--help", "x"],
+    ] {
+        assert!(
+            matches!(parsed(&t, &args), Ok(ParsedToolArguments::Help(_))),
+            "{args:?}"
+        );
+    }
+    assert!(parsed(&t, &["--cwd"]).is_err());
+    assert!(parsed(&t, &["--verbose=2", "x"]).is_err());
+
+    let t = tool(implicit_tail_body(1, Some(2)));
+    for args in [vec![], vec!["--"], vec!["-v"], vec!["a", "b", "c"]] {
+        assert!(parsed(&t, &args).is_err(), "{args:?}");
+    }
+    assert_eq!(values(&t, &["a", "b"])[0], strings(&["a", "b"]));
+}
+
+#[test]
+fn a_leaf_subcommand_with_a_verbatim_dash_dash_tail_starts_it_without_the_separator() {
+    let mut t = tool(implicit_tail_body(0, None));
+    let mut run = t.commands.nodes[0].clone();
+    run.name = "run".into();
+    t.commands.nodes[0].body = None;
+    t.commands.nodes[0].subcommands = vec![CommandIndex(1)];
+    t.commands.nodes[0].globals.flags.push(flag(
+        "quiet",
+        'q',
+        FlagShape::BoolFlag(BoolFlagShape {
+            default: false,
+            negatable: false,
+        }),
+    ));
+    t.commands.nodes.push(run);
+    let ParsedToolArguments::Invoke {
+        command_path,
+        input,
+    } = parsed(&t, &["-q", "run", "-qv", "script.py", "-q", "run"]).unwrap()
+    else {
+        panic!("unexpected help")
+    };
+    assert_eq!(command_path, vec!["run".to_string()]);
+    let (_, SchemaValue::Record { fields }) = input.into_parts() else {
+        panic!("not a record")
+    };
+    assert_eq!(
+        fields,
+        vec![
+            SchemaValue::Bool(true),
+            strings(&["script.py", "-q", "run"]),
+            SchemaValue::String("/workspace".into()),
+            SchemaValue::U32(1),
+        ]
+    );
+    // The root has a subcommand, so a token there is no tail.
+    assert!(parsed(&t, &["script.py"]).is_err());
+}
+
+/// A change to the tool that `implicit_tail_body` describes.
+type ShapeChange = fn(&mut Tool);
+
+#[test]
+fn other_tail_shapes_still_require_their_separator() {
+    let shapes: [(&str, ShapeChange); 4] = [
+        ("a verbatim tail after another separator", |t| {
+            tail_of(t).separator = Some("::".into())
+        }),
+        ("a tail that is not verbatim", |t| {
+            tail_of(t).verbatim = false
+        }),
+        ("a fixed positional before the tail", |t| {
+            let mut p = positional("file", SchemaType::string());
+            p.required = false;
+            t.commands.nodes[0]
+                .body
+                .as_mut()
+                .unwrap()
+                .positionals
+                .fixed
+                .push(p);
+        }),
+        ("a subcommand beside the body", |t| {
+            let mut child = t.commands.nodes[0].clone();
+            child.name = "sub".into();
+            t.commands.nodes[0].subcommands = vec![CommandIndex(1)];
+            t.commands.nodes.push(child);
+        }),
+    ];
+    for (shape, change) in shapes {
+        let mut t = tool(implicit_tail_body(0, None));
+        change(&mut t);
+        assert!(parsed(&t, &["--unknown"]).is_err(), "{shape}");
+        let ParsedToolArguments::Help(help) = parsed(&t, &["--help"]).unwrap() else {
+            panic!("{shape}")
+        };
+        assert!(!help.contains("[--]"), "{shape}: {help}");
+        assert!(
+            !help.contains("not an option of this command"),
+            "{shape}: {help}"
+        );
+    }
+    let mut t = tool(implicit_tail_body(0, None));
+    tail_of(&mut t).verbatim = false;
+    let error = match parsed(&t, &["-v", "x"]) {
+        Err(error) => error,
+        Ok(_) => panic!("a tail that is not verbatim needs its separator"),
+    };
+    assert_eq!(error, "expected tail separator \"--\"");
+}
+
+fn tail_of(t: &mut Tool) -> &mut TailPositional {
+    t.commands.nodes[0]
+        .body
+        .as_mut()
+        .unwrap()
+        .positionals
+        .tail
+        .as_mut()
+        .unwrap()
+}
+
+#[test]
+fn help_shows_an_optional_dash_dash_separator() {
+    let mut b = implicit_tail_body(0, None);
+    b.positionals.tail.as_mut().unwrap().doc.summary = "Program arguments.".into();
+    let ParsedToolArguments::Help(help) = parsed(&tool(b), &["--help"]).unwrap() else {
+        panic!()
+    };
+    let first = help.lines().next().unwrap();
+    assert_eq!(first, "Usage: example [OPTIONS] [--] [args]...", "{help}");
+    assert!(
+        help.lines().any(|line| line.split_whitespace().collect::<Vec<_>>().join(" ")
+            == "[args]... Program arguments. [starts at the first argument that is not an option of this command, or after --]"),
+        "{help}"
+    );
+
+    let mut t = tool(implicit_tail_body(0, None));
+    tail_of(&mut t).verbatim = false;
+    let ParsedToolArguments::Help(help) = parsed(&t, &["--help"]).unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        help.lines().next().unwrap(),
+        "Usage: example [OPTIONS] -- [args]...",
+        "{help}"
+    );
+}

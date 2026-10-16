@@ -24,6 +24,7 @@ import (
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
 	underlying "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_underlying"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/witschema"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 	"io"
 )
@@ -116,7 +117,12 @@ func init() {
 			if rpcErr != nil {
 				return nil, toolCallErrorFromWit(name, path, *rpcErr)
 			}
-			return finish(res)
+			if res.IsNone() {
+				return finish(res)
+			}
+			return witschema.DecodeOwned(res.Some().Value, func() (any, error) {
+				return finish(res)
+			})
 		}
 		if dynamic {
 			return newInvocation(call, func(c toolCall) (golem.Option[golem.TypedValue], error) {

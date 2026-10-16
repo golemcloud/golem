@@ -228,21 +228,14 @@ func TestRaisingAnUndeclaredErrorIsAnInvalidResult(t *testing.T) {
 	}
 }
 
-// TestAnOrdinaryPanicBecomesAToolError — a crashing handler must not take the
-// component down; the agent dispatcher recovers the same way.
-func TestAnOrdinaryPanicBecomesAToolError(t *testing.T) {
+func TestAnOrdinaryPanicEscapesTheToolDispatcher(t *testing.T) {
 	_, r, d := buildToolFor(t, func(r *toolRegistry, d *definitions) { declareLookup(r, d) })
-
-	got := invokeLookup(t, d, r, "boom")
-	if got.Tag() != witTypes.ResultErr {
-		t.Fatal("a panicking handler produced a successful invocation")
-	}
-	if tag := got.Err().Tag(); tag != types.ToolErrorInvalidResult {
-		t.Fatalf("error tag %d, want invalid-result", tag)
-	}
-	if msg := got.Err().InvalidResult(); !strings.Contains(msg, "something went wrong") {
-		t.Errorf("message lost the panic: %q", msg)
-	}
+	defer func() {
+		if got := recover(); got != "something went wrong" {
+			t.Errorf("panic = %v", got)
+		}
+	}()
+	invokeLookup(t, d, r, "boom")
 }
 
 func TestSuccessStillWorksAlongsideDeclaredErrors(t *testing.T) {

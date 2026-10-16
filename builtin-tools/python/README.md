@@ -1,6 +1,6 @@
 # Python built-in tool
 
-`python@0.1.0` executes Python in a fresh RustPython interpreter per invocation.
+`python@0.1.1` executes Python in a fresh RustPython interpreter per invocation.
 It provides a Python CLI-shaped command, not the old snippet/session API.
 It has no dependency on golem-ai.
 
@@ -88,6 +88,6 @@ The manifest builds and adds metadata to `builtin-tools/python.wasm`. Generated
 WASMs are ignored, never committed. Runtime provenance and license generation
 are in [SOURCE.md](SOURCE.md).
 
-The production descriptor provisions `python@0.1.0` through the same path as
+The production descriptor provisions `python@0.1.1` through the same path as
 the other built-ins. The artifact lock pins the immutable `python-v0.0.1`
 release. The source build does not publish artifacts or bypass checksum validation.

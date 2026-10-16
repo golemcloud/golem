@@ -662,7 +662,15 @@ The worker executor exports these metrics for filesystem snapshots. The labels h
 | `filesystem_snapshot_dropped_confirmations_total` | counter | `reason` | Uploaded snapshots that no confirmation record names. `reason` is `superseded`. |
 | `filesystem_snapshot_cleanups_pending` | gauge | | The agents with clean-up work that waits or runs. |
 | `filesystem_snapshot_leaked_cleanups_total` | counter | `operation` | Clean-ups that left snapshots in blob storage. `operation` is `delete` (a delete of some snapshots failed), `delete_all` (a delete of all snapshots of an agent failed), `overflow` (a full queue refused a request, or removed the waiting revert deletes of another agent to make room), `shutdown` (the executor shut down before the clean-up ended) or `fork_stage` (the outcome of a fork attempt is not known). |
-| `filesystem_snapshot_failed_space_reclaims_total` | counter | | Deletes after which the release of unused storage failed. The next delete of the agent tries again. |
+| `filesystem_snapshot_skipped_total` | counter | `kind`, `reason` | Snapshots that the admission skipped. `kind` is `periodic` or `update`. `reason` is `upload_in_flight` (an upload of the agent runs now), `volume_under_pressure` (the volume of the agent filesystems has less free space than the pressure target) or `deleting_all_snapshots` (a delete of all snapshots of the agent is queued or runs). A skipped `update` snapshot fails the manual update. |
+| `filesystem_snapshot_restored_age_seconds` | histogram | | The time from the save of a snapshot to its successful restore. This is the work that an agent can lose when it restarts from that snapshot. |
+| `filesystem_snapshot_delete_seconds` | histogram | `operation`, `outcome` | The time of a delete, with its prune. `operation` is `delete` (named snapshots: a retention, a superseded snapshot or a queued clean-up) or `delete_all` (all snapshots of an agent). `outcome` is `deleted`, `stopped` or `leaked`. |
+| `filesystem_snapshot_prune_seconds` | histogram | `outcome` | The time of a prune after a delete, with its check. `outcome` is `pruned` or `failed`. After a failure, the next delete of the agent prunes again. |
+| `filesystem_snapshot_prune_skipped_total` | counter | `reason` | Deletes after which no prune ran. `reason` is `not_due` (too few freed bytes, or the last prune is too recent) or `claimed_elsewhere` (another delete holds the claim of the prune, or pruned since the check). |
+| `filesystem_snapshot_retention_runs_total` | counter | `outcome` | Retention runs. `outcome` is `list_failed`, `nothing_to_delete`, `deleted`, `stopped` or `leaked`. |
+| `filesystem_snapshot_stored_bytes_total` | counter | `source` | The bytes of the repository files that the executor wrote to blob storage. `source` is `save` (packs, index files, snapshot files and the config of a new repository), `prune` (repacked packs and new index files) or `copy` (the copy of a fork source, on the side of the storage). A retry that writes a file again counts it again. |
+| `filesystem_snapshot_removed_bytes_total` | counter | `source` | The bytes that the executor deleted from blob storage. `source` is `prune` (the marked packs whose time to stay is over) or `delete_all` (the whole repository of an agent). |
+| `filesystem_snapshot_released_bytes_total` | counter | | The packed bytes of the deleted snapshots. A later prune can remove them when no other snapshot uses them. |
 
 Watch these values:
 
@@ -673,7 +681,11 @@ Watch these values:
 - **Dropped confirmations.** `filesystem_snapshot_dropped_confirmations_total` counts uploads that an update or a revert made useless.
 - **Leaked clean-ups.** `filesystem_snapshot_leaked_cleanups_total` counts clean-ups that left snapshots in blob storage. A growing `overflow` count means that deletes come faster than the clean-ups run. A `shutdown` count shows clean-ups that a shutdown cut off.
 - **Pending clean-ups.** A `filesystem_snapshot_cleanups_pending` value that grows all the time means that the clean-ups do not keep up.
-- **Unused storage.** `filesystem_snapshot_failed_space_reclaims_total` counts deletes that did not give back their storage yet.
+- **Skipped snapshots.** `filesystem_snapshot_skipped_total{reason="volume_under_pressure"}` counts the snapshots that Golem did not take because the disk is too full. While it grows, the agents get no new restore points.
+- **Snapshot age at restore.** `filesystem_snapshot_restored_age_seconds` shows how much work the agents lose when they restart from a snapshot.
+- **Failed prunes.** `filesystem_snapshot_prune_seconds_count{outcome="failed"}` counts prunes that did not give back their storage yet.
+- **Failed retention.** `filesystem_snapshot_retention_runs_total{outcome=~"list_failed|leaked"}` counts retention runs that left old snapshots in blob storage. The next retention tries again.
+- **Storage growth.** `filesystem_snapshot_stored_bytes_total` minus `filesystem_snapshot_removed_bytes_total` shows how fast the snapshot storage grows. The counters do not give the size of the bucket, and an agent whose repository nobody deleted is not in them.
 - **Restore time.** `filesystem_snapshot_restore_seconds` shows how much a restore adds to the start of an agent, with the wait for a restore slot.
 
 ## Logs

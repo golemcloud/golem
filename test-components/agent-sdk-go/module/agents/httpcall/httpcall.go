@@ -19,6 +19,14 @@ var Callback = Agent.Method[CallbackIn, string]("callback", golem.Description("G
 // RetryCallback calls a flaky endpoint under a status-code retry policy.
 var RetryCallback = Agent.Method[CallbackIn, string]("retry-callback", golem.Description("GET the flaky endpoint under a retry policy that retries on 500"))
 
+// ScheduleCallback calls the flaky endpoint and retries it in the agent, with a
+// retry.Schedule that sleeps between the attempts, while it answers 500.
+var ScheduleCallback = Agent.Method[CallbackIn, string]("schedule-callback", golem.Description("GET the flaky endpoint, retrying in the agent with a schedule while it answers 500; return attempts:body"))
+
+// ScheduleAttempts reports how many attempts the schedule runs made, which a
+// replay rebuilds from the oplog.
+var ScheduleAttempts = Agent.Method[golem.Unit, uint32]("schedule-attempts", golem.Description("The attempts of every schedule-callback so far"))
+
 // AtomicTimedCallback reads the clock (wall + monotonic) inside the atomic
 // region right before the HTTP call — a user-level stand-in for the runtime's
 // sampled clock read that coincided with the pre-send hang.

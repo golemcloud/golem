@@ -492,7 +492,8 @@ pipe. What a call returns is bounded lower, by what Golem can carry (see Output)
   million elements and a brace expansion of a million words fit comfortably.
 - **Time.** A call runs for at most its `timeout` argument (600 s by default, at most 3600 s;
   see [Contract](#contract)). The limit reaches a loop of commands that never wait
-  (`while :; do x=1; done`): the shell lets the call's timers run every 64 commands. It cannot
+  (`while :; do x=1; done`), also one that starts a pipeline in each round: each shell and each
+  pipeline stage lets the call's timers run after every 64 of its own commands. It cannot
   stop one command that computes for long without waiting (a `sort` of a large file, a regular
   expression that backtracks), which ends first. `timeout DURATION COMMAND` limits one command, as
   GNU's does, with its options, signals and statuses (124 on timeout, 137 on KILL). A `sh -c` or
@@ -607,15 +608,17 @@ version, and a change to the exported tool metadata a new tool version
 as well.
 
 The independent workspace commits its own `Cargo.lock`. Forks are pinned by git revision in the
-workspace `[patch.crates-io]`; no local dependency overrides are required.
+workspace `[patch.crates-io]`; no local dependency overrides are required. Each pinned revision of
+a `golemcloud` fork carries a release tag in that fork (`golem-v1`, `golem-v2`, …). The tag names
+the revision, and the revision stays the pin.
 
-| Dependency | Repository | Revision |
-|---|---|---|
-| Brush | `golemcloud/brush` | `9549479d688721d6ae10a0b5fdc413d617fe5f03` |
-| Coreutils | `golemcloud/coreutils` | `3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620` |
-| sed | `golemcloud/sed` | `794cb2bc9b00ba17432fda74f1bc74d0965e46dc` |
-| jaq-json, jaq-core, jaq-std | `golemcloud/jaq` | `c26f142e19128acda39f0c6668b38a581193b388` |
-| diffutils (upstream, past the wasip2 build fix) | `uutils/diffutils` | `3f7a9a6ff3ee584d1cedbe013ebdebb437ad33b8` |
+| Dependency | Repository | Tag | Revision |
+|---|---|---|---|
+| Brush | `golemcloud/brush` | `golem-v2` | `518bd2f0ad68e3f2ea25beee4eb17e62ce694c1a` |
+| Coreutils | `golemcloud/coreutils` | `golem-v1` | `3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620` |
+| sed | `golemcloud/sed` | `golem-v1` | `794cb2bc9b00ba17432fda74f1bc74d0965e46dc` |
+| jaq-json, jaq-core, jaq-std | `golemcloud/jaq` | `golem-v1` | `c26f142e19128acda39f0c6668b38a581193b388` |
+| diffutils (upstream, past the wasip2 build fix) | `uutils/diffutils` | none | `3f7a9a6ff3ee584d1cedbe013ebdebb437ad33b8` |
 
 Golem SDK and schema paths are repository-relative. Source attribution is retained in `NOTICE`
 and `LICENSE`.

@@ -365,21 +365,34 @@ async fn custom_durability_counter_ids_handle_nested_and_concurrent_no_input_cal
     let server_history = history.clone();
     let server = tokio::spawn(
         async move {
+            let slow_recorded = Arc::new(tokio::sync::Notify::new());
+            let fast_counter_assigned = Arc::new(tokio::sync::Notify::new());
             let route = Router::new().route(
                 "/callback",
                 any(move |Query(params): Query<Params>| {
                     let response = server_response.clone();
                     let history = server_history.clone();
+                    let slow_recorded = slow_recorded.clone();
+                    let fast_counter_assigned = fast_counter_assigned.clone();
                     async move {
+                        // Record slow first, but assign fast's response counter before slow's.
+                        if params.payload == "fast" {
+                            slow_recorded.notified().await;
+                        }
                         history.lock().unwrap().push(params.payload.clone());
                         if params.payload == "slow" {
-                            tokio::time::sleep(Duration::from_millis(200)).await;
+                            slow_recorded.notify_one();
+                            fast_counter_assigned.notified().await;
                         }
-                        format!(
+                        let result = format!(
                             "{}-{}",
                             response.fetch_add(1, Ordering::AcqRel),
                             params.payload
-                        )
+                        );
+                        if params.payload == "fast" {
+                            fast_counter_assigned.notify_one();
+                        }
+                        result
                     }
                 }),
             );

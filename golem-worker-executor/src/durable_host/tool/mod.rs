@@ -22,6 +22,8 @@
 
 pub(crate) mod attachment;
 pub(crate) mod boundary;
+pub(crate) mod durability;
+pub(crate) mod input;
 mod mcp;
 pub(crate) mod operation;
 mod streams;
@@ -99,7 +101,9 @@ use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::ToolOwnerPattern;
 use golem_common::model::card::{ToolArgPattern, ToolIdentifier, ToolInvocationValue};
 use golem_common::model::component::ComponentName;
-use golem_common::model::durable_stream::{DurableStreamHandle, SessionStreamRole};
+use golem_common::model::durable_stream::{
+    DurableStreamHandle, SessionStreamRole, StreamCancelReason,
+};
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationPlanReference,
     InvocationExecutionMode, NamedToolErrorSchema, ToolInputDecodeFailure,
@@ -144,9 +148,9 @@ use golem_service_base::error::worker_executor::{
 };
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::task::{Context as TaskContext, Poll};
 use tokio::sync::{Notify, mpsc, oneshot};
 use wasmtime::component::{
@@ -253,15 +257,22 @@ impl ToolStdinEntry {
         self.consumer.into_stream_producer()
     }
 
-    fn into_native(self) -> NativeToolStdin {
-        NativeToolStdin {
-            consumer: self.consumer,
-        }
+    fn into_native<Ctx: WorkerCtx>(
+        self,
+        ctx: &DurableWorkerCtx<Ctx>,
+        tasks: crate::worker::tasks::NativeReconstructionSpawner,
+    ) -> anyhow::Result<NativeToolStdin> {
+        Ok(NativeToolStdin {
+            controller: self.consumer.controller(),
+            input: input::NativeAttachmentInput::new(self.consumer, ctx)?,
+            tasks,
+        })
     }
 }
 
 pub struct ToolStdinClosedEntry {
     observer: AttachmentObserver,
+    next_operation_ordinal: u64,
 }
 
 struct ToolStdinStreamItem {
@@ -428,6 +439,8 @@ impl<D> StreamConsumer<D> for UnderlyingToolStdinStreamConsumer {
 struct ToolStdinStreamPumpTask<Ctx> {
     producer: AttachmentProducer,
     items: mpsc::UnboundedReceiver<ToolStdinStreamItem>,
+    /// The reason of a cancel by the producer of a client's stdin, set before the source ends.
+    source_cancel: Option<Arc<OnceLock<StreamCancelReason>>>,
     _ctx: std::marker::PhantomData<fn() -> Ctx>,
 }
 
@@ -453,7 +466,17 @@ impl<Ctx: WorkerCtx, U: Send + 'static> AccessorTask<U, HasSelf<DurableWorkerCtx
                 return Ok(());
             }
         }
-        let _ = self.producer.finish();
+        // A tool's stdin has a failure item, so a client's cancel reaches the tool as
+        // `cancelled`. Every other end of the source is a clean end.
+        let cancelled = matches!(
+            self.source_cancel.as_ref().and_then(|reason| reason.get()),
+            Some(StreamCancelReason::Cancelled)
+        );
+        let _ = if cancelled {
+            self.producer.fail(ByteStreamFailure::Cancelled)
+        } else {
+            self.producer.finish()
+        };
         Ok(())
     }
 }
@@ -464,20 +487,6 @@ pub struct ToolOutputEntry {
 }
 
 impl ToolOutputEntry {
-    fn producer(&self) -> &AttachmentProducer {
-        self.producer
-            .as_ref()
-            .expect("output target already consumed")
-    }
-
-    fn reject_unconfigured(&self) {
-        let _ = self.producer().reject_unconfigured();
-    }
-
-    fn abandon_unconfigured(&self) {
-        let _ = self.producer().abandon_unconfigured();
-    }
-
     pub(crate) fn into_writer(mut self) -> ToolOutputWriterEntry {
         ToolOutputWriterEntry {
             producer: self
@@ -518,9 +527,13 @@ impl ToolOutputWriterEntry {
         self.completion_only
     }
 
-    fn native_writer(&self) -> NativeToolOutput {
+    fn native_writer(
+        &self,
+        tasks: crate::worker::tasks::NativeReconstructionSpawner,
+    ) -> NativeToolOutput {
         NativeToolOutput {
             writer: self.producer.writer(),
+            tasks,
         }
     }
 }
@@ -538,10 +551,11 @@ fn materialize_output_writer(
 fn native_output_handles(
     stdout: Option<&ToolOutputWriterEntry>,
     stderr: Option<&ToolOutputWriterEntry>,
+    tasks: &crate::worker::tasks::NativeReconstructionSpawner,
 ) -> (Option<NativeToolOutput>, Option<NativeToolOutput>) {
     (
-        stdout.map(ToolOutputWriterEntry::native_writer),
-        stderr.map(ToolOutputWriterEntry::native_writer),
+        stdout.map(|output| output.native_writer(tasks.clone())),
+        stderr.map(|output| output.native_writer(tasks.clone())),
     )
 }
 
@@ -1498,6 +1512,12 @@ where
     };
     use golem_common::model::mcp_import::McpImportSource;
 
+    crate::durable_host::call_coordinator::process_pending_replay_events_access(
+        accessor,
+        accessor.getter(),
+    )
+    .await
+    .map_err(ToolDiscoveryError::Retrieval)?;
     let (service, owner) = accessor.with(|mut access| {
         let ctx = access.get();
         (
@@ -1579,6 +1599,11 @@ where
     U: Send + 'static,
     Ctx: WorkerCtx,
 {
+    crate::durable_host::call_coordinator::process_pending_replay_events_access(
+        accessor,
+        accessor.getter(),
+    )
+    .await?;
     let has_stdin = stdin.is_some();
     let ToolInvocationAttempt {
         target,
@@ -2071,6 +2096,7 @@ async fn encode_tool_operation_terminal(
         SerializableToolOperationTerminal {
             body_execution: SerializableEntityBodyExecution::Executed,
             result,
+            admission_refusal: None,
         },
         "failed to encode durable tool operation terminal",
     )
@@ -2155,13 +2181,20 @@ impl<Ctx: WorkerCtx> EntityInvocationBody<Ctx, HostResponseEntityInvocation> for
                 + 'a,
         >,
     > {
-        Box::pin(invoke_tool_sidecar(
-            instance,
-            store,
-            self.invocation,
-            self.operation,
-            self.cancellation,
-        ))
+        Box::pin(async move {
+            let result = invoke_tool_sidecar(
+                instance,
+                store,
+                self.invocation,
+                self.operation,
+                self.cancellation,
+            )
+            .await;
+            if result.is_err() {
+                durability::abort_producer_disposals(store.data_mut().durable_ctx_mut()).await;
+            }
+            result
+        })
     }
 }
 
@@ -2316,7 +2349,21 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
     };
     prepare_guest_call(&mut store, &display_name).await;
     let stdin = stdin
-        .map(|stdin| StreamReader::new(store.as_context_mut(), stdin.into_stream_producer()))
+        .map(|stdin| -> anyhow::Result<_> {
+            if stdin.controller().observer().identity().is_some() {
+                let input = input::AttachmentInputProducer::new(
+                    stdin.consumer,
+                    |ctx: &mut Ctx| ctx.durable_ctx_mut(),
+                    store.data().durable_ctx(),
+                )?;
+                Ok(StreamReader::new(store.as_context_mut(), input)?)
+            } else {
+                Ok(StreamReader::new(
+                    store.as_context_mut(),
+                    stdin.into_stream_producer(),
+                )?)
+            }
+        })
         .transpose()
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
     store
@@ -2441,11 +2488,39 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         .data_mut()
         .durable_ctx_mut()
         .set_invocation_principal(None);
+    if !matches!(&result, Ok(Ok(_))) {
+        durability::abort_producer_disposals(store.data_mut().durable_ctx_mut()).await;
+    }
     let finish = finish_invocation_and_get_fuel_consumption(&mut store, &display_name).await;
-    let parent_end = prepare_tool_parent_end(&mut store, parent).await;
+    let mut parent_end = prepare_tool_parent_end(&mut store, parent).await;
+    if matches!(&result, Ok(Ok(_))) && finish.is_ok() && parent_end.is_ok() {
+        parent_end = store
+            .as_context_mut()
+            .run_concurrent(async move |accessor| {
+                durability::finish_producer_disposals(
+                    &mut crate::durable_host::concurrent::AccessorContext::new(accessor, |ctx| {
+                        ctx.durable_ctx_mut()
+                    }),
+                )
+                .await
+            })
+            .await
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+    }
     drop(cancellation_epoch);
     if operation.has_pending_live_admission_rejection().await {
-        return Err(crate::durable_host::tool_attachment_live_admission_rejected_error());
+        for error in [finish.as_ref().err(), parent_end.as_ref().err()]
+            .into_iter()
+            .flatten()
+        {
+            if !crate::durable_host::is_tool_attachment_live_admission_rejection(error) {
+                return Err(error.clone());
+            }
+        }
+        if guest_body_accepts_admission_rejection(&result) {
+            return Err(crate::durable_host::tool_attachment_live_admission_rejected_error());
+        }
+        rollback_live_attachment_admission_rejection(&operation).await;
     }
     finish?;
     if let Err(error) = parent_end
@@ -2576,6 +2651,7 @@ async fn invoke_native_tool<Ctx: WorkerCtx>(
             scope.activation().clone(),
             owner_component_metadata,
             scope.authority_wallet().to_vec(),
+            Some(scope.invocation_id().start_index()),
         ),
     )
     .await
@@ -2602,10 +2678,18 @@ async fn invoke_native_tool<Ctx: WorkerCtx>(
     }
     ctx.durable_ctx_mut()
         .set_invocation_principal(Some(invocation.principal.clone()));
+    let tasks = match crate::worker::tasks::NativeReconstructionTasks::new(&worker.tasks) {
+        Ok(tasks) => tasks,
+        Err(error) => return (Err(error), None),
+    };
+    let spawner = tasks.spawner();
+    let monitor = tasks.monitor();
     let mut retained = RetainedNativeContext::new(
         ctx,
+        registration.clone(),
         worker.owner_execution(),
         crate::worker::owner_lane::OwnerInvocationId::Entity(scope.invocation_id().clone()),
+        tasks,
     );
     let stdout_controller = invocation
         .stdout
@@ -2620,56 +2704,119 @@ async fn invoke_native_tool<Ctx: WorkerCtx>(
         .map(ToolOutputWriterEntry::controller)
         .as_ref()
         .map(AttachmentController::observer);
-    let (stdout, stderr) =
-        native_output_handles(invocation.stdout.as_ref(), invocation.stderr.as_ref());
+    let (stdout, stderr) = native_output_handles(
+        invocation.stdout.as_ref(),
+        invocation.stderr.as_ref(),
+        &spawner,
+    );
+    let stdin = match invocation
+        .stdin
+        .map(|stdin| {
+            retained
+                .context_mut()
+                .shared
+                .with_ctx(|ctx| stdin.into_native(ctx, spawner.clone()))
+        })
+        .transpose()
+    {
+        Ok(stdin) => stdin,
+        Err(error) => return (Err(error.into()), None),
+    };
     let native_invocation = NativeToolInvocation {
         command_path: invocation.command_path,
         input: invocation.input,
         principal: invocation.principal,
         cancellation,
-        stdin: invocation.stdin.map(ToolStdinEntry::into_native),
+        stdin,
         stdout,
         stderr,
     };
-    let result = await_native_entity_body(&runner_abort, async {
-        match handler {
+    let completed = await_native_entity_body(&runner_abort, async move {
+        let result = tokio::select! {
+            biased;
+            error = monitor.wait_for_failure() => Err(error),
+            error = monitor.wait_for_body_failure() => Err(error),
+            result = async {
+                match handler {
             Some(handler) => {
                 handler
                     .invoke(retained.context_mut(), native_invocation)
                     .await
             }
             None => mcp::invoke(retained.context_mut(), native_invocation).await,
+                }
+            } => result,
+        };
+        if result.is_err() {
+            durability::abort_producer_disposals(&mut retained.context_mut().shared).await;
         }
+        let parent_end = if result.is_ok() {
+            retained.prepare_parent_end().await
+        } else {
+            Ok(())
+        };
+        let result = select_native_body_result(
+            result,
+            parent_end,
+            operation.has_pending_live_admission_rejection().await,
+        );
+        let result = match result {
+            Ok(result) => {
+                if let Some(error) =
+                    first_output_limit_error(stdout_observer.as_ref(), stderr_observer.as_ref())
+                {
+                    encode_tool_operation_terminal(Err(error)).await
+                } else {
+                    encode_tool_operation_terminal(validate_native_tool_output(
+                        result,
+                        &output_contract,
+                    ))
+                    .await
+                }
+            }
+            Err(error) => Err(error),
+        };
+        if result.is_err() {
+            durability::abort_producer_disposals(&mut retained.context_mut().shared).await;
+        }
+        let retained = Box::new(retained) as Box<dyn RetainedEntityStore>;
+        Ok((result, Some(retained)))
     })
     .await;
-    retained
-        .context_mut()
-        .durable_ctx_mut()
-        .set_invocation_principal(None);
-    let parent_end = retained.prepare_parent_end().await;
-    let result = select_native_body_result(
-        result,
-        parent_end,
-        operation.has_pending_live_admission_rejection().await,
-    );
-    let result = match result {
-        Ok(result) => {
-            if let Some(error) =
-                first_output_limit_error(stdout_observer.as_ref(), stderr_observer.as_ref())
-            {
-                encode_tool_operation_terminal(Err(error)).await
-            } else {
-                encode_tool_operation_terminal(validate_native_tool_output(
-                    result,
-                    &output_contract,
-                ))
-                .await
-            }
+    let completed = completed.unwrap_or_else(|error| (Err(error), None));
+    if completed
+        .0
+        .as_ref()
+        .is_err_and(crate::durable_host::is_tool_attachment_live_admission_rejection)
+    {
+        for output in [invocation.stdout.as_ref(), invocation.stderr.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            output
+                .controller()
+                .reserve_owner_terminal(ByteStreamFailure::ResourceExhausted);
         }
-        Err(error) => Err(error),
-    };
-    let retained = Box::new(retained) as Box<dyn RetainedEntityStore>;
-    (result, Some(retained))
+    }
+    completed
+}
+
+fn guest_body_accepts_admission_rejection<T>(
+    result: &Result<Result<T, wasmtime::Error>, GuestCallSettlementError>,
+) -> bool {
+    match result {
+        Ok(Ok(_)) => true,
+        Ok(Err(error))
+        | Err(GuestCallSettlementError::Interrupted(error))
+        | Err(GuestCallSettlementError::Trap(error)) => error.chain().any(|cause| {
+            cause
+                .downcast_ref::<WorkerExecutorError>()
+                .is_some_and(crate::durable_host::is_tool_attachment_live_admission_rejection)
+        }),
+        Err(GuestCallSettlementError::Infrastructure(error)) => {
+            crate::durable_host::is_tool_attachment_live_admission_rejection(error)
+        }
+    }
 }
 
 fn select_native_body_result<T>(
@@ -2677,13 +2824,11 @@ fn select_native_body_result<T>(
     parent_end: Result<(), WorkerExecutorError>,
     live_admission_rejected: bool,
 ) -> Result<T, WorkerExecutorError> {
-    if live_admission_rejected {
+    let result = body.and_then(|value| parent_end.map(|()| value));
+    if live_admission_rejected && result.is_ok() {
         return Err(crate::durable_host::tool_attachment_live_admission_rejected_error());
     }
-    match body {
-        Ok(result) => parent_end.map(|()| result),
-        Err(error) => Err(error),
-    }
+    result
 }
 
 async fn await_native_entity_body<T>(
@@ -2717,6 +2862,7 @@ fn resource_exhausted_terminal(
 ) -> SerializableToolOperationTerminal {
     SerializableToolOperationTerminal {
         body_execution,
+        admission_refusal: None,
         result: Err(SerializableToolRpcError::ResourceExhausted(
             "tool stdin exceeded the attachment byte limit".to_string(),
         )),
@@ -2792,26 +2938,131 @@ impl SkippedToolAttachmentEndpoints {
             self.stderr.as_ref().map(ToolOutputWriterEntry::controller),
         )
     }
+}
 
-    fn publish_failure(
-        self,
-        controllers: &(
-            Option<AttachmentController>,
-            Option<AttachmentController>,
-            Option<AttachmentController>,
-        ),
-        failure: ByteStreamFailure,
-    ) {
-        for controller in controllers
-            .0
-            .iter()
-            .chain(controllers.1.iter())
-            .chain(controllers.2.iter())
-        {
+/// Completes the attachment effects of an already recorded operation terminal. A retained
+/// skipped-body End is authoritative even when a crash or cut removed its following controls.
+async fn complete_owner_attachment_terminals<U: Send + 'static, Ctx: WorkerCtx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    operation: &operation::OwnerToolOperation,
+    start: golem_common::model::OplogIndex,
+    controllers: [Option<&AttachmentController>; 3],
+    failure: ByteStreamFailure,
+) -> anyhow::Result<()> {
+    use crate::durable_host::concurrent::{LiveCallPermit, prepare_access_terminal_effect};
+    use crate::services::oplog::CommitLevel;
+    use golem_common::model::oplog::OplogEntry;
+    use golem_common::model::oplog::attachment::ToolAttachmentControl;
+
+    for controller in controllers.into_iter().flatten() {
+        let (worker, oplog, replay, live, suppressed, failure_context, activity, permit) = accessor
+            .with(|mut access| {
+                let ctx = access.get();
+                (
+                    ctx.public_state.worker(),
+                    ctx.state.oplog.clone(),
+                    ctx.state.replay_state.clone(),
+                    ctx.is_live(),
+                    ctx.state.durability_is_suppressed(),
+                    durability::PublicationFailureContext::new(ctx),
+                    ctx.tail_work_tracker().activity(),
+                    LiveCallPermit::new(ctx.state.live_host_call_counter()),
+                )
+            });
+        let Some(identity) = controller.observer().identity().filter(|_| !suppressed) else {
             let _ = controller.host_fail(failure.clone());
-            controller.publish_no_body_terminal();
+            continue;
+        };
+        if !live && let Some(index) = replay.await_tool_attachment_terminal(identity).await? {
+            controller.await_terminal_publication(Some(index)).await?;
+            continue;
         }
-        drop(self);
+        let setup_failure = failure_context.clone();
+        let commit_worker = worker.clone();
+        let failed_controller = controller.clone();
+        let failed_operation = operation.clone();
+        let setup = (|| {
+            let recording = worker.runtime_append_tasks().register().ok_or(
+                WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::Jump,
+                },
+            )?;
+            prepare_access_terminal_effect(
+                &worker.tasks,
+                recording,
+                async move {
+                    commit_worker
+                        .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                        .await
+                        .map(|_| ())
+                        .map_err(WorkerExecutorError::from)
+                },
+                move |publication: attachment::AttachmentTerminalPublication, index| {
+                    let (_activity, _permit) = (activity, permit);
+                    publication.publish(index);
+                },
+                move |error| {
+                    failure_context.fail(
+                        error,
+                        Some(failed_operation),
+                        failed_controller,
+                        "tool owner attachment terminal",
+                    )
+                },
+            )
+        })();
+        let (handoff, receipt) = match setup {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let cleanup = setup_failure.fail(
+                    error.clone(),
+                    Some(operation.clone()),
+                    controller.clone(),
+                    "tool owner attachment terminal",
+                );
+                tokio::spawn(cleanup);
+                return Err(error.into());
+            }
+        };
+        let accepted =
+            controller.accept_owner_terminal(failure.clone(), |terminal, publication| {
+                (
+                    publication,
+                    oplog.enqueue_add(OplogEntry::ToolAttachmentControl {
+                        timestamp: golem_common::model::Timestamp::now_utc(),
+                        entity_parent_start_index: Some(start),
+                        attachment: identity,
+                        transition: ToolAttachmentControl::TerminalSelected(terminal),
+                    }),
+                )
+            });
+        if let Some(accepted) = accepted {
+            assert!(handoff.send(accepted).is_ok());
+            receipt
+                .await
+                .map_err(|error| anyhow!("owner terminal recorder stopped: {error}"))??;
+        } else {
+            drop(handoff);
+        }
+        controller.await_terminal_publication(None).await?;
+    }
+    Ok(())
+}
+
+async fn rollback_live_attachment_admission_rejection(operation: &operation::OwnerToolOperation) {
+    if operation
+        .take_live_attachment_admission_rejection()
+        .await
+        .is_some_and(|rejection| rejection.preselected)
+    {
+        operation
+            .resolve_ordinary(
+                Arc::new(resource_exhausted_terminal(
+                    SerializableEntityBodyExecution::Executed,
+                )),
+                false,
+            )
+            .await;
     }
 }
 
@@ -2880,10 +3131,12 @@ where
     U: Send + 'static,
     Ctx: WorkerCtx,
 {
+    let start = durability.scope().invocation_id().start_index();
+    let _reconstruction = durability.historical_reconstruction_hold();
     let admission_rejection_preselected = operation
         .take_live_attachment_admission_rejection()
         .await
-        .is_some();
+        .is_some_and(|rejection| rejection.preselected);
     if !admission_rejection_preselected && !operation.begin_ordinary() {
         return Err(anyhow!(
             "tool invocation was fenced before no-body completion"
@@ -2917,17 +3170,23 @@ where
             _,
         )) => {
             operation.resolve_ordinary(terminal, true).await;
-            operation.settle().await;
             let terminal = terminal_from_response(&response)?;
             let failure = skipped_attachment_failure(&terminal);
+            complete_owner_attachment_terminals(
+                accessor,
+                &operation,
+                start,
+                [stdin, stdout, stderr],
+                failure.clone(),
+            )
+            .await?;
             for controller in stdin.into_iter().chain(stdout).chain(stderr) {
                 if matches!(failure, ByteStreamFailure::ResourceExhausted) {
                     controller.complete_rejected_live_memory_accounting();
-                } else {
-                    let _ = controller.host_fail(failure.clone());
                 }
             }
             publish_no_body_terminals(stdin, stdout, stderr);
+            operation.settle().await;
             decode_tool_terminal(*response).map_err(Into::into)
         }
         Ok(crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(
@@ -2937,13 +3196,18 @@ where
             operation.resolve_ordinary(terminal, false).await;
             let _ = operation.begin_cancel();
             operation.resolve_cancel(true).await;
-            operation.settle().await;
             let terminal = terminal_from_response(&response)?;
             let failure = skipped_attachment_failure(&terminal);
-            for controller in stdin.into_iter().chain(stdout).chain(stderr) {
-                let _ = controller.host_fail(failure.clone());
-            }
+            complete_owner_attachment_terminals(
+                accessor,
+                &operation,
+                start,
+                [stdin, stdout, stderr],
+                failure,
+            )
+            .await?;
             publish_no_body_terminals(stdin, stdout, stderr);
+            operation.settle().await;
             decode_tool_terminal(*response).map_err(Into::into)
         }
         Err(error) => {
@@ -2969,6 +3233,8 @@ where
     U: Send + 'static,
     Ctx: WorkerCtx,
 {
+    let start = durability.scope().invocation_id().start_index();
+    let _reconstruction = durability.historical_reconstruction_hold();
     let response = match &recorded {
         RecordedEntityTerminal::Completed(response)
         | RecordedEntityTerminal::Cancelled(response) => response,
@@ -3076,8 +3342,25 @@ where
             outcome
         }
     }?;
+    complete_owner_attachment_terminals(
+        accessor,
+        &operation,
+        start,
+        [
+            controllers.0.as_ref(),
+            controllers.1.as_ref(),
+            controllers.2.as_ref(),
+        ],
+        failure,
+    )
+    .await?;
+    publish_no_body_terminals(
+        controllers.0.as_ref(),
+        controllers.1.as_ref(),
+        controllers.2.as_ref(),
+    );
+    drop(endpoints);
     operation.settle().await;
-    endpoints.publish_failure(&controllers, failure);
     match outcome {
         crate::durable_host::entity::EntityInvocationDurabilityOutcome::Completed(response, _)
         | crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(response, _) => {
@@ -3123,6 +3406,7 @@ where
     U: Send + 'static,
     Ctx: WorkerCtx,
 {
+    let _reconstruction = durability.historical_reconstruction_hold();
     let expected_readiness = match admission {
         operation::BodyAdmissionState::Staging => operation::DeferredAdmissionReadiness::Staging,
         operation::BodyAdmissionState::Ready => operation::DeferredAdmissionReadiness::Ready,
@@ -3168,8 +3452,16 @@ where
         ))
         .await;
     let outcome = outcome?;
-    operation.settle().await;
+    complete_owner_attachment_terminals(
+        accessor,
+        &operation,
+        start,
+        [stdin, stdout, stderr],
+        ByteStreamFailure::Cancelled,
+    )
+    .await?;
     publish_no_body_terminals(stdin, stdout, stderr);
+    operation.settle().await;
     match outcome {
         crate::durable_host::entity::EntityInvocationDurabilityOutcome::Completed(response, _)
         | crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(response, _) => {
@@ -3190,6 +3482,8 @@ where
     U: Send + 'static,
     Ctx: WorkerCtx,
 {
+    let start = durability.scope().invocation_id().start_index();
+    let _reconstruction = durability.historical_reconstruction_hold();
     if !operation.begin_cancel() {
         return Err(anyhow!(
             "tool invocation lost cancellation terminal arbitration"
@@ -3205,8 +3499,16 @@ where
         ))
         .await;
     let outcome = outcome?;
-    operation.settle().await;
+    complete_owner_attachment_terminals(
+        accessor,
+        &operation,
+        start,
+        [stdin, stdout, stderr],
+        ByteStreamFailure::Cancelled,
+    )
+    .await?;
     publish_no_body_terminals(stdin, stdout, stderr);
+    operation.settle().await;
     match outcome {
         crate::durable_host::entity::EntityInvocationDurabilityOutcome::Completed(response, _)
         | crate::durable_host::entity::EntityInvocationDurabilityOutcome::Cancelled(response, _) => {
@@ -3290,6 +3592,7 @@ where
         execution_future.await
     };
     if let Err(error) = &mut result {
+        rollback_live_attachment_admission_rejection(&cleanup_operation).await;
         let mut failed_resources = failed_resources.lock().unwrap().take();
         if let Some(failed_resources) = failed_resources.as_mut() {
             if !failed_resources.parent_end_attempted {
@@ -3424,20 +3727,31 @@ where
     if let Some(recorded) = durability
         .recorded_terminal_access(accessor, accessor.getter())
         .await?
-        && recorded_tool_body_is_skipped(&recorded)?
     {
-        return execute_recorded_skipped_tool_call(
-            accessor,
-            durability,
-            operation,
-            stdin,
-            stdout,
-            stderr,
-            recorded,
-            deferred_admission_inserted,
-            &mut eager_deferred_cleanup,
-        )
-        .await;
+        if recorded_tool_body_is_skipped(&recorded)? {
+            return execute_recorded_skipped_tool_call(
+                accessor,
+                durability,
+                operation,
+                stdin,
+                stdout,
+                stderr,
+                recorded,
+                deferred_admission_inserted,
+                &mut eager_deferred_cleanup,
+            )
+            .await;
+        }
+        if let RecordedEntityTerminal::Completed(response) = &recorded
+            && let Some(refusal) = terminal_from_response(response)?.admission_refusal.clone()
+        {
+            let replay = accessor.with(|mut access| access.get().state.replay_state.clone());
+            let (terminal_index, _) = replay
+                .visible_terminal_record(start)
+                .await
+                .ok_or_else(|| anyhow!("recorded tool terminal has no visible End"))?;
+            operation.install_recorded_admission_refusal(refusal, terminal_index);
+        }
     }
     let replaying_incomplete = durability.scope().mode()
         == golem_common::model::entity::InvocationExecutionMode::ReplayingIncomplete;
@@ -3933,14 +4247,16 @@ where
     let cancellation = execution
         .filter(|execution| execution.cancellable)
         .map(|execution| execution.cancel.clone());
+    let scope_interest = durability.scope_interest();
     let finalize = move |result: Result<HostResponseEntityInvocation, WorkerExecutorError>| {
         let operation = operation_for_finalize;
         async move {
+            let _scope_interest = scope_interest;
             let (result, admission_rejection_preselected) = match result {
                 Err(error)
                     if crate::durable_host::is_tool_attachment_live_admission_rejection(&error) =>
                 {
-                    operation
+                    let rejection = operation
                         .take_live_attachment_admission_rejection()
                         .await
                         .ok_or_else(|| {
@@ -3948,21 +4264,39 @@ where
                                 "tool attachment admission rejection lost its operation marker",
                             )
                         })?;
-                    let result = resource_exhausted_after_body().await;
-                    if result.is_err() {
-                        operation
-                            .resolve_ordinary(
-                                Arc::new(resource_exhausted_terminal(
-                                    SerializableEntityBodyExecution::Executed,
-                                )),
-                                false,
-                            )
-                            .await;
-                    }
-                    (result, true)
+                    (resource_exhausted_after_body().await, rejection.preselected)
+                }
+                Err(error) => {
+                    rollback_live_attachment_admission_rejection(&operation).await;
+                    (Err(error), false)
                 }
                 result => (result, false),
             };
+            let result = match (result, operation.observed_admission_refusal()) {
+                (Ok(response), Some(refusal)) => match terminal_from_response(&response) {
+                    Ok(selected) => {
+                        let mut selected = (*selected).clone();
+                        selected.admission_refusal = Some(refusal);
+                        encode_tool_terminal(
+                            selected,
+                            "failed to encode observed admission refusal",
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                },
+                (result, _) => result,
+            };
+            if result.is_err() && admission_rejection_preselected {
+                operation
+                    .resolve_ordinary(
+                        Arc::new(resource_exhausted_terminal(
+                            SerializableEntityBodyExecution::Executed,
+                        )),
+                        false,
+                    )
+                    .await;
+            }
             match &result {
                 Ok(response) => {
                     let selected = match terminal_from_response(response) {
@@ -4080,6 +4414,7 @@ where
     let body = match body {
         Ok(body) => body,
         Err(error) => {
+            rollback_live_attachment_admission_rejection(&operation).await;
             let _ = operation.select_infrastructure(error.clone()).await;
             return Err(error.into());
         }
@@ -4112,6 +4447,9 @@ where
                     operation_for_completed_failure
                         .resolve_ordinary(terminal, false)
                         .await;
+                } else {
+                    rollback_live_attachment_admission_rejection(&operation_for_completed_failure)
+                        .await;
                 }
                 let _ = operation_for_completed_failure
                     .select_infrastructure(error)
@@ -4128,9 +4466,7 @@ where
             let terminal = terminal.lock().unwrap().take().ok_or_else(|| {
                 anyhow!("completed tool body did not select an operation terminal")
             })?;
-            if live_admission_rejected {
-                operation.complete_rejected_live_attachment_memory_accounting();
-            }
+            let failure = skipped_attachment_failure(&terminal);
             let resources = match resources {
                 Some(mut retained) => {
                     if let Err(error) = retained.prepare_parent_end().await {
@@ -4146,6 +4482,30 @@ where
                 None => None,
             };
             operation.resolve_ordinary(terminal, true).await;
+            if live_admission_rejected {
+                if let Err(error) = complete_owner_attachment_terminals(
+                    accessor,
+                    &operation,
+                    start,
+                    [
+                        stdin_controller.as_ref(),
+                        stdout_controller.as_ref(),
+                        stderr_controller.as_ref(),
+                    ],
+                    failure,
+                )
+                .await
+                {
+                    if let Some(retained) = resources {
+                        *failed_resources.lock().unwrap() = Some(FailedRetainedEntityResources {
+                            resources: retained,
+                            parent_end_attempted: true,
+                        });
+                    }
+                    return Err(error);
+                }
+                operation.complete_rejected_live_attachment_memory_accounting();
+            }
             if let Some(resources) = resources {
                 resources.settle_after_parent_end().await?;
             }
@@ -4205,13 +4565,18 @@ where
             }
             if live_admission_rejected {
                 let failure = skipped_attachment_failure(&response_terminal);
-                for controller in stdin_controller
-                    .iter()
-                    .chain(stdout_controller.iter())
-                    .chain(stderr_controller.iter())
-                {
-                    let _ = controller.host_fail(failure.clone());
-                }
+                complete_owner_attachment_terminals(
+                    accessor,
+                    &operation,
+                    start,
+                    [
+                        stdin_controller.as_ref(),
+                        stdout_controller.as_ref(),
+                        stderr_controller.as_ref(),
+                    ],
+                    failure,
+                )
+                .await?;
             }
             if has_input_streams
                 || result_streams
@@ -4247,6 +4612,8 @@ where
             let selected_terminal = terminal.lock().unwrap().take();
             if let Some(terminal) = selected_terminal {
                 operation.resolve_ordinary(terminal, false).await;
+            } else {
+                rollback_live_attachment_admission_rejection(&operation).await;
             }
             if let Some(resources) = failure.resources {
                 *failed_resources.lock().unwrap() = Some(FailedRetainedEntityResources {
@@ -4311,6 +4678,9 @@ where
                 let operation = operation
                     .accept(durability.scope().invocation_id().clone())
                     .ok_or_else(|| anyhow!("owner generation fenced replayed tool invocation"))?;
+                accessor.with(|mut access| {
+                    durability::install_cancellation_effect(access.get(), &operation)
+                });
                 return Ok(ToolCallDispatch::Accepted(Box::new(AcceptedToolCall {
                     durability,
                     operation,
@@ -4366,6 +4736,9 @@ where
                 .operation
                 .accept(durability.scope().invocation_id().clone())
                 .ok_or_else(|| anyhow!("owner generation fenced tool invocation"))?;
+            accessor.with(|mut access| {
+                durability::install_cancellation_effect(access.get(), &operation)
+            });
             let _permit = prepared.permit;
             Ok(ToolCallDispatch::Accepted(Box::new(AcceptedToolCall {
                 durability,
@@ -4786,20 +5159,23 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
             let endpoint = stdin
                 .take_host_endpoint::<DurableInputEndpoint>()
                 .map_err(wasmtime::Error::msg)?;
+            let source_cancel = Arc::new(OnceLock::new());
             let reader = accessor.with(|mut access| {
                 let ctx = access.get();
                 let producer = DurableByteInputProducer(
-                    DurableInputProducer::new(endpoint).with_drop_cleanup(
-                        ctx.state
-                            .dropped_call_event_sender()
-                            .expect("dropped-call event sender is always available"),
-                        ctx.stream_runtime_teardown_probe(),
-                    ),
+                    DurableInputProducer::new(endpoint)
+                        .with_drop_cleanup(
+                            ctx.state
+                                .dropped_call_event_sender()
+                                .expect("dropped-call event sender is always available"),
+                            ctx.stream_runtime_teardown_probe(),
+                        )
+                        .with_producer_cancel_observer(source_cancel.clone()),
                 );
                 StreamReader::new(&mut access, producer)
             })?;
             Some(
-                create_native_underlying_stdin(accessor, reader)
+                create_native_underlying_stdin(accessor, reader, source_cancel)
                     .map_err(wasmtime::Error::from_anyhow)?,
             )
         } else {
@@ -4993,33 +5369,61 @@ pub(crate) async fn prepare_tool_parent_end<Ctx: WorkerCtx>(
 ) -> Result<(), WorkerExecutorError> {
     store
         .as_context_mut()
-        .run_concurrent(async move |accessor| -> wasmtime::Result<()> {
+        .run_concurrent(async move |accessor| -> Result<(), WorkerExecutorError> {
+            // Dropped acknowledgments leave accepted effects owned by the cleanup queue.
+            // Join their publication before classifying output failures or closing the parent.
+            crate::durable_host::concurrent::drain_dropped_call_events_access(accessor, |ctx| {
+                ctx.durable_ctx_mut()
+            })
+            .await
+            .map_err(|error| error.source)?;
             let execution =
                 accessor.with(|mut access| access.data_mut().durable_ctx().owner_execution.clone());
-            prepare_tool_parent_end_owned(&execution, parent)
-                .await
-                .map_err(|error| wasmtime::Error::msg(error.to_string()))
+            prepare_tool_parent_end_owned(&execution, parent).await
         })
         .await
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
-        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
 }
 
 pub(crate) async fn settle_tool_children<Ctx: WorkerCtx>(
     store: &mut wasmtime::StoreContextMut<'_, Ctx>,
     parent: crate::worker::owner_lane::OwnerInvocationId,
 ) -> Result<(), WorkerExecutorError> {
+    use futures::FutureExt;
+
     let execution = store.data().durable_ctx().owner_execution.clone();
-    store
-        .as_context_mut()
-        .run_concurrent(async move |_accessor| -> wasmtime::Result<()> {
-            settle_tool_children_owned(&execution, parent)
-                .await
-                .map_err(|error| wasmtime::Error::msg(error.to_string()))
-        })
-        .await
-        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
-        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
+    let operations = execution.tool_operations();
+    let primary = store
+        .data()
+        .durable_ctx()
+        .entity_invocation_scope()
+        .is_none();
+    let settlement = async move {
+        let result = settle_tool_children_owned(&execution, parent).await;
+        if primary {
+            execution
+                .tool_operations()
+                .join_owner_failure_cleanup()
+                .await?;
+        }
+        result
+    }
+    .boxed()
+    .shared();
+    loop {
+        let pending = settlement.clone();
+        match store
+            .as_context_mut()
+            .run_concurrent(async move |_accessor| pending.await)
+            .await
+        {
+            Ok(result) => return result,
+            // A secondary task error must not strand a registered failure continuation,
+            // even while election still waits for another terminal selection to settle.
+            Err(_) if operations.has_owner_failure() => {}
+            Err(error) => return Err(WorkerExecutorError::runtime(error.to_string())),
+        }
+    }
 }
 
 fn register_tool_admission<U, Ctx>(
@@ -5143,8 +5547,19 @@ where
     Ctx: WorkerCtx,
 {
     if let Some(output) = output {
-        let output = accessor.with(|mut access| access.get().table().delete(output))?;
-        output.reject_unconfigured();
+        accessor.with(|mut access| {
+            let ctx = access.get();
+            let mut output = ctx.table().delete(output)?;
+            durability::dispose_producer(
+                ctx,
+                output
+                    .producer
+                    .take()
+                    .expect("output target already consumed"),
+                ByteStreamFailure::Failed("tool invocation rejected".to_string()),
+                true,
+            )
+        })?;
     }
     Ok(())
 }
@@ -5224,6 +5639,7 @@ where
         access.spawn(ToolStdinStreamPumpTask::<Ctx> {
             producer,
             items: received,
+            source_cancel: None,
             _ctx: std::marker::PhantomData,
         });
         Ok(stdin)
@@ -5233,6 +5649,7 @@ where
 fn create_native_underlying_stdin<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     source: StreamReader<u8>,
+    source_cancel: Arc<OnceLock<StreamCancelReason>>,
 ) -> anyhow::Result<Resource<ToolStdinEntry>>
 where
     U: Send + 'static,
@@ -5265,6 +5682,7 @@ where
         access.spawn(ToolStdinStreamPumpTask::<Ctx> {
             producer,
             items: received,
+            source_cancel: Some(source_cancel),
             _ctx: std::marker::PhantomData,
         });
         Ok(stdin)
@@ -5502,6 +5920,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub(crate) async fn get_all_tools_model(&mut self) -> anyhow::Result<Vec<Arc<DiscoveredTool>>> {
+        self.process_pending_replay_events().await?;
         let environment_id = self.state.owned_agent_id.environment_id;
         let owner_component_metadata = self.owner_component_metadata();
         let component_id = owner_component_metadata.id;
@@ -5599,6 +6018,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         tool_name: String,
     ) -> anyhow::Result<Option<Arc<DiscoveredTool>>> {
+        self.process_pending_replay_events().await?;
         let valid_tool_name = ToolName::try_from(tool_name.as_str()).ok();
         let environment_id = self.state.owned_agent_id.environment_id;
         let owner_component_metadata = self.owner_component_metadata();
@@ -5799,8 +6219,8 @@ fn merge_discovered_tools(
 
 impl<Ctx: WorkerCtx> HostToolStdinWriter for DurableWorkerCtx<Ctx> {
     async fn drop(&mut self, rep: Resource<ToolStdinWriterEntry>) -> anyhow::Result<()> {
-        self.table().delete(rep)?;
-        Ok(())
+        let writer = self.table().delete(rep)?;
+        durability::dispose_producer(self, writer.producer, ByteStreamFailure::Abandoned, false)
     }
 }
 
@@ -5812,17 +6232,36 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolStdinWriterWithStore<U>
         self_: Resource<ToolStdinWriterEntry>,
         bytes: Vec<u8>,
     ) -> anyhow::Result<Result<(), StreamWriteError>> {
-        let writer = accessor.with(|mut access| {
-            Ok::<_, anyhow::Error>(access.get().table().get(&self_)?.producer.writer())
+        let (writer, controller, ordinal) = accessor.with(|mut access| {
+            let producer = &mut access.get().table().get_mut(&self_)?.producer;
+            Ok::<_, anyhow::Error>((
+                producer.writer(),
+                producer.controller(),
+                producer.next_operation_ordinal(),
+            ))
         })?;
-        Ok(writer.write(bytes).await)
+        durability::write::<golem_common::model::oplog::host_functions::GolemToolStdinWrite, _, _>(
+            accessor, writer, controller, ordinal, bytes,
+        )
+        .await
     }
 
     async fn finish(
         accessor: &Accessor<U, Self>,
         self_: Resource<ToolStdinWriterEntry>,
     ) -> anyhow::Result<Result<(), StreamWriteError>> {
-        accessor.with(|mut access| Ok(access.get().table().get(&self_)?.producer.writer().finish()))
+        let (writer, controller, ordinal) = accessor.with(|mut access| {
+            let producer = &mut access.get().table().get_mut(&self_)?.producer;
+            Ok::<_, anyhow::Error>((
+                producer.writer(),
+                producer.controller(),
+                producer.next_operation_ordinal(),
+            ))
+        })?;
+        durability::finish::<golem_common::model::oplog::host_functions::GolemToolStdinFinish, _, _>(
+            accessor, writer, controller, ordinal,
+        )
+        .await
     }
 
     async fn fail(
@@ -5830,15 +6269,18 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolStdinWriterWithStore<U>
         self_: Resource<ToolStdinWriterEntry>,
         reason: ByteStreamFailure,
     ) -> anyhow::Result<Result<(), StreamWriteError>> {
-        accessor.with(|mut access| {
-            Ok(access
-                .get()
-                .table()
-                .get(&self_)?
-                .producer
-                .writer()
-                .fail(reason))
-        })
+        let (writer, controller, ordinal) = accessor.with(|mut access| {
+            let producer = &mut access.get().table().get_mut(&self_)?.producer;
+            Ok::<_, anyhow::Error>((
+                producer.writer(),
+                producer.controller(),
+                producer.next_operation_ordinal(),
+            ))
+        })?;
+        durability::fail::<golem_common::model::oplog::host_functions::GolemToolStdinFail, _, _>(
+            accessor, writer, controller, ordinal, reason,
+        )
+        .await
     }
 }
 
@@ -5863,25 +6305,35 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolStdinClosedWithStore<U>
         accessor: &Accessor<U, Self>,
         self_: Resource<ToolStdinClosedEntry>,
     ) -> anyhow::Result<ByteStreamCloseCause> {
-        let observer = accessor.with(|mut access| {
-            Ok::<_, anyhow::Error>(access.get().table().get(&self_)?.observer.clone())
+        let (observer, operation_ordinal) = accessor.with(|mut access| {
+            let entry = access.get().table().get_mut(&self_)?;
+            let operation_ordinal = entry.next_operation_ordinal;
+            entry.next_operation_ordinal += 1;
+            Ok::<_, anyhow::Error>((entry.observer.clone(), operation_ordinal))
         })?;
-        Ok(observer.wait_terminal().await)
+        durability::wait(accessor, observer, operation_ordinal).await
     }
 }
 
 impl<Ctx: WorkerCtx> HostToolOutput for DurableWorkerCtx<Ctx> {
     async fn drop(&mut self, rep: Resource<ToolOutputEntry>) -> anyhow::Result<()> {
-        let stdout = self.table().delete(rep)?;
-        stdout.abandon_unconfigured();
-        Ok(())
+        let mut stdout = self.table().delete(rep)?;
+        durability::dispose_producer(
+            self,
+            stdout
+                .producer
+                .take()
+                .expect("output target already consumed"),
+            ByteStreamFailure::Abandoned,
+            true,
+        )
     }
 }
 
 impl<Ctx: WorkerCtx> HostToolOutputWriter for DurableWorkerCtx<Ctx> {
     async fn drop(&mut self, rep: Resource<ToolOutputWriterEntry>) -> anyhow::Result<()> {
-        self.table().delete(rep)?;
-        Ok(())
+        let writer = self.table().delete(rep)?;
+        durability::dispose_producer(self, writer.producer, ByteStreamFailure::Abandoned, false)
     }
 }
 
@@ -5893,17 +6345,36 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolOutputWriterWithStore<U>
         self_: Resource<ToolOutputWriterEntry>,
         bytes: Vec<u8>,
     ) -> anyhow::Result<Result<(), StreamWriteError>> {
-        let writer = accessor.with(|mut access| {
-            Ok::<_, anyhow::Error>(access.get().table().get(&self_)?.producer.writer())
+        let (writer, controller, ordinal) = accessor.with(|mut access| {
+            let entry = access.get().table().get_mut(&self_)?;
+            Ok::<_, anyhow::Error>((
+                entry.producer.writer(),
+                entry.controller(),
+                entry.producer.next_operation_ordinal(),
+            ))
         })?;
-        Ok(writer.write(bytes).await)
+        durability::write::<golem_common::model::oplog::host_functions::GolemToolOutputWrite, _, _>(
+            accessor, writer, controller, ordinal, bytes,
+        )
+        .await
     }
 
     async fn finish(
         accessor: &Accessor<U, Self>,
         self_: Resource<ToolOutputWriterEntry>,
     ) -> anyhow::Result<Result<(), StreamWriteError>> {
-        accessor.with(|mut access| Ok(access.get().table().get(&self_)?.producer.writer().finish()))
+        let (writer, controller, ordinal) = accessor.with(|mut access| {
+            let entry = access.get().table().get_mut(&self_)?;
+            Ok::<_, anyhow::Error>((
+                entry.producer.writer(),
+                entry.controller(),
+                entry.producer.next_operation_ordinal(),
+            ))
+        })?;
+        durability::finish::<golem_common::model::oplog::host_functions::GolemToolOutputFinish, _, _>(
+            accessor, writer, controller, ordinal,
+        )
+        .await
     }
 
     async fn fail(
@@ -5911,15 +6382,18 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolOutputWriterWithStore<U>
         self_: Resource<ToolOutputWriterEntry>,
         reason: ByteStreamFailure,
     ) -> anyhow::Result<Result<(), StreamWriteError>> {
-        accessor.with(|mut access| {
-            Ok(access
-                .get()
-                .table()
-                .get(&self_)?
-                .producer
-                .writer()
-                .fail(reason))
-        })
+        let (writer, controller, ordinal) = accessor.with(|mut access| {
+            let entry = access.get().table().get_mut(&self_)?;
+            Ok::<_, anyhow::Error>((
+                entry.producer.writer(),
+                entry.controller(),
+                entry.producer.next_operation_ordinal(),
+            ))
+        })?;
+        durability::fail::<golem_common::model::oplog::host_functions::GolemToolOutputFail, _, _>(
+            accessor, writer, controller, ordinal, reason,
+        )
+        .await
     }
 }
 
@@ -5947,30 +6421,102 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Resource<ToolStdinEntry>,
         Resource<ToolStdinClosedEntry>,
     )> {
-        let memory = AttachmentMemory::for_store(
-            self.public_state.worker().active_agents(),
-            self.state.is_live(),
-        );
-        let (producer, consumer, observer) =
-            attachment_pair(self.state.config.limits.max_tool_attachment_bytes, memory);
-        let writer = self.table().push(ToolStdinWriterEntry { producer })?;
-        let source = match self.table().push(ToolStdinEntry { consumer }) {
-            Ok(source) => source,
-            Err(error) => {
-                self.table().delete(writer)?;
-                return Err(error.into());
-            }
+        use golem_common::model::oplog::HostResponseToolAttachmentCreated;
+        use golem_common::model::oplog::attachment::{ToolAttachmentId, ToolAttachmentSlot};
+        use golem_common::model::oplog::host_functions::GolemToolCreateStdin;
+        use golem_common::model::oplog::payload::tool_attachment::ToolAttachmentCreated;
+
+        if self.state.durability_is_suppressed() {
+            return allocate_stdin(
+                self,
+                self.state.config.limits.max_tool_attachment_bytes,
+                None,
+            );
+        }
+        let mut call = DurableCallSession::<GolemToolCreateStdin, NotCancellable>::start(
+            self,
+            HostRequestNoInput {},
+            DurableFunctionType::WriteLocal,
+        )
+        .await?;
+        let identity = ToolAttachmentId {
+            creation_start: call.start_index(),
+            slot: ToolAttachmentSlot::Stdin,
         };
-        let closed = match self.table().push(ToolStdinClosedEntry { observer }) {
-            Ok(closed) => closed,
-            Err(error) => {
-                self.table().delete(source)?;
-                self.table().delete(writer)?;
-                return Err(error.into());
+        let created = 'creation: {
+            if !call.is_live() {
+                match call.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => {
+                        anyhow::ensure!(
+                            response.created.attachment == identity,
+                            "tool stdin identity changed during replay"
+                        );
+                        break 'creation response.created;
+                    }
+                    CallReplayOutcome::Incomplete(live) => call = live,
+                }
             }
+            let capacity_bytes = self.state.config.limits.max_tool_attachment_bytes as u64;
+            call.complete(
+                self,
+                HostResponseToolAttachmentCreated {
+                    created: ToolAttachmentCreated {
+                        attachment: identity,
+                        capacity_bytes,
+                    },
+                },
+            )
+            .await?
+            .created
         };
-        Ok((writer, source, closed))
+        allocate_stdin(
+            self,
+            usize::try_from(created.capacity_bytes)?,
+            Some(created.attachment),
+        )
     }
+}
+
+fn allocate_stdin<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    capacity: usize,
+    identity: Option<golem_common::model::oplog::attachment::ToolAttachmentId>,
+) -> anyhow::Result<(
+    Resource<ToolStdinWriterEntry>,
+    Resource<ToolStdinEntry>,
+    Resource<ToolStdinClosedEntry>,
+)> {
+    let memory = AttachmentMemory::for_store(
+        ctx.public_state.worker().active_agents(),
+        ctx.state.is_live(),
+    );
+    let (producer, consumer, observer) = attachment_pair(capacity, memory);
+    if let Some(identity) = identity {
+        producer.writer().set_identity(identity);
+        ctx.state
+            .replay_state
+            .register_tool_attachment(identity, &consumer.controller())?;
+    }
+    let writer = ctx.table().push(ToolStdinWriterEntry { producer })?;
+    let source = match ctx.table().push(ToolStdinEntry { consumer }) {
+        Ok(source) => source,
+        Err(error) => {
+            ctx.table().delete(writer)?;
+            return Err(error.into());
+        }
+    };
+    let closed = match ctx.table().push(ToolStdinClosedEntry {
+        observer: observer.into_guest_watcher(),
+        next_operation_ordinal: 0,
+    }) {
+        Ok(closed) => closed,
+        Err(error) => {
+            ctx.table().delete(source)?;
+            ctx.table().delete(writer)?;
+            return Err(error.into());
+        }
+    };
+    Ok((writer, source, closed))
 }
 
 impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWorkerCtx<Ctx>> {
@@ -5997,6 +6543,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
             access.spawn(ToolStdinStreamPumpTask::<Ctx> {
                 producer,
                 items: received,
+                source_cancel: None,
                 _ctx: std::marker::PhantomData,
             });
             Ok(stdin)
@@ -6009,26 +6556,105 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         Resource<ToolOutputEntry>,
         StreamReader<Result<Vec<u8>, ByteStreamFailure>>,
     )> {
-        accessor.with(|mut access| {
+        use crate::durable_host::concurrent::DeferredCallReplayOutcome;
+        use golem_common::model::oplog::HostResponseToolAttachmentCreated;
+        use golem_common::model::oplog::attachment::{ToolAttachmentId, ToolAttachmentSlot};
+        use golem_common::model::oplog::host_functions::GolemToolCreateOutput;
+        use golem_common::model::oplog::payload::tool_attachment::ToolAttachmentCreated;
+
+        if accessor.with(|mut access| access.get().state.durability_is_suppressed()) {
+            let (target, consumer) = create_output_attachment(accessor, false)?;
+            return accessor.with(|mut access| {
+                match StreamReader::new(&mut access, consumer.into_stream_producer()) {
+                    Ok(reader) => Ok((target, reader)),
+                    Err(error) => {
+                        access.get().table().delete(target)?;
+                        Err(error.into())
+                    }
+                }
+            });
+        }
+        let mut call = DurableCallSession::<GolemToolCreateOutput, NotCancellable>::start_access(
+            accessor,
+            accessor.getter(),
+            HostRequestNoInput {},
+            DurableFunctionType::WriteLocal,
+        )
+        .await?;
+        let identity = ToolAttachmentId {
+            creation_start: call.start_index(),
+            slot: ToolAttachmentSlot::Output,
+        };
+        let (created, delivery) = 'creation: {
+            if !call.is_live() {
+                match call
+                    .replay_access_deferred(accessor, accessor.getter())
+                    .await?
+                {
+                    DeferredCallReplayOutcome::Replayed(response, delivery) => {
+                        anyhow::ensure!(
+                            response.created.attachment == identity,
+                            "tool output identity changed during replay"
+                        );
+                        break 'creation (response.created, delivery);
+                    }
+                    DeferredCallReplayOutcome::Incomplete(live) => call = live,
+                }
+            }
+            let capacity_bytes = accessor.with(|mut access| {
+                access.get().state.config.limits.max_tool_attachment_bytes as u64
+            });
+            let (response, delivery) = call
+                .complete_access_deferred(
+                    accessor,
+                    accessor.getter(),
+                    HostResponseToolAttachmentCreated {
+                        created: ToolAttachmentCreated {
+                            attachment: identity,
+                            capacity_bytes,
+                        },
+                    },
+                )
+                .await?;
+            (response.created, delivery)
+        };
+        let output = accessor.with(|mut access| -> anyhow::Result<_> {
+            let capacity = usize::try_from(created.capacity_bytes)?;
             let ctx = access.get();
             let memory = AttachmentMemory::for_store(
                 ctx.public_state.worker().active_agents(),
                 ctx.state.is_live(),
             );
-            let (producer, consumer, _) =
-                attachment_pair(ctx.state.config.limits.max_tool_attachment_bytes, memory);
+            let (producer, consumer, _) = attachment_pair(capacity, memory);
+            producer.writer().set_identity(created.attachment);
+            ctx.state
+                .replay_state
+                .register_tool_attachment(created.attachment, &consumer.controller())?;
             let target = ctx.table().push(ToolOutputEntry {
                 producer: Some(producer),
                 completion_only: false,
             })?;
-            match StreamReader::new(&mut access, consumer.into_stream_producer()) {
+            let input = input::AttachmentInputProducer::new(consumer, accessor.getter(), ctx)?;
+            match StreamReader::new(&mut access, input) {
                 Ok(reader) => Ok((target, reader)),
                 Err(error) => {
                     access.get().table().delete(target)?;
                     Err(error.into())
                 }
             }
-        })
+        });
+        let output = match output {
+            Ok(output) => output,
+            Err(error) => {
+                delivery.suppress();
+                return Err(error);
+            }
+        };
+        if delivery.is_replay_discarded() {
+            std::future::pending::<()>().await;
+        }
+        delivery.deliver_at_accessor_terminal(accessor).await?;
+        Ok(output)
     }
 
     async fn get_invoke_results(
@@ -6464,11 +7090,11 @@ mod tests {
         ToolOutputWriterEntry, ToolStdinEntry, ToolStdinStreamConsumer, UnderlyingToolEntry,
         WitRegisteredTool, await_native_entity_body, caller_tool_owner,
         classify_tool_discovery_error, cleanup_tool_endpoints, first_output_limit_error,
-        materialize_output_writer, merge_discovered_tools, native_output_handles, option_args,
-        output_limit_error, publish_output_completions, recorded_tool_body_is_skipped,
-        resolve_tool_command, select_native_body_result, terminal_tool_discovery_error,
-        validate_declared_tool_error, validate_declared_tool_result, validate_native_tool_output,
-        validate_stream_attachments,
+        guest_body_accepts_admission_rejection, materialize_output_writer, merge_discovered_tools,
+        native_output_handles, option_args, output_limit_error, publish_output_completions,
+        recorded_tool_body_is_skipped, resolve_tool_command, select_native_body_result,
+        terminal_tool_discovery_error, validate_declared_tool_error, validate_declared_tool_result,
+        validate_native_tool_output, validate_stream_attachments,
     };
     use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
     use crate::durable_host::entity::RecordedEntityTerminal;
@@ -6589,6 +7215,31 @@ mod tests {
     }
 
     #[test]
+    fn completed_guest_admission_refusal_preserves_unrelated_body_failures() {
+        use crate::worker::invocation::GuestCallSettlementError;
+
+        assert!(guest_body_accepts_admission_rejection(&Ok(Ok(()))));
+        let refusal = crate::durable_host::tool_attachment_live_admission_rejected_error();
+        assert!(guest_body_accepts_admission_rejection::<()>(&Ok(Err(
+            wasmtime::Error::new(refusal).context("host call failed"),
+        ))));
+        for result in [
+            Ok(Err(wasmtime::Error::msg("unrelated guest failure"))),
+            Err(GuestCallSettlementError::Trap(wasmtime::Error::msg(
+                "unrelated trap",
+            ))),
+            Err(GuestCallSettlementError::Interrupted(wasmtime::Error::msg(
+                "interrupted",
+            ))),
+            Err(GuestCallSettlementError::Infrastructure(
+                WorkerExecutorError::runtime("unrelated infrastructure failure"),
+            )),
+        ] {
+            assert!(!guest_body_accepts_admission_rejection::<()>(&result));
+        }
+    }
+
+    #[test]
     fn native_post_body_admission_rejection_overrides_a_caught_handler_error() {
         let result =
             select_native_body_result(Ok("handler returned success"), Ok(()), true).unwrap_err();
@@ -6601,7 +7252,7 @@ mod tests {
         let result = select_native_body_result::<()>(
             Err(WorkerExecutorError::runtime("body failed")),
             Err(WorkerExecutorError::runtime("cleanup failed")),
-            false,
+            true,
         )
         .unwrap_err();
 
@@ -6923,13 +7574,19 @@ mod tests {
         assert!(stdout.controller().configure_live());
         assert!(stderr.controller().configure_live());
 
-        let (stdout_handle, stderr_handle) = native_output_handles(Some(&stdout), Some(&stderr));
+        let tasks = crate::worker::tasks::NativeReconstructionTasks::new(
+            &crate::worker::tasks::WorkerTasks::default(),
+        )
+        .unwrap();
+        let spawner = tasks.spawner();
+        let (stdout_handle, stderr_handle) =
+            native_output_handles(Some(&stdout), Some(&stderr), &spawner);
         let stdout_handle = stdout_handle.unwrap();
         let stderr_handle = stderr_handle.unwrap();
-        stdout_handle.write(vec![0, 1, 2]).await.unwrap();
-        stderr_handle.write(vec![9, 8]).await.unwrap();
-        stdout_handle.finish().unwrap();
-        stderr_handle.finish().unwrap();
+        stdout_handle.writer.write(vec![0, 1, 2]).await.unwrap();
+        stderr_handle.writer.write(vec![9, 8]).await.unwrap();
+        stdout_handle.writer.finish().unwrap();
+        stderr_handle.writer.finish().unwrap();
         assert!(matches!(
             stdout_reader.read_next().await,
             AttachmentRead::Item(Ok(bytes)) if bytes == vec![0, 1, 2]
@@ -6946,11 +7603,11 @@ mod tests {
         }
         .into_writer();
         assert!(stderr.controller().configure_live());
-        let (stdout_handle, stderr_handle) = native_output_handles(None, Some(&stderr));
+        let (stdout_handle, stderr_handle) = native_output_handles(None, Some(&stderr), &spawner);
         assert!(stdout_handle.is_none());
         let stderr_handle = stderr_handle.unwrap();
-        stderr_handle.write(vec![7, 6]).await.unwrap();
-        stderr_handle.finish().unwrap();
+        stderr_handle.writer.write(vec![7, 6]).await.unwrap();
+        stderr_handle.writer.finish().unwrap();
         assert!(matches!(
             stderr_reader.read_next().await,
             AttachmentRead::Item(Ok(bytes)) if bytes == vec![7, 6]
@@ -6970,9 +7627,13 @@ mod tests {
             controller.metadata().mode,
             ToolAttachmentModeMetadata::Discard
         );
-        let output = discard.native_writer();
-        output.write(vec![5; 1024 * 1024]).await.unwrap();
-        output.finish().unwrap();
+        let tasks = crate::worker::tasks::NativeReconstructionTasks::new(
+            &crate::worker::tasks::WorkerTasks::default(),
+        )
+        .unwrap();
+        let output = discard.native_writer(tasks.spawner());
+        output.writer.write(vec![5; 1024 * 1024]).await.unwrap();
+        output.writer.finish().unwrap();
     }
 
     #[test]
@@ -7049,11 +7710,25 @@ mod tests {
             anyhow::anyhow!("stderr setup failed"),
             || Ok(()),
             || {
-                stdout.take().unwrap().reject_unconfigured();
+                stdout
+                    .take()
+                    .unwrap()
+                    .producer
+                    .as_ref()
+                    .unwrap()
+                    .reject_unconfigured()
+                    .unwrap();
                 Ok(())
             },
             || {
-                stderr.take().unwrap().reject_unconfigured();
+                stderr
+                    .take()
+                    .unwrap()
+                    .producer
+                    .as_ref()
+                    .unwrap()
+                    .reject_unconfigured()
+                    .unwrap();
                 Ok(())
             },
         );
@@ -7073,6 +7748,7 @@ mod tests {
     fn completed_skipped_terminal_selects_no_body_replay() {
         let response = HostResponseEntityInvocation {
             result: Ok(SerializableToolOperationTerminal {
+                admission_refusal: None,
                 body_execution: SerializableEntityBodyExecution::Skipped,
                 result: Err(SerializableToolRpcError::ResourceExhausted(
                     "recorded limit".to_string(),
@@ -7113,7 +7789,27 @@ mod tests {
             };
             let controllers = endpoints.controllers();
 
-            endpoints.publish_failure(&controllers, failure.clone());
+            for controller in controllers
+                .0
+                .iter()
+                .chain(controllers.1.iter())
+                .chain(controllers.2.iter())
+            {
+                controller
+                    .restore_terminal(
+                        ByteStreamCloseCause::Failed(failure.clone()),
+                        matches!(failure, ByteStreamFailure::ResourceExhausted),
+                        golem_common::model::OplogIndex::from_u64(9),
+                        false,
+                    )
+                    .unwrap();
+            }
+            super::publish_no_body_terminals(
+                controllers.0.as_ref(),
+                controllers.1.as_ref(),
+                controllers.2.as_ref(),
+            );
+            drop(endpoints);
 
             assert_eq!(
                 controllers.0.as_ref().unwrap().metadata().mode,

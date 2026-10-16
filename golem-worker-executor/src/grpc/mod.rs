@@ -1637,7 +1637,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn connect_worker_internal(
         &self,
         request: ConnectWorkerRequest,
-    ) -> ResponseResult<<Self as WorkerExecutor>::ConnectWorkerStream> {
+    ) -> Result<Response<<Self as WorkerExecutor>::ConnectWorkerStream>, WorkerExecutorError> {
         let owned_agent_id =
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
 
@@ -1683,8 +1683,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             // We don't want 'connect' to resume interrupted workers
             Err(WorkerExecutorError::Interrupted {
                 kind: InterruptKind::Interrupt(Timestamp::now_utc()),
-            }
-            .into())
+            })
         }
     }
 
@@ -2505,9 +2504,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             agent_id = proto_agent_id_string(&request.agent_id),
         );
 
-        self.connect_worker_internal(request)
+        match self
+            .connect_worker_internal(request)
             .instrument(record.span.clone())
             .await
+        {
+            Ok(stream) => Ok(record.succeed(stream)),
+            Err(mut err) => Err(record.fail(err.clone().into(), &mut err)),
+        }
     }
 
     async fn delete_worker(

@@ -10,6 +10,9 @@ tracing_file_name_with_port = true
 drop_when_full = 0.25
 ttl = "8h"
 
+[agent_sockets]
+enabled = false
+
 [agent_status_checkpoint]
 enabled = true
 min_oplog_delta = 1000
@@ -456,6 +459,9 @@ without_time = false
 # [active_agents]
 # drop_when_full = 0.25
 # ttl = "8h"
+#
+# [agent_sockets]
+# enabled = false
 #
 # [agent_status_checkpoint]
 # enabled = true
@@ -905,6 +911,9 @@ without_time = false
 # drop_when_full = 0.25
 # ttl = "8h"
 #
+# [agent_sockets]
+# enabled = false
+#
 # [agent_status_checkpoint]
 # enabled = true
 # min_oplog_delta = 1000
@@ -1351,6 +1360,9 @@ without_time = false
 # [active_agents]
 # drop_when_full = 0.25
 # ttl = "8h"
+#
+# [agent_sockets]
+# enabled = false
 #
 # [agent_status_checkpoint]
 # enabled = true

@@ -97,6 +97,166 @@ use golem_api_grpc::proto::golem::worker::{
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU64;
 
+fn decode_attachment_observation(
+    value: &crate::schema::TypedSchemaValue,
+) -> Result<crate::base_model::oplog::attachment::ToolAttachmentReadObservation, String> {
+    use crate::schema::FromSchema as _;
+    crate::base_model::oplog::attachment::ToolAttachmentReadObservation::from_value(value.value())
+        .map_err(|error| error.to_string())
+}
+
+fn decode_attachment_control(
+    attachment: &crate::schema::TypedSchemaValue,
+    transition: &crate::schema::TypedSchemaValue,
+) -> Result<
+    (
+        crate::base_model::oplog::attachment::ToolAttachmentId,
+        crate::base_model::oplog::attachment::ToolAttachmentControl,
+    ),
+    String,
+> {
+    use crate::base_model::oplog::attachment::{ToolAttachmentControl, ToolAttachmentId};
+    use crate::schema::FromSchema as _;
+    Ok((
+        ToolAttachmentId::from_value(attachment.value()).map_err(|error| error.to_string())?,
+        ToolAttachmentControl::from_value(transition.value()).map_err(|error| error.to_string())?,
+    ))
+}
+
+#[cfg(test)]
+mod tool_attachment_control_tests {
+    use super::*;
+    use crate::base_model::oplog::attachment::{
+        ByteStreamCloseCause, ByteStreamFailure, ToolAttachmentControl, ToolAttachmentId,
+        ToolAttachmentSlot, ToolAttachmentTerminal,
+    };
+    use crate::model::Timestamp;
+    use crate::model::oplog::public_oplog_entry::ToolAttachmentControlParams;
+    use crate::schema::IntoTypedSchemaValue;
+    use test_r::test;
+
+    #[test]
+    fn tool_attachment_control_contract_roundtrips() {
+        let timestamp = Timestamp::now_utc().rounded();
+        let transitions = [
+            ToolAttachmentControl::ReaderDiscarded,
+            ToolAttachmentControl::TerminalSelected(ToolAttachmentTerminal::HostResourceExhausted),
+            ToolAttachmentControl::TerminalSelected(ToolAttachmentTerminal::Application(
+                ByteStreamCloseCause::Finished,
+            )),
+            ToolAttachmentControl::TerminalSelected(ToolAttachmentTerminal::Application(
+                ByteStreamCloseCause::ConsumerCancelled,
+            )),
+            ToolAttachmentControl::TerminalSelected(ToolAttachmentTerminal::Application(
+                ByteStreamCloseCause::Failed(ByteStreamFailure::Cancelled),
+            )),
+            ToolAttachmentControl::TerminalSelected(ToolAttachmentTerminal::Application(
+                ByteStreamCloseCause::Failed(ByteStreamFailure::Failed("failure".to_string())),
+            )),
+        ];
+        for slot in [
+            ToolAttachmentSlot::Stdin,
+            ToolAttachmentSlot::Stdout,
+            ToolAttachmentSlot::Stderr,
+            ToolAttachmentSlot::Output,
+        ] {
+            let attachment = ToolAttachmentId {
+                creation_start: OplogIndex::from_u64(3),
+                slot,
+            };
+            for transition in &transitions {
+                for parent in [None, Some(OplogIndex::from_u64(2))] {
+                    let raw = OplogEntry::ToolAttachmentControl {
+                        timestamp,
+                        entity_parent_start_index: parent,
+                        attachment,
+                        transition: transition.clone(),
+                    };
+                    assert!(raw.is_hint());
+                    assert_eq!(raw.entity_parent_start_index(), parent);
+                    let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+                        raw.clone().try_into().unwrap();
+                    let decoded: OplogEntry = proto.try_into().unwrap();
+                    assert_eq!(decoded, raw);
+                    let bytes = crate::serialization::serialize(&raw).unwrap();
+                    let decoded: OplogEntry = crate::serialization::deserialize(&bytes).unwrap();
+                    assert_eq!(decoded, raw);
+                }
+                let public = PublicOplogEntry::ToolAttachmentControl(ToolAttachmentControlParams {
+                    timestamp,
+                    attachment: attachment.into_typed_schema_value().unwrap(),
+                    transition: transition.clone().into_typed_schema_value().unwrap(),
+                });
+                let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+                    public.clone().try_into().unwrap();
+                let decoded: PublicOplogEntry = proto.try_into().unwrap();
+                assert_eq!(decoded, public);
+                for value in ["toolattachmentcontrol", "tool-attachment-control"] {
+                    assert!(public.matches(&crate::model::lucene::Query::Term {
+                        value: value.to_string(),
+                    }));
+                }
+                let json = serde_json::to_value(&public).unwrap();
+                assert_eq!(json["type"], "ToolAttachmentControl");
+                assert!(json.get("payload").is_none());
+                assert_eq!(
+                    serde_json::from_value::<PublicOplogEntry>(json).unwrap(),
+                    public
+                );
+                let raw: OplogEntry = public.try_into().unwrap();
+                assert_eq!(
+                    raw,
+                    OplogEntry::ToolAttachmentControl {
+                        timestamp,
+                        entity_parent_start_index: None,
+                        attachment,
+                        transition: transition.clone(),
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tool_attachment_control_rejects_invalid_metadata() {
+        let timestamp = Timestamp::now_utc();
+        let attachment = ToolAttachmentId {
+            creation_start: OplogIndex::from_u64(3),
+            slot: ToolAttachmentSlot::Output,
+        }
+        .into_typed_schema_value()
+        .unwrap();
+        let transition = ToolAttachmentControl::ReaderDiscarded
+            .into_typed_schema_value()
+            .unwrap();
+        for (attachment, transition) in [
+            (transition.clone(), transition.clone()),
+            (attachment.clone(), attachment.clone()),
+        ] {
+            let public = PublicOplogEntry::ToolAttachmentControl(ToolAttachmentControlParams {
+                timestamp,
+                attachment: attachment.clone(),
+                transition: transition.clone(),
+            });
+            let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+                public.clone().try_into().unwrap();
+            assert!(PublicOplogEntry::try_from(proto).is_err());
+            assert!(OplogEntry::try_from(public).is_err());
+            let proto = golem_api_grpc::proto::golem::worker::RawOplogEntry {
+                timestamp: Some(timestamp.into()),
+                entity_parent_start_index: None,
+                entry: Some(golem_api_grpc::proto::golem::worker::raw_oplog_entry::Entry::ToolAttachmentControl(
+                    golem_api_grpc::proto::golem::worker::RawToolAttachmentControlParameters {
+                        attachment: Some(attachment.try_into().unwrap()),
+                        transition: Some(transition.try_into().unwrap()),
+                    },
+                )),
+            };
+            assert!(OplogEntry::try_from(proto).is_err());
+        }
+    }
+}
+
 impl TryFrom<PublicTypedAgentConfigEntry>
     for golem_api_grpc::proto::golem::worker::PublicTypedAgentConfigEntry
 {
@@ -1854,6 +2014,40 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     payload: params.payload.ok_or("Missing payload field")?.try_into()?,
                 }))
             }
+            oplog_entry::Entry::ToolAttachmentControl(params) => {
+                let attachment = params
+                    .attachment
+                    .ok_or("Missing attachment field")?
+                    .try_into()?;
+                let transition = params
+                    .transition
+                    .ok_or("Missing transition field")?
+                    .try_into()?;
+                decode_attachment_control(&attachment, &transition)?;
+                Ok(PublicOplogEntry::ToolAttachmentControl(
+                    crate::model::oplog::public_oplog_entry::ToolAttachmentControlParams {
+                        timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
+                        attachment,
+                        transition,
+                    },
+                ))
+            }
+            oplog_entry::Entry::ToolAttachmentRead(params) => {
+                let observation = params
+                    .observation
+                    .ok_or("Missing observation field")?
+                    .try_into()?;
+                decode_attachment_observation(&observation)?
+                    .validate_payload_presence(params.payload.is_some())
+                    .map_err(|error| format!("Invalid attachment read payload: {error:?}"))?;
+                Ok(PublicOplogEntry::ToolAttachmentRead(
+                    crate::model::oplog::public_oplog_entry::ToolAttachmentReadParams {
+                        timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
+                        observation,
+                        payload: params.payload,
+                    },
+                ))
+            }
             oplog_entry::Entry::StreamRegistered(params) => {
                 Ok(PublicOplogEntry::StreamRegistered(StreamRegisteredParams {
                     timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
@@ -2572,6 +2766,28 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::DurableStreamRecordParameters {
                             timestamp: Some(params.timestamp.into()),
                             record: Some(params.record.try_into()?),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::ToolAttachmentControl(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::ToolAttachmentControl(
+                        golem_api_grpc::proto::golem::worker::ToolAttachmentControlParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            attachment: Some(params.attachment.try_into()?),
+                            transition: Some(params.transition.try_into()?),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::ToolAttachmentRead(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::ToolAttachmentRead(
+                        golem_api_grpc::proto::golem::worker::ToolAttachmentReadParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            observation: Some(params.observation.try_into()?),
+                            payload: params.payload,
                         },
                     )),
                 }
@@ -4330,6 +4546,26 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     ).map_err(|error| error.to_string())?)),
                 })
             }
+            PublicOplogEntry::ToolAttachmentControl(p) => {
+                let (attachment, transition) = decode_attachment_control(&p.attachment, &p.transition)?;
+                Ok(OplogEntry::ToolAttachmentControl {
+                    timestamp: p.timestamp,
+                    entity_parent_start_index: None,
+                    attachment,
+                    transition,
+                })
+            }
+            PublicOplogEntry::ToolAttachmentRead(p) => {
+                let observation = decode_attachment_observation(&p.observation)?;
+                observation.validate_payload_presence(p.payload.is_some())
+                    .map_err(|error| format!("Invalid attachment read payload: {error:?}"))?;
+                Ok(OplogEntry::ToolAttachmentRead {
+                    timestamp: p.timestamp,
+                    entity_parent_start_index: None,
+                    observation: Box::new(observation),
+                    payload: p.payload.map(|bytes| OplogPayload::Inline(Box::new(bytes))),
+                })
+            }
             PublicOplogEntry::StreamItems(p) => {
                 use crate::schema::FromSchema as _;
                 let record = StreamItemsRecord::from_value(p.record.value())
@@ -5350,6 +5586,47 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 record: Some(oplog_payload_to_proto(record)?),
                 summary: summary.map(Into::into),
             }),
+            OplogEntry::ToolAttachmentControl {
+                attachment,
+                transition,
+                ..
+            } => {
+                use crate::schema::IntoTypedSchemaValue as _;
+                Entry::ToolAttachmentControl(
+                    golem_api_grpc::proto::golem::worker::RawToolAttachmentControlParameters {
+                        attachment: Some(
+                            attachment
+                                .into_typed_schema_value()
+                                .map_err(|error| error.to_string())?
+                                .try_into()?,
+                        ),
+                        transition: Some(
+                            transition
+                                .into_typed_schema_value()
+                                .map_err(|error| error.to_string())?
+                                .try_into()?,
+                        ),
+                    },
+                )
+            }
+            OplogEntry::ToolAttachmentRead {
+                observation,
+                payload,
+                ..
+            } => {
+                use crate::schema::IntoTypedSchemaValue as _;
+                Entry::ToolAttachmentRead(
+                    golem_api_grpc::proto::golem::worker::RawToolAttachmentReadParameters {
+                        observation: Some(
+                            (*observation)
+                                .into_typed_schema_value()
+                                .map_err(|error| error.to_string())?
+                                .try_into()?,
+                        ),
+                        payload: payload.map(oplog_payload_to_proto).transpose()?,
+                    },
+                )
+            }
             OplogEntry::StreamItems {
                 record, summary, ..
             } => Entry::StreamItems(RawDurableStreamRecordParameters {
@@ -5979,6 +6256,32 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 summary: p.summary.map(TryInto::try_into).transpose()?,
                 record: oplog_payload_from_proto(p.record.ok_or("Missing record")?)?,
             }),
+            Entry::ToolAttachmentControl(p) => {
+                let (attachment, transition) = decode_attachment_control(
+                    &p.attachment.ok_or("Missing attachment")?.try_into()?,
+                    &p.transition.ok_or("Missing transition")?.try_into()?,
+                )?;
+                Ok(OplogEntry::ToolAttachmentControl {
+                    timestamp,
+                    entity_parent_start_index,
+                    attachment,
+                    transition,
+                })
+            }
+            Entry::ToolAttachmentRead(p) => {
+                let observation = decode_attachment_observation(
+                    &p.observation.ok_or("Missing observation")?.try_into()?,
+                )?;
+                observation
+                    .validate_payload_presence(p.payload.is_some())
+                    .map_err(|error| format!("Invalid attachment read payload: {error:?}"))?;
+                Ok(OplogEntry::ToolAttachmentRead {
+                    timestamp,
+                    entity_parent_start_index,
+                    observation: Box::new(observation),
+                    payload: p.payload.map(oplog_payload_from_proto).transpose()?,
+                })
+            }
             Entry::StreamItems(p) => Ok(OplogEntry::StreamItems {
                 timestamp,
                 entity_parent_start_index,

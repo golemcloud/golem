@@ -2009,6 +2009,7 @@ pub mod api {
             subcommand: ApiSecuritySchemeSubcommand,
         },
         /// Inspect, refresh and authorize MCP imports
+        #[command(after_help = crate::command_examples::MCP_IMPORT)]
         McpImport {
             #[clap(subcommand)]
             subcommand: McpImportSubcommand,
@@ -2023,25 +2024,31 @@ pub mod api {
     #[derive(Debug, Subcommand)]
     pub enum McpImportSubcommand {
         /// Inspect an import's projected tool definitions
+        #[command(after_help = crate::command_examples::MCP_IMPORT)]
         Tools {
-            /// Zero-based index in the target deployment's MCP imports
-            import_index: u32,
+            /// Import name or unique full URL from the selected environment's manifest
+            #[arg(value_name = "NAME_OR_URL")]
+            import: String,
             /// Deployment revision to target; defaults to the current deployment
             #[arg(long)]
             revision: Option<golem_common::model::deployment::DeploymentRevision>,
         },
         /// Fetch fresh upstream definitions for an import
+        #[command(after_help = crate::command_examples::MCP_IMPORT)]
         Refresh {
-            /// Zero-based index in the target deployment's MCP imports
-            import_index: u32,
+            /// Import name or unique full URL from the selected environment's manifest
+            #[arg(value_name = "NAME_OR_URL")]
+            import: String,
             /// Deployment revision to target; defaults to the current deployment
             #[arg(long)]
             revision: Option<golem_common::model::deployment::DeploymentRevision>,
         },
         /// Start authorization and print the provider consent URL
+        #[command(after_help = crate::command_examples::MCP_IMPORT)]
         Authorize {
-            /// Zero-based import index in the target deployment or selected manifest
-            import_index: u32,
+            /// Import name or unique full URL from the selected environment's manifest
+            #[arg(value_name = "NAME_OR_URL")]
+            import: String,
             /// Deployment revision; defaults to current. Mutually exclusive with --manifest
             #[arg(long)]
             revision: Option<golem_common::model::deployment::DeploymentRevision>,
@@ -2050,9 +2057,11 @@ pub mod api {
             manifest: bool,
         },
         /// Complete authorization from the exact provider callback URL
+        #[command(after_help = crate::command_examples::MCP_IMPORT)]
         Complete {
-            /// Zero-based import index in the target deployment or selected manifest
-            import_index: u32,
+            /// Import name or unique full URL from the selected environment's manifest
+            #[arg(value_name = "NAME_OR_URL")]
+            import: String,
             /// Exact provider callback URL received after consent, including query parameters
             callback_url: OAuthCallbackUrl,
             /// Deployment revision; defaults to current. Mutually exclusive with --manifest
@@ -2063,9 +2072,11 @@ pub mod api {
             manifest: bool,
         },
         /// Show non-secret authorization state
+        #[command(after_help = crate::command_examples::MCP_IMPORT)]
         Status {
-            /// Zero-based import index in the target deployment or selected manifest
-            import_index: u32,
+            /// Import name or unique full URL from the selected environment's manifest
+            #[arg(value_name = "NAME_OR_URL")]
+            import: String,
             /// Deployment revision; defaults to current. Mutually exclusive with --manifest
             #[arg(long)]
             revision: Option<golem_common::model::deployment::DeploymentRevision>,
@@ -2074,9 +2085,11 @@ pub mod api {
             manifest: bool,
         },
         /// Revoke the stored grant
+        #[command(after_help = crate::command_examples::MCP_IMPORT)]
         Disconnect {
-            /// Zero-based import index in the target deployment or selected manifest
-            import_index: u32,
+            /// Import name or unique full URL from the selected environment's manifest
+            #[arg(value_name = "NAME_OR_URL")]
+            import: String,
             /// Deployment revision; defaults to current. Mutually exclusive with --manifest
             #[arg(long)]
             revision: Option<golem_common::model::deployment::DeploymentRevision>,

@@ -140,6 +140,7 @@ impl<Ctx: WorkerCtx> CustomStoreAdmission<Ctx> {
                     linear_memory,
                     self.role(),
                     self.local_live_tail.clone(),
+                    replay_state,
                     replay_state.replay_target(),
                 )
                 .await?
@@ -2336,6 +2337,11 @@ pub struct InFunctionRetryController {
     retry_state: InFunctionRetryState,
     /// Fully-qualified host-function name used as the retry decision's function label.
     function_label: &'static str,
+    /// Set for a child of a durable scope whose owner may re-execute the scope's effect under its
+    /// recorded `Start` (a re-issuable HTTP response body). Such a child may complete an incomplete
+    /// `Start` live although its own function type is not re-executable; the scope owner, not the
+    /// child's type, decides that the effect may repeat. It never widens in-function retry.
+    incomplete_repair_authorized_by_scope: bool,
 }
 
 impl InFunctionRetryController {
@@ -2349,11 +2355,21 @@ impl InFunctionRetryController {
             durable_execution_state,
             retry_state: InFunctionRetryState::new(),
             function_label,
+            incomplete_repair_authorized_by_scope: false,
         }
     }
 
     pub fn function_type(&self) -> &DurableFunctionType {
         &self.function_type
+    }
+
+    pub fn with_incomplete_repair_authorized_by_scope(mut self, authorized: bool) -> Self {
+        self.incomplete_repair_authorized_by_scope = authorized;
+        self
+    }
+
+    pub fn incomplete_repair_authorized_by_scope(&self) -> bool {
+        self.incomplete_repair_authorized_by_scope
     }
 
     pub fn durable_execution_state(&self) -> &DurableExecutionState {
@@ -2440,6 +2456,34 @@ impl InFunctionRetryController {
         classify: impl Fn(&Err) -> HostFailureKind,
         properties: RetryProperties,
     ) -> anyhow::Result<InternalRetryResult> {
+        self.try_trigger_retry_or_loop_with_capabilities(
+            ctx,
+            result,
+            classify,
+            properties,
+            |ctx| ctx.create_interrupt_signal(),
+            |ctx, failure, properties| ctx.try_trigger_retry(failure, properties),
+        )
+        .await
+    }
+
+    pub(crate) async fn try_trigger_retry_or_loop_with_capabilities<H, Ok, Err: Display>(
+        &mut self,
+        ctx: &mut H,
+        result: &Result<Ok, Err>,
+        classify: impl Fn(&Err) -> HostFailureKind,
+        properties: RetryProperties,
+        interrupt: impl FnOnce(&H) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>>,
+        fallback: impl for<'a> FnOnce(
+            &'a mut H,
+            Error,
+            RetryProperties,
+        )
+            -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>,
+    ) -> anyhow::Result<InternalRetryResult>
+    where
+        H: InFunctionRetryHost + Sync,
+    {
         let err = match result {
             Ok(_) => return Ok(InternalRetryResult::Persist),
             Err(err) => err,
@@ -2463,7 +2507,7 @@ impl InFunctionRetryController {
         if !self.is_eligible_for_internal_retry() {
             let message = err.to_string();
             let failure = Error::new(ClassifiedHostError { kind, message });
-            ctx.try_trigger_retry(failure, properties).await?;
+            fallback(ctx, failure, properties).await?;
             return Ok(InternalRetryResult::Persist);
         }
 
@@ -2475,7 +2519,7 @@ impl InFunctionRetryController {
         match decision {
             AsyncRetryDecision::RetryAfterDelay(delay) => {
                 // Interrupt-aware sleep
-                let interrupt = ctx.create_interrupt_signal();
+                let interrupt = interrupt(ctx);
                 let sleep = tokio::time::sleep(delay);
                 tokio::pin!(sleep);
 
@@ -2498,7 +2542,7 @@ impl InFunctionRetryController {
                         inner: failure,
                     }));
                 }
-                ctx.try_trigger_retry(failure, properties.clone()).await?;
+                fallback(ctx, failure, properties).await?;
                 // If try_trigger_retry returned Ok, retries are exhausted — persist the failure
                 Ok(InternalRetryResult::Persist)
             }
@@ -2519,12 +2563,14 @@ impl InFunctionRetryController {
 
     /// Whether a call of this function type may be safely re-executed when replay finds its
     /// host-call `Start` committed but its `End` missing (see
-    /// [`crate::durable_host::concurrent::CallReplayOutcome::Incomplete`]). This is exactly the set
-    /// that is eligible for in-function retry: reads and local/idempotent writes can be re-run
-    /// without duplicating an external side effect; non-idempotent / batched / transaction writes
-    /// cannot, and rely on durable-scope recovery instead.
+    /// [`crate::durable_host::concurrent::CallReplayOutcome::Incomplete`]). This is the set that
+    /// is eligible for in-function retry: reads and local/idempotent writes can be re-run without
+    /// duplicating an external side effect; non-idempotent / batched / transaction writes cannot,
+    /// and rely on durable-scope recovery instead. A batched child of a scope whose owner
+    /// re-executes the scope's effect call-locally is the one addition: the owner authorizes the
+    /// repair ([`Self::with_incomplete_repair_authorized_by_scope`]).
     pub fn can_reexecute_on_incomplete_replay(&self) -> bool {
-        self.is_eligible_for_internal_retry()
+        self.is_eligible_for_internal_retry() || self.incomplete_repair_authorized_by_scope
     }
 }
 

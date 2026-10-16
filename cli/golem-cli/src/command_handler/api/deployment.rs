@@ -196,8 +196,10 @@ impl ApiDeploymentCommandHandler {
         Ok(app_ctx
             .application()
             .mcp_imports(environment_name)
-            .cloned()
-            .unwrap_or_default())
+            .into_iter()
+            .flatten()
+            .map(|entry| entry.import.clone())
+            .collect())
     }
 
     pub async fn get_http_api_deployment_revision_by_id(

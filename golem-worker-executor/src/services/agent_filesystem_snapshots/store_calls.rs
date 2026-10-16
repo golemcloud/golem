@@ -32,6 +32,7 @@ use crate::filesystem_snapshot::{
     AgentSnapshots, CallError, ChangeDetection, Failed, FilesystemSnapshotStore, ReadError,
     RestoreFailure, RunSlots, SaveError, Slot, SnapshotInfo, SnapshotName, Withdrawal,
 };
+use crate::metrics::filesystem_snapshots::{DeleteOperation, DeleteOutcome};
 use crate::services::agent_filesystem::{RestoreClass, RestoreError, RestoreTree};
 use crate::services::golem_config::{
     FilesystemSnapshotStoreConfig, FilesystemSnapshotUploadConfig,
@@ -39,6 +40,7 @@ use crate::services::golem_config::{
 use crate::worker::LostShard;
 use futures::StreamExt as _;
 use futures::future::{BoxFuture, FutureExt as _, Shared};
+use golem_common::model::Timestamp;
 use golem_common::model::oplog::FilesystemSnapshotName;
 use std::future::Future;
 use std::path::Path;
@@ -638,9 +640,12 @@ impl StoreCalls {
         stop: impl Future<Output = ()> + Send + 'static,
     ) -> Deleted {
         let (store, agent_of_call) = (Arc::clone(&self.store), agent.clone());
-        self.deleting(agent, stop.boxed().shared(), move |slots| {
-            async move { store.delete(&agent_of_call, &names, &slots).await }.boxed()
-        })
+        self.deleting(
+            agent,
+            DeleteOperation::Delete,
+            stop.boxed().shared(),
+            move |slots| async move { store.delete(&agent_of_call, &names, &slots).await }.boxed(),
+        )
         .await
     }
 
@@ -649,6 +654,7 @@ impl StoreCalls {
         let (store, agent_of_call) = (Arc::clone(&self.store), agent.clone());
         self.deleting(
             agent,
+            DeleteOperation::DeleteAll,
             std::future::pending().boxed().shared(),
             move |slots| async move { store.delete_all(&agent_of_call, &slots).await }.boxed(),
         )
@@ -657,8 +663,30 @@ impl StoreCalls {
 
     /// Runs the delete that `call` makes in one call counted for `agent`, with a limiter on the
     /// slots of the uploads that `stop` and the shutdown withdraw. `stop` answers `Stopped` at
-    /// once.
+    /// once. The metric of the deletes gets the time and the outcome, as `operation`.
     async fn deleting(
+        &self,
+        agent: &AgentSnapshots,
+        operation: DeleteOperation,
+        stop: Stop,
+        call: impl FnOnce(ServiceSlots) -> BoxFuture<'static, Result<(), CallError>> + Send + 'static,
+    ) -> Deleted {
+        let started = std::time::Instant::now();
+        let deleted = self.deleting_untimed(agent, stop, call).await;
+        crate::metrics::filesystem_snapshots::record_delete(
+            operation,
+            match deleted {
+                Deleted::Deleted => DeleteOutcome::Deleted,
+                Deleted::Stopped => DeleteOutcome::Stopped,
+                Deleted::Leaked(_) => DeleteOutcome::Leaked,
+            },
+            started.elapsed(),
+        );
+        deleted
+    }
+
+    /// The delete of [`Self::deleting`], without its metric.
+    async fn deleting_untimed(
         &self,
         agent: &AgentSnapshots,
         stop: Stop,
@@ -987,6 +1015,12 @@ impl RestoreTree for StoreRestore {
             if result.is_ok() { "restored" } else { "failed" },
             started.elapsed(),
         );
+        if let Ok(info) = &result {
+            let age = Timestamp::now_utc()
+                .to_millis()
+                .saturating_sub(info.created_at.to_millis());
+            crate::metrics::filesystem_snapshots::record_restored_age(Duration::from_millis(age));
+        }
         result.map(drop).map_err(|error| RestoreError {
             class: restore_class(&error),
             source: anyhow::Error::new(error)

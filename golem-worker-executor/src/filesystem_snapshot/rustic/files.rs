@@ -615,12 +615,13 @@ impl SnapshotFiles {
         .await
     }
 
-    /// Deletes the directory at the path and each blob below it.
+    /// Deletes the directory at the path and each blob below it. Gives the sum of the sizes of the
+    /// deleted blobs, or `None` when the path had no directory.
     pub(super) async fn delete_dir(
         &self,
         op_label: &'static str,
         path: &Path,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<Option<u64>> {
         self.answer(Effect::Write, || {
             self.storage
                 .delete_dir(TARGET_LABEL, op_label, self.namespace.clone(), path)

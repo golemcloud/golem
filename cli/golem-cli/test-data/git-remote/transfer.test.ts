@@ -61,6 +61,9 @@ async function run(
     child.stdout.on("data", (bytes) => out.push(bytes));
     child.stderr.on("data", (bytes) => errors.push(bytes));
     child.on("error", reject);
+    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.code !== "EPIPE") reject(error);
+    });
     child.on("close", (code) =>
       code === 0
         ? resolve(Buffer.concat(out))
