@@ -29,6 +29,9 @@ repeat:
 Register compensation only after a step succeeds. Preserve compensation failures so callers do
 not mistake partial compensation for a completed rollback. A permanent domain failure can loop
 forever; prefer a fallible workflow unless the application has an explicit retry decision.
+There is no SDK-provided attempt bound or backoff guarantee for this application loop. Add an
+explicit application policy if the workflow needs a limit or a delay; host retry policies do not
+schedule saga attempts.
 
 ## Recovery rules
 

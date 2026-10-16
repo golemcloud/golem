@@ -300,6 +300,7 @@ impl From<crate::services::rdbms::RdbmsError> for Error {
                 Self::QueryResponseFailure(v)
             }
             crate::services::rdbms::RdbmsError::Other(v) => Self::Other(v),
+            crate::services::rdbms::RdbmsError::ResourceLost(v) => Self::ResourceLost(v),
         }
     }
 }

@@ -1865,10 +1865,11 @@ args = ["--interfaces", "127.0.0.1", "--port", "41357", "cli/schema.golem.cloud"
 
 ## PLUGINS
 [tasks.build-otlp-exporter]
-dependencies = ["build"]
+dependencies = ["wit"]
 description = "Builds the built-in OTLP exporter (requires golem CLI to be built first)"
 script_runner = "@duckscript"
 script = '''
+exec --fail-on-error cargo build -p golem --bin golem
 # Resolve the cargo target directory robustly so this works even when the target
 # dir is redirected (e.g. via CARGO_TARGET_DIR, cargo config, or a cargo wrapper).
 # cargo-make computes CARGO_MAKE_CRATE_TARGET_DIRECTORY for us cross-platform.
@@ -2142,7 +2143,7 @@ if equals ${component} otlp-exporter
     build_task = set build-otlp-exporter
     wasm = set plugins/otlp-exporter.wasm
     artifact_id = set otlp_exporter
-    exports_json = set "{\"plugin\":\"golem-otlp-exporter\",\"version\":\"1.5.7\"}"
+    exports_json = set "{\"plugin\":\"golem-otlp-exporter\",\"version\":\"1.5.8\"}"
     licenses = set LICENSE
     sbom = set ""
 elif equals ${component} filesystem-tools
@@ -2156,7 +2157,7 @@ elif equals ${component} javascript-tools
     build_task = set build-javascript-tools
     wasm = set builtin-tools/javascript-tools.wasm
     artifact_id = set javascript_tools
-    exports_json = set "{\"tools\":[\"node@0.1.8\",\"npm@10.9.9+golem.8\",\"npx@10.9.9+golem.8\"]}"
+    exports_json = set "{\"tools\":[\"node@0.1.9\",\"npm@10.9.9+golem.9\",\"npx@10.9.9+golem.9\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/npm
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/npm/sbom.spdx.json
@@ -2164,7 +2165,7 @@ elif equals ${component} typescript-tools
     build_task = set build-typescript-tools
     wasm = set builtin-tools/typescript-tools.wasm
     artifact_id = set typescript_tools
-    exports_json = set "{\"tools\":[\"tsc@5.9.2+golem.8\"]}"
+    exports_json = set "{\"tools\":[\"tsc@5.9.2+golem.9\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/typescript
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/typescript/sbom.spdx.json
@@ -2180,7 +2181,7 @@ elif equals ${component} git-tool
     build_task = set build-git-tool
     wasm = set builtin-tools/git-tool.wasm
     artifact_id = set git_tool
-    exports_json = set "{\"tools\":[\"git@0.1.14\"]}"
+    exports_json = set "{\"tools\":[\"git@0.1.15\"]}"
     licenses = set builtin-tools/git/licenses/git
     source_notice = set builtin-tools/git/licenses/SOURCE.md
     sbom = set builtin-tools/git/licenses/git/sbom.spdx.json
@@ -2386,6 +2387,11 @@ if not is_empty ${tracked_wasms}
 end
 echo "validated ${artifact_count} external built-in artifacts"
 '''
+
+[tasks.check-builtin-host-contract]
+description = "Type-checks built-in WASM imports and exports against the current host WIT (requires wasm-tools)"
+command = "python3"
+args = ["builtin-tools/validate-host-contract.py"]
 
 [tasks.component-size-report]
 description = "Builds representative components and assembles a local size and retention report"

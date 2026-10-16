@@ -4798,6 +4798,54 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
     }
 
+    /// Promotes an incomplete parent after its protocol-authorized child reached live execution.
+    /// Publishing the child's replay tail does not change the parent's session-local state.
+    pub(super) async fn resume_incomplete_scope_access<T, D, Ctx>(
+        &mut self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    ) -> Result<(), WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        let replay_state =
+            store.with(|mut access| get_ctx(access.data_mut()).state.replay_state.clone());
+        let replay = self
+            .replay
+            .take()
+            .expect("incomplete scope repair requires a replaying parent");
+        let result = async {
+            let outcome = replay_state.await_resolution_outcome(replay).await?;
+            if !matches!(
+                classify_replay_resolution(outcome),
+                ReplayedResolution::Incomplete
+            ) {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "an incomplete parent for a live demand-stream child",
+                    format!("completed scope at {}", self.start_idx),
+                ));
+            }
+            publish_incomplete_replay_tail_at(
+                &mut AccessorContext::new(store, get_ctx),
+                Some(SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                    index: self.start_idx.into(),
+                }),
+            )
+            .await?
+            .require_live()?;
+            self.prepare_incomplete_live_repair(|| {
+                store.with(|mut access| get_ctx(access.data_mut()).state.live_host_call_counter())
+            })
+        }
+        .await;
+        if result.is_err() {
+            self.abandon_for_trap();
+        }
+        result
+    }
+
     /// Finalizes a response that has already been produced by adapter-specific logic, converging
     /// live completion, completed replay, and incomplete-replay repair in one transition.
     pub(crate) async fn finish_access<T, D, Ctx>(

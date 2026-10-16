@@ -99,6 +99,95 @@ const baseSpec = (FunctionType: { writeRemote: DurableFunctionType }) => ({
 });
 
 describe('durable()', () => {
+  it('appends compensated saga attempts and replays their complete history', async () => {
+    const { durable, FunctionType, Result } = await load();
+    const { compensable, infallibleSaga } = await import('../src/host/saga');
+    const effects: string[] = [];
+    let identity = 0;
+    let settlements = 0;
+    const spec = {
+      iface: 'saga',
+      function: 'reserve',
+      functionType: FunctionType.writeRemote,
+      requestSchema: z.string(),
+      success: z.number(),
+    };
+    const reserve = compensable(
+      async (name: string) =>
+        Result.ok(
+          durable(spec, name, () => {
+            const id = ++identity;
+            effects.push(`reserve:${name}:${id}`);
+            return id;
+          }),
+        ),
+      async (name, id) => {
+        durable({ ...spec, function: 'release' }, `${name}:${id}`, () => {
+          effects.push(`release:${name}:${id}`);
+          return id;
+        });
+        return Result.ok(undefined);
+      },
+    );
+    const settle = compensable(
+      async (ids: string) =>
+        durable({ ...spec, function: 'settle', error: z.string() }, ids, () => {
+          settlements++;
+          effects.push(`settle:${ids}`);
+          return settlements < 3 ? Result.err('declined') : Result.ok(73);
+        }),
+      async () => Result.ok(undefined),
+    );
+    const run = () =>
+      infallibleSaga(async (saga) => {
+        const flight = await saga.execute(reserve, 'flight');
+        const hotel = await saga.execute(reserve, 'hotel');
+        const receipt = await saga.execute(settle, `${flight},${hotel}`);
+        return { flight, hotel, receipt };
+      });
+
+    expect(await run()).toEqual({ flight: 5, hotel: 6, receipt: 73 });
+    expect(effects).toEqual([
+      'reserve:flight:1',
+      'reserve:hotel:2',
+      'settle:1,2',
+      'release:hotel:2',
+      'release:flight:1',
+      'reserve:flight:3',
+      'reserve:hotel:4',
+      'settle:3,4',
+      'release:hotel:4',
+      'release:flight:3',
+      'reserve:flight:5',
+      'reserve:hotel:6',
+      'settle:5,6',
+    ]);
+    expect(oplog.map((entry) => entry.functionName)).toEqual([
+      'saga::reserve',
+      'saga::reserve',
+      'saga::settle',
+      'saga::release',
+      'saga::release',
+      'saga::reserve',
+      'saga::reserve',
+      'saga::settle',
+      'saga::release',
+      'saga::release',
+      'saga::reserve',
+      'saga::reserve',
+      'saga::settle',
+    ]);
+    const history = structuredClone(oplog);
+    const liveEffects = [...effects];
+    live = false;
+    replayCursor = 0;
+    expect(await run()).toEqual({ flight: 5, hotel: 6, receipt: 73 });
+    expect(replayCursor).toBe(13);
+    expect(oplog).toEqual(history);
+    expect(effects).toEqual(liveEffects);
+    expect(unfinishedDrops).toBe(0);
+  });
+
   it('persists the success value on the live run and returns it', async () => {
     const { durable, FunctionType } = await load();
     const out = durable(baseSpec(FunctionType), { symbol: 'GOLEM' }, () => ({

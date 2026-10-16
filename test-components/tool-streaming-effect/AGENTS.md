@@ -89,7 +89,6 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-wait-for-external-input-rust` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
 | `golem-add-webhook-rust` | Creating and awaiting webhooks for integrating with webhook-driven external APIs |
 | `golem-multi-instance-agent-rust` | Creating multiple agent instances with the same constructor parameters using phantom agents |
-| `golem-atomic-block-rust` | Atomic blocks and idempotency |
 | `golem-add-transactions-rust` | Saga-pattern transactions with compensation |
 | `golem-add-http-endpoint-rust` | Exposing an agent over HTTP with mount paths and endpoint annotations |
 | `golem-http-params-rust` | Mapping path, query, header, and body parameters for HTTP endpoints |
@@ -153,7 +152,7 @@ Retryable failures in the following operations are handled transparently:
 - **RPC calls** between agents
 - **Database / storage calls** — `golem:rdbms/postgres`, `golem:rdbms/mysql`, `golem:rdbms/ignite2`, `wasi:blobstore`, `wasi:keyvalue`
 
-A panic outside an atomic region fails the agent without retry. Inside an atomic region, a panic traps and the region is retried according to the applicable retry policy; if the policy gives up, the agent becomes failed.
+A panic is a deterministic guest trap and fails the invocation without retry. Recovery replays completed outcomes and repairs only an eligible incomplete call at its own `Start`. Use sagas for domain compensation; new attempts append fresh calls without rewinding history. Infallible saga loops have no built-in attempt bound or backoff guarantee.
 
 Only customize when the *strategy* needs to change (different backoff, give-up conditions, per-status-code policies). For that, see the `golem-retry-policies-rust` skill.
 

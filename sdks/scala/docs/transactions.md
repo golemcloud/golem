@@ -40,6 +40,8 @@ execute and the entire transaction retries automatically.
 These helpers implement sagas, not atomic regions. Attempts and compensations append to the oplog.
 They do not rewind execution or undo concurrent work. An unexpected failed `Future` traps without
 running compensations and fails the invocation.
+The guest-code loop has no built-in attempt bound or backoff guarantee and does not use the host
+retry policy. A permanent domain failure can loop forever; eventual success is not guaranteed.
 
 ```scala
 import golem.Transactions

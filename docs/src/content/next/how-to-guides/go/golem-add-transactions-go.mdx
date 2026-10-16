@@ -120,7 +120,8 @@ if result.IsErr() {
 On a step failure, the completed steps are compensated in reverse and the helper
 starts a new guest-code attempt. Each attempt appends new durable calls and keeps the
 earlier attempts and compensations in history. The helper returns a plain `Out` if an
-attempt succeeds; a permanent domain failure can loop forever:
+attempt succeeds; a permanent domain failure can loop forever. This loop does not rewind
+history and has no built-in attempt bound or backoff guarantee:
 
 ```go
 orderID := transaction.Infallible(func(tx *transaction.Tx[string]) golem.Result[string, string] {

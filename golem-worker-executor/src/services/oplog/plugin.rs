@@ -3822,15 +3822,8 @@ mod tests {
         )
         .await;
 
-        let first = oplog.enqueue_add(OplogEntry::RecoverySucceeded {
-            timestamp: Timestamp::now_utc(),
-        });
-        let second = oplog
-            .add(OplogEntry::RecoverySucceeded {
-                timestamp: Timestamp::now_utc(),
-            })
-            .await
-            .unwrap();
+        let first = oplog.enqueue_add(grow_memory(1));
+        let second = oplog.add(grow_memory(2)).await.unwrap();
 
         assert_eq!(first.await.unwrap(), OplogIndex::INITIAL);
         assert_eq!(second, OplogIndex::INITIAL.next());

@@ -28,6 +28,25 @@ object TransactionsSpec extends ZIOSpecDefault {
   private def f[A](a: A): Future[A] = Future.successful(a)
 
   def spec = suite("TransactionsSpec")(
+    test("synchronous body exceptions trap without retrying") {
+      ZIO
+        .foreach(List("fallible", "infallible")) { mode =>
+          var attempts         = 0
+          def crash(): Nothing = {
+            attempts += 1
+            throw new IllegalStateException("body defect")
+          }
+          ZIO.fromFuture { _ =>
+            val result =
+              if (mode == "fallible") fallibleTransaction[Int, String](_ => crash())
+              else infallibleTransaction[Int](_ => crash())
+            result.map(_ => "unexpected success").recover { case error => error.getMessage }
+          }.map(message =>
+            assertTrue(message.contains(s"${mode}Transaction failed:"), message.contains("body defect"), attempts == 1)
+          )
+        }
+        .map(results => results.reduce(_ && _))
+    },
     test("fallible body can handle a failed operation and continue") {
       var undos = 0
       val step  = operation[Boolean, Int, String](fail => f(if (fail) Left("handled") else Right(42))) { (_, _) =>
@@ -84,45 +103,49 @@ object TransactionsSpec extends ZIOSpecDefault {
           tx.execute(step, ())
             .flatMap(_ => tx.execute(fail, ()).recover { case _ => 0 })
             .flatMap(_ => tx.execute(step, ()).recover { case _ => 0 })
-        }.map(_ => false).recover { case _ => true }
-      }.map(failed => assertTrue(failed, attempts == 1, runs == 1, undos == 1))
+        }.map(_ => "unexpected success").recover { case error => error.getMessage }
+      }.map(message => assertTrue(message.contains("broken compensation"), attempts == 1, runs == 1, undos == 1))
     },
     test("infallible saga compensates in reverse order and starts fresh attempts") {
       var attempts           = 0
+      var identity           = 0
       var events             = List.empty[String]
-      def step(name: String) = operation[Unit, Unit, String] { _ =>
-        events :+= s"run-$name-$attempts"
-        f(Right(()))
-      } { (_, _) =>
-        events :+= s"undo-$name-$attempts"
+      def step(name: String) = operation[Unit, Int, String] { _ =>
+        identity += 1
+        events :+= s"run-$name-$identity"
+        f(Right(identity))
+      } { (_, output) =>
+        events :+= s"undo-$name-$output"
         f(Right(()))
       }
       val finish =
-        operation[Unit, Int, String](_ => f(if (attempts < 3) Left("retry") else Right(42)))((_, _) => f(Right(())))
+        operation[Int, Int, String](input => f(if (attempts < 3) Left("retry") else Right(input)))((_, _) =>
+          f(Right(()))
+        )
       ZIO.fromFuture { _ =>
         infallibleTransaction { tx =>
           attempts += 1
           for {
-            _      <- tx.execute(step("a"), ())
-            _      <- tx.execute(step("b"), ())
-            result <- tx.execute(finish, ())
+            a      <- tx.execute(step("a"), ())
+            b      <- tx.execute(step("b"), ())
+            result <- tx.execute(finish, 100 * a + b)
           } yield result
         }
       }.map { result =>
         assertTrue(
-          result == 42,
+          result == 506,
           attempts == 3,
           events == List(
             "run-a-1",
-            "run-b-1",
-            "undo-b-1",
-            "undo-a-1",
-            "run-a-2",
             "run-b-2",
             "undo-b-2",
-            "undo-a-2",
+            "undo-a-1",
             "run-a-3",
-            "run-b-3"
+            "run-b-4",
+            "undo-b-4",
+            "undo-a-3",
+            "run-a-5",
+            "run-b-6"
           )
         )
       }

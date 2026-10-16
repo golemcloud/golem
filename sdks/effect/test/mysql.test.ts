@@ -322,6 +322,7 @@ layer(MySqlStub)("MySqlClient (mocked golem:rdbms/mysql@1.5.0)", (it) => {
       const cases: Array<{
         tag:
           | "connection-failure"
+          | "resource-lost"
           | "query-parameter-failure"
           | "query-execution-failure"
           | "query-response-failure"
@@ -329,6 +330,7 @@ layer(MySqlStub)("MySqlClient (mocked golem:rdbms/mysql@1.5.0)", (it) => {
         reason: typeof ConnectionError | typeof SqlSyntaxError | typeof UnknownError
       }> = [
         { tag: "connection-failure", reason: ConnectionError },
+        { tag: "resource-lost", reason: UnknownError },
         { tag: "query-parameter-failure", reason: SqlSyntaxError },
         { tag: "query-execution-failure", reason: SqlSyntaxError },
         { tag: "query-response-failure", reason: SqlSyntaxError },

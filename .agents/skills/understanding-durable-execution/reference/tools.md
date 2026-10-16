@@ -373,7 +373,7 @@ An admission refusal records its exact demand in `SerializableToolOperationTermi
 of the returned tool error. The demand is a typed Start claim, a validated recorded-entry index,
 a positional request, a session input read, or an attachment disposal. Replay prefers recorded
 effects and reproduces a refusal only at the missing demand. Start probing and claiming share the
-cursor lock. Consumed NoOp markers reproduce refusal after the marker, not before consuming it.
+cursor lock. Positional demands reproduce refusal at their recorded observation boundary.
 Input tasks capture the session binding, read ordinal and observation class before spawning;
 recorded consumer observations bypass missing-source admission. Concurrent missing demands wait
 on the operation's existing watch channel without retaining the Store or cursor.

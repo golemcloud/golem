@@ -83,12 +83,14 @@ val result: Future[(String, String)] =
       charge      <- tx.execute(chargePayment, 4999L)
     } yield (reservation, charge)
   }
-// Always succeeds eventually
+// A permanent domain failure can loop forever.
 ```
 
 ## Guidelines
 
+- Infallible transactions compensate domain failures and loop in guest code, appending fresh calls without rewinding history. The loop has no built-in attempt bound or backoff guarantee and does not use the host retry policy.
+- An unexpected exception or failed `Future` traps without guaranteed compensation and fails the invocation without retry.
 - Keep compensation logic idempotent — it may be called more than once
 - Compensation runs in reverse order of execution
 - Use `fallibleTransaction` when failure is an acceptable outcome
-- Use `infallibleTransaction` when the operation must eventually succeed
+- Use `infallibleTransaction` only when another attempt after compensation is appropriate; eventual success is not guaranteed

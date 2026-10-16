@@ -9445,7 +9445,7 @@ async fn existing_scope_claim_does_not_wait_for_missing_scope_recovery_readiness
 }
 
 #[test]
-async fn missing_scope_recovery_preserves_foreign_remote_write() {
+async fn missing_scope_enters_settlement_without_consuming_foreign_incomplete_write() {
     let foreign_write = OplogEntry::Start {
         timestamp: Timestamp::now_utc(),
         parent_start_index: None,
@@ -9458,13 +9458,7 @@ async fn missing_scope_recovery_preserves_foreign_remote_write() {
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
     };
-    let rs = replay_state_over(vec![
-        OplogEntry::RecoverySucceeded {
-            timestamp: Timestamp::now_utc(),
-        },
-        foreign_write,
-    ])
-    .await;
+    let rs = replay_state_over(vec![OplogEntry::grow_memory(0), foreign_write]).await;
     let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
 
     let result = rs

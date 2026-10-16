@@ -119,11 +119,10 @@ response arrives the host transparently re-sends the request without an applicat
 The resolved response is the *last* attempt. See the
 [`golem-retry-policies-scala`](/next/how-to-guides/scala/golem-retry-policies-scala) skill for the policy YAML / SDK shape.
 
-> **POST/PUT/PATCH work out of the box.** Idempotence mode defaults to `true`, so a plain `POST
-> /charge` with a body is already eligible for status-code retry — there is **no** need to wrap
-> the call in `Guards.withIdempotenceMode(true) { ... }`. Opt out with
-> `Guards.withIdempotenceMode(false) { ... }` when repeating an ambiguous write is unsafe.
-> Exactly-once processing requires the peer to enforce an idempotency key.
+> **POST/PUT/PATCH are eligible for retry.** The guest cannot opt out with an idempotence-mode
+> switch. Make writes duplicate-safe at the peer: exactly-once processing requires the peer to
+> enforce an idempotency key. A lost response does not prove the write failed. Do not predicate
+> retry policies on `is-idempotent`; the host no longer supplies that property.
 
 Minimal POST example — the policy is defined once (in `golem.yaml` or via the SDK) and the call
 site is just a plain HTTP call:

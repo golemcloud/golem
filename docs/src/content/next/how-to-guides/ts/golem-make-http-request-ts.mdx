@@ -104,11 +104,10 @@ The resolved `Response` is the *last* attempt. See the
 This is the recommended path when the retry trigger is a status code (or status-code range). It
 also handles request-body reconstruction, idempotency checks, and replay correctly.
 
-> **POST/PUT/PATCH work out of the box.** Idempotence mode defaults to `true`, so a plain `POST
-> /charge` with a JSON body is already eligible for status-code retry — there is **no** need to
-> wrap the call in `withIdempotenceMode(true, ...)`. Opt out with
-> `withIdempotenceMode(false, ...)` when repeating an ambiguous write is unsafe.
-> Exactly-once processing still requires the peer to enforce an idempotency key.
+> **POST/PUT/PATCH are eligible for retry.** The guest cannot opt out with an idempotence-mode
+> switch. Make writes duplicate-safe at the peer: exactly-once processing requires the peer to
+> enforce an idempotency key. A lost response does not prove the write failed. Do not predicate
+> retry policies on `is-idempotent`; the host no longer supplies that property.
 
 Minimal POST example — the policy is defined once (in `golem.yaml` or via the SDK) and the call
 site is just `fetch`:

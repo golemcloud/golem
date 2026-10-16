@@ -95,7 +95,7 @@ object Transactions {
   def infallibleTransaction[A](body: InfallibleTransaction => Future[A]): Future[A] = {
     def loop(): Future[A] = {
       val tx = new InfallibleTransaction
-      body(tx).flatMap(value => tx.checkActive().map(_ => value)).recoverWith { case error =>
+      Future.delegate(body(tx)).flatMap(value => tx.checkActive().map(_ => value)).recoverWith { case error =>
         tx.failure(error) match {
           case RetrySignal => loop()
           case other       =>
@@ -123,24 +123,27 @@ object Transactions {
     body: FallibleTransaction[Err] => Future[Either[Err, A]]
   ): Future[Either[TransactionFailure[Err], A]] = {
     val tx = new FallibleTransaction[Err]
-    body(tx).flatMap {
-      case Right(value) =>
-        Future.successful(Right(value))
-      case Left(err) =>
-        tx.onFailure(err)
-          .map { failure =>
-            Left(failure)
-          }
-          .recover { case e =>
-            // Force an uncatchable trap. Note: this only fires for *thrown*
-            // errors, which are unexpected. Expected failures are returned
-            // via Left and processed by `tx.onFailure` above without trapping.
-            HostApi.trap(s"fallibleTransaction failed: ${formatErrorForTrap(e)}")
-          }
-    }.recover { case e =>
-      // Same reasoning as above — thrown errors are unexpected, trap.
-      HostApi.trap(s"fallibleTransaction failed: ${formatErrorForTrap(e)}")
-    }
+    Future
+      .delegate(body(tx))
+      .flatMap {
+        case Right(value) =>
+          Future.successful(Right(value))
+        case Left(err) =>
+          tx.onFailure(err)
+            .map { failure =>
+              Left(failure)
+            }
+            .recover { case e =>
+              // Force an uncatchable trap. Note: this only fires for *thrown*
+              // errors, which are unexpected. Expected failures are returned
+              // via Left and processed by `tx.onFailure` above without trapping.
+              HostApi.trap(s"fallibleTransaction failed: ${formatErrorForTrap(e)}")
+            }
+      }
+      .recover { case e =>
+        // Same reasoning as above — thrown errors are unexpected, trap.
+        HostApi.trap(s"fallibleTransaction failed: ${formatErrorForTrap(e)}")
+      }
   }
 
   private def formatErrorForTrap(error: Throwable): String = {

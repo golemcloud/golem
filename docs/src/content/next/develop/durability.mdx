@@ -7,22 +7,22 @@ recorded outcomes and repairs an eligible incomplete call at its own `Start`. It
 group of completed effects. Guests cannot disable recording or change the execution cursor.
 
 Use [SDK sagas](/next/develop/transactions) for workflows that need compensation. Use
-[retry policies](/next/develop/retries) for retryable host operations. A deterministic guest trap
-fails the invocation; throwing after an HTTP response does not retry that completed request.
+[retry policies](/next/develop/retries) for retryable host operations. A trap is permanent;
+return an error for a transient condition and use a retry schedule. Throwing after an HTTP response
+does not retry that completed request.
 
-## Idempotence mode
+A Rust panic is permanent, including inside code that formerly used `atomically`. It no longer
+retries the block or rewinds completed effects.
 
-Golem assumes remote writes are idempotent by default. An incomplete call can therefore be
+## Remote-write safety
+
+Golem treats remote writes as eligible for re-execution. An incomplete call can therefore be
 retried even when the peer might already have applied it. External exactly-once behavior requires
 the peer to enforce an idempotency key; a header alone is not a guarantee.
 
-Use the SDK's scoped idempotence setting to opt out for an unsafe remote write:
-`withIdempotenceMode(false, ...)` in TypeScript, `Durability.withIdempotenceMode(false, ...)`
-in Effect, `with_idempotence_mode(false, ...)` in Rust and MoonBit,
-`Guards.withIdempotenceMode(false)` in Scala, or `durability.WithIdempotenceMode(false)` in Go.
-Go returns a restore function to call with `defer`. Rust also provides an async variant.
-This setting controls re-execution safety, not whether the call is recorded. An ambiguous
-non-idempotent outcome fails rather than silently repeating the write.
+There is no guest idempotence-mode switch. Make writes duplicate-safe at the peer before relying
+on retries or crash recovery. A lost response does not prove the write failed. Retry predicates
+must not use `is-idempotent`: the host no longer supplies that property.
 
 ## Custom durable operations
 

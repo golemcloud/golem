@@ -15,9 +15,12 @@
 package transaction
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
 )
 
 // tracker records execute/compensate calls in order, so tests can assert that
@@ -168,41 +171,137 @@ func TestFallibleRollbackPartial(t *testing.T) {
 
 func TestInfallibleRetriesWithFreshCompensations(t *testing.T) {
 	tr := &tracker{}
-	a, b := okOp(tr, "1"), okOp(tr, "2")
+	identity := 0
+	reserve := NewOperation(
+		func(in int) golem.Result[int, string] {
+			identity++
+			tr.calls = append(tr.calls, fmt.Sprintf("reserve:%d:%d", in, identity))
+			return golem.Ok[int, string](identity)
+		},
+		func(in, out int) golem.Result[golem.Unit, string] {
+			tr.calls = append(tr.calls, fmt.Sprintf("release:%d:%d", in, out))
+			return golem.Ok[golem.Unit, string](golem.Unit{})
+		},
+	)
 	attempts := 0
+	settle := NewOperation(
+		func(in int) golem.Result[int, string] {
+			tr.calls = append(tr.calls, fmt.Sprintf("settle:%d", in))
+			if attempts < 3 {
+				return golem.Err[int, string]("declined")
+			}
+			return golem.Ok[int, string](in)
+		},
+		func(in, out int) golem.Result[golem.Unit, string] {
+			t.Fatal("failed or committed settlement must not be compensated")
+			return golem.Ok[golem.Unit, string](golem.Unit{})
+		},
+	)
 	out := Infallible(func(tx *Tx[string]) golem.Result[int, string] {
 		attempts++
-		tx.Step(a, 10)
-		tx.Step(b, 20)
-		if attempts < 3 {
-			return golem.Err[int, string]("retry")
-		}
-		return golem.Ok[int, string](42)
+		a := tx.Step(reserve, 10).Ok()
+		b := tx.Step(reserve, 70).Ok()
+		return tx.Step(settle, 100*a+b)
 	})
-	if out != 42 || attempts != 3 {
+	if out != 506 || attempts != 3 {
 		t.Fatalf("result=%d attempts=%d", out, attempts)
 	}
-	if !eq(tr.calls, []string{"e1", "e2", "c2", "c1", "e1", "e2", "c2", "c1", "e1", "e2"}) {
+	if !eq(tr.calls, []string{
+		"reserve:10:1", "reserve:70:2", "settle:102", "release:70:2", "release:10:1",
+		"reserve:10:3", "reserve:70:4", "settle:304", "release:70:4", "release:10:3",
+		"reserve:10:5", "reserve:70:6", "settle:506",
+	}) {
 		t.Fatalf("calls = %v", tr.calls)
 	}
 }
 
 func TestInfallibleStopsOnCompensationFailure(t *testing.T) {
-	attempts := 0
-	defer func() {
-		if recover() == nil || attempts != 1 {
-			t.Fatalf("expected compensation panic without retry, attempts=%d", attempts)
+	for _, mode := range []string{"error", "panic"} {
+		t.Run(mode, func(t *testing.T) {
+			attempts := 0
+			tr := &tracker{}
+			defer func() {
+				failure := recover()
+				if !strings.Contains(fmt.Sprint(failure), "refund rejected") || attempts != 1 {
+					t.Fatalf("expected compensation panic without retry, failure=%v attempts=%d", failure, attempts)
+				}
+				if !eq(tr.calls, []string{"eolder", "refund"}) {
+					t.Fatalf("compensation must stop at failure: %v", tr.calls)
+				}
+			}()
+			op := NewOperation(
+				func(in int) golem.Result[int, string] { return golem.Ok[int, string](in) },
+				func(in, out int) golem.Result[golem.Unit, string] {
+					tr.calls = append(tr.calls, "refund")
+					if mode == "panic" {
+						panic("refund rejected")
+					}
+					return golem.Err[golem.Unit, string]("refund rejected")
+				},
+			)
+			Infallible(func(tx *Tx[string]) golem.Result[int, string] {
+				attempts++
+				if attempts > 1 {
+					return golem.Ok[int, string](0)
+				}
+				tx.Step(okOp(tr, "older"), 70)
+				tx.Step(op, 1)
+				return golem.Err[int, string]("retry")
+			})
+		})
+	}
+}
+
+func TestUnexpectedPanicsTrapWithoutCompensationOrRetry(t *testing.T) {
+	for _, mode := range []string{"fallible", "infallible"} {
+		for _, location := range []string{"body", "step"} {
+			t.Run(mode+"/"+location, func(t *testing.T) {
+				previous := link.TrapPanic
+				t.Cleanup(func() { link.TrapPanic = previous })
+				original := &struct{ Reason string }{"unexpected failure"}
+				trapped := &struct{ Reason string }{"host trap"}
+				traps := 0
+				link.TrapPanic = func(region string, value any) {
+					traps++
+					if region != "transaction" || value != original {
+						t.Fatalf("wrong trap: region=%q value=%v", region, value)
+					}
+					panic(trapped)
+				}
+				tr := &tracker{}
+				attempts := 0
+				defer func() {
+					if failure := recover(); failure != trapped {
+						t.Fatalf("expected host trap, got %v", failure)
+					}
+					if attempts != 1 || traps != 1 || !eq(tr.calls, []string{"eflight", "ehotel"}) {
+						t.Fatalf("attempts=%d traps=%d calls=%v", attempts, traps, tr.calls)
+					}
+				}()
+				body := func(tx *Tx[string]) golem.Result[int, string] {
+					attempts++
+					if attempts > 1 {
+						return golem.Ok[int, string](0)
+					}
+					tx.Step(okOp(tr, "flight"), 17)
+					tx.Step(okOp(tr, "hotel"), 83)
+					if location == "body" {
+						panic(original)
+					}
+					return tx.Step(NewOperation(
+						func(in int) golem.Result[int, string] { panic(original) },
+						func(in, out int) golem.Result[golem.Unit, string] {
+							t.Fatal("a panicking step must not register compensation")
+							return golem.Ok[golem.Unit, string](golem.Unit{})
+						},
+					), 91)
+				}
+				if mode == "fallible" {
+					Fallible(body)
+				} else {
+					Infallible(body)
+				}
+			})
 		}
-	}()
-	op := NewOperation(
-		func(in int) golem.Result[int, string] { return golem.Ok[int, string](in) },
-		func(in, out int) golem.Result[golem.Unit, string] {
-			return golem.Err[golem.Unit, string]("compensation")
-		},
-	)
-	Infallible(func(tx *Tx[string]) golem.Result[int, string] {
-		attempts++
-		tx.Step(op, 1)
-		return golem.Err[int, string]("retry")
-	})
+	}
 }

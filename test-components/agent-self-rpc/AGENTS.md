@@ -28,6 +28,8 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-config-ts` | Adding typed configuration to a TypeScript agent |
 | `golem-add-secret-ts` | Adding secrets (`s.secret`, `Secret<T>`) to TypeScript agents |
 | `golem-call-another-agent-ts` | Calling another agent and awaiting the result over RPC through a definition client |
+| `golem-agent-reflection` | Choosing reflection levels and identity lookup behavior |
+| `golem-agent-reflection-ts` | Discovering and calling agents through runtime reflection |
 | `golem-call-from-external-ts` | Calling agents from external Node.js apps using generated bridge SDKs |
 | `golem-fire-and-forget-ts` | Triggering an agent invocation without waiting for the result (`.trigger`) |
 | `golem-parallel-workers-ts` | Fan out work to multiple parallel agents and collect results |
@@ -36,7 +38,6 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-wait-for-external-input-ts` | Waiting for external input using Golem promises (human-in-the-loop) |
 | `golem-add-webhook-ts` | Creating and awaiting webhooks for webhook-driven external APIs |
 | `golem-multi-instance-agent-ts` | Creating multiple agent instances with phantom agents |
-| `golem-atomic-block-ts` | Atomic blocks and idempotency |
 | `golem-add-transactions-ts` | Saga-pattern transactions with compensation |
 | `golem-add-http-endpoint-ts` | Exposing an agent over HTTP with mount paths and endpoints |
 | `golem-http-params-ts` | Mapping path, query, header, and body parameters for HTTP endpoints |
@@ -102,7 +103,7 @@ The SDK is schema-driven: method inputs and return values are described with [St
 
 Golem **automatically retries** retryable host-operation failures using durable execution and the applicable retry policy. **Do not add manual retry loops, `while` retry patterns, or backoff utilities around host operations** — let Golem apply the retry policy. The default retry policy applies when no user-defined policy matches.
 
-Retryable failures in outgoing HTTP requests (`fetch`), RPC calls between agents, and database / storage calls (`golem:rdbms/*`, keyvalue, blobstore) are handled transparently. An uncaught thrown error or rejected promise outside an atomic region fails the agent without retry. Inside `atomically(...)`, a thrown error traps and the region is retried according to the applicable retry policy; if the policy gives up, the agent becomes failed.
+Retryable failures in outgoing HTTP requests (`fetch`), RPC calls between agents, and database / storage calls (`golem:rdbms/*`, keyvalue, blobstore) are handled transparently. An uncaught thrown error or rejected promise is a deterministic guest trap and fails the invocation without retry. Recovery replays completed outcomes and repairs only an eligible incomplete call at its own `Start`. Use sagas for domain compensation; new attempts append fresh calls without rewinding history. Infallible saga loops have no built-in attempt bound or backoff guarantee.
 
 Only customize when the *strategy* needs to change — see `golem-retry-policies-ts`.
 
@@ -277,8 +278,6 @@ Policy is `'disabled'` (default) | `'default'` | `{ everyNInvocations: n }` | `{
 
 Host helpers, importable from `@golemcloud/golem-ts-sdk`:
 
-- `atomically(fn)` — run a region that commits on success and rolls back + retries on a thrown error.
-- `checkpoint()` — `cp.runOrRevert(() => Result.ok/err(...))` returns the ok value or reverts (uncatchable) the invocation.
 - `durable(spec, request, body)` — run a non-deterministic side effect once, persist its typed result, and replay (not re-run) it on recovery. Uses `FunctionType` for the commit/replay policy.
 - Sagas — `compensable(run, compensate)` steps composed with `fallibleSaga(...)` / `infallibleSaga(...)` for transactional compensation.
 - Promises (human-in-the-loop) — `createPromise()`, `await awaitPromise(id)`, `completePromise(id, bytes)`.

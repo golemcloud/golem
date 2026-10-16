@@ -73,6 +73,7 @@ const (
 	QueryExecutionFailure = rdbms.QueryExecutionFailure
 	QueryResponseFailure  = rdbms.QueryResponseFailure
 	Other                 = rdbms.Other
+	ResourceLost          = rdbms.ResourceLost
 )
 
 // Error is a Postgres host error.
@@ -95,6 +96,8 @@ func pgError(e pg.Error) error {
 		return &Error{Kind: QueryResponseFailure, Message: e.QueryResponseFailure()}
 	case pg.ErrorOther:
 		return &Error{Kind: Other, Message: e.Other()}
+	case pg.ErrorResourceLost:
+		return &Error{Kind: ResourceLost, Message: e.ResourceLost()}
 	default:
 		panic(fmt.Sprintf("golem/rdbms/postgres: unhandled error case %d", e.Tag()))
 	}

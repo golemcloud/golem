@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
-import { Cause, Effect, Exit } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber } from "effect"
 import { AgentHostLive } from "../src/host/AgentHostClient.js"
 import * as Saga from "../src/Saga.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
@@ -586,6 +586,51 @@ describe("Saga — compensation failures", () => {
 })
 
 describe("Saga — external cancellation", () => {
+  it.effect("cancels a fresh attempt after a typed failure without starting another", () =>
+    Effect.gen(function* () {
+      const ready = yield* Deferred.make<void>()
+      const trace: string[] = []
+      let attempts = 0
+      const fiber = yield* Saga.infallibleTransaction(
+        Effect.gen(function* () {
+          const attempt = ++attempts
+          for (const name of ["flight", "hotel"]) {
+            yield* Saga.withCompensation(
+              Effect.sync(() => {
+                const id = `${name}:${attempt}`
+                trace.push(`reserve:${id}`)
+                return id
+              }),
+              (id) =>
+                Effect.sync(() => {
+                  trace.push(`release:${id}`)
+                }),
+            )
+          }
+          if (attempt === 1) return yield* Effect.fail("declined")
+          yield* Deferred.succeed(ready, undefined)
+          return yield* Effect.never
+        }),
+      ).pipe(Effect.forkChild)
+      yield* Deferred.await(ready)
+      yield* Fiber.interrupt(fiber)
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isFailure(exit) && exit.cause.reasons.some(Cause.isInterruptReason)).toBe(true)
+      expect(attempts).toBe(2)
+      expect(trace).toEqual([
+        "reserve:flight:1",
+        "reserve:hotel:1",
+        "release:hotel:1",
+        "release:flight:1",
+        "reserve:flight:2",
+        "reserve:hotel:2",
+        "release:hotel:2",
+        "release:flight:2",
+      ])
+      expect(ApiHostMock.__getTrapReasons()).toEqual([])
+    }).pipe(Effect.provide(hostLayer)),
+  )
+
   for (const transaction of [Saga.fallibleTransaction, Saga.infallibleTransaction]) {
     it.live(`drains compensation before an external timeout returns: ${transaction.name}`, () =>
       Effect.gen(function* () {

@@ -58,10 +58,10 @@ http-5xx-retry:
 The host returns the final response after retries. A catch-all policy does not opt into HTTP
 status retries. See `golem-retry-policies-moonbit` for policy configuration.
 
-Remote writes are assumed idempotent by default. Opt out with
-`@api.with_idempotence_mode(false, ...)` when repeating an ambiguous write is unsafe. Exactly-once
-processing requires the remote peer to enforce a stable idempotency key. A lost response does not
-prove the remote operation failed.
+Remote writes are eligible for retry; there is no guest idempotence-mode switch. Make writes
+duplicate-safe at the peer. Exactly-once processing requires the remote peer to enforce a stable
+idempotency key. A lost response does not prove the remote operation failed. Do not predicate retry
+policies on `is-idempotent`; the host no longer supplies that property.
 
 For retry decisions based on decoded content, use ordinary guest control flow or a manual saga.
 Compensate successful steps before the next attempt; new calls append to history instead of

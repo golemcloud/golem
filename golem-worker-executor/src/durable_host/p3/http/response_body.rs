@@ -1463,20 +1463,15 @@ where
                                         }
                                         RebuildOutcome::Failed(code) => HttpBodyFrame::Error(code),
                                         RebuildOutcome::Refused(message) => {
+                                            debug!(%message, "p3 HTTP response rebuild refused");
                                             retry_exempt = true;
-                                            HttpBodyFrame::Error(ErrorCode::InternalError(Some(
-                                                message,
-                                            )))
+                                            HttpBodyFrame::Error(ErrorCode::HttpResponseIncomplete)
                                         }
                                     }
                                 }
                                 None => {
                                     retry_exempt = true;
-                                    HttpBodyFrame::Error(ErrorCode::InternalError(Some(
-                                "cannot rebuild the in-flight p3 HTTP send after a restart: no \
-                                 resend information was captured for the replayed response"
-                                    .to_string(),
-                            )))
+                                    HttpBodyFrame::Error(ErrorCode::HttpResponseIncomplete)
                                 }
                             }
                         } else if let Some(cancel_rx) = cancel_rx {
@@ -1604,10 +1599,9 @@ where
                         match resend_recorded_request::<Ctx, U>(accessor, resend, &range_headers)
                             .await
                         {
-                            // The recorded request body cannot be reconstructed:
-                            // resume is refused, the original failure falls through
-                            // to the worker-level retry classification (whose replay
-                            // re-issues from a then-complete recording, or fails).
+                            // Storage outages reconstruct with infrastructure backoff. A
+                            // recording that cannot reproduce the request reports typed loss;
+                            // semantic retry cannot make that recording replayable.
                             ResendOutcome::RecoveryRequired(error) => {
                                 child.abandon_for_trap();
                                 stream.abandon_for_trap();
@@ -1615,6 +1609,8 @@ where
                             }
                             ResendOutcome::Refused(reason) => {
                                 debug!(%reason, "p3 HTTP response-body resume refused");
+                                retry_exempt = true;
+                                frame = HttpBodyFrame::Error(ErrorCode::HttpResponseIncomplete);
                                 break;
                             }
                             // The resume send itself failed: charge another resume
@@ -1647,11 +1643,8 @@ where
                                         // Deterministic for this request — never
                                         // retry-routed.
                                         retry_exempt = true;
-                                        frame = HttpBodyFrame::Error(ErrorCode::InternalError(Some(
-                                        "response-body resume failed: the server returned 416 \
-                                         Range Not Satisfiable"
-                                            .to_string(),
-                                    )));
+                                        frame =
+                                            HttpBodyFrame::Error(ErrorCode::HttpResponseIncomplete);
                                         break;
                                     }
                                     ResumeResponseAction::SkipPrefix => {
@@ -1684,24 +1677,14 @@ where
                                             Err(SkipBodyPrefixError::BodyTooShort) => {
                                                 retry_exempt = true;
                                                 frame = HttpBodyFrame::Error(
-                                                    ErrorCode::InternalError(Some(
-                                                        "response-body resume failed: the re-sent \
-                                                     response body is shorter than the bytes \
-                                                     already delivered to the guest"
-                                                            .to_string(),
-                                                    )),
+                                                    ErrorCode::HttpResponseIncomplete,
                                                 );
                                                 break;
                                             }
                                             Err(SkipBodyPrefixError::Mismatch) => {
                                                 retry_exempt = true;
                                                 frame = HttpBodyFrame::Error(
-                                                    ErrorCode::InternalError(Some(
-                                                        "response-body resume failed: the re-sent \
-                                                     response body differs from the bytes \
-                                                     already delivered to the guest"
-                                                            .to_string(),
-                                                    )),
+                                                    ErrorCode::HttpResponseIncomplete,
                                                 );
                                                 break;
                                             }
@@ -1738,9 +1721,9 @@ where
                     // error raises a retry trap here — before anything about this
                     // frame is persisted or delivered, so the guest never observes
                     // a truncated stream — leaving the parent `Start` incomplete.
-                    // The retry's replay then jumps the scope and re-issues the
-                    // recorded request (see `reissue_recorded_request`), re-reading
-                    // the body from a fresh response. Permanent errors — and
+                    // Replay repairs the same scope and re-issues the recorded
+                    // request (see `reissue_recorded_request`), verifying the prefix
+                    // already delivered before continuing. Permanent errors — and
                     // transient ones whose retry budget is exhausted — fall through
                     // and are recorded as the terminal, which is also what a
                     // recorded terminal replays as. A retry-exempt failure (refused
@@ -1779,9 +1762,9 @@ where
                         };
                         if let Some(error) = trap {
                             // The retry trap tears the invocation down after the
-                            // parent handle has been abandoned. The child `Start` is persisted but the
-                            // jumped scope discards it on replay; abandon the handle
-                            // so its drop does not record a `Cancelled`. The span is
+                            // parent handle has been abandoned. The child's original
+                            // `Start` stays incomplete for in-place repair; abandon the
+                            // handle so its drop does not record a `Cancelled`. The span is
                             // deliberately left open — the retry's replay reconstructs it.
                             child.abandon_for_trap();
                             let _ = demand.send(HttpBodyChunkReply::Failed {

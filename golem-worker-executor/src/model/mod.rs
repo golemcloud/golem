@@ -1116,6 +1116,25 @@ mod tests {
     }
 
     #[test]
+    fn deterministic_guest_traps_are_never_retried() {
+        let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+            &anyhow::Error::new(wasmtime::Trap::UnreachableCodeReached)
+                .context("guest-requested trap: reservation failed"),
+            OplogIndex::from_u64(37),
+            AgentMode::Durable,
+        );
+        assert!(matches!(&trap, TrapType::Error {
+            error: AgentError::DeterministicTrap(message),
+            retry_from,
+            ..
+        } if message.contains("reservation failed") && *retry_from == OplogIndex::from_u64(37)));
+        assert_eq!(
+            crate::durable_host::DurableWorkerCtx::<crate::workerctx::default::Context>::fixed_decision_for_trap_type(&trap),
+            Some(RetryDecision::None)
+        );
+    }
+
+    #[test]
     fn unexpected_oplog_entry_is_non_retriable_internal_error() {
         let trap = TrapType::from_error::<crate::workerctx::default::Context>(
             &anyhow::Error::from(

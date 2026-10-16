@@ -1889,7 +1889,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
         let Some(claimed) = claimed else {
             let recording = worker.runtime_append_tasks().register().ok_or(
                 WorkerExecutorError::Interrupted {
-                    kind: InterruptKind::Jump,
+                    kind: InterruptKind::Restart,
                 },
             )?;
             let (verdict_tx, verdict_rx) = oneshot::channel();

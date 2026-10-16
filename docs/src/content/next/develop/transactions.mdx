@@ -51,6 +51,10 @@ A **fallible transaction** deals with domain errors. Successful steps register c
 
 In an infallible transaction, a propagated domain error runs compensations and then starts another guest-code attempt. Both the failed attempt and its compensations remain in history. New attempt calls have new `Start` positions; reconstruction of an incomplete call repairs that call at its own `Start`. This loop does not use the host retry policy and can run forever on a deterministic domain failure. Unexpected traps fail the invocation and do not guarantee compensation. Do not use interruption as a business retry signal.
 
+The Rust, TypeScript, Scala, and Go helpers provide no built-in attempt bound or backoff guarantee
+for this guest-code loop. Eventual success is not guaranteed. MoonBit has no public saga helper;
+the same warning applies to an application that implements the compensate-and-loop pattern.
+
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         In TypeScript, an infallible saga can be executed using the async `infallibleSaga` function, by

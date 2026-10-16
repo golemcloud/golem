@@ -2956,7 +2956,7 @@ async fn complete_owner_attachment_terminals<U: Send + 'static, Ctx: WorkerCtx>(
         let setup = (|| {
             let recording = worker.runtime_append_tasks().register().ok_or(
                 WorkerExecutorError::Interrupted {
-                    kind: InterruptKind::Jump,
+                    kind: InterruptKind::Restart,
                 },
             )?;
             prepare_access_terminal_effect(

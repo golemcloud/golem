@@ -246,6 +246,12 @@ jobs:
           cp builtin-tools/typescript-tools.wasm tmp/builtin-artifacts/
           cp builtin-tools/web-fetch.wasm tmp/builtin-artifacts/
           cp plugins/otlp-exporter.wasm tmp/builtin-artifacts/
+      - name: Install component contract validator
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-tools@1.262.0
+      - name: Validate released artifacts against the current host
+        run: python3 builtin-tools/validate-host-contract.py --artifact-dir tmp/builtin-artifacts
       - name: Package built-in artifacts
         run: tar --zstd -cf tmp/builtin-artifacts.tar.zst -C tmp/builtin-artifacts .
       - name: Upload built-in artifacts

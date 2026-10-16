@@ -1277,17 +1277,14 @@ impl TestWorkerExecutor {
         Ok(())
     }
 
-    pub fn return_no_op_after_oplog_reads(
+    pub fn return_non_snapshot_after_oplog_reads(
         &self,
         agent_id: &AgentId,
         oplog_index: OplogIndex,
         reads_to_skip: usize,
     ) {
-        self.additional_test_deps.return_no_op_after_oplog_reads(
-            agent_id.clone(),
-            oplog_index,
-            reads_to_skip,
-        );
+        self.additional_test_deps
+            .return_non_snapshot_after_oplog_reads(agent_id.clone(), oplog_index, reads_to_skip);
     }
 
     /// Pauses one `Oplog::read` or `read_exact` starting at the given index before accessing storage.
@@ -5683,11 +5680,9 @@ impl Oplog for TestOplog {
         }
         if self
             .additional_test_deps
-            .take_no_op_oplog_read(&self.owned_agent_id.agent_id, oplog_index)
+            .take_non_snapshot_oplog_read(&self.owned_agent_id.agent_id, oplog_index)
         {
-            return OplogEntry::RecoverySucceeded {
-                timestamp: golem_common::model::Timestamp::now_utc(),
-            };
+            return OplogEntry::grow_memory(0);
         }
         let mut entry = self.oplog.read(oplog_index).await;
         if matches!(entry, OplogEntry::Snapshot { .. }) {
@@ -6110,6 +6105,15 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
         agent_id: &AgentId,
         transaction_id: &TransactionId,
     ) -> Result<RdbmsTransactionStatus, rdbms::RdbmsError> {
+        self.check_rdbms_tx(agent_id, "GetTransactionStatusError")
+            .await?;
+        if self
+            .check_rdbms_tx(agent_id, "GetTransactionStatusInProgress")
+            .await
+            .is_err()
+        {
+            return Ok(RdbmsTransactionStatus::InProgress);
+        }
         let r = self
             .check_rdbms_tx(agent_id, "GetTransactionStatusNotFound")
             .await;
@@ -6207,7 +6211,7 @@ pub struct AdditionalTestDeps {
         Arc<std::sync::Mutex<HashMap<AgentId, tokio::sync::mpsc::UnboundedSender<usize>>>>,
     snapshot_download_failures: Arc<std::sync::Mutex<SnapshotDownloadFailures>>,
     empty_snapshot_payloads: Arc<std::sync::Mutex<HashSet<(AgentId, OplogIndex)>>>,
-    no_op_oplog_reads: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), usize>>>,
+    non_snapshot_oplog_reads: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), usize>>>,
     oplog_read_gates: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), OplogReadGate>>>,
     append_after_commit: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     rdbms_tx_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
@@ -6287,7 +6291,7 @@ impl AdditionalTestDeps {
             runtime_disposal_probes: Arc::new(std::sync::Mutex::new(HashMap::new())),
             snapshot_download_failures: Arc::new(std::sync::Mutex::new(HashMap::new())),
             empty_snapshot_payloads: Arc::new(std::sync::Mutex::new(HashSet::new())),
-            no_op_oplog_reads: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            non_snapshot_oplog_reads: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_read_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             append_after_commit: Arc::new(std::sync::Mutex::new(HashSet::new())),
             rdbms_tx_failures,
@@ -6905,21 +6909,21 @@ impl AdditionalTestDeps {
             .unwrap_or_default()
     }
 
-    fn return_no_op_after_oplog_reads(
+    fn return_non_snapshot_after_oplog_reads(
         &self,
         agent_id: AgentId,
         oplog_index: OplogIndex,
         reads_to_skip: usize,
     ) {
-        self.no_op_oplog_reads
+        self.non_snapshot_oplog_reads
             .lock()
             .unwrap()
             .insert((agent_id, oplog_index), reads_to_skip);
     }
 
-    fn take_no_op_oplog_read(&self, agent_id: &AgentId, oplog_index: OplogIndex) -> bool {
+    fn take_non_snapshot_oplog_read(&self, agent_id: &AgentId, oplog_index: OplogIndex) -> bool {
         let key = (agent_id.clone(), oplog_index);
-        let mut reads = self.no_op_oplog_reads.lock().unwrap();
+        let mut reads = self.non_snapshot_oplog_reads.lock().unwrap();
         match reads.get_mut(&key) {
             Some(0) => {
                 reads.remove(&key);

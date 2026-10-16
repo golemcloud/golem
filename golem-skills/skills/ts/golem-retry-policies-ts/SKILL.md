@@ -7,6 +7,14 @@ description: "Configuring semantic retry policies for a TypeScript Golem agent. 
 
 Golem provides a composable, per-environment retry policy system. Policies are evaluated against error context properties and can be defined in the application manifest, managed via CLI, or created/overridden at runtime from agent code using the SDK.
 
+Do not predicate on `is-idempotent`; the host no longer supplies that property. The explicit
+`golem:api/host.trap` function raises a deterministic trap and is never retried, even by a catch-all policy. Host retry
+policies repair eligible individual calls, not completed effects or whole saga attempts.
+
+A trap is permanent. Return an error for a transient condition and use a retry schedule.
+Application-level errors need application-level handling; returning an error does not automatically
+activate a host retry policy.
+
 ## 1. Define Retry Policies in the Application Manifest
 
 Add retry policy definitions under `retryPolicyDefaults` in `golem.yaml`, scoped per environment:

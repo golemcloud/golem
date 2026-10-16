@@ -266,9 +266,21 @@ async fn recover_concurrent_post(
     mode: InferenceMode,
     method: &str,
     verify_replay: bool,
+    inject_payload_outage: bool,
 ) -> anyhow::Result<RecoveredRun> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let overrides = || golem_worker_executor_test_utils::TestExecutorOverrides {
+        configure: inject_payload_outage.then(|| {
+            Arc::new(
+                |config: &mut golem_worker_executor::services::golem_config::GolemConfig| {
+                    config.oplog.max_payload_size = 0;
+                },
+            ) as _
+        }),
+        ..Default::default()
+    };
+    let executor =
+        golem_worker_executor_test_utils::start_with_overrides(deps, &context, overrides()).await?;
     let (server, port, http_server) = spawn_inference_server(mode).await?;
 
     let component = executor
@@ -321,26 +333,89 @@ async fn recover_concurrent_post(
     assert_eq!(server.get_count.load(Ordering::SeqCst), 1);
     assert_eq!(jump_count(&before_crash), 0);
 
+    let outage_payload =
+        if inject_payload_outage {
+            use golem_common::model::oplog::payload::{
+                HostRequestP3HttpClientRequestBodyFrame, OplogPayload,
+            };
+            use golem_common::model::oplog::types::SerializableP3HttpRequestBodyFrame;
+            use golem_common::model::oplog::{HostStreamKind, OplogEntry};
+            use golem_common::schema::FromSchema;
+            let parent = before_crash
+                .iter()
+                .find_map(|entry| match &entry.entry {
+                    PublicOplogEntry::HostStreamFrame(params)
+                        if params.kind == HostStreamKind::P3HttpRequestBody =>
+                    {
+                        let frame = HostRequestP3HttpClientRequestBodyFrame::from_value(
+                            params.payload.value(),
+                        )
+                        .expect("request-body frames must decode through their public schema");
+                        matches!(frame.frame, SerializableP3HttpRequestBodyFrame::Data { .. })
+                            .then_some(params.parent_start_index)
+                    }
+                    _ => None,
+                })
+                .expect("the POST must have recorded request-body data");
+            Some(executor.stored_oplog(&worker_id).await.into_iter().find_map(|entry| match entry {
+            OplogEntry::HostStreamFrame {
+                parent_start_index,
+                kind: HostStreamKind::P3HttpRequestBody,
+                payload: OplogPayload::External { payload_id, .. },
+                ..
+            } if parent_start_index == parent => Some(payload_id),
+            _ => None,
+        }).expect("the request body must have an external payload to exercise the backend outage"))
+        } else {
+            None
+        };
     drop(executor);
-    let executor = start(deps, &context).await?;
-    let result = timeout(
-        Duration::from_secs(60),
-        executor.invoke_and_await_agent_with_key(
+    let executor =
+        golem_worker_executor_test_utils::start_with_overrides(deps, &context, overrides()).await?;
+    if let Some(payload) = outage_payload {
+        executor.set_oplog_download_outage_for_payload(&worker_id, payload);
+    }
+    let result = {
+        let invocation = executor.invoke_and_await_agent_with_key(
             &component,
             &agent_id,
             &key,
             method,
             data_value!(),
-        ),
-    )
-    .await?
-    .map_err(|error| error.to_string())
-    .and_then(|value| {
-        value
-            .into_typed::<String>()
+        );
+        tokio::pin!(invocation);
+        if inject_payload_outage {
+            let hit = async {
+                while executor.oplog_download_outage_hits(&worker_id).is_empty() {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            };
+            tokio::select! {
+                hit = timeout(Duration::from_secs(20), hit) => hit?,
+                result = &mut invocation => panic!("payload outage must recover without completing the invocation: {result:?}"),
+            }
+            assert_eq!(
+                server.post_count.load(Ordering::SeqCst),
+                1,
+                "storage recovery must precede the resend"
+            );
+            executor.set_oplog_download_outage(&worker_id, false);
+        }
+        timeout(Duration::from_secs(60), &mut invocation)
+            .await?
             .map_err(|error| error.to_string())
-    });
+            .and_then(|value| {
+                value
+                    .into_typed::<String>()
+                    .map_err(|error| error.to_string())
+            })
+    };
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    if inject_payload_outage {
+        assert!(oplog.iter().all(|entry| !matches!(&entry.entry,
+            PublicOplogEntry::Error(params) if params.kind == golem_common::model::oplog::OplogErrorKind::Invocation
+        )), "storage outages must not charge semantic retries");
+    }
     executor.check_oplog_is_queryable(&worker_id).await?;
     let recovered = ServerCounts::snapshot(&server);
 
@@ -431,6 +506,7 @@ async fn post_crash_before_headers_repairs_the_send_and_keeps_the_sibling(
         InferenceMode::BeforeHeaders,
         "post_with_concurrent_get",
         true,
+        false,
     )
     .await?;
     assert_eq!(run.result, Ok(full_success()));
@@ -463,6 +539,7 @@ async fn post_crash_mid_body_resumes_with_a_range_continuation(
         InferenceMode::MidBodyThenRange,
         "post_with_concurrent_get",
         true,
+        false,
     )
     .await?;
     assert_eq!(run.result, Ok(full_success()));
@@ -492,6 +569,7 @@ async fn post_crash_mid_body_continues_a_verified_full_response(
         InferenceMode::MidBodyThenFullSame,
         "post_with_concurrent_get",
         true,
+        false,
     )
     .await?;
     assert_eq!(run.result, Ok(full_success()));
@@ -520,6 +598,7 @@ async fn post_crash_mid_body_reports_an_incomplete_response_when_the_body_change
         InferenceMode::MidBodyThenFullChanged,
         "post_with_concurrent_get",
         true,
+        false,
     )
     .await?;
     assert_eq!(
@@ -542,5 +621,30 @@ async fn post_crash_mid_body_reports_an_incomplete_response_when_the_body_change
         "the fresh invocation sends no Range and receives the full body"
     );
     assert_eq!(run.after_replay.post_range_headers[2], None);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn post_crash_body_payload_outage_uses_infrastructure_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let run = recover_concurrent_post(
+        last_unique_id,
+        deps,
+        http_tests,
+        InferenceMode::MidBodyThenRange,
+        "post_with_concurrent_get",
+        true,
+        true,
+    )
+    .await?;
+    assert_eq!(run.result, Ok(full_success()));
+    assert_call_local_recovery(&run);
+    assert_eq!(run.result_after_replay, Ok(full_success()));
+    assert_eq!((run.after_replay.gets, run.after_replay.posts), (2, 3));
     Ok(())
 }

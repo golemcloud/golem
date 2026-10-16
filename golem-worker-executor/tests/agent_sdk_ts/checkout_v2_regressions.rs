@@ -579,9 +579,14 @@ async fn ts_v2_s2_shipment_hangs_then_reset(
     let backend_for_reset = backend.clone();
     let reset_handle = tokio::spawn(
         async move {
-            tokio::time::sleep(Duration::from_secs(15)).await;
-            tracing::info!("S2: 15s elapsed, resetting chaos so /shipment recovers");
+            tokio::time::timeout(Duration::from_secs(30), async {
+                while backend_for_reset.attempts_snapshot().2 < 2 {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await?;
             backend_for_reset.reset().await;
+            Ok::<(), tokio::time::error::Elapsed>(())
         }
         .in_current_span(),
     );
@@ -596,7 +601,7 @@ async fn ts_v2_s2_shipment_hangs_then_reset(
         .await?
         .into_typed::<bool>()?;
 
-    let _ = reset_handle.await;
+    reset_handle.await??;
 
     let (inv, pay, ship, mail) = backend.snapshot().await;
     let (inv_a, pay_a, ship_a, mail_a) = backend.attempts_snapshot();
@@ -626,17 +631,11 @@ async fn ts_v2_s2_shipment_hangs_then_reset(
         "S2: email must succeed exactly once, observed {mail}"
     );
 
-    // Hard upper bound on the *number of /shipment attempts*: the user
-    // observed hundreds-to-thousands of in-flight POSTs because every
-    // trap-replay re-issues the hung request. With the bug fixed, each
-    // failed attempt should be charged against a small bounded retry
-    // budget (default trap retry: ~5 attempts) plus the one successful
-    // attempt after chaos resets — so 32 is a generous ceiling that any
-    // working executor will stay well under and any tight-loop
-    // regression will easily exceed.
+    // The guest cancels each timed-out request and appends a fresh send. Cancellation
+    // is not a transient host error and must not consume the host retry budget.
     assert!(
-        ship_a <= 32,
-        "S2: /shipment attempt count must be bounded (tight retry loop bug), observed {ship_a}"
+        (2..=11).contains(&ship_a),
+        "S2: shipment must retry after cancellation, within the guest's eleven-attempt bound; observed {ship_a}"
     );
 
     let oplog = executor
@@ -649,7 +648,6 @@ async fn ts_v2_s2_shipment_hangs_then_reset(
             _ => None,
         })
         .collect();
-    let mut error_entries_checked = 0usize;
     for e in &oplog {
         if let golem_common::model::oplog::PublicOplogEntry::Error(params) = &e.entry {
             assert!(
@@ -659,12 +657,34 @@ async fn ts_v2_s2_shipment_hangs_then_reset(
                 params.retry_from,
                 params.error,
             );
-            error_entries_checked += 1;
         }
     }
+    use golem_common::model::oplog::PublicOplogEntry;
+    let send_starts: std::collections::HashSet<_> = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params) if params.function_name == "http::client::send" => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        send_starts.len(),
+        inv_a + pay_a + ship_a + mail_a,
+        "each guest attempt must append a distinct durable send, without hidden host retries"
+    );
     assert!(
-        error_entries_checked > 0,
-        "S2: expected at least one persisted Error entry from the shipment retries, found none"
+        oplog.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::Cancelled(params) if send_starts.contains(&params.start_index)
+        )),
+        "the timed-out request must have a recorded cancellation"
+    );
+    assert!(
+        oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Jump(_))),
+        "guest retries must retain earlier attempts rather than rewind history"
     );
 
     Ok(())

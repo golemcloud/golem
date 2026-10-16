@@ -84,9 +84,15 @@ To retry HTTP responses such as 502, 503, and 504, the predicate itself (or a ne
 statuses. Effect `HttpClient` normally returns 4xx and 5xx responses; when an eligible host policy
 matches, Golem transparently re-sends the request and `HttpClient` receives the final response.
 
-Status retries require live execution, a reconstructible request, and an idempotent operation.
-Prefer GET and other naturally idempotent methods unless the operation has explicitly been made
-safe to retry. Host policies repair individual calls, not whole guest workflows.
+Status retries require live execution and a reconstructible request. Remote writes are eligible
+for retry without a guest idempotence-mode switch; make them duplicate-safe at the peer. Do not
+predicate on `is-idempotent`; the host no longer supplies that property. The explicit
+`golem:api/host.trap` function raises a deterministic trap and is never retried, even by a catch-all policy. Host policies repair
+individual calls, not whole guest workflows.
+
+A trap is permanent. Return an error for a transient condition and use a retry schedule.
+Application-level errors need application-level handling; returning an error does not automatically
+activate a host retry policy.
 
 ## Build a Host Policy with the Effect SDK
 

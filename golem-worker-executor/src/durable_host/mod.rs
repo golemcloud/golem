@@ -3429,13 +3429,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 // The scope's side effect runs as soon as this returns. A `Start` the storage
                 // refused has to stop it here: the shard's new owner has no record of the scope,
                 // so nothing would stop it running the effect a second time.
-                let begin_index = self
-                    .public_state
+                self.public_state
                     .worker()
                     .add_and_commit_oplog(entry)
                     .await
-                    .map_err(WorkerExecutorError::from)?;
-                begin_index
+                    .map_err(WorkerExecutorError::from)?
             };
 
             // A durable scope (remote write / HTTP request) is now open until the matching
@@ -3709,6 +3707,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         handler: impl RemoteTransactionHandler<Tx, crate::services::rdbms::RdbmsError>,
     ) -> anyhow::Result<(OplogIndex, Tx)> {
+        use concurrent::DurableContext;
+
         if self.state.durability_is_suppressed() {
             let (_, tx) = handler.create_new().await.map_err(|error| anyhow!(error))?;
             let begin_index = self.state.current_oplog_index().await;
@@ -3733,8 +3733,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
 
         let Some((scope_start_index, scope_handle)) = claimed_scope else {
-            // Commit the scope before opening the external transaction. An incomplete begin
-            // cannot safely create a replacement transaction after reconstruction.
+            // Commit the scope before opening the external transaction. No statements can
+            // execute until the Begin marker is committed and the handle reaches the guest.
             let scope_start = OplogEntry::Start {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index: self.entity_parent_start_index(),
@@ -3814,12 +3814,30 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
                 return Err(anyhow!("Invalid begin transaction outcome"));
             }
-            let error = crate::services::rdbms::RdbmsError::ConnectionFailure(
-                "Database transaction begin was lost during reconstruction".to_string(),
-            );
-            self.finish_transaction_terminal(scope_start_index,
-                golem_common::model::oplog::payload::types::SerializableRdbmsTransactionTerminal::BeginFailed(Err(error.clone().into())), None).await?;
-            return Err(anyhow!(error));
+            self.publish_direct_replay_tail(scope_start_index).await?;
+            // The previous handle never reached the guest, so it cannot contain statements.
+            // Repair only the begin, retaining its scope Start and every sibling call.
+            let (tx_id, tx) = match handler.create_new().await {
+                Ok(tx) => tx,
+                Err(error) => {
+                    self.finish_transaction_terminal(scope_start_index,
+                        golem_common::model::oplog::payload::types::SerializableRdbmsTransactionTerminal::BeginFailed(Err(error.clone().into())), None).await?;
+                    return Err(anyhow!(error));
+                }
+            };
+            self.state
+                .oplog
+                .add(OplogEntry::begin_remote_transaction(
+                    tx_id,
+                    scope_start_index,
+                ))
+                .await?;
+            self.public_state
+                .worker()
+                .commit_oplog_and_update_state(CommitLevel::Always)
+                .await?;
+            self.state.current_retry_point = scope_start_index;
+            return Ok((scope_start_index, tx));
         };
         let original_begin_index = scope_start_index;
 
@@ -3893,8 +3911,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         outcome: golem_common::model::oplog::payload::types::SerializableRdbmsTransactionTerminal,
         marker: Option<OplogEntry>,
     ) -> anyhow::Result<()> {
+        use concurrent::DurableContext;
+
         if self.state.durability_is_suppressed() {
             return Ok(());
+        }
+        if !self.is_live() {
+            self.publish_direct_replay_tail(begin_index).await?;
         }
         let response = golem_common::model::oplog::HostResponse::GolemRdbmsTransactionTerminal(
             golem_common::model::oplog::HostResponseGolemRdbmsTransactionTerminal { outcome },

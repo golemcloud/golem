@@ -122,6 +122,7 @@ Module._load = function (request) {
     return {
       getSelfMetadata: missingHostImport("getSelfMetadata"),
       generateIdempotencyKey: missingHostImport("generateIdempotencyKey"),
+      trap: (reason) => { throw new Error(reason); },
     };
   }
   if (request === "wasi:clocks/monotonic-clock@0.3.0") {

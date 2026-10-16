@@ -65,6 +65,7 @@ const (
 	QueryExecutionFailure = rdbms.QueryExecutionFailure
 	QueryResponseFailure  = rdbms.QueryResponseFailure
 	Other                 = rdbms.Other
+	ResourceLost          = rdbms.ResourceLost
 )
 
 // Error is a MySQL host error.
@@ -87,6 +88,8 @@ func myError(e my.Error) error {
 		return &Error{Kind: QueryResponseFailure, Message: e.QueryResponseFailure()}
 	case my.ErrorOther:
 		return &Error{Kind: Other, Message: e.Other()}
+	case my.ErrorResourceLost:
+		return &Error{Kind: ResourceLost, Message: e.ResourceLost()}
 	default:
 		panic(fmt.Sprintf("golem/rdbms/mysql: unhandled error case %d", e.Tag()))
 	}

@@ -6341,7 +6341,7 @@ mod tests {
     }
 
     #[test]
-    fn known_fresh_requires_a_durably_recorded_live_host_call() {
+    fn known_fresh_requires_live_execution_and_an_ephemeral_target() {
         assert!(known_fresh_dispatch_allowed(true, true));
         assert!(!known_fresh_dispatch_allowed(true, false));
         assert!(!known_fresh_dispatch_allowed(false, true));

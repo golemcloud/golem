@@ -318,6 +318,7 @@ pub enum RdbmsError {
     QueryExecutionFailure(String),
     QueryResponseFailure(String),
     Other(String),
+    ResourceLost(String),
 }
 
 impl RdbmsError {
@@ -346,6 +347,7 @@ impl Display for RdbmsError {
             RdbmsError::QueryExecutionFailure(msg) => write!(f, "QueryExecutionFailure: {msg}"),
             RdbmsError::QueryResponseFailure(msg) => write!(f, "QueryResponseFailure: {msg}"),
             RdbmsError::Other(msg) => write!(f, "Other: {msg}"),
+            RdbmsError::ResourceLost(msg) => write!(f, "ResourceLost: {msg}"),
         }
     }
 }
@@ -364,6 +366,7 @@ impl From<RdbmsError> for SerializableRdbmsError {
                 SerializableRdbmsError::QueryResponseFailure(msg)
             }
             RdbmsError::Other(msg) => SerializableRdbmsError::Other(msg),
+            RdbmsError::ResourceLost(msg) => SerializableRdbmsError::ResourceLost(msg),
         }
     }
 }
@@ -382,6 +385,7 @@ impl From<SerializableRdbmsError> for RdbmsError {
                 RdbmsError::QueryResponseFailure(msg)
             }
             SerializableRdbmsError::Other(msg) => RdbmsError::Other(msg),
+            SerializableRdbmsError::ResourceLost(msg) => RdbmsError::ResourceLost(msg),
         }
     }
 }

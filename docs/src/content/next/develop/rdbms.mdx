@@ -64,7 +64,9 @@ The currently supported databases are:
         }
 
         export class DbResultStream {
+          /** @throws Error */
           getColumns(): DbColumn[];
+          /** @throws Error */
           getNext(): DbRow[] | undefined;
         }
 
@@ -162,7 +164,9 @@ The currently supported databases are:
         import * as golemRdbms150Types from 'golem:rdbms/types@1.5.0';
 
         export class DbResultStream {
+          /** @throws Error */
           getColumns(): DbColumn[];
+          /** @throws Error */
           getNext(): DbRow[] | undefined;
         }
 
@@ -503,8 +507,8 @@ The currently supported databases are:
       // ...
     } derive(Debug, Eq)
 
-    pub fn DbResultStream::get_columns(self : DbResultStream) -> Array[DbColumn]
-    pub fn DbResultStream::get_next(self : DbResultStream) -> Array[DbRow]?
+    pub fn DbResultStream::get_columns(self : DbResultStream) -> Result[Array[DbColumn], Error_]
+    pub fn DbResultStream::get_next(self : DbResultStream) -> Result[Array[DbRow]?, Error_]
 
     pub fn DbConnection::open(address : String) -> Result[DbConnection, Error_]
     pub fn DbConnection::query(
@@ -562,8 +566,8 @@ The currently supported databases are:
       // ...
     } derive(Debug, Eq)
 
-    pub fn DbResultStream::get_columns(self : DbResultStream) -> Array[DbColumn]
-    pub fn DbResultStream::get_next(self : DbResultStream) -> Array[DbRow]?
+    pub fn DbResultStream::get_columns(self : DbResultStream) -> Result[Array[DbColumn], Error_]
+    pub fn DbResultStream::get_next(self : DbResultStream) -> Result[Array[DbRow]?, Error_]
 
     pub fn DbConnection::open(address : String) -> Result[DbConnection, Error_]
     pub fn DbConnection::query(
@@ -1195,3 +1199,16 @@ Additionally you can:
 - `query` executes a SQL statement and returns a result
 - `query-stream` executes a SQL statement and returns a streaming result where the selected SDK exposes streaming
 - `begin-transaction` creates a transaction resource on which, in addition to the `query` and `execute` functions, there is also a `commit` and a `rollback` method.
+
+At the WIT boundary, a result stream's accessors are fallible:
+
+```wit
+get-columns: func() -> result<list<db-column>, error>;
+get-next: func() -> result<option<list<db-row>>, error>;
+```
+
+Handle the error arm before consuming columns or rows. Only a successful `none` from `get-next`
+means the stream ended. Recorded results replay unchanged. A transaction or stream that cannot
+continue after reconstruction reports typed loss at its live boundary; it does not silently rerun
+the transaction or neighboring effects. Open a new transaction explicitly and reconcile uncertain
+external outcomes before repeating business work. Loss does not prove a prior write failed.

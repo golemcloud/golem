@@ -1234,88 +1234,98 @@ async fn wait_at_unscoped_crash_checkpoint(name: &str) {
         .expect("caller crash checkpoint gate port is configured")
         .parse()
         .expect("caller crash checkpoint gate port is a valid port");
-    let headers = types::Fields::from_list(&[]).expect("valid checkpoint fields");
-    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
-    let (request, transmit) = types::Request::new(headers, None, trailers_rx, None);
-    request
-        .set_method(&types::Method::Post)
-        .expect("set checkpoint method");
-    request
-        .set_scheme(Some(&types::Scheme::Http))
-        .expect("set checkpoint scheme");
-    request
-        .set_authority(Some(&format!("127.0.0.1:{port}")))
-        .expect("set checkpoint authority");
-    request
-        .set_path_with_query(Some(&format!("/{name}")))
-        .expect("set checkpoint path");
-    let receive_response = async move {
-        client::send(request)
+    loop {
+        let headers = types::Fields::from_list(&[]).expect("valid checkpoint fields");
+        let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+        let (request, transmit) = types::Request::new(headers, None, trailers_rx, None);
+        request
+            .set_method(&types::Method::Post)
+            .expect("set checkpoint method");
+        request
+            .set_scheme(Some(&types::Scheme::Http))
+            .expect("set checkpoint scheme");
+        request
+            .set_authority(Some(&format!("127.0.0.1:{port}")))
+            .expect("set checkpoint authority");
+        request
+            .set_path_with_query(Some(&format!("/{name}")))
+            .expect("set checkpoint path");
+        let receive_response = async move {
+            client::send(request)
+                .await
+                .expect("send checkpoint request")
+        };
+        let finish_request = async move {
+            trailers_tx
+                .write(Ok(None))
+                .await
+                .expect("finish checkpoint request");
+            transmit.await.expect("transmit checkpoint request");
+        };
+        let (response, ()) = (receive_response, finish_request).join().await;
+        assert_eq!(response.get_status_code(), 204);
+        let (response_done_tx, response_done_rx) = wit_future::new(|| Ok(()));
+        let (body, trailers) = types::Response::consume_body(response, response_done_rx);
+        response_done_tx
+            .write(Ok(()))
             .await
-            .expect("send checkpoint request")
-    };
-    let finish_request = async move {
-        trailers_tx
-            .write(Ok(None))
-            .await
-            .expect("finish checkpoint request");
-        transmit.await.expect("transmit checkpoint request");
-    };
-    let (response, ()) = (receive_response, finish_request).join().await;
-    assert_eq!(response.get_status_code(), 204);
-    let (response_done_tx, response_done_rx) = wit_future::new(|| Ok(()));
-    let (body, trailers) = types::Response::consume_body(response, response_done_rx);
-    response_done_tx
-        .write(Ok(()))
-        .await
-        .expect("finish checkpoint response");
-    drop(body);
-    drop(trailers);
+            .expect("finish checkpoint response");
+        drop(body);
+        drop(trailers);
 
-    if name == "single-store-http-atomic" {
-        // Give the response body scope time to record, then issue durable calls from this Store.
-        let yields: u32 = std::env::var("GOL581_YIELDS")
-            .unwrap_or_else(|_| "1000".to_string())
-            .parse()
-            .expect("GOL581_YIELDS is a number");
-        for _ in 0..yields {
-            golem_rust::wasip3::wit_bindgen::yield_async().await;
-        }
-        let first = golem_rust::generate_idempotency_key();
-        let second = golem_rust::generate_idempotency_key();
-        assert_ne!(first, second);
-    }
-
-    let wait_for_release = || async {
-        let socket =
-            TcpSocket::create(IpAddressFamily::Ipv4).expect("create checkpoint gate socket");
-        socket
-            .connect(IpSocketAddress::Ipv4(Ipv4SocketAddress {
-                address: (127, 0, 0, 1),
-                port: gate_port,
-            }))
-            .await
-            .expect("connect to checkpoint gate");
-        let (mut stream, received) = socket.receive();
-        let mut bytes = Vec::new();
-        let mut buffer = Vec::with_capacity(1);
-        loop {
-            let (result, next_buffer) = stream.read(buffer).await;
-            buffer = next_buffer;
-            match result {
-                StreamResult::Complete(len) => {
-                    bytes.extend_from_slice(&buffer[..len]);
-                    buffer.clear();
-                }
-                StreamResult::Dropped => break,
-                StreamResult::Cancelled => panic!("checkpoint gate read was cancelled"),
+        if name == "single-store-http-atomic" {
+            // Give the response body scope time to record, then issue durable calls from this Store.
+            let yields: u32 = std::env::var("GOL581_YIELDS")
+                .unwrap_or_else(|_| "1000".to_string())
+                .parse()
+                .expect("GOL581_YIELDS is a number");
+            for _ in 0..yields {
+                golem_rust::wasip3::wit_bindgen::yield_async().await;
             }
+            let first = golem_rust::generate_idempotency_key();
+            let second = golem_rust::generate_idempotency_key();
+            assert_ne!(first, second);
         }
-        drop(stream);
-        received.await.expect("finish checkpoint gate receive");
-        assert_eq!(bytes, [1], "checkpoint gate returns one release byte");
-    };
-    wait_for_release().await;
+
+        let wait_for_release = || async {
+            let socket =
+                TcpSocket::create(IpAddressFamily::Ipv4).expect("create checkpoint gate socket");
+            socket
+                .connect(IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                    address: (127, 0, 0, 1),
+                    port: gate_port,
+                }))
+                .await
+                .expect("connect to checkpoint gate");
+            let (mut stream, received) = socket.receive();
+            let mut bytes = Vec::new();
+            let mut buffer = Vec::with_capacity(1);
+            loop {
+                let (result, next_buffer) = stream.read(buffer).await;
+                buffer = next_buffer;
+                match result {
+                    StreamResult::Complete(len) => {
+                        bytes.extend_from_slice(&buffer[..len]);
+                        buffer.clear();
+                    }
+                    StreamResult::Dropped => break,
+                    StreamResult::Cancelled => panic!("checkpoint gate read was cancelled"),
+                }
+            }
+            drop(stream);
+            received.await?;
+            assert_eq!(bytes, [1], "checkpoint gate returns one release byte");
+            Ok::<(), golem_rust::wasip3::sockets::types::ErrorCode>(())
+        };
+        match wait_for_release().await {
+            Ok(()) => break,
+            Err(
+                golem_rust::wasip3::sockets::types::ErrorCode::InvalidState
+                | golem_rust::wasip3::sockets::types::ErrorCode::ConnectionBroken,
+            ) => continue,
+            Err(error) => panic!("finish checkpoint gate receive: {error:?}"),
+        }
+    }
 }
 
 async fn wait_at_promise_checkpoint(name: &str) {

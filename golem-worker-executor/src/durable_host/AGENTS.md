@@ -77,9 +77,11 @@ The key is derived from the durable call's `Start` index and reused by every att
 Streaming and non-streaming RPC follow the same
 rule. Streaming session descriptors must exclude retry tracing and canonicalize environment-map
 ordering without discarding execution-relevant configuration.
-Dispatch uses `InvocationFreshnessDisposition::MayExist`. Same-key retry attaches to the existing
-target invocation; it is never new
-work. RPC preparation does not acquire target execution capacity. An execution-needing target
+Only the first live dispatch to an ephemeral target may use
+`InvocationFreshnessDisposition::KnownFresh`, after the caller durably commits its `Start`.
+Every repair, retry, and replay dispatch uses `InvocationFreshnessDisposition::MayExist`.
+Same-key retry attaches to the existing target invocation; it is never new work.
+RPC preparation does not acquire target execution capacity. An execution-needing target
 invocation durably enqueues its acceptance prefix before reporting acceptance, and caller
 cancellation must not split that prefix. Settled read-only cache hits and coalesced followers do
 not persist a separate invocation, result, or alias; only the miss owner follows normal durable

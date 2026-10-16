@@ -3873,10 +3873,9 @@ impl ReplayState {
                         && let OplogEntry::Start {
                             parent_start_index, ..
                         } = &entry
+                        && let Some(parent) = parent_start_index
                     {
-                        if let Some(parent) = parent_start_index {
-                            parents.insert(index, *parent);
-                        }
+                        parents.insert(index, *parent);
                     }
 
                     if index == head {
@@ -4471,6 +4470,7 @@ impl ReplayState {
     ///
     /// Auto-skipped hint entries manipulate worker status but are non-deterministic from the
     /// replay's point of view.
+    #[cfg(test)]
     pub async fn try_get_oplog_entry(
         &self,
         condition: impl FnMut(&OplogEntry) -> bool,

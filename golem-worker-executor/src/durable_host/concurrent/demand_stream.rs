@@ -158,7 +158,7 @@ where
     }
 
     pub(crate) async fn next<T, D, Ctx>(
-        &self,
+        &mut self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         request: Child::Req,
@@ -181,7 +181,7 @@ where
         )
         .await?;
 
-        if child.is_live() {
+        let item = if child.is_live() {
             Ok(DurableDemandItem::Live(child))
         } else {
             match self.delivery_mode {
@@ -205,7 +205,21 @@ where
                     }
                 }
             }
+        }?;
+        if matches!(&item, DurableDemandItem::Live(_))
+            && self.children_repair_incomplete
+            && !self.parent.is_live()
+            && let Err(error) = self
+                .parent
+                .resume_incomplete_scope_access(store, get_ctx)
+                .await
+        {
+            if let DurableDemandItem::Live(mut child) = item {
+                child.abandon_for_trap();
+            }
+            return Err(error);
         }
+        Ok(item)
     }
 
     /// A child whose `Start` is recorded without a terminal: the crash happened while its item was

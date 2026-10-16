@@ -5,7 +5,7 @@ description: "Configuring semantic retry policies for a Go Golem agent. Use when
 
 # Configuring Semantic Retry Policies (Go)
 
-Golem retries retriable operations (RPC, HTTP, RDBMS, and whole-invocation traps)
+Golem retries retryable host operations (RPC, HTTP, RDBMS) and classified transient failures
 according to **named policy rules**. Each rule is a `retry.NamedPolicy`: a
 `retry.Policy` (the strategy) plus a `retry.Predicate` deciding when it applies and
 a priority. Per operation, the runtime resolves the highest-priority rule whose
@@ -159,6 +159,14 @@ retry.MatchNever()
 `.Contains(sub)`. Comparison values may be a string, any integer type, or a bool.
 
 ### Available properties
+
+Do not predicate on `is-idempotent`; the host no longer supplies that property. The explicit
+`golem:api/host.trap` function raises a deterministic trap and is never retried, even by a catch-all policy. Host retry
+policies repair eligible individual calls, not completed effects or whole saga attempts.
+
+A trap is permanent. Return an error for a transient condition and use a retry schedule.
+Application-level errors need application-level handling; returning an error does not automatically
+activate a host retry policy.
 
 Exported `retry.PropName` constants (use `retry.Prop("name")` for any other):
 

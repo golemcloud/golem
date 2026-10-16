@@ -7,6 +7,64 @@ afterEach(() => {
 });
 
 describe('sagas', () => {
+  it.each(['fallible', 'infallible'] as const)(
+    '%s traps unexpected body and step throws without compensation or retry',
+    async (mode) => {
+      for (const location of ['body', 'step']) {
+        const trapped = new Error('host trap');
+        const trap = vi.fn((_reason: string) => {
+          throw trapped;
+        });
+        vi.doMock('golem:api/host@1.5.0', () => ({ trap }));
+        vi.resetModules();
+        const { compensable, fallibleSaga, infallibleSaga } = await import('../src/host/saga');
+        const events: string[] = [];
+        let attempts = 0;
+        const reserve = compensable(
+          async (name: string) => {
+            events.push(`reserve:${name}`);
+            return Result.ok(name);
+          },
+          async (name) => {
+            events.push(`release:${name}`);
+            return Result.ok(undefined);
+          },
+        );
+        const fail = compensable(
+          async () => {
+            throw new Error('unexpected failure');
+          },
+          async () => {
+            events.push('unexpected compensation');
+            return Result.ok(undefined);
+          },
+        );
+        const body = async (
+          saga:
+            | Parameters<Parameters<typeof infallibleSaga>[0]>[0]
+            | Parameters<Parameters<typeof fallibleSaga>[0]>[0],
+        ) => {
+          attempts++;
+          if (attempts > 1) return Result.ok('unexpected retry');
+          await saga.execute(reserve, 'flight');
+          await saga.execute(reserve, 'hotel');
+          if (location === 'body') throw new Error('unexpected failure');
+          await saga.execute(fail, undefined);
+          return Result.ok('unexpected success');
+        };
+        await expect(mode === 'fallible' ? fallibleSaga(body) : infallibleSaga(body)).rejects.toBe(
+          trapped,
+        );
+        expect(attempts).toBe(1);
+        expect(events).toEqual(['reserve:flight', 'reserve:hotel']);
+        expect(trap).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining(`${mode}Saga failed:`),
+        );
+        expect(trap.mock.calls[0]?.[0]).toContain('unexpected failure');
+      }
+    },
+  );
+
   it('allows fallible bodies to handle a failed step and continue', async () => {
     vi.doMock('golem:api/host@1.5.0', () => ({ trap: vi.fn() }));
     const { compensable, fallibleSaga } = await import('../src/host/saga');

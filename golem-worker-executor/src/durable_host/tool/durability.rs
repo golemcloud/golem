@@ -1150,7 +1150,7 @@ pub(super) fn dispose_producer<Ctx: WorkerCtx>(
                 .runtime_append_tasks()
                 .register()
                 .ok_or(WorkerExecutorError::Interrupted {
-                    kind: InterruptKind::Jump,
+                    kind: InterruptKind::Restart,
                 })?;
             let worker = failure_context.worker.clone();
             let failed_controller = controller.clone();
@@ -1338,7 +1338,7 @@ pub(super) fn install_cancellation_effect<Ctx: WorkerCtx>(
         let setup = (|| {
             let recording = context.worker.runtime_append_tasks().register().ok_or(
                 WorkerExecutorError::Interrupted {
-                    kind: InterruptKind::Jump,
+                    kind: InterruptKind::Restart,
                 },
             )?;
             let worker = context.worker.clone();

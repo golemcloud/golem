@@ -157,7 +157,7 @@ use uuid::Uuid;
 #[test]
 async fn fork_regions_use_the_pinned_horizon_before_later_reverts() {
     let test_case = TestCase::builder(0)
-        .add(OplogEntry::recovery_succeeded(), |status| status)
+        .add(OplogEntry::grow_memory(0), |status| status)
         .add(
             OplogEntry::jump(
                 None,

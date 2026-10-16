@@ -81,7 +81,9 @@ match result {
 
 ## Infallible Transactions
 
-On failure, compensates completed steps and **retries the entire transaction**:
+On a domain failure, compensates completed steps and starts a fresh guest-code attempt.
+Each attempt appends new durable calls; it does not rewind earlier effects. The loop has no
+built-in attempt bound or backoff guarantee and does not guarantee eventual success:
 
 ```rust
 use golem_rust::{infallible_transaction, boxed};
@@ -106,4 +108,4 @@ let (reservation, charge) = infallible_transaction(|tx| boxed(async move {
 - Infallible transactions compensate and loop in guest code. New attempts append new calls; they do not delete history or use the host retry policy.
 - Recovery repairs an eligible incomplete call at its own `Start`, not a group of completed effects. Panics fail the invocation without guaranteed compensation.
 - Use `fallible_transaction` when failure is an acceptable outcome
-- Use `infallible_transaction` when the operation must eventually succeed
+- Use `infallible_transaction` only when another attempt after compensation is appropriate; a permanent domain failure can loop forever

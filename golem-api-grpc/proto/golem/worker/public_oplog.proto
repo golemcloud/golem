@@ -22,8 +22,8 @@ import "golem/schema/schema.proto";
 // removed and replaced by `Start`, `End`, `Cancelled`. Their tag numbers are reserved to
 // prevent accidental reuse should we ever need rolling-version compatibility in the future.
 message OplogEntry {
-  reserved 2, 14, 15, 41;
-  reserved "HostCall", "BeginRemoteWrite", "EndRemoteWrite", "FilesystemStorageUsageUpdate";
+  reserved 2, 7, 12, 13, 14, 15, 41;
+  reserved "HostCall", "NoOp", "BeginAtomicRegion", "EndAtomicRegion", "BeginRemoteWrite", "EndRemoteWrite", "FilesystemStorageUsageUpdate";
 
   oneof entry {
     CreateParameters Create = 1;
@@ -415,6 +415,9 @@ enum OplogErrorKind {
 }
 
 message ErrorParameters {
+  reserved 4;
+  reserved "inside_atomic_region";
+
   google.protobuf.Timestamp timestamp = 1;
   string error = 2;
   uint64 retry_from = 3;

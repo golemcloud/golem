@@ -1474,70 +1474,81 @@ async fn wait_at_crash_checkpoint<T>(_retained: &T, name: &str) {
         .expect("provider crash checkpoint gate port is configured")
         .parse()
         .expect("provider crash checkpoint gate port is a valid port");
-    let headers = types::Fields::from_list(&[]).expect("valid checkpoint fields");
-    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
-    let (request, transmit) = types::Request::new(headers, None, trailers_rx, None);
-    request
-        .set_method(&types::Method::Post)
-        .expect("set checkpoint method");
-    request
-        .set_scheme(Some(&types::Scheme::Http))
-        .expect("set checkpoint scheme");
-    request
-        .set_authority(Some(&format!("127.0.0.1:{port}")))
-        .expect("set checkpoint authority");
-    request
-        .set_path_with_query(Some(&format!("/{name}")))
-        .expect("set checkpoint path");
-    let receive_response = async move {
-        client::send(request)
-            .await
-            .expect("send checkpoint request")
-    };
-    let finish_request = async move {
-        trailers_tx
-            .write(Ok(None))
-            .await
-            .expect("finish checkpoint request");
-        transmit.await.expect("transmit checkpoint request");
-    };
-    let (response, ()) = (receive_response, finish_request).join().await;
-    assert_eq!(response.get_status_code(), 204);
-    let (response_done_tx, response_done_rx) = wit_future::new(|| Ok(()));
-    let (body, trailers) = types::Response::consume_body(response, response_done_rx);
-    response_done_tx
-        .write(Ok(()))
-        .await
-        .expect("finish checkpoint response");
-    drop(body);
-    drop(trailers);
-
-    let socket = TcpSocket::create(IpAddressFamily::Ipv4).expect("create checkpoint gate socket");
-    socket
-        .connect(IpSocketAddress::Ipv4(Ipv4SocketAddress {
-            address: (127, 0, 0, 1),
-            port: gate_port,
-        }))
-        .await
-        .expect("connect to checkpoint gate");
-    let (mut stream, received) = socket.receive();
-    let mut bytes = Vec::new();
-    let mut buffer = Vec::with_capacity(1);
     loop {
-        let (result, next_buffer) = stream.read(buffer).await;
-        buffer = next_buffer;
-        match result {
-            StreamResult::Complete(len) => {
-                bytes.extend_from_slice(&buffer[..len]);
-                buffer.clear();
+        let headers = types::Fields::from_list(&[]).expect("valid checkpoint fields");
+        let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+        let (request, transmit) = types::Request::new(headers, None, trailers_rx, None);
+        request
+            .set_method(&types::Method::Post)
+            .expect("set checkpoint method");
+        request
+            .set_scheme(Some(&types::Scheme::Http))
+            .expect("set checkpoint scheme");
+        request
+            .set_authority(Some(&format!("127.0.0.1:{port}")))
+            .expect("set checkpoint authority");
+        request
+            .set_path_with_query(Some(&format!("/{name}")))
+            .expect("set checkpoint path");
+        let receive_response = async move {
+            client::send(request)
+                .await
+                .expect("send checkpoint request")
+        };
+        let finish_request = async move {
+            trailers_tx
+                .write(Ok(None))
+                .await
+                .expect("finish checkpoint request");
+            transmit.await.expect("transmit checkpoint request");
+        };
+        let (response, ()) = (receive_response, finish_request).join().await;
+        assert_eq!(response.get_status_code(), 204);
+        let (response_done_tx, response_done_rx) = wit_future::new(|| Ok(()));
+        let (body, trailers) = types::Response::consume_body(response, response_done_rx);
+        response_done_tx
+            .write(Ok(()))
+            .await
+            .expect("finish checkpoint response");
+        drop(body);
+        drop(trailers);
+
+        let socket =
+            TcpSocket::create(IpAddressFamily::Ipv4).expect("create checkpoint gate socket");
+        socket
+            .connect(IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                address: (127, 0, 0, 1),
+                port: gate_port,
+            }))
+            .await
+            .expect("connect to checkpoint gate");
+        let (mut stream, received) = socket.receive();
+        let mut bytes = Vec::new();
+        let mut buffer = Vec::with_capacity(1);
+        loop {
+            let (result, next_buffer) = stream.read(buffer).await;
+            buffer = next_buffer;
+            match result {
+                StreamResult::Complete(len) => {
+                    bytes.extend_from_slice(&buffer[..len]);
+                    buffer.clear();
+                }
+                StreamResult::Dropped => break,
+                StreamResult::Cancelled => panic!("checkpoint gate read was cancelled"),
             }
-            StreamResult::Dropped => break,
-            StreamResult::Cancelled => panic!("checkpoint gate read was cancelled"),
         }
+        drop(stream);
+        match received.await {
+            Ok(()) => {}
+            Err(
+                golem_rust::wasip3::sockets::types::ErrorCode::InvalidState
+                | golem_rust::wasip3::sockets::types::ErrorCode::ConnectionBroken,
+            ) => continue,
+            Err(error) => panic!("finish checkpoint gate receive: {error:?}"),
+        }
+        assert_eq!(bytes, [1], "checkpoint gate returns one release byte");
+        break;
     }
-    drop(stream);
-    received.await.expect("finish checkpoint gate receive");
-    assert_eq!(bytes, [1], "checkpoint gate returns one release byte");
 }
 
 async fn wait_at_promise_checkpoint(name: &str) {

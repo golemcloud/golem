@@ -424,7 +424,7 @@ impl DurableRequestBody {
             state.recording_failed = Some(OplogError::Payload(
                 "request body belongs to an abandoned runtime".to_string(),
             ));
-            self.recovery.producer.lock().unwrap().1 = state.recording_failed.clone();
+            self.recovery.producer.lock().unwrap().error = state.recording_failed.clone();
             state.wake_all();
             return;
         };
@@ -438,7 +438,7 @@ impl DurableRequestBody {
         });
         state.pending_recordings += 1;
         let recovery = self.recovery.clone();
-        recovery.producer.lock().unwrap().0 += 1;
+        recovery.producer.lock().unwrap().pending += 1;
         let oplog = self.oplog.clone();
         let parent_start_index = self.parent_start_index;
         let shared = self.state.clone();
@@ -447,13 +447,13 @@ impl DurableRequestBody {
             let result = record_frame_entry(oplog, parent_start_index, frame).await;
             {
                 let mut producer = recovery.producer.lock().unwrap();
-                producer.0 -= 1;
-                if let Err(error) = &result {
-                    if producer.1.is_none() || matches!(error, OplogError::Fenced(_)) {
-                        producer.1 = Some(error.clone());
-                    }
+                producer.pending -= 1;
+                if let Err(error) = &result
+                    && (producer.error.is_none() || matches!(error, OplogError::Fenced(_)))
+                {
+                    producer.error = Some(error.clone());
                 }
-                for waker in producer.2.drain(..) {
+                for waker in producer.wakers.drain(..) {
                     waker.wake();
                 }
             }
@@ -653,13 +653,20 @@ impl From<crate::services::oplog::OplogPayloadDownloadError> for RecordedFrameEr
 #[derive(Clone, Default)]
 pub(super) struct RequestBodyRecovery {
     message: Arc<Mutex<Option<String>>>,
-    producer: Arc<Mutex<(usize, Option<OplogError>, Vec<std::task::Waker>)>>,
+    producer: Arc<Mutex<RequestBodyRecordings>>,
+}
+
+#[derive(Default)]
+struct RequestBodyRecordings {
+    pending: usize,
+    error: Option<OplogError>,
+    wakers: Vec<std::task::Waker>,
 }
 
 impl RequestBodyRecovery {
     pub(super) fn transport_error(&self, error: RecordedFrameError) -> ErrorCode {
         if let RecordedFrameError::Fenced(fence) = &error {
-            self.producer.lock().unwrap().1 = Some(OplogError::Fenced(fence.clone()));
+            self.producer.lock().unwrap().error = Some(OplogError::Fenced(fence.clone()));
         }
         if let RecordedFrameError::Infrastructure(message) = &error {
             self.message
@@ -673,7 +680,7 @@ impl RequestBodyRecovery {
     pub(super) fn error(
         &self,
     ) -> Option<golem_service_base::error::worker_executor::WorkerExecutorError> {
-        if let Some(error) = &self.producer.lock().unwrap().1 {
+        if let Some(error) = &self.producer.lock().unwrap().error {
             return RecordedFrameError::from(error.clone()).recovery_error();
         }
         self.message
@@ -686,10 +693,10 @@ impl RequestBodyRecovery {
     async fn settle_recordings(&self) {
         std::future::poll_fn(|cx| {
             let mut producer = self.producer.lock().unwrap();
-            if producer.0 == 0 {
+            if producer.pending == 0 {
                 Poll::Ready(())
             } else {
-                producer.2.push(cx.waker().clone());
+                producer.wakers.push(cx.waker().clone());
                 Poll::Pending
             }
         })

@@ -121,6 +121,32 @@ async fn p3_status_retry_header_wait_observes_interrupt(
         result = &mut invocation => panic!("completed before replacement headers were withheld: {result:?}"),
     }
     assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut invocation)
+            .await
+            .is_err(),
+        "the invocation must stay pending while replacement headers are withheld"
+    );
+    assert!(executor.worker_is_loaded(&owned).await);
+    let before_interrupt = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let send_start = before_interrupt
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params) if params.function_name == "http::client::send" => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("the HTTP send must have a durable Start before retry");
+    let retry_error = before_interrupt
+        .iter()
+        .find(|entry| {
+            matches!(&entry.entry,
+                PublicOplogEntry::Error(params) if params.retry_from == send_start
+            )
+        })
+        .expect("the retry decision must belong to the HTTP send")
+        .clone();
     let retry_state = executor
         .attached_agent_status(&worker_id)
         .await?
@@ -172,6 +198,28 @@ async fn p3_status_retry_header_wait_observes_interrupt(
     );
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        oplog.contains(&retry_error),
+        "reconstruction must retain the original retry decision"
+    );
+    assert!(
+        oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Jump(_))),
+        "HTTP retry must not discard history"
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(params) if params.function_name == "http::client::send" =>
+                    Some(entry.oplog_index),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        vec![send_start],
+        "reconstruction must repair the original send Start"
+    );
     assert_eq!(oplog.iter().filter(|entry| matches!(
         &entry.entry, PublicOplogEntry::AgentInvocationStarted(params)
             if matches!(&params.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.idempotency_key == key)

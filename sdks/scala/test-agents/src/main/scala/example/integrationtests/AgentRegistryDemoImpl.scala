@@ -153,7 +153,7 @@ final class AgentRegistryDemoImpl(@unused private val name: String) extends Agen
       )
       val targetCid = HostApi.ComponentIdLiteral(targetUuid)
       val targetAid = HostApi.AgentIdLiteral(targetCid, "fork-target")
-      HostApi.forkAgent(self.agentId, targetAid, BigInt(0))
+      HostApi.forkAgent(self.agentId, targetAid, BigInt(2))
       sb.append("forkAgent: succeeded\n")
     } catch {
       case e: Throwable => sb.append(s"forkAgent: ${e.getMessage}\n")

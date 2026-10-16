@@ -11851,14 +11851,6 @@ impl RunningWorker {
         parent.runtime_append_tasks().seal_and_wait().await;
         *parent.runtime_append_tasks.lock().unwrap() = Arc::default();
 
-        if parent.durable_stream_producer.is_recovering() {
-            parent
-                .durable_stream_producer
-                .begin_recovery()
-                .await
-                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
-        }
-
         // Drain buffered work from the previous runtime before constructing its replacement.
         parent
             .commit_oplog_and_update_state(CommitLevel::Always)

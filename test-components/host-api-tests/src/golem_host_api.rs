@@ -96,6 +96,7 @@ pub trait GolemHostApi {
     fn create_promise(&self) -> PromiseId;
     fn await_promise(&self, promise_id: PromiseId) -> Vec<u8>;
     fn fail_with_custom_max_retries(&self, max_retries: u64);
+    fn trap_after_recorded_effect(&self, authority: String, via_host: bool) -> String;
     fn explicit_commit(&self, replicas: u8);
     async fn fallible_transaction_test(&self) -> u64;
     async fn infallible_transaction_test(&self) -> u64;
@@ -306,6 +307,17 @@ impl GolemHostApi for GolemHostApiImpl {
         let _guard = use_retry_policy(policy);
 
         panic!("Fail now");
+    }
+
+    fn trap_after_recorded_effect(&self, authority: String, via_host: bool) -> String {
+        let (status, _) = raw_http::request(Method::Post, &authority, "/effect", None, None);
+        assert_eq!(status, 200);
+        if via_host {
+            host_api::trap("terminal compensation failure");
+        } else {
+            panic!("terminal compensation failure");
+        }
+        "trap returned".to_string()
     }
 
     fn explicit_commit(&self, replicas: u8) {

@@ -64,7 +64,7 @@ const outcome = await fallibleSaga<{ reservation: string; charge: string }, stri
 
 ## Infallible Sagas
 
-`infallibleSaga` runs a sequence whose steps are expected to succeed. If a step returns `Result.err`, the already-run steps' compensations run in reverse order and the **entire saga is retried**. Here `saga.execute(step, input)` returns the step's success value directly (an `err` triggers rollback + retry rather than being returned):
+`infallibleSaga` runs a sequence whose steps are expected to succeed. If a step returns `Result.err`, the already-run steps' compensations run in reverse order and a fresh guest-code attempt appends new durable calls. Earlier attempts remain in history; execution does not rewind. This loop has no built-in attempt bound or backoff guarantee and can run forever on a permanent domain failure. Here `saga.execute(step, input)` returns the step's success value directly (an `err` triggers compensation and another attempt rather than being returned):
 
 ```typescript
 import { infallibleSaga } from '@golemcloud/golem-ts-sdk';
@@ -114,4 +114,4 @@ OrderAgent.implement({
 - Infallible sagas compensate and loop in guest code. Each attempt appends new durable calls; earlier calls and compensations remain recorded. This loop is independent of host retry policies and does not guarantee eventual success.
 - Reconstruction repairs an eligible incomplete call at its own `Start`, without repeating completed saga steps.
 - Use `fallibleSaga` when failure is an acceptable outcome the caller should observe
-- Use `infallibleSaga` when the operation must eventually succeed (failures roll back and retry)
+- Use `infallibleSaga` only when another attempt after compensation is appropriate; eventual success is not guaranteed

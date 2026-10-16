@@ -56,6 +56,7 @@ fn classify_rdbms_error(error: &RdbmsError) -> HostFailureKind {
         RdbmsError::QueryParameterFailure(_) => HostFailureKind::Permanent,
         RdbmsError::QueryResponseFailure(_) => HostFailureKind::Permanent,
         RdbmsError::Other(_) => HostFailureKind::Transient,
+        RdbmsError::ResourceLost(_) => HostFailureKind::Permanent,
     }
 }
 
@@ -789,8 +790,10 @@ where
             Ok(query_stream) => query_stream.deref().get_columns().await,
             Err(error) => Err(error),
         };
-        if matches!(ctx.table().get(entry)?.state, RdbmsResultStreamState::Lost) {
-            // Reconstruction loss is permanent for this handle, not a transient connection error.
+        if is_db_query_stream_in_transaction(ctx, entry)?
+            || matches!(ctx.table().get(entry)?.state, RdbmsResultStreamState::Lost)
+        {
+            // Transaction children cannot retry independently; lost cursors cannot resume.
         } else if let Ok(pool_key) = pool_key.as_ref() {
             let properties = rdbms_retry_properties(ctx, "stream-get-columns", pool_key);
             handle
@@ -876,8 +879,10 @@ where
             Ok(query_stream) => query_stream.deref().get_next().await,
             Err(error) => Err(error),
         };
-        if matches!(ctx.table().get(entry)?.state, RdbmsResultStreamState::Lost) {
-            // Reconstruction loss is permanent for this handle, not a transient connection error.
+        if is_db_query_stream_in_transaction(ctx, entry)?
+            || matches!(ctx.table().get(entry)?.state, RdbmsResultStreamState::Lost)
+        {
+            // Transaction children cannot retry independently; lost cursors cannot resume.
         } else if let Ok(pool_key) = pool_key.as_ref() {
             let properties = rdbms_retry_properties(ctx, "stream-get-next", pool_key);
             handle
@@ -973,13 +978,6 @@ where
 {
     let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
 
-    let txn_pool_key = ctx
-        .as_wasi_view()
-        .table()
-        .get::<RdbmsTransactionEntry<T>>(entry)
-        .map(|v| v.pool_key.clone())
-        .ok();
-
     let db_params = to_db_values::<T, P>(params, ctx.as_wasi_view().table());
     let tx = ctx.table().get(entry)?;
     let request = HostRequestGolemRdbmsRequest {
@@ -1010,7 +1008,7 @@ where
         None
     };
 
-    let mut handle = DurableCallSession::<T::TxnQuery, NotCancellable>::start(
+    let handle = DurableCallSession::<T::TxnQuery, NotCancellable>::start(
         ctx,
         request,
         DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
@@ -1046,27 +1044,7 @@ where
             }
             Err(error) => Err(error.clone()),
         };
-        let pool_key_for_props = prepared
-            .as_ref()
-            .ok()
-            .map(|(pool_key, _, _)| pool_key.clone())
-            .or_else(|| txn_pool_key.clone());
-        if matches!(
-            ctx.table().get(entry)?.state,
-            RdbmsTransactionState::Lost(_)
-        ) {
-            // A lost transaction cannot be retried on a replacement connection.
-        } else if let Some(pool_key) = pool_key_for_props.as_ref() {
-            let properties = rdbms_retry_properties(ctx, "query", pool_key);
-            handle
-                .try_trigger_retry_with_properties(ctx, &result, classify_rdbms_error, properties)
-                .await?;
-        } else {
-            handle
-                .try_trigger_retry(ctx, &result, classify_rdbms_error)
-                .await?;
-        }
-
+        // Statements belong to this transaction; retrying them independently can repeat effects.
         let result = result.map(|result| result.into()).map_err(|err| err.into());
         handle
             .complete(ctx, HostResponseGolemRdbmsResult { result })
@@ -1101,13 +1079,6 @@ where
 {
     let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
 
-    let txn_pool_key = ctx
-        .as_wasi_view()
-        .table()
-        .get::<RdbmsTransactionEntry<T>>(entry)
-        .map(|v| v.pool_key.clone())
-        .ok();
-
     let db_params = to_db_values::<T, P>(params, ctx.as_wasi_view().table());
     let tx = ctx.table().get(entry)?;
     let request = HostRequestGolemRdbmsRequest {
@@ -1138,7 +1109,7 @@ where
         None
     };
 
-    let mut handle = DurableCallSession::<T::TxnExecute, NotCancellable>::start(
+    let handle = DurableCallSession::<T::TxnExecute, NotCancellable>::start(
         ctx,
         request,
         DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
@@ -1174,27 +1145,6 @@ where
             }
             Err(error) => Err(error.clone()),
         };
-        let pool_key_for_props = prepared
-            .as_ref()
-            .ok()
-            .map(|(pool_key, _, _)| pool_key.clone())
-            .or_else(|| txn_pool_key.clone());
-        if matches!(
-            ctx.table().get(entry)?.state,
-            RdbmsTransactionState::Lost(_)
-        ) {
-            // A lost transaction cannot be retried on a replacement connection.
-        } else if let Some(pool_key) = pool_key_for_props.as_ref() {
-            let properties = rdbms_retry_properties(ctx, "execute", pool_key);
-            handle
-                .try_trigger_retry_with_properties(ctx, &result, classify_rdbms_error, properties)
-                .await?;
-        } else {
-            handle
-                .try_trigger_retry(ctx, &result, classify_rdbms_error)
-                .await?;
-        }
-
         let result = result.map_err(|e| e.into());
         handle
             .complete(ctx, HostResponseGolemRdbmsRowCount { result })
@@ -1227,7 +1177,7 @@ where
     } else {
         None
     };
-    let mut handle = DurableCallSession::<T::TxnQueryStream, NotCancellable>::start(
+    let handle = DurableCallSession::<T::TxnQueryStream, NotCancellable>::start(
         ctx,
         HostRequestNoInput {},
         DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
@@ -1260,38 +1210,12 @@ where
 
         let result = if matches!(
             ctx.table().get(entry)?.state,
-            RdbmsTransactionState::Lost(_)
+            RdbmsTransactionState::Reconstructed(_)
         ) {
             Err(rdbms_transaction_lost())
         } else {
             prepared.clone()
         };
-        let pool_key_for_props = result
-            .as_ref()
-            .map(|r| r.pool_key.clone())
-            .ok()
-            .or_else(|| {
-                prepared
-                    .as_ref()
-                    .ok()
-                    .map(|request| request.pool_key.clone())
-            });
-        if matches!(
-            ctx.table().get(entry)?.state,
-            RdbmsTransactionState::Lost(_)
-        ) {
-            // No replacement transaction is permitted.
-        } else if let Some(pool_key) = pool_key_for_props.as_ref() {
-            let properties = rdbms_retry_properties(ctx, "query-stream", pool_key);
-            handle
-                .try_trigger_retry_with_properties(ctx, &result, classify_rdbms_error, properties)
-                .await?;
-        } else {
-            handle
-                .try_trigger_retry(ctx, &result, classify_rdbms_error)
-                .await?;
-        }
-
         let result = result.map(|request| request.into()).map_err(|e| e.into());
         handle
             .complete(ctx, HostResponseGolemRdbmsRequest { request: result })
@@ -1406,9 +1330,13 @@ where
         ctx.table().get_mut(entry)?.set_closed();
         return Ok(result.map_err(|e| RdbmsError::from(e).into()));
     }
+    if !ctx.is_live() {
+        use crate::durable_host::concurrent::DurableContext;
+        ctx.publish_direct_replay_tail(begin).await?;
+    }
     let result = match tx.state {
-        RdbmsTransactionState::Lost(_) if confirmed => Ok(()),
-        RdbmsTransactionState::Lost(ref id) if pre => {
+        RdbmsTransactionState::Reconstructed(_) if confirmed => Ok(()),
+        RdbmsTransactionState::Reconstructed(ref id) if pre => {
             let status = ctx
                 .state
                 .rdbms_service
@@ -1416,6 +1344,33 @@ where
                 .get_transaction_status(&tx.pool_key, &ctx.state.owned_agent_id.agent_id, id)
                 .await;
             match status {
+                Err(error) => {
+                    return retry_transaction_resolution(ctx, begin, &tx.pool_key, error).await;
+                }
+                Ok(RdbmsTransactionStatus::InProgress) | Ok(RdbmsTransactionStatus::NotFound)
+                    if terminal == TransactionTerminal::Commit =>
+                {
+                    return retry_transaction_resolution(
+                        ctx,
+                        begin,
+                        &tx.pool_key,
+                        RdbmsError::ConnectionFailure(
+                            "Database transaction outcome is not known".to_string(),
+                        ),
+                    )
+                    .await;
+                }
+                Ok(RdbmsTransactionStatus::InProgress) => {
+                    return retry_transaction_resolution(
+                        ctx,
+                        begin,
+                        &tx.pool_key,
+                        RdbmsError::ConnectionFailure(
+                            "Database transaction outcome is still pending".to_string(),
+                        ),
+                    )
+                    .await;
+                }
                 Ok(RdbmsTransactionStatus::Committed)
                     if terminal == TransactionTerminal::Commit =>
                 {
@@ -1429,7 +1384,7 @@ where
                 _ => Err(rdbms_transaction_lost()),
             }
         }
-        RdbmsTransactionState::Lost(_) => Err(rdbms_transaction_lost()),
+        RdbmsTransactionState::Reconstructed(_) => Err(rdbms_transaction_lost()),
         RdbmsTransactionState::Open(ref transaction) => {
             let prepared = if terminal == TransactionTerminal::Commit {
                 transaction.pre_commit().await
@@ -1441,7 +1396,18 @@ where
                 Ok(()) => {
                     if terminal == TransactionTerminal::Commit {
                         ctx.pre_commit_transaction_function(begin).await?;
-                        transaction.commit().await
+                        match transaction.commit().await {
+                            Ok(()) => Ok(()),
+                            Err(error) => {
+                                return retry_transaction_resolution(
+                                    ctx,
+                                    begin,
+                                    &tx.pool_key,
+                                    error,
+                                )
+                                .await;
+                            }
+                        }
                     } else {
                         ctx.pre_rollback_transaction_function(begin).await?;
                         transaction.rollback().await
@@ -1471,6 +1437,21 @@ where
     ctx.table().get_mut(entry)?.set_closed();
     let _ = db_transaction_cleanup(ctx, entry).await;
     Ok(result.map_err(Into::into))
+}
+
+async fn retry_transaction_resolution<Ctx: WorkerCtx, R>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    begin: OplogIndex,
+    pool_key: &RdbmsPoolKey,
+    error: RdbmsError,
+) -> anyhow::Result<R> {
+    // A failed status observation is not a transaction outcome. Leave the scope incomplete,
+    // even if policy gives up, so another recovery can still discover a committed transaction.
+    ctx.state.current_retry_point = begin;
+    let properties = rdbms_retry_properties(ctx, "transaction-status", pool_key);
+    ctx.try_trigger_retry(anyhow!(error.clone()), properties)
+        .await?;
+    Err(anyhow!(error))
 }
 
 async fn db_transaction_drop<Ctx, T>(
@@ -1544,13 +1525,11 @@ pub enum RdbmsResultStreamState<T: RdbmsType + 'static> {
 }
 
 fn rdbms_stream_lost() -> RdbmsError {
-    RdbmsError::ConnectionFailure(
-        "Database result stream was lost during reconstruction".to_string(),
-    )
+    RdbmsError::ResourceLost("Database result stream was lost during reconstruction".to_string())
 }
 
 fn rdbms_transaction_lost() -> RdbmsError {
-    RdbmsError::ConnectionFailure("Database transaction was lost during reconstruction".to_string())
+    RdbmsError::ResourceLost("Database transaction was lost during reconstruction".to_string())
 }
 
 fn is_db_query_stream_in_transaction<Ctx, T>(
@@ -1656,7 +1635,7 @@ impl<T: RdbmsType + 'static> RdbmsTransactionEntry<T> {
                 self.state = RdbmsTransactionState::Closed(transaction.deref().transaction_id())
             }
             RdbmsTransactionState::Closed(_) => (),
-            RdbmsTransactionState::Lost(id) => {
+            RdbmsTransactionState::Reconstructed(id) => {
                 self.state = RdbmsTransactionState::Closed(id.clone())
             }
         }
@@ -1666,7 +1645,7 @@ impl<T: RdbmsType + 'static> RdbmsTransactionEntry<T> {
         match &self.state {
             RdbmsTransactionState::Open(transaction) => transaction.deref().transaction_id(),
             RdbmsTransactionState::Closed(id) => id.clone(),
-            RdbmsTransactionState::Lost(id) => id.clone(),
+            RdbmsTransactionState::Reconstructed(id) => id.clone(),
         }
     }
 }
@@ -1674,7 +1653,9 @@ impl<T: RdbmsType + 'static> RdbmsTransactionEntry<T> {
 #[derive(Clone)]
 pub enum RdbmsTransactionState<T: RdbmsType + 'static> {
     Open(Arc<dyn crate::services::rdbms::DbTransaction<T> + Send + Sync>),
-    Lost(TransactionId),
+    /// Recorded outputs are replayable, but there is no resident connection. A prepared
+    /// commit may still have succeeded; its outcome must be resolved separately.
+    Reconstructed(TransactionId),
     Closed(TransactionId),
 }
 
@@ -1701,7 +1682,7 @@ where
 
     match transaction_entry.state {
         RdbmsTransactionState::Open(transaction) => Ok((transaction_entry.pool_key, transaction)),
-        RdbmsTransactionState::Lost(_) => Err(rdbms_transaction_lost()),
+        RdbmsTransactionState::Reconstructed(_) => Err(rdbms_transaction_lost()),
         RdbmsTransactionState::Closed(_) => {
             Err(RdbmsError::other_response_failure("Transaction is closed"))
         }
@@ -1871,7 +1852,7 @@ where
     ) -> Result<(TransactionId, RdbmsTransactionState<T>), RdbmsError> {
         Ok((
             transaction_id.clone(),
-            RdbmsTransactionState::Lost(transaction_id.clone()),
+            RdbmsTransactionState::Reconstructed(transaction_id.clone()),
         ))
     }
 
@@ -1885,5 +1866,33 @@ where
         // if transaction is not found, it is considered as rolled back
         Ok(transaction_status == RdbmsTransactionStatus::RolledBack
             || transaction_status == RdbmsTransactionStatus::NotFound)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::oplog::payload::types::SerializableRdbmsError;
+    use test_r::test;
+
+    #[test]
+    fn resource_loss_is_typed_and_permanent() {
+        for error in [rdbms_transaction_lost(), rdbms_stream_lost()] {
+            assert_eq!(classify_rdbms_error(&error), HostFailureKind::Permanent);
+            let serialized: SerializableRdbmsError = error.clone().into();
+            assert!(matches!(
+                serialized,
+                SerializableRdbmsError::ResourceLost(_)
+            ));
+            assert_eq!(RdbmsError::from(serialized), error);
+            assert!(matches!(
+                crate::preview2::golem::rdbms::postgres::Error::from(error),
+                crate::preview2::golem::rdbms::postgres::Error::ResourceLost(_)
+            ));
+        }
+        assert_eq!(
+            classify_rdbms_error(&RdbmsError::ConnectionFailure("unavailable".into())),
+            HostFailureKind::Transient
+        );
     }
 }

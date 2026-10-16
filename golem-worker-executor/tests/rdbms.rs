@@ -184,7 +184,9 @@ impl TransactionFailOn {
             Self::OplogAdd(entry, _) => {
                 entry == "PreCommitRemoteTransaction" || entry == "PreRollbackRemoteTransaction"
             }
-            Self::OplogAddAndTx(..) => true,
+            Self::OplogAddAndTx(entry, _, _, _) => {
+                entry == "PreCommitRemoteTransaction" || entry == "PreRollbackRemoteTransaction"
+            }
         }
     }
 
@@ -676,13 +678,29 @@ async fn rdbms_postgres_commit_recovery(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    for fail_count in 1..=2 {
+    for fail_on in [
+        TransactionFailOn::oplog_add("BeginRemoteTransaction", 1),
+        TransactionFailOn::oplog_add("CommittedRemoteTransaction", 1),
+        TransactionFailOn::oplog_add("CommittedRemoteTransaction", 2),
+        TransactionFailOn::oplog_add_and_tx(
+            "CommittedRemoteTransaction",
+            1,
+            "GetTransactionStatusError",
+            1,
+        ),
+        TransactionFailOn::oplog_add_and_tx(
+            "CommittedRemoteTransaction",
+            1,
+            "GetTransactionStatusInProgress",
+            1,
+        ),
+    ] {
         postgres_transaction_recovery_test(
             last_unique_id,
             deps,
             postgres,
             host_api_tests,
-            TransactionFailOn::oplog_add("CommittedRemoteTransaction", fail_count),
+            fail_on,
             TransactionEnd::Commit,
         )
         .await?;
@@ -719,6 +737,81 @@ async fn rdbms_postgres_pre_commit_recovery(
     )
     .await?;
 
+    Ok(())
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn rdbms_postgres_incomplete_statement_and_stream_report_typed_loss(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    postgres: &DockerPostgresRdb,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::host_functions::HostFunctionName;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let address = postgres.public_connection_string();
+    let pool = sqlx::PgPool::connect(&address).await?;
+    for (suffix, function, transactional) in [
+        (
+            "statement",
+            HostFunctionName::RdbmsPostgresDbTransactionExecute,
+            true,
+        ),
+        (
+            "stream",
+            HostFunctionName::RdbmsPostgresDbResultStreamGetNext,
+            false,
+        ),
+    ] {
+        let sequence = format!("recovery_{}", Uuid::new_v4().simple());
+        sqlx::query(&format!("CREATE SEQUENCE {sequence}"))
+            .execute(&pool)
+            .await?;
+        let workers =
+            start_workers::<PostgresType>(&executor, &component, &address, suffix, 1).await?;
+        let (worker, agent) = &workers[0];
+        let (entered, release) = executor.gate_next_oplog_function_end(worker, function, true);
+        let statement = format!("SELECT nextval('{sequence}')");
+        let test = RdbmsTest::new(
+            vec![
+                StatementTest::query_test(statement.clone(), vec![], None),
+                if transactional {
+                    StatementTest::execute_test(statement, vec![], None)
+                } else {
+                    StatementTest::query_stream_test(statement, vec![], None)
+                },
+            ],
+            transactional.then_some(TransactionEnd::Commit),
+        );
+        let key = IdempotencyKey::fresh();
+        let invocation =
+            execute_worker_test::<PostgresType>(&executor, &component, agent, &key, test);
+        let fail_after_effect = async {
+            entered
+                .await
+                .expect("target database effect must reach its End");
+            release.send(()).expect("target End must still be waiting");
+        };
+        let (result, ()) = tokio::join!(invocation, fail_after_effect);
+        assert!(get_test_result_error(result?).contains("ResourceLost"));
+        // Sequences are not rolled back with the transaction. Both the completed query and
+        // the incomplete call must execute once, even though the runtime was reconstructed.
+        let count: i64 = sqlx::query_scalar(&format!("SELECT last_value FROM {sequence}"))
+            .fetch_one(&pool)
+            .await?;
+        assert_eq!(count, 2);
+        sqlx::query(&format!("DROP SEQUENCE {sequence}"))
+            .execute(&pool)
+            .await?;
+    }
     Ok(())
 }
 
@@ -1352,13 +1445,29 @@ async fn rdbms_mysql_commit_recovery(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    for fail_count in 1..=2 {
+    for fail_on in [
+        TransactionFailOn::oplog_add("BeginRemoteTransaction", 1),
+        TransactionFailOn::oplog_add("CommittedRemoteTransaction", 1),
+        TransactionFailOn::oplog_add("CommittedRemoteTransaction", 2),
+        TransactionFailOn::oplog_add_and_tx(
+            "CommittedRemoteTransaction",
+            1,
+            "GetTransactionStatusError",
+            1,
+        ),
+        TransactionFailOn::oplog_add_and_tx(
+            "CommittedRemoteTransaction",
+            1,
+            "GetTransactionStatusInProgress",
+            1,
+        ),
+    ] {
         mysql_transaction_recovery_test(
             last_unique_id,
             deps,
             mysql,
             host_api_tests,
-            TransactionFailOn::oplog_add("CommittedRemoteTransaction", fail_count),
+            fail_on,
             TransactionEnd::Commit,
         )
         .await?;

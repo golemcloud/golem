@@ -555,7 +555,12 @@ order and skips hints. Key kinds:
 - `HostStreamFrame` (hint): a frame of a host-owned stream (e.g. a p3 HTTP request body) attached
   to its owning call by `parent_start_index`; consumers find frames by scanning, interrupted
   recordings need no closing entry.
-- `NoOp` is positional; operator `Revert` metadata marks deleted history without relocating entries.
+- Operator `Revert` metadata marks deleted history without relocating entries.
+- Remote transaction phase entries (`BeginRemoteTransaction`, `PreCommitRemoteTransaction`,
+  `PreRollbackRemoteTransaction`, `CommittedRemoteTransaction`, `RolledBackRemoteTransaction`)
+  are `hint: true`, not call terminals. The raw begin entry requires `original_begin_index`:
+  the owning transaction scope's `Start`. The scope's durable `End` response is
+  `HostResponse::GolemRdbmsTransactionTerminal { outcome }`; phase hints do not replace it.
 - `PendingUpdate`, `SuccessfulUpdate`, `FailedUpdate`, `Snapshot` (hint).
 - Lifecycle hints: `Suspend`, `Error`, `RecoverySucceeded`, `Interrupted`, `Resumed`, `Exited`,
   `Restart`.
@@ -956,8 +961,9 @@ one. Recorded calls, including incomplete repairs, retain admission without re-a
 5. Replay of a completed call returns the recorded `End`; replay of an incomplete call (`Start`
    without `End`) re-dispatches with the **same** key (`InvocationFreshnessDisposition::MayExist`,
    the default). RPC is a `WriteRemote` call, so repair completes the existing `Start`.
-6. `KnownFresh` is allowed only when `is_live && is_ephemeral`
-   (`wasm_rpc/mod.rs`) and forces a `DurableOnly` commit before dispatch. Ephemeral phantom
+6. Only the first live dispatch to an ephemeral target may use `KnownFresh`
+   (`wasm_rpc/mod.rs`), after a `DurableOnly` commit makes the caller's `Start` durable.
+   Every repair, retry, and replay dispatch uses `MayExist`. Ephemeral phantom
    identity is `ephemeral_invocation_phantom_id` = UUIDv5 of the idempotency key — deterministic,
    never random.
 
@@ -1539,6 +1545,13 @@ resource drop releases it locally. Loss does not prove an earlier send never rea
 An `End` result alone does not override an unfinished durable scope. Nonresumable operations
 report typed loss at their live boundary; they do not rewind neighboring effects.
 
+RDBMS stream `get-columns` returns `result<list<db-column>, error>` and `get-next` returns
+`result<option<list<db-row>>, error>`. Only successful `none` is EOF. Recorded accessor outcomes
+replay unchanged; an irrecoverable transaction or stream reports typed loss when execution reaches
+its live boundary. Explicitly open a new transaction and reconcile uncertain external outcomes;
+do not silently rerun the old transaction. Storage unavailability remains infrastructure recovery,
+not a business loss result.
+
 Guests that need protocol initialization should supervise session generations: one scope per
 generation, reader started before initialization writer acquisition, reader failure observed or
 raced during all writes, old generation cancelled and joined before explicit connect and
@@ -1705,6 +1718,8 @@ cursor (`OwnerExecution`, `worker/instance.rs`).
   Loss does not prove that an earlier write failed.
 - SDK sagas compensate and loop in guest code. New attempts append new calls and retain earlier
   attempts and compensations. A guest trap is not a retry signal and does not guarantee compensation.
+  Infallible loops have no built-in attempt bound or backoff guarantee. MoonBit has no public saga
+  helper; application code owns any compensate-and-loop workflow.
 - Guests cannot disable recording, group effects into atomic regions, or get/set an execution
   cursor. External operator revert/fork remains available at validated cuts. `oplog-commit` is a
   replication barrier, not an external transaction commit or an undo operation.
@@ -1757,6 +1772,15 @@ satisfies one does not imply the others.
 | "`AttemptId::fresh()` in a replay-sensitive path breaks determinism." | Randomness is fine when appended and committed before observation and read back on replay. | Consumer-journal replay in `durable_session.rs` |
 
 ## Retries: in-function versus trap-based
+
+A guest trap is permanent. Return an error for a transient condition and use a retry schedule;
+application-level errors need application-level handling and do not automatically activate a host policy.
+A Rust panic is permanent even in code that formerly used `atomically`; it does not retry the block.
+
+The explicit `golem:api/host.trap` function wraps `wasmtime::Trap::UnreachableCodeReached` with
+the guest-requested reason. It becomes `AgentError::DeterministicTrap` and is never retried.
+This rule does not change the retry-policy handling of generic `AgentError::Unknown` errors.
+Do not predicate retry policies on `is-idempotent`; the host no longer supplies that property.
 
 A failed durable call has two recovery paths (`durable_host/durability.rs`):
 

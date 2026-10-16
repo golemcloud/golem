@@ -17,8 +17,8 @@ import "google/protobuf/timestamp.proto";
 
 // An oplog entry in its raw/internal representation.
 message RawOplogEntry {
-  reserved 21;
-  reserved "filesystem_storage_usage_update";
+  reserved 8, 12, 13, 21;
+  reserved "no_op", "begin_atomic_region", "end_atomic_region", "filesystem_storage_usage_update";
 
   google.protobuf.Timestamp timestamp = 1;
   optional uint64 entity_parent_start_index = 3;
@@ -278,6 +278,9 @@ message RawAgentInvocationFinishedParameters {
 }
 
 message RawErrorParameters {
+  reserved 3;
+  reserved "inside_atomic_region";
+
   AgentError error = 1;
   uint64 retry_from = 2;
   optional bytes retry_policy_state = 4;

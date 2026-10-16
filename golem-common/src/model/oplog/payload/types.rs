@@ -2550,6 +2550,7 @@ pub enum SerializableRdbmsError {
     QueryExecutionFailure(String),
     QueryResponseFailure(String),
     Other(String),
+    ResourceLost(String),
 }
 
 #[derive(

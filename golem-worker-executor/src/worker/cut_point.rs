@@ -358,7 +358,7 @@ mod tests {
                 let entry = entries
                     .get(&u64::from(i))
                     .cloned()
-                    .unwrap_or_else(OplogEntry::recovery_succeeded);
+                    .unwrap_or_else(|| OplogEntry::grow_memory(0));
                 async move { entry }
             },
             idx(cut),
@@ -378,7 +378,7 @@ mod tests {
                 let entry = entries
                     .get(&u64::from(i))
                     .cloned()
-                    .unwrap_or_else(OplogEntry::recovery_succeeded);
+                    .unwrap_or_else(|| OplogEntry::grow_memory(0));
                 async move { entry }
             },
             idx(start),

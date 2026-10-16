@@ -4,7 +4,15 @@ import { Callout, Tabs } from "nextra/components"
 
 ### Using Golem's retry mechanism
 
-Golem applies retry policies to retryable host operations and agent failures. The selected policy controls delays and retry limits. Permanent errors, permission failures, stack overflows, and deterministic guest traps are not retried.
+Golem applies retry policies to retryable host operations and agent failures. The selected policy controls delays and retry limits. Permanent errors, permission failures, stack overflows, and traps are not retried.
+
+A trap is permanent. Return an error for a transient condition and use a retry schedule. For application-level
+errors, the application must handle the returned error and apply that schedule; returning an error does not
+automatically activate a host retry policy.
+
+The explicit `golem:api/host.trap` function raises a deterministic trap and is never retried. Do not predicate retry
+policies on `is-idempotent`: the host no longer supplies that property. Remote-write eligibility
+does not guarantee exactly-once effects; the peer must enforce an idempotency key.
 
 If the maximum number of retries is reached, the agent will be marked as failed and no further invocations will be possible on it.
 

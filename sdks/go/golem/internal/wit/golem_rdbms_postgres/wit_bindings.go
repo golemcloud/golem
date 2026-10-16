@@ -55,6 +55,9 @@ const (
 	ErrorQueryExecutionFailure uint8 = 2
 	ErrorQueryResponseFailure  uint8 = 3
 	ErrorOther                 uint8 = 4
+	// The resident transaction or result stream cannot be resumed. Recorded results
+	// remain valid; this does not prove that an earlier write failed.
+	ErrorResourceLost uint8 = 5
 )
 
 type Error struct {
@@ -96,6 +99,12 @@ func (self Error) Other() string {
 	}
 	return self.value.(string)
 }
+func (self Error) ResourceLost() string {
+	if self.tag != ErrorResourceLost {
+		panic("tag mismatch")
+	}
+	return self.value.(string)
+}
 
 func MakeErrorConnectionFailure(value string) Error {
 	return Error{ErrorConnectionFailure, value}
@@ -111,6 +120,9 @@ func MakeErrorQueryResponseFailure(value string) Error {
 }
 func MakeErrorOther(value string) Error {
 	return Error{ErrorOther, value}
+}
+func MakeErrorResourceLost(value string) Error {
+	return Error{ErrorResourceLost, value}
 }
 
 type Interval struct {
@@ -3267,7 +3279,7 @@ func (self *DbResultStream) GetColumns() witTypes.Result[[]DbColumn, Error] {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (4 * 4), 4))
 	wasm_import_method_db_result_stream_get_columns((self).Handle(), returnArea)
-	var result13 witTypes.Result[[]DbColumn, Error]
+	var result14 witTypes.Result[[]DbColumn, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 		result6 := make([]DbColumn, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))
@@ -3471,45 +3483,50 @@ func (self *DbResultStream) GetColumns() witTypes.Result[[]DbColumn, Error] {
 			result6 = append(result6, DbColumn{Ordinal: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 0))), Name: value, DbType: variant, DbTypeName: value5})
 		}
 
-		result13 = witTypes.Ok[[]DbColumn, Error](result6)
+		result14 = witTypes.Ok[[]DbColumn, Error](result6)
 	case 1:
-		var variant12 Error
+		var variant13 Error
 		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
 		case 0:
 			value7 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant12 = MakeErrorConnectionFailure(value7)
+			variant13 = MakeErrorConnectionFailure(value7)
 
 		case 1:
 			value8 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant12 = MakeErrorQueryParameterFailure(value8)
+			variant13 = MakeErrorQueryParameterFailure(value8)
 
 		case 2:
 			value9 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant12 = MakeErrorQueryExecutionFailure(value9)
+			variant13 = MakeErrorQueryExecutionFailure(value9)
 
 		case 3:
 			value10 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant12 = MakeErrorQueryResponseFailure(value10)
+			variant13 = MakeErrorQueryResponseFailure(value10)
 
 		case 4:
 			value11 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant12 = MakeErrorOther(value11)
+			variant13 = MakeErrorOther(value11)
+
+		case 5:
+			value12 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant13 = MakeErrorResourceLost(value12)
 
 		default:
 			panic("unreachable")
 		}
 
-		result13 = witTypes.Err[[]DbColumn, Error](variant12)
+		result14 = witTypes.Err[[]DbColumn, Error](variant13)
 	default:
 		panic("unreachable")
 	}
-	result14 := result13
-	return result14
+	result15 := result14
+	return result15
 
 }
 
@@ -3522,7 +3539,7 @@ func (self *DbResultStream) GetNext() witTypes.Result[witTypes.Option[[]DbRow], 
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (4 * 4), 4))
 	wasm_import_method_db_result_stream_get_next((self).Handle(), returnArea)
-	var result48 witTypes.Result[witTypes.Option[[]DbRow], Error]
+	var result49 witTypes.Result[witTypes.Option[[]DbRow], Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 		var option witTypes.Option[[]DbRow]
@@ -4044,45 +4061,50 @@ func (self *DbResultStream) GetNext() witTypes.Result[witTypes.Option[[]DbRow], 
 			panic("unreachable")
 		}
 
-		result48 = witTypes.Ok[witTypes.Option[[]DbRow], Error](option)
+		result49 = witTypes.Ok[witTypes.Option[[]DbRow], Error](option)
 	case 1:
-		var variant47 Error
+		var variant48 Error
 		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
 		case 0:
 			value42 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant47 = MakeErrorConnectionFailure(value42)
+			variant48 = MakeErrorConnectionFailure(value42)
 
 		case 1:
 			value43 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant47 = MakeErrorQueryParameterFailure(value43)
+			variant48 = MakeErrorQueryParameterFailure(value43)
 
 		case 2:
 			value44 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant47 = MakeErrorQueryExecutionFailure(value44)
+			variant48 = MakeErrorQueryExecutionFailure(value44)
 
 		case 3:
 			value45 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant47 = MakeErrorQueryResponseFailure(value45)
+			variant48 = MakeErrorQueryResponseFailure(value45)
 
 		case 4:
 			value46 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant47 = MakeErrorOther(value46)
+			variant48 = MakeErrorOther(value46)
+
+		case 5:
+			value47 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant48 = MakeErrorResourceLost(value47)
 
 		default:
 			panic("unreachable")
 		}
 
-		result48 = witTypes.Err[witTypes.Option[[]DbRow], Error](variant47)
+		result49 = witTypes.Err[witTypes.Option[[]DbRow], Error](variant48)
 	default:
 		panic("unreachable")
 	}
-	result49 := result48
-	return result49
+	result50 := result49
+	return result50
 
 }
 
@@ -4130,6 +4152,11 @@ func DbConnectionOpen(address string) witTypes.Result[*DbConnection, Error] {
 
 			variant = MakeErrorOther(value3)
 
+		case 5:
+			value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant = MakeErrorResourceLost(value4)
+
 		default:
 			panic("unreachable")
 		}
@@ -4138,8 +4165,8 @@ func DbConnectionOpen(address string) witTypes.Result[*DbConnection, Error] {
 	default:
 		panic("unreachable")
 	}
-	result4 := result
-	return result4
+	result5 := result
+	return result5
 
 }
 
@@ -4918,7 +4945,7 @@ func (self *DbConnection) Query(statement string, params []DbValue) witTypes.Res
 	}
 
 	wasm_import_method_db_connection_query((self).Handle(), uintptr(utf8), uint32(len(statement)), uintptr(result34), length35, returnArea)
-	var result95 witTypes.Result[DbResult, Error]
+	var result96 witTypes.Result[DbResult, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 		result43 := make([]DbColumn, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))
@@ -5630,45 +5657,50 @@ func (self *DbConnection) Query(statement string, params []DbValue) witTypes.Res
 			result88 = append(result88, DbRow{Values: result87})
 		}
 
-		result95 = witTypes.Ok[DbResult, Error](DbResult{Columns: result43, Rows: result88})
+		result96 = witTypes.Ok[DbResult, Error](DbResult{Columns: result43, Rows: result88})
 	case 1:
-		var variant94 Error
+		var variant95 Error
 		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
 		case 0:
 			value89 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant94 = MakeErrorConnectionFailure(value89)
+			variant95 = MakeErrorConnectionFailure(value89)
 
 		case 1:
 			value90 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant94 = MakeErrorQueryParameterFailure(value90)
+			variant95 = MakeErrorQueryParameterFailure(value90)
 
 		case 2:
 			value91 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant94 = MakeErrorQueryExecutionFailure(value91)
+			variant95 = MakeErrorQueryExecutionFailure(value91)
 
 		case 3:
 			value92 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant94 = MakeErrorQueryResponseFailure(value92)
+			variant95 = MakeErrorQueryResponseFailure(value92)
 
 		case 4:
 			value93 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant94 = MakeErrorOther(value93)
+			variant95 = MakeErrorOther(value93)
+
+		case 5:
+			value94 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant95 = MakeErrorResourceLost(value94)
 
 		default:
 			panic("unreachable")
 		}
 
-		result95 = witTypes.Err[DbResult, Error](variant94)
+		result96 = witTypes.Err[DbResult, Error](variant95)
 	default:
 		panic("unreachable")
 	}
-	result96 := result95
-	return result96
+	result97 := result96
+	return result97
 
 }
 
@@ -6447,11 +6479,11 @@ func (self *DbConnection) QueryStream(statement string, params []DbValue) witTyp
 	}
 
 	wasm_import_method_db_connection_query_stream((self).Handle(), uintptr(utf8), uint32(len(statement)), uintptr(result34), length35, returnArea)
-	var result40 witTypes.Result[*DbResultStream, Error]
+	var result41 witTypes.Result[*DbResultStream, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result40 = witTypes.Ok[*DbResultStream, Error](DbResultStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
+		result41 = witTypes.Ok[*DbResultStream, Error](DbResultStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
 	case 1:
 		var variant Error
 		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
@@ -6480,16 +6512,21 @@ func (self *DbConnection) QueryStream(statement string, params []DbValue) witTyp
 
 			variant = MakeErrorOther(value39)
 
+		case 5:
+			value40 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant = MakeErrorResourceLost(value40)
+
 		default:
 			panic("unreachable")
 		}
 
-		result40 = witTypes.Err[*DbResultStream, Error](variant)
+		result41 = witTypes.Err[*DbResultStream, Error](variant)
 	default:
 		panic("unreachable")
 	}
-	result41 := result40
-	return result41
+	result42 := result41
+	return result42
 
 }
 
@@ -7268,11 +7305,11 @@ func (self *DbConnection) Execute(statement string, params []DbValue) witTypes.R
 	}
 
 	wasm_import_method_db_connection_execute((self).Handle(), uintptr(utf8), uint32(len(statement)), uintptr(result34), length35, returnArea)
-	var result40 witTypes.Result[uint64, Error]
+	var result41 witTypes.Result[uint64, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result40 = witTypes.Ok[uint64, Error](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8))))
+		result41 = witTypes.Ok[uint64, Error](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8))))
 	case 1:
 		var variant Error
 		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))) {
@@ -7301,16 +7338,21 @@ func (self *DbConnection) Execute(statement string, params []DbValue) witTypes.R
 
 			variant = MakeErrorOther(value39)
 
+		case 5:
+			value40 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))
+
+			variant = MakeErrorResourceLost(value40)
+
 		default:
 			panic("unreachable")
 		}
 
-		result40 = witTypes.Err[uint64, Error](variant)
+		result41 = witTypes.Err[uint64, Error](variant)
 	default:
 		panic("unreachable")
 	}
-	result41 := result40
-	return result41
+	result42 := result41
+	return result42
 
 }
 
@@ -7356,6 +7398,11 @@ func (self *DbConnection) BeginTransaction() witTypes.Result[*DbTransaction, Err
 
 			variant = MakeErrorOther(value3)
 
+		case 5:
+			value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant = MakeErrorResourceLost(value4)
+
 		default:
 			panic("unreachable")
 		}
@@ -7364,8 +7411,8 @@ func (self *DbConnection) BeginTransaction() witTypes.Result[*DbTransaction, Err
 	default:
 		panic("unreachable")
 	}
-	result4 := result
-	return result4
+	result5 := result
+	return result5
 
 }
 
@@ -8144,7 +8191,7 @@ func (self *DbTransaction) Query(statement string, params []DbValue) witTypes.Re
 	}
 
 	wasm_import_method_db_transaction_query((self).Handle(), uintptr(utf8), uint32(len(statement)), uintptr(result34), length35, returnArea)
-	var result95 witTypes.Result[DbResult, Error]
+	var result96 witTypes.Result[DbResult, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 		result43 := make([]DbColumn, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))
@@ -8856,45 +8903,50 @@ func (self *DbTransaction) Query(statement string, params []DbValue) witTypes.Re
 			result88 = append(result88, DbRow{Values: result87})
 		}
 
-		result95 = witTypes.Ok[DbResult, Error](DbResult{Columns: result43, Rows: result88})
+		result96 = witTypes.Ok[DbResult, Error](DbResult{Columns: result43, Rows: result88})
 	case 1:
-		var variant94 Error
+		var variant95 Error
 		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
 		case 0:
 			value89 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant94 = MakeErrorConnectionFailure(value89)
+			variant95 = MakeErrorConnectionFailure(value89)
 
 		case 1:
 			value90 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant94 = MakeErrorQueryParameterFailure(value90)
+			variant95 = MakeErrorQueryParameterFailure(value90)
 
 		case 2:
 			value91 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant94 = MakeErrorQueryExecutionFailure(value91)
+			variant95 = MakeErrorQueryExecutionFailure(value91)
 
 		case 3:
 			value92 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant94 = MakeErrorQueryResponseFailure(value92)
+			variant95 = MakeErrorQueryResponseFailure(value92)
 
 		case 4:
 			value93 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant94 = MakeErrorOther(value93)
+			variant95 = MakeErrorOther(value93)
+
+		case 5:
+			value94 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant95 = MakeErrorResourceLost(value94)
 
 		default:
 			panic("unreachable")
 		}
 
-		result95 = witTypes.Err[DbResult, Error](variant94)
+		result96 = witTypes.Err[DbResult, Error](variant95)
 	default:
 		panic("unreachable")
 	}
-	result96 := result95
-	return result96
+	result97 := result96
+	return result97
 
 }
 
@@ -9673,11 +9725,11 @@ func (self *DbTransaction) QueryStream(statement string, params []DbValue) witTy
 	}
 
 	wasm_import_method_db_transaction_query_stream((self).Handle(), uintptr(utf8), uint32(len(statement)), uintptr(result34), length35, returnArea)
-	var result40 witTypes.Result[*DbResultStream, Error]
+	var result41 witTypes.Result[*DbResultStream, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result40 = witTypes.Ok[*DbResultStream, Error](DbResultStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
+		result41 = witTypes.Ok[*DbResultStream, Error](DbResultStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
 	case 1:
 		var variant Error
 		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
@@ -9706,16 +9758,21 @@ func (self *DbTransaction) QueryStream(statement string, params []DbValue) witTy
 
 			variant = MakeErrorOther(value39)
 
+		case 5:
+			value40 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant = MakeErrorResourceLost(value40)
+
 		default:
 			panic("unreachable")
 		}
 
-		result40 = witTypes.Err[*DbResultStream, Error](variant)
+		result41 = witTypes.Err[*DbResultStream, Error](variant)
 	default:
 		panic("unreachable")
 	}
-	result41 := result40
-	return result41
+	result42 := result41
+	return result42
 
 }
 
@@ -10494,11 +10551,11 @@ func (self *DbTransaction) Execute(statement string, params []DbValue) witTypes.
 	}
 
 	wasm_import_method_db_transaction_execute((self).Handle(), uintptr(utf8), uint32(len(statement)), uintptr(result34), length35, returnArea)
-	var result40 witTypes.Result[uint64, Error]
+	var result41 witTypes.Result[uint64, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		result40 = witTypes.Ok[uint64, Error](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8))))
+		result41 = witTypes.Ok[uint64, Error](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8))))
 	case 1:
 		var variant Error
 		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))) {
@@ -10527,16 +10584,21 @@ func (self *DbTransaction) Execute(statement string, params []DbValue) witTypes.
 
 			variant = MakeErrorOther(value39)
 
+		case 5:
+			value40 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))
+
+			variant = MakeErrorResourceLost(value40)
+
 		default:
 			panic("unreachable")
 		}
 
-		result40 = witTypes.Err[uint64, Error](variant)
+		result41 = witTypes.Err[uint64, Error](variant)
 	default:
 		panic("unreachable")
 	}
-	result41 := result40
-	return result41
+	result42 := result41
+	return result42
 
 }
 
@@ -10582,6 +10644,11 @@ func (self *DbTransaction) Commit() witTypes.Result[witTypes.Unit, Error] {
 
 			variant = MakeErrorOther(value3)
 
+		case 5:
+			value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant = MakeErrorResourceLost(value4)
+
 		default:
 			panic("unreachable")
 		}
@@ -10590,8 +10657,8 @@ func (self *DbTransaction) Commit() witTypes.Result[witTypes.Unit, Error] {
 	default:
 		panic("unreachable")
 	}
-	result4 := result
-	return result4
+	result5 := result
+	return result5
 
 }
 
@@ -10637,6 +10704,11 @@ func (self *DbTransaction) Rollback() witTypes.Result[witTypes.Unit, Error] {
 
 			variant = MakeErrorOther(value3)
 
+		case 5:
+			value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant = MakeErrorResourceLost(value4)
+
 		default:
 			panic("unreachable")
 		}
@@ -10645,7 +10717,7 @@ func (self *DbTransaction) Rollback() witTypes.Result[witTypes.Unit, Error] {
 	default:
 		panic("unreachable")
 	}
-	result4 := result
-	return result4
+	result5 := result
+	return result5
 
 }
