@@ -30,7 +30,8 @@ use tracing::{Instrument, Level, error, info};
 ///
 /// origin: the request that opened this connection, to link the proxy's span back to
 /// keep_alive_interval: Interval at which Ping messages are sent
-/// max_pong_timeout: Maximum time to wait for a Pong message before considering the connection dead
+/// max_pong_timeout: Maximum time to wait for a Pong message before considering the connection dead;
+/// zero keeps Pings enabled without requiring Pongs within a deadline
 // The proxy runs for the connection's whole life - hours, for a `connect` websocket -
 // so it is the root of its own trace, linked to the request that opened it rather than
 // nested under it. The origin has to be captured by the caller: poem drives the upgrade
@@ -169,25 +170,43 @@ where
 pub(crate) mod keep_alive {
     use std::{
         pin::Pin,
+        sync::Arc,
         task::{Context, Poll},
         time::Duration,
     };
 
+    use futures::task::{ArcWake, AtomicWaker, waker_ref};
     use futures::{Future, Sink, SinkExt, Stream, StreamExt};
     use poem::web::websocket::Message;
     use tokio::time::Instant;
     use tracing::debug;
 
+    #[derive(Default)]
+    struct WebSocketWakers {
+        reader: AtomicWaker,
+        writer: AtomicWaker,
+    }
+
+    impl ArcWake for WebSocketWakers {
+        fn wake_by_ref(wakers: &Arc<Self>) {
+            wakers.reader.wake();
+            wakers.writer.wake();
+        }
+    }
+
     pub struct WebSocketKeepAlive<A, B> {
         sink: A,
         stream: B,
         max_pong_timeout: Duration,
-        // When last ping was sent
+        // The outstanding Ping when a Pong deadline is enabled.
         last_ping: Option<Instant>,
         // Timer that triggers sending of Ping messages at regular intervals
         ping_interval: Pin<Box<tokio::time::Interval>>,
         // Is reset when a Ping message is sent
         pong_timeout: Pin<Box<tokio::time::Sleep>>,
+        // Reading sends Pings through the application sink. Either poller can register
+        // the sink's readiness waker, so readiness must wake both pollers.
+        wakers: Arc<WebSocketWakers>,
     }
 
     fn far_future() -> Instant {
@@ -221,6 +240,7 @@ pub(crate) mod keep_alive {
                 ping_interval,
                 max_pong_timeout,
                 pong_timeout: Box::pin(tokio::time::sleep_until(far_future())),
+                wakers: Arc::default(),
             }
         }
     }
@@ -243,6 +263,11 @@ pub(crate) mod keep_alive {
             mut self: std::pin::Pin<&mut Self>,
             cx: &mut Context<'_>,
         ) -> Poll<Option<Self::Item>> {
+            let wakers = self.wakers.clone();
+            wakers.reader.register(cx.waker());
+            let waker = waker_ref(&wakers);
+            let mut context = Context::from_waker(&waker);
+            let cx = &mut context;
             if (self.pong_timeout.as_mut().poll(cx).is_ready() || self.pong_timeout.is_elapsed())
                 && self.last_ping.is_some()
             {
@@ -277,11 +302,15 @@ pub(crate) mod keep_alive {
 
                 debug!("WebSocket Ping sent");
 
-                let now = Instant::now();
-                let timeout = now + self.max_pong_timeout;
+                if !self.max_pong_timeout.is_zero() {
+                    let now = Instant::now();
+                    let timeout = now + self.max_pong_timeout;
 
-                self.last_ping = Some(now);
-                self.pong_timeout.as_mut().reset(timeout);
+                    self.last_ping = Some(now);
+                    self.pong_timeout.as_mut().reset(timeout);
+                }
+                // Poll again to register the interval's next tick even without incoming traffic.
+                cx.waker().wake_by_ref();
             }
 
             match self.stream.poll_next_unpin(cx) {
@@ -313,7 +342,10 @@ pub(crate) mod keep_alive {
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
         ) -> Poll<Result<(), Self::Error>> {
-            self.sink.poll_ready_unpin(cx)
+            let wakers = self.wakers.clone();
+            wakers.writer.register(cx.waker());
+            let waker = waker_ref(&wakers);
+            self.sink.poll_ready_unpin(&mut Context::from_waker(&waker))
         }
 
         fn start_send(mut self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
@@ -324,14 +356,20 @@ pub(crate) mod keep_alive {
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
         ) -> Poll<Result<(), Self::Error>> {
-            self.sink.poll_flush_unpin(cx)
+            let wakers = self.wakers.clone();
+            wakers.writer.register(cx.waker());
+            let waker = waker_ref(&wakers);
+            self.sink.poll_flush_unpin(&mut Context::from_waker(&waker))
         }
 
         fn poll_close(
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
         ) -> Poll<Result<(), Self::Error>> {
-            self.sink.poll_close_unpin(cx)
+            let wakers = self.wakers.clone();
+            wakers.writer.register(cx.waker());
+            let waker = waker_ref(&wakers);
+            self.sink.poll_close_unpin(&mut Context::from_waker(&waker))
         }
     }
 

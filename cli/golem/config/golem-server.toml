@@ -738,7 +738,7 @@ retry_delay = "100ms"
 
 [worker_service.invocation_session]
 keep_alive_interval = "30s"
-max_pong_timeout = "15s"
+max_pong_timeout = "0s"
 
 [worker_service.invocation_session_tokens]
 issuer = "local-worker-service"
@@ -1680,7 +1680,7 @@ type = "Disabled"
 #
 # [worker_service.invocation_session]
 # keep_alive_interval = "30s"
-# max_pong_timeout = "15s"
+# max_pong_timeout = "0s"
 #
 # [worker_service.invocation_session_tokens]
 # issuer = "local-worker-service"

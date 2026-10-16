@@ -78,10 +78,9 @@ impl WorkerServiceConfig {
 
     pub fn validate_keep_alive(&self) -> Result<(), String> {
         if self.invocation_session.keep_alive_interval.is_zero()
-            || self.invocation_session.max_pong_timeout.is_zero()
             || self.mcp.sse_keep_alive_interval.is_zero()
         {
-            return Err("Invocation session and MCP keep-alive durations must be non-zero".into());
+            return Err("Invocation session and MCP keep-alive intervals must be non-zero".into());
         }
         Ok(())
     }
@@ -256,6 +255,7 @@ impl HasConfigExamples<WorkerServiceConfig> for WorkerServiceConfig {
 pub struct InvocationSessionConfig {
     #[serde(with = "humantime_serde")]
     pub keep_alive_interval: Duration,
+    /// Zero disables the Pong deadline without disabling periodic Pings.
     #[serde(with = "humantime_serde")]
     pub max_pong_timeout: Duration,
 }
@@ -264,7 +264,7 @@ impl Default for InvocationSessionConfig {
     fn default() -> Self {
         Self {
             keep_alive_interval: Duration::from_secs(30),
-            max_pong_timeout: Duration::from_secs(15),
+            max_pong_timeout: Duration::ZERO,
         }
     }
 }
@@ -980,10 +980,7 @@ mod tests {
             defaults.invocation_session.keep_alive_interval,
             Duration::from_secs(30)
         );
-        assert_eq!(
-            defaults.invocation_session.max_pong_timeout,
-            Duration::from_secs(15)
-        );
+        assert_eq!(defaults.invocation_session.max_pong_timeout, Duration::ZERO);
         assert_eq!(
             defaults.mcp.sse_keep_alive_interval,
             Duration::from_secs(15)
@@ -1013,12 +1010,11 @@ mod tests {
     }
 
     #[test]
-    fn keep_alive_rejects_zero_durations() {
-        for setting in 0..3 {
+    fn keep_alive_rejects_zero_intervals() {
+        for setting in 0..2 {
             let mut config = WorkerServiceConfig::default();
             match setting {
                 0 => config.invocation_session.keep_alive_interval = Duration::ZERO,
-                1 => config.invocation_session.max_pong_timeout = Duration::ZERO,
                 _ => config.mcp.sse_keep_alive_interval = Duration::ZERO,
             }
             assert!(config.validate_keep_alive().is_err());

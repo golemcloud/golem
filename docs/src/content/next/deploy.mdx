@@ -51,7 +51,7 @@ The worker service uses these settings in `config/worker-service.toml`:
 ```toml
 [invocation_session]
 keep_alive_interval = "30s"
-max_pong_timeout = "15s"
+max_pong_timeout = "0s"
 
 [mcp]
 sse_keep_alive_interval = "15s"
@@ -60,7 +60,9 @@ sse_keep_alive_interval = "15s"
 long_poll_timeout = "30s"
 ```
 
-The invocation session WebSocket sends a Ping every `keep_alive_interval` after the previous Pong. It closes the connection if no Pong arrives within `max_pong_timeout`. Both durations must be non-zero. The `golem-client` socket task reads and answers Pings while an invocation waits, even when the caller does not poll for output. It does not send separate client Pings.
+The invocation session WebSocket sends Pings at `keep_alive_interval`, which must be non-zero. The default `max_pong_timeout = "0s"` disables the Pong deadline, but Pings continue. Set a positive duration to close the connection when no Pong arrives within that duration.
+
+The `golem-client` socket task reads and answers Pings while an invocation waits, even when the caller does not poll for output. When its bounded output buffers fill, it pauses socket reads and answers Pings when reading resumes. Keep the Pong deadline disabled if output consumers can pause longer than the deadline. It does not send separate client Pings.
 
 MCP uses the RMCP transport's SSE comment keep-alive on open GET and POST streams. `sse_keep_alive_interval` must be non-zero. Durable stream SSE emits a `control` event after each read, including empty reads. An idle read waits for at most `long_poll_timeout`, with an executor cap of 30 seconds, so no separate SSE heartbeat is needed.
 

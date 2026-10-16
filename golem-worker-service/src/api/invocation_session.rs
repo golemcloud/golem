@@ -828,30 +828,66 @@ pub async fn serve_public_invocation_session(
     auth: AuthCtx,
     config: InvocationSessionConfig,
 ) {
+    serve_invocation_session_connection(
+        socket,
+        config,
+        move |incoming, outbound, budgets, setup_complete| {
+            serve_session_messages(
+                incoming,
+                worker_service,
+                keyring,
+                auth,
+                outbound,
+                budgets,
+                setup_complete,
+            )
+        },
+    )
+    .await;
+}
+
+async fn serve_invocation_session_connection<F>(
+    socket: WebSocketStream,
+    config: InvocationSessionConfig,
+    handler: impl FnOnce(
+        tokio_stream::wrappers::ReceiverStream<std::io::Result<AdmittedMessage>>,
+        Outbound,
+        SessionBudgets,
+        tokio::sync::oneshot::Sender<()>,
+    ) -> F,
+) where
+    F: std::future::Future<Output = ()>,
+{
     let (mut websocket_sink, websocket_stream) =
         invocation_session_websocket(socket, config).split();
     let budgets = SessionBudgets::new();
     let (incoming_tx, incoming_rx) = mpsc::channel(CHANNEL_CAPACITY);
     // Keep reading control frames while session setup waits for the executor.
-    let _reader = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(read_websocket(
+    let mut reader = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(read_websocket(
         websocket_stream,
         incoming_tx,
         budgets.session.clone(),
     )));
-    let mut websocket_stream = tokio_stream::wrappers::ReceiverStream::new(incoming_rx);
+    let websocket_stream = tokio_stream::wrappers::ReceiverStream::new(incoming_rx);
     let (outbound_tx, mut outbound_rx) = mpsc::channel::<QueuedMessage>(CHANNEL_CAPACITY);
     let outbound = Outbound {
         sender: outbound_tx,
         budgets: budgets.clone(),
     };
     let writer_budgets = budgets.clone();
+    let force_close = tokio_util::sync::CancellationToken::new();
+    let writer_force_close = force_close.clone();
     let writer = tokio::spawn(async move {
         // A queued close frame is held back and sent as the final frame once the session ends,
         // so the client cannot observe the close handshake before the private session has been
         // drained. Everything queued after a close frame is dropped.
         let mut pending_close = None;
         let mut sink_open = true;
-        while let Some(message) = outbound_rx.recv().await {
+        while let Some(message) = tokio::select! {
+            biased;
+            _ = writer_force_close.cancelled() => None,
+            message = outbound_rx.recv() => message,
+        } {
             if !sink_open || pending_close.is_some() || message.should_drop(&writer_budgets).await {
                 continue;
             }
@@ -859,11 +895,12 @@ pub async fn serve_public_invocation_session(
                 pending_close = Some(message.message);
                 continue;
             }
-            if !matches!(
-                tokio::time::timeout(WRITE_PROGRESS_TIMEOUT, websocket_sink.send(message.message))
-                    .await,
-                Ok(Ok(()))
-            ) {
+            let sent = tokio::select! {
+                biased;
+                _ = writer_force_close.cancelled() => break,
+                sent = tokio::time::timeout(WRITE_PROGRESS_TIMEOUT, websocket_sink.send(message.message)) => sent,
+            };
+            if !matches!(sent, Ok(Ok(()))) {
                 sink_open = false;
             }
         }
@@ -874,13 +911,43 @@ pub async fn serve_public_invocation_session(
         }
         let _ = tokio::time::timeout(WRITE_PROGRESS_TIMEOUT, websocket_sink.close()).await;
     });
+    let (setup_complete, mut setup_completed) = tokio::sync::oneshot::channel();
+    let close_now = {
+        let session = handler(websocket_stream, outbound, budgets, setup_complete);
+        tokio::pin!(session);
+        tokio::select! {
+            biased;
+            _ = &mut session => false,
+            _ = &mut reader => {
+                if setup_completed.try_recv().is_ok() {
+                    tokio::time::timeout(CLIENT_GONE_DRAIN_TIMEOUT, &mut session).await.is_err()
+                } else {
+                    true
+                }
+            }
+        }
+    };
+    if close_now {
+        force_close.cancel();
+    }
+    let _ = writer.await;
+}
+
+async fn serve_session_messages(
+    mut websocket_stream: tokio_stream::wrappers::ReceiverStream<std::io::Result<AdmittedMessage>>,
+    worker_service: Arc<WorkerService>,
+    keyring: Arc<InvocationSessionTokenKeyring>,
+    auth: AuthCtx,
+    outbound: Outbound,
+    budgets: SessionBudgets,
+    setup_complete: tokio::sync::oneshot::Sender<()>,
+) {
     let bindings = token_bindings(&auth);
     let initial = match receive_initial(&mut websocket_stream, &outbound, &keyring, &bindings).await
     {
         Ok(Some(initial)) => initial,
         Ok(None) | Err(()) => {
             drop(outbound);
-            let _ = writer.await;
             return;
         }
     };
@@ -989,7 +1056,6 @@ pub async fn serve_public_invocation_session(
                 )
                 .await;
             drop(outbound);
-            let _ = writer.await;
             return;
         }
     };
@@ -1009,9 +1075,9 @@ pub async fn serve_public_invocation_session(
         .await;
         close_error(&outbound, &message).await;
         drop(outbound);
-        let _ = writer.await;
         return;
     }
+    let _ = setup_complete.send(());
     let state = Arc::new(Mutex::new(initial_state));
     let responses = started.responses;
     {
@@ -1041,7 +1107,6 @@ pub async fn serve_public_invocation_session(
         }
     }
     drop(outbound);
-    let _ = writer.await;
 }
 
 fn invocation_session_websocket(
@@ -1072,36 +1137,33 @@ async fn read_websocket(
     mut websocket: impl futures::Stream<Item = std::io::Result<Message>> + Unpin,
     incoming: mpsc::Sender<std::io::Result<AdmittedMessage>>,
     session: Arc<Semaphore>,
-) {
+) -> std::io::Result<()> {
     loop {
         let message = tokio::select! {
-            _ = incoming.closed() => return,
+            _ = incoming.closed() => return Ok(()),
             message = websocket.next() => message,
         };
         match message {
             // Tungstenite queues the Pong and flushes it on the next read.
             Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
-            Some(message) => {
-                let terminal = message.is_err() || matches!(message, Ok(Message::Close(_)));
-                let message = match message {
-                    Ok(message) => {
-                        let Ok(permit) =
-                            acquire_bytes(&session, message_size(&message).max(1)).await
-                        else {
-                            return;
-                        };
-                        Ok(AdmittedMessage {
-                            message,
-                            session: permit,
-                        })
-                    }
-                    Err(error) => Err(error),
+            Some(Ok(Message::Close(_))) | None => return Ok(()),
+            Some(Err(error)) => return Err(error),
+            Some(Ok(message)) => {
+                let Ok(permit) = acquire_bytes(&session, message_size(&message).max(1)).await
+                else {
+                    return Ok(());
                 };
-                if incoming.send(message).await.is_err() || terminal {
-                    return;
+                if incoming
+                    .send(Ok(AdmittedMessage {
+                        message,
+                        session: permit,
+                    }))
+                    .await
+                    .is_err()
+                {
+                    return Ok(());
                 }
             }
-            None => return,
         }
     }
 }
