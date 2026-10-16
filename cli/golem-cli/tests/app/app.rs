@@ -600,6 +600,33 @@ async fn app_new_with_overlapping_layout_upgrades_leaves_app_unchanged(_tracing:
 }
 
 #[test]
+async fn app_new_adds_template_to_component_without_dir_in_manifest(_tracing: &Tracing) {
+    let app_name = "test-app-no-dir";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    assert!(manifest.contains("    dir: \"\"\n"));
+    fs::write_str(&manifest_path, manifest.replace("    dir: \"\"\n", "")).unwrap();
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts/json"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    assert!(ctx.cwd_path_join("src/task-agent.ts").is_file());
+    assert!(!ctx.cwd_path_join(",").exists());
+}
+
+#[test]
 async fn app_new_keeps_customized_scala_build_files_when_upgrading_layout(_tracing: &Tracing) {
     let app_name = "test-app-scala-merge";
 

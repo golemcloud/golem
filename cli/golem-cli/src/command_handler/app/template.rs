@@ -291,7 +291,7 @@ impl TemplateHandler {
                                 })?,
                                 dir: component
                                     .dir()
-                                    .unwrap_or_else(|| Path::new(","))
+                                    .unwrap_or_else(|| Path::new("."))
                                     .to_path_buf(),
                                 component_dir: component.component_dir().to_path_buf(),
                                 manifest_source_dir: fs::parent_or_err(component.source())?
