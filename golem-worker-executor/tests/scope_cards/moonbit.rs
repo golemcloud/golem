@@ -450,6 +450,8 @@ async fn moonbit_sdk_derives_inspects_and_rejects_permission_cards(
             "child-id-differs=true",
             "child-expires=true",
             "child-inspect-grants=1",
+            "open-scope-expires=false",
+            "derived-scope-parent=not-permitted",
             "root-child-parent-is-root=true",
             "root-child-expires=true",
             "calendar-lifespan=invalid-pattern",

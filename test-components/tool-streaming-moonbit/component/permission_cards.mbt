@@ -15,11 +15,6 @@ fn MoonBitPermissionAgent::new(name : String) -> MoonBitPermissionAgent {
 }
 
 ///|
-fn is_template_grant(grant : @permissions.PatternGrant) -> Bool {
-  grant.owner.contains("?") || grant.resource_id.contains("?")
-}
-
-///|
 fn is_inspect_grant(grant : @permissions.PatternGrant) -> Bool {
   grant.class == "card" && grant.verb == "inspect" && grant.resource_id == "*"
 }
@@ -27,25 +22,19 @@ fn is_inspect_grant(grant : @permissions.PatternGrant) -> Bool {
 ///|
 /// The agent type's initial template card from the wallet, if the wallet still
 /// holds it. The other wallet cards are released.
-fn template_root() -> @permissions.PermissionCard? {
-  let mut root : @permissions.PermissionCard? = None
+fn template_root() -> @permissions.PolymorphicPermissionCard? {
+  let mut root : @permissions.PolymorphicPermissionCard? = None
   for card in @permissions.wallet() {
-    let is_template = card.inspect().lower_positive
-      .iter()
-      .any(is_template_grant) catch {
-        _ => false
-      }
-    if root is None && is_template {
-      root = Some(card)
-    } else {
-      card.drop()
+    match (root, card) {
+      (None, Template(template)) => root = Some(template)
+      _ => card.drop()
     }
   }
   root
 }
 
 ///|
-fn require_template_root() -> @permissions.PermissionCard {
+fn require_template_root() -> @permissions.PolymorphicPermissionCard {
   match template_root() {
     Some(card) => card
     None => abort("the wallet has no template card")
@@ -54,7 +43,7 @@ fn require_template_root() -> @permissions.PermissionCard {
 
 ///|
 fn inspect_grant(
-  card : @permissions.PermissionCard,
+  card : @permissions.PolymorphicPermissionCard,
 ) -> @permissions.PatternGrant raise @permissions.PermissionError {
   match card.inspect().lower_positive.iter().find_first(is_inspect_grant) {
     Some(grant) => grant
@@ -109,6 +98,23 @@ pub fn MoonBitPermissionAgent::derive_chain(
     observations.push(
       "child-inspect-grants=\{child.inspect().lower_positive.filter(is_inspect_grant).length()}",
     )
+    // The template root never expires, so neither does a scope card derived
+    // from it.
+    let open_scope = @permissions.derive_scope([], inspect_bounds(grant), template_parents=[
+      root,
+    ])
+    defer open_scope.drop()
+    observations.push(
+      "open-scope-expires=\{open_scope.expires_at() is Some(_)}",
+    )
+    // A derived card is not in the wallet, so it cannot be a scope parent.
+    let derived_parent = try {
+      @permissions.derive_scope([child], inspect_bounds(grant)).drop()
+      "accepted"
+    } catch {
+      error => error.kind()
+    }
+    observations.push("derived-scope-parent=\{derived_parent}")
     let root_child = root.derive_child(
       inspect_bounds(grant),
       lifespan=@permissions.Lifespan::from_duration(
@@ -234,7 +240,7 @@ fn is_oplog_grant(grant : @permissions.PatternGrant) -> Bool {
 /// The template root's oplog grant, as `inspect` returns it. Its owner is the
 /// `?agent` slot.
 fn template_oplog_grant(
-  root : @permissions.PermissionCard,
+  root : @permissions.PolymorphicPermissionCard,
 ) -> @permissions.PatternGrant raise @permissions.PermissionError {
   match root.inspect().lower_positive.iter().find_first(is_oplog_grant) {
     Some(grant) => grant
@@ -247,7 +253,7 @@ fn template_oplog_grant(
 /// `owner` (`account/application/environment/component/agent`). A requested
 /// grant must be concrete: the host rejects a slot variable such as `?agent`.
 fn oplog_read_grant(
-  root : @permissions.PermissionCard,
+  root : @permissions.PolymorphicPermissionCard,
   owner : String,
 ) -> @permissions.PatternGrant raise @permissions.PermissionError {
   { ..template_oplog_grant(root), owner, verb: "read", resource_id: "*", }
@@ -274,7 +280,7 @@ pub async fn MoonBitPermissionAgent::scope_rpc(
     let bounds = @permissions.Bounds::new(lower_positive=[
       template_oplog_grant(root),
     ])
-    @permissions.derive_scope([root], bounds).drop()
+    @permissions.derive_scope([], bounds, template_parents=[root]).drop()
     "accepted"
   } catch {
     error => error.kind()
@@ -284,7 +290,7 @@ pub async fn MoonBitPermissionAgent::scope_rpc(
       inspect_grant(root),
       oplog_read_grant(root, owner),
     ])
-    @permissions.derive_scope([root], bounds)
+    @permissions.derive_scope([], bounds, template_parents=[root])
   } catch {
     error => return Err(error.to_string())
   }
@@ -308,7 +314,8 @@ pub async fn MoonBitPermissionAgent::scope_rpc(
 }
 
 ///|
-/// Describes the scope card that the caller lent to this invocation as
+/// Describes the scope card that the caller lent to this invocation, which the
+/// wallet lists as a `Scope` entry, as
 /// `present/<parent is the root>/<lower-positive grant count>`, or `absent`,
 /// followed by `/readable` when this agent can read the oplog of the agent
 /// `viewed` of this component and `/denied` otherwise.
@@ -321,24 +328,17 @@ pub fn MoonBitPermissionAgent::scope_report(
   defer @permissions.drop_all(cards)
   let root_ids = []
   for card in cards {
-    let is_template = card.inspect().lower_positive
-      .iter()
-      .any(is_template_grant) catch {
-        _ => false
-      }
-    if is_template {
-      root_ids.push(card.id())
+    if card is Template(template) {
+      root_ids.push(template.id())
     }
   }
   for card in cards {
-    let parents = card.parents()
-    if parents.is_empty() {
-      continue
-    }
-    let parent_is_root = parents
+    guard card is Scope(scope) else { continue }
+    let parent_is_root = scope
+      .parents()
       .iter()
       .any(fn(parent) { root_ids.contains(parent) })
-    let grants = card.inspect().lower_positive.length() catch { _ => -1 }
+    let grants = scope.inspect().lower_positive.length() catch { _ => -1 }
     return "present/\{parent_is_root}/\{grants}/\{view}"
   }
   "absent/\{view}"
@@ -404,14 +404,10 @@ pub fn MoonBitPermissionAgent::revoke_installed_card(
   ignore(self)
   let cards = @permissions.wallet()
   defer @permissions.drop_all(cards)
-  let installed = cards
-    .iter()
-    .find_first(fn(card) {
-      !(card.inspect().lower_positive.iter().any(is_template_grant) catch {
-        _ => true
-      })
-    })
-  guard installed is Some(card) else { return Err("no installed card") }
+  let installed = cards.iter().find_first(fn(card) { card is Concrete(_) })
+  guard installed is Some(Concrete(card)) else {
+    return Err("no installed card")
+  }
   try {
     let count = card.revoke()
     Ok(["revoked=\{count}", "card-moved=\{card.is_moved()}"])
