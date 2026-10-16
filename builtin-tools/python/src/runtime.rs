@@ -12,6 +12,19 @@ No arguments or '-' reads a noninteractive script from stdin.\n\
 Options: -u (unbuffered), -B (no bytecode), -S (no site), -E (ignore startup environment),\n\
          -s (no user site), -P (safe path), -I (isolated), -O/-OO (optimize), -h, -V.\n";
 
+/// The error with which the stdin reader reports that the caller cancelled the stdin. Python
+/// reads it as Ctrl+C: the read raises `KeyboardInterrupt`.
+#[derive(Debug)]
+pub(crate) struct StdinCancelled;
+
+impl std::fmt::Display for StdinCancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("stdin was cancelled")
+    }
+}
+
+impl std::error::Error for StdinCancelled {}
+
 pub(crate) struct Stdio {
     input: Box<dyn Read>,
     output: Box<dyn Write>,
@@ -310,6 +323,13 @@ fn install_stdio(
                     Ok(count) => {
                         bytes.truncate(count);
                         Ok(vm.ctx.new_bytes(bytes))
+                    }
+                    Err(error)
+                        if error
+                            .get_ref()
+                            .is_some_and(|error| error.is::<StdinCancelled>()) =>
+                    {
+                        Err(vm.new_exception_empty(vm.ctx.exceptions.keyboard_interrupt.to_owned()))
                     }
                     Err(error) => {
                         input.failure = Some(error.to_string());

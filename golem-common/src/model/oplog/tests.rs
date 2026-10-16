@@ -43,17 +43,17 @@ use crate::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
     AgentMethodInvocationParameters, AgentResourceId, DurableFunctionType, DurableInvocationId,
     FilesystemSnapshotName, JsonSnapshotData, LogLevel, MultipartPartData, MultipartSnapshotData,
-    MultipartSnapshotPart, OplogEntry, OplogErrorKind, OplogPayload, PluginInstallationDescription,
-    PublicAgentEntity, PublicAgentEntityKind, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicEntityCallMode,
-    PublicEntityInvocation, PublicEntityInvocationContext, PublicEntityInvocationOperation,
-    PublicFailedSnapshotAssistedUpdateDetails, PublicLocalSpanData, PublicOplogEntry,
-    PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicQueuedCardEvent,
-    PublicSnapshotAssistedUpdateDetails, PublicSnapshotData, PublicSpanAttributes, PublicSpanData,
-    PublicSpanFinished, PublicSpanKind, PublicSpanLink, PublicSpanOutcome, PublicSpanStarted,
-    PublicToolInvocationOperation, PublicTypedAgentConfigEntry, PublicUpdateDescription,
-    QueuedCardEvent, RawSnapshotData, SnapshotBasedUpdateParameters, StringAttributeValue,
-    UpdateDescription,
+    MultipartSnapshotPart, OmittedOplogEntry, OplogEntry, OplogErrorKind, OplogPayload,
+    PluginInstallationDescription, PublicAgentEntity, PublicAgentEntityKind, PublicAgentInvocation,
+    PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
+    PublicEntityCallMode, PublicEntityInvocation, PublicEntityInvocationContext,
+    PublicEntityInvocationOperation, PublicFailedSnapshotAssistedUpdateDetails,
+    PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex,
+    PublicOplogPageEntry, PublicQueuedCardEvent, PublicSnapshotAssistedUpdateDetails,
+    PublicSnapshotData, PublicSpanAttributes, PublicSpanData, PublicSpanFinished, PublicSpanKind,
+    PublicSpanLink, PublicSpanOutcome, PublicSpanStarted, PublicToolInvocationOperation,
+    PublicTypedAgentConfigEntry, PublicUpdateDescription, QueuedCardEvent, RawSnapshotData,
+    SnapshotBasedUpdateParameters, StringAttributeValue, UpdateDescription,
 };
 use crate::model::regions::OplogRegion;
 use crate::model::{
@@ -1630,6 +1630,60 @@ fn rolled_back_remote_transaction_serialization_poem_serde_equivalence() {
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
     assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn oplog_page_entries_roundtrip_through_serde_and_protobuf() {
+    let entry = PublicOplogEntry::Snapshot(SnapshotParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        data: PublicSnapshotData::Raw(RawSnapshotData {
+            data: vec![1, 2, 3, 4],
+            mime_type: "application/octet-stream".to_string(),
+        }),
+        filesystem_snapshot: None,
+    });
+    let page_entries = vec![
+        PublicOplogPageEntry::Included(PublicOplogEntryWithIndex {
+            oplog_index: OplogIndex::from_u64(3),
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: entry.clone(),
+        }),
+        PublicOplogPageEntry::Omitted(OmittedOplogEntry {
+            oplog_index: OplogIndex::from_u64(4),
+            attribution: PublicOplogEntryAttribution::agent(),
+            timestamp: entry.timestamp(),
+            entry_type: entry.entry_type().to_string(),
+            size: 62_914_560,
+            component_revision: ComponentRevision::new(7).unwrap(),
+        }),
+    ];
+
+    for page_entry in page_entries {
+        let json = serde_json::to_string(&page_entry).unwrap();
+        assert_eq!(
+            serde_json::from_str::<PublicOplogPageEntry>(&json).unwrap(),
+            page_entry
+        );
+        assert_eq!(
+            serde_json::from_str::<PublicOplogPageEntry>(&page_entry.to_json_string()).unwrap(),
+            page_entry
+        );
+
+        let proto: golem_api_grpc::proto::golem::worker::OplogPageEntry =
+            page_entry.clone().try_into().unwrap();
+        assert_eq!(PublicOplogPageEntry::try_from(proto).unwrap(), page_entry);
+    }
+}
+
+#[test]
+fn public_oplog_entry_type_is_the_serialized_type_tag() {
+    let entry = PublicOplogEntry::RolledBackRemoteTransaction(RolledBackRemoteTransactionParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        begin_index: OplogIndex::from_u64(3),
+    });
+    let json: serde_json::Value = serde_json::from_str(&entry.to_json_string()).unwrap();
+    assert_eq!(json["type"], entry.entry_type());
+    assert_eq!(entry.entry_type(), "RolledBackRemoteTransaction");
 }
 
 #[test]

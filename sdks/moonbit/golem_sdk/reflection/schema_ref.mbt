@@ -1,13 +1,72 @@
 ///|
 /// A graph-backed view of one reflected schema root.
+///
+/// A record root may carry values for root fields that canonical JSON input
+/// can omit. They apply only to the JSON surface (`pack_json` and
+/// `to_json_schema`); the graph, the root, and value validation stay the
+/// unchanged record.
 pub struct SchemaRef {
   graph : @model.SchemaGraph
   root : @model.SchemaType
+  priv root_defaults : Map[String, @model.SchemaValue]
 } derive(Debug, Eq)
 
 ///|
-fn SchemaRef::new(graph : @model.SchemaGraph) -> SchemaRef {
-  { root: graph.root, graph, }
+fn SchemaRef::new(
+  graph : @model.SchemaGraph,
+  root_defaults? : Map[String, @model.SchemaValue] = Map([]),
+) -> SchemaRef {
+  { root: graph.root, graph, root_defaults, }
+}
+
+///|
+/// Copy the mutable arrays of a value so a packed result never shares storage
+/// with a value retained by the schema. Capability handles are not copied.
+fn copy_schema_value(value : @model.SchemaValue) -> @model.SchemaValue {
+  match value {
+    Record(values) => Record(values.map(copy_schema_value))
+    Tuple(values) => Tuple(values.map(copy_schema_value))
+    List(values) => List(values.map(copy_schema_value))
+    FixedList(values) => FixedList(values.map(copy_schema_value))
+    Flags(values) => Flags(values.copy())
+    Map(entries) =>
+      Map(
+        entries.map(entry => {
+          key: copy_schema_value(entry.key),
+          value: copy_schema_value(entry.value),
+        }),
+      )
+    Variant(index, payload) => Variant(index, payload.map(copy_schema_value))
+    Option(payload) => Option(payload.map(copy_schema_value))
+    ResultOk(payload) => ResultOk(payload.map(copy_schema_value))
+    ResultErr(payload) => ResultErr(payload.map(copy_schema_value))
+    Binary(bytes, mime_type) => Binary(bytes.copy(), mime_type)
+    Union(tag, body) => Union(tag, copy_schema_value(body))
+    other => other
+  }
+}
+
+///|
+fn json_error(message : String) -> ReflectError {
+  Json(message, path=[])
+}
+
+///|
+/// Run a packing step for one child of the current JSON value and prefix the
+/// path of a JSON failure with the child's segment, so each reported path is
+/// relative to the value being packed.
+fn[T] within_json_segment(
+  segment : String,
+  pack : () -> T raise ReflectError,
+) -> T raise ReflectError {
+  pack() catch {
+    Json(message, path~) => {
+      let prefixed = [segment]
+      prefixed.append(path)
+      raise Json(message, path=prefixed)
+    }
+    error => raise error
+  }
 }
 
 ///|
@@ -594,7 +653,7 @@ fn SchemaRef::resolve_with(
 fn json_object(value : Json) -> Map[String, Json] raise ReflectError {
   match value {
     Object(fields) => fields
-    _ => raise Json("expected a JSON object")
+    _ => raise json_error("expected a JSON object")
   }
 }
 
@@ -602,7 +661,7 @@ fn json_object(value : Json) -> Map[String, Json] raise ReflectError {
 fn json_array(value : Json) -> Array[Json] raise ReflectError {
   match value {
     Array(values) => values
-    _ => raise Json("expected a JSON array")
+    _ => raise json_error("expected a JSON array")
   }
 }
 
@@ -610,7 +669,7 @@ fn json_array(value : Json) -> Array[Json] raise ReflectError {
 fn json_string(value : Json) -> String raise ReflectError {
   match value {
     String(value) => value
-    _ => raise Json("expected a JSON string")
+    _ => raise json_error("expected a JSON string")
   }
 }
 
@@ -623,7 +682,7 @@ fn is_valid_mime_type(value : String) -> Bool {
 fn json_number(value : Json) -> Double raise ReflectError {
   match value {
     Number(value, ..) => value
-    _ => raise Json("expected a JSON number")
+    _ => raise json_error("expected a JSON number")
   }
 }
 
@@ -635,10 +694,10 @@ fn json_integer(
 ) -> Double raise ReflectError {
   let value = json_number(value)
   guard !value.is_nan() && !value.is_inf() && value == value.trunc() else {
-    raise Json("expected a finite integer")
+    raise json_error("expected a finite integer")
   }
   guard value >= minimum && value <= maximum else {
-    raise Json("integer is outside the supported range")
+    raise json_error("integer is outside the supported range")
   }
   value
 }
@@ -647,10 +706,10 @@ fn json_integer(
 fn json_int64_string(value : Json) -> Int64 raise ReflectError {
   let text = json_string(value)
   guard re"^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$".execute(text) is Some(_) else {
-    raise Json("expected a canonical signed integer string")
+    raise json_error("expected a canonical signed integer string")
   }
   @string.parse_int64(text.view(), base=10) catch {
-    _ => raise Json("signed integer is outside the s64 range")
+    _ => raise json_error("signed integer is outside the s64 range")
   }
 }
 
@@ -658,10 +717,10 @@ fn json_int64_string(value : Json) -> Int64 raise ReflectError {
 fn json_uint64_string(value : Json) -> UInt64 raise ReflectError {
   let text = json_string(value)
   guard re"^(?:0|[1-9][0-9]*)$".execute(text) is Some(_) else {
-    raise Json("expected a canonical unsigned integer string")
+    raise json_error("expected a canonical unsigned integer string")
   }
   @string.parse_uint64(text.view(), base=10) catch {
-    _ => raise Json("unsigned integer is outside the u64 range")
+    _ => raise json_error("unsigned integer is outside the u64 range")
   }
 }
 
@@ -672,7 +731,7 @@ fn required_field(
 ) -> Json raise ReflectError {
   match fields.get(name) {
     Some(value) => value
-    None => raise Json("missing field '" + name + "'")
+    None => raise Json("missing field '" + name + "'", path=[name])
   }
 }
 
@@ -686,17 +745,17 @@ fn binary_to_json(bytes : FixedArray[Byte]) -> String {
 ///|
 fn binary_from_json(encoded : String) -> FixedArray[Byte] raise ReflectError {
   guard !encoded.contains("=") else {
-    raise Json("binary bytes must be unpadded base64url")
+    raise json_error("binary bytes must be unpadded base64url")
   }
   let standard = encoded
     .replace_all(old="-", new="+")
     .replace_all(old="_", new="/")
   let bytes = @base64.decode(standard) catch {
-    _ => raise Json("invalid base64url binary bytes")
+    _ => raise json_error("invalid base64url binary bytes")
   }
   let result = bytes.to_fixedarray()
   guard binary_to_json(result) == encoded else {
-    raise Json("invalid canonical base64url binary bytes")
+    raise json_error("invalid canonical base64url binary bytes")
   }
   result
 }
@@ -750,7 +809,9 @@ fn discriminator_matches(
         String(value) => {
           let regex = @string.Regex::Regex(pattern) catch {
             error =>
-              raise Json("invalid union discriminator regex: \{repr(error)}")
+              raise json_error(
+                "invalid union discriminator regex: \{repr(error)}",
+              )
           }
           regex.execute(value) is Some(_)
         }
@@ -779,13 +840,60 @@ fn discriminator_matches(
 }
 
 ///|
+/// Pack canonical JSON into a schema-native value and validate it. A record
+/// root fills an omitted field from its root defaults; a JSON failure reports
+/// the path of the rejected value.
 pub fn SchemaRef::pack_json(
   self : SchemaRef,
   value : Json,
 ) -> @model.SchemaValue raise ReflectError {
-  let packed = self.pack(self.resolve(self.root), value)
+  let resolved = self.resolve(self.root)
+  let packed = match resolved.body {
+    Record(expected) => self.pack_record(expected, value, self.root_defaults)
+    _ => self.pack(resolved, value)
+  }
   self.validate_value(packed)
   packed
+}
+
+///|
+/// Pack a JSON object against record fields. An absent field takes its value
+/// from `defaults` when one is declared for it, otherwise an option field
+/// packs as `none`; any other absent field is rejected.
+fn SchemaRef::pack_record(
+  self : SchemaRef,
+  expected : Array[@model.NamedFieldType],
+  json : Json,
+  defaults : Map[String, @model.SchemaValue],
+) -> @model.SchemaValue raise ReflectError {
+  let fields = json_object(json)
+  for item in fields {
+    let (name, _) = item
+    guard expected.any(field => field.name == name) else {
+      raise Json("unknown field '" + name + "'", path=[name])
+    }
+  }
+  let values = expected.map(field => {
+    match fields.get(field.name) {
+      Some(value) =>
+        within_json_segment(field.name, () => {
+          self.pack(self.resolve(field.body), value)
+        })
+      None =>
+        match defaults.get(field.name) {
+          Some(default) => copy_schema_value(default)
+          None =>
+            match self.resolve(field.body).body {
+              Option(_) => @model.SchemaValue::Option(None)
+              _ =>
+                raise Json("missing field '" + field.name + "'", path=[
+                  field.name,
+                ])
+            }
+        }
+    }
+  })
+  Record(values)
 }
 
 ///|
@@ -822,13 +930,13 @@ fn SchemaRef::unpack(
       Json::string(value.to_string())
     (@model.SchemaTypeBody::F32(_), @model.SchemaValue::F32(value)) => {
       guard !value.is_nan() && !value.is_inf() else {
-        raise Json("expected a finite JSON number")
+        raise json_error("expected a finite JSON number")
       }
       Json::number(value.to_double())
     }
     (@model.SchemaTypeBody::F64(_), @model.SchemaValue::F64(value)) => {
       guard !value.is_nan() && !value.is_inf() else {
-        raise Json("expected a finite JSON number")
+        raise json_error("expected a finite JSON number")
       }
       Json::number(value)
     }
@@ -979,7 +1087,7 @@ fn SchemaRef::unpack(
       match mime {
         Some(mime) => {
           if !is_valid_mime_type(mime) {
-            raise Json("invalid MIME type")
+            raise json_error("invalid MIME type")
           }
           fields["mimeType"] = Json::string(mime)
         }
@@ -1002,10 +1110,10 @@ fn SchemaRef::unpack(
     | (
       @model.SchemaTypeBody::PermissionCard(_),
       @model.SchemaValue::PermissionCard(_),
-    ) => raise Json("capability values have no JSON representation")
+    ) => raise json_error("capability values have no JSON representation")
     (@model.SchemaTypeBody::Future(_), _)
     | (@model.SchemaTypeBody::Stream(_), _) =>
-      raise Json("future and stream values have no JSON representation")
+      raise json_error("future and stream values have no JSON representation")
     (@model.SchemaTypeBody::Ref(_), _) =>
       raise Schema("unresolved schema reference")
     _ => raise Schema("schema value does not match the reflected schema")
@@ -1023,7 +1131,7 @@ fn SchemaRef::pack(
       match json {
         True => Bool(true)
         False => Bool(false)
-        _ => raise Json("expected a JSON boolean")
+        _ => raise json_error("expected a JSON boolean")
       }
     S8(_) => S8(json_integer(json, -128.0, 127.0).to_int())
     S16(_) => S16(json_integer(json, -32768.0, 32767.0).to_int())
@@ -1036,71 +1144,65 @@ fn SchemaRef::pack(
     F32(_) => {
       let value = json_number(json)
       guard !value.is_nan() && !value.is_inf() else {
-        raise Json("expected a finite number")
+        raise json_error("expected a finite number")
       }
       let narrowed = Float::from_double(value)
       guard !narrowed.is_nan() && !narrowed.is_inf() else {
-        raise Json("number is outside the f32 range")
+        raise json_error("number is outside the f32 range")
       }
       F32(narrowed)
     }
     F64(_) => {
       let value = json_number(json)
       guard !value.is_nan() && !value.is_inf() else {
-        raise Json("expected a finite number")
+        raise json_error("expected a finite number")
       }
       F64(value)
     }
     Char => {
       let text = json_string(json)
       guard text.char_length() == 1 else {
-        raise Json("expected one character")
+        raise json_error("expected one character")
       }
       Char(text.get_char(0).unwrap())
     }
     String => String(json_string(json))
-    Record(expected) => {
-      let fields = json_object(json)
-      for item in fields {
-        let (name, _) = item
-        guard expected.any(field => field.name == name) else {
-          raise Json("unknown field '" + name + "'")
-        }
-      }
-      let values = expected.map(field => {
-        let resolved = self.resolve(field.body)
-        match fields.get(field.name) {
-          Some(value) => self.pack(resolved, value)
-          None =>
-            match resolved.body {
-              Option(_) => @model.SchemaValue::Option(None)
-              _ => raise Json("missing field '" + field.name + "'")
-            }
-        }
-      })
-      Record(values)
-    }
+    Record(expected) => self.pack_record(expected, json, Map([]))
     Tuple(expected) => {
       let values = json_array(json)
       guard values.length() == expected.length() else {
-        raise Json("tuple length does not match schema")
+        raise json_error("tuple length does not match schema")
       }
       let packed : Array[@model.SchemaValue] = []
       for index in 0..<expected.length() {
-        packed.push(self.pack(self.resolve(expected[index]), values[index]))
+        packed.push(
+          within_json_segment(index.to_string(), () => {
+            self.pack(self.resolve(expected[index]), values[index])
+          }),
+        )
       }
       Tuple(packed)
     }
     List(element) =>
       List(
-        json_array(json).map(value => self.pack(self.resolve(element), value)),
+        json_array(json).mapi((index, value) => {
+          within_json_segment(index.to_string(), () => {
+            self.pack(self.resolve(element), value)
+          })
+        }),
       )
     FixedList(element, length) => {
       let values = json_array(json)
       guard values.length() == length.reinterpret_as_int() else {
-        raise Json("fixed-list length does not match schema")
+        raise json_error("fixed-list length does not match schema")
       }
-      FixedList(values.map(value => self.pack(self.resolve(element), value)))
+      FixedList(
+        values.mapi((index, value) => {
+          within_json_segment(index.to_string(), () => {
+            self.pack(self.resolve(element), value)
+          })
+        }),
+      )
     }
     Option(element) =>
       match json {
@@ -1111,19 +1213,20 @@ fn SchemaRef::pack(
       let name = json_string(json)
       match find_string_index(cases, name) {
         Some(index) => Enum(index.reinterpret_as_uint())
-        None => raise Json("unknown enum case '" + name + "'")
+        None => raise json_error("unknown enum case '" + name + "'")
       }
     }
     Flags(names) => {
       let requested_json = json_array(json)
       let requested : Array[String] = []
-      for entry in requested_json {
-        let name = json_string(entry)
+      for index, entry in requested_json {
+        let segment = index.to_string()
+        let name = within_json_segment(segment, () => json_string(entry))
         guard names.any(expected => expected == name) else {
-          raise Json("unknown flag '" + name + "'")
+          raise Json("unknown flag '" + name + "'", path=[segment])
         }
         guard !requested.any(existing => existing == name) else {
-          raise Json("duplicate flag '" + name + "'")
+          raise Json("duplicate flag '" + name + "'", path=[segment])
         }
         requested.push(name)
       }
@@ -1137,14 +1240,18 @@ fn SchemaRef::pack(
               if cases[index].payload is None {
                 Variant(index.reinterpret_as_uint(), None)
               } else {
-                raise Json("variant case '" + name + "' requires a payload")
+                raise json_error(
+                  "variant case '" + name + "' requires a payload",
+                )
               }
             None =>
-              raise Json("unknown payload-free variant case '" + name + "'")
+              raise json_error(
+                "unknown payload-free variant case '" + name + "'",
+              )
           }
         Object(fields) => {
           guard fields.length() == 1 else {
-            raise Json("expected a single-key variant object")
+            raise json_error("expected a single-key variant object")
           }
           let (name, payload_json) = fields.iter().next().unwrap()
           match find_variant_index(cases, name) {
@@ -1153,66 +1260,88 @@ fn SchemaRef::pack(
                 Some(payload) =>
                   Variant(
                     index.reinterpret_as_uint(),
-                    Some(self.pack(self.resolve(payload), payload_json)),
+                    Some(
+                      within_json_segment(name, () => {
+                        self.pack(self.resolve(payload), payload_json)
+                      }),
+                    ),
                   )
-                None => raise Json("variant case '" + name + "' has no payload")
+                None =>
+                  raise json_error("variant case '" + name + "' has no payload")
               }
-            None => raise Json("unknown payload variant case '" + name + "'")
+            None =>
+              raise json_error("unknown payload variant case '" + name + "'")
           }
         }
-        _ => raise Json("expected a variant string or object")
+        _ => raise json_error("expected a variant string or object")
       }
     Map(key, entry) =>
       Map(
-        json_array(json).map(item => {
-          let pair = json_array(item)
-          guard pair.length() == 2 else {
-            raise Json("expected a two-element map entry")
-          }
-          {
-            key: self.pack(self.resolve(key), pair[0]),
-            value: self.pack(self.resolve(entry), pair[1]),
-          }
+        json_array(json).mapi((index, item) => {
+          within_json_segment(index.to_string(), () => {
+            let pair = json_array(item)
+            guard pair.length() == 2 else {
+              raise json_error("expected a two-element map entry")
+            }
+            @model.SchemaMapEntry::{
+              key: within_json_segment("0", () => {
+                self.pack(self.resolve(key), pair[0])
+              }),
+              value: within_json_segment("1", () => {
+                self.pack(self.resolve(entry), pair[1])
+              }),
+            }
+          })
         }),
       )
     Result(ok, err) => {
       let fields = json_object(json)
       guard fields.length() == 1 else {
-        raise Json("expected exactly one 'ok' or 'err' result field")
+        raise json_error("expected exactly one 'ok' or 'err' result field")
       }
       if fields.get("ok") is Some(payload) {
         ResultOk(
           match ok {
-            Some(schema) => Some(self.pack(self.resolve(schema), payload))
+            Some(schema) =>
+              Some(
+                within_json_segment("ok", () => {
+                  self.pack(self.resolve(schema), payload)
+                }),
+              )
             None =>
               if payload is Null {
                 None
               } else {
-                raise Json("expected null unit ok payload")
+                raise Json("expected null unit ok payload", path=["ok"])
               }
           },
         )
       } else if fields.get("err") is Some(payload) {
         ResultErr(
           match err {
-            Some(schema) => Some(self.pack(self.resolve(schema), payload))
+            Some(schema) =>
+              Some(
+                within_json_segment("err", () => {
+                  self.pack(self.resolve(schema), payload)
+                }),
+              )
             None =>
               if payload is Null {
                 None
               } else {
-                raise Json("expected null unit err payload")
+                raise Json("expected null unit err payload", path=["err"])
               }
           },
         )
       } else {
-        raise Json("expected an 'ok' or 'err' result object")
+        raise json_error("expected an 'ok' or 'err' result object")
       }
     }
     Text(_) => {
       let fields = json_object(json)
       guard fields.length() <= 2 &&
         (fields.length() == 1 || fields.contains("language")) else {
-        raise Json("unexpected text JSON field")
+        raise json_error("unexpected text JSON field")
       }
       Text(
         json_string(required_field(fields, "text")),
@@ -1224,14 +1353,14 @@ fn SchemaRef::pack(
     Uuid =>
       match @types.parse_uuid(json_string(json)) {
         Ok(value) => Uuid(value)
-        Err(message) => raise Json(message)
+        Err(message) => raise json_error(message)
       }
     Union(branches) => {
       let matching = branches.filter(branch => {
         discriminator_matches(branch.discriminator, json)
       })
       guard matching.length() == 1 else {
-        raise Json(
+        raise json_error(
           "expected exactly one matching union branch, found \{matching.length()}",
         )
       }
@@ -1242,13 +1371,13 @@ fn SchemaRef::pack(
       let fields = json_object(json)
       guard fields.length() <= 2 &&
         (fields.length() == 1 || fields.contains("mimeType")) else {
-        raise Json("unexpected binary JSON field")
+        raise json_error("unexpected binary JSON field")
       }
       let mime_type = fields.get("mimeType").map(json_string)
       match mime_type {
         Some(mime) =>
           if !is_valid_mime_type(mime) {
-            raise Json("invalid MIME type")
+            raise json_error("invalid MIME type")
           }
         None => ()
       }
@@ -1260,7 +1389,7 @@ fn SchemaRef::pack(
     Quantity(_) => {
       let fields = json_object(json)
       guard fields.length() == 3 else {
-        raise Json("quantity JSON requires mantissa, scale, and unit")
+        raise json_error("quantity JSON requires mantissa, scale, and unit")
       }
       Quantity({
         mantissa: json_int64_string(required_field(fields, "mantissa")),
@@ -1276,14 +1405,14 @@ fn SchemaRef::pack(
     Duration => {
       let fields = json_object(json)
       guard fields.length() == 1 else {
-        raise Json("duration JSON requires only nanoseconds")
+        raise json_error("duration JSON requires only nanoseconds")
       }
       Duration(json_int64_string(required_field(fields, "nanoseconds")))
     }
     Secret(_) | QuotaToken(_) | PermissionCard(_) =>
-      raise Json("capability values cannot be constructed from JSON")
+      raise json_error("capability values cannot be constructed from JSON")
     Future(_) | Stream(_) =>
-      raise Json("future and stream values have no JSON representation")
+      raise json_error("future and stream values have no JSON representation")
     Ref(_) => raise Schema("unresolved schema reference")
   }
 }

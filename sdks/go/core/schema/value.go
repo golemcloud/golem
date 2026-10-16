@@ -196,3 +196,77 @@ func (SecretValue) isSchemaValue()         {}
 func (QuotaTokenValue) isSchemaValue()     {}
 func (PermissionCardValue) isSchemaValue() {}
 func (StreamValue) isSchemaValue()         {}
+
+// cloneValue deep-copies the storage a value owns: slices, byte buffers and
+// pointed-to payloads. Capability handles keep their identity.
+func cloneValue(v SchemaValue) SchemaValue {
+	switch v := v.(type) {
+	case RecordValue:
+		return RecordValue{Fields: cloneValues(v.Fields)}
+	case VariantValue:
+		return VariantValue{Case: v.Case, Payload: clonePointer(v.Payload)}
+	case FlagsValue:
+		return FlagsValue{Set: cloneSlice(v.Set)}
+	case TupleValue:
+		return TupleValue{Elements: cloneValues(v.Elements)}
+	case ListValue:
+		return ListValue{Items: cloneValues(v.Items)}
+	case FixedListValue:
+		return FixedListValue{Items: cloneValues(v.Items)}
+	case MapValue:
+		if v.Entries == nil {
+			return v
+		}
+		entries := make([]MapEntry, len(v.Entries))
+		for i, e := range v.Entries {
+			entries[i] = MapEntry{Key: cloneValue(e.Key), Value: cloneValue(e.Value)}
+		}
+		return MapValue{Entries: entries}
+	case OptionValue:
+		return OptionValue{Value: clonePointer(v.Value)}
+	case ResultValue:
+		return ResultValue{IsErr: v.IsErr, Value: clonePointer(v.Value)}
+	case TextValue:
+		return TextValue{Text: v.Text, Language: cloneString(v.Language)}
+	case BinaryValue:
+		return BinaryValue{Bytes: cloneSlice(v.Bytes), MimeType: cloneString(v.MimeType)}
+	case UnionValue:
+		return UnionValue{Tag: v.Tag, Body: cloneValue(v.Body)}
+	default:
+		return v
+	}
+}
+
+func cloneValues(vs []SchemaValue) []SchemaValue {
+	if vs == nil {
+		return nil
+	}
+	out := make([]SchemaValue, len(vs))
+	for i, v := range vs {
+		out[i] = cloneValue(v)
+	}
+	return out
+}
+
+func clonePointer(v *SchemaValue) *SchemaValue {
+	if v == nil {
+		return nil
+	}
+	c := cloneValue(*v)
+	return &c
+}
+
+func cloneSlice[T any](s []T) []T {
+	if s == nil {
+		return nil
+	}
+	return append(make([]T, 0, len(s)), s...)
+}
+
+func cloneString(s *string) *string {
+	if s == nil {
+		return nil
+	}
+	c := *s
+	return &c
+}
