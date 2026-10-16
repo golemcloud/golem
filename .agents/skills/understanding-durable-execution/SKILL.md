@@ -1612,6 +1612,12 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
   own oplog in ordinal order. Replay performs no source RPC, authorization, or attachment; only
   the live suffix reads the source after the last journaled offset. An unread input may be
   forwarded as its original foreign handle without first attaching or consuming it.
+- **A guest observation commits only past the published horizon.** Its owned write calls
+  `DurableStreamStore::commit_through` with the reserved index. Every commit flushes the whole
+  oplog buffer, so a durable agent's attached published status at or above that index proves an
+  earlier commit made the record durable and folded it; the write returns its receipt without a
+  commit. Ephemeral status (weaker levels fold without storage) and detached status prove nothing,
+  so those writes always commit. The receipt still means durable and folded.
 - **RPC result and stream draining are separate.** The caller's durable call completes with the
   result *stripped of streams*, so the RPC `End` may be recorded while items still flow.
   Streaming keys follow the RPC identity rule above. Terminals finalize once; protocol terminals fence

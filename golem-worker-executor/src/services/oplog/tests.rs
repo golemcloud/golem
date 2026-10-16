@@ -3806,9 +3806,13 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
 #[test]
 #[test_r::timeout("30s")]
 async fn blocked_durable_stream_batch_prepares_before_atomic_commit_and_append(_tracing: &Tracing) {
+    use crate::durable_host::durable_stream::tests::consumer_item_record;
+    use crate::durable_host::durable_stream::{DurableStreamStore, StreamStoreError};
     use golem_common::base_model::durable_stream::{
-        LocalStreamId, StreamEndRecord, StreamEndResult, StreamInvocationId, StreamOffset,
-        StreamSessionFinishedRecord, StreamSessionRecord, StreamTerminalAuthor,
+        LocalStreamId, LocalStreamReaderId, StreamConsumerItemValueRecord,
+        StreamConsumerObservation, StreamEndRecord, StreamEndResult, StreamInvocationId,
+        StreamOffset, StreamRegistrationInvocation, StreamSessionFinishedRecord,
+        StreamSessionRecord, StreamTerminalAuthor,
     };
 
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
@@ -3820,7 +3824,7 @@ async fn blocked_durable_stream_batch_prepares_before_atomic_commit_and_append(_
             blob_storage,
             0,
             0,
-            8,
+            512,
             RetryConfig::default(),
         )
         .await,
@@ -3838,20 +3842,41 @@ async fn blocked_durable_stream_batch_prepares_before_atomic_commit_and_append(_
             &owned_agent_id,
             AgentMode::Durable,
             None,
-            make_agent_metadata(agent_id, account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
             None,
         )
         .await;
+    let producer_fingerprint = AgentFingerprint(Uuid::new_v4());
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        environment_id,
+        agent_id,
+        producer_fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
     let generated = Arc::new(AtomicUsize::new(0));
     let produced = generated.clone();
     let session_key = StreamInvocationId {
         callee_environment_id: environment_id,
         callee: owned_agent_id.agent_id.clone(),
-        callee_fingerprint: AgentFingerprint(Uuid::new_v4()),
+        callee_fingerprint: producer_fingerprint,
         idempotency_key: IdempotencyKey::new("blocked-terminal-session".to_string()),
     };
+    let observed = consumer_item_record(
+        StreamRegistrationInvocation::Local(session_key.idempotency_key.clone()),
+        LocalStreamReaderId {
+            introducing_oplog_index: OplogIndex::INITIAL,
+            binding_slot: 0,
+        },
+        StreamOffset::new(OplogIndex::INITIAL, 0),
+        0,
+        vec![17],
+        false,
+    );
     let batch_oplog = oplog.clone();
     let batch = tokio::spawn(async move {
         batch_oplog
@@ -3911,10 +3936,59 @@ async fn blocked_durable_stream_batch_prepares_before_atomic_commit_and_append(_
     tokio::pin!(competing_append);
     assert!(futures::poll!(&mut competing_append).is_pending());
 
+    // Guest reads prepare an ordinary observation while the actor is blocked behind the commit.
+    let inline = tokio::time::timeout(
+        Duration::from_secs(1),
+        oplog.upload_raw_payload(vec![5; 512]),
+    )
+    .await
+    .expect("an inline payload must not wait for the blocked oplog actor")
+    .unwrap();
+    let RawOplogPayload::SerializedInline(inline) = inline else {
+        panic!("a payload at the inline threshold must stay inline");
+    };
+    assert_eq!(inline, vec![5; 512]);
+    let external = oplog.upload_raw_payload(vec![6; 513]);
+    tokio::pin!(external);
+    assert!(futures::poll!(&mut external).is_pending());
+    let prepared = tokio::time::timeout(
+        Duration::from_secs(1),
+        producer.prepare_consumer_observation(None, observed.clone()),
+    )
+    .await
+    .expect("an ordinary consumer observation must not wait for the blocked oplog actor")
+    .unwrap();
+    let mut reobservation = observed;
+    let StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
+        reobserves,
+        observation,
+        ..
+    }) = &mut reobservation
+    else {
+        unreachable!()
+    };
+    *reobserves = Some(OplogIndex::INITIAL);
+    *observation = StreamConsumerObservation::Guest {
+        parent_start_index: None,
+    };
+    let validated = producer.prepare_consumer_observation(None, reobservation);
+    tokio::pin!(validated);
+    assert!(futures::poll!(&mut validated).is_pending());
+
     release_put.send(()).unwrap();
     let added = batch.await.unwrap().unwrap();
     competing_commit.await.unwrap();
     let competing_index = competing_append.await.unwrap();
+    assert!(matches!(
+        external.await.unwrap(),
+        RawOplogPayload::External { .. }
+    ));
+    // The re-observation still reads its original, which is the agent's `Create` entry here.
+    assert!(matches!(
+        validated.await,
+        Err(StreamStoreError::CorruptHistory(_))
+    ));
+    drop(prepared);
 
     assert_eq!(generated.load(Ordering::SeqCst), 3);
     assert_eq!(added.len(), 3);
