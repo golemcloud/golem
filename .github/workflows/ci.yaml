@@ -94,9 +94,6 @@ jobs:
           stat -c 'Native archive bytes=%s' golem-binaries.tar.zst
           printf 'run-id=%s\nsource-sha=%s\ndisk-key=%s\n' "$GITHUB_RUN_ID" "$SOURCE_SHA" "$DISK_KEY" > PUBLICATION
 
-      - name: Test download-and-cache release defaults and reject release embedding
-        run: cargo make --profile ci builtin-artifacts-release-tests
-
   check-clippy-and-format:
     env:
       CARGO_BUILD_JOBS: 10
@@ -1812,6 +1809,23 @@ jobs:
       - name: Check the images
         run: docker/check-images.sh
 
+  builtin-artifacts-release-tests:
+    if: github.event_name == 'release' && github.ref_type == 'tag'
+    runs-on: blacksmith-32vcpu-ubuntu-2204
+    env:
+      CARGO_BUILD_JOBS: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-shared-key: 'builtin-artifacts-release-tests'
+          cache-save-if: 'true'
+          install-protoc: 'true'
+      - name: Test download-and-cache release defaults and reject release embedding
+        run: cargo make --profile ci builtin-artifacts-release-tests
+
   docker-targets-build:
     env:
       CARGO_BUILD_JOBS: 10
@@ -1878,6 +1892,7 @@ jobs:
     needs:
       - docker-targets-build
       - docker-image-checks
+      - builtin-artifacts-release-tests
     if: github.event_name == 'release' && github.ref_type == 'tag'
     steps:
       - uses: actions/checkout@v5
@@ -1909,6 +1924,7 @@ jobs:
     needs:
       - docker-targets-build
       - docker-image-checks
+      - builtin-artifacts-release-tests
     if: github.event_name == 'release' && github.ref_type == 'tag'
     steps:
       - uses: actions/checkout@v5
@@ -1937,6 +1953,7 @@ jobs:
 
   publish:
     needs:
+      - builtin-artifacts-release-tests
       - check-clippy-and-format
       - unit-tests-and-checks
       - config-checks
@@ -1974,6 +1991,7 @@ jobs:
 
   publish-binaries:
     if: github.event_name == 'release' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'golemcloud/golem'
+    needs: builtin-artifacts-release-tests
     strategy:
       fail-fast: false
       matrix:
