@@ -163,6 +163,7 @@ describe("tool metadata WIT validation", () => {
           return {
             result: Effect.never,
             cancel: Effect.sync(cancel),
+            detach: Effect.void,
           }
         }),
     }
@@ -233,7 +234,7 @@ describe("tool metadata WIT validation", () => {
     expect(chunks).toEqual([[3, 8], [13]])
     expect(writer.finish).toHaveBeenCalledOnce()
     expect(writer.fail).not.toHaveBeenCalled()
-    expect(cancel).toHaveBeenCalledOnce()
+    expect(cancel).not.toHaveBeenCalled()
   })
 
   it("drains declared stdout even when no callback is supplied", async () => {
@@ -253,6 +254,7 @@ describe("tool metadata WIT validation", () => {
               }),
           ),
           cancel: Effect.void,
+          detach: Effect.void,
         }),
     }
     const definition = toolDefinition("backpressured").body((body) => body.output())
@@ -274,6 +276,7 @@ describe("tool metadata WIT validation", () => {
           })(),
           result: Effect.fail({ tag: "denied", val: "result failed" } as const),
           cancel: Effect.void,
+          detach: Effect.void,
         }),
     }
     const definition = toolDefinition("settle-both").body((body) => body.output())
@@ -295,6 +298,7 @@ describe("tool metadata WIT validation", () => {
           })(),
           result: Effect.succeed({ result: undefined }),
           cancel: Effect.void,
+          detach: Effect.void,
         }),
     }
     const definition = toolDefinition("failed-sink").body((body) => body.output())
@@ -327,6 +331,7 @@ describe("tool metadata WIT validation", () => {
           })(),
           result: Effect.succeed({ result: undefined }),
           cancel: Effect.void,
+          detach: Effect.void,
         }),
     }
     const definition = toolDefinition("failed-stdout-settles-stderr").body((body) =>
@@ -362,6 +367,7 @@ describe("tool metadata WIT validation", () => {
           })(),
           result: Effect.succeed({ result: undefined }),
           cancel: Effect.void,
+          detach: Effect.void,
         }),
     }
     const definition = toolDefinition("failed-stderr-settles-stdout").body((body) =>
@@ -397,6 +403,7 @@ describe("tool metadata WIT validation", () => {
               }),
           ),
           cancel: Effect.sync(cancel),
+          detach: Effect.void,
         }),
     }
     const definition = toolDefinition("failed-backpressured-sink").body((body) => body.output())
@@ -431,6 +438,7 @@ describe("tool metadata WIT validation", () => {
               }),
           ),
           cancel: Effect.sync(cancel),
+          detach: Effect.void,
         }),
     }
     const definition = toolDefinition("defective-backpressured-sink").body((body) => body.output())
@@ -477,6 +485,7 @@ describe("tool metadata WIT validation", () => {
             })(),
             result: Effect.succeed(terminal),
             cancel: Effect.void,
+            detach: Effect.void,
           }),
       }
       const definition = toolDefinition("invalid-result").body((body) =>
@@ -505,6 +514,7 @@ describe("tool metadata WIT validation", () => {
             },
           }),
           cancel: Effect.void,
+          detach: Effect.void,
         }),
     }
     const definition = toolDefinition("mismatched-result-graph").body((body) =>
@@ -528,6 +538,7 @@ describe("tool metadata WIT validation", () => {
             },
           }),
           cancel: Effect.void,
+          detach: Effect.void,
         }),
     }
     const definition = toolDefinition("reordered-result-graph").body((body) =>
@@ -555,6 +566,7 @@ describe("tool metadata WIT validation", () => {
             },
           }),
           cancel: Effect.void,
+          detach: Effect.void,
         }),
     }
     const definition = toolDefinition("reordered-result-graph-with-failed-stdout").body((body) =>
@@ -570,7 +582,11 @@ describe("tool metadata WIT validation", () => {
 
   it("forwards an explicit discovery lookup name to the transport", async () => {
     const start = vi.fn(() =>
-      Effect.succeed({ result: Effect.succeed({ result: undefined }), cancel: Effect.void }),
+      Effect.succeed({
+        result: Effect.succeed({ result: undefined }),
+        cancel: Effect.void,
+        detach: Effect.void,
+      }),
     )
     const definition = toolDefinition("presented-name").body((body) => body)
     await Effect.runPromise(
@@ -613,6 +629,7 @@ describe("tool metadata WIT validation", () => {
             },
           }),
           cancel: Effect.void,
+          detach: Effect.void,
         }),
     }
     const exit = await Effect.runPromiseExit(client(definition, { transport })({}))

@@ -119,7 +119,10 @@ object ToolGuestSpec extends ZIOSpecDefault {
               Some(StreamSpec(doc(""), Nil, required = true)),
               None,
               None,
-              Nil,
+              List(
+                ExtendedErrorCase("failure", doc("failure"), ErrorKind.RuntimeError, 1, Some(strGraph)),
+                ExtendedErrorCase("invalid-request", doc("invalid request"), ErrorKind.UsageError, 2, Some(strGraph))
+              ),
               None
             )
           )
@@ -641,6 +644,150 @@ object ToolGuestSpec extends ZIOSpecDefault {
         attachments.stdoutFinishes() == 1
       )
     },
+    test("malformed returned success and undeclared named error finish outputs instead of crashing") {
+      val outcomes = List(
+        Right(ToolInvokeResult(Some(TypedSchemaValue(strGraph, SchemaValue.StringValue("unexpected"))))),
+        Left(ToolInvokeError.UnknownToolError("undeclared", TypedSchemaValue(strGraph, SchemaValue.StringValue("bad"))))
+      )
+      ZIO
+        .foreach(outcomes.zipWithIndex.flatMap { case (outcome, index) =>
+          List((outcome, index, false), (outcome, index, true))
+        }) { case (outcome, index, wire) =>
+          val tool        = dualOutputTool(s"guest-invalid-return-$index-$wire")
+          val attachments = invocationAttachments()
+          val stderr      = invocationAttachments()
+          if (wire)
+            ToolImplementationRuntime.registerWire(
+              WireToolImplementation(
+                tool.tryToTool.toOption.get,
+                List(
+                  WireToolBinding(
+                    List(Nil),
+                    tool.commands.head.body.get.stdout,
+                    tool.commands.head.body.get.stderr,
+                    _ =>
+                      Future.successful(
+                        outcome.left.map(ToolInvokeError.toWire).map(_.result.map(SchemaWire.typedSchemaValueToWit))
+                      )
+                  )
+                )
+              )
+            )
+          else ToolRegistry.registerInvoker(tool, stdoutInvoker(tool, outcome))
+          rejectionOf(
+            invokeAtGuest(
+              tool.toolName,
+              encodedInput(emptyInput(tool)),
+              None,
+              Some(attachments.stdout),
+              Some(stderr.stdout)
+            )
+          ).map { error =>
+            assertTrue(
+              error.tag.asInstanceOf[String] == "invalid-result",
+              attachments.stdoutFinishes() == 1,
+              attachments.stdoutFailures() == 0,
+              attachments.stdoutDisposals() == 1,
+              stderr.stdoutFinishes() == 1,
+              stderr.stdoutFailures() == 0,
+              stderr.stdoutDisposals() == 1
+            )
+          }
+        }
+        .map(_.reduce(_ && _))
+    },
+    test("wire returned invalid payload releases its owned stream exactly once") {
+      val tool     = dualOutputTool("guest-wire-invalid-capability")
+      val stdout   = invocationAttachments()
+      val stderr   = invocationAttachments()
+      var releases = 0
+      val released = Promise[Unit]()
+      val source   = AgentStream.fromPull[String](
+        () => Future.successful(None),
+        () => {
+          releases += 1
+          released.trySuccess(())
+          Future.successful(())
+        }
+      )
+      val value = SchemaWire.typedSchemaValueToWit(IntoSchema[AgentStream[String]].toTyped(source))
+      ToolImplementationRuntime.registerWire(
+        WireToolImplementation(
+          tool.tryToTool.toOption.get,
+          List(
+            WireToolBinding(
+              List(Nil),
+              tool.commands.head.body.get.stdout,
+              tool.commands.head.body.get.stderr,
+              _ => Future.successful(Right(Some(value)))
+            )
+          )
+        )
+      )
+      for {
+        error <-
+          rejectionOf(
+            invokeAtGuest(tool.toolName, encodedInput(emptyInput(tool)), None, Some(stdout.stdout), Some(stderr.stdout))
+          )
+        _ <- ZIO.fromFuture(_ => released.future)
+      } yield assertTrue(
+        error.tag.asInstanceOf[String] == "invalid-result",
+        releases == 1,
+        stdout.stdoutFinishes() == 1,
+        stderr.stdoutFinishes() == 1
+      )
+    },
+    test("ordinary handler failure remains a trap and fails both outputs") {
+      ZIO
+        .foreach(List(false, true).flatMap(wire => List((wire, false), (wire, true)))) { case (wire, cancel) =>
+          val tool             = dualOutputTool(s"guest-handler-crash-$wire-$cancel")
+          val stdout           = invocationAttachments(cleanupFails = true)
+          val stderr           = invocationAttachments(cleanupFails = true)
+          val crash: Throwable =
+            if (cancel) new java.util.concurrent.CancellationException("cancelled")
+            else new IllegalStateException("handler crashed")
+          if (wire)
+            ToolImplementationRuntime.registerWire(
+              WireToolImplementation(
+                tool.tryToTool.toOption.get,
+                List(
+                  WireToolBinding(
+                    List(Nil),
+                    tool.commands.head.body.get.stdout,
+                    tool.commands.head.body.get.stderr,
+                    _ => Future.failed(crash)
+                  )
+                )
+              )
+            )
+          else
+            ToolRegistry.registerInvoker(
+              tool,
+              ToolImplementationRuntime.adaptHandler(
+                tool,
+                ToolImplementationHandle(
+                  _ => Right(tool),
+                  List(ToolMethodBinding(tool.toolName, Nil, _ => Future.failed(crash))),
+                  Nil
+                )
+              )
+            )
+          fromPromise(
+            invokeAtGuest(tool.toolName, encodedInput(emptyInput(tool)), None, Some(stdout.stdout), Some(stderr.stdout))
+          ).either.map { result =>
+            assertTrue(
+              result == Left(crash),
+              stdout.stdoutFinishes() == 0,
+              stderr.stdoutFinishes() == 0,
+              stdout.stdoutFailures() == 1,
+              stderr.stdoutFailures() == 1,
+              stdout.stdoutDisposals() == 1,
+              stderr.stdoutDisposals() == 1
+            )
+          }
+        }
+        .map(_.reduce(_ && _))
+    },
     test("accepted attachments stay live through the invocation and close exactly once") {
       val tool                              = attachmentTool("guest-attachment-transfer")
       val attachments                       = invocationAttachments()
@@ -797,11 +944,21 @@ object ToolGuestSpec extends ZIOSpecDefault {
         failure: Option[ByteStreamFailure],
         outcome: Either[ToolInvokeError[TypedSchemaValue], Unit],
         expectedResult: String,
-        expectedTerminal: String
+        expectedTerminal: String,
+        cleanupFails: Boolean = false
       )
       val payload   = TypedSchemaValue(strGraph, SchemaValue.StringValue("bad request"))
       val scenarios = List(
         Scenario("success", None, Right(()), "success", "ended"),
+        Scenario("success-finish-errors", None, Right(()), "success", "ended", cleanupFails = true),
+        Scenario(
+          "error-finish-errors",
+          None,
+          Left(ToolInvokeError.UnknownToolError("invalid-request", payload)),
+          "custom-error",
+          "ended",
+          cleanupFails = true
+        ),
         Scenario(
           "declared-error",
           None,
@@ -828,8 +985,8 @@ object ToolGuestSpec extends ZIOSpecDefault {
         .foreach(scenarios.zipWithIndex) { case (scenario, index) =>
           val tool   = dualOutputTool(s"guest-terminal-${scenario.name}-$index")
           val stdin  = invocationAttachments()
-          val stdout = invocationAttachments()
-          val stderr = invocationAttachments()
+          val stdout = invocationAttachments(cleanupFails = scenario.cleanupFails, disposeFails = scenario.cleanupFails)
+          val stderr = invocationAttachments(cleanupFails = scenario.cleanupFails, disposeFails = scenario.cleanupFails)
           ToolRegistry.registerInvoker(
             tool,
             lifecycleInvoker(
