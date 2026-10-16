@@ -4,6 +4,9 @@ version = "0.0.0"
 edition = "2024"
 autotests = false
 
+[features]
+embed-builtin-artifacts = ["dep:zstd"]
+
 [[bin]]
 name = "golem-registry-service"
 path = "src/server.rs"
@@ -92,6 +95,14 @@ tracing = { workspace = true }
 tracing-futures = { workspace = true, features = ["futures-03"] }
 url = { workspace = true }
 uuid = { workspace = true }
+zstd = { workspace = true, optional = true }
+
+[build-dependencies]
+anyhow = { workspace = true }
+semver = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
 assert2 = { workspace = true }

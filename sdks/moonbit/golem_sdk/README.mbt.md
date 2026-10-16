@@ -322,7 +322,14 @@ and a snapshot changes only after explicit rediscovery. Use `SchemaRef::typed_va
 schema-native value and create the self-contained graph required by a fully dynamic invocation.
 
 Use `command.pack_json(input)` and `command.invoke_json(input)` for canonical JSON, or
-`command.invoke_value(input)` for schema-native values. The command validates inputs locally before
+`command.invoke_value(input)` for schema-native values. Canonical JSON may omit a scalar option or a
+fixed positional that declares a default, and any flag; packing fills each omitted argument with its
+declared default (a count flag defaults to `0`) and leaves the canonical input record unchanged.
+Repeatable options and tails are not filled. `command.input_schema().to_json_schema()` leaves these
+arguments out of `required` and adds their `default` when it has a canonical JSON form. For rejected
+JSON, `SchemaRef::pack_json` raises `ReflectError::Json(message, path~)`, where `path` locates the
+rejected value, for example `["script"]` for a missing `script` argument; `command.pack_json`
+returns the same failure as an invalid-input tool error. The command validates inputs locally before
 opening RPC and validates declared results after invocation. `start_value` returns an invocation
 whose `stdout`, `stderr`, `collect`, `get`, and `cancel` methods handle pending and streaming calls.
 A command with either required output must use `start_value`; `collect` drains both outputs

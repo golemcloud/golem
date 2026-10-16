@@ -28,7 +28,7 @@ fn datetime_to_json(value : @types.Datetime) -> String raise ReflectError {
   guard value.nanoseconds < 1000000000U &&
     value.seconds >= -62167219200L &&
     value.seconds <= 253402300799L else {
-    raise Json("datetime is outside canonical year range 0000..9999")
+    raise json_error("datetime is outside canonical year range 0000..9999")
   }
   let days = if value.seconds < 0L {
     (value.seconds - 86399L) / 86400L
@@ -66,24 +66,24 @@ fn datetime_from_json(text : String) -> @types.Datetime raise ReflectError {
   let matched = re"^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]{1,9}))?Z$".execute(
     text,
   )
-  guard matched is Some(m) else { raise Json("invalid UTC datetime") }
+  guard matched is Some(m) else { raise json_error("invalid UTC datetime") }
   let year = @string.parse_int(m.group(1).unwrap(), base=10) catch {
-    _ => raise Json("invalid UTC datetime")
+    _ => raise json_error("invalid UTC datetime")
   }
   let month = @string.parse_int(m.group(2).unwrap(), base=10) catch {
-    _ => raise Json("invalid UTC datetime")
+    _ => raise json_error("invalid UTC datetime")
   }
   let day = @string.parse_int(m.group(3).unwrap(), base=10) catch {
-    _ => raise Json("invalid UTC datetime")
+    _ => raise json_error("invalid UTC datetime")
   }
   let hour = @string.parse_int(m.group(4).unwrap(), base=10) catch {
-    _ => raise Json("invalid UTC datetime")
+    _ => raise json_error("invalid UTC datetime")
   }
   let minute = @string.parse_int(m.group(5).unwrap(), base=10) catch {
-    _ => raise Json("invalid UTC datetime")
+    _ => raise json_error("invalid UTC datetime")
   }
   let second = @string.parse_int(m.group(6).unwrap(), base=10) catch {
-    _ => raise Json("invalid UTC datetime")
+    _ => raise json_error("invalid UTC datetime")
   }
   guard month >= 1 &&
     month <= 12 &&
@@ -92,16 +92,16 @@ fn datetime_from_json(text : String) -> @types.Datetime raise ReflectError {
     hour <= 23 &&
     minute <= 59 &&
     second <= 59 else {
-    raise Json("invalid UTC datetime")
+    raise json_error("invalid UTC datetime")
   }
   let days = days_from_civil(year, month, day)
   guard civil_from_days(days) == (year, month, day) else {
-    raise Json("invalid UTC datetime")
+    raise json_error("invalid UTC datetime")
   }
   let nanos = match m.group(7) {
     Some(fraction) =>
       @string.parse_uint(fraction.to_owned().pad_end(9, '0').view(), base=10) catch {
-        _ => raise Json("invalid UTC datetime")
+        _ => raise json_error("invalid UTC datetime")
       }
     None => 0U
   }

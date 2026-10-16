@@ -16,6 +16,8 @@ package schema
 
 import (
 	"encoding/json"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -207,6 +209,133 @@ func TestRecordRejectsUnknownAndMissingFields(t *testing.T) {
 	}
 	mustReject(t, root, `{"name":"a"}`, `missing field "count"`)
 	mustReject(t, root, `{"name":"a","count":2,"extra":true}`, `unknown field "extra"`)
+}
+
+func fieldDefaultsRef() Ref {
+	root := typ(RecordType{Fields: []NamedField{
+		{Name: "name", Body: typ(StringType{})},
+		{Name: "retries", Body: typ(U32Type{})},
+		{Name: "nickname", Body: typ(OptionType{Inner: typ(StringType{})})},
+		{Name: "label", Body: typ(OptionType{Inner: typ(StringType{})})},
+		{Name: "inner", Body: typ(RecordType{Fields: []NamedField{{Name: "retries", Body: typ(U32Type{})}}})},
+	}})
+	x := SchemaValue(StringValue{Value: "x"})
+	return NewRef(SchemaGraph{Root: root}).WithFieldDefaults(map[string]SchemaValue{
+		"retries": U32Value{Value: 3},
+		"label":   OptionValue{Value: &x},
+	})
+}
+
+// TestFieldDefaultsFillOmittedRootFields — a root field with a default may be
+// left out of canonical JSON and packs as that default, while an option field
+// without one is still none and an explicit value, null included, wins.
+func TestFieldDefaultsFillOmittedRootFields(t *testing.T) {
+	r := fieldDefaultsRef()
+	got, err := r.PackJSONBytes([]byte(`{"name":"a","inner":{"retries":1}}`))
+	if err != nil {
+		t.Fatalf("PackJSONBytes: %v", err)
+	}
+	x := SchemaValue(StringValue{Value: "x"})
+	want := RecordValue{Fields: []SchemaValue{
+		StringValue{Value: "a"}, U32Value{Value: 3}, OptionValue{}, OptionValue{Value: &x},
+		RecordValue{Fields: []SchemaValue{U32Value{Value: 1}}},
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("packed %#v, want %#v", got, want)
+	}
+	if err := r.Validate(got); err != nil {
+		t.Errorf("the filled record does not validate: %v", err)
+	}
+
+	got, err = r.PackJSONBytes([]byte(`{"name":"a","retries":5,"label":null,"inner":{"retries":1}}`))
+	if err != nil {
+		t.Fatalf("PackJSONBytes: %v", err)
+	}
+	fields := got.(RecordValue).Fields
+	if fields[1] != (U32Value{Value: 5}) || !reflect.DeepEqual(fields[3], OptionValue{}) {
+		t.Errorf("explicit values packed as %#v", fields)
+	}
+}
+
+// TestFieldDefaultsApplyOnlyToTheRootRecord — a nested field that shares a
+// defaulted root field's name, an unknown field and a missing required field
+// are reported as before, each at its own path.
+func TestFieldDefaultsApplyOnlyToTheRootRecord(t *testing.T) {
+	r := fieldDefaultsRef()
+	_, err := r.PackJSONBytes([]byte(`{"inner":{},"extra":1}`))
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("got %v, want a validation error", err)
+	}
+	var paths []string
+	for _, i := range ve.Issues {
+		paths = append(paths, i.Path+": "+i.Message)
+	}
+	want := []string{`extra: unknown field "extra"`, `name: missing field "name"`, `inner.retries: missing field "retries"`}
+	if !reflect.DeepEqual(paths, want) {
+		t.Errorf("issues %q, want %q", paths, want)
+	}
+	if _, err := r.At(r.Type()).PackJSONBytes([]byte(`{"name":"a","inner":{"retries":1}}`)); err == nil ||
+		!strings.Contains(err.Error(), `missing field "retries"`) {
+		t.Errorf("At kept the field defaults: %v", err)
+	}
+}
+
+// TestFieldDefaultsDoNotShareStorage — mutating a packed default, or the value
+// handed to WithFieldDefaults, does not change what a later pack produces.
+func TestFieldDefaultsDoNotShareStorage(t *testing.T) {
+	root := typ(RecordType{Fields: []NamedField{
+		{Name: "tags", Body: typ(ListType{Element: typ(StringType{})})},
+		{Name: "payload", Body: typ(BinaryType{})},
+		{Name: "label", Body: typ(OptionType{Inner: typ(StringType{})})},
+	}})
+	label := SchemaValue(StringValue{Value: "x"})
+	tags := ListValue{Items: []SchemaValue{StringValue{Value: "a"}}}
+	payload := BinaryValue{Bytes: []byte{1, 2}}
+	r := NewRef(SchemaGraph{Root: root}).WithFieldDefaults(map[string]SchemaValue{
+		"tags": tags, "payload": payload, "label": OptionValue{Value: &label},
+	})
+	x := SchemaValue(StringValue{Value: "x"})
+	want := RecordValue{Fields: []SchemaValue{
+		ListValue{Items: []SchemaValue{StringValue{Value: "a"}}},
+		BinaryValue{Bytes: []byte{1, 2}},
+		OptionValue{Value: &x},
+	}}
+
+	tags.Items[0] = StringValue{Value: "changed"}
+	payload.Bytes[0] = 9
+	label = StringValue{Value: "changed"}
+	first, err := r.PackJSON(map[string]any{})
+	if err != nil {
+		t.Fatalf("PackJSON: %v", err)
+	}
+	if !reflect.DeepEqual(first, want) {
+		t.Fatalf("mutating the declared defaults changed the pack: %#v", first)
+	}
+
+	fields := first.(RecordValue).Fields
+	fields[0].(ListValue).Items[0] = StringValue{Value: "mutated"}
+	fields[1].(BinaryValue).Bytes[0] = 9
+	*fields[2].(OptionValue).Value = StringValue{Value: "mutated"}
+	second, err := r.PackJSON(map[string]any{})
+	if err != nil {
+		t.Fatalf("PackJSON: %v", err)
+	}
+	if !reflect.DeepEqual(second, want) {
+		t.Errorf("mutating a packed value changed the next pack: %#v", second)
+	}
+}
+
+// TestFieldDefaultIsCheckedAgainstItsField — a default that does not fit its
+// field is a problem at that field, not a value sent on.
+func TestFieldDefaultIsCheckedAgainstItsField(t *testing.T) {
+	root := typ(RecordType{Fields: []NamedField{{Name: "retries", Body: typ(U32Type{})}}})
+	r := NewRef(SchemaGraph{Root: root}).WithFieldDefaults(map[string]SchemaValue{"retries": StringValue{Value: "3"}})
+	_, err := r.PackJSON(map[string]any{})
+	var ve *ValidationError
+	if !errors.As(err, &ve) || len(ve.Issues) != 1 || ve.Issues[0].Path != "retries" {
+		t.Errorf("got %v, want one issue at retries", err)
+	}
 }
 
 // TestUnionPicksTheFirstBranchThatFits — the tag is not in the JSON, so
