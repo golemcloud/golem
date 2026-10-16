@@ -15908,6 +15908,174 @@ function verify() {{
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
+async fn builtin_node_eval_resolves_modules_from_working_directory(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let javascript_component = executor
+        .component_dep(&context.default_environment_id, javascript_tools)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", javascript_tools.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        javascript_component.id,
+        javascript_component.revision,
+        "golem:javascript-tools",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let agent_name = "node-eval-resolution";
+    let fixture_source = r#"
+const fs = require('node:fs');
+for (const [dir, value] of [['/workspace', 'workspace'], ['/workspace/project', 'project']]) {
+  fs.mkdirSync(`${dir}/node_modules/probe-package`, { recursive: true });
+  fs.writeFileSync(`${dir}/node_modules/probe-package/package.json`, JSON.stringify({ name: 'probe-package', main: 'main.js' }));
+  fs.writeFileSync(`${dir}/node_modules/probe-package/main.js`, `module.exports = 'package:${value}';\n`);
+  fs.writeFileSync(`${dir}/local.js`, `module.exports = 'local:${value}';\n`);
+}
+fs.writeFileSync('/workspace/project/entry.js', "console.log([require('probe-package'), require('./local.js')].join(','));\n");
+"#;
+    let fixture = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        agent_name,
+        "node",
+        "/workspace",
+        vec!["-e", fixture_source],
+    )
+    .await?;
+    assert_eq!(fixture.exit_code, 0, "fixture: {fixture:?}");
+
+    let source = "console.log([require('probe-package'), require('./local'), require('node:path').basename(process.cwd())].join(','))";
+    let mut failures = Vec::new();
+    for (cwd, expected) in [
+        (
+            "/workspace",
+            "package:workspace,local:workspace,workspace\n",
+        ),
+        (
+            "/workspace/project",
+            "package:project,local:project,project\n",
+        ),
+    ] {
+        for flag in ["-e", "--eval"] {
+            let result = invoke_cli_tool(
+                &executor,
+                &caller_component,
+                agent_name,
+                "node",
+                cwd,
+                vec![flag, source],
+            )
+            .await?;
+            if result.exit_code != 0
+                || result.stdout != expected.as_bytes()
+                || !result.stderr.is_empty()
+            {
+                failures.push(format!(
+                    "{flag} in {cwd}: exit {}; stdout: {}; stderr: {}",
+                    result.exit_code,
+                    String::from_utf8_lossy(&result.stdout),
+                    String::from_utf8_lossy(&result.stderr),
+                ));
+            }
+        }
+    }
+    for (cwd, source, expected) in [
+        (
+            "/workspace",
+            "const require = 7; console.log(require)",
+            "7\n",
+        ),
+        (
+            "/workspace",
+            "let require = 'shadowed'; console.log(require)",
+            "shadowed\n",
+        ),
+        (
+            "/workspace/project",
+            "setTimeout(() => console.log(require('probe-package')), 20)",
+            "package:project\n",
+        ),
+    ] {
+        let result = invoke_cli_tool(
+            &executor,
+            &caller_component,
+            agent_name,
+            "node",
+            cwd,
+            vec!["-e", source],
+        )
+        .await?;
+        if result.exit_code != 0
+            || result.stdout != expected.as_bytes()
+            || !result.stderr.is_empty()
+        {
+            failures.push(format!(
+                "{source:?} in {cwd}: exit {}; stdout: {}; stderr: {}",
+                result.exit_code,
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr),
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+
+    let file = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        agent_name,
+        "node",
+        "/workspace/project",
+        vec!["entry.js"],
+    )
+    .await?;
+    assert_eq!(file.exit_code, 0, "file: {file:?}");
+    assert_eq!(file.stdout, b"package:project,local:project\n");
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
 async fn typescript_guest_recursive_rm_removes_tool_created_output(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

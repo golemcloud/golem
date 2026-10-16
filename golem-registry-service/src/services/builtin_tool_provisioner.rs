@@ -139,7 +139,7 @@ static BUILTIN_EXPORTS: &[BuiltinExportDescriptor] = &[
         component_name: "javascript-tools",
         artifact_id: "javascript_tools",
         export_name: "node",
-        release_version: "0.1.8",
+        release_version: "0.1.9",
         kind: BuiltinExportKind::Tool,
     },
     BuiltinExportDescriptor {
