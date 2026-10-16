@@ -339,6 +339,66 @@ func TestMalformedReturnedOutcomeFinishesOutputs(t *testing.T) {
 	}
 }
 
+func TestToolUnitResultRejectsUnexpectedPayloadAndPreservesDeclaredErrors(t *testing.T) {
+	def := defineToolInto[Gate](newToolRegistry(), newDefinitions(), "unit-result", Spec{}, true)
+	plain := def.Command[golem.Unit, golem.Unit]("plain", nil)
+	streamed := def.OutputCommand[golem.Unit, golem.Unit]("streamed", func(_ *golem.Unit, s *CommandSpec) { s.Stdout() })
+	payload := types.TypedSchemaValue{Value: types.SchemaValueTree{Root: 0, ValueNodes: []types.SchemaValueNode{
+		types.MakeSchemaValueNodeSecretValue(new(types.Secret)),
+	}}}
+	for _, declaredError := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unexpected-success-payload", true: "declared-error-payload"}[declaredError], func(t *testing.T) {
+			previous := startToolCall
+			t.Cleanup(func() { startToolCall = previous })
+			gets, drops := 0, 0
+			startToolCall = func(string, []string, types.TypedSchemaValue, io.Reader, Streams) (toolCall, error) {
+				return guardCancel(toolCall{
+					wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+						gets++
+						if declaredError {
+							err := types.MakeToolRpcErrorRemoteToolError(types.MakeToolErrorCustomError(types.CustomToolError{Name: "expected", Payload: payload}))
+							return witTypes.None[types.TypedSchemaValue](), &err
+						}
+						return witTypes.Some(payload), nil
+					},
+					drop: func() { drops++ },
+				}), nil
+			}
+			check := func(err error) {
+				t.Helper()
+				var ce *CallError
+				if !errors.As(err, &ce) {
+					t.Fatalf("expected CallError, got %v", err)
+				}
+				if declaredError {
+					if ce.Kind != CallDeclaredError || ce.ErrorName != "expected" || !reflect.DeepEqual(witOf(ce.Payload()), payload) {
+						t.Fatalf("declared error payload changed: %v", ce)
+					}
+				} else if ce.Kind != CallInvalidResult {
+					t.Fatalf("unexpected Unit payload accepted: %v", ce)
+				}
+			}
+			_, err := plain.Call(nil)
+			check(err)
+			inv, err := streamed.Call(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, first := inv.Wait()
+			check(first)
+			_, again := inv.Wait()
+			if first != again {
+				t.Fatal("repeated Wait did not preserve the delivered error")
+			}
+			inv.Detach()
+			check(first)
+			if gets != 2 || drops != 2 {
+				t.Fatalf("result resources: gets %d, drops %d", gets, drops)
+			}
+		})
+	}
+}
+
 func TestInvocationDropPanicPreservesWaitPanic(t *testing.T) {
 	i := newInvocation(guardCancel(toolCall{
 		wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) { panic("original") },

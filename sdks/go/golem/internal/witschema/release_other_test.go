@@ -21,6 +21,16 @@ import (
 	"testing"
 )
 
+// RecordReleasedNodes exposes the native release adapter to external SDK tests.
+func RecordReleasedNodes(t *testing.T) *[]types.SchemaValueNode {
+	t.Helper()
+	original := releaseNode
+	var nodes []types.SchemaValueNode
+	releaseNode = func(n types.SchemaValueNode) { nodes = append(nodes, n) }
+	t.Cleanup(func() { releaseNode = original })
+	return &nodes
+}
+
 func TestReleaseRawTreeIncludesUnreachableCapabilities(t *testing.T) {
 	original := releaseNode
 	defer func() { releaseNode = original }()

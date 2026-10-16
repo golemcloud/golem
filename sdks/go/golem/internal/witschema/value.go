@@ -48,6 +48,25 @@ func ReleaseTree(tree types.SchemaValueTree) {
 	}
 }
 
+// DecodeOwned transfers the tree's capabilities only when decode succeeds.
+// On error or panic, the raw pool releases both partially decoded capabilities
+// and capabilities that decoding never reached. decode must not release them.
+func DecodeOwned[T any](tree types.SchemaValueTree, decode func() (T, error)) (T, error) {
+	transferred := false
+	defer func() {
+		if !transferred {
+			ReleaseTree(tree)
+		}
+	}()
+	out, err := decode()
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	transferred = true
+	return out, nil
+}
+
 type valueConverter struct {
 	tree  types.SchemaValueTree
 	depth int

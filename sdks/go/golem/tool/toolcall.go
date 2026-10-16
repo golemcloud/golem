@@ -391,19 +391,24 @@ func (ce *commandEntry) finish(target string, call toolCall) (reflect.Value, err
 	if rpcErr != nil {
 		return reflect.Value{}, toolCallErrorFromWit(target, ce.node.path, *rpcErr)
 	}
-	out := reflect.New(ce.outType).Elem()
-	if ce.outType == reflect.TypeFor[golem.Unit]() {
-		return out, nil
-	}
 	if res.IsNone() {
+		if ce.outType == reflect.TypeFor[golem.Unit]() {
+			return reflect.New(ce.outType).Elem(), nil
+		}
 		return reflect.Value{}, ce.callError(target, CallInvalidResult, "the command returned no result")
 	}
 	tree := res.Some().Value
-	dec := engine.Decoder{Nodes: tree.ValueNodes}
-	if err := ce.node.entry.d.Compile(ce.outType).Decode(&dec, out, tree.Root); err != nil {
-		return reflect.Value{}, ce.callError(target, CallInvalidResult, "%v", err)
-	}
-	return out, nil
+	return witschema.DecodeOwned(tree, func() (reflect.Value, error) {
+		if ce.outType == reflect.TypeFor[golem.Unit]() {
+			return reflect.Value{}, ce.callError(target, CallInvalidResult, "the command returned a value but declares none")
+		}
+		out := reflect.New(ce.outType).Elem()
+		dec := engine.Decoder{Nodes: tree.ValueNodes}
+		if err := ce.node.entry.d.Compile(ce.outType).Decode(&dec, out, tree.Root); err != nil {
+			return reflect.Value{}, ce.callError(target, CallInvalidResult, "%v", err)
+		}
+		return out, nil
+	})
 }
 
 // Invocation is a running call of a command with outputs. Take an output
