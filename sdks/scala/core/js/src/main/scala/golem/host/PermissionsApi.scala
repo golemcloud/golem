@@ -35,6 +35,7 @@ import golem.schema.wire.{ConcreteCodec, WitSchemaTypeBody, WitSchemaValueNode}
 
 import scala.collection.immutable.ListMap
 import scala.concurrent.duration.FiniteDuration
+import scala.util.control.NonFatal
 import scala.scalajs.js
 import scala.scalajs.js.annotation.JSImport
 
@@ -672,17 +673,20 @@ object PermissionsApi {
      */
     final case class Scope(card: ScopeCard) extends WalletCard
 
-    private[PermissionsApi] val witTags: Set[String] = Set("concrete", "template", "scope")
+    private val byTag: Map[String, GuestPermissionCardHandle => WalletCard] = Map(
+      "concrete" -> (handle => Concrete(new PermissionCard(handle))),
+      "template" -> (handle => Template(new PolymorphicPermissionCard(handle))),
+      "scope"    -> (handle => Scope(new ScopeCard(handle)))
+    )
 
-    private[PermissionsApi] def fromJs(raw: JsWalletCard): WalletCard = {
-      val handle = GuestPermissionCardHandle.fromRaw(raw.card)
-      raw.tag match {
-        case "concrete" => Concrete(new PermissionCard(handle))
-        case "template" => Template(new PolymorphicPermissionCard(handle))
-        case "scope"    => Scope(new ScopeCard(handle))
-        case other      => throw new IllegalStateException(s"unknown wallet-card case: $other")
+    /** The WIT case names of `wallet-card` that this SDK recognises. */
+    private[golem] val witTags: Set[String] = byTag.keySet
+
+    private[PermissionsApi] def fromJs(raw: JsWalletCard): WalletCard =
+      byTag.get(raw.tag) match {
+        case Some(wrap) => wrap(GuestPermissionCardHandle.fromRaw(raw.card))
+        case None       => throw new IllegalStateException(s"unknown wallet-card case: ${raw.tag}")
       }
-    }
   }
 
   // --- Module-level operations ---
@@ -693,15 +697,47 @@ object PermissionsApi {
    * a [[WalletCard.Scope]] when the caller holds `card:inspect`. Each card is
    * an owned handle; call [[Card.release]] on the cards that the caller does
    * not keep.
+   *
+   * When the list cannot be wrapped, because of an unknown case or a resource
+   * that another card object holds, no card is returned: the cards already
+   * wrapped are released, the other handles are dropped unless another card
+   * object holds them, and the failure is rethrown.
    */
   def wallet(): List[WalletCard] = {
     val entries = WalletModule.selfWallet().toList
     entries.find(entry => !WalletCard.witTags.contains(entry.tag)).foreach { unknown =>
-      entries.foreach(entry => dispose(entry.card))
+      disposeUnheld(entries.map(_.card))
       throw new IllegalStateException(s"unknown wallet-card case: ${unknown.tag}")
     }
-    entries.map(WalletCard.fromJs)
+    val wrapped = scala.collection.mutable.ListBuffer.empty[WalletCard]
+    try {
+      entries.foreach(entry => wrapped += WalletCard.fromJs(entry))
+      wrapped.toList
+    } catch {
+      case NonFatal(error) =>
+        val unwrapped = entries.drop(wrapped.size).map(_.card).filter(raw => holderOf(raw).isEmpty)
+        wrapped.foreach(entry => quietly(entry.card.release()))
+        disposeUnheld(unwrapped)
+        throw error
+    }
   }
+
+  /**
+   * Drop each distinct raw resource that no card object holds. A failing drop
+   * does not stop the others.
+   */
+  private def disposeUnheld(raws: List[Any]): Unit =
+    raws
+      .filter(raw => isResourceObject(raw) && holderOf(raw).isEmpty)
+      .foldLeft(List.empty[Any])((seen, raw) =>
+        if (seen.exists(_.asInstanceOf[AnyRef] eq raw.asInstanceOf[AnyRef])) seen else raw :: seen
+      )
+      .reverse
+      .foreach(raw => quietly(dispose(raw)))
+
+  private def quietly(action: => Unit): Unit =
+    try action
+    catch { case NonFatal(_) => () }
 
   /** The current version of the caller's wallet. */
   def walletVersion(): WalletVersionToken = {

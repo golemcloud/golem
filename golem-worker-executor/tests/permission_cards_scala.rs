@@ -575,7 +575,7 @@ async fn scala_sdk_runs_the_shared_permission_card_scenario(
             // Deriving from the template card returns concrete children of it,
             // which the wallet lists as concrete cards once installed.
             "template-derive=true",
-            "template-children=concrete,concrete",
+            "template-children=concrete,concrete,concrete",
             // A scope card expires with its earliest root card; a scope card
             // of a root card without expiry does not expire.
             "scope-expiry=true",
@@ -615,7 +615,7 @@ async fn scala_sdk_runs_the_shared_permission_card_scenario(
             "target-expiring-after-revoke=0",
             "moved-child=true",
             "mismatch=Left(InstallRecipientMismatch)",
-            "children-revoked=List(Right(1), Right(1))",
+            "children-revoked=List(Right(1), Right(1), Right(1))",
         ]
     );
 

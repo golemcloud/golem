@@ -178,26 +178,27 @@ final class ScalaPermissionCardAgentImpl(name: String) extends ScalaPermissionCa
     }
     val self            = HostApi.getSelfMetadata()
     val selfHolder      = Holder.agent(self.componentId, self.agentId.agentId)
-    val shortLived      = unwrap("derive short-lived", template.derive(inspectOnly, Some(Lifespan(1.hour))))
-    val longLived       = unwrap("derive long-lived", template.derive(inspectOnly, Some(Lifespan(2.hours))))
-    val templateDerived = shortLived.parents == List(template.id) && longLived.parents == List(template.id)
-    val (shortId, longId, shortExpiry) = (shortLived.id, longLived.id, shortLived.expiresAt)
-    unwrap("install short-lived", shortLived.install(selfHolder))
-    unwrap("install long-lived", longLived.install(selfHolder))
-    val (children, rest) = PermissionsApi.wallet().partition(e => e.card.id == shortId || e.card.id == longId)
+    val lifespans       = List(2.hours, 1.hour, 3.hours)
+    val timed           = lifespans.map(l => unwrap(s"derive $l child", template.derive(inspectOnly, Some(Lifespan(l)))))
+    val templateDerived = timed.forall(_.parents == List(template.id))
+    val timedIds        = timed.map(_.id)
+    val shortExpiry     = timed(1).expiresAt
+    timed.foreach(card => unwrap("install timed child", card.install(selfHolder)))
+    val (children, rest) = PermissionsApi.wallet().partition(e => timedIds.contains(e.card.id))
     rest.foreach(_.card.release())
-    val childKinds   = children.map(PermissionCardKinds.kind).sorted.mkString(",")
-    val longAndShort = children.sortBy(e => if (e.card.id == longId) 0 else 1).map(_.card)
+    val childKinds = children.map(PermissionCardKinds.kind).sorted.mkString(",")
+    val timedRoots = children.sortBy(e => timedIds.indexOf(e.card.id)).map(_.card)
 
     // 4. Derive a scope card and send it with awaited RPC calls.
     val scope  = unwrap("deriveScope", PermissionsApi.deriveScope(List(root), inspectOnly))
     val remote = ScalaPermissionCardTargetClient.get(target)
 
     // A scope card expires with its earliest root card, also for the callee:
-    // the roots are a card without expiry, the long-lived and the short-lived
-    // card, in this order.
+    // the roots are a card without expiry and the cards with 2h, 1h and 3h
+    // lifespans, in this order, so neither the first nor the last expiring
+    // root is the earliest.
     val expiringScope =
-      unwrap("deriveScope expiring", PermissionsApi.deriveScope(root :: longAndShort, inspectOnly))
+      unwrap("deriveScope expiring", PermissionsApi.deriveScope(root :: timedRoots, inspectOnly))
     val scopeExpiry = shortExpiry.nonEmpty && expiringScope.expiresAt == shortExpiry
 
     for {

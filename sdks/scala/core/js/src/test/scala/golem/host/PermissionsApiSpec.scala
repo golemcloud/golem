@@ -175,17 +175,57 @@ object PermissionsApiSpec extends ZIOSpecDefault {
         rootCard.id.toString == "CardId(<opaque>)"
       )
     },
-    test("wallet drops every handle and fails on a wallet-card case that it does not know") {
-      val host = new FakeHost
+    test("wallet drops every unheld handle and fails on a wallet-card case that it does not know") {
+      val host    = new FakeHost
+      val failing = js.Dynamic.literal(name = "failing")
+      val heldRaw = host.rawCard("held")
+      val holder  = card(heldRaw)
+      val symbol  = js.Dynamic.global.Symbol.selectDynamic("dispose")
+      js.Dynamic.global.Reflect.applyDynamic("set")(
+        failing,
+        symbol,
+        js.Any.fromFunction0(() => throwJs(js.Dynamic.newInstance(js.Dynamic.global.Error)("drop failed")))
+      )
+      val first = host.rawCard("first")
       host
         .on("selfWallet")(_ =>
-          js.Array[js.Any](walletEntry("concrete", host.rawCard("first")), walletEntry("borrowed", host.rawCard("odd")))
+          js.Array[js.Any](
+            walletEntry("concrete", failing),
+            walletEntry("concrete", first),
+            walletEntry("scope", first),
+            walletEntry("template", "not-a-resource".asInstanceOf[js.Dynamic]),
+            walletEntry("concrete", heldRaw),
+            walletEntry("borrowed", host.rawCard("odd"))
+          )
         )
         .install()
       val result = Try(PermissionsApi.wallet())
       assertTrue(
+        result.failed.toOption.exists(_.isInstanceOf[IllegalStateException]),
         result.failed.toOption.exists(_.getMessage.contains("unknown wallet-card case: borrowed")),
-        host.disposed.toList == List("first", "odd")
+        host.disposed.toList == List("first", "odd"),
+        holder.isPresent && holder.borrowRaw(_ eq heldRaw)
+      )
+    },
+    test("wallet releases the cards it wrapped and drops the rest when one entry cannot be wrapped") {
+      val host    = new FakeHost
+      val heldRaw = host.rawCard("held")
+      val holder  = card(heldRaw)
+      host
+        .on("selfWallet")(_ =>
+          js.Array[js.Any](
+            walletEntry("concrete", host.rawCard("wrapped-concrete")),
+            walletEntry("template", host.rawCard("wrapped-template")),
+            walletEntry("scope", heldRaw),
+            walletEntry("concrete", host.rawCard("after"))
+          )
+        )
+        .install()
+      val result = Try(PermissionsApi.wallet())
+      assertTrue(
+        result.failed.toOption.exists(_.getMessage.contains("resource is held by another card object")),
+        host.disposed.toList == List("wrapped-concrete", "wrapped-template", "after"),
+        holder.isPresent && holder.borrowRaw(_ eq heldRaw)
       )
     },
     test("a template card derives a concrete card, and revoke, install and release move it") {
