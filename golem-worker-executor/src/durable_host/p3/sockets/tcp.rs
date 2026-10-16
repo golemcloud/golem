@@ -1111,51 +1111,49 @@ where
                     .as_ref()
                     .map(|reply_tx| reply_tx.is_closed())
                     .unwrap_or(true);
-                let frame = if bytes_rx.is_none() {
+                let frame = match bytes_rx.as_mut() {
                     // Recorded chunks remain replayable, but their socket does not survive
                     // reconstruction. Complete only the missing tail with explicit loss.
-                    TcpReceiveFrame::End(Err(types::ErrorCode::ConnectionBroken))
-                } else if producer_gone {
-                    TcpReceiveFrame::End(Ok(()))
-                } else {
-                    let bytes_rx = bytes_rx
-                        .as_mut()
-                        .expect("live tcp receive has an upstream byte channel");
-                    // Grant the upstream consumer permission to forward exactly one
-                    // chunk for this demand.
-                    if let Some(permit_tx) = permit_tx.as_ref()
-                        && let Err(mpsc::error::TrySendError::Full(())) = permit_tx.try_send(())
-                    {
-                        tracing::error!(
-                            "tcp receive permit channel unexpectedly full; \
+                    None => TcpReceiveFrame::End(Err(types::ErrorCode::ConnectionBroken)),
+                    Some(_) if producer_gone => TcpReceiveFrame::End(Ok(())),
+                    Some(bytes_rx) => {
+                        // Grant the upstream consumer permission to forward exactly one
+                        // chunk for this demand.
+                        if let Some(permit_tx) = permit_tx.as_ref()
+                            && let Err(mpsc::error::TrySendError::Full(())) = permit_tx.try_send(())
+                        {
+                            tracing::error!(
+                                "tcp receive permit channel unexpectedly full; \
                              continuing with the already-queued permit"
-                        );
-                    }
-                    let interrupt = accessor.with(|mut access| {
-                        durable_worker_ctx::<Ctx, U>(access.data_mut()).create_interrupt_signal()
-                    });
-                    let socket_result_rx = &mut socket_result_rx;
-                    let read_frame = async {
-                        match bytes_rx.recv().await {
-                            Some(bytes) => TcpReceiveFrame::Data(Bytes::from(bytes)),
-                            None => {
-                                let result = match socket_result_rx.take() {
-                                    Some(rx) => {
-                                        rx.await.unwrap_or(Err(types::ErrorCode::ConnectionBroken))
-                                    }
-                                    None => Ok(()),
-                                };
-                                TcpReceiveFrame::End(result)
-                            }
+                            );
                         }
-                    };
-                    tokio::select! {
-                        frame = read_frame => frame,
-                        kind = interrupt => {
-                            // Leave both Starts incomplete for call-local loss completion.
-                            child.abandon_for_trap();
-                            stream.abandon_for_trap();
-                            return Err(wasmtime::Error::from_anyhow(kind.into()));
+                        let interrupt = accessor.with(|mut access| {
+                            durable_worker_ctx::<Ctx, U>(access.data_mut())
+                                .create_interrupt_signal()
+                        });
+                        let socket_result_rx = &mut socket_result_rx;
+                        let read_frame = async {
+                            match bytes_rx.recv().await {
+                                Some(bytes) => TcpReceiveFrame::Data(Bytes::from(bytes)),
+                                None => {
+                                    let result = match socket_result_rx.take() {
+                                        Some(rx) => rx
+                                            .await
+                                            .unwrap_or(Err(types::ErrorCode::ConnectionBroken)),
+                                        None => Ok(()),
+                                    };
+                                    TcpReceiveFrame::End(result)
+                                }
+                            }
+                        };
+                        tokio::select! {
+                            frame = read_frame => frame,
+                            kind = interrupt => {
+                                // Leave both Starts incomplete for call-local loss completion.
+                                child.abandon_for_trap();
+                                stream.abandon_for_trap();
+                                return Err(wasmtime::Error::from_anyhow(kind.into()));
+                            }
                         }
                     }
                 };

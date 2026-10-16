@@ -4594,7 +4594,12 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides::agent_sockets_enabled(),
+    )
+    .await?;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
@@ -4772,7 +4777,12 @@ async fn incomplete_p3_udp_receive_reports_loss_without_consuming_a_new_datagram
     use golem_common::model::oplog::PublicOplogEntry;
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides::agent_sockets_enabled(),
+    )
+    .await?;
     let peer = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
     let ready_port = peer.local_addr()?.port();
     let reservation = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
@@ -7089,7 +7099,12 @@ async fn ip_address_resolve(
     use golem_common::{agent_id, data_value};
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides::agent_sockets_enabled(),
+    )
+    .await?;
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
@@ -7107,7 +7122,12 @@ async fn ip_address_resolve(
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     drop(executor);
-    let executor = start(deps, &context).await?;
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides::agent_sockets_enabled(),
+    )
+    .await?;
 
     // If the recovery succeeds, that means that the replayed IP address resolution produced the same result as expected
 
@@ -7144,7 +7164,12 @@ async fn p3_ip_address_resolve(
     use golem_common::data_value;
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides::agent_sockets_enabled(),
+    )
+    .await?;
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
@@ -7167,7 +7192,12 @@ async fn p3_ip_address_resolve(
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     drop(executor);
-    let executor = start(deps, &context).await?;
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides::agent_sockets_enabled(),
+    )
+    .await?;
 
     // If the recovery succeeds, the replayed P3 DNS resolution produced the same recorded result
 
@@ -7229,7 +7259,12 @@ async fn p3_ip_address_resolve_permanent_failure_is_guest_visible_without_retry(
     use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides::agent_sockets_enabled(),
+    )
+    .await?;
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)

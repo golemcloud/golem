@@ -1099,6 +1099,214 @@ impl CursorTx<'_> {
         missing_start_waits_for(head_body, claiming_body, claim_is_live).map(|_| bodies)
     }
 
+    /// Decides a `Start` claim that found no matching `Start` before the replay target while the
+    /// cursor replays, after [`Self::active_body_owning_head`] found no active body that owns the
+    /// head.
+    ///
+    /// A crash prefix can hold the `Start` of one concurrent guest call and not the `Start` of
+    /// another: guest calls reserve their invocation ids in guest call order, but append their
+    /// `Start`s in host scheduling order. On replay the call without a `Start` can reach its claim
+    /// before its sibling claims the recorded one, so a sibling's unclaimed `Start` at the head is
+    /// not evidence of divergence. Like every reader that must make progress, the claim neither
+    /// consumes nor waits on such a `Start`: the cursor retains it for its owner's claim, and a
+    /// retained `Start` that nobody claims is reported at the invocation end. Which records the
+    /// claim moves past is decided by [`Self::sibling_record_at_head`], so that the decision is
+    /// the same whether or not the sibling has already claimed its own records.
+    ///
+    /// The claim is decided against the entry the cursor stops at: the replay target ends replay,
+    /// a delivery boundary, an entry of an active body, or an entry of the body of a retained
+    /// entity invocation waits for its owner, and anything else is divergence. A `Start` recorded
+    /// with the claim's own invocation id belongs to the claiming guest call itself, so it is
+    /// divergence before the cursor moves.
+    pub(super) async fn decide_missing_start(
+        &mut self,
+        claim: &StartClaim,
+    ) -> Result<MissingStart, WorkerExecutorError> {
+        if let Some(invocation_id) = claim.expected_invocation_id()
+            && self.unclaimed_start_with_invocation_id(invocation_id).await
+        {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                claim.expected_description(),
+                "no matching Start; a Start with the same invocation id exists but does not match"
+                    .to_string(),
+            ));
+        }
+
+        loop {
+            self.try_get_oplog_entry_leaving_unclaimed_starts(|_| false)
+                .await?;
+            if self.cursor.is_live() {
+                return Ok(MissingStart::ReplayEnded);
+            }
+            if self.blocked_on_completion_delivery {
+                return Ok(MissingStart::Blocked(BlockedOn::CursorProgress));
+            }
+            match self.sibling_record_at_head().await {
+                SiblingRecord::Retain(index, entry) => {
+                    self.retain_start(index, entry.clone());
+                    self.commit_retained_entry(index, &entry).await?;
+                }
+                SiblingRecord::BodyOfRetainedInvocation => {
+                    return Ok(MissingStart::Blocked(BlockedOn::CursorProgress));
+                }
+                SiblingRecord::None => break,
+            }
+        }
+        match self.active_body_owning_head(
+            self.buffered_head_owner(),
+            claim.expected_parent_start_index(),
+        ) {
+            Some(bodies) => Ok(MissingStart::Blocked(BlockedOn::ActiveBody(bodies))),
+            None => Err(WorkerExecutorError::unexpected_oplog_entry(
+                claim.expected_description(),
+                "no matching Start between the replay cursor and the replay target".to_string(),
+            )),
+        }
+    }
+
+    /// Classifies the entry buffered at the cursor head for [`Self::decide_missing_start`], as
+    /// its owner would treat it once it claimed the records it owns:
+    ///
+    /// - a top-level `Start` recorded under an invocation id belongs to a guest call, and is
+    ///   retained;
+    /// - a `Start` under a retained or claimed `Start` with the same invocation id belongs to the
+    ///   same guest call (the call of a scope, the child of a host call, a tool invocation of the
+    ///   import that dispatched it), and is retained;
+    /// - a record in the subtree of a retained custom invocation, through retained parents and
+    ///   observational owners, is retained: the custom invocation adopts its retained subtree
+    ///   when it is claimed;
+    /// - a record of the body of a retained entity invocation waits: that body consumes it once
+    ///   its invocation is claimed;
+    /// - anything else is not a sibling's record.
+    async fn sibling_record_at_head(&self) -> SiblingRecord {
+        let next = self.cursor.last_replayed_index().next();
+        let Some((index, entry)) = self.st.replay_buffer.front() else {
+            return SiblingRecord::None;
+        };
+        if *index != next || self.st.claimed_starts.contains(index) {
+            return SiblingRecord::None;
+        }
+        let retained = |index: &OplogIndex| self.st.retained_starts.get(index).map(|r| &r.entry);
+        let owner = match head_owner(entry) {
+            HeadOwner::EntityBody(owner) | HeadOwner::ParentStart(owner) => Some(owner),
+            HeadOwner::Agent | HeadOwner::Unattributed => None,
+        };
+        if owner
+            .and_then(|owner| retained(&owner))
+            .is_some_and(is_entity_invocation_start)
+        {
+            return SiblingRecord::BodyOfRetainedInvocation;
+        }
+        if !Self::is_retainable_start(entry) {
+            return SiblingRecord::None;
+        }
+        let OplogEntry::Start {
+            invocation_id,
+            parent_start_index,
+            observational_owner,
+            ..
+        } = entry
+        else {
+            return SiblingRecord::None;
+        };
+        let retain =
+            if self.under_retained_custom_invocation(*parent_start_index, *observational_owner) {
+                true
+            } else if observational_owner.is_some() {
+                false
+            } else {
+                match (invocation_id, parent_start_index) {
+                    (Some(_), None) => true,
+                    (_, Some(parent)) => match retained(parent) {
+                        Some(parent) => {
+                            invocation_id.is_some() && start_invocation_id(parent) == *invocation_id
+                        }
+                        None => {
+                            invocation_id.is_some()
+                                && self.st.concurrent_resolver.has_claim(*parent)
+                                && start_invocation_id(&self.cursor.oplog.read(*parent).await)
+                                    == *invocation_id
+                        }
+                    },
+                    (None, None) => false,
+                }
+            };
+        if retain {
+            SiblingRecord::Retain(*index, entry.clone())
+        } else {
+            SiblingRecord::None
+        }
+    }
+
+    /// Whether a record with `parent` and `observer` lies in the subtree of a retained custom
+    /// invocation, through retained parents and observers, as the custom invocation adopts its
+    /// retained subtree when it is claimed (`register_custom_subtree_root`).
+    fn under_retained_custom_invocation(
+        &self,
+        parent: Option<OplogIndex>,
+        observer: Option<OplogIndex>,
+    ) -> bool {
+        let mut ancestors: Vec<OplogIndex> = parent.into_iter().chain(observer).collect();
+        while let Some(index) = ancestors.pop() {
+            let Some(retained) = self.st.retained_starts.get(&index) else {
+                continue;
+            };
+            if is_custom_invocation_start(&retained.entry) {
+                return true;
+            }
+            if let OplogEntry::Start {
+                parent_start_index,
+                observational_owner,
+                ..
+            } = &retained.entry
+            {
+                ancestors.extend(
+                    parent_start_index
+                        .iter()
+                        .chain(observational_owner)
+                        .filter(|ancestor| **ancestor < index),
+                );
+            }
+        }
+        false
+    }
+
+    /// Whether a `Start` nobody has claimed yet carries `invocation_id`: a retained one, or one
+    /// between the cursor and the replay target.
+    async fn unclaimed_start_with_invocation_id(&self, invocation_id: DurableInvocationId) -> bool {
+        let carries_id = |entry: &OplogEntry| match entry {
+            OplogEntry::Start {
+                invocation_id: Some(recorded),
+                ..
+            } => *recorded == invocation_id,
+            _ => false,
+        };
+        if self
+            .st
+            .retained_starts
+            .values()
+            .any(|retained| carries_id(&retained.entry))
+        {
+            return true;
+        }
+        let start = self.cursor.last_replayed_index().next();
+        let claimed = &self.st.claimed_starts;
+        matches!(
+            self.cursor
+                .scan_oplog(
+                    start,
+                    self.cursor.replay_target().next(),
+                    &self.st.skipped_regions,
+                    self.st.skipped_regions.find_next_deleted_region(start),
+                    OplogIndex::NONE,
+                    |entry, _, index| carries_id(entry) && !claimed.contains(&index),
+                    |_, _, _| true,
+                )
+                .await,
+            OplogEntryLookupResult::Found { .. }
+        )
+    }
+
     /// Whether `entry` is an `End`/`Cancelled` whose `start_index` currently has a registered
     /// resolver awaiter (and is therefore an *awaited terminal* the cursor auto-drains to its owner
     /// rather than handing to a positional reader).
@@ -5062,6 +5270,51 @@ pub(super) enum HeadOwner {
     /// A nested `Start`: the durable call, scope or entity invocation whose `Start` is at this
     /// index owns it.
     ParentStart(OplogIndex),
+}
+
+/// What [`CursorTx::decide_missing_start`] does with the entry at the cursor head.
+enum SiblingRecord {
+    /// A `Start` that a concurrent guest call recorded: the cursor retains it for its owner.
+    Retain(OplogIndex, OplogEntry),
+    /// A record of the body of a retained entity invocation, which that body consumes once its
+    /// invocation is claimed.
+    BodyOfRetainedInvocation,
+    /// Not a record of a concurrent guest call.
+    None,
+}
+
+/// The invocation id of a `Start` entry.
+fn start_invocation_id(entry: &OplogEntry) -> Option<DurableInvocationId> {
+    match entry {
+        OplogEntry::Start { invocation_id, .. } => *invocation_id,
+        _ => None,
+    }
+}
+
+/// Whether `entry` is the `Start` of an entity invocation, accepted or rejected.
+fn is_entity_invocation_start(entry: &OplogEntry) -> bool {
+    matches!(
+        entry,
+        OplogEntry::Start {
+            function_name: HostFunctionName::GolemEntityInvoke
+                | HostFunctionName::GolemToolInvocationRejected,
+            ..
+        }
+    )
+}
+
+/// Whether `entry` is the `Start` of a custom durable invocation: a numbered call `Start` of a
+/// guest-named function. Scopes share the naming but record no request.
+fn is_custom_invocation_start(entry: &OplogEntry) -> bool {
+    matches!(
+        entry,
+        OplogEntry::Start {
+            function_name: HostFunctionName::Custom(_),
+            invocation_id: Some(_),
+            request: Some(_),
+            ..
+        }
+    )
 }
 
 /// Decides the owner of `entry` when it is at the cursor head. Positional reads use it to decide

@@ -4,7 +4,7 @@
 
 Golem TypeScript agents run in a WebAssembly environment with a built-in `fetch` API. Use the standard `fetch()` function for all outgoing HTTP requests — it is fully supported and works with WASI HTTP under the hood.
 
-> **Note:** The `node:http` and `node:https` modules are also available with comprehensive client-side support (the client API passes the majority of Node.js compatibility tests). They can be used as an alternative, especially when porting existing Node.js code. Server-side APIs (`http.createServer`, `net.listen`) are **not** available in WASM.
+> **Note:** The `node:http` and `node:https` modules are also available with comprehensive client-side support (the client API passes the majority of Node.js compatibility tests). They can be used as an alternative, especially when porting existing Node.js code. Socket-backed servers (`net.createServer`, or `http.createServer` with a port `listen()`) are **not** available; to serve HTTP with a `node:http` request listener, mount it as a custom HTTP router with `nodeHttpHandler`.
 
 ## GET Request
 
@@ -224,7 +224,8 @@ await fetch('http://my-app.localhost:9006/recorder/main/record', {
 
 - Use `fetch()` as the primary HTTP client — it is the standard and recommended API
 - `node:http` and `node:https` are available with comprehensive client-side support — useful when porting Node.js code or when npm packages depend on them
-- Server-side APIs (`http.createServer`, `net.listen`) are **not** available in WASM
+- Socket-backed servers (`net.createServer`, or `http.createServer` with a port `listen()`) are **not** available; mount `node:http` request listeners as custom HTTP routers with `nodeHttpHandler`
+- `node:net`, `node:dgram` and `node:dns` are **not** supported: the worker executor refuses WASI sockets by default
 - Third-party HTTP client libraries that use `fetch` or `node:http` internally (e.g., `axios`) generally work; libraries that depend on native C/C++ bindings will not
 - All HTTP requests go through the WASI HTTP layer, which provides durable execution guarantees
 - HTTP error statuses are recorded responses. Use a `status-code`-keyed host retry policy; throwing after the response does not retry that completed call.

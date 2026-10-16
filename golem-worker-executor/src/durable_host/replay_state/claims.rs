@@ -184,6 +184,10 @@ impl StartClaim {
         self.custom_invocation
     }
 
+    pub(super) fn expected_invocation_id(&self) -> Option<DurableInvocationId> {
+        self.invocation_id
+    }
+
     pub(super) fn matches_start_identity(&self, entry: &OplogEntry) -> bool {
         matches!(entry, OplogEntry::Start {
             function_name,
@@ -339,8 +343,8 @@ impl ReplayState {
     /// Claims a recorded `Start`, reports that the same cursor transaction observed replay already
     /// ended, or identifies a matching `Start` removed by a replay jump. A missing match while an
     /// active entity body owns the cursor head waits for that body or for cursor progress (see
-    /// [`CursorTx::active_body_owning_head`]); every other missing match while replay is active
-    /// remains strict divergence.
+    /// [`CursorTx::active_body_owning_head`]); any other missing match is decided by
+    /// [`CursorTx::decide_missing_start`].
     pub(crate) async fn claim_start_or_replay_end(
         &self,
         claim: StartClaim,
@@ -425,11 +429,12 @@ impl ReplayState {
                                         Ok((None, Some(BlockedOn::CursorProgress), None))
                                     }
                                     Some(_) => Ok((None, None, Some(Missing::DeletedRegion))),
-                                    None => Err(WorkerExecutorError::unexpected_oplog_entry(
-                                        owned_claim.expected_description(),
-                                        "no matching Start between the replay cursor and the replay target"
-                                            .to_string(),
-                                    )),
+                                    None => match tx.decide_missing_start(&owned_claim).await? {
+                                        MissingStart::ReplayEnded => {
+                                            Ok((None, None, Some(Missing::ReplayEnded)))
+                                        }
+                                        MissingStart::Blocked(on) => Ok((None, Some(on), None)),
+                                    },
                                 }
                             }
                             Err(error) => Err(error),

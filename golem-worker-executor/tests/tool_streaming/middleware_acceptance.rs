@@ -78,18 +78,20 @@ macro_rules! setup_rate_limit_chain {
     ($last:expr, $deps:expr, $provider:expr, $caller:expr, $rate_limit:expr,
      $policy:expr, $limit:expr,
      $context:ident, $environment:ident, $executor:ident, $provider_component:ident,
-     $caller_component:ident, $rate_limit_component:ident, $agent_type:ident) => {
+     $caller_component:ident, $rate_limit_component:ident, $agent_type:ident
+     $(, agent_sockets = $agent_sockets:literal)?) => {
         let $context = TestContext::new($last);
         let $environment = Arc::new(TestEnvironmentStateService::default());
-        let $executor = start_with_overrides(
-            $deps,
-            &$context,
-            TestExecutorOverrides {
-                environment_state_service: Some($environment.clone()),
-                ..Default::default()
-            },
-        )
-        .await?;
+        let overrides = TestExecutorOverrides {
+            environment_state_service: Some($environment.clone()),
+            ..Default::default()
+        };
+        $(let overrides = if $agent_sockets {
+            overrides.with_agent_sockets()
+        } else {
+            overrides
+        };)?
+        let $executor = start_with_overrides($deps, &$context, overrides).await?;
         let $provider_component = $executor
             .component_dep(&$context.default_environment_id, $provider)
             .store()
@@ -162,7 +164,8 @@ macro_rules! setup_probe_chain {
     ($last:expr, $deps:expr, $provider:expr, $caller:expr, $names:expr,
      $context:ident, $environment:ident, $executor:ident, $provider_component:ident,
      $caller_component:ident, $middleware_metadata:ident, $agent_type:ident, $deployment:ident
-     $(, configure = $configure:expr)?) => {
+     $(, configure = $configure:expr)?
+     $(, agent_sockets = $agent_sockets:literal)?) => {
         let $context = TestContext::new($last);
         let $environment = Arc::new(TestEnvironmentStateService::default());
         let overrides = TestExecutorOverrides {
@@ -172,6 +175,11 @@ macro_rules! setup_probe_chain {
         $(let overrides = TestExecutorOverrides {
             configure: Some($configure),
             ..overrides
+        };)?
+        $(let overrides = if $agent_sockets {
+            overrides.with_agent_sockets()
+        } else {
+            overrides
         };)?
         let $executor = start_with_overrides(
             $deps,
@@ -1895,7 +1903,8 @@ async fn middleware_race_cancels_loser_drops_observer_and_settles_all_siblings(
         caller_component,
         middleware_metadata,
         agent_type,
-        deployment
+        deployment,
+        agent_sockets = true
     );
     environment_state.set_tool_deployment(
         context.default_environment_id,
@@ -2495,7 +2504,8 @@ async fn rate_3_crash_after_leaf_effect_replays_without_an_extra_charge_or_effec
         provider_component,
         caller_component,
         rate_limit_component,
-        agent_type
+        agent_type,
+        agent_sockets = true
     );
     let (effect_port, mut effects, effect_server) = start_probe_effect_server().await;
     let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut arrivals) =
@@ -2961,7 +2971,8 @@ async fn mixed_chain_trap_cascades_through_detached_leaf_and_all_ancestor_stores
                 multiplier: 1.0,
                 max_jitter_factor: None,
             };
-        })
+        }),
+        agent_sockets = true
     );
     environment_state.set_tool_deployment(
         context.default_environment_id,
@@ -3107,7 +3118,8 @@ async fn partial_fanout_restart_replays_completed_child_repairs_pending_and_keep
         caller_component,
         middleware_metadata,
         agent_type,
-        deployment
+        deployment,
+        agent_sockets = true
     );
     let original_deployment = deployment.clone();
     environment_state.set_tool_deployment(

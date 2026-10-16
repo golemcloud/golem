@@ -594,6 +594,175 @@ async fn websocket_report_loss_exact_send_and_receive_crash_prefixes(
     Ok(())
 }
 
+#[test]
+#[tracing::instrument]
+#[timeout("6m")]
+async fn websocket_report_loss_recovers_a_crash_prefix_with_one_sibling_start(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    const RECEIVE: &str = "::receive";
+    const TIMED: &str = "::receive-with-timeout";
+    let context = TestContext::new(last_unique_id);
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| config.max_websocket_connections = 1)),
+        ..Default::default()
+    };
+    let start_executor = || start_with_overrides(deps, &context, overrides.clone());
+    for (recorded, missing) in [(RECEIVE, TIMED), (TIMED, RECEIVE)] {
+        for after_end in [false, true] {
+            let mut executor = start_executor().await?;
+            let mut peer = ReconnectTestServer::start().await;
+            let component = executor
+                .component_dep(&context.default_environment_id, host_api_tests)
+                .store()
+                .await?;
+            let agent_id = agent_id!(
+                "WebsocketTest",
+                format!(
+                    "one-sibling-{}-{after_end}",
+                    recorded.trim_start_matches("::")
+                )
+            );
+            let worker_id = executor
+                .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+                .await?;
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &agent_id,
+                    "connect_report_loss",
+                    data_value!(peer.url()),
+                )
+                .await?;
+            executor.shutdown_and_wait_for_invocation_loops().await?;
+            drop(executor);
+
+            // Live: the missing sibling stops before appending its Start while the recorded
+            // sibling reaches its End, then the executor crashes.
+            executor = start_executor().await?;
+            executor
+                .invoke_and_await_agent(&component, &agent_id, "noop", data_value!())
+                .await?;
+            let pool = executor.websocket_connection_pool().expect("captured pool");
+            let permit = tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await??;
+            let mut live_hold = executor.gate_next_replay_access_admission(
+                &worker_id,
+                missing,
+                ReplayAdmissionStage::BeforeLiveStart,
+            );
+            let mut end_gate = executor.gate_next_call_end(&worker_id, after_end).await;
+            let key = IdempotencyKey::fresh();
+            executor
+                .invoke_agent_with_key(
+                    &component,
+                    &agent_id,
+                    &key,
+                    CONTENTION_METHOD,
+                    data_value!(CONTENTION_TIMEOUT_MS),
+                )
+                .await?;
+            tokio::time::timeout(Duration::from_secs(10), live_hold.entered()).await?;
+            tokio::time::timeout(Duration::from_secs(10), end_gate.entered()).await?;
+            end_gate.abort();
+            executor.shutdown_and_wait_for_invocation_loops().await?;
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let starts = oplog
+                .iter()
+                .filter(|entry| entry.oplog_index >= end_gate.start_index())
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Start(params)
+                        if params.function_name.ends_with(RECEIVE)
+                            || params.function_name.ends_with(TIMED) =>
+                    {
+                        Some(params.function_name.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(starts.len(), 1, "{}", describe_oplog(&oplog));
+            assert!(starts[0].ends_with(recorded), "{}", describe_oplog(&oplog));
+            let recorded_start = end_gate.start_index();
+            drop(live_hold);
+            drop(end_gate);
+            drop(permit);
+            drop(executor);
+
+            // Replay: the recorded sibling is held before its claim, and the missing sibling must
+            // continue live while the recorded Start is still unclaimed.
+            executor = start_executor().await?;
+            // The earlier `connect_report_loss` invocation replays the same function first.
+            let mut earlier_occurrence = executor.gate_next_replay_access_admission(
+                &worker_id,
+                recorded,
+                ReplayAdmissionStage::BeforeScope,
+            );
+            let mut recorded_hold = executor.gate_next_replay_access_admission(
+                &worker_id,
+                recorded,
+                ReplayAdmissionStage::BeforeScope,
+            );
+            let mut missing_live = executor.gate_next_replay_access_admission(
+                &worker_id,
+                missing,
+                ReplayAdmissionStage::BeforeLiveStart,
+            );
+            executor
+                .invoke_agent_with_key(
+                    &component,
+                    &agent_id,
+                    &key,
+                    CONTENTION_METHOD,
+                    data_value!(CONTENTION_TIMEOUT_MS),
+                )
+                .await?;
+            tokio::time::timeout(Duration::from_secs(10), earlier_occurrence.entered()).await?;
+            earlier_occurrence.release();
+            tokio::time::timeout(Duration::from_secs(10), recorded_hold.entered()).await?;
+            tokio::time::timeout(Duration::from_secs(10), missing_live.entered()).await?;
+            missing_live.release();
+            recorded_hold.release();
+            assert_eq!(
+                executor
+                    .invoke_and_await_agent_with_key(
+                        &component,
+                        &agent_id,
+                        &key,
+                        CONTENTION_METHOD,
+                        data_value!(CONTENTION_TIMEOUT_MS),
+                    )
+                    .await?
+                    .into_typed::<(String, String)>()?,
+                ("session-lost".to_string(), "session-lost".to_string())
+            );
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            assert_call_terminal_counts(&oplog, recorded_start, 1, 1);
+            let missing_starts = oplog
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Start(params)
+                        if entry.oplog_index > recorded_start
+                            && params.function_name.ends_with(missing) =>
+                    {
+                        Some(entry.oplog_index)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(missing_starts.len(), 1, "{}", describe_oplog(&oplog));
+            assert_call_terminal_counts(&oplog, missing_starts[0], 1, 1);
+            assert_eq!(peer.accepted(), 1);
+            assert_eq!(peer.completed_handshakes(), 1);
+            executor.shutdown_and_wait_for_invocation_loops().await?;
+            drop(executor);
+            peer.stop().await?;
+        }
+    }
+    Ok(())
+}
+
 fn assert_call_terminal_counts(
     oplog: &[PublicOplogEntryWithIndex],
     start: OplogIndex,

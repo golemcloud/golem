@@ -87,6 +87,16 @@ use tokio_stream::wrappers::ReceiverStream;
 use wasmtime::Engine;
 use wasmtime::component::Component;
 
+/// Starts an executor with agent sockets enabled. The Rust tool streaming fixtures park at crash
+/// checkpoints and count trap attempts over raw TCP connections to the test.
+async fn start_with_agent_sockets(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    overrides: TestExecutorOverrides,
+) -> anyhow::Result<TestWorkerExecutor> {
+    start_with_overrides(deps, context, overrides.with_agent_sockets()).await
+}
+
 mod attachment_cost_contract;
 mod chunk_f_policy_acceptance;
 mod chunk_m_stream_deltas;
@@ -292,7 +302,8 @@ async fn run_single_store_http_probe(
         .await
         .expect("single-store probe semaphore is not closed");
     let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+    let executor =
+        start_with_agent_sockets(deps, &context, TestExecutorOverrides::default()).await?;
     let component = executor
         .component_dep(&context.default_environment_id, caller)
         .store()
@@ -424,7 +435,8 @@ async fn run_single_store_http_probe(
     }
     drop(executor);
 
-    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+    let executor =
+        start_with_agent_sockets(deps, &context, TestExecutorOverrides::default()).await?;
     let mut admission_gate = match gate {
         SingleStoreProbeGate::None => None,
         SingleStoreProbeGate::Admission(stage) => {
@@ -3835,7 +3847,7 @@ async fn successful_middleware_parent_waits_for_admitted_dropped_child_observer(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -4341,7 +4353,7 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
         environment_state_service: Some(environment_state.clone()),
         ..Default::default()
     };
-    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let executor = start_with_agent_sockets(deps, &context, overrides()).await?;
     let (
         provider_checkpoint_port,
         provider_checkpoint_gate_port,
@@ -4512,7 +4524,7 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
     drop(provider_gate.release);
     drop(executor);
 
-    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let executor = start_with_agent_sockets(deps, &context, overrides()).await?;
     let resumed_executor = executor.clone();
     let resumed_component = caller_component.clone();
     let resumed_id = agent_id.clone();
@@ -4849,7 +4861,7 @@ async fn concurrent_tool_attempt_identity_survives_reordered_admission_and_repla
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(ReorderedToolActivationService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -5723,7 +5735,7 @@ async fn rust_generated_client_streams_live_and_handles_edges(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -8790,7 +8802,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -9318,7 +9330,7 @@ async fn completed_tool_replay_bypasses_current_attachment_memory_pressure(
         .expect("attachment-pressure test semaphore is not closed");
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -9514,7 +9526,7 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
         .expect("attachment-pressure test semaphore is not closed");
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -9946,7 +9958,7 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
     let load = Arc::new(ComponentLoadGate::new());
     let wrapped_load = load.clone();
     let registry = cards.clone();
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -10118,7 +10130,7 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -10692,7 +10704,7 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -11589,7 +11601,7 @@ async fn completed_reconstruction_validates_before_delivering_result(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -11757,7 +11769,7 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -11957,7 +11969,7 @@ async fn incomplete_custom_durability_waits_for_overlapping_completed_reconstruc
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -12188,7 +12200,7 @@ async fn run_clocked_stream_recovery(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -12546,7 +12558,7 @@ async fn deterministic_stream_crash_checkpoint_matrix(
 
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -13028,7 +13040,7 @@ async fn dual_output_reconstruction_preserves_independent_history_and_effects(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -13219,7 +13231,7 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -15555,6 +15567,174 @@ function verify() {{
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn builtin_node_eval_resolves_modules_from_working_directory(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let javascript_component = executor
+        .component_dep(&context.default_environment_id, javascript_tools)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", javascript_tools.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        javascript_component.id,
+        javascript_component.revision,
+        "golem:javascript-tools",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let agent_name = "node-eval-resolution";
+    let fixture_source = r#"
+const fs = require('node:fs');
+for (const [dir, value] of [['/workspace', 'workspace'], ['/workspace/project', 'project']]) {
+  fs.mkdirSync(`${dir}/node_modules/probe-package`, { recursive: true });
+  fs.writeFileSync(`${dir}/node_modules/probe-package/package.json`, JSON.stringify({ name: 'probe-package', main: 'main.js' }));
+  fs.writeFileSync(`${dir}/node_modules/probe-package/main.js`, `module.exports = 'package:${value}';\n`);
+  fs.writeFileSync(`${dir}/local.js`, `module.exports = 'local:${value}';\n`);
+}
+fs.writeFileSync('/workspace/project/entry.js', "console.log([require('probe-package'), require('./local.js')].join(','));\n");
+"#;
+    let fixture = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        agent_name,
+        "node",
+        "/workspace",
+        vec!["-e", fixture_source],
+    )
+    .await?;
+    assert_eq!(fixture.exit_code, 0, "fixture: {fixture:?}");
+
+    let source = "console.log([require('probe-package'), require('./local'), require('node:path').basename(process.cwd())].join(','))";
+    let mut failures = Vec::new();
+    for (cwd, expected) in [
+        (
+            "/workspace",
+            "package:workspace,local:workspace,workspace\n",
+        ),
+        (
+            "/workspace/project",
+            "package:project,local:project,project\n",
+        ),
+    ] {
+        for flag in ["-e", "--eval"] {
+            let result = invoke_cli_tool(
+                &executor,
+                &caller_component,
+                agent_name,
+                "node",
+                cwd,
+                vec![flag, source],
+            )
+            .await?;
+            if result.exit_code != 0
+                || result.stdout != expected.as_bytes()
+                || !result.stderr.is_empty()
+            {
+                failures.push(format!(
+                    "{flag} in {cwd}: exit {}; stdout: {}; stderr: {}",
+                    result.exit_code,
+                    String::from_utf8_lossy(&result.stdout),
+                    String::from_utf8_lossy(&result.stderr),
+                ));
+            }
+        }
+    }
+    for (cwd, source, expected) in [
+        (
+            "/workspace",
+            "const require = 7; console.log(require)",
+            "7\n",
+        ),
+        (
+            "/workspace",
+            "let require = 'shadowed'; console.log(require)",
+            "shadowed\n",
+        ),
+        (
+            "/workspace/project",
+            "setTimeout(() => console.log(require('probe-package')), 20)",
+            "package:project\n",
+        ),
+    ] {
+        let result = invoke_cli_tool(
+            &executor,
+            &caller_component,
+            agent_name,
+            "node",
+            cwd,
+            vec!["-e", source],
+        )
+        .await?;
+        if result.exit_code != 0
+            || result.stdout != expected.as_bytes()
+            || !result.stderr.is_empty()
+        {
+            failures.push(format!(
+                "{source:?} in {cwd}: exit {}; stdout: {}; stderr: {}",
+                result.exit_code,
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr),
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+
+    let file = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        agent_name,
+        "node",
+        "/workspace/project",
+        vec!["entry.js"],
+    )
+    .await?;
+    assert_eq!(file.exit_code, 0, "file: {file:?}");
+    assert_eq!(file.stdout, b"package:project,local:project\n");
     Ok(())
 }
 
