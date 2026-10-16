@@ -1042,7 +1042,7 @@ async fn parent_only_response_repair_reports_loss_after_delivered_eof(
             }
             _ => None,
         })
-        .last()
+        .next_back()
         .unwrap();
     assert!(before.iter().any(|entry| matches!(&entry.entry,
         PublicOplogEntry::CompletionDelivered(delivered) if delivered.start_index == last_child)));

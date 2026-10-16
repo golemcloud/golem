@@ -4584,9 +4584,13 @@ mod tests {
             Ok(golem_common::model::oplog::PublicOplogEntryWithIndex {
                 oplog_index,
                 attribution: golem_common::model::oplog::PublicOplogEntryAttribution::agent(),
-                entry: golem_common::model::oplog::PublicOplogEntry::NoOp(
-                    golem_common::model::oplog::public_oplog_entry::NoOpParams {
+                entry: golem_common::model::oplog::PublicOplogEntry::Log(
+                    golem_common::model::oplog::public_oplog_entry::LogParams {
                         timestamp: golem_common::model::Timestamp::now_utc(),
+                        level: golem_common::model::oplog::LogLevel::Info,
+                        context: String::new(),
+                        message: String::new(),
+                        trace_context: None,
                     },
                 ),
             })
