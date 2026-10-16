@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
 
-async fn streaming_invocation_context() -> TestContext {
+pub(super) async fn streaming_invocation_context() -> TestContext {
     let started = std::time::Instant::now();
     let mut ctx = TestContext::new();
     let fixture = workspace_path().join("test-components/golem_it_agent_rpc_rust_release.wasm");
@@ -66,7 +66,7 @@ async fn streaming_invocation_context() -> TestContext {
     ctx
 }
 
-fn streaming_agent(name: &str) -> String {
+pub(super) fn streaming_agent(name: &str) -> String {
     format!(r#"StreamingRpcTarget("{name}")"#)
 }
 

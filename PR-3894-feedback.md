@@ -34,10 +34,9 @@ as passing; the scoped executor Clippy result above is separate.
 
 [PR-3894-delivery-plan.md](PR-3894-delivery-plan.md) replaces the previous incremental repair queue.
 The user confirmed that the full recovery report's conclusions are being implemented now, not merely
-proposed for later. [PR #4207 / GOL-920](https://github.com/golemcloud/golem/pull/4207) is the active
-implementation, now targeting main. #4199, #4198/GOL-910 and #4212/GOL-898/GOL-897 are merged.
-#4207 is now ready for review and its selected integration head includes main and #4212's stdin
-fixes. The user explicitly authorized local integration of that pinned revision. The plan targets
+proposed for later. [PR #4207 / GOL-920](https://github.com/golemcloud/golem/pull/4207) is now merged
+into main, alongside #4199, #4198/GOL-910 and #4212/GOL-898/GOL-897. The user directs this branch to
+current main; #4207 is no longer a separate pinned dependency or handoff gate. The plan targets
 those contracts and excludes further repairs to the P2 HTTP ownership chain, atomic/global-idempotence
 and suffix-rollback machinery being removed. Host P3 HTTP retry, transaction settlement and
 non-HTTP P2 support still require their surviving guarantees.
@@ -50,11 +49,13 @@ These receipts cover their original branch trees, not the #4207 port. Local inte
 authorized; push, review replies and tracker changes remain unauthorized. Grant precedence stays
 unchanged and deferred.
 
-The authorized local merge is now in progress against the pinned head in the delivery plan.
-Source conflicts are resolved and the selected combined runtime, lifecycle and CLI scopes pass.
-Final strict lint passes. The local merge checkpoint is blocked because the normal Git commit
-cannot execute the shared `prepare-commit-msg` hook; no merge commit exists. The earlier one-command
-checkpoint bypass is consumed and does not authorize another bypass.
+The validated recovery integration is checkpointed locally. The update against fetched main has
+resolved conflicts and passes the selected library, native socket/HTTP, lifecycle, metering and
+CLI/client checks, including the new TLS helpers. Strict all-target lint and the production binary
+checks pass. One existing privileged-XFS case requires its managed test profile
+and was not executed in this shell; it is not counted as covered.
+The user has authorized command-scoped hook bypasses for local commits in this task because the
+lefthook entry is obsolete. Shared Git configuration is unchanged, and no push is authorized.
 The merge keeps #4212's consumer and producer cancellation branches. Removed P2 HTTP producers
 and their dedicated tests are retired together. Non-HTTP P2 support and P3 HTTP retry remain.
 Monthly HTTP/TCP expectations now use the original Starts, exact typed results and full raw-prefix

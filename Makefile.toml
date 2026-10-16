@@ -209,7 +209,7 @@ run_task = [{ name = ["build-bins-all"] }]
 
 [tasks.build-cli-test-bins]
 dependencies = ["wit", "ensure-builtin-artifacts-non-ci"]
-description = "Builds the golem binary used by CLI integration tests"
+description = "Builds the golem and golem-cli binaries used by CLI integration tests"
 script_runner = "@duckscript"
 script = '''
 profile = get_env GOLEM_CLI_TEST_BIN_PROFILE
@@ -224,15 +224,15 @@ dev_release_profile = eq ${profile} dev-release
 dev_release_ci_profile = eq ${profile} dev-release-ci
 
 if ${debug_profile}
-    exec --fail-on-error cargo build -p golem --bin golem
+    exec --fail-on-error cargo build -p golem --bin golem -p golem-cli --bin golem-cli
 elseif ${dev_ci_profile}
-    exec --fail-on-error cargo build --profile dev-ci -p golem --bin golem
+    exec --fail-on-error cargo build --profile dev-ci -p golem --bin golem -p golem-cli --bin golem-cli
 elseif ${dev_release_profile}
     set_env GOLEM_BUILD_SKIP_SHADOW 1
-    exec --fail-on-error cargo build --profile dev-release -p golem --bin golem
+    exec --fail-on-error cargo build --profile dev-release -p golem --bin golem -p golem-cli --bin golem-cli
 elseif ${dev_release_ci_profile}
     set_env GOLEM_BUILD_SKIP_SHADOW 1
-    exec --fail-on-error cargo build --profile dev-release-ci -p golem --bin golem
+    exec --fail-on-error cargo build --profile dev-release-ci -p golem --bin golem -p golem-cli --bin golem-cli
 else
     echo "Unsupported GOLEM_CLI_TEST_BIN_PROFILE=${profile}. Expected 'debug', 'dev-ci', 'dev-release', or 'dev-release-ci'."
     trigger_error unsupported-cli-test-bin-profile

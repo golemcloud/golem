@@ -127,6 +127,28 @@ const MEMORY_SIZE_BUCKETS: &[f64; 16] = &[
     1073741824.0, // 1 GiB
 ];
 
+/// Declares the enum of the values of a metric label, with the value of each variant and the list
+/// of all variants.
+macro_rules! label_values {
+    ($(#[$meta:meta])* $name:ident { $($(#[$variant_meta:meta])* $variant:ident => $label:literal,)+ }) => {
+        $(#[$meta])*
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum $name {
+            $($(#[$variant_meta])* $variant,)+
+        }
+
+        impl $name {
+            const ALL: &'static [Self] = &[$(Self::$variant,)+];
+
+            fn label(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $label,)+
+                }
+            }
+        }
+    };
+}
+
 pub mod component {
     use std::time::Duration;
 
@@ -316,7 +338,6 @@ pub mod events {
 pub mod workers {
     use golem_common::model::AgentStatus;
     use lazy_static::lazy_static;
-    use prometheus::core::Number;
     use prometheus::*;
     use std::time::Duration;
 
@@ -337,11 +358,6 @@ pub mod workers {
             "worker_eviction_total",
             "Number of workers evicted from memory",
             &["class"]
-        )
-        .unwrap();
-        static ref WORKER_FILESYSTEM_SEMAPHORE_AVAILABLE: Gauge = register_gauge!(
-            "worker_filesystem_semaphore_available",
-            "Available filesystem semaphore permits (bytes)"
         )
         .unwrap();
         pub static ref WORKER_MEMORY_RESIDENT_COUNT: GaugeVec = register_gauge_vec!(
@@ -837,18 +853,6 @@ pub mod workers {
 
     pub fn record_worker_eviction(class: &'static str) {
         WORKER_EVICTION_TOTAL.with_label_values(&[class]).inc();
-    }
-
-    pub fn set_filesystem_semaphore_available(permits: u64) {
-        WORKER_FILESYSTEM_SEMAPHORE_AVAILABLE.set(permits.into_f64());
-    }
-
-    pub fn dec_filesystem_semaphore_available(permits: u64) {
-        WORKER_FILESYSTEM_SEMAPHORE_AVAILABLE.sub(permits.into_f64());
-    }
-
-    pub fn inc_filesystem_semaphore_available(permits: u64) {
-        WORKER_FILESYSTEM_SEMAPHORE_AVAILABLE.add(permits.into_f64());
     }
 
     pub fn record_worker_kv_cache_value_size(bytes: usize) {
@@ -1885,47 +1889,156 @@ pub mod storage {
     pub const STORAGE_TYPE_KV: &str = "kv";
     pub const STORAGE_TYPE_OPLOG: &str = "oplog";
     pub const STORAGE_TYPE_OPLOG_ARCHIVE: &str = "oplog_archive";
-    pub const STORAGE_TYPE_FILESYSTEM: &str = "filesystem";
-
-    use lazy_static::lazy_static;
-    use prometheus::*;
 
     /// Re-exported from [`crate::identity`], which owns the process identity.
     /// Kept here so existing metric-recording call sites can keep using
     /// `crate::metrics::storage::executor_id()`.
     pub use crate::identity::executor_id;
+}
+
+pub mod agent_filesystem {
+    use lazy_static::lazy_static;
+    use prometheus::*;
+    use std::time::Duration;
 
     lazy_static! {
-        pub static ref STORAGE_FILESYSTEM_POOL_TOTAL_BYTES: GaugeVec = register_gauge_vec!(
-            "golem_storage_filesystem_pool_total_bytes",
-            "Total filesystem storage pool capacity for this executor",
-            &["executor_id"]
+        static ref PRESSURE_RECOVERY_SECONDS: HistogramVec = register_histogram_vec!(
+            "filesystem_pressure_recovery_seconds",
+            "Time of a recovery of free space on the agent filesystem volume after a write failed for space, by outcome",
+            &["outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
         )
         .unwrap();
-        pub static ref STORAGE_FILESYSTEM_POOL_USED_BYTES: GaugeVec = register_gauge_vec!(
-            "golem_storage_filesystem_pool_used_bytes",
-            "Currently acquired filesystem storage bytes across all workers on this executor",
-            &["executor_id"]
+        static ref PRESSURE_UNLOAD_ATTEMPTS: IntCounterVec = register_int_counter_vec!(
+            "filesystem_pressure_unload_attempts_total",
+            "Unloads of idle agents that a recovery of free space on the agent filesystem volume tried, by outcome",
+            &["outcome"]
+        )
+        .unwrap();
+        static ref STORAGE_REFUSALS: IntCounterVec = register_int_counter_vec!(
+            "filesystem_storage_refusals_total",
+            "Agent filesystem calls that failed because no space was left, by cause",
+            &["cause"]
+        )
+        .unwrap();
+        static ref PROJECT_CLEANUP_FAILURES: IntCounterVec = register_int_counter_vec!(
+            "filesystem_project_cleanup_failures_total",
+            "Failed cleanups of managed XFS projects, which stay reserved until a later cleanup, by operation",
+            &["operation"]
+        )
+        .unwrap();
+        static ref PROJECT_STALE_RECLAIMS: IntCounter = register_int_counter!(
+            "filesystem_project_stale_reclaims_total",
+            "Managed XFS projects that a new agent filesystem found left over at its path and cleaned"
         )
         .unwrap();
     }
 
-    pub fn record_filesystem_pool_total(bytes: u64) {
-        STORAGE_FILESYSTEM_POOL_TOTAL_BYTES
-            .with_label_values(&[executor_id()])
-            .set(bytes as f64);
+    label_values! {
+        /// How a recovery of free space ended, as the `outcome` label.
+        PressureRecovery {
+            /// The unloads of idle agents freed enough space, and the write tries again.
+            Recovered => "recovered",
+            /// No idle agent was left to unload before the free space reached the target.
+            TargetNotReached => "target_not_reached",
+            /// The recovery did not end before its deadline.
+            Deadline => "deadline",
+            /// The free space of the volume could not be observed.
+            ObservationFailed => "observation_failed",
+            /// The cleanup of an unloaded agent filesystem failed.
+            CleanupFailed => "cleanup_failed",
+            /// The volume had enough free space, so the failure has another cause.
+            NotUnderPressure => "not_under_pressure",
+            /// The executor is shutting down and has no agents to unload.
+            Unavailable => "unavailable",
+        }
     }
 
-    pub fn record_filesystem_pool_acquired(bytes: u64) {
-        STORAGE_FILESYSTEM_POOL_USED_BYTES
-            .with_label_values(&[executor_id()])
-            .add(bytes as f64);
+    label_values! {
+        /// How one unload of an idle agent in a recovery of free space ended, as the `outcome` label.
+        PressureUnload {
+            /// The agent was unloaded and its filesystem cleaned up.
+            Unloaded => "unloaded",
+            /// The agent was no longer an idle candidate when the unload ran, for example because
+            /// it got new work or is being deleted. The recovery goes on with the next candidate.
+            Ineligible => "ineligible",
+            /// The agent was stopped, but the cleanup of its filesystem failed. The recovery stops.
+            CleanupFailed => "cleanup_failed",
+            /// The unload task panicked or was cancelled. The recovery stops.
+            TaskFailed => "task_failed",
+            /// The deadline of the recovery passed before the unload finished. The unload task can
+            /// still finish later.
+            Deadline => "deadline",
+        }
     }
 
-    pub fn record_filesystem_pool_released(bytes: u64) {
-        STORAGE_FILESYSTEM_POOL_USED_BYTES
-            .with_label_values(&[executor_id()])
-            .sub(bytes as f64);
+    label_values! {
+        /// Why an agent filesystem call found no space, as the `cause` label.
+        StorageRefusal {
+            /// The agent used up its own quota.
+            AgentQuota => "agent_quota",
+            /// The volume has no space left, and a recovery did not free enough.
+            PhysicalCapacity => "physical_capacity",
+        }
+    }
+
+    label_values! {
+        /// The cleanup of a managed XFS project that failed, as the `operation` label.
+        ProjectCleanup {
+            /// The delete of an agent filesystem.
+            Delete => "delete",
+            /// The fallback cleanup of an agent filesystem that was dropped without a delete.
+            Drop => "drop",
+            /// The cleanup of a project that a new agent filesystem found left over at its path.
+            Stale => "stale",
+        }
+    }
+
+    /// Exports each label value at zero, so that a dashboard or an alert reads 0 instead of no data
+    /// before the first event. Called when the executor opens an XFS volume for the agent
+    /// filesystems. `project_quotas` tells that the volume has managed XFS projects.
+    pub fn record_agent_filesystem_volume_opened(project_quotas: bool) {
+        for outcome in PressureRecovery::ALL {
+            PRESSURE_RECOVERY_SECONDS.with_label_values(&[outcome.label()]);
+        }
+        for outcome in PressureUnload::ALL {
+            PRESSURE_UNLOAD_ATTEMPTS.with_label_values(&[outcome.label()]);
+        }
+        for cause in StorageRefusal::ALL {
+            STORAGE_REFUSALS.with_label_values(&[cause.label()]);
+        }
+        if project_quotas {
+            for operation in ProjectCleanup::ALL {
+                PROJECT_CLEANUP_FAILURES.with_label_values(&[operation.label()]);
+            }
+            lazy_static::initialize(&PROJECT_STALE_RECLAIMS);
+        }
+    }
+
+    pub fn record_pressure_recovery(outcome: PressureRecovery, elapsed: Duration) {
+        PRESSURE_RECOVERY_SECONDS
+            .with_label_values(&[outcome.label()])
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_pressure_unload_attempt(outcome: PressureUnload) {
+        PRESSURE_UNLOAD_ATTEMPTS
+            .with_label_values(&[outcome.label()])
+            .inc();
+    }
+
+    pub fn record_storage_refusal(cause: StorageRefusal) {
+        STORAGE_REFUSALS.with_label_values(&[cause.label()]).inc();
+    }
+
+    pub fn record_project_cleanup_failure(operation: ProjectCleanup) {
+        PROJECT_CLEANUP_FAILURES
+            .with_label_values(&[operation.label()])
+            .inc();
+    }
+
+    pub fn record_project_stale_reclaim() {
+        PROJECT_STALE_RECLAIMS.inc();
     }
 }
 
@@ -2048,28 +2161,6 @@ pub mod filesystem_snapshots {
             &["outcome"]
         )
         .unwrap();
-    }
-
-    /// Declares the enum of the values of a metric label, with the value of each variant and the
-    /// list of all variants.
-    macro_rules! label_values {
-        ($(#[$meta:meta])* $name:ident { $($(#[$variant_meta:meta])* $variant:ident => $label:literal,)+ }) => {
-            $(#[$meta])*
-            #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-            pub enum $name {
-                $($(#[$variant_meta])* $variant,)+
-            }
-
-            impl $name {
-                const ALL: &'static [Self] = &[$(Self::$variant,)+];
-
-                fn label(self) -> &'static str {
-                    match self {
-                        $(Self::$variant => $label,)+
-                    }
-                }
-            }
-        };
     }
 
     label_values! {

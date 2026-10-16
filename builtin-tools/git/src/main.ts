@@ -5,9 +5,14 @@ import {
   c,
   command,
   err,
+  NamedPolicy,
   ok,
+  Policy,
+  Predicate,
+  Props,
   s,
   toolDefinition,
+  withRetryPolicy,
 } from "@golemcloud/golem-ts-sdk";
 import {
   compileSchema,
@@ -126,6 +131,10 @@ function credentials(handle: Secret | undefined): Credentials | undefined {
     (handle as unknown as { [Symbol.dispose](): void })[Symbol.dispose]();
   }
 }
+
+const noReceivePackResend = NamedPolicy.named("git-push-no-resend", Policy.never())
+  .priority(0xffffffff)
+  .appliesWhen(Predicate.eq(Props.verb, "POST"));
 
 const definition = toolDefinition("git", { requiresFilesystem: true })
   .version("0.1.15")
@@ -1072,23 +1081,27 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
       atomic,
       authentication: handle,
     }) =>
-      withAuthentication(handle, async (auth) =>
-        pushCommand(
-          await repository(workingDirectory ?? [], cwd),
-          remote,
-          refspecs,
-          {
-            setUpstream,
-            delete: deleting,
-            tags,
-            all,
-            force,
-            forceWithLease,
-            lease,
-            atomic,
-          },
-          wasiHttp,
-          auth,
+      // A lost receive-pack response may follow a successful remote update, and Git servers
+      // do not deduplicate by idempotency key, so the host must not resend the POST.
+      withRetryPolicy(noReceivePackResend, () =>
+        withAuthentication(handle, async (auth) =>
+          pushCommand(
+            await repository(workingDirectory ?? [], cwd),
+            remote,
+            refspecs,
+            {
+              setUpstream,
+              delete: deleting,
+              tags,
+              all,
+              force,
+              forceWithLease,
+              lease,
+              atomic,
+            },
+            wasiHttp,
+            auth,
+          ),
         ),
       ),
     clone: async ({

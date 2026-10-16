@@ -830,9 +830,8 @@ P3 HTTP monthly tests in `tests/api/interruption/host/p3/http/` withhold respons
 body suffix at the peer. Recovery retains the original send, consume-body parent and chunk Starts.
 It verifies an already-delivered prefix before appending the suffix. There is no synthetic batched
 scope or recovery Jump. The assertions require exact output, HTTP key, invocation count, terminals,
-delivery markers and the full committed raw prefix. This matrix passes on the pinned integration.
-The earlier P2 HTTP receipts are separate. P2 HTTP producers and their dedicated tests were removed
-with that unsupported API.
+delivery markers and the full committed raw prefix. P2 HTTP producers and their dedicated tests
+were removed with that unsupported API.
 
 Raw P2/P3 TCP and UDP fixtures explicitly enable `agent_sockets.enabled` in their executor setup.
 The production default remains disabled. Host HTTP, WebSocket and RDBMS clients do not depend on

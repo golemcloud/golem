@@ -2,15 +2,15 @@
 
 ## Target
 
-Deliver monthly resource policy, accounting, admission and enforcement on the recovery model being
-implemented now. Do not spend another cycle repairing the P2 HTTP ownership chain or suffix-rollback
+Deliver monthly resource policy, accounting, admission and enforcement on current main's recovery
+model. Do not spend another cycle repairing the P2 HTTP ownership chain or suffix-rollback
 machinery that the recovery work removes. Do not build a second recovery or worker lifecycle model.
 
 This plan replaces the earlier incremental control-removal queue. `PR-3894-feedback.md` remains the
 source of feedback status. Planning does not close a review finding or authorize implementation,
 rebasing, pushing, review replies or issue-status changes.
 
-## Active dependency and ownership
+## Merged baseline and ownership
 
 The full [recovery report](https://t-03h1xykjf7qcai8l0jyytjz1f-p21914.onamp.dev/#full-0-summary)
 was read, including sections 0-9 and every exploration in 8.1-8.6. The user confirmed that its
@@ -22,7 +22,7 @@ reported by the user and verified through GitHub on 2026-10-16:
 | [#4199](https://github.com/golemcloud/golem/pull/4199), Rust P3 HTTP templates/guidance | Daniel Vigovszky; merged into main at 06:50 UTC |
 | [#4198 / GOL-910](https://github.com/golemcloud/golem/pull/4198), P3 HTTP repair | Daniel Vigovszky; merged into main at 12:34 UTC. Reuse its call-local send and verified body continuation; do not recreate it. |
 | [#4212 / GOL-898, GOL-897](https://github.com/golemcloud/golem/pull/4212), client tool stdin terminals | Daniel Vigovszky; merged into main at 12:03 UTC. Preserve its cancellation semantics, native-tool propagation, tests and Python artifact pin. |
-| [#4207 / GOL-920](https://github.com/golemcloud/golem/pull/4207), call-local recovery and removals | Daniel Vigovszky; open and ready for review, targeting main. Owns the remaining runtime, SDK, WIT/schema and fixture contract changes. |
+| [#4207 / GOL-920](https://github.com/golemcloud/golem/pull/4207), call-local recovery and removals | Daniel Vigovszky; merged into main at 22:46 UTC. Its runtime, SDK, WIT/schema and fixture contracts are now part of the baseline. |
 | PR #3894 / GOL-442 | This workstream; owns monthly limits and the smallest necessary integration with the surviving lifecycle |
 
 #4207 removes P2 HTTP, the global idempotence mode, atomic regions, guest cursor/checkpoint controls
@@ -30,17 +30,16 @@ and suffix-rollback scans. It keeps verified P3 continuation and host-side HTTP 
 recovery to typed loss where resources cannot resume, and preserves operator fork/revert. It does
 not add a generic guest retry schedule, a new socket API or recovery-decision instrumentation.
 
-The user has authorized local integration. Pin main at
-`14c0f47be0ce9da89be610c028540a688fa87a4b` and #4207 at
-`fc000ea235ef2fbfef5118f71b27087f4c831612`. The pinned #4207 head contains that main revision and
-the merge commits for #4198, #4199 and #4212, so one local integration includes them all. Its
-stdin producer-cancel observer and unsolicited-consumer-cancel Dropped terminal are present.
-The earlier inspected draft lacked #4212; that gap is closed in this pin, not in the old receipt.
+The user has authorized local integration and now directs this work to current main. #4207 is
+merged; it is no longer a separate branch dependency or handoff gate. The previously validated
+integration is checkpointed locally before updating against fetched main. Its exact revision and
+source receipts remain validation history, not the delivery target. Main includes #4198, #4199
+and #4212, including the stdin producer-cancel observer and consumer-cancel Dropped terminal.
 Preserve the ordinary pre-finalization terminal check and Always/Deferred commit-before-notify.
 
-#4198's merge does not remove P2 HTTP, atomic/global-idempotence controls or suffix rollback from
-main. Those removals still belong to #4207. Older ticket wording about post-1.6 work is not a reason
-to repair the discarded model. Integration remains local; pushing, review replies, tracker changes
+#4198 supplies P3 retry and continuation; #4207 supplies the removals, now in main. Older ticket
+wording about post-1.6 work is not a reason to repair the discarded model. Integration remains
+local; pushing, review replies, tracker changes
 and grant-precedence changes are not authorized.
 
 ### Newly merged stdin overlap
@@ -73,16 +72,19 @@ This section records the state at plan capture, not the status of every later ex
 
 ## Authorized work and integration boundary
 
-The user approved independent implementation before #4207 merges, then explicitly authorized
-local integration of merged main and a pinned #4207 revision. Keep #4212's merged stdin fixes.
+The user approved independent implementation, then local recovery integration, and now directs
+the branch to current main after #4207 merged. Keep #4212's merged stdin fixes.
 This does not authorize changing grants, pushing, review replies or tracker mutations.
 
-The local merge is in progress. Source conflicts are resolved. The selected combined library,
+The earlier local integration is checkpointed. Its selected combined library,
 native socket/HTTP, lifecycle, metering and CLI scopes pass, and current fixtures rebuild and
 validate. Production compilation without `test-utils`, strict executor/CLI lint and account checks
-pass. The normal merge commit cannot execute the shared `prepare-commit-msg` hook. Restore hook
-access or obtain fresh one-command authorization before completing the local merge checkpoint.
-The earlier checkpoint bypass is consumed. No remote publication has occurred.
+pass. The current-main update has resolved conflicts and passes the selected library, native,
+lifecycle, metering and CLI/client checks plus strict all-target lint and production binary checks.
+An existing privileged-XFS case was not executed in this shell and remains
+outside that evidence. The user has authorized skipping the obsolete hooks for local
+commits in this task. Use command-scoped bypasses; shared Git configuration is unchanged.
+No remote publication has occurred.
 The canonical wallet installer now owns the one replay-generation reset. Startup provenance follows
 successful installation, not the earlier attempt counter. Stop publication and progress still need
 restoration to the existing establishment owner; this intermediate merge does not close A1.
@@ -93,12 +95,12 @@ restoration to the existing establishment owner; this intermediate merge does no
 - Keep the validated independent policy/accounting/CLI changes ready for delivery.
 - Classify the finite remaining A1/F10/F11 work by surviving contract and actual #4207 overlap.
   Delete or simplify only independent PR-introduced machinery; do not rebuild removed recovery.
-- Integrate the pinned recovery implementation and its SDK/schema/fixture contracts locally.
+- Integrate current main and its recovery, SDK/schema and fixture contracts locally.
   Preserve protocol-owned repair and typed loss rather than restoring removed recovery behavior.
 
 ## Scope decisions
 
-### Finite pre-landing queue
+### Remaining integration queue
 
 | Group | Next action |
 | --- | --- |
@@ -107,7 +109,7 @@ restoration to the existing establishment owner; this intermediate merge does no
 | Filesystem observation gate | Remove the keyed semaphore gate in `wasi_filesystem/mod.rs` and its producer/consumer wiring. Its Pending event precedes polling the actual filesystem call; it is not native metadata-Pending evidence. Use actual wait/adapter proofs and separate Worker guarantees. This is retained filesystem support, not removed P2 HTTP. |
 | UDP/RPC/WebSocket test observation | Complete observer families and WebSocket reader-order gates removed. Existing tracing and an own-agent guest promise preserve native assertions without Worker test state or a recovery redesign. |
 | Monthly fault/time, replay, deletion and allocation support | Panic selector removed and locally validated through the real usage-flusher seam. Resolve the remaining controls as a fixed set; group protocol-specific cases with protocol removal and retain only surviving guarantees. |
-| P2 HTTP, suffix rollback, atomic/mode-off and changed resource recovery | No new repair work here. Use the #4207 handoff and retire removed contracts rather than rebuilding their old tests. |
+| P2 HTTP, suffix rollback, atomic/mode-off and changed resource recovery | No new repair work here. Use main's recovery contracts and retire removed contracts rather than rebuilding their old tests. |
 
 The queue is not a requirement for one build or one new test framework per row. Combine related
 changes into coherent candidates and reuse source-bound evidence for unchanged code.
@@ -136,17 +138,17 @@ either old or new behavior, skip replay errors, or label an unresolved failure "
 
 ### 1. Fix the integration boundary before more repairs
 
-- Pin an explicit #4207 branch handoff and record which SDKs, schemas and fixtures it includes.
-  It need not be merged first; its outstanding validation and unpublished dependency stay explicit.
-- The selected pin already contains merged #4198, #4199 and #4212. Preserve their changes through
+- Use fetched main, which now contains #4207. Keep the actual fetched revision in validation
+  receipts so results stay source-bound; there is no separate unmerged dependency.
+- Main also contains merged #4198, #4199 and #4212. Preserve their changes through
   conflict resolution, including #4212's distinct consumer and producer cancellation branches.
 - Use a file-and-contract overlap map. Current overlap includes Worker/loop/context code, durable
   host/streams/RPC code, test-utils, shared documentation, fixtures and generated schemas.
 - Account for renames: #4207 edits `worker/instance.rs`; this PR moved it to `worker/instance/mod.rs`.
   Port its surviving content into the directory layout rather than recreate a competing flat module.
 - Keep independent Registry/CLI/accounting work ready while the overlapping executor work settles.
-- Local integration of the selected pin is authorized. Do not substitute a later moving head
-  silently. Upstream validation remains distinct from this branch's monthly-composition evidence.
+- Local integration of main is authorized. Account for each newly fetched delta before reusing
+  earlier evidence. Upstream validation remains distinct from monthly-composition evidence.
 
 Exit: one concrete recovery contract and revision for executor work, with ownership of each overlap.
 No compatibility layer for both lifecycle models and no speculative port to several moving heads.
