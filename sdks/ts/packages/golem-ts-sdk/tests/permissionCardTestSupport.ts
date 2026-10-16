@@ -18,11 +18,13 @@
 import { PermissionCard as RawPermissionCard } from 'golem:core/types@2.0.0';
 import {
   type PermissionCard,
+  PolymorphicPermissionCard,
   ScopeCard,
   borrowPermissionCardInternal,
   borrowScopeCardInternal,
   permissionCardFromRawInternal,
 } from '../src/host/permissions';
+import { createGuestPermissionCardHandle } from '../src/internal/schema-model/permissionCardHandle';
 import { PERMISSION_CARD_INTERNAL } from '../src/internal/schema-model/permissionCardInternal';
 
 /** A fake host permission-card resource: an instance of the mocked core resource class. */
@@ -40,6 +42,13 @@ export function rawOfScopeCard(card: ScopeCard): unknown {
 
 export function permissionCardFromRaw(raw: unknown): PermissionCard {
   return permissionCardFromRawInternal(PERMISSION_CARD_INTERNAL, raw as never);
+}
+
+export function polymorphicPermissionCardFromRaw(raw: unknown): PolymorphicPermissionCard {
+  return new PolymorphicPermissionCard(
+    PERMISSION_CARD_INTERNAL,
+    createGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, raw as never),
+  );
 }
 
 export function rawOfPermissionCard(card: unknown): unknown {

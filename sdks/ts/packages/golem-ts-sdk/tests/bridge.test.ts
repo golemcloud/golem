@@ -6,11 +6,12 @@ import { SchemaValueStream, type SchemaValueTree } from 'golem:core/types@2.0.0'
 import type { ToolRpcError as RpcError } from 'golem:core/types@2.0.0';
 import { createStdin, ToolRpc, type ByteStreamFailure } from 'golem:tool/host@0.1.0';
 import { describe, expect, it, vi } from 'vitest';
-import { bridge, s, type PermissionCard } from '../src';
+import { bridge, s, type PermissionCard, PolymorphicPermissionCard } from '../src';
 import { compileSchema } from '../src/schema/adapter';
 import {
   fakeRawCard,
   permissionCardFromRaw,
+  polymorphicPermissionCardFromRaw,
   rawOfPermissionCard,
   scopeCardFromRaw,
 } from './permissionCardTestSupport';
@@ -959,7 +960,37 @@ describe('public bridge runtime', () => {
       /already held by another card/,
     );
     expect(() => bridge.permissionCardToSchemaValue({} as PermissionCard)).toThrow(
-      'invalid permission card',
+      /Expected a PermissionCard/,
+    );
+  });
+
+  it('keeps polymorphic bridge conversions to template cards', () => {
+    const raw = fakeRawCard({ id: 'template-card' }) as never;
+    const template = polymorphicPermissionCardFromRaw(raw);
+    const concrete = permissionCardFromRaw(fakeRawCard({ id: 'concrete-card' }));
+    expect(() =>
+      bridge.polymorphicPermissionCardToSchemaValue(
+        concrete as unknown as PolymorphicPermissionCard,
+      ),
+    ).toThrow(/Expected a PolymorphicPermissionCard/);
+    expect(() => bridge.permissionCardToSchemaValue(template as unknown as PermissionCard)).toThrow(
+      /Expected a PermissionCard/,
+    );
+
+    const value = bridge.polymorphicPermissionCardToSchemaValue(template);
+    expect(() => bridge.polymorphicPermissionCardFromSchemaValue(value)).toThrow(
+      /already held by another card/,
+    );
+    const lifted = bridge.schemaValueFromWit(bridge.schemaValueToWit(value));
+    expect(template.isMoved()).toBe(true);
+    const decoded = bridge.polymorphicPermissionCardFromSchemaValue(lifted);
+    expect(decoded).toBeInstanceOf(PolymorphicPermissionCard);
+    expect(rawOfPermissionCard(decoded)).toBe(raw);
+    expect(() => bridge.polymorphicPermissionCardFromSchemaValue(lifted)).toThrow(
+      /already held by another card/,
+    );
+    expect(() => bridge.polymorphicPermissionCardFromSchemaValue(bridge.v.bool(true))).toThrow(
+      /Expected a permission-card schema value/,
     );
   });
 
@@ -969,7 +1000,12 @@ describe('public bridge runtime', () => {
       asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
     };
     const card = permissionCardFromRaw(fakeRawCard({ id: 'argument-card' }));
-    const params = () => bridge.v.record([bridge.permissionCardToSchemaValue(card)]);
+    const template = polymorphicPermissionCardFromRaw(fakeRawCard({ id: 'template-argument' }));
+    const params = () =>
+      bridge.v.record([
+        bridge.permissionCardToSchemaValue(card),
+        bridge.polymorphicPermissionCardToSchemaValue(template),
+      ]);
 
     const released = scopeCardFromRaw(fakeRawCard({ id: 'released-scope' }));
     released.release();
@@ -991,6 +1027,8 @@ describe('public bridge runtime', () => {
     await expect(pending).rejects.toThrow();
     expect(card.isMoved()).toBe(false);
     expect(rawOfPermissionCard(card)).toMatchObject({ id: 'argument-card' });
+    expect(template.isMoved()).toBe(false);
+    expect(rawOfPermissionCard(template)).toMatchObject({ id: 'template-argument' });
     expect(rpc.asyncInvokeAndAwait).not.toHaveBeenCalled();
     expect(scope.isMoved()).toBe(false);
   });

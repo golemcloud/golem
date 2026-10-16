@@ -61,6 +61,8 @@ import {
   PermissionCard,
   permissionCardFromSchemaHandleInternal,
   permissionCardToSchemaValueInternal,
+  PolymorphicPermissionCard,
+  polymorphicPermissionCardFromSchemaHandleInternal,
 } from '../host/permissions';
 import type {
   BinaryRestrictions,
@@ -828,20 +830,52 @@ function streamMarker<Output>(
 // Capability node: permission-card
 // ============================================================
 
-export interface PermissionCardOptions {
-  /** Whether the card schema may carry slot variables in its owner or resource id. */
-  polymorphic: boolean;
+export interface PermissionCardOptions<Polymorphic extends boolean = boolean> {
+  /**
+   * `true` for a template card, whose grants may contain slot variables;
+   * `false` for a concrete card. `s.permissionCard` needs a literal value.
+   */
+  polymorphic: Polymorphic;
 }
 
-function permissionCardMarker(options: PermissionCardOptions): MarkerSchema<PermissionCard> {
-  const validate: Validator<PermissionCard> = (value) =>
-    value instanceof PermissionCard
-      ? ok(value)
-      : fail('Expected a PermissionCard for WIT permission-card');
+/**
+ * A `permission-card` schema node. `polymorphic: false` declares a concrete
+ * {@link PermissionCard}; `polymorphic: true` declares a template
+ * {@link PolymorphicPermissionCard}. A received card is decoded into the
+ * declared type; the host keeps the card's real kind.
+ */
+function permissionCardMarker(options: PermissionCardOptions<false>): MarkerSchema<PermissionCard>;
+function permissionCardMarker(
+  options: PermissionCardOptions<true>,
+): MarkerSchema<PolymorphicPermissionCard>;
+function permissionCardMarker(
+  options: PermissionCardOptions,
+): MarkerSchema<PermissionCard | PolymorphicPermissionCard> {
+  const polymorphic = options.polymorphic;
+  if (typeof polymorphic !== 'boolean') {
+    throw new TypeError('s.permissionCard expects { polymorphic: boolean }');
+  }
+  const validate: Validator<PermissionCard | PolymorphicPermissionCard> = polymorphic
+    ? (value) =>
+        value instanceof PolymorphicPermissionCard
+          ? ok(value)
+          : fail(
+              'Expected a PolymorphicPermissionCard for WIT permission-card { polymorphic: true }',
+            )
+    : (value) =>
+        value instanceof PermissionCard
+          ? ok(value)
+          : fail('Expected a PermissionCard for WIT permission-card { polymorphic: false }');
   const descriptor: MarkerDescriptor = () => ({
-    graph: { defs: new Map(), root: t.permissionCard(options) },
-    toValue: (value) =>
-      permissionCardToSchemaValueInternal(PERMISSION_CARD_INTERNAL, value as PermissionCard),
+    graph: { defs: new Map(), root: t.permissionCard({ polymorphic }) },
+    toValue: (value) => {
+      const issues = (validate(value) as StandardSchemaV1.FailureResult).issues;
+      if (issues !== undefined) throw new TypeError(issues[0].message);
+      return permissionCardToSchemaValueInternal(
+        PERMISSION_CARD_INTERNAL,
+        value as PermissionCard | PolymorphicPermissionCard,
+      );
+    },
     fromValue: (sv) => {
       const handle = (
         sv as {
@@ -849,7 +883,9 @@ function permissionCardMarker(options: PermissionCardOptions): MarkerSchema<Perm
           handle: GuestPermissionCardHandle;
         }
       ).handle;
-      return permissionCardFromSchemaHandleInternal(PERMISSION_CARD_INTERNAL, handle);
+      return polymorphic
+        ? polymorphicPermissionCardFromSchemaHandleInternal(PERMISSION_CARD_INTERNAL, handle)
+        : permissionCardFromSchemaHandleInternal(PERMISSION_CARD_INTERNAL, handle);
     },
   });
   return marker(validate, descriptor);
@@ -1380,7 +1416,7 @@ export const s = {
   secret: <Output>(inner: StandardSchemaV1<Output>) => secretMarker(inner),
   quotaToken: () => quotaTokenMarker(),
   stream: <Output>(inner: StandardSchemaV1<Output>) => streamMarker(inner),
-  permissionCard: (options: PermissionCardOptions) => permissionCardMarker(options),
+  permissionCard: permissionCardMarker,
 
   // Principal carried as a data value (WIT `principal` variant).
   principal: () => principalMarker(),

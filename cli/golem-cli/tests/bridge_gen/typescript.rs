@@ -30,8 +30,8 @@ use golem_cli::bridge_gen::{
 use golem_cli::model::language::GuestLanguage;
 use golem_common::model::agent::{AgentMode, CorsOptions, FileMapping, HttpMountDetails};
 use golem_common::schema::schema_type::{
-    BinaryRestrictions, DiscriminatorRule, PathDirection, PathKind, PathSpec, QuantitySpec,
-    ResultSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
+    BinaryRestrictions, DiscriminatorRule, PathDirection, PathKind, PathSpec, PermissionCardSpec,
+    QuantitySpec, ResultSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
 };
 use golem_common::schema::schema_type::{NumericBound, NumericRestrictions};
 use golem_common::schema::tool::StreamSpec;
@@ -913,6 +913,7 @@ fn guest_generation_compiles_host_managed_capability_methods() {
         SchemaType::secret(Default::default()),
         SchemaType::quota_token(Default::default()),
         SchemaType::permission_card(Default::default()),
+        SchemaType::permission_card(PermissionCardSpec { polymorphic: true }),
     ]);
     let envelope = SchemaType::record(vec![named_field(
         "capabilities",
@@ -924,6 +925,12 @@ fn guest_generation_compiles_host_managed_capability_methods() {
         variant_case(
             "permission",
             Some(SchemaType::permission_card(Default::default())),
+        ),
+        variant_case(
+            "template",
+            Some(SchemaType::permission_card(PermissionCardSpec {
+                polymorphic: true,
+            })),
         ),
     ]);
     let agent_type = agent(
@@ -955,6 +962,7 @@ fn guest_generation_compiles_host_managed_capability_methods() {
         "base.SecretHandle",
         "base.QuotaToken",
         "base.PermissionCard",
+        "base.PolymorphicPermissionCard",
     ] {
         assert!(
             source.contains(capability_type),
@@ -968,12 +976,91 @@ fn guest_generation_compiles_host_managed_capability_methods() {
         "base.quotaTokenFromSchemaValue(",
         "base.permissionCardToSchemaValue(",
         "base.permissionCardFromSchemaValue(",
+        "base.polymorphicPermissionCardToSchemaValue(",
+        "base.polymorphicPermissionCardFromSchemaValue(",
     ] {
         assert!(
             source.contains(codec),
             "missing generated capability codec {codec}:\n{source}"
         );
     }
+}
+
+#[test]
+fn guest_polymorphic_permission_cards_map_to_their_own_card_type_and_compile() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let concrete = || SchemaType::permission_card(PermissionCardSpec { polymorphic: false });
+    let template = || SchemaType::permission_card(PermissionCardSpec { polymorphic: true });
+    let agent_type = agent(
+        "CardAgent",
+        "typescript",
+        vec![],
+        vec![
+            method(
+                "delegate",
+                vec![field("concrete", concrete()), field("template", template())],
+                Some(template()),
+            ),
+            method("concreteBack", vec![], Some(concrete())),
+        ],
+        vec![],
+        AgentMode::Durable,
+    );
+    let package_dir = target.join(bridge_client_directory_name(
+        &agent_type.type_name,
+        BridgeMode::Guest,
+    ));
+    let mut generator = TypeScriptBridgeGenerator::new_with_mode(
+        agent_type,
+        &package_dir,
+        true,
+        TypeScriptBridgeMode::GuestWasmRpc,
+    )
+    .unwrap();
+    generator.generate().unwrap();
+
+    let source = std::fs::read_to_string(package_dir.join("card-agent-guest-client.ts")).unwrap();
+    for expected in [
+        "base.PolymorphicPermissionCard",
+        "base.PermissionCard",
+        "base.polymorphicPermissionCardToSchemaValue(",
+        "base.polymorphicPermissionCardFromSchemaValue(",
+        "base.permissionCardToSchemaValue(",
+        "base.permissionCardFromSchemaValue(",
+    ] {
+        assert!(
+            source.contains(expected),
+            "missing generated card mapping {expected}:\n{source}"
+        );
+    }
+
+    let test_path = package_dir.join("test.ts");
+    let mut test = std::fs::read_to_string(&test_path).unwrap_or_default();
+    test.push_str(
+        r#"
+import { CardAgent as CardAgentClient } from './card-agent-guest-client';
+import type { bridge as sdkBridge } from '@golemcloud/golem-ts-sdk';
+
+export async function cardKindUsage(
+  concrete: sdkBridge.PermissionCard,
+  template: sdkBridge.PolymorphicPermissionCard,
+): Promise<void> {
+  const client = CardAgentClient.get();
+  const returned: sdkBridge.PolymorphicPermissionCard = await client.delegate(concrete, template);
+  const back: sdkBridge.PermissionCard = await client.concreteBack();
+  // @ts-expect-error a concrete card is not a template card
+  await client.delegate(concrete, concrete);
+  // @ts-expect-error a template card is not a concrete card
+  await client.delegate(template, template);
+  // @ts-expect-error a polymorphic result is not a concrete card
+  const wrong: sdkBridge.PermissionCard = await client.delegate(concrete, template);
+  void [returned, back, wrong];
+}
+"#,
+    );
+    std::fs::write(&test_path, test).unwrap();
+    install_and_build(&package_dir);
 }
 
 #[test]

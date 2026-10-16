@@ -14,10 +14,10 @@
 
 // Typed permission-card management over `golem:permissions@0.1.0`.
 //
-// A `PermissionCard` wraps the SDK's take-once `GuestPermissionCardHandle`
-// carrier. Borrowing operations peek the handle; consuming operations (`revoke`,
-// `install`, `release`) take it before calling the host, because the host drops
-// the owned handle even when the call fails. Nothing in this module turns an
+// A `PermissionCard` or `PolymorphicPermissionCard` wraps the SDK's take-once
+// `GuestPermissionCardHandle` carrier. Borrowing operations peek the handle;
+// consuming operations (`revoke`, `install`, `release`) take it before calling
+// the host, because the host drops the owned handle even when the call fails. Nothing in this module turns an
 // identifier or plain data into a card: cards only come from the host.
 
 import type {
@@ -34,6 +34,7 @@ import {
   type Holder as RawHolder,
   type PatternGrant as RawPatternGrant,
   type PermissionError as RawPermissionError,
+  type WalletCard as RawWalletCard,
 } from 'golem:permissions/types@0.1.0';
 import { inspectCard } from 'golem:permissions/inspect@0.1.0';
 import {
@@ -386,13 +387,13 @@ function holderToRaw(holder: Holder): RawHolder {
 // Permission card
 // ============================================================
 
-const cardHandles = new WeakMap<PermissionCard, GuestPermissionCardHandle>();
+const cardHandles = new WeakMap<PersistentCard, GuestPermissionCardHandle>();
 
 const CARD_MOVED =
   'permission card has already been moved (revoked, installed, released, or sent to another ' +
   'agent) and can no longer be used';
 
-function handleOf(card: PermissionCard): GuestPermissionCardHandle {
+function handleOf(card: PersistentCard): GuestPermissionCardHandle {
   const handle = cardHandles.get(card);
   if (handle === undefined) {
     throw new Error('invalid permission card');
@@ -400,13 +401,13 @@ function handleOf(card: PermissionCard): GuestPermissionCardHandle {
   return handle;
 }
 
-function borrow(card: PermissionCard): RawPermissionCard {
+function borrow(card: PersistentCard): RawPermissionCard {
   const raw = peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, handleOf(card));
   if (raw === undefined) throw new Error(CARD_MOVED);
   return raw;
 }
 
-function take(card: PermissionCard): RawPermissionCard {
+function take(card: PersistentCard): RawPermissionCard {
   const raw = takeGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, handleOf(card));
   if (raw === undefined) throw new Error(CARD_MOVED);
   return raw;
@@ -419,34 +420,39 @@ function adopt(raw: RawPermissionCard): PermissionCard {
   );
 }
 
-/**
- * An unforgeable permission card held by this agent.
- *
- * Cards come only from the host: from {@link wallet}, a derive call, or an
- * agent method or RPC result. A card has no public constructor and cannot be
- * serialized. Sending a card to another agent, {@link PermissionCard.revoke},
- * {@link PermissionCard.install} and {@link PermissionCard.release} move it;
- * every later use of a moved card throws.
- *
- * {@link PermissionCard.id}, {@link PermissionCard.parents} and
- * {@link PermissionCard.expiresAt} trap when the host no longer knows the card,
- * for example after it was revoked by another holder.
- */
-export class PermissionCard {
-  // Makes the class nominal, so a `ScopeCard` is never a `PermissionCard` and
-  // the reverse.
-  declare private readonly permissionCardBrand: undefined;
+function adoptPolymorphic(raw: RawPermissionCard): PolymorphicPermissionCard {
+  return new PolymorphicPermissionCard(
+    PERMISSION_CARD_INTERNAL,
+    createGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, raw),
+  );
+}
 
+function timestampFromRaw(
+  raw: { seconds: bigint; nanoseconds: number } | undefined,
+): Timestamp | undefined {
+  return raw === undefined
+    ? undefined
+    : Object.freeze({ seconds: raw.seconds, nanoseconds: raw.nanoseconds });
+}
+
+/**
+ * The operations shared by {@link PermissionCard} and
+ * {@link PolymorphicPermissionCard}. It is not part of the public API: use one
+ * of the two card types.
+ */
+export abstract class PersistentCard {
   /** @internal */
   constructor(key: PermissionCardInternal, handle: GuestPermissionCardHandle) {
     if (key !== PERMISSION_CARD_INTERNAL) {
-      throw new Error('PermissionCard construction is an internal SDK operation');
+      throw new Error('permission card construction is an internal SDK operation');
     }
     if (!(handle instanceof GuestPermissionCardHandle)) {
-      throw new Error('PermissionCard can only wrap an opaque permission-card handle');
+      throw new Error('a permission card can only wrap an opaque permission-card handle');
     }
     bindGuestPermissionCardHandleToCard(key, handle, this);
     cardHandles.set(this, handle);
+    // The prototype is the card's kind; a frozen card cannot change it.
+    Object.freeze(this);
   }
 
   /** The card's identifier. */
@@ -461,10 +467,7 @@ export class PermissionCard {
 
   /** The card's expiry, or `undefined` when its lifespan is unbounded. */
   expiresAt(): Timestamp | undefined {
-    const raw = rawExpiresAt(borrow(this));
-    return raw === undefined
-      ? undefined
-      : Object.freeze({ seconds: raw.seconds, nanoseconds: raw.nanoseconds });
+    return timestampFromRaw(rawExpiresAt(borrow(this)));
   }
 
   /** The card's grant lattice. Requires `card:inspect` authority over the card. */
@@ -476,7 +479,10 @@ export class PermissionCard {
   /**
    * Derive a narrower child card. The positive lists of `bounds` name the
    * grants of this card to retain and the negative lists name the denials to
-   * add. Requires `card:derive` authority over the card.
+   * add. Requires `card:derive` authority over the card. The child is a
+   * {@link PermissionCard}. A template parent must be in this agent's wallet,
+   * where the host resolves it for this agent; otherwise the host returns
+   * `not-permitted`.
    */
   derive(bounds: Bounds, lifespan?: Lifespan): Result<PermissionCard, PermissionError> {
     const raw = borrow(this);
@@ -530,14 +536,57 @@ export class PermissionCard {
   }
 }
 
+/**
+ * An unforgeable concrete permission card held by this agent: every grant
+ * names concrete owners and resources.
+ *
+ * Cards come only from the host: from {@link wallet}, a derive call, or an
+ * agent method or RPC result. A card has no public constructor and cannot be
+ * serialized. Sending a card to another agent, {@link PermissionCard.revoke},
+ * {@link PermissionCard.install} and {@link PermissionCard.release} move it;
+ * every later use of a moved card throws.
+ *
+ * {@link PermissionCard.id}, {@link PermissionCard.parents} and
+ * {@link PermissionCard.expiresAt} trap when the host no longer knows the card,
+ * for example after it was revoked by another holder.
+ *
+ * In an agent or tool schema, declare it with
+ * `s.permissionCard({ polymorphic: false })`.
+ */
+export class PermissionCard extends PersistentCard {
+  // Makes the class nominal, so a `PolymorphicPermissionCard` or a `ScopeCard`
+  // is never a `PermissionCard` and the reverse.
+  declare private readonly permissionCardBrand: undefined;
+}
+
+/**
+ * An unforgeable template permission card held by this agent: its grants may
+ * contain slot variables (`?agent`, `?env`, ...), which resolve for each
+ * holder.
+ *
+ * It has the operations and the move rules of {@link PermissionCard}, and
+ * {@link PolymorphicPermissionCard.derive} returns a `PermissionCard`. A
+ * template card is a `derive` or {@link deriveScope} parent only while it is in
+ * this agent's wallet. The SDK has no API that converts between the two types;
+ * a card received through a schema takes the type that the schema declares.
+ *
+ * In an agent or tool schema, declare it with
+ * `s.permissionCard({ polymorphic: true })`.
+ */
+export class PolymorphicPermissionCard extends PersistentCard {
+  // Makes the class nominal, so a `PermissionCard` or a `ScopeCard` is never a
+  // `PolymorphicPermissionCard` and the reverse.
+  declare private readonly polymorphicPermissionCardBrand: undefined;
+}
+
 /** @internal Borrow the host resource of a card for one host call. */
 export function borrowPermissionCardInternal(
   key: PermissionCardInternal,
-  card: PermissionCard,
+  card: PermissionCard | PolymorphicPermissionCard,
 ): RawPermissionCard {
   requirePermissionCardInternal(key);
-  if (!(card instanceof PermissionCard)) {
-    throw new TypeError('expected a PermissionCard');
+  if (!(card instanceof PersistentCard)) {
+    throw new TypeError('expected a PermissionCard or a PolymorphicPermissionCard');
   }
   return borrow(card);
 }
@@ -568,12 +617,19 @@ function borrowScope(card: ScopeCard): RawPermissionCard {
   return raw;
 }
 
-function borrowParent(parent: PermissionCard | ScopeCard): RawPermissionCard {
-  return parent instanceof ScopeCard ? borrowScope(parent) : borrow(parent);
+function borrowParent(
+  parent: PermissionCard | PolymorphicPermissionCard | ScopeCard,
+): RawPermissionCard {
+  if (parent instanceof ScopeCard) return borrowScope(parent);
+  if (parent instanceof PersistentCard) return borrow(parent);
+  throw new TypeError(
+    'expected a PermissionCard, a PolymorphicPermissionCard or a ScopeCard as a scope parent',
+  );
 }
 
 /**
- * An invocation-local card from {@link deriveScope}.
+ * An invocation-local card from {@link deriveScope}, or the scope card lent to
+ * the current invocation, listed by {@link wallet}.
  *
  * Attach a scope card to an awaited RPC call (the `scopeCard` call or client
  * option): the callee holds its authority until that invocation ends, and the
@@ -604,6 +660,14 @@ export class ScopeCard {
   /** The identifiers of the scope card's root cards. */
   parents(): CardId[] {
     return rawParents(borrowScope(this)).map(cardIdFromRaw);
+  }
+
+  /**
+   * The earliest expiry of the root cards of this scope card, or `undefined`
+   * when no root card expires. The scope card stops authorizing then.
+   */
+  expiresAt(): Timestamp | undefined {
+    return timestampFromRaw(rawExpiresAt(borrowScope(this)));
   }
 
   /** The scope card's grant lattice. Requires `card:inspect` authority. */
@@ -646,27 +710,23 @@ export function borrowScopeCardInternal(
 /** @internal Encode a card as a schema value that moves the card when lowered. */
 export function permissionCardToSchemaValueInternal(
   key: PermissionCardInternal,
-  card: PermissionCard,
+  card: PermissionCard | PolymorphicPermissionCard,
 ): SchemaValue {
   requirePermissionCardInternal(key);
   return v.permissionCard(handleOf(card));
 }
 
-/**
- * @internal Decode the handle of a `permission-card` schema value into a card.
- * A handle that another card already holds is rejected, so decoding never
- * moves a card's resource into a second card.
- */
-export function permissionCardFromSchemaHandleInternal(
+function cardFromSchemaHandle<Card extends PersistentCard>(
   key: PermissionCardInternal,
   handle: GuestPermissionCardHandle,
-): PermissionCard {
+  Card: new (key: PermissionCardInternal, handle: GuestPermissionCardHandle) => Card,
+): Card {
   requirePermissionCardInternal(key);
   if (guestPermissionCardHandleIsBoundToCard(key, handle)) {
     throw new Error('permission-card handle is already held by another card');
   }
   if (permissionCardHandleWasLiftedFromWire(key, handle)) {
-    return new PermissionCard(key, handle);
+    return new Card(key, handle);
   }
   const raw = releaseGuestPermissionCardHandle(key, handle);
   if (raw === undefined) {
@@ -674,16 +734,31 @@ export function permissionCardFromSchemaHandleInternal(
       'permission-card handle was already consumed; an owned permission-card can only be decoded once',
     );
   }
-  return adopt(raw);
+  return new Card(key, createGuestPermissionCardHandle(key, raw));
 }
 
-/** @internal Wrap a decoded permission-card handle. */
-export function permissionCardFromHandleInternal(
+/**
+ * @internal Decode the handle of a `permission-card { polymorphic: false }`
+ * schema value into a card. A handle that another card already holds is
+ * rejected, so decoding never moves a card's resource into a second card.
+ */
+export function permissionCardFromSchemaHandleInternal(
   key: PermissionCardInternal,
   handle: GuestPermissionCardHandle,
 ): PermissionCard {
-  requirePermissionCardInternal(key);
-  return new PermissionCard(key, handle);
+  return cardFromSchemaHandle(key, handle, PermissionCard);
+}
+
+/**
+ * @internal Decode the handle of a `permission-card { polymorphic: true }`
+ * schema value into a template card, with the rules of
+ * {@link permissionCardFromSchemaHandleInternal}.
+ */
+export function polymorphicPermissionCardFromSchemaHandleInternal(
+  key: PermissionCardInternal,
+  handle: GuestPermissionCardHandle,
+): PolymorphicPermissionCard {
+  return cardFromSchemaHandle(key, handle, PolymorphicPermissionCard);
 }
 
 /** @internal Wrap a host-owned permission-card resource. */
@@ -706,15 +781,58 @@ function requirePermissionCardInternal(key: PermissionCardInternal): void {
 // ============================================================
 
 /**
- * The cards installed in this agent's wallet. The caller owns the returned
- * cards; {@link PermissionCard.release} the ones it does not keep.
+ * A card in this agent's wallet, labelled with its kind. Switch on `tag`; the
+ * card of each case has its own type.
+ */
+export type WalletCard =
+  /** A concrete card: every grant names concrete owners and resources. */
+  | { readonly tag: 'concrete'; readonly card: PermissionCard }
+  /** A template card: its grants may contain slot variables, which resolve for each holder. */
+  | { readonly tag: 'template'; readonly card: PolymorphicPermissionCard }
+  /** The scope card lent to the current invocation. */
+  | { readonly tag: 'scope'; readonly card: ScopeCard };
+
+function walletCardFromRaw(raw: RawWalletCard): WalletCard {
+  switch (raw.tag) {
+    case 'concrete':
+      return Object.freeze({ tag: 'concrete', card: adopt(raw.val) });
+    case 'template':
+      return Object.freeze({ tag: 'template', card: adoptPolymorphic(raw.val) });
+    case 'scope':
+      return Object.freeze({
+        tag: 'scope',
+        card: new ScopeCard(PERMISSION_CARD_INTERNAL, raw.val),
+      });
+    default:
+      throw new Error(`unknown wallet card kind '${(raw as { tag: unknown }).tag}'`);
+  }
+}
+
+function disposeRaw(raw: RawPermissionCard): void {
+  (raw as RawPermissionCard & { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
+}
+
+/**
+ * The cards installed in this agent's wallet, each labelled with its kind. The
+ * caller owns the returned cards; release the ones it does not keep.
  *
  * During an invocation that received a scope card, the host also lists that
- * scope card here if the agent holds `card:inspect`. It comes back as a
- * `PermissionCard`, and the host refuses to revoke, install or persist it.
+ * scope card, as a `scope` entry, if the agent holds `card:inspect`. Like a
+ * scope card from {@link deriveScope}, it is valid only during the current
+ * invocation.
  */
-export function wallet(): PermissionCard[] {
-  return selfWallet().map(adopt);
+export function wallet(): WalletCard[] {
+  const raws = selfWallet();
+  const cards: WalletCard[] = [];
+  try {
+    for (const raw of raws) cards.push(walletCardFromRaw(raw));
+  } catch (error) {
+    // The entry that failed is left alone: its resource may belong to another card.
+    for (const entry of cards) entry.card.release();
+    for (const raw of raws.slice(cards.length + 1)) disposeRaw(raw.val);
+    throw error;
+  }
+  return cards;
 }
 
 /** This agent's wallet version. */
@@ -749,7 +867,7 @@ export function deriveFromWallet(
  * requested lists.
  */
 export function deriveScope(
-  parents: readonly (PermissionCard | ScopeCard)[],
+  parents: readonly (PermissionCard | PolymorphicPermissionCard | ScopeCard)[],
   bounds: Bounds,
 ): Result<ScopeCard, PermissionError> {
   const rawParents = parents.map(borrowParent);

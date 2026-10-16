@@ -68,7 +68,7 @@ export * from './host/guard';
 export { acquireQuotaToken, QuotaToken, Reservation, withReservation } from './host/quota';
 export type { FailedReservation } from './host/quota';
 export * as permissions from './permissions';
-export { PermissionCard, ScopeCard } from './host/permissions';
+export { PermissionCard, PolymorphicPermissionCard, ScopeCard } from './host/permissions';
 export * from './host/retry';
 export * from './host/result';
 export * from './host/saga';

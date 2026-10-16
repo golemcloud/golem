@@ -26,7 +26,7 @@ import {
   method,
   permissions,
   s,
-  type PermissionCard,
+  type PolymorphicPermissionCard,
 } from '@golemcloud/golem-ts-sdk';
 import { getEnvironment } from 'wasi:cli/environment@0.3.0';
 
@@ -62,23 +62,45 @@ function sameGrant(left: permissions.PatternGrant, right: permissions.PatternGra
   return render(left) === render(right);
 }
 
-/** The wallet card that carries the caller's concrete env grant. Releases the other wallet cards. */
-function templateCard(): PermissionCard {
-  let template: PermissionCard | undefined;
-  for (const card of permissions.wallet()) {
-    const view = template === undefined ? card.inspect() : undefined;
+/** The template wallet card with the caller's env grant. Releases the other wallet cards. */
+function templateCard(): PolymorphicPermissionCard {
+  let template: PolymorphicPermissionCard | undefined;
+  for (const entry of permissions.wallet()) {
+    const view =
+      template === undefined && entry.tag === 'template' ? entry.card.inspect() : undefined;
     if (
+      entry.tag === 'template' &&
       view !== undefined &&
       view.isOk() &&
       view.unwrap().lowerPositive.some((grant) => sameGrant(grant, envGrant))
     ) {
-      template = card;
+      template = entry.card;
     } else {
-      card.release();
+      entry.card.release();
     }
   }
-  if (template === undefined) throw new Error('the caller wallet has no card with the env grant');
+  if (template === undefined) {
+    throw new Error('the caller wallet has no template card with the env grant');
+  }
   return template;
+}
+
+/**
+ * The sorted kinds of this agent's wallet cards, and the expiry of a listed
+ * scope card. Releases every card.
+ */
+function walletKinds(): { kinds: string[]; scopeExpiresAt: number } {
+  const kinds: string[] = [];
+  let scopeExpiresAt = -1;
+  for (const entry of permissions.wallet()) {
+    kinds.push(entry.tag);
+    if (entry.tag === 'scope') {
+      const expiresAt = entry.card.expiresAt();
+      scopeExpiresAt = expiresAt === undefined ? 0 : Number(expiresAt.seconds);
+    }
+    entry.card.release();
+  }
+  return { kinds: kinds.sort(), scopeExpiresAt };
 }
 
 function errorMessage(error: unknown): string {
@@ -90,10 +112,17 @@ export const PermissionCallee = defineAgent({
   id: { name: z.string() },
   methods: {
     scopeEnv: method({ input: {}, returns: z.string() }),
-    walletSize: method({ input: {}, returns: z.number() }),
+    walletKinds: method({
+      input: {},
+      returns: z.object({ kinds: z.array(z.string()), scopeExpiresAt: z.number() }),
+    }),
     echoCard: method({
       input: { card: s.permissionCard({ polymorphic: false }) },
       returns: s.permissionCard({ polymorphic: false }),
+    }),
+    echoTemplate: method({
+      input: { card: s.permissionCard({ polymorphic: true }) },
+      returns: s.permissionCard({ polymorphic: true }),
     }),
   },
 });
@@ -104,13 +133,15 @@ export const PermissionCalleeImpl = PermissionCallee.implement({
     scopeEnv() {
       return getEnvironment().find(([key]) => key === SCOPE_ENV)?.[1] ?? ABSENT;
     },
-    walletSize() {
-      const cards = permissions.wallet();
-      for (const card of cards) card.release();
-      return cards.length;
+    walletKinds() {
+      return walletKinds();
     },
     echoCard({ card }) {
       if (card.isMoved()) throw new Error('the received card is not usable');
+      return card;
+    },
+    echoTemplate({ card }) {
+      if (card.isMoved()) throw new Error('the received template card is not usable');
       return card;
     },
   },
@@ -145,14 +176,27 @@ export const PermissionCaller = defineAgent({
     installAndRevoke: method({
       input: { calleeName: z.string() },
       returns: z.object({
-        walletBefore: z.number(),
+        walletBefore: z.array(z.string()),
         installed: z.boolean(),
         movedError: z.string(),
-        walletAfterInstall: z.number(),
+        walletAfterInstall: z.array(z.string()),
         envAfterInstall: z.string(),
         revokedCount: z.number(),
-        walletAfterRevoke: z.number(),
+        walletAfterRevoke: z.array(z.string()),
         envAfterRevoke: z.string(),
+      }),
+    }),
+    walletCardKinds: method({
+      input: { calleeName: z.string() },
+      returns: z.object({
+        ownBefore: z.array(z.string()),
+        own: z.array(z.string()),
+        templateChildIsConcrete: z.boolean(),
+        parentExpiresAt: z.number(),
+        scopeExpiresAt: z.number(),
+        calleeWithoutScope: z.array(z.string()),
+        calleeWithScope: z.array(z.string()),
+        calleeScopeExpiresAt: z.number(),
       }),
     }),
     keepScopeCard: method({ input: {}, returns: z.void() }),
@@ -163,6 +207,9 @@ export const PermissionCaller = defineAgent({
         movedAfterSend: z.boolean(),
         sameCard: z.boolean(),
         returnedInspectable: z.boolean(),
+        templateMovedAfterSend: z.boolean(),
+        sameTemplate: z.boolean(),
+        returnedTemplateInspectable: z.boolean(),
       }),
     }),
     recipientMismatch: method({
@@ -226,7 +273,7 @@ export const PermissionCallerImpl = PermissionCaller.implement({
 
     async installAndRevoke({ calleeName }) {
       const callee = PermissionCallee.client.get({ name: calleeName });
-      const walletBefore = await callee.walletSize();
+      const walletBefore = (await callee.walletKinds()).kinds;
       const parent = permissions
         .deriveFromWallet({ lowerPositive: [inspectGrant, envGrant] })
         .unwrap();
@@ -238,11 +285,11 @@ export const PermissionCallerImpl = PermissionCaller.implement({
       } catch (error) {
         movedError = errorMessage(error);
       }
-      const walletAfterInstall = await callee.walletSize();
+      const walletAfterInstall = (await callee.walletKinds()).kinds;
       const envAfterInstall = await callee.scopeEnv();
       const keptChild = parent.derive({ lowerPositive: [envGrant] }).unwrap();
       const revokedCount = parent.revoke().unwrap();
-      const walletAfterRevoke = await callee.walletSize();
+      const walletAfterRevoke = (await callee.walletKinds()).kinds;
       const envAfterRevoke = await callee.scopeEnv();
       keptChild.release();
       return {
@@ -255,6 +302,62 @@ export const PermissionCallerImpl = PermissionCaller.implement({
         walletAfterRevoke,
         envAfterRevoke,
       };
+    },
+
+    async walletCardKinds({ calleeName }) {
+      const ownBefore = walletKinds().kinds;
+      const template = templateCard();
+      const parent = template
+        .derive(
+          { lowerPositive: [inspectGrant, envGrant] },
+          permissions.Lifespan.of(Duration.hours(1)),
+        )
+        .unwrap();
+      const templateChildIsConcrete = parent instanceof permissions.PermissionCard;
+      const parentExpiresAt = Number(parent.expiresAt()?.seconds ?? -1n);
+      template.release();
+      // A persistent scope parent must be in the wallet, so install the expiring card on this
+      // agent and take both cards from the wallet again.
+      parent.install(permissions.Holder.agent(getSelfMetadata().agentId)).unwrap();
+      const own: string[] = [];
+      let walletTemplate: PolymorphicPermissionCard | undefined;
+      let walletConcrete: permissions.PermissionCard | undefined;
+      for (const entry of permissions.wallet()) {
+        own.push(entry.tag);
+        if (entry.tag === 'template' && walletTemplate === undefined) {
+          walletTemplate = entry.card;
+        } else if (entry.tag === 'concrete' && walletConcrete === undefined) {
+          walletConcrete = entry.card;
+        } else {
+          entry.card.release();
+        }
+      }
+      if (walletTemplate === undefined || walletConcrete === undefined) {
+        throw new Error('the wallet lacks the template or the installed concrete card');
+      }
+      // The template root has no expiry, so the scope card expires with the installed card.
+      const scope = permissions
+        .deriveScope([walletTemplate, walletConcrete], {
+          lowerPositive: [inspectGrant, envGrant],
+        })
+        .unwrap();
+      const callee = PermissionCallee.client.get({ name: calleeName });
+      const calleeWithoutScope = await callee.walletKinds();
+      const calleeWithScope = await callee.walletKinds({ scopeCard: scope });
+      const result = {
+        ownBefore,
+        own: own.sort(),
+        templateChildIsConcrete,
+        parentExpiresAt,
+        scopeExpiresAt: Number(scope.expiresAt()?.seconds ?? -1n),
+        calleeWithoutScope: calleeWithoutScope.kinds,
+        calleeWithScope: calleeWithScope.kinds,
+        calleeScopeExpiresAt: calleeWithScope.scopeExpiresAt,
+      };
+      scope.release();
+      walletConcrete.release();
+      walletTemplate.release();
+      return result;
     },
 
     keepScopeCard() {
@@ -277,12 +380,23 @@ export const PermissionCallerImpl = PermissionCaller.implement({
       const card = permissions.deriveFromWallet({ lowerPositive: [inspectGrant] }).unwrap();
       const id = card.id();
       const returned = await PermissionCallee.client.get({ name: calleeName }).echoCard({ card });
+      const template = templateCard();
+      const templateId = template.id();
+      const returnedTemplate = await PermissionCallee.client
+        .get({ name: calleeName })
+        .echoTemplate({ card: template });
       const result = {
         movedAfterSend: card.isMoved(),
         sameCard: returned.id() === id,
         returnedInspectable: returned.inspect().isOk(),
+        templateMovedAfterSend: template.isMoved(),
+        sameTemplate:
+          returnedTemplate instanceof permissions.PolymorphicPermissionCard &&
+          returnedTemplate.id() === templateId,
+        returnedTemplateInspectable: returnedTemplate.inspect().isOk(),
       };
       returned.release();
+      returnedTemplate.release();
       return result;
     },
 

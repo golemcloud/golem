@@ -879,7 +879,12 @@ describe('tool runtime client', () => {
         issuer: z.string(),
       });
       const remoteCodec = compileSchema(
-        z.object({ card: s.permissionCard({ polymorphic }), issuer: z.string() }),
+        z.object({
+          card: polymorphic
+            ? s.permissionCard({ polymorphic: true })
+            : s.permissionCard({ polymorphic: false }),
+          issuer: z.string(),
+        }),
       );
       const dispose = vi.fn();
       const raw = fakeRawCard({ [Symbol.dispose]: dispose }) as never;
@@ -905,7 +910,11 @@ describe('tool runtime client', () => {
                 ],
               ]),
             },
-            value: remoteCodec.toValue({ card: permissionCardFromRaw(raw), issuer: 'rust' }),
+            // The value tree does not carry the polymorphic flag; only the graph differs.
+            value: compileSchema(localSchema).toValue({
+              card: permissionCardFromRaw(raw),
+              issuer: 'rust',
+            }),
           }),
         })),
       })['named-issuer']({});

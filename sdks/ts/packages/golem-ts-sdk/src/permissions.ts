@@ -25,6 +25,7 @@ export {
   PERMISSION_ERROR_KINDS,
   PermissionCard,
   PermissionError,
+  PolymorphicPermissionCard,
   ScopeCard,
   validateGrant,
   wallet,
@@ -37,5 +38,6 @@ export type {
   PatternGrant,
   PermissionErrorKind,
   Timestamp,
+  WalletCard,
   WalletVersionToken,
 } from './host/permissions';

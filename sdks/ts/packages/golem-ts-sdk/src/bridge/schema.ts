@@ -26,10 +26,12 @@ import {
   PermissionCard,
   permissionCardFromSchemaHandleInternal,
   permissionCardToSchemaValueInternal,
+  PolymorphicPermissionCard,
+  polymorphicPermissionCardFromSchemaHandleInternal,
 } from '../host/permissions';
 
 export type SecretHandle = RawSecret;
-export { PermissionCard, QuotaToken };
+export { PermissionCard, PolymorphicPermissionCard, QuotaToken };
 export { ScopeCard } from '../host/permissions';
 
 export function secretHandleToSchemaValue(value: SecretHandle): SchemaValue {
@@ -56,6 +58,9 @@ export function quotaTokenFromSchemaValue(value: SchemaValue): QuotaToken {
 }
 
 export function permissionCardToSchemaValue(value: PermissionCard): SchemaValue {
+  if (!(value instanceof PermissionCard)) {
+    throw new TypeError('Expected a PermissionCard for WIT permission-card { polymorphic: false }');
+  }
   return permissionCardToSchemaValueInternal(PERMISSION_CARD_INTERNAL, value);
 }
 
@@ -64,6 +69,26 @@ export function permissionCardFromSchemaValue(value: SchemaValue): PermissionCar
     throw new Error(`Expected a permission-card schema value, got '${value.tag}'`);
   }
   return permissionCardFromSchemaHandleInternal(PERMISSION_CARD_INTERNAL, value.handle);
+}
+
+export function polymorphicPermissionCardToSchemaValue(
+  value: PolymorphicPermissionCard,
+): SchemaValue {
+  if (!(value instanceof PolymorphicPermissionCard)) {
+    throw new TypeError(
+      'Expected a PolymorphicPermissionCard for WIT permission-card { polymorphic: true }',
+    );
+  }
+  return permissionCardToSchemaValueInternal(PERMISSION_CARD_INTERNAL, value);
+}
+
+export function polymorphicPermissionCardFromSchemaValue(
+  value: SchemaValue,
+): PolymorphicPermissionCard {
+  if (value.tag !== 'permission-card') {
+    throw new Error(`Expected a permission-card schema value, got '${value.tag}'`);
+  }
+  return polymorphicPermissionCardFromSchemaHandleInternal(PERMISSION_CARD_INTERNAL, value.handle);
 }
 
 export function typedSchemaValueConforms(

@@ -42,9 +42,24 @@ import { encodeToolValue } from '../src/internal/tool/invocationResult';
 import { PermissionCard } from '../src/host/permissions';
 import {
   permissionCardFromRaw,
+  polymorphicPermissionCardFromRaw,
   rawOfPermissionCard,
   fakeRawCard,
 } from './permissionCardTestSupport';
+
+// Each permission-card schema flag with a card of its declared type.
+const cardKinds = [
+  {
+    kind: 'concrete',
+    schema: () => s.permissionCard({ polymorphic: false }),
+    card: (raw: unknown) => permissionCardFromRaw(raw),
+  },
+  {
+    kind: 'template',
+    schema: () => s.permissionCard({ polymorphic: true }),
+    card: (raw: unknown) => polymorphicPermissionCardFromRaw(raw),
+  },
+] as const;
 import type { ByteStreamFailure } from 'golem:tool/host@0.1.0';
 
 const streamFailures = [
@@ -1336,39 +1351,45 @@ describe('tool guest exports', () => {
     });
   });
 
-  it('rejects an aliased permission card in a result and keeps it usable for a retry', () => {
-    const raw = fakeRawCard() as never;
-    const card = permissionCardFromRaw(raw);
-    const codec = compileSchema(z.array(s.permissionCard({ polymorphic: false })));
-    expect(() => encodeToolValue(codec, [card, card], 'tool result')).toThrow();
-    expect(card.isMoved()).toBe(false);
-    const result = encodeToolValue(codec, [card], 'tool result');
-    const [decoded] = codec.fromValue(typedSchemaValueFromWit(result).value) as PermissionCard[];
-    expect(rawOfPermissionCard(decoded)).toBe(raw);
-  });
+  it.each(cardKinds)(
+    'rejects an aliased $kind permission card in a result and keeps it usable for a retry',
+    ({ schema, card: cardFromRaw }) => {
+      const raw = fakeRawCard() as never;
+      const card = cardFromRaw(raw);
+      const codec = compileSchema(z.array(schema()));
+      expect(() => encodeToolValue(codec, [card, card], 'tool result')).toThrow();
+      expect(card.isMoved()).toBe(false);
+      const result = encodeToolValue(codec, [card], 'tool result');
+      const [decoded] = codec.fromValue(typedSchemaValueFromWit(result).value) as PermissionCard[];
+      expect(decoded).toBeInstanceOf(card.constructor);
+      expect(rawOfPermissionCard(decoded)).toBe(raw);
+    },
+  );
 
-  it('keeps a permission card usable when a later property getter throws', () => {
-    const raw = fakeRawCard() as never;
-    const card = permissionCardFromRaw(raw);
-    const codec = compileSchema(
-      z.object({ capability: s.permissionCard({ polymorphic: false }), later: z.string() }),
-    );
-    expect(() =>
-      codec.toValue({
-        capability: card,
-        get later() {
-          throw new Error('getter failed');
-        },
-      }),
-    ).toThrow('getter failed');
-    const result = encodeToolValue(codec, { capability: card, later: 'ok' }, 'tool result');
-    const decoded = codec.fromValue(typedSchemaValueFromWit(result).value) as {
-      capability: PermissionCard;
-      later: string;
-    };
-    expect(rawOfPermissionCard(decoded.capability)).toBe(raw);
-    expect(decoded.later).toBe('ok');
-  });
+  it.each(cardKinds)(
+    'keeps a $kind permission card usable when a later property getter throws',
+    ({ schema, card: cardFromRaw }) => {
+      const raw = fakeRawCard() as never;
+      const card = cardFromRaw(raw);
+      const codec = compileSchema(z.object({ capability: schema(), later: z.string() }));
+      expect(() =>
+        codec.toValue({
+          capability: card,
+          get later() {
+            throw new Error('getter failed');
+          },
+        }),
+      ).toThrow('getter failed');
+      const result = encodeToolValue(codec, { capability: card, later: 'ok' }, 'tool result');
+      const decoded = codec.fromValue(typedSchemaValueFromWit(result).value) as {
+        capability: PermissionCard;
+        later: string;
+      };
+      expect(decoded.capability).toBeInstanceOf(card.constructor);
+      expect(rawOfPermissionCard(decoded.capability)).toBe(raw);
+      expect(decoded.later).toBe('ok');
+    },
+  );
 
   it('moves a lifted card whose resource is disposed after a failed decode', () => {
     const dispose = vi.fn();

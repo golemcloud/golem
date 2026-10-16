@@ -39,10 +39,11 @@ import {
   typedSchemaValueToWit,
   v,
 } from '../src/internal/schema-model';
-import { PermissionCard } from '../src/host/permissions';
+import { PermissionCard, PolymorphicPermissionCard } from '../src/host/permissions';
 import {
   fakeRawCard,
   permissionCardFromRaw,
+  polymorphicPermissionCardFromRaw,
   rawOfPermissionCard,
   rawOfScopeCard,
   scopeCardFromRaw,
@@ -411,15 +412,29 @@ describe('schema markers', () => {
     });
 
     const raw = fakeRawCard({ id: 'opaque-permission-card' }) as never;
-    const card = permissionCardFromRaw(raw);
+    const card = polymorphicPermissionCardFromRaw(raw);
     // A local decode of the card's own value would alias it into a second card.
     expect(() => codec.fromValue(codec.toValue(card))).toThrow(/already held by another card/);
     expect(card.isMoved()).toBe(false);
     const decoded = codec.fromValue(schemaValueFromWit(schemaValueToWit(codec.toValue(card))));
-    expect(decoded).toBeInstanceOf(PermissionCard);
+    expect(decoded).toBeInstanceOf(PolymorphicPermissionCard);
     expect(rawOfPermissionCard(decoded)).toBe(raw);
     expect(card.isMoved()).toBe(true);
     expect(() => codec.toValue({ id: 'raw-host-resource' })).toThrow();
+
+    const concreteCodec = compileSchema(s.permissionCard({ polymorphic: false }));
+    expect(concreteCodec.graph.root.body).toEqual({
+      tag: 'permission-card',
+      spec: { polymorphic: false },
+    });
+    const concreteRaw = fakeRawCard({ id: 'concrete-permission-card' }) as never;
+    const concrete = concreteCodec.fromValue(
+      schemaValueFromWit(
+        schemaValueToWit(concreteCodec.toValue(permissionCardFromRaw(concreteRaw))),
+      ),
+    );
+    expect(concrete).toBeInstanceOf(PermissionCard);
+    expect(rawOfPermissionCard(concrete)).toBe(concreteRaw);
   });
 
   it('maps unstructuredText to a role-tagged variant and round-trips', () => {

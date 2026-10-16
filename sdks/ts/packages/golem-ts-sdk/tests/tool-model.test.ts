@@ -49,7 +49,10 @@ import {
   schemaValueConforms,
   validateExtendedTool,
 } from '../src/internal/tool';
-import { permissionCardFromRaw } from './permissionCardTestSupport';
+import {
+  permissionCardFromRaw,
+  polymorphicPermissionCardFromRaw,
+} from './permissionCardTestSupport';
 
 const stringCodec = compileSchema(z.string());
 
@@ -1427,9 +1430,20 @@ describe('internal extended tool model', () => {
     expect(capability.fromValue(capability.toValue(raw))).toBe(raw);
   });
 
-  it('keeps a permission card usable when a later optional field fails', () => {
-    const card = permissionCardFromRaw({});
-    const capability = compileSchema(s.permissionCard({ polymorphic: false }));
+  it.each([
+    {
+      kind: 'concrete',
+      card: () => permissionCardFromRaw({}),
+      schema: () => s.permissionCard({ polymorphic: false }),
+    },
+    {
+      kind: 'template',
+      card: () => polymorphicPermissionCardFromRaw({}),
+      schema: () => s.permissionCard({ polymorphic: true }),
+    },
+  ] as const)('keeps a $kind permission card usable when a later optional field fails', (kind) => {
+    const card = kind.card();
+    const capability = compileSchema(kind.schema());
     const canonical = new CanonicalInputModel([
       { name: 'capability', aliases: [], codec: optionalCanonicalFieldCodec(capability) },
       { name: 'later', aliases: [], codec: stringCodec },

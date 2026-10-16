@@ -562,14 +562,26 @@ struct ScopeRpc {
 
 #[derive(Debug, FromSchema, PartialEq)]
 struct InstallAndRevoke {
-    wallet_before: f64,
+    wallet_before: Vec<String>,
     installed: bool,
     moved_error: String,
-    wallet_after_install: f64,
+    wallet_after_install: Vec<String>,
     env_after_install: String,
     revoked_count: f64,
-    wallet_after_revoke: f64,
+    wallet_after_revoke: Vec<String>,
     env_after_revoke: String,
+}
+
+#[derive(Debug, FromSchema, PartialEq)]
+struct WalletCardKinds {
+    own_before: Vec<String>,
+    own: Vec<String>,
+    template_child_is_concrete: bool,
+    parent_expires_at: f64,
+    scope_expires_at: f64,
+    callee_without_scope: Vec<String>,
+    callee_with_scope: Vec<String>,
+    callee_scope_expires_at: f64,
 }
 
 #[derive(Debug, FromSchema, PartialEq)]
@@ -577,6 +589,13 @@ struct CardRoundTrip {
     moved_after_send: bool,
     same_card: bool,
     returned_inspectable: bool,
+    template_moved_after_send: bool,
+    same_template: bool,
+    returned_template_inspectable: bool,
+}
+
+fn kinds(kinds: &[&str]) -> Vec<String> {
+    kinds.iter().map(|kind| kind.to_string()).collect()
 }
 
 #[derive(Debug, FromSchema, PartialEq)]
@@ -715,14 +734,15 @@ async fn ts_permissions_install_and_revoke_move_authority_between_agents(
     assert_eq!(
         observed,
         InstallAndRevoke {
-            wallet_before: 1.0,
+            // The callee's own initial card is a template; the installed child is concrete.
+            wallet_before: kinds(&["template"]),
             installed: true,
             moved_error: observed.moved_error.clone(),
-            wallet_after_install: 2.0,
+            wallet_after_install: kinds(&["concrete", "template"]),
             env_after_install: "visible".to_string(),
             // The revoked parent, the installed child and the child the caller kept.
             revoked_count: 3.0,
-            wallet_after_revoke: 1.0,
+            wallet_after_revoke: kinds(&["template"]),
             env_after_revoke: "<absent>".to_string(),
         }
     );
@@ -812,7 +832,58 @@ async fn ts_permissions_cards_move_through_rpc_arguments_and_results(
             moved_after_send: true,
             same_card: true,
             returned_inspectable: true,
+            template_moved_after_send: true,
+            same_template: true,
+            returned_template_inspectable: true,
         }
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn ts_permissions_wallet_labels_card_kinds_and_scope_expiry(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_ts")] agent_sdk_ts: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let scenario = start_scenario(deps, &context, agent_sdk_ts, "kinds").await?;
+
+    let started = chrono::Utc::now().timestamp() as f64;
+    let observed = scenario
+        .executor
+        .invoke_and_await_agent(
+            &scenario.component,
+            &scenario.caller,
+            "walletCardKinds",
+            data_value!("kinds-callee"),
+        )
+        .await?
+        .into_typed::<WalletCardKinds>()?;
+
+    assert_eq!(
+        observed,
+        WalletCardKinds {
+            own_before: kinds(&["template"]),
+            // The expiring child of the template, installed on the caller itself, is concrete.
+            own: kinds(&["concrete", "template"]),
+            template_child_is_concrete: true,
+            parent_expires_at: observed.parent_expires_at,
+            // The template root never expires, so the earliest root expiry is the installed card's.
+            scope_expires_at: observed.parent_expires_at,
+            callee_without_scope: kinds(&["template"]),
+            // The scope card grants `card:inspect`, so the callee sees it in its wallet.
+            callee_with_scope: kinds(&["scope", "template"]),
+            callee_scope_expires_at: observed.parent_expires_at,
+        }
+    );
+    let lifespan = observed.parent_expires_at - started;
+    assert!(
+        (3500.0..=3700.0).contains(&lifespan),
+        "the parent card must expire one hour after it was derived, got {lifespan}s"
     );
     Ok(())
 }

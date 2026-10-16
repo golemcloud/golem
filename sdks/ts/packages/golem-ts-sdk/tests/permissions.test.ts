@@ -39,8 +39,10 @@ function fakeCard(name: string, id: bigint, parents: bigint[] = []): FakeCard {
 
 const cardId = (id: bigint) => ({ uuid: { highBits: 7n, lowBits: id } });
 
+type WalletTag = 'concrete' | 'template' | 'scope';
+
 interface Host {
-  wallet: FakeCard[];
+  wallet: { tag: WalletTag; val: FakeCard }[];
   derive: ReturnType<typeof vi.fn>;
   deriveFromWallet: ReturnType<typeof vi.fn>;
   deriveScope: ReturnType<typeof vi.fn>;
@@ -66,7 +68,7 @@ async function loadPermissions(): Promise<{
 }> {
   vi.resetModules();
   const host: Host = {
-    wallet: [fakeCard('template', 1n)],
+    wallet: [{ tag: 'template', val: fakeCard('template', 1n) }],
     derive: vi.fn((parent: FakeCard) => fakeCard('child', 3n, [parent.id])),
     deriveFromWallet: vi.fn(() => fakeCard('wallet-derived', 2n, [1n])),
     deriveScope: vi.fn((parents: FakeCard[]) =>
@@ -92,7 +94,11 @@ async function loadPermissions(): Promise<{
     id: (card: FakeCard) => cardId(card.id),
     parents: (card: FakeCard) => card.parents.map(cardId),
     expiresAt: (card: FakeCard) =>
-      card.name === 'child' ? { seconds: 1_700_000_000n, nanoseconds: 5 } : undefined,
+      card.name === 'child'
+        ? { seconds: 1_700_000_000n, nanoseconds: 5 }
+        : card.name === 'scope'
+          ? { seconds: 1_600_000_000n, nanoseconds: 7 }
+          : undefined,
   }));
   vi.doMock('golem:permissions/inspect@0.1.0', () => ({ inspectCard: host.inspectCard }));
   vi.doMock('golem:permissions/derive@0.1.0', () => ({
@@ -133,6 +139,15 @@ const rawGrant = (resourceId: string) => ({
   resourceId,
 });
 
+function walletCard<Tag extends WalletTag>(
+  permissions: PermissionsModule,
+  tag: Tag,
+): Extract<ReturnType<PermissionsModule['wallet']>[number], { tag: Tag }>['card'] {
+  const entry = permissions.wallet().find((card) => card.tag === tag);
+  if (entry === undefined) throw new Error(`no ${tag} wallet card`);
+  return entry.card as never;
+}
+
 afterEach(() => {
   for (const module of MODULES) vi.doUnmock(module);
   vi.resetModules();
@@ -141,7 +156,7 @@ afterEach(() => {
 describe('permission cards', () => {
   it('borrows cards for inspection and interns card IDs for equality', async () => {
     const { permissions } = await loadPermissions();
-    const [template] = permissions.wallet();
+    const template = walletCard(permissions, 'template');
     const parent = permissions.deriveFromWallet({ upperPositive: [envGrant] }).unwrap();
     const child = parent.derive({}).unwrap();
 
@@ -312,11 +327,66 @@ describe('permission cards', () => {
     expect(kept.isMoved()).toBe(false);
   });
 
+  it('labels each wallet card with its kind and its own card type', async () => {
+    const { host, permissions } = await loadPermissions();
+    host.wallet = [
+      { tag: 'concrete', val: fakeCard('concrete', 11n) },
+      { tag: 'template', val: fakeCard('template', 12n) },
+      { tag: 'scope', val: fakeCard('scope', 13n, [12n]) },
+    ];
+    const [concrete, template, scope] = permissions.wallet();
+    expect(Object.isFrozen(concrete)).toBe(true);
+    if (concrete.tag !== 'concrete' || template.tag !== 'template' || scope.tag !== 'scope') {
+      throw new Error('the wallet lost the host order or labels');
+    }
+    expect(concrete.card).toBeInstanceOf(permissions.PermissionCard);
+    expect(concrete.card).not.toBeInstanceOf(permissions.PolymorphicPermissionCard);
+    expect(template.card).toBeInstanceOf(permissions.PolymorphicPermissionCard);
+    expect(template.card).not.toBeInstanceOf(permissions.PermissionCard);
+    expect(scope.card).toBeInstanceOf(permissions.ScopeCard);
+    expect(scope.card).not.toBeInstanceOf(permissions.PermissionCard);
+    expect(scope.card).not.toBeInstanceOf(permissions.PolymorphicPermissionCard);
+    expect(scope.card.parents()).toEqual([template.card.id()]);
+    expect(scope.card.expiresAt()).toEqual({ seconds: 1_600_000_000n, nanoseconds: 7 });
+
+    concrete.card.release();
+    template.card.release();
+    scope.card.release();
+    expect(host.wallet.map((entry) => entry.val.disposed)).toEqual([true, true, true]);
+    expect(scope.card.isMoved()).toBe(true);
+    expect(() => scope.card.expiresAt()).toThrow(/already been released/);
+  });
+
+  it('releases the adopted wallet cards when a later entry fails', async () => {
+    const { host, permissions } = await loadPermissions();
+    const shared = fakeCard('shared', 21n);
+    const held = permissions.deriveFromWallet({}).unwrap();
+    host.deriveFromWallet.mockImplementationOnce(() => shared);
+    const owner = permissions.deriveFromWallet({}).unwrap();
+    const first = fakeCard('first', 22n);
+    const last = fakeCard('last', 23n);
+    host.wallet = [
+      { tag: 'concrete', val: first },
+      { tag: 'template', val: shared },
+      { tag: 'concrete', val: last },
+    ];
+    expect(() => permissions.wallet()).toThrow(/already owned/);
+    expect(first.disposed).toBe(true);
+    expect(last.disposed).toBe(true);
+    // The failing entry belongs to another card, which keeps it.
+    expect(shared.disposed).toBe(false);
+    expect(owner.isMoved()).toBe(false);
+    expect(held.isMoved()).toBe(false);
+
+    host.wallet = [{ tag: 'other' as never, val: fakeCard('unknown', 24n) }];
+    expect(() => permissions.wallet()).toThrow(/unknown wallet card kind 'other'/);
+  });
+
   it('returns owned wallet cards that the caller can release', async () => {
     const { host, permissions } = await loadPermissions();
-    const [card] = permissions.wallet();
+    const card = walletCard(permissions, 'template');
     card.release();
-    expect(host.wallet[0].disposed).toBe(true);
+    expect(host.wallet[0].val.disposed).toBe(true);
     expect(card.isMoved()).toBe(true);
     expect(() => card.release()).toThrow(/already been moved/);
     expect(permissions.walletVersion()).toEqual({
@@ -343,9 +413,12 @@ describe('permission cards', () => {
     const scope = permissions.deriveScope([parent], { lowerPositive: [envGrant] }).unwrap();
     expect(scope).toBeInstanceOf(permissions.ScopeCard);
     expect(scope).not.toBeInstanceOf(permissions.PermissionCard);
-    for (const operation of ['revoke', 'install', 'derive', 'expiresAt']) {
+    for (const operation of ['revoke', 'install', 'derive']) {
       expect(operation in scope).toBe(false);
     }
+    // The host reports the earliest expiry of the scope card's root cards.
+    expect(scope.expiresAt()).toEqual({ seconds: 1_600_000_000n, nanoseconds: 7 });
+    expect(Object.isFrozen(scope.expiresAt())).toBe(true);
     expect(scope.inspect().unwrap().lowerPositive).toEqual([grant('A')]);
     expect(() => JSON.stringify(scope)).toThrow(/cannot be serialized/);
 
@@ -365,6 +438,51 @@ describe('permission cards', () => {
     expect(() => nested.id()).toThrow(/already been released/);
     expect(() => permissions.deriveScope([nested], {})).toThrow(/already been released/);
     expect(scope.isMoved()).toBe(false);
+  });
+
+  it('gives template cards the persistent operations, and derives concrete children', async () => {
+    const { host, permissions } = await loadPermissions();
+    const template = walletCard(permissions, 'template');
+    expect(template.inspect().unwrap().lowerPositive).toEqual([grant('A')]);
+    expect(template.expiresAt()).toBeUndefined();
+
+    const child = template.derive({ lowerPositive: [envGrant] }).unwrap();
+    expect(child).toBeInstanceOf(permissions.PermissionCard);
+    expect(child).not.toBeInstanceOf(permissions.PolymorphicPermissionCard);
+    expect(child.parents()).toEqual([template.id()]);
+
+    const scope = permissions.deriveScope([template], { lowerPositive: [envGrant] }).unwrap();
+    expect(host.deriveScope).toHaveBeenLastCalledWith(
+      [expect.objectContaining({ name: 'template' })],
+      [rawGrant('SCOPE_ENV')],
+      [],
+      [],
+      [],
+    );
+    expect(scope.parents()).toEqual([template.id()]);
+    expect(template.isMoved()).toBe(false);
+
+    host.revokeCard.mockImplementationOnce(() => {
+      throw { tag: 'not-permitted', val: 'no revoke authority' };
+    });
+    expect(template.revoke().unwrapErr().kind).toBe('not-permitted');
+    expect(template.isMoved()).toBe(true);
+    expect(() => template.derive({})).toThrow(/already been moved/);
+
+    const { ComponentId } = await import('../src/ids');
+    const { Uuid } = await import('../src/uuid');
+    host.wallet = [{ tag: 'template', val: fakeCard('template', 1n) }];
+    const installed = walletCard(permissions, 'template');
+    host.installCard.mockImplementationOnce(() => {
+      throw { tag: 'install-recipient-mismatch', val: 'no matching recipient' };
+    });
+    const target = permissions.Holder.agent({
+      componentId: new ComponentId(new Uuid(1n, 2n)),
+      agentId: 'Worker("a")',
+    });
+    expect(installed.install(target).unwrapErr().kind).toBe('install-recipient-mismatch');
+    expect(installed.isMoved()).toBe(true);
+    expect(() => installed.install(target)).toThrow(/already been moved/);
   });
 
   it('compares cards by identity in structural equality', async () => {
@@ -424,6 +542,32 @@ describe('permission card non-forgeability', () => {
     expect(() => forged.revoke()).toThrow('invalid permission card');
     expect(() => permissions.deriveScope([forged], {})).toThrow('invalid permission card');
 
+    const PolymorphicPermissionCard =
+      publicPermissions.PolymorphicPermissionCard as unknown as new (...args: unknown[]) => unknown;
+    expect(
+      () => new PolymorphicPermissionCard(Symbol('golem:permission-card internal capability'), {}),
+    ).toThrow(/internal SDK operation/);
+    expect(() => new PolymorphicPermissionCard(undefined, fakeCard('forged', 99n))).toThrow(
+      /internal SDK operation/,
+    );
+    // A card's kind cannot change after construction.
+    const concrete = permissions.deriveFromWallet({}).unwrap();
+    expect(() =>
+      Object.setPrototypeOf(concrete, permissions.PolymorphicPermissionCard.prototype),
+    ).toThrow(TypeError);
+    expect(concrete).toBeInstanceOf(permissions.PermissionCard);
+    expect(concrete).not.toBeInstanceOf(permissions.PolymorphicPermissionCard);
+    expect(Object.isFrozen(concrete)).toBe(true);
+
+    const forgedTemplate = Object.create(
+      permissions.PolymorphicPermissionCard.prototype,
+    ) as InstanceType<PermissionsModule['PolymorphicPermissionCard']>;
+    expect(() => forgedTemplate.id()).toThrow('invalid permission card');
+    expect(() => forgedTemplate.install(undefined as never)).toThrow(TypeError);
+    expect(() => forgedTemplate.release()).toThrow('invalid permission card');
+    expect(() => permissions.deriveScope([forgedTemplate], {})).toThrow('invalid permission card');
+    expect(() => permissions.deriveScope([{} as never], {})).toThrow(TypeError);
+
     const CardId = publicPermissions.CardId as unknown as new (...args: unknown[]) => unknown;
     expect(() => new CardId(Symbol('golem:card-id internal capability'), '7:1')).toThrow(
       /internal SDK operation/,
@@ -431,10 +575,15 @@ describe('permission card non-forgeability', () => {
   });
 
   it('cannot serialize cards or card IDs', async () => {
-    const { permissions } = await loadPermissions();
+    const { host, permissions } = await loadPermissions();
     const card = permissions.deriveFromWallet({}).unwrap();
     expect(() => JSON.stringify(card)).toThrow(/cannot be serialized/);
     expect(Object.keys(card)).toEqual([]);
+    const template = walletCard(permissions, 'template');
+    expect(() => JSON.stringify({ template })).toThrow(/cannot be serialized/);
+    expect(Object.keys(template)).toEqual([]);
+    host.wallet = [{ tag: 'concrete', val: fakeCard('concrete', 5n) }];
+    expect(() => JSON.stringify(permissions.wallet())).toThrow(/cannot be serialized/);
   });
 
   it('keeps SDK-internal card conversions out of the public namespace', async () => {
@@ -446,6 +595,7 @@ describe('permission card non-forgeability', () => {
       'PERMISSION_ERROR_KINDS',
       'PermissionCard',
       'PermissionError',
+      'PolymorphicPermissionCard',
       'ScopeCard',
       'deriveFromWallet',
       'deriveScope',
@@ -464,11 +614,71 @@ describe('permission card non-forgeability', () => {
     const codec = compileSchema(s.permissionCard({ polymorphic: false }));
     const card = permissions.deriveFromWallet({}).unwrap();
 
-    expect(() => codec.toValue({ id: 'not-a-card' })).toThrow('invalid permission card');
+    expect(() => codec.toValue({ id: 'not-a-card' })).toThrow(/Expected a PermissionCard/);
     const tree = schemaValueToWit(codec.toValue(card));
     expect(tree.valueNodes[tree.root]).toMatchObject({ tag: 'permission-card-handle' });
     expect(card.isMoved()).toBe(true);
     expect(() => card.derive({})).toThrow(/already been moved/);
     expect(() => schemaValueToWit(codec.toValue(card))).toThrow(/already transferred/);
+
+    const templateCodec = compileSchema(s.permissionCard({ polymorphic: true }));
+    const template = walletCard(permissions, 'template');
+    const templateTree = schemaValueToWit(templateCodec.toValue(template));
+    expect(templateTree.valueNodes[templateTree.root]).toMatchObject({
+      tag: 'permission-card-handle',
+    });
+    expect(template.isMoved()).toBe(true);
+    expect(() => template.inspect()).toThrow(/already been moved/);
+    expect(() => schemaValueToWit(templateCodec.toValue(template))).toThrow(/already transferred/);
+  });
+
+  it('keeps each schema flag to its own card type', async () => {
+    const { host, permissions } = await loadPermissions();
+    const { compileSchema } = await import('../src/schema/adapter');
+    const { s } = await import('../src/schema/markers');
+    const { schemaValueFromWit, schemaValueToWit } = await import('../src/internal/schema-model');
+    const { PermissionCard: RawPermissionCard } = await import('golem:core/types@2.0.0');
+    const concreteCodec = compileSchema(s.permissionCard({ polymorphic: false }));
+    const templateCodec = compileSchema(s.permissionCard({ polymorphic: true }));
+    // Only instances of the host resource class lift from a wire value.
+    host.deriveFromWallet.mockImplementationOnce(() =>
+      Object.assign(Object.create(RawPermissionCard.prototype), fakeCard('wire', 5n, [1n])),
+    );
+    const concrete = permissions.deriveFromWallet({}).unwrap();
+    const template = walletCard(permissions, 'template');
+
+    expect(() => templateCodec.toValue(concrete)).toThrow(/Expected a PolymorphicPermissionCard/);
+    expect(() => concreteCodec.toValue(template)).toThrow(/Expected a PermissionCard/);
+    expect(concrete.isMoved()).toBe(false);
+    expect(template.isMoved()).toBe(false);
+    expect(s.permissionCard({ polymorphic: true })['~standard'].validate(concrete)).toHaveProperty(
+      'issues',
+    );
+    expect(s.permissionCard({ polymorphic: false })['~standard'].validate(template)).toHaveProperty(
+      'issues',
+    );
+    expect(() => s.permissionCard({ polymorphic: 'yes' } as never)).toThrow(TypeError);
+
+    // The host does not check the kind: a received card becomes the declared type.
+    const decoded = templateCodec.fromValue(
+      schemaValueFromWit(schemaValueToWit(concreteCodec.toValue(concrete))),
+    );
+    expect(concrete.isMoved()).toBe(true);
+    expect(decoded).toBeInstanceOf(permissions.PolymorphicPermissionCard);
+    expect(decoded.parents()).toEqual([template.id()]);
+
+    // A local decode would put the card's handle into a second card, also of the other kind.
+    expect(() => templateCodec.fromValue(templateCodec.toValue(template))).toThrow(
+      /already held by another card/,
+    );
+    expect(() => concreteCodec.fromValue(templateCodec.toValue(template))).toThrow(
+      /already held by another card/,
+    );
+    expect(template.isMoved()).toBe(false);
+    const other = permissions.deriveFromWallet({}).unwrap();
+    expect(() => templateCodec.fromValue(concreteCodec.toValue(other))).toThrow(
+      /already held by another card/,
+    );
+    expect(other.isMoved()).toBe(false);
   });
 });

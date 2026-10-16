@@ -5,17 +5,24 @@ import {
   permissions,
   s,
   type PermissionCard,
+  type PolymorphicPermissionCard,
   type ScopeCard,
 } from '../src';
 
 declare const card: PermissionCard;
+declare const template: PolymorphicPermissionCard;
 declare const scope: ScopeCard;
+declare const polymorphic: boolean;
 
 const Worker = defineAgentClient({
   name: 'Worker',
   id: {},
   methods: {
     take: method({ input: { card: s.permissionCard({ polymorphic: false }) }, returns: z.void() }),
+    takeTemplate: method({
+      input: { card: s.permissionCard({ polymorphic: true }) },
+      returns: s.permissionCard({ polymorphic: true }),
+    }),
     run: method({ input: {}, returns: z.void() }),
   },
 });
@@ -39,3 +46,56 @@ scope.install(permissions.Holder.app(undefined as never));
 scope.derive({});
 // @ts-expect-error a native lifespan cannot be calendar-based; it takes an SDK Duration
 permissions.Lifespan.of('P1M');
+
+client.takeTemplate({ card: template });
+const derived: PermissionCard = template.derive({}).unwrap();
+permissions.deriveScope([template, card, scope], {});
+const expiry: permissions.Timestamp | undefined = scope.expiresAt();
+void [derived, expiry];
+
+async function returnedTemplate(): Promise<PolymorphicPermissionCard> {
+  return client.takeTemplate({ card: template });
+}
+void returnedTemplate;
+
+for (const entry of permissions.wallet()) {
+  switch (entry.tag) {
+    case 'concrete': {
+      const concrete: PermissionCard = entry.card;
+      // @ts-expect-error a concrete wallet card is not a template card
+      const wrong: PolymorphicPermissionCard = entry.card;
+      void [concrete, wrong];
+      break;
+    }
+    case 'template': {
+      const templateCard: PolymorphicPermissionCard = entry.card;
+      // @ts-expect-error a template wallet card is not a concrete card
+      const wrong: PermissionCard = entry.card;
+      void [templateCard, wrong];
+      break;
+    }
+    case 'scope': {
+      const scopeCard: ScopeCard = entry.card;
+      // @ts-expect-error a scope wallet card is not a persistent card
+      const wrong: PermissionCard = entry.card;
+      void [scopeCard, wrong];
+      break;
+    }
+    default: {
+      const exhaustive: never = entry;
+      void exhaustive;
+    }
+  }
+}
+
+// @ts-expect-error a concrete card is not a template card
+client.takeTemplate({ card });
+// @ts-expect-error a template card is not a concrete card
+client.take({ card: template });
+// @ts-expect-error a template card is not a scope card
+client.run({ scopeCard: template });
+// @ts-expect-error the schema flag must be a literal, so the card type is known
+s.permissionCard({ polymorphic });
+// @ts-expect-error the wallet card kinds are closed
+const unknownKind: permissions.WalletCard = { tag: 'other', card };
+void unknownKind;
