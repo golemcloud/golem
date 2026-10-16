@@ -398,6 +398,15 @@ fn try_merge(path: &Path, current: &str, new: &str) -> anyhow::Result<Option<Str
                 validate_json,
                 edit::json::merge_object,
             )?),
+            "build.sbt" => Some(edit::build_sbt::merge_build_sbt(current, new)),
+            "plugins.sbt" => Some(edit::build_sbt::merge_plugins_sbt(current, new)),
+            "build.properties" => Some(edit::build_sbt::merge_properties(current, new)),
+            // Any other sbt file a template generates is a component's own build definition.
+            // Its project directory is set by the multi-component layout upgrade; the template
+            // only contributes its SDK versions.
+            name if name.ends_with(".sbt") => {
+                Some(edit::build_sbt::merge_component_sbt(current, new))
+            }
             _ => None,
         })
     }
@@ -512,6 +521,36 @@ impl MultiComponentLayoutUpgradePlan {
         self.steps.extend(other.steps);
     }
 
+    /// Pairs of move sources, and pairs of distinct move targets, where one path is the same as
+    /// or inside the other. Such moves cannot all be applied in order.
+    pub fn overlapping_moves(&self) -> Vec<(&Path, &Path)> {
+        let moves = self
+            .steps
+            .iter()
+            .filter_map(|step| match step {
+                MultiComponentLayoutUpgradePlanStep::Move { source, target } => {
+                    Some((source.as_path(), target.as_path()))
+                }
+                MultiComponentLayoutUpgradePlanStep::Rewrite { .. } => None,
+            })
+            .collect::<Vec<_>>();
+
+        let overlaps = |a: &Path, b: &Path| a.starts_with(b) || b.starts_with(a);
+
+        let mut result = Vec::new();
+        for (idx, (source_a, target_a)) in moves.iter().enumerate() {
+            for (source_b, target_b) in &moves[idx + 1..] {
+                if overlaps(source_a, source_b) {
+                    result.push((*source_a, *source_b));
+                }
+                if target_a != target_b && overlaps(target_a, target_b) {
+                    result.push((*target_a, *target_b));
+                }
+            }
+        }
+        result
+    }
+
     /// Contents of `path` as they will be after the plan is applied, read from the
     /// files as they are now. `None` when the path will not exist.
     pub fn current_contents(&self, path: &Path) -> anyhow::Result<Option<String>> {
@@ -616,6 +655,38 @@ mod tests {
         assert!(root.join("tsconfig.json").exists());
         assert!(!root.join("ts-main").exists());
         assert!(!root.join("go-main").exists());
+    }
+
+    #[test]
+    fn layout_upgrade_reports_overlapping_moves() {
+        let root = Path::new("/app");
+        let move_step = |source: &str, target: &str| MultiComponentLayoutUpgradePlanStep::Move {
+            source: root.join(source),
+            target: root.join(target),
+        };
+
+        let mut upgrade = MultiComponentLayoutUpgradePlan::new();
+        upgrade.add(move_step("src", "ts-a/src"));
+        upgrade.add(move_step("tsconfig.json", "ts-a/tsconfig.json"));
+        upgrade.add(move_step("src", "ts-b/src"));
+        upgrade.add(move_step("Cargo.toml", "ts-a/tsconfig.json/x"));
+
+        assert_eq!(
+            upgrade.overlapping_moves(),
+            vec![
+                (root.join("src").as_path(), root.join("src").as_path()),
+                (
+                    root.join("ts-a/tsconfig.json").as_path(),
+                    root.join("ts-a/tsconfig.json/x").as_path()
+                ),
+            ]
+        );
+
+        let mut disjoint = MultiComponentLayoutUpgradePlan::new();
+        disjoint.add(move_step("src", "ts-a/src"));
+        disjoint.add(move_step("tsconfig.json", "ts-a/tsconfig.json"));
+        disjoint.add(move_step("target", "rust-a/target"));
+        assert!(disjoint.overlapping_moves().is_empty());
     }
 
     #[test]

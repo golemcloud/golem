@@ -97,6 +97,7 @@ struct NewTemplateInputs {
     pub agent_templates: BTreeMap<AppTemplateName, AppTemplateAgent>,
     pub all_component_directories: BTreeMap<ComponentName, PathBuf>,
     pub layout_upgrade_plans: BTreeMap<ComponentName, MultiComponentLayoutUpgradePlan>,
+    pub layout_upgrade: MultiComponentLayoutUpgradePlan,
 }
 
 pub struct TemplateHandler {
@@ -187,9 +188,7 @@ impl TemplateHandler {
             bail!(NonSuccessfulExit);
         }
 
-        for upgrade_plan in template_inputs.layout_upgrade_plans.values() {
-            self.apply_multi_component_layout_upgrade_plan(upgrade_plan)?;
-        }
+        self.apply_multi_component_layout_upgrade_plan(&template_inputs.layout_upgrade)?;
         self.apply_new_template_plan(&safe_template_plan)?;
 
         match claude_skills_ctx.mode {
@@ -665,8 +664,6 @@ impl TemplateHandler {
                             component_template.as_ref(),
                         )?;
 
-                        self.validate_multi_component_layout_upgrade_plan(&upgrade_plan)?;
-
                         layout_upgrade_plans.insert(component_name.clone(), upgrade_plan);
                         all_component_directories.insert(component_name.clone(), new_component_dir);
                     }
@@ -685,6 +682,14 @@ impl TemplateHandler {
             all_component_directories
         );
 
+        // The upgrades of all promoted components are applied together, so they are validated
+        // together: two components cannot move the same files
+        let mut layout_upgrade = MultiComponentLayoutUpgradePlan::new();
+        for upgrade_plan in layout_upgrade_plans.values() {
+            layout_upgrade.extend(upgrade_plan.clone());
+        }
+        self.validate_multi_component_layout_upgrade_plan(&layout_upgrade)?;
+
         // We extend the component templates again to include promoted existing components
         for component_name in all_component_directories.keys() {
             if let Some(component) = existing_components.get(component_name)
@@ -701,6 +706,7 @@ impl TemplateHandler {
             agent_templates,
             all_component_directories,
             layout_upgrade_plans,
+            layout_upgrade,
         })
     }
 
@@ -712,11 +718,8 @@ impl TemplateHandler {
         template_inputs: &NewTemplateInputs,
         claude_skills_ctx: &ClaudeSkillsContext,
     ) -> anyhow::Result<TemplatePlan> {
-        let mut layout_upgrade = MultiComponentLayoutUpgradePlan::new();
-        for upgrade_plan in template_inputs.layout_upgrade_plans.values() {
-            layout_upgrade.extend(upgrade_plan.clone());
-        }
-        let mut template_plan_builder = TemplatePlanBuilder::with_layout_upgrade(layout_upgrade);
+        let mut template_plan_builder =
+            TemplatePlanBuilder::with_layout_upgrade(template_inputs.layout_upgrade.clone());
 
         for (common_template_name, common_template) in &template_inputs.common_templates {
             template_plan_builder.add(
@@ -965,6 +968,14 @@ impl TemplateHandler {
 
         let mut validation_errors = Vec::<String>::new();
         let mut targets = BTreeSet::<PathBuf>::new();
+
+        for (a, b) in upgrade_plan.overlapping_moves() {
+            validation_errors.push(format!(
+                "Overlapping move paths in plan: {} and {}",
+                a.display().to_string().log_color_error_highlight(),
+                b.display().to_string().log_color_error_highlight()
+            ));
+        }
 
         for step in upgrade_plan.steps() {
             match step {

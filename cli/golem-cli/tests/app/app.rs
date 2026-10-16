@@ -530,12 +530,88 @@ async fn app_new_with_failing_template_plan_leaves_single_component_app_unchange
     ctx.cd(app_name);
 
     let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // An edited skill file cannot be merged with the template's, so the template plan for a
+    // second component fails after the layout upgrade is planned.
+    let skill = ctx.cwd_path_join(".agents/skills/golem-new-project/SKILL.md");
+    let edited = format!("{}\nedited\n", fs::read_to_string(&skill).unwrap());
+    fs::write_str(&skill, edited).unwrap();
+
+    let before = snapshot_dir(ctx.cwd_path());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "ts",
+            flag::COMPONENT_NAME,
+            &format!("{app_name}:ts-second"),
+        ])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stdout_contains("Already existing non-mergeable files"));
+
+    assert_eq!(snapshot_dir(ctx.cwd_path()), before);
+}
+
+#[test]
+async fn app_new_with_overlapping_layout_upgrades_leaves_app_unchanged(_tracing: &Tracing) {
+    let app_name = "test-app-two-flat";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // Two components in the flat layout: promoting both would move the same root files.
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let manifest = format!(
+        "{}  {app_name}:ts-other:\n    dir: \"\"\n    templates: ts\n",
+        fs::read_to_string(&manifest_path).unwrap()
+    );
+    fs::write_str(&manifest_path, manifest).unwrap();
+
+    let before = snapshot_dir(ctx.cwd_path());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "ts",
+            flag::COMPONENT_NAME,
+            &format!("{app_name}:ts-third"),
+        ])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stdout_contains("Overlapping move paths in plan"));
+
+    assert_eq!(snapshot_dir(ctx.cwd_path()), before);
+}
+
+#[test]
+async fn app_new_keeps_customized_scala_build_files_when_upgrading_layout(_tracing: &Tracing) {
+    let app_name = "test-app-scala-merge";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
         .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "scala"])
         .await;
     assert!(outputs.success_or_dump());
 
-    // A customized component sbt file cannot be merged with the template's, so the
-    // template plan for a second component fails after the layout upgrade is planned.
     let component_sbt = std::fs::read_dir(ctx.cwd_path())
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -544,13 +620,20 @@ async fn app_new_with_failing_template_plan_leaves_single_component_app_unchange
                 && path.file_name().is_some_and(|name| name != "build.sbt")
         })
         .expect("component sbt file");
-    let customized = format!(
-        "{}\n// customized\n",
-        fs::read_to_string(&component_sbt).unwrap()
-    );
-    fs::write_str(&component_sbt, customized).unwrap();
 
-    let before = snapshot_dir(ctx.cwd_path());
+    let append = |path: &Path, line: &str| {
+        let contents = format!("{}{line}\n", fs::read_to_string(path).unwrap());
+        fs::write_str(path, contents).unwrap();
+    };
+    append(&component_sbt, "// customized component");
+    append(
+        &ctx.cwd_path_join("build.sbt"),
+        "ThisBuild / organization := \"customized\"",
+    );
+    append(
+        &ctx.cwd_path_join("project/plugins.sbt"),
+        "addSbtPlugin(\"org.scalameta\" % \"sbt-scalafmt\" % \"2.5.2\")",
+    );
 
     let outputs = ctx
         .cli([
@@ -563,10 +646,23 @@ async fn app_new_with_failing_template_plan_leaves_single_component_app_unchange
             &format!("{app_name}:scala-second"),
         ])
         .await;
-    assert!(!outputs.success());
-    assert!(outputs.stdout_contains("Already existing non-mergeable files"));
+    assert!(outputs.success_or_dump());
 
-    assert_eq!(snapshot_dir(ctx.cwd_path()), before);
+    let component_sbt = fs::read_to_string(&component_sbt).unwrap();
+    assert!(component_sbt.contains("// customized component"));
+    assert!(component_sbt.contains(".in(file(\"scala-main\"))"));
+    assert!(
+        fs::read_to_string(ctx.cwd_path_join("build.sbt"))
+            .unwrap()
+            .contains("ThisBuild / organization := \"customized\"")
+    );
+    assert!(
+        fs::read_to_string(ctx.cwd_path_join("project/plugins.sbt"))
+            .unwrap()
+            .contains("sbt-scalafmt")
+    );
+    assert!(ctx.cwd_path_join("scala-main/src").is_dir());
+    assert!(!ctx.cwd_path_join("src").exists());
 }
 
 fn snapshot_dir(root: &Path) -> std::collections::BTreeMap<String, Option<Vec<u8>>> {
