@@ -16,10 +16,16 @@
 //!
 //! A [`PermissionCard`] is an unforgeable capability held by the host. Guest code
 //! can only obtain one from the host ([`wallet`], [`derive_from_wallet`],
-//! [`PermissionCard::derive`]) or receive one as an agent method argument.
-//! A [`ScopeCard`] ([`derive_scope`]) lives only in memory for the current
-//! invocation and can only be lent to awaited agent calls. Nothing in this
-//! module turns a [`CardId`], a grant list or any other data into a card.
+//! [`PermissionCard::derive`], [`PolymorphicPermissionCard::derive`]) or
+//! receive one as an agent method argument.
+//! A [`PolymorphicPermissionCard`] is a template card whose grants may contain
+//! slot variables; the agent's initial card is one. A [`ScopeCard`]
+//! ([`derive_scope`]) lives only in memory for the current invocation and can
+//! only be lent to awaited agent calls. This module offers no conversion
+//! between the three card types, and nothing in it turns a [`CardId`], a grant
+//! list or any other data into a card. A card value that goes through the
+//! schema-value codec takes the type that the decoder declares; the host keeps
+//! the real kind of the card.
 //!
 //! Every operation is checked by the host against the caller's own cards:
 //! deriving requires `card:derive`, inspecting requires `card:inspect`,
@@ -109,13 +115,7 @@ impl PermissionCard {
     }
 
     fn with_raw<R>(&self, f: impl FnOnce(&wire::PermissionCard) -> R) -> R {
-        self.handle
-            .with_handle(f)
-            .unwrap_or_else(|| panic!("{CARD_MOVED}"))
-    }
-
-    fn take_raw(self) -> wire::PermissionCard {
-        self.handle.take().unwrap_or_else(|| panic!("{CARD_MOVED}"))
+        with_raw_card(&self.handle, f)
     }
 
     /// The identifier of this card.
@@ -135,10 +135,7 @@ impl PermissionCard {
     /// Panics if the card was moved. The host traps if the card was revoked
     /// or is unknown.
     pub fn parents(&self) -> Vec<CardId> {
-        self.with_raw(raw::parents)
-            .into_iter()
-            .map(CardId::from_raw)
-            .collect()
+        card_parents(&self.handle)
     }
 
     /// The expiry time of this card, or `None` for a card without a lifespan.
@@ -157,9 +154,7 @@ impl PermissionCard {
     ///
     /// Panics if the card was moved.
     pub fn inspect(&self) -> Result<CardView, PermissionError> {
-        self.with_raw(raw_inspect::inspect_card)
-            .map(CardView::from)
-            .map_err(PermissionError::from)
+        inspect_card(&self.handle)
     }
 
     /// Derives a child card from this card. Requires `card:derive`.
@@ -167,9 +162,6 @@ impl PermissionCard {
     /// The positive lists of `bounds` select the grants of this card that the
     /// child retains. The negative lists of `bounds` are denials that the child
     /// adds. The child's lifespan cannot exceed the lifespan of this card.
-    ///
-    /// This card may be a template card from the caller's wallet; the host
-    /// resolves it against the caller first.
     ///
     /// # Panics
     ///
@@ -179,20 +171,7 @@ impl PermissionCard {
         bounds: &Bounds,
         lifespan: Option<&Lifespan>,
     ) -> Result<PermissionCard, PermissionError> {
-        let bounds = RawBounds::from(bounds);
-        let lifespan = lifespan.map(Lifespan::to_raw);
-        self.with_raw(|card| {
-            raw_derive::derive(
-                card,
-                &bounds.lower_positive,
-                &bounds.lower_negative,
-                &bounds.upper_positive,
-                &bounds.upper_negative,
-                lifespan.as_ref(),
-            )
-        })
-        .map(PermissionCard::from_raw)
-        .map_err(PermissionError::from)
+        derive_child(&self.handle, bounds, lifespan)
     }
 
     /// Revokes this card and every card derived from it. Requires `card:revoke`.
@@ -204,7 +183,7 @@ impl PermissionCard {
     ///
     /// Panics if the card was already moved.
     pub fn revoke(self) -> Result<u32, PermissionError> {
-        raw_revoke::revoke_card(self.take_raw()).map_err(PermissionError::from)
+        revoke_card(&self.handle)
     }
 
     /// Installs this card into the wallet of `target`. Requires `card:install`.
@@ -219,34 +198,271 @@ impl PermissionCard {
     ///
     /// Panics if the card was already moved.
     pub fn install(self, target: &Holder) -> Result<(), PermissionError> {
-        let target = target.to_raw();
-        raw_wallet::install_card(self.take_raw(), &target).map_err(PermissionError::from)
+        install_card(&self.handle, target)
     }
 }
 
 impl std::fmt::Debug for PermissionCard {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = if self.handle.is_present() {
-            "present"
-        } else {
-            "moved"
-        };
-        write!(f, "PermissionCard(<{state}>)")
+        write!(f, "PermissionCard(<{}>)", handle_state(&self.handle))
     }
 }
 
-/// Returns every card in the caller's wallet.
+/// A template permission card held by the calling component.
+///
+/// The grants of a template card may contain slot variables, such as `?agent`
+/// or `?env` in an owner, which the host resolves for each holder. The
+/// agent's initial card is a template card. [`wallet`] returns template cards
+/// as [`WalletCard::Template`].
+///
+/// A template card follows the same rules as a [`PermissionCard`]: it has no
+/// public constructor, it cannot be built from a [`CardId`] or from data, it
+/// cannot be serialized, and [`revoke`](Self::revoke),
+/// [`install`](Self::install) and passing it as an agent method argument or
+/// return value move its host handle. Every later use of a moved card panics.
+///
+/// The SDK offers no conversion between a template card and a
+/// [`PermissionCard`].
+/// [`derive`](Self::derive) resolves the template for the caller and returns a
+/// concrete [`PermissionCard`]. As an agent method parameter or result, this
+/// type declares a `permission-card` with `polymorphic: true`, and a
+/// [`PermissionCard`] declares `polymorphic: false`. The host refuses an agent
+/// method input or output whose card does not match the declared kind. The
+/// guest codecs see only the handle: a decoded card takes the type that the
+/// decoder declares.
+pub struct PolymorphicPermissionCard {
+    handle: GuestPermissionCardHandle,
+}
+
+impl PolymorphicPermissionCard {
+    fn from_raw(raw: wire::PermissionCard) -> Self {
+        Self {
+            handle: GuestPermissionCardHandle::new(raw),
+        }
+    }
+
+    fn with_raw<R>(&self, f: impl FnOnce(&wire::PermissionCard) -> R) -> R {
+        with_raw_card(&self.handle, f)
+    }
+
+    /// The identifier of this card.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the card was moved. The host traps if the card was revoked
+    /// or is unknown.
+    pub fn id(&self) -> CardId {
+        CardId::from_raw(self.with_raw(raw::id))
+    }
+
+    /// The identifiers of the cards this card was derived from.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the card was moved. The host traps if the card was revoked
+    /// or is unknown.
+    pub fn parents(&self) -> Vec<CardId> {
+        card_parents(&self.handle)
+    }
+
+    /// The expiry time of this card, or `None` for a card without a lifespan.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the card was moved. The host traps if the card was revoked
+    /// or is unknown.
+    pub fn expires_at(&self) -> Option<Timestamp> {
+        self.with_raw(raw::expires_at).map(Timestamp::from)
+    }
+
+    /// Returns the four grant lists of this card, with their slot variables.
+    /// Requires `card:inspect`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the card was moved.
+    pub fn inspect(&self) -> Result<CardView, PermissionError> {
+        inspect_card(&self.handle)
+    }
+
+    /// Derives a concrete child card from this card. Requires `card:derive`.
+    ///
+    /// The host first resolves this template card for the caller, so this
+    /// card must be in the caller's wallet. The bounds then apply as in
+    /// [`PermissionCard::derive`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the card was moved.
+    pub fn derive(
+        &self,
+        bounds: &Bounds,
+        lifespan: Option<&Lifespan>,
+    ) -> Result<PermissionCard, PermissionError> {
+        derive_child(&self.handle, bounds, lifespan)
+    }
+
+    /// Revokes this card and every card derived from it, as
+    /// [`PermissionCard::revoke`] does. Requires `card:revoke`.
+    ///
+    /// The card is moved even when the host refuses the revocation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the card was already moved.
+    pub fn revoke(self) -> Result<u32, PermissionError> {
+        revoke_card(&self.handle)
+    }
+
+    /// Installs this card into the wallet of `target`, as
+    /// [`PermissionCard::install`] does. Requires `card:install`.
+    ///
+    /// The host resolves the template for `target` and installs the resolved
+    /// card; the template card stays in the caller's wallet. The handle is
+    /// moved even when the host refuses the installation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the card was already moved.
+    pub fn install(self, target: &Holder) -> Result<(), PermissionError> {
+        install_card(&self.handle, target)
+    }
+}
+
+impl std::fmt::Debug for PolymorphicPermissionCard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "PolymorphicPermissionCard(<{}>)",
+            handle_state(&self.handle)
+        )
+    }
+}
+
+fn handle_state(handle: &GuestPermissionCardHandle) -> &'static str {
+    if handle.is_present() {
+        "present"
+    } else {
+        "moved"
+    }
+}
+
+fn with_raw_card<R>(
+    handle: &GuestPermissionCardHandle,
+    f: impl FnOnce(&wire::PermissionCard) -> R,
+) -> R {
+    handle
+        .with_handle(f)
+        .unwrap_or_else(|| panic!("{CARD_MOVED}"))
+}
+
+fn take_raw_card(handle: &GuestPermissionCardHandle) -> wire::PermissionCard {
+    handle.take().unwrap_or_else(|| panic!("{CARD_MOVED}"))
+}
+
+fn card_parents(handle: &GuestPermissionCardHandle) -> Vec<CardId> {
+    with_raw_card(handle, raw::parents)
+        .into_iter()
+        .map(CardId::from_raw)
+        .collect()
+}
+
+fn inspect_card(handle: &GuestPermissionCardHandle) -> Result<CardView, PermissionError> {
+    with_raw_card(handle, raw_inspect::inspect_card)
+        .map(CardView::from)
+        .map_err(PermissionError::from)
+}
+
+fn derive_child(
+    handle: &GuestPermissionCardHandle,
+    bounds: &Bounds,
+    lifespan: Option<&Lifespan>,
+) -> Result<PermissionCard, PermissionError> {
+    let bounds = RawBounds::from(bounds);
+    let lifespan = lifespan.map(Lifespan::to_raw);
+    with_raw_card(handle, |card| {
+        raw_derive::derive(
+            card,
+            &bounds.lower_positive,
+            &bounds.lower_negative,
+            &bounds.upper_positive,
+            &bounds.upper_negative,
+            lifespan.as_ref(),
+        )
+    })
+    .map(PermissionCard::from_raw)
+    .map_err(PermissionError::from)
+}
+
+fn revoke_card(handle: &GuestPermissionCardHandle) -> Result<u32, PermissionError> {
+    raw_revoke::revoke_card(take_raw_card(handle)).map_err(PermissionError::from)
+}
+
+fn install_card(
+    handle: &GuestPermissionCardHandle,
+    target: &Holder,
+) -> Result<(), PermissionError> {
+    let target = target.to_raw();
+    raw_wallet::install_card(take_raw_card(handle), &target).map_err(PermissionError::from)
+}
+
+/// A card in the caller's [`wallet`], labelled with its kind.
+///
+/// The three cases hold three distinct card types, and this module offers no
+/// conversion between them.
+#[derive(Debug)]
+pub enum WalletCard {
+    /// A concrete card: every grant names concrete owners and resources.
+    Concrete(PermissionCard),
+    /// A template card: its grants may contain slot variables (`?agent`,
+    /// `?env`, ...), which resolve for each holder.
+    Template(PolymorphicPermissionCard),
+    /// The scope card lent to the current invocation. The host lists it only
+    /// if the agent holds `card:inspect`, and retires it when the invocation
+    /// ends.
+    Scope(ScopeCard),
+}
+
+impl WalletCard {
+    fn from_raw(raw: raw::WalletCard) -> Self {
+        match raw {
+            raw::WalletCard::Concrete(card) => Self::Concrete(PermissionCard::from_raw(card)),
+            raw::WalletCard::Template(card) => {
+                Self::Template(PolymorphicPermissionCard::from_raw(card))
+            }
+            raw::WalletCard::Scope(card) => Self::Scope(ScopeCard {
+                raw: Arc::new(card),
+            }),
+        }
+    }
+
+    /// The identifier of this card.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the card was moved. The host traps if the card was revoked
+    /// or is unknown.
+    pub fn id(&self) -> CardId {
+        match self {
+            Self::Concrete(card) => card.id(),
+            Self::Template(card) => card.id(),
+            Self::Scope(card) => card.id(),
+        }
+    }
+}
+
+/// Returns every card in the caller's wallet, labelled with its kind.
 ///
 /// Each returned card is an owned handle. Drop the cards that you do not keep
 /// to release their handles; dropping a card does not change the wallet.
 ///
 /// During an invocation that received a scope card, the result also contains
-/// that scope card, typed as a `PermissionCard`, if the agent holds
-/// `card:inspect`. The host refuses to revoke, install or persist it.
-pub fn wallet() -> Vec<PermissionCard> {
+/// that scope card as [`WalletCard::Scope`], if the agent holds
+/// `card:inspect`.
+pub fn wallet() -> Vec<WalletCard> {
     raw_wallet::self_wallet()
         .into_iter()
-        .map(PermissionCard::from_raw)
+        .map(WalletCard::from_raw)
         .collect()
 }
 
@@ -280,9 +496,10 @@ pub fn derive_from_wallet(
 
 /// Derives a scope card from one or more parents. Requires `card:derive`.
 ///
-/// A parent is a card in the caller's wallet or a scope card of the current
-/// invocation. All four lists of `bounds` are the full requested grant lists of
-/// the new card.
+/// A parent is a card in the caller's wallet, concrete or template, or a scope
+/// card of the current invocation. The host resolves a template parent for
+/// the caller. All four lists of `bounds` are the full requested grant lists
+/// of the new card.
 ///
 /// # Panics
 ///
@@ -305,16 +522,34 @@ pub fn derive_scope(
     .map_err(PermissionError::from)
 }
 
-/// A parent of [`derive_scope`]: a persistent card or a scope card.
+/// A parent of [`derive_scope`]: a persistent card, a template card or a
+/// scope card.
 #[derive(Clone, Copy, Debug)]
 pub enum ScopeParent<'a> {
     Card(&'a PermissionCard),
+    Template(&'a PolymorphicPermissionCard),
     Scope(&'a ScopeCard),
 }
 
 impl<'a> From<&'a PermissionCard> for ScopeParent<'a> {
     fn from(card: &'a PermissionCard) -> Self {
         Self::Card(card)
+    }
+}
+
+impl<'a> From<&'a PolymorphicPermissionCard> for ScopeParent<'a> {
+    fn from(card: &'a PolymorphicPermissionCard) -> Self {
+        Self::Template(card)
+    }
+}
+
+impl<'a> From<&'a WalletCard> for ScopeParent<'a> {
+    fn from(card: &'a WalletCard) -> Self {
+        match card {
+            WalletCard::Concrete(card) => Self::Card(card),
+            WalletCard::Template(card) => Self::Template(card),
+            WalletCard::Scope(card) => Self::Scope(card),
+        }
     }
 }
 
@@ -358,7 +593,8 @@ impl ScopeCard {
             .collect()
     }
 
-    /// The expiry time of this scope card, if one of its roots expires.
+    /// The earliest expiry of the root cards of this scope card, or `None`
+    /// when no root card expires. The scope card stops authorizing then.
     pub fn expires_at(&self) -> Option<Timestamp> {
         raw::expires_at(&self.raw).map(Timestamp::from)
     }
@@ -485,21 +721,22 @@ fn with_raw_parents<R>(
         let Some((parent, rest)) = parents.split_first() else {
             return f(acc);
         };
-        let card = match parent {
+        let handle = match parent {
             ScopeParent::Scope(scope) => {
                 let mut next = acc.to_vec();
                 next.push(scope.raw.as_ref());
                 return go(rest, first_index, &next, f);
             }
-            ScopeParent::Card(card) => card,
+            ScopeParent::Card(card) => &card.handle,
+            ScopeParent::Template(card) => &card.handle,
         };
-        let index = first_index[&card.handle.cell_id()];
+        let index = first_index[&handle.cell_id()];
         if index < acc.len() {
             let mut next = acc.to_vec();
             next.push(acc[index]);
             return go(rest, first_index, &next, f);
         }
-        card.with_raw(|raw| {
+        with_raw_card(handle, |raw| {
             let mut next = acc.to_vec();
             next.push(raw);
             go(rest, first_index, &next, f)
@@ -508,9 +745,12 @@ fn with_raw_parents<R>(
 
     let mut first_index = HashMap::new();
     for (index, parent) in parents.iter().enumerate() {
-        if let ScopeParent::Card(card) = parent {
-            first_index.entry(card.handle.cell_id()).or_insert(index);
-        }
+        let handle = match parent {
+            ScopeParent::Card(card) => &card.handle,
+            ScopeParent::Template(card) => &card.handle,
+            ScopeParent::Scope(_) => continue,
+        };
+        first_index.entry(handle.cell_id()).or_insert(index);
     }
     go(parents, &first_index, &[], Box::new(f))
 }
@@ -911,94 +1151,121 @@ impl std::fmt::Display for PermissionError {
 
 impl std::error::Error for PermissionError {}
 
-impl WireSchema for PermissionCard {
-    fn wire_type_id() -> String {
-        GuestPermissionCardHandle::wire_type_id()
-    }
+/// Implements the schema, wire and serde codecs of a card type. The two card
+/// types share the handle codec and differ only in their declared
+/// `polymorphic` flag.
+macro_rules! card_codecs {
+    ($card:ident, $type_id:literal, polymorphic: $polymorphic:literal) => {
+        impl WireSchema for $card {
+            fn wire_type_id() -> String {
+                $type_id.to_string()
+            }
 
-    fn append_schema(builder: &mut WireSchemaBuilder) -> i32 {
-        GuestPermissionCardHandle::append_schema(builder)
-    }
-}
+            fn append_schema(builder: &mut WireSchemaBuilder) -> i32 {
+                builder.push(wire::SchemaTypeBody::PermissionCardType(
+                    wire::PermissionCardSpec {
+                        polymorphic: $polymorphic,
+                    },
+                ))
+            }
+        }
 
-impl FromWire for PermissionCard {
-    /// Takes the handle out of the decoded node. Decoding the same node again,
-    /// for example from a second reader over a shared snapshot, fails.
-    fn read_wire(reader: &mut WireReader, index: i32) -> Result<Self, WireError> {
-        GuestPermissionCardHandle::read_wire(reader, index)?
-            .take()
-            .map(Self::from_raw)
-            .ok_or(WireError::ConsumedResource("permission-card"))
-    }
-}
+        impl FromWire for $card {
+            /// Takes the handle out of the decoded node. Decoding the same node
+            /// again, for example from a second reader over a shared snapshot,
+            /// fails.
+            fn read_wire(reader: &mut WireReader, index: i32) -> Result<Self, WireError> {
+                GuestPermissionCardHandle::read_wire(reader, index)?
+                    .take()
+                    .map(Self::from_raw)
+                    .ok_or(WireError::ConsumedResource("permission-card"))
+            }
+        }
 
-impl IntoWire for PermissionCard {
-    fn preflight(&self, resources: &mut WirePreflight) -> Result<(), WireError> {
-        self.handle.preflight(resources)
-    }
+        impl IntoWire for $card {
+            fn preflight(&self, resources: &mut WirePreflight) -> Result<(), WireError> {
+                self.handle.preflight(resources)
+            }
 
-    fn write_wire(&self, writer: &mut WireWriter) -> Result<i32, WireError> {
-        self.handle.write_wire(writer)
-    }
-}
+            fn write_wire(&self, writer: &mut WireWriter) -> Result<i32, WireError> {
+                self.handle.write_wire(writer)
+            }
+        }
 
-#[cfg(feature = "export_golem_agentic")]
-impl IntoSchema for PermissionCard {
-    fn type_id() -> TypeId {
-        TypeId::new("golem.core.PermissionCard")
-    }
+        #[cfg(feature = "export_golem_agentic")]
+        impl IntoSchema for $card {
+            fn type_id() -> TypeId {
+                TypeId::new($type_id)
+            }
 
-    fn register_in(_builder: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::permission_card(PermissionCardSpec::default())
-    }
-
-    /// Lowers the card into a schema value that shares its handle.
-    ///
-    /// The handle moves out of the card only when the schema value is
-    /// encoded into a WIT `schema-value-tree`.
-    fn to_value(&self) -> SchemaValue {
-        SchemaValue::PermissionCard(self.handle.clone())
-    }
-}
-
-#[cfg(feature = "export_golem_agentic")]
-impl FromSchema for PermissionCard {
-    /// Takes the handle out of `value`. Decoding the same value again fails.
-    fn from_value(value: &SchemaValue) -> Result<Self, FromSchemaError> {
-        match value {
-            SchemaValue::PermissionCard(handle) => {
-                handle.take().map(Self::from_raw).ok_or_else(|| {
-                    FromSchemaError::custom(
-                        "permission card has already been moved out of this value",
-                    )
+            fn register_in(_builder: &mut SchemaBuilder) -> SchemaType {
+                SchemaType::permission_card(PermissionCardSpec {
+                    polymorphic: $polymorphic,
                 })
             }
-            other => Err(FromSchemaError::shape_mismatch(
-                "permission-card",
-                format!("{other:?}"),
-                "PermissionCard",
-            )),
+
+            /// Lowers the card into a schema value that shares its handle.
+            ///
+            /// The handle moves out of the card only when the schema value is
+            /// encoded into a WIT `schema-value-tree`.
+            fn to_value(&self) -> SchemaValue {
+                SchemaValue::PermissionCard(self.handle.clone())
+            }
         }
-    }
+
+        #[cfg(feature = "export_golem_agentic")]
+        impl FromSchema for $card {
+            /// Takes the handle out of `value`. Decoding the same value again
+            /// fails.
+            fn from_value(value: &SchemaValue) -> Result<Self, FromSchemaError> {
+                match value {
+                    SchemaValue::PermissionCard(handle) => {
+                        handle.take().map(Self::from_raw).ok_or_else(|| {
+                            FromSchemaError::custom(
+                                "permission card has already been moved out of this value",
+                            )
+                        })
+                    }
+                    other => Err(FromSchemaError::shape_mismatch(
+                        "permission-card",
+                        format!("{other:?}"),
+                        stringify!($card),
+                    )),
+                }
+            }
+        }
+
+        #[cfg(feature = "export_golem_agentic")]
+        impl crate::serde::Serialize for $card {
+            fn serialize<S: crate::serde::Serializer>(
+                &self,
+                _serializer: S,
+            ) -> Result<S::Ok, S::Error> {
+                Err(crate::serde::ser::Error::custom(
+                    "permission cards cannot be serialized; pass them as agent method arguments or results",
+                ))
+            }
+        }
+
+        #[cfg(feature = "export_golem_agentic")]
+        impl<'de> crate::serde::Deserialize<'de> for $card {
+            fn deserialize<D: crate::serde::Deserializer<'de>>(
+                _deserializer: D,
+            ) -> Result<Self, D::Error> {
+                Err(crate::serde::de::Error::custom(
+                    "permission cards cannot be deserialized or forged from data",
+                ))
+            }
+        }
+    };
 }
 
-#[cfg(feature = "export_golem_agentic")]
-impl crate::serde::Serialize for PermissionCard {
-    fn serialize<S: crate::serde::Serializer>(&self, _serializer: S) -> Result<S::Ok, S::Error> {
-        Err(crate::serde::ser::Error::custom(
-            "permission cards cannot be serialized; pass them as agent method arguments or results",
-        ))
-    }
-}
-
-#[cfg(feature = "export_golem_agentic")]
-impl<'de> crate::serde::Deserialize<'de> for PermissionCard {
-    fn deserialize<D: crate::serde::Deserializer<'de>>(_deserializer: D) -> Result<Self, D::Error> {
-        Err(crate::serde::de::Error::custom(
-            "permission cards cannot be deserialized or forged from data",
-        ))
-    }
-}
+card_codecs!(PermissionCard, "golem.core.PermissionCard", polymorphic: false);
+card_codecs!(
+    PolymorphicPermissionCard,
+    "golem.core.PolymorphicPermissionCard",
+    polymorphic: true
+);
 
 #[cfg(feature = "export_golem_agentic")]
 impl crate::serde::Serialize for ScopeCard {
@@ -1021,6 +1288,14 @@ mod tests {
 
     /// Releases a fake handle without calling the host's resource drop.
     fn forget(card: PermissionCard) -> Option<u32> {
+        card.handle.take().map(|raw| raw.take_handle())
+    }
+
+    fn fake_template(handle: u32) -> PolymorphicPermissionCard {
+        PolymorphicPermissionCard::from_raw(unsafe { wire::PermissionCard::from_handle(handle) })
+    }
+
+    fn forget_template(card: PolymorphicPermissionCard) -> Option<u32> {
         card.handle.take().map(|raw| raw.take_handle())
     }
 
@@ -1305,20 +1580,211 @@ mod tests {
     fn scope_parents_are_each_locked_once() {
         let first = fake_card(21);
         let second = fake_card(22);
+        let template = fake_template(26);
         let scope = fake_scope(24);
         let handles = with_raw_parents(
             &[
                 (&first).into(),
+                (&template).into(),
                 (&scope).into(),
                 (&second).into(),
+                (&template).into(),
                 (&first).into(),
             ],
             |raw| raw.iter().map(|card| card.handle()).collect::<Vec<_>>(),
         );
-        assert_eq!(handles, vec![21, 24, 22, 21]);
+        assert_eq!(handles, vec![21, 26, 24, 22, 26, 21]);
         assert_eq!(forget(first), Some(21));
         assert_eq!(forget(second), Some(22));
+        assert_eq!(forget_template(template), Some(26));
         assert_eq!(forget_scope(scope), 24);
+    }
+
+    #[test]
+    fn moved_template_card_fails_loudly() {
+        let card = fake_template(31);
+        let alias = PolymorphicPermissionCard {
+            handle: card.handle.clone(),
+        };
+        assert_eq!(forget_template(card), Some(31));
+
+        assert_eq!(format!("{alias:?}"), "PolymorphicPermissionCard(<moved>)");
+        for operation in [
+            Box::new(|card: &PolymorphicPermissionCard| {
+                let _ = card.id();
+            }) as Box<dyn Fn(&PolymorphicPermissionCard)>,
+            Box::new(|card| {
+                let _ = card.parents();
+            }),
+            Box::new(|card| {
+                let _ = card.expires_at();
+            }),
+            Box::new(|card| {
+                let _ = card.inspect();
+            }),
+            Box::new(|card| {
+                let _ = card.derive(&Bounds::default(), None);
+            }),
+            Box::new(|card| {
+                let _ = derive_scope(&[card.into()], &Bounds::default());
+            }),
+        ] {
+            let message = panic_message(std::panic::AssertUnwindSafe(|| operation(&alias)));
+            assert!(message.contains("already been moved"), "{message}");
+        }
+
+        let revoked = PolymorphicPermissionCard {
+            handle: alias.handle.clone(),
+        };
+        let message = panic_message(std::panic::AssertUnwindSafe(move || {
+            let _ = revoked.revoke();
+        }));
+        assert!(message.contains("already been moved"), "{message}");
+        let installed = PolymorphicPermissionCard {
+            handle: alias.handle.clone(),
+        };
+        let message = panic_message(std::panic::AssertUnwindSafe(move || {
+            let _ = installed.install(&Holder::Account(Uuid::nil()));
+        }));
+        assert!(message.contains("already been moved"), "{message}");
+    }
+
+    #[test]
+    fn transferred_template_card_is_moved_and_cannot_be_encoded_twice() {
+        let card = fake_template(32);
+        let tree = direct::encode(&card).unwrap();
+        assert_eq!(format!("{card:?}"), "PolymorphicPermissionCard(<moved>)");
+        assert!(matches!(
+            direct::encode(&card),
+            Err(WireError::ConsumedResource(_))
+        ));
+
+        let received = direct::decode::<PolymorphicPermissionCard>(tree).unwrap();
+        assert_eq!(
+            format!("{received:?}"),
+            "PolymorphicPermissionCard(<present>)"
+        );
+        assert_eq!(forget_template(received), Some(32));
+    }
+
+    #[test]
+    fn aliased_template_card_is_rejected_before_any_handle_moves() {
+        let card = fake_template(33);
+        let alias = PolymorphicPermissionCard {
+            handle: card.handle.clone(),
+        };
+        let other = fake_card(34);
+        let triple = (other, card, alias);
+        assert!(matches!(
+            direct::encode(&triple),
+            Err(WireError::AliasedResource(_))
+        ));
+        assert_eq!(format!("{:?}", triple.0), "PermissionCard(<present>)");
+        assert_eq!(
+            format!("{:?}", triple.2),
+            "PolymorphicPermissionCard(<present>)"
+        );
+        assert_eq!(forget(triple.0), Some(34));
+        assert_eq!(forget_template(triple.1), Some(33));
+    }
+
+    #[test]
+    fn decoding_a_shared_wire_snapshot_twice_does_not_alias_the_template_card() {
+        let card = fake_template(35);
+        let tree = direct::encode(&card).unwrap();
+        let snapshot = std::rc::Rc::new(direct::WireSnapshot::new(tree.value_nodes));
+        let first =
+            PolymorphicPermissionCard::read_wire(&mut snapshot.reader(), tree.root).unwrap();
+        assert!(matches!(
+            PolymorphicPermissionCard::read_wire(&mut snapshot.reader(), tree.root),
+            Err(WireError::ConsumedResource(_))
+        ));
+        assert_eq!(forget_template(first), Some(35));
+    }
+
+    #[test]
+    fn card_types_declare_their_polymorphic_flag_on_the_wire() {
+        let polymorphic =
+            |graph: wire::SchemaGraph| match &graph.type_nodes[graph.root as usize].body {
+                wire::SchemaTypeBody::PermissionCardType(spec) => spec.polymorphic,
+                other => panic!("expected a permission-card type, found {other:?}"),
+            };
+        assert!(!polymorphic(direct::schema::<PermissionCard>()));
+        assert!(polymorphic(direct::schema::<PolymorphicPermissionCard>()));
+    }
+
+    #[cfg(feature = "export_golem_agentic")]
+    #[test]
+    fn template_card_cannot_be_serialized_or_deserialized() {
+        let card = fake_template(36);
+        let error = crate::serde_json::to_string(&card).unwrap_err().to_string();
+        assert!(error.contains("cannot be serialized"), "{error}");
+        let error = crate::serde_json::from_str::<PolymorphicPermissionCard>("36")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("cannot be deserialized"), "{error}");
+        assert_eq!(forget_template(card), Some(36));
+    }
+
+    #[cfg(feature = "export_golem_agentic")]
+    #[test]
+    fn decoding_a_template_card_takes_its_handle() {
+        let card = fake_template(37);
+        let value = card.to_value();
+        let decoded = PolymorphicPermissionCard::from_value(&value).unwrap();
+        assert_eq!(format!("{card:?}"), "PolymorphicPermissionCard(<moved>)");
+        assert!(PolymorphicPermissionCard::from_value(&value).is_err());
+        assert!(PolymorphicPermissionCard::from_value(&SchemaValue::Bool(true)).is_err());
+        assert_eq!(forget_template(decoded), Some(37));
+    }
+
+    #[cfg(feature = "export_golem_agentic")]
+    #[test]
+    fn card_types_declare_their_polymorphic_flag_in_the_schema() {
+        #[derive(IntoSchema)]
+        struct Cards {
+            concrete: PermissionCard,
+            template: PolymorphicPermissionCard,
+        }
+
+        let schema = crate::schema::try_into_schema_graph::<Cards>().unwrap();
+        let resolve = |ty| schema.resolve_ref(ty).unwrap();
+        let SchemaType::Record { fields, .. } = resolve(&schema.root) else {
+            panic!("expected a record");
+        };
+        let flags = fields
+            .iter()
+            .map(|field| match resolve(&field.body) {
+                SchemaType::PermissionCard { spec, .. } => spec.polymorphic,
+                other => panic!("expected a permission-card type, found {other:?}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(flags, vec![false, true]);
+    }
+
+    #[test]
+    fn wallet_cards_keep_the_kind_the_host_reported() {
+        let raw_card = |handle| unsafe { wire::PermissionCard::from_handle(handle) };
+        let cards = [
+            raw::WalletCard::Concrete(raw_card(41)),
+            raw::WalletCard::Template(raw_card(42)),
+            raw::WalletCard::Scope(raw_card(43)),
+        ]
+        .into_iter()
+        .map(WalletCard::from_raw)
+        .collect::<Vec<_>>();
+        let handles = cards
+            .into_iter()
+            .map(|card| match card {
+                WalletCard::Concrete(card) => ("concrete", forget(card).unwrap()),
+                WalletCard::Template(card) => ("template", forget_template(card).unwrap()),
+                WalletCard::Scope(card) => ("scope", forget_scope(card)),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            handles,
+            vec![("concrete", 41), ("template", 42), ("scope", 43)]
+        );
     }
 
     #[test]

@@ -718,8 +718,9 @@ impl RustBridgeGenerator {
             SchemaType::QuotaToken { .. } => {
                 quote! { <golem_rust::quota::QuotaToken as golem_rust::schema::wit::direct::FromWire>::read_wire(__reader, #index).map_err(|e| e.to_string()) }
             }
-            SchemaType::PermissionCard { .. } => {
-                quote! { <golem_rust::permissions::PermissionCard as golem_rust::schema::wit::direct::FromWire>::read_wire(__reader, #index).map_err(|e| e.to_string()) }
+            SchemaType::PermissionCard { spec, .. } => {
+                let card = super::permission_card_type(spec);
+                quote! { <#card as golem_rust::schema::wit::direct::FromWire>::read_wire(__reader, #index).map_err(|e| e.to_string()) }
             }
             SchemaType::Stream { inner, .. } => {
                 let inner = inner

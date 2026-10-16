@@ -33,7 +33,7 @@ use golem_common::schema::agent::{
 use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef};
 use golem_common::schema::metadata::TypeId;
 use golem_common::schema::schema_type::{
-    BinaryRestrictions, NumericBound, NumericRestrictions, TextRestrictions,
+    BinaryRestrictions, NumericBound, NumericRestrictions, PermissionCardSpec, TextRestrictions,
 };
 use golem_common::schema::tool::{
     BoolFlagShape, CommandBody, CommandIndex, CommandNode, CommandTree, Doc, ErrorCase, ErrorKind,
@@ -501,10 +501,12 @@ fn guest_generation_uses_logical_ephemeral_proxies_and_invocation_metadata() {
 fn guest_generation_compiles_host_managed_capability_methods() {
     let dir = TempDir::new().unwrap();
     let target_path = Utf8Path::from_path(dir.path()).unwrap();
+    let template_card = || SchemaType::permission_card(PermissionCardSpec { polymorphic: true });
     let capability_tuple = SchemaType::tuple(vec![
         SchemaType::secret(Default::default()),
         SchemaType::quota_token(Default::default()),
         SchemaType::permission_card(Default::default()),
+        template_card(),
     ]);
     let envelope = SchemaType::record(vec![named_field(
         "capabilities",
@@ -532,6 +534,14 @@ fn guest_generation_compiles_host_managed_capability_methods() {
                 "transferMultimodal",
                 vec![field("capabilities", capability_modalities.clone())],
                 Some(capability_modalities),
+            ),
+            method(
+                "delegate",
+                vec![
+                    field("template", template_card()),
+                    field("concrete", SchemaType::permission_card(Default::default())),
+                ],
+                Some(template_card()),
             ),
             method("with_scope_card", vec![], None),
             method("set_default_scope_card", vec![], None),
@@ -568,12 +578,30 @@ fn guest_generation_compiles_host_managed_capability_methods() {
         "golem_rust::secrets::GuestSecretHandle",
         "golem_rust::quota::QuotaToken",
         "golem_rust::permissions::PermissionCard",
+        "golem_rust::permissions::PolymorphicPermissionCard",
     ] {
         assert!(
             lib_rs.contains(capability_type),
             "missing capability type {capability_type}:\n{lib_rs}"
         );
     }
+    // A `polymorphic: true` card is a template card on both sides of a call;
+    // a `polymorphic: false` card stays a concrete card.
+    let delegate = lib_rs
+        .split("pub async fn delegate(")
+        .nth(1)
+        .and_then(|rest| rest.split('{').next())
+        .unwrap_or_else(|| panic!("missing delegate method:\n{lib_rs}"));
+    let delegate = delegate.split_whitespace().collect::<Vec<_>>().join(" ");
+    let (parameters, result) = delegate
+        .split_once(") ->")
+        .unwrap_or_else(|| panic!("delegate has no result type: {delegate}"));
+    assert!(
+        parameters.contains("template: golem_rust::permissions::PolymorphicPermissionCard,")
+            && parameters.contains("concrete: golem_rust::permissions::PermissionCard,")
+            && result.contains("golem_rust::permissions::PolymorphicPermissionCard"),
+        "unexpected delegate signature: {delegate}"
+    );
     // User method and type names win over the generated scope-card members,
     // which are renamed.
     for scope_card_item in [
@@ -595,7 +623,7 @@ fn guest_generation_compiles_host_managed_capability_methods() {
         lib_rs
             .matches("golem_rust::permissions::__async_invoke_and_await")
             .count(),
-        6,
+        7,
         "every awaited call, and only awaited calls, must go through the scope-card helper:\n{lib_rs}"
     );
     assert!(!lib_rs.contains("wasm_rpc.async_invoke_and_await"));
@@ -605,7 +633,7 @@ fn guest_generation_compiles_host_managed_capability_methods() {
         .split("async fn __golem_bridge_invoke_")
         .skip(1)
         .collect::<Vec<_>>();
-    assert_eq!(impls.len(), 6, "{lib_rs}");
+    assert_eq!(impls.len(), 7, "{lib_rs}");
     for body in impls {
         let body = body.split("pub async fn").next().unwrap();
         let resolve = body

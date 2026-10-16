@@ -4,8 +4,14 @@ error[E0451]: field `handle` of struct `golem_rust::permissions::PermissionCard`
 6 |     PermissionCard { handle }
   |                      ^^^^^^ private field
 
-error[E0451]: field `uuid` of struct `golem_rust::permissions::CardId` is private
-  --> tests/ui/fail/permission_card_struct_literal.rs:10:14
+error[E0451]: field `handle` of struct `PolymorphicPermissionCard` is private
+  --> tests/ui/fail/permission_card_struct_literal.rs:10:33
    |
-10 |     CardId { uuid }
+10 |     PolymorphicPermissionCard { handle }
+   |                                 ^^^^^^ private field
+
+error[E0451]: field `uuid` of struct `golem_rust::permissions::CardId` is private
+  --> tests/ui/fail/permission_card_struct_literal.rs:14:14
+   |
+14 |     CardId { uuid }
    |              ^^^^ private field

@@ -42,7 +42,8 @@ use golem_common::schema::find_host_managed_type;
 use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef};
 use golem_common::schema::multimodal::multimodal_variant_cases;
 use golem_common::schema::schema_type::{
-    BinaryRestrictions, NamedFieldType, SchemaType, TextRestrictions, VariantCaseType,
+    BinaryRestrictions, NamedFieldType, PermissionCardSpec, SchemaType, TextRestrictions,
+    VariantCaseType,
 };
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::schema::unstructured::{
@@ -3701,8 +3702,11 @@ impl RustBridgeGenerator {
             SchemaType::QuotaToken { .. } if self.mode == RustBridgeMode::GuestWasmRpc => {
                 quote! { Ok(<golem_rust::quota::QuotaToken as golem_rust::IntoSchema>::to_value(&#val)) }
             }
-            SchemaType::PermissionCard { .. } if self.mode == RustBridgeMode::GuestWasmRpc => {
-                quote! { Ok(<golem_rust::permissions::PermissionCard as golem_rust::IntoSchema>::to_value(&#val)) }
+            SchemaType::PermissionCard { spec, .. }
+                if self.mode == RustBridgeMode::GuestWasmRpc =>
+            {
+                let card = permission_card_type(spec);
+                quote! { Ok(<#card as golem_rust::IntoSchema>::to_value(&#val)) }
             }
             SchemaType::Ref { .. }
             | SchemaType::Record { .. }
@@ -4027,9 +4031,12 @@ impl RustBridgeGenerator {
                 <golem_rust::quota::QuotaToken as golem_rust::FromSchema>::from_value(&#val)
                     .map_err(|__error| __error.to_string())
             },
-            SchemaType::PermissionCard { .. } if self.mode == RustBridgeMode::GuestWasmRpc => {
+            SchemaType::PermissionCard { spec, .. }
+                if self.mode == RustBridgeMode::GuestWasmRpc =>
+            {
+                let card = permission_card_type(spec);
                 quote! {
-                    <golem_rust::permissions::PermissionCard as golem_rust::FromSchema>::from_value(&#val)
+                    <#card as golem_rust::FromSchema>::from_value(&#val)
                         .map_err(|__error| __error.to_string())
                 }
             }
@@ -4208,8 +4215,10 @@ impl RustBridgeGenerator {
             SchemaType::QuotaToken { .. } if self.mode == RustBridgeMode::GuestWasmRpc => {
                 Ok(quote! { golem_rust::quota::QuotaToken })
             }
-            SchemaType::PermissionCard { .. } if self.mode == RustBridgeMode::GuestWasmRpc => {
-                Ok(quote! { golem_rust::permissions::PermissionCard })
+            SchemaType::PermissionCard { spec, .. }
+                if self.mode == RustBridgeMode::GuestWasmRpc =>
+            {
+                Ok(permission_card_type(spec))
             }
             SchemaType::Ref { .. }
             | SchemaType::Variant { .. }
@@ -4537,6 +4546,16 @@ impl GolemDependencySource {
                 features,
             )),
         }
+    }
+}
+
+/// The `golem_rust::permissions` card type of a permission-card parameter or
+/// result: a template card for `polymorphic: true`, a concrete card otherwise.
+fn permission_card_type(spec: &PermissionCardSpec) -> TokenStream {
+    if spec.polymorphic {
+        quote! { golem_rust::permissions::PolymorphicPermissionCard }
+    } else {
+        quote! { golem_rust::permissions::PermissionCard }
     }
 }
 
