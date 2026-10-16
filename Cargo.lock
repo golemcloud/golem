@@ -4664,6 +4664,7 @@ dependencies = [
  "golem-worker-executor",
  "golem-xfs-quotad",
  "prometheus",
+ "prost",
  "regex",
  "rustls",
  "scc",

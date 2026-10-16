@@ -870,3 +870,110 @@ test "non-awaited reflected methods reject nested streams" {
     _ => fail("expected a streaming method to be rejected")
   }
 }
+
+///|
+test "JSON packing errors carry the path of the rejected value" {
+  let metadata = @model.empty_metadata()
+  let item = @model.schema_type(
+    Record([{ name: "count", body: @model.schema_type(U32(None)), metadata, }]),
+  )
+  let schema = test_schema(
+    Record([
+      { name: "items", body: @model.schema_type(List(item)), metadata, },
+      {
+        name: "lookup",
+        body: @model.schema_type(
+          Map(@model.schema_type(String), @model.schema_type(U32(None))),
+        ),
+        metadata,
+      },
+      {
+        name: "outcome",
+        body: @model.schema_type(
+          Result(Some(@model.schema_type(Option(item))), None),
+        ),
+        metadata,
+      },
+    ]),
+  )
+  let cases : Array[(Json, String, Array[String])] = [
+    (
+      { "items": [{ "count": 1 }, {}], "lookup": [], "outcome": { "ok": null } },
+      "missing field 'count'",
+      ["items", "1", "count"],
+    ),
+    (
+      { "items": [], "lookup": [["a", "b"]], "outcome": { "ok": null } },
+      "expected a JSON number",
+      ["lookup", "0", "1"],
+    ),
+    (
+      {
+        "items": [],
+        "lookup": [],
+        "outcome": { "ok": { "count": 1, "extra": 2 } },
+      },
+      "unknown field 'extra'",
+      ["outcome", "ok", "extra"],
+    ),
+    (
+      { "lookup": [], "outcome": { "ok": null } },
+      "missing field 'items'",
+      ["items"],
+    ),
+  ]
+  for test_case in cases {
+    let (input, expected_message, expected_path) = test_case
+    try schema.pack_json(input) catch {
+      Json(message, path~) => {
+        assert_eq(message, expected_message)
+        assert_eq(path, expected_path)
+      }
+      error => fail("unexpected error: \{repr(error)}")
+    } noraise {
+      _ => fail("expected the input to be rejected")
+    }
+  }
+}
+
+///|
+test "root defaults fill omitted JSON fields with independent copies" {
+  let metadata = @model.empty_metadata()
+  let schema = SchemaRef::new(
+    {
+      defs: [],
+      root: @model.schema_type(
+        Record([
+          {
+            name: "tags",
+            body: @model.schema_type(List(@model.schema_type(String))),
+            metadata,
+          },
+        ]),
+      ),
+    },
+    root_defaults={ "tags": List([String("a")]) },
+  )
+  let first = schema.pack_json(Json::object({}))
+  guard first is Record([List(tags)]) else { fail("expected packed tags") }
+  tags.push(String("b"))
+  assert_eq(
+    schema.pack_json(Json::object({})),
+    @model.SchemaValue::Record([List([String("a")])]),
+  )
+  assert_eq(
+    schema.pack_json({ "tags": [] }),
+    @model.SchemaValue::Record([List([])]),
+  )
+  let plain = SchemaRef::new(schema.graph)
+  assert_eq(plain.graph(), schema.graph())
+  try plain.pack_json(Json::object({})) catch {
+    Json(message, path~) => {
+      assert_eq(message, "missing field 'tags'")
+      assert_eq(path, ["tags"])
+    }
+    error => fail("unexpected error: \{repr(error)}")
+  } noraise {
+    _ => fail("expected a schema without defaults to require tags")
+  }
+}

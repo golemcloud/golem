@@ -45,6 +45,7 @@ use std::task::{Context, Poll};
 pub struct SchemaRef {
     graph: Arc<SchemaGraph>,
     root: SchemaType,
+    root_field_defaults: Arc<[Option<SchemaValue>]>,
 }
 
 impl SchemaRef {
@@ -53,11 +54,85 @@ impl SchemaRef {
         Self {
             graph: Arc::new(graph),
             root,
+            root_field_defaults: Arc::new([]),
         }
     }
 
     pub(crate) fn with_root(graph: Arc<SchemaGraph>, root: SchemaType) -> Self {
-        Self { graph, root }
+        Self {
+            graph,
+            root,
+            root_field_defaults: Arc::new([]),
+        }
+    }
+
+    /// Attaches per-field defaults to a record root. They apply only to the JSON surface: JSON
+    /// packing fills an omitted field with its default, and the rendered JSON Schema neither
+    /// requires such a field nor hides its default. The value surface keeps the plain record.
+    pub(crate) fn with_root_field_defaults(mut self, defaults: Vec<Option<SchemaValue>>) -> Self {
+        debug_assert!(
+            matches!(&self.root, SchemaType::Record { fields, .. } if fields.len() == defaults.len())
+        );
+        if defaults.iter().any(Option::is_some) {
+            self.root_field_defaults = defaults.into();
+        }
+        self
+    }
+
+    #[cfg(feature = "json")]
+    fn root_record_with_defaults(&self) -> Option<&[NamedFieldType]> {
+        match &self.root {
+            SchemaType::Record { fields, .. }
+                if !self.root_field_defaults.is_empty()
+                    && fields.len() == self.root_field_defaults.len() =>
+            {
+                Some(fields)
+            }
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "json")]
+    fn decode_json(&self, value: &serde_json::Value) -> Result<SchemaValue, RenderError> {
+        let (Some(fields), Some(object)) = (self.root_record_with_defaults(), value.as_object())
+        else {
+            return from_json_value(&self.graph, &self.root, value);
+        };
+        let omitted = fields
+            .iter()
+            .zip(self.root_field_defaults.iter())
+            .map(|(field, default)| {
+                default
+                    .as_ref()
+                    .filter(|_| !object.contains_key(&field.name))
+            })
+            .collect::<Vec<_>>();
+        if omitted.iter().all(Option::is_none) {
+            return from_json_value(&self.graph, &self.root, value);
+        }
+        let mut present = self.root.clone();
+        if let SchemaType::Record { fields, .. } = &mut present {
+            let mut index = 0;
+            fields.retain(|_| {
+                let keep = omitted[index].is_none();
+                index += 1;
+                keep
+            });
+        }
+        let SchemaValue::Record { fields: decoded } =
+            from_json_value(&self.graph, &present, value)?
+        else {
+            unreachable!("a record schema decodes to a record value")
+        };
+        let mut decoded = decoded.into_iter();
+        let fields = omitted
+            .into_iter()
+            .map(|default| match default {
+                Some(default) => default.clone(),
+                None => decoded.next().expect("decoded present field"),
+            })
+            .collect();
+        Ok(SchemaValue::Record { fields })
     }
 
     #[cfg(test)]
@@ -95,7 +170,7 @@ impl SchemaRef {
 
     #[cfg(feature = "json")]
     pub fn pack_json(&self, value: &serde_json::Value) -> Result<SchemaValue, GolemReflectError> {
-        let packed = from_json_value(&self.graph, &self.root, value)?;
+        let packed = self.decode_json(value)?;
         self.validate_value(&packed)?;
         Ok(packed)
     }
@@ -116,7 +191,29 @@ impl SchemaRef {
 
     #[cfg(feature = "json")]
     pub fn to_json_schema(&self, include_draft_marker: bool) -> serde_json::Value {
-        to_reflection_json_schema(&self.graph, &self.root, include_draft_marker)
+        let mut schema = to_reflection_json_schema(&self.graph, &self.root, include_draft_marker);
+        if let Some(fields) = self.root_record_with_defaults() {
+            for (field, default) in fields.iter().zip(self.root_field_defaults.iter()) {
+                let Some(default) = default else {
+                    continue;
+                };
+                if let Some(required) = schema
+                    .get_mut("required")
+                    .and_then(serde_json::Value::as_array_mut)
+                {
+                    required.retain(|name| name.as_str() != Some(field.name.as_str()));
+                }
+                if let Ok(default) = to_json_value(&self.graph, &field.body, default)
+                    && let Some(property) = schema
+                        .get_mut("properties")
+                        .and_then(|properties| properties.get_mut(&field.name))
+                        .and_then(serde_json::Value::as_object_mut)
+                {
+                    property.insert("default".to_string(), default);
+                }
+            }
+        }
+        schema
     }
 }
 

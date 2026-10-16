@@ -3658,6 +3658,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             Poll::Ready(())
         })
         .await;
+        wait_at_promise_checkpoint("first-stdin-write-accepted").await;
         second_writer.write(vec![0xa7; 19]).await.unwrap();
         second_writer
             .fail(ByteStreamFailure::Failed("second".to_string()))

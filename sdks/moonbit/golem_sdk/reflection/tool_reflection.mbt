@@ -9,6 +9,7 @@ pub struct ToolArgument {
   default : @model.SchemaValue?
   schema : SchemaRef
   optional_carrier : Bool
+  priv defaulted : Bool
 } derive(Debug, Eq)
 
 ///|
@@ -357,6 +358,7 @@ fn tool_option_argument(
     RepeatableList(_) | RepeatableMap(_) => false
   }
   let optional_carrier = !spec.required && spec.default is None && scalar_shape
+  let defaulted = scalar_shape && spec.default is Some(_)
   let schema = match spec.shape {
     Scalar(root) | OptionalScalar(root) => tool_schema_at(tool, root)
     RepeatableList(shape) => {
@@ -386,6 +388,7 @@ fn tool_option_argument(
     },
     schema,
     optional_carrier,
+    defaulted,
   }
 }
 
@@ -412,6 +415,7 @@ fn tool_flag_argument(
     ),
     schema: SchemaRef::new({ defs: tool.decoded.graph.defs, root, }),
     optional_carrier: false,
+    defaulted: true,
   }
 }
 
@@ -505,6 +509,7 @@ pub fn ToolType::command(
           },
           schema: tool_schema_at(self, item.type_),
           optional_carrier: !item.required && item.default is None,
+          defaulted: item.default is Some(_),
         })
       }
       match body.positionals.tail {
@@ -522,6 +527,7 @@ pub fn ToolType::command(
               root: @model.schema_type(List(inner.root)),
             }),
             optional_carrier: false,
+            defaulted: false,
           })
         }
         None => ()
@@ -567,13 +573,23 @@ pub fn ToolType::command(
     error => raise Schema("failed to merge tool input schemas: \{Repr(error)}")
   }
   let wire_input : @model.SchemaGraph = { defs, root: input_root, }
+  let root_defaults : Map[String, @model.SchemaValue] = Map([])
+  for argument in arguments {
+    match argument.default {
+      Some(default) =>
+        if argument.defaulted && !schema_value_contains_capability(default) {
+          root_defaults[argument.name] = default
+        }
+      None => ()
+    }
+  }
   {
     tool: self,
     path: canonical,
     body,
     subcommands: nodes[index].subcommands.map(child => nodes[child].name),
     arguments,
-    input_schema: SchemaRef::new(wire_input),
+    input_schema: SchemaRef::new(wire_input, root_defaults~),
     wire_input,
     result,
   }
@@ -593,6 +609,11 @@ pub fn ReflectedToolClient::command(
 }
 
 ///|
+/// Pack canonical JSON input against the command's canonical input record and
+/// check its constraints. An omitted scalar option, fixed positional, or flag
+/// takes its declared default (`0` for a count flag); other omitted
+/// non-option arguments are rejected. The packed value is the unchanged wire
+/// record.
 pub fn ToolCommand::pack_json(
   self : ToolCommand,
   input : Json,

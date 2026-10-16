@@ -16,6 +16,7 @@ package schema
 
 import (
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 )
@@ -105,6 +106,41 @@ func TestJSONSchemaOptionFieldsAreNotRequired(t *testing.T) {
 	}})
 	got := renderDoc(t, SchemaGraph{Root: root}, false)
 	assertJSON(t, "required", got["required"], `["name"]`)
+}
+
+// TestJSONSchemaFieldDefaultsAreNotRequired — a root field with a default is
+// not required and states its default, unless the default has no canonical
+// JSON form; the rest of the document is unchanged.
+func TestJSONSchemaFieldDefaultsAreNotRequired(t *testing.T) {
+	root := typ(RecordType{Fields: []NamedField{
+		{Name: "script", Body: typ(StringType{})},
+		{Name: "timeout", Body: typ(U32Type{})},
+		{Name: "ratio", Body: typ(F64Type{})},
+		{Name: "label", Body: typ(OptionType{Inner: typ(StringType{})})},
+	}})
+	plain := NewRef(SchemaGraph{Root: root})
+	r := plain.WithFieldDefaults(map[string]SchemaValue{
+		"timeout": U32Value{Value: 600},
+		"ratio":   F64Value{Value: math.NaN()},
+	})
+	data, err := r.ToJSONSchemaBytes(false)
+	if err != nil {
+		t.Fatalf("ToJSONSchemaBytes: %v", err)
+	}
+	var got map[string]any
+	_ = json.Unmarshal(data, &got)
+	assertJSON(t, "required", got["required"], `["script"]`)
+	props := got["properties"].(map[string]any)
+	assertJSON(t, "timeout", props["timeout"], `{"type":"integer","minimum":0,"maximum":4294967295,"default":600}`)
+	if _, has := props["ratio"].(map[string]any)["default"]; has {
+		t.Error("a NaN default was rendered")
+	}
+
+	want := renderDoc(t, SchemaGraph{Root: root}, false)
+	want["required"] = []any{"script"}
+	want["properties"].(map[string]any)["timeout"].(map[string]any)["default"] = 600
+	wantBytes, _ := json.Marshal(want)
+	assertJSON(t, "document", got, string(wantBytes))
 }
 
 // TestJSONSchemaNamedDefsBecomeRefs — a named type is emitted once under $defs
