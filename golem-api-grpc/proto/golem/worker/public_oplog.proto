@@ -781,6 +781,24 @@ message OplogEntryWithIndex {
   PublicOplogEntryAttribution attribution = 3;
 }
 
+// An oplog entry that an oplog page leaves out because its encoded form is larger than the
+// limit of the executor.
+message OmittedOplogEntry {
+  uint64 oplog_index = 1;
+  PublicOplogEntryAttribution attribution = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  string entry_type = 4;
+  uint64 size = 5;
+  uint64 component_revision = 6;
+}
+
+message OplogPageEntry {
+  oneof entry {
+    OplogEntryWithIndex included = 1;
+    OmittedOplogEntry omitted = 2;
+  }
+}
+
 enum PublicAgentEntityKind {
   PUBLIC_AGENT_ENTITY_KIND_UNSPECIFIED = 0;
   PUBLIC_AGENT_ENTITY_KIND_TOOL = 1;

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
 	"io"
 	"reflect"
 	"slices"
@@ -287,12 +288,14 @@ func startUnderlying[O any](ce *commandEntry, inv *middlewareInvocation, m *midd
 		return nil, fmt.Errorf("golem: middleware %s calls %s of tool %s, which it does not wrap",
 			m.name, ce.label(), ce.node.entry.name)
 	}
-	input, stdin, err := ce.prepare(inv.toolName, fill)
+	input, stdin, restore, err := ce.prepare(inv.toolName, fill)
 	if err != nil {
 		return nil, err
 	}
 	call, err := inv.under.start(ce.node.path, input, stdin)
 	if err != nil {
+		// The layer beneath took nothing: the cards in the arguments go back.
+		restore()
 		return nil, err
 	}
 	started := commandInvocation[O](ce, inv.toolName, call)
@@ -385,6 +388,11 @@ func (c *UniversalMiddlewareContext[P]) CommandPath() []string {
 }
 
 // Input returns the call's arguments, the command's canonical input record.
+//
+// A permission card in it moves out when [golem.DecodeTypedValue] decodes it,
+// or when Start or Next hands the input on. After that the input can no longer
+// be handed on whole: Start and Next refuse it with an error, as the card is
+// held elsewhere; build the input to hand on from the decoded value instead.
 func (c *UniversalMiddlewareContext[P]) Input() golem.TypedValue {
 	return typedValue(c.inv.input)
 }
@@ -436,6 +444,9 @@ func (inv *middlewareInvocation) outputs() []*Output {
 // startRaw starts the invoked command beneath with the given input and the
 // original standard input.
 func (inv *middlewareInvocation) startRaw(input types.TypedSchemaValue) (*Invocation[golem.Option[golem.TypedValue]], error) {
+	if err := engine.CheckCardsPresent(input.Value); err != nil {
+		return nil, err
+	}
 	var stdin io.Reader
 	if inv.stdin.present() {
 		stdin = inv.stdin
@@ -444,6 +455,9 @@ func (inv *middlewareInvocation) startRaw(input types.TypedSchemaValue) (*Invoca
 	if err != nil {
 		return nil, err
 	}
+	// The layer beneath took the input's cards: the same value cannot be
+	// handed on again.
+	engine.MarkCardsSent(input.Value.ValueNodes)
 	tool, path := inv.toolName, inv.commandPath
 	started := newInvocation(call, func(call toolCall) (golem.Option[golem.TypedValue], error) {
 		res, rpcErr := call.wait()
@@ -585,7 +599,11 @@ func (d *definitions) runMiddleware(e *middlewareEntry, inv *middlewareInvocatio
 		}
 		result := witTypes.None[types.TypedSchemaValue]()
 		if v, has := out.Interface().(golem.Option[golem.TypedValue]).Get(); has {
-			result = witTypes.Some(witOf(v))
+			if err := engine.CheckCardsPresent(witOf(v).Value); err != nil {
+				engine.ReleaseCardsIn(witOf(v).Value.ValueNodes, link.ReleaseCard)
+				return fail(types.MakeToolErrorInvalidResult(fmt.Sprintf("%s: result: %v", label, err)))
+			}
+			result = witTypes.Some(sendOnce(witOf(v)))
 		}
 		return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](toolCommon.InvocationResult{
 			Result: result, Stdout: witTypes.None[*witTypes.StreamReader[uint8]](), Stderr: witTypes.None[*witTypes.StreamReader[uint8]](),
@@ -634,7 +652,11 @@ func (d *definitions) passThrough(inv *middlewareInvocation) witTypes.Result[too
 	}
 	wire := witTypes.None[types.TypedSchemaValue]()
 	if v, has := result.Get(); has {
-		wire = witTypes.Some(witOf(v))
+		if err := engine.CheckCardsPresent(witOf(v).Value); err != nil {
+			engine.ReleaseCardsIn(witOf(v).Value.ValueNodes, link.ReleaseCard)
+			return fail(types.MakeToolErrorInvalidResult(fmt.Sprintf("middleware %s: result: %v", inv.entry.name, err)))
+		}
+		wire = witTypes.Some(sendOnce(witOf(v)))
 	}
 	return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](toolCommon.InvocationResult{
 		Result: wire, Stdout: witTypes.None[*witTypes.StreamReader[uint8]](), Stderr: witTypes.None[*witTypes.StreamReader[uint8]](),

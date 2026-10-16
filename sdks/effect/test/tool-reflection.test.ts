@@ -8,9 +8,9 @@ import { toolClientDefinition, ToolTransport } from "../src/Tool.js"
 import { ToolClient } from "../src/host/ToolClient.js"
 import { compile } from "../src/WitCodec.js"
 import { t } from "../src/internal/schema-model/model.js"
-import { schemaGraphToWit } from "../src/internal/schema-model/wit.js"
-import { SchemaRef } from "../src/SchemaRef.js"
-import { Binary, restrict, Uint8 } from "../src/WitTypes.js"
+import { schemaGraphToWit, schemaValueFromWit } from "../src/internal/schema-model/wit.js"
+import { SchemaRef, type JsonValue } from "../src/SchemaRef.js"
+import { Binary, restrict, Uint8, Uint32 } from "../src/WitTypes.js"
 import { SchemaValueStream } from "golem:core/types@2.0.0"
 
 const definition = toolDefinition("effect-reflection").body((body) =>
@@ -41,7 +41,7 @@ describe("native tool reflection", () => {
       {
         mode,
         tag: "permission-card-handle",
-        schema: ToolSchema.PermissionCard({ polymorphic: false }),
+        schema: ToolSchema.PermissionCard,
       },
       { mode, tag: "stream-value", schema: ToolSchema.AgentStream(Schema.Number) },
     ]),
@@ -580,5 +580,244 @@ describe("native tool reflection", () => {
       "function",
     )
     expect(() => toolClientDefinition(definition).client()).toThrow("requires a target name")
+  })
+})
+
+describe("declared defaults in canonical JSON input", () => {
+  const bashDefinition = toolDefinition("effect-bash").body((body) =>
+    body
+      .positional("script", Schema.String)
+      .option("cwd", Schema.String, { default: "" })
+      .option("timeout", Uint32, { default: 600 })
+      .option("env-file", Schema.String)
+      .flag("login")
+      .flag("strict", { default: true, negatable: true })
+      .countFlag("verbose")
+      .returns(Schema.String),
+  )
+  const bashCompiled = compileDefinition(bashDefinition)
+  const bashRegistered = {
+    ...registered,
+    lookupName: "effect-bash",
+    definition: bashCompiled.wire,
+  }
+  const bash = () => new ToolType(bashRegistered).client.command([])
+  const unpacked = (input: Common.TypedSchemaValue["value"]) =>
+    bash().inputSchema!.unpackJson(input)
+
+  it("fills omitted defaulted arguments and keeps explicit values", () => {
+    const command = bash()
+    expect(unpacked(command.packJson({ script: "echo ok" }))).toEqual({
+      script: "echo ok",
+      cwd: "",
+      timeout: 600,
+      "env-file": null,
+      login: false,
+      strict: true,
+      verbose: 0,
+    })
+    expect(
+      unpacked(
+        command.packJson({
+          script: "echo ok",
+          cwd: "/tmp",
+          timeout: 30,
+          "env-file": ".env",
+          login: true,
+          strict: false,
+          verbose: 2,
+        }),
+      ),
+    ).toEqual({
+      script: "echo ok",
+      cwd: "/tmp",
+      timeout: 30,
+      "env-file": ".env",
+      login: true,
+      strict: false,
+      verbose: 2,
+    })
+    expect(unpacked(command.packJson({ script: "sleep 1", timeout: 120000 }))).toMatchObject({
+      timeout: 120000,
+    })
+    expect(unpacked(command.packJson({ script: "true", "env-file": null }))).toMatchObject({
+      "env-file": null,
+    })
+    expect(command.validateJson({ script: "true" }).success).toBe(true)
+  })
+
+  it("rejects unknown keys and names a missing required argument", async () => {
+    const command = bash()
+    const unknown = command.validateJson({ script: "true", shell: "zsh" })
+    expect(unknown.success).toBe(false)
+    if (!unknown.success) expect(unknown.issues[0]?.path).toEqual(["shell"])
+
+    const missing = command.validateJson({ timeout: 5 })
+    expect(missing.success).toBe(false)
+    if (!missing.success) {
+      expect(missing.issues[0]?.path).toEqual(["script"])
+      expect(missing.issues[0]?.message).toBe("missing field 'script'")
+    }
+    const failure = await Effect.runPromise(
+      command
+        .invokeJson({})
+        .pipe(
+          Effect.provideService(
+            ToolTransport,
+            ToolTransport.of({ start: () => Effect.die("unused") }),
+          ),
+          Effect.provideService(ToolClient, ToolClient.of({} as never)),
+          Effect.flip,
+        ),
+    )
+    expect(failure).toMatchObject({ phase: "input", message: "missing field 'script'" })
+  })
+
+  it("renders defaults in the input JSON Schema", () => {
+    const command = bash()
+    const compiled = new SchemaRef(bashCompiled.bodies.get("")!.input.schemaGraph).toJsonSchema()
+    const rendered = command.inputSchema!.toJsonSchema() as Record<string, any>
+    expect(rendered.required).toEqual(["script"])
+    expect(rendered.properties.cwd.default).toBe("")
+    expect(rendered.properties.timeout.default).toBe(600)
+    expect(rendered.properties.login.default).toBe(false)
+    expect(rendered.properties.strict.default).toBe(true)
+    expect(rendered.properties.verbose.default).toBe(0)
+    expect(rendered.properties.script).not.toHaveProperty("default")
+    expect(rendered.properties["env-file"]).not.toHaveProperty("default")
+    const withoutDefaults = Object.fromEntries(
+      Object.entries(rendered.properties as Record<string, Record<string, unknown>>).map(
+        ([name, property]) => {
+          const { default: _default, ...rest } = property
+          return [name, rest]
+        },
+      ),
+    )
+    expect({ ...rendered, properties: withoutDefaults, required: undefined }).toEqual({
+      ...(compiled as Record<string, unknown>),
+      required: undefined,
+    })
+  })
+
+  it("sends the unchanged wire record for filled defaults", async () => {
+    const sent: Array<Parameters<ToolTransport["start"]>[2]> = []
+    const codec = Effect.runSync(compile(Schema.String))
+    const transport = ToolTransport.of({
+      start: (_tool, _path, input) => {
+        sent.push(input)
+        return Effect.succeed({
+          result: Effect.succeed({
+            result: {
+              graph: codec.schemaGraph,
+              value: Effect.runSync(codec.encode("ok") as Effect.Effect<any, any>),
+            },
+          }),
+          cancel: Effect.void,
+          detach: Effect.void,
+        })
+      },
+    })
+    const host = ToolClient.of({
+      getAllTools: () => [bashRegistered],
+      getTool: () => bashRegistered,
+      createStdin: vi.fn() as never,
+      createStdinFromStream: vi.fn() as never,
+      createOutput: vi.fn() as never,
+      rpc: vi.fn() as never,
+      createRpc: vi.fn() as never,
+    })
+    const command = bash()
+    await expect(
+      Effect.runPromise(
+        command
+          .invokeJson({ script: "echo ok" })
+          .pipe(
+            Effect.provideService(ToolTransport, transport),
+            Effect.provideService(ToolClient, host),
+          ),
+      ),
+    ).resolves.toBe("ok")
+    const input = sent[0]!
+    const wire = new SchemaRef(input.graph)
+    const compiled = new SchemaRef(bashCompiled.bodies.get("")!.input.schemaGraph)
+    expect(wire.toJsonSchema()).toEqual(compiled.toJsonSchema())
+    expect((wire.toJsonSchema() as Record<string, unknown>).required).toEqual([
+      "script",
+      "cwd",
+      "timeout",
+      "login",
+      "strict",
+      "verbose",
+    ])
+    expect(wire.validateValue(input.value).success).toBe(true)
+    expect(wire.validateJson({ script: "echo ok" }).success).toBe(false)
+    expect(wire.unpackJson(input.value)).toEqual({
+      script: "echo ok",
+      cwd: "",
+      timeout: 600,
+      "env-file": null,
+      login: false,
+      strict: true,
+      verbose: 0,
+    })
+    expect(command.inputSchema!.validateValue(input.value).success).toBe(true)
+  })
+
+  it("fills defaulted positionals and optional scalars but not tails or repeatable options", () => {
+    const definition = toolDefinition("effect-default-shapes").body((body) =>
+      body
+        .positional("source", Schema.String, { default: "stdin" })
+        .tail("files", Schema.String)
+        .option("color", Schema.UndefinedOr(Schema.String), {
+          optionalScalar: true,
+          default: "auto",
+        })
+        .option("include", Schema.String, { repeatable: "repeated" })
+        .option("define", ToolSchema.Map(Schema.String, Schema.Number), {
+          repeatable: "either",
+          delim: ",",
+          default: new Map([["a", 1]]),
+        })
+        .option("ratio", Schema.Number, { default: Number.NaN }),
+    )
+    const command = new ToolType({
+      ...registered,
+      lookupName: "effect-default-shapes",
+      definition: compileDefinition(definition).wire,
+    }).client.command([])
+    const source = command.arguments.find((argument) => argument.name === "source")!
+    expect(source.required).toBe(true)
+
+    const packed = schemaValueFromWit(command.packJson({ files: [], include: [], define: [] }))
+    if (packed.tag !== "record") throw new Error("expected a record")
+    expect(packed.fields[0]).toEqual({ tag: "string", value: "stdin" })
+    expect(packed.fields[2]).toMatchObject({ tag: "option", value: { value: "auto" } })
+    expect(packed.fields[5]).toMatchObject({ tag: "f64" })
+    expect(Number.isNaN((packed.fields[5] as { value: number }).value)).toBe(true)
+    const explicitNone = schemaValueFromWit(
+      command.packJson({ files: [], include: [], define: [], color: null }),
+    )
+    if (explicitNone.tag !== "record") throw new Error("expected a record")
+    expect(explicitNone.fields[2]).toEqual({ tag: "option" })
+
+    for (const omitted of ["files", "include", "define"]) {
+      const input: Record<string, JsonValue> = { files: [], include: [], define: [] }
+      delete input[omitted]
+      const result = command.validateJson(input)
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.issues[0]?.path).toEqual([omitted])
+        expect(result.issues[0]?.message).toBe(`missing field '${omitted}'`)
+      }
+    }
+
+    const rendered = command.inputSchema!.toJsonSchema() as Record<string, any>
+    expect(rendered.required).toEqual(["files", "include", "define"])
+    expect(rendered.properties.source.default).toBe("stdin")
+    expect(rendered.properties.color.default).toBe("auto")
+    expect(rendered.properties).not.toHaveProperty(["ratio", "default"])
+    expect(rendered.properties.files).not.toHaveProperty("default")
+    expect(rendered.properties.include).not.toHaveProperty("default")
+    expect(rendered.properties.define).not.toHaveProperty("default")
   })
 })

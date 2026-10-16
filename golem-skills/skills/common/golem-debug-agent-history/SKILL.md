@@ -25,6 +25,7 @@ golem agent oplog <AGENT_ID> [OPTIONS]
 |------|-------------|
 | `--from <INDEX>` | Start from a specific oplog entry index. Cannot be combined with `--query`. |
 | `--query <LUCENE_QUERY>` | Search oplog entries using a Lucene query string. Cannot be combined with `--from`. |
+| `--omit-payloads` | Show the entries that oplog pages omit only by their type, timestamp and size. Oplog pages omit an entry whose encoded form is larger than a server limit (1 MiB by default), for example an entry with a large snapshot, invocation input or host call response. Without this flag the CLI reads each omitted entry in full. |
 | `--serve` | Serve an interactive HTML viewer on a local port and open it in the default browser. The viewer loads the oplog page by page through the API, runs Lucene queries on the server and can follow a running agent, so it works for oplogs of any size. `--from` and `--query` set the initial position and query. Runs until interrupted. |
 | `--port <PORT>` | Port of the served viewer. A free port is chosen when omitted. Requires `--serve`. |
 | `--no-open` | Do not open the served viewer in a browser. Requires `--serve`. |
@@ -70,6 +71,7 @@ Each text entry is printed with its index (e.g. `#00042:`) followed by a labeled
 | `CARD INSTALLED` / `CARD DERIVED` / `CARD REVOKED` / `CARD EXPIRED` / `CARD TRANSFER STARTED` / … | Permission card lifecycle |
 | `STREAM REGISTERED` / `STREAM ITEMS` / `STREAM END` / `STREAM CANCEL` / `STREAM SESSION` | Streaming invocation events |
 | `ENQUEUED EXTERNAL TOOL` / `INVOKE EXTERNAL TOOL` | External tool invocations on the agent |
+| `OMITTED ENTRY` | Only with `--omit-payloads`, or when the CLI could not read the full entry: an entry too large for an oplog page — shows its entry type, timestamp and size in bytes. In structured formats its `entry` has `type: "Omitted"` |
 
 ### Examples
 

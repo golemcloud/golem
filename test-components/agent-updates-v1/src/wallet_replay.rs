@@ -3,6 +3,38 @@ use futures::future::{Either, select};
 use golem_rust::agentic::Config;
 use golem_rust::bindings::golem::agent::host;
 use golem_rust::{PromiseId, agent_definition, agent_implementation};
+use raw_permissions::golem::permissions::{revoke, types, wallet};
+
+/// Raw `golem:permissions` calls through this component's own bindings: the
+/// tests name wallet cards by id, which the typed `golem_rust::permissions`
+/// API never reveals.
+mod raw_permissions {
+    wit_bindgen::generate!({
+        inline: "
+            package golem-it:raw-permissions;
+
+            world raw-permissions {
+                import golem:permissions/types@0.1.0;
+                import golem:permissions/wallet@0.1.0;
+                import golem:permissions/revoke@0.1.0;
+            }
+        ",
+        path: "../../sdks/rust/golem-rust/wit",
+        with: {
+            "golem:core/types@2.0.0": golem_rust::schema::wit::wire,
+        },
+        generate_all,
+    });
+}
+
+/// The cards of this agent's wallet, of every kind.
+fn wallet_cards() -> impl Iterator<Item = golem_rust::schema::wit::wire::PermissionCard> {
+    wallet::self_wallet().into_iter().map(|card| match card {
+        types::WalletCard::Concrete(card)
+        | types::WalletCard::Template(card)
+        | types::WalletCard::Scope(card) => card,
+    })
+}
 
 #[agent_definition]
 pub trait WalletReplayProbe {
@@ -69,15 +101,21 @@ pub trait WalletSnapshotProbe {
     fn new(name: String, #[agent_config] _config: Config<WalletSnapshotConfig>) -> Self;
     fn arm_snapshot_change(
         &self,
-        card: golem_rust::CardId,
+        card: golem_rust::golem_schema::CardId,
         component: golem_rust::ComponentId,
         target: String,
     );
-    fn observe(&self, card: golem_rust::CardId) -> (bool, u64, bool, bool);
+    fn observe(&self, card: golem_rust::golem_schema::CardId) -> (bool, u64, bool, bool);
 }
 
 pub struct WalletSnapshotProbeImpl {
-    change: std::cell::RefCell<Option<(golem_rust::CardId, golem_rust::ComponentId, String)>>,
+    change: std::cell::RefCell<
+        Option<(
+            golem_rust::golem_schema::CardId,
+            golem_rust::ComponentId,
+            String,
+        )>,
+    >,
 }
 
 #[agent_implementation]
@@ -90,18 +128,16 @@ impl WalletSnapshotProbe for WalletSnapshotProbeImpl {
 
     fn arm_snapshot_change(
         &self,
-        card: golem_rust::CardId,
+        card: golem_rust::golem_schema::CardId,
         component: golem_rust::ComponentId,
         target: String,
     ) {
         *self.change.borrow_mut() = Some((card, component, target));
     }
 
-    fn observe(&self, card: golem_rust::CardId) -> (bool, u64, bool, bool) {
-        use golem_rust::bindings::golem::permissions::{types, wallet};
-        let present = wallet::self_wallet()
-            .into_iter()
-            .any(|handle| golem_rust::CardId::from(types::id(&handle)) == card);
+    fn observe(&self, card: golem_rust::golem_schema::CardId) -> (bool, u64, bool, bool) {
+        let present = wallet_cards()
+            .any(|handle| golem_rust::golem_schema::CardId::from(types::id(&handle)) == card);
         let generation = wallet::self_version().generation;
         let expected = golem_rust::encode_schema_graph(
             &golem_rust::schema::try_into_schema_graph::<Option<String>>().unwrap(),
@@ -113,12 +149,10 @@ impl WalletSnapshotProbe for WalletSnapshotProbeImpl {
     }
 
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
-        use golem_rust::bindings::golem::permissions::{revoke, types, wallet};
         let change = self.change.borrow_mut().take();
         if let Some((id, component, target)) = change {
-            let card = wallet::self_wallet()
-                .into_iter()
-                .find(|handle| golem_rust::CardId::from(types::id(handle)) == id)
+            let card = wallet_cards()
+                .find(|handle| golem_rust::golem_schema::CardId::from(types::id(handle)) == id)
                 .expect("the save-hook card must be installed");
             if target.is_empty() {
                 let count = revoke::revoke_card(card).map_err(|error| format!("{error:?}"))?;

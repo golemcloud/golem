@@ -114,7 +114,7 @@ describe("tool input graph validation", () => {
   })
 
   it("rejects malformed graphs without consuming a permission card and accepts a corrected retry", async () => {
-    const Card = GolemSchema.PermissionCard({ polymorphic: false })
+    const Card = GolemSchema.PermissionCard
     const codec = Effect.runSync(compile(Schema.Struct({ card: Card })))
     const handler = vi.fn(() => Effect.void)
     toolDefinition("card-check")
@@ -122,7 +122,11 @@ describe("tool input graph validation", () => {
       .implement({ cardCheck: handler })
     const value = Effect.runSync(
       codec.encode({
-        card: createGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, {} as PermissionCard),
+        card: createGuestPermissionCardHandle(
+          PERMISSION_CARD_INTERNAL,
+          {} as PermissionCard,
+          "concrete",
+        ),
       }),
     )
     await expect(

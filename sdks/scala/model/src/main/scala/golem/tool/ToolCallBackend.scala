@@ -103,13 +103,14 @@ object ToolCallPreparation {
       case Some(result) =>
         val expected = SchemaWire.schemaGraphFromWit(codec.graph)
         if (!ToolGraphs.schemaShapesMatch(result.graph, expected)) {
-          SchemaWire.releaseOwned(result.value)
+          SchemaWire.releaseOwned(result.value, includeCardOwned = true)
           Left("tool result schema does not match the generated client's expected result schema")
         } else
           try Right(codec.decode(SchemaWire.schemaValueToWit(result.value)))
           catch {
             case NonFatal(error) =>
-              SchemaWire.releaseOwned(result.value)
+              // The decode was discarded, so cards it created own nothing.
+              SchemaWire.releaseOwned(result.value, includeCardOwned = true)
               Left(Option(error.getMessage).getOrElse(error.toString))
           }
     }

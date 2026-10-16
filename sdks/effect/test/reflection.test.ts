@@ -12,6 +12,7 @@ import { getAgentType, getAgentTypeByAgentId, getAllAgentTypes } from "../src/Re
 import { SchemaRef } from "../src/SchemaRef.js"
 import { emptyMetadata, field, t, type SchemaGraph } from "../src/internal/schema-model/model.js"
 import { schemaGraphToWit } from "../src/internal/schema-model/wit.js"
+import { createScopeCard } from "../src/internal/scopeCard.js"
 
 const metadata = emptyMetadata()
 const recursive: SchemaGraph = {
@@ -372,5 +373,46 @@ describe("reflection", () => {
         yield* Fiber.interrupt(fiber)
         expect(events).toEqual(["get", "cancel", "future-drop", "connection-drop"])
       }),
+  )
+
+  it.effect("attaches a per-call scope card to reflected awaited calls only", () =>
+    Effect.gen(function* () {
+      const scopeCards: Array<unknown> = []
+      const raw = { scope: 1 } as unknown as CoreTypes.PermissionCard
+      const scope = createScopeCard(raw)
+      const invocationMetadata = { agentId: "actual-id", idempotencyKey: "actual-key" }
+      const connection = {
+        asyncInvokeAndAwait: (_name: string, _input: unknown, scopeCard: unknown) => {
+          scopeCards.push(scopeCard)
+          return {
+            metadata: invocationMetadata,
+            get: () =>
+              Promise.resolve({ root: 0, valueNodes: [{ tag: "string-value", val: "answer" }] }),
+            cancel: () => {},
+            drop: () => {},
+          }
+        },
+        invoke: () => invocationMetadata,
+        drop: () => {},
+      } as unknown as RpcConnection
+      const rpc = Layer.succeed(RpcClient, { connect: () => Effect.succeed(connection) })
+      const host = Layer.succeed(AgentHostClient, {
+        getAgentType: () => registration(),
+        makeAgentId: () => 'Recursive("unique")',
+      } as never)
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const type = (yield* getAgentType("Recursive"))!
+          if (type.mode !== "durable") throw new Error("expected durable mode")
+          const client = yield* type.client.get({ name: "unique" })
+          const method = yield* client.method("walk")
+          const node = { node: { label: "first", next: null } }
+          yield* method.invoke(node, { scopeCard: scope })
+          yield* method.invoke(node)
+          yield* method.trigger(node)
+        }).pipe(Effect.provide(Layer.mergeAll(host, rpc))),
+      )
+      expect(scopeCards).toEqual([raw, undefined])
+    }),
   )
 })

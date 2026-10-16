@@ -585,12 +585,12 @@ container it runs the same Cargo build as `golem.yaml`'s release preset, with th
 `Cargo.toml` pins. It then names the component `golem:bash` as golem-cli does, checks it with
 `wasm-tools validate --features all` and writes `builtin-tools/bash.wasm`. That file is not
 committed: built-in artifacts are published as immutable releases of `golemcloud/golem-builtins`
-with `cargo make publish-builtin-artifact` (`BUILTIN_COMPONENT=bash`) and pinned by SHA-256 in
-`builtin-artifacts.lock.json`; `cargo make fetch-builtin-artifacts` downloads the pinned bytes to
-the same path. A rebuild of unchanged sources gives the published bytes, so a
+as part of tagged Golem releases and pinned by SHA-256 in the generated
+`builtin-artifacts.release.json`. Development uses `cargo make ensure-builtin-artifacts` to
+rebuild changed inputs locally. A rebuild of unchanged sources gives the published bytes, so a
 rebuilt `bash.wasm` differs only where a change reached it. The Golem SDK is a path dependency:
-after a change to it, or to this workspace, publish a new artifact version and update the lock
-entry in the same change.
+changes to it or to this workspace require a local rebuild, not a publication or lock update.
+See [the release procedure](../../BUILTIN_ARTIFACTS.md) for publication.
 
 A native build cannot be reproducible, for two reasons. Cargo mixes the host platform into the
 hashes that name every crate (through the proc macros and build scripts it depends on). It also
@@ -630,8 +630,8 @@ cargo clippy --manifest-path builtin-tools/bash/Cargo.toml --locked --workspace 
 CARGO_TARGET_WASM32_WASIP2_RUNNER="wasmtime run -Sp3 -Shttp -Wcomponent-model-async=y --dir /tmp::/tmp" \
   cargo test --manifest-path builtin-tools/bash/Cargo.toml --locked --target wasm32-wasip2 -p bash-shell -p whttp --lib
 cargo make test-builtin-bash-pipelines
-cargo make fetch-builtin-artifacts
-cargo build -p golem -p golem-cli
+cargo make build-golem
+cargo make build-golem-cli
 cargo test -p golem-cli --test integration -- app::builtin_bash --report-time
 ```
 

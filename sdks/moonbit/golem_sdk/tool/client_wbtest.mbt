@@ -51,3 +51,62 @@ test "structural remote tool errors stay distinct from RPC errors" {
     RemoteToolError::InvalidResult("result"),
   )
 }
+
+///|
+/// A tool input whose encode fails, carrying `card`.
+fn failing_tool_input(
+  card : @card.GuestPermissionCardHandle,
+  quota : Int,
+) -> @model.TypedSchemaValue {
+  {
+    graph: {
+      defs: [],
+      root: @model.schema_type(@model.SchemaTypeBody::Record([])),
+    },
+    value: Record(@test_support.failing_card_input(card, quota)),
+  }
+}
+
+///|
+test "a failed tool input encode keeps argument permission cards" {
+  @test_support.reset_resource_drop_counts()
+  // The encode fails before the client calls the host, so the RPC handle is
+  // never used.
+  let client : ToolClient = { rpc: @toolHost.ToolRpc::ToolRpc(0), }
+  let no_error = fn(
+    _ : String,
+    _ : @model.TypedSchemaValue,
+  ) -> Result[Unit, String]? {
+    None
+  }
+  let card_a = @card.adopt(@types.PermissionCard::PermissionCard(631))
+  let triggered = client.trigger(
+    [],
+    failing_tool_input(card_a, 632),
+    None,
+    no_error,
+  )
+  assert_true(triggered is Err(_))
+  let card_b = @card.adopt(@types.PermissionCard::PermissionCard(634))
+  @test_support.run_async(async fn() {
+    let awaited = client.invoke_and_await(
+      [],
+      failing_tool_input(card_b, 635),
+      None,
+      no_error,
+    )
+    assert_true(awaited is Err(_))
+  })
+  assert_true(card_a.is_present())
+  assert_true(card_b.is_present())
+  assert_eq(
+    @test_support.resource_drop_count(@test_support.QUOTA_TOKEN_DROPS),
+    2,
+  )
+  assert_eq(
+    @test_support.resource_drop_count(@test_support.PERMISSION_CARD_DROPS),
+    0,
+  )
+  ignore(@card.take(card_a))
+  ignore(@card.take(card_b))
+}

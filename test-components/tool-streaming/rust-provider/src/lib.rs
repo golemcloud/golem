@@ -3,13 +3,10 @@ use golem_rust::agentic::{
     AgentStream, InputStream, OutputStream, Principal, Secret as ConfigSecret, pump_tool_stdin,
     spawn_local,
 };
-use golem_rust::bindings::golem::permissions::{
-    derive as permission_derive, types as permission_types,
-};
 use golem_rust::golem_agentic::golem::agent::host as agent_host;
 use golem_rust::golem_agentic::golem::tool::host::{self as tool_host, ByteStreamFailure, ToolRpc};
 use golem_rust::quota::QuotaToken;
-use golem_rust::schema::wit::GuestPermissionCardHandle;
+use golem_rust::permissions::{self, PermissionCard};
 use golem_rust::schema::wit::direct::{
     WireError, WirePreflight, WireReader, WireSchemaBuilder, WireWriter,
 };
@@ -433,19 +430,19 @@ pub struct QuotaExchange {
     pub token: MatrixCapacityToken,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[derive(Debug, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 #[schema(rename_all = "camelCase")]
 pub struct PermissionExchange {
     pub provider: String,
     pub principal: String,
     pub owner_agent_id: String,
-    pub card: GuestPermissionCardHandle,
+    pub card: PermissionCard,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[derive(Debug, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 #[schema(rename_all = "camelCase")]
 pub struct PermissionIssue {
-    pub card: GuestPermissionCardHandle,
+    pub card: PermissionCard,
     pub issuer: String,
     pub principal: String,
     pub owner_agent_id: String,
@@ -461,14 +458,14 @@ struct MatrixPermissionIssuerImpl;
 #[tool_implementation]
 impl MatrixPermissionIssuer for MatrixPermissionIssuerImpl {
     async fn issue(&self, principal: Principal) -> PermissionIssue {
-        let card = permission_derive::derive_from_wallet(&[], &[], &[], &[], None)
+        let card = permissions::derive_from_wallet(&Default::default(), None)
             .expect("matrix permission issuer derives a card from the owner wallet");
         let owner_agent_id = golem_rust::get_self_metadata()
             .expect("matrix permission issuer owner metadata")
             .agent_id
             .agent_id;
         PermissionIssue {
-            card: GuestPermissionCardHandle::new(card),
+            card,
             issuer: "rust".to_string(),
             principal: matrix_principal(&principal),
             owner_agent_id,
@@ -591,7 +588,7 @@ impl Quota for QuotaImpl {
 pub trait Permissions {
     async fn exchange(
         &self,
-        card: GuestPermissionCardHandle,
+        card: PermissionCard,
         principal: golem_rust::agentic::Principal,
     ) -> PermissionExchange;
 }
@@ -602,14 +599,11 @@ struct PermissionsImpl;
 impl Permissions for PermissionsImpl {
     async fn exchange(
         &self,
-        card: GuestPermissionCardHandle,
+        card: PermissionCard,
         principal: Principal,
     ) -> PermissionExchange {
-        assert_eq!(
-            card.with_handle(permission_types::is_polymorphic),
-            Some(false),
-            "matrix resource permission card must be non-polymorphic"
-        );
+        // Panics unless the received card is present and known to the host.
+        let _ = card.id();
         let (provider, principal, owner_agent_id) = matrix_resource_evidence(&principal);
         PermissionExchange {
             provider,
@@ -1680,6 +1674,8 @@ impl Streaming for StreamingImpl {
                 | "writer-abandonment"
                 | "finish-after-reader-drop"
                 | "stream-failure-success"
+                | "stdin-or-clock"
+                | "stdin-or-spin"
         ) {
             if matches!(mode.as_str(), "declared-error" | "stream-failure-success") {
                 for byte in MARKER {
@@ -1718,6 +1714,37 @@ impl Streaming for StreamingImpl {
                 while stdin.next().await.is_some() {}
             }
             "empty" => {}
+            // The read of stdin and the work run side by side. The first to end is written to
+            // stdout: how stdin ended, or that the work ended first.
+            "stdin-or-clock" | "stdin-or-spin" => {
+                let read = async {
+                    match stdin.next().await {
+                        None => "stdin-eof".to_string(),
+                        Some(Ok(_)) => "stdin-data".to_string(),
+                        Some(Err(ByteStreamFailure::Cancelled)) => "stdin-cancelled".to_string(),
+                        Some(Err(other)) => format!("stdin-failed:{other:?}"),
+                    }
+                };
+                let work = async {
+                    if mode == "stdin-or-clock" {
+                        golem_rust::wasip3::clocks::monotonic_clock::wait_for(600_000_000_000)
+                            .await;
+                        "clock".to_string()
+                    } else {
+                        // Computes without a host call and lets the other task run in between,
+                        // like an interpreter between two commands.
+                        let mut counter: u64 = 0;
+                        loop {
+                            for _ in 0..1_000_000 {
+                                counter = core::hint::black_box(counter.wrapping_add(1));
+                            }
+                            golem_rust::wasip3::wit_bindgen::yield_async().await;
+                        }
+                    }
+                };
+                let outcome = (read, work).race().await;
+                summary.output_closed = !write_chunk(&mut stdout, outcome.into_bytes()).await;
+            }
             "binary" => {
                 summary.output_closed =
                     !write_chunk(&mut stdout, vec![0, 255, 1, 128, 0, 13, 10, 254]).await;

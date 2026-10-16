@@ -58,15 +58,17 @@ The CLI can filter account root, permission-share, environment-default, and init
 
 ## Derivation, transfer, and installation
 
-Agents use the `golem:permissions` guest interfaces to work with cards:
+Agents use the `golem:permissions` guest interfaces to work with cards. Every SDK wraps them in a typed API; see the permission-card guide for [Rust](/next/how-to-guides/rust/golem-permission-card-rust), [TypeScript](/next/how-to-guides/ts/golem-permission-card-ts), [Effect](/next/how-to-guides/effect/golem-permission-card-effect), [Scala](/next/how-to-guides/scala/golem-permission-card-scala), [Go](/next/how-to-guides/go/golem-permission-card-go), or [MoonBit](/next/how-to-guides/moonbit/golem-permission-card-moonbit).
 
 1. **Derive** a persistent child with `derive` from one explicit parent, or with `derive-from-wallet` from one compatible card selected from the active wallet. `derive-scope` instead creates an invocation-local, in-memory card from one or more persistent or scope parents. Every child must be no more permissive than its parent authority.
 2. **Transfer** the resulting owned card handle through a component-model call. Permission-card handles are affine: transferring a handle consumes the sender's handle, so it cannot be copied and reused.
 3. **Install** a persistent card into a target agent's wallet. Installation currently supports agent targets only and consumes the supplied handle.
 
-Deriving a card does not install it. Transfer moves an owned handle between components; installation changes the target agent's wallet. Installing a concrete card that is already in the caller's wallet removes it from that source wallet before delivery. Installing a polymorphic card materializes a child and retains the template in the source wallet.
+`self-wallet` labels every listed card with its kind: `concrete`, `template` (its grants contain slot variables), or `scope`. The SDKs return each kind as its own card type. Deriving a card does not install it. Transfer moves an owned handle between components; installation changes the target agent's wallet. Installing a concrete card that is already in the caller's wallet removes it from that source wallet before delivery. Installing a polymorphic card materializes a child and retains the template in the source wallet.
 
-Scope cards cannot be persisted, installed, or transferred as ordinary persistent card snapshots. A persistent derivation is recorded by Golem before the guest receives its handle.
+An agent's initial card is usually a template: its grants contain slot variables such as `?agent` or `?env`. A template can be a `derive` parent only when it is in the caller's wallet, and it is resolved for the caller. Only the template's grants that are addressed to the caller can be retained. Requested grants must be concrete: a grant with a slot variable is rejected with `invalid-pattern`, because deriving a new template card, with slot variables in its grants, is not supported yet. A child derived from a template parent is a concrete card. A lifespan is an ISO 8601 duration in days and time units only, such as `P30D` or `PT1H30M`.
+
+Scope cards cannot be persisted, installed, or transferred as ordinary persistent card snapshots. They can only be attached to an awaited agent invocation, where they extend the callee's authority for that one call. The callee sees the lent scope card in its wallet, as a `scope` entry, only if it holds `card:inspect`; otherwise the card is sealed, still authorizing the call without being listed. A scope card expires with the earliest expiring of its root cards, and `expires-at` reports that time. A scope card is valid only during the invocation that derived it. After that invocation ends, the guest can still drop or inspect its handle, but attaching it to a call is denied and using it as a `derive-scope` parent is not permitted. The SDKs give scope cards their own type, which cannot be revoked, installed, or sent as a value. A persistent derivation is recorded by Golem before the guest receives its handle.
 
 ## Revocation and expiry
 
@@ -78,7 +80,7 @@ A new attempt to revoke an already or concurrently revoked card returns `card-re
 
 Persistent derivation, installation, and revocation participate in Golem's durable execution protocol: mutation results and audit events are written to the operation log. During replay, Golem reproduces the recorded result instead of performing the external mutation again, and verifies that the replayed card and wallet generation match the recorded event. Ordinary handle transfer travels in the surrounding durable call's value; it is not a separate audited card mutation.
 
-Permission operations return typed failures for conditions such as invalid grants or recipients, insufficient parent authority, a missing or changed wallet parent, unsupported installation targets, recipient mismatch, and expired, missing, or revoked cards. A failed installation does not partially add a card to the target wallet. Runtime and infrastructure failures can still fail the invocation according to the normal [durability and retry model](/next/concepts/durable-execution).
+Permission operations return typed failures for conditions such as invalid grants or recipients, a missing `card:derive` permission, insufficient parent authority, a missing or changed wallet parent, unsupported installation targets, recipient mismatch (`install-recipient-mismatch`), and expired, missing, or revoked cards. A failed installation does not partially add a card to the target wallet. Runtime and infrastructure failures can still fail the invocation according to the normal [durability and retry model](/next/concepts/durable-execution).
 
 ## Administration
 

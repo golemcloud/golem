@@ -27,7 +27,7 @@ use std::future::poll_fn;
 use std::pin::pin;
 use std::task::Poll;
 
-mod gated_host_bindings {
+pub(crate) mod gated_host_bindings {
     wit_bindgen::generate!({
         path: "../../sdks/rust/golem-rust/wit",
         world: "golem-rust",
