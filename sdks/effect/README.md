@@ -719,6 +719,16 @@ traversal and invocation behavior remain separate deployment concerns.
 typed request and finishes exactly once with a typed response. `forcedCommit: true` asks the host to
 commit after finish. Replay returns the recorded response without executing the body.
 
+**Sequential execution only.** Both wrappers support properly nested operations and a body that
+awaits host calls when no unrelated guest work runs during the wait. Do not overlap a custom
+operation with other fibers, concurrent effects, or JavaScript promises, even if they only use
+ordinary host APIs. The custom scope remains installed while waiting, so sibling effects can be
+attributed to the wrong operation and cause incorrect replay or invocation failure. Misuse is not
+reliably detected. Await each nested operation and do not detach work. Stop and join outstanding
+work before the body exits, including on failure or interruption; structured finalization alone
+does not make concurrent custom scopes supported. Ordinary built-in durability is not subject to
+this restriction when no custom operation is active.
+
 On typed success or typed failure, `wrap` encodes the response and calls
 `finishCustomDurableInvocation`. On defect, interruption, response encoding failure, or any other
 unfinished exit, scope cleanup **drops** the live invocation instead of finishing it. This is the

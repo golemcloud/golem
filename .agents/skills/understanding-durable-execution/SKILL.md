@@ -641,6 +641,17 @@ custom invocation of an entity body records the entity invocation `Start` as its
 can tell it from a top-level call of the primary; the custom tree itself (invocation ids, child
 initiation) keeps using the custom parent.
 
+**Non-Rust SDK limitation:** TypeScript, Effect, Scala, MoonBit, and Go custom combinators support
+sequential and properly nested execution only. Their scope remains installed across suspension.
+An async/blocking body may wait for host calls when no unrelated guest work runs during the wait.
+Do not overlap it with sibling continuations, including ordinary host calls: their effects can
+become observational entries owned by the wrong custom operation, causing incorrect replay or
+invocation failure. Misuse is not reliably detected. Await nested operations; do not detach work.
+Stop and join outstanding work before the body exits, including on failure or cancellation. A
+fail-fast join does not necessarily wait for surviving siblings, and eventual joining does not
+make concurrent custom scopes supported. This restriction does not apply to ordinary built-in
+durability outside custom operations or to the Rust poll/drop scope integration.
+
 `Incomplete` (`prepare_incomplete_live_repair`): the handle switches to live completion of the
 *existing* `Start` — no second `Start` is appended — if `can_reexecute_on_incomplete_replay`
 (`durability.rs`): `ReadLocal`, `ReadRemote`, `WriteLocal` always; `WriteRemote` only while the

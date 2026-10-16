@@ -73,6 +73,20 @@ invocation: on the live path it runs the body, encodes and persists the typed
 result, and returns it; on replay it returns the recorded result **without
 running the body**.
 
+**Sequential execution only.** `durability.Run` supports sequential and properly
+nested operations. Its blocking body can yield to other goroutines: the plain
+`func()` signature does not isolate its scope. Do not let unrelated goroutines run
+while the operation is open, even if they only use ordinary host APIs. Sibling
+effects can be attributed to the wrong operation and cause incorrect replay or
+invocation failure. This misuse is not reliably detected.
+
+Complete each nested `Run` before continuing its parent. Do not detach goroutines
+or let them outlive the body, including on failure or cancellation. Stop and join
+outstanding work before the operation closes; joining at the end does not make
+concurrent custom operations supported. Sequential blocking host calls remain
+supported when no unrelated goroutine runs during the wait. This restriction does
+not apply to ordinary built-in durability when no custom operation is active.
+
 ```go
 result := durability.Run(
 	durability.Spec{

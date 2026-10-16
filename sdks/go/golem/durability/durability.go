@@ -169,6 +169,16 @@ type Spec struct {
 //
 // There is no async variant: a blocking body already suspends the fiber at its
 // await points, so one function covers both cases.
+//
+// Sequential and properly nested execution only. A blocking body can yield to
+// other goroutines; the plain func signature does not isolate its custom scope.
+// Do not let unrelated goroutines run while the operation is open, including
+// ordinary host calls: sibling effects can acquire the wrong scope and cause
+// incorrect replay or invocation failure. Misuse is not reliably detected.
+// Complete each nested Run before continuing its parent. Do not detach goroutines
+// or let work outlive the body, including on failure or cancellation. Stop and join
+// outstanding work before the operation closes. Sequential blocking host calls
+// remain supported when no unrelated goroutine runs during the wait.
 func Run[In any, Out any](spec Spec, request In, body func() Out) Out {
 	witDurability.ObserveFunctionCall(spec.Interface, spec.Function)
 

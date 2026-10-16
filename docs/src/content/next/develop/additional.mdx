@@ -495,6 +495,10 @@ Both resources, once constructed, provide a `get-next` function that returns a c
 
 The low-level `golem:durability@1.6.0` interface is for SDK and library authors who need to wrap raw host effects as one durable operation. Application code should use the normal high-level SDK APIs and Golem's built-in durability instead.
 
+**TypeScript, Effect, Scala, MoonBit, and Go support sequential and properly nested custom operations only.** An async body may await host operations, but no unrelated guest work may run during those waits. This includes ordinary host calls, not just other custom operations: sibling effects can be attributed to the wrong custom operation and cause incorrect replay or invocation failure. The SDKs do not reliably detect this misuse.
+
+Await each nested operation before continuing its parent. Do not detach work or let it outlive the body, including on failure or cancellation. Stop and join outstanding work before closing the operation; fail-fast promise/future combinators do not necessarily wait for surviving siblings. Go's blocking `durability.Run` can yield to other goroutines and has the same restriction. See [custom durable operations](/next/develop/durability#custom-durable-operations) for the per-SDK limits and supported use cases. These limits do not restrict ordinary built-in durability or Rust's scope integration.
+
 A library opens the operation with `begin-custom-durable-invocation`, passing a stable function name, a typed request, and a durable function type. The executor synchronously allocates a replay-stable UUID before the host call can yield. The UUID identifies the logical call; the request remains its independently recorded and validated semantic input. This separation means a unit/no-input request remains correct for generators while concurrent calls still have distinct identities. The result selects one of two paths:
 
 - `live(live-invocation)`: perform the complete operation while the returned resource is active, then consume the resource by calling its static `finish` function with the typed result.

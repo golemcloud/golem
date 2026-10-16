@@ -176,6 +176,15 @@ its execution. Libraries that perform an effect Golem does not already record us
 live run and returns it on replay without re-running the body. See
 `golem-configure-durability-effect` for an example.
 
+**Sequential execution only.** Custom operations may await host calls and nest sequentially, but
+must not overlap with unrelated fibers, concurrent effects, or JavaScript promises, including
+ordinary host calls. Their scope remains installed while waiting, so sibling effects can be
+attributed to the wrong operation and cause incorrect replay or invocation failure. The SDK does
+not reliably detect this misuse. Await each nested operation; do not detach work. Stop and join
+outstanding work before the body exits, including on failure or interruption. Structured
+finalization alone does not make concurrent custom scopes supported. This restriction does not
+apply to ordinary built-in durability when no custom operation is active.
+
 ## Idempotence Mode
 
 The host default is `true`. In that mode, side effects are treated as idempotent and Golem

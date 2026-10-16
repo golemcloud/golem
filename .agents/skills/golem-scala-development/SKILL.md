@@ -68,6 +68,13 @@ The Scala.js core exposes the current schema-based host surface. Useful authorit
 - `runtime/rpc/` and `RpcCodegen.scala` for invocation and mode-aware client signatures;
 - `wit/main.wit` for three Preview 3 guest worlds and current versioned dependencies.
 
+`DurabilityApi.durable` and `durableAsync` support sequential and properly nested custom operations
+only. An async body may await host calls when no unrelated guest work runs during the wait. Do not
+overlap it with other futures or callbacks, including ordinary host calls: sibling effects can
+acquire the wrong scope and cause incorrect replay or invocation failure. Misuse is not reliably
+detected. Await each nested operation; do not detach work. All outstanding work must terminate
+before the body exits, including on failure; a failed Future does not cancel its siblings.
+
 Durable generated clients return plain values/`Unit` plus cancellation tokens where applicable. Ephemeral invocations return metadata-bearing `InvocationResult`, `InvocationReceipt`, `CancelableAsyncInvocation`, and `CancelableInvocationReceipt` values. Do not describe the old wasm-rpc resource API without checking these files.
 
 After WIT or guest-role changes, sync and regenerate as described by `golem-scala-base-image`. The script uses `wasm-rquickjs` 0.4.11, Preview 3, and `wasm32-wasip2`; generated WASMs are ignored while ordinary-role d.ts files are tracked.

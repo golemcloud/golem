@@ -64,21 +64,33 @@ interface DurableFallibleSpec<Req, Ok, Err> extends DurableSpec<Req, Ok> {
   readonly error: StandardSchemaV1<Err>;
 }
 
-// Infallible — body returns the success value directly; a throw leaves the
-// custom invocation unfinished. It does not itself trigger a retry.
+/**
+ * Persists the body's result; a throw leaves the operation unfinished without triggering a retry.
+ *
+ * Sequential execution only, including properly nested calls. An async body may await host calls
+ * only when no unrelated guest work runs during the wait. Do not overlap this operation with other
+ * promises or callbacks, even those using ordinary host APIs: sibling effects can be attributed to
+ * the wrong operation, causing incorrect replay or invocation failure. Misuse is not reliably detected.
+ * Await each nested operation and do not detach work. Stop and join outstanding work before the
+ * body exits, including on failure; Promise.all rejection does not join surviving siblings.
+ */
 export function durable<Req, Ok>(
   spec: DurableSpec<Req, Ok>,
   request: Req,
   body: () => Promise<Ok>,
 ): Promise<Ok>;
+/** Synchronous form of {@link durable}; the same sequential-only and no-detached-work limits apply. */
 export function durable<Req, Ok>(spec: DurableSpec<Req, Ok>, request: Req, body: () => Ok): Ok;
-// Fallible — body returns a `Result<Ok, Err>`; the Result (ok OR err) is persisted
-// and replayed. A throw is still an uncaught defect.
+/**
+ * Persists either Result variant; a throw is an uncaught defect.
+ * The same sequential-only and no-detached-work limits as {@link durable} apply.
+ */
 export function durable<Req, Ok, Err>(
   spec: DurableFallibleSpec<Req, Ok, Err>,
   request: Req,
   body: () => Promise<Result<Ok, Err>>,
 ): Promise<Result<Ok, Err>>;
+/** Synchronous Result form of {@link durable}; the same sequential-only and no-detached-work limits apply. */
 export function durable<Req, Ok, Err>(
   spec: DurableFallibleSpec<Req, Ok, Err>,
   request: Req,

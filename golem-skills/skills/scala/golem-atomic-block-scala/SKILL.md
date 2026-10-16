@@ -53,6 +53,10 @@ Guards.atomically {
 
 The low-level `golem:durability@1.6.0` interface is intended for SDK and library authors, not as an application tuning knob. It lets a library represent several raw host effects as one custom durable invocation. `DurabilityApi.durable` and `DurabilityApi.durableAsync` own the live invocation resource: they evaluate the body only on the live path, finish and persist its typed result, or return the recorded result on replay.
 
+**Sequential execution only.** Both combinators support sequential and properly nested operations. An async body can await host calls when no unrelated guest work runs during the wait. Do not overlap a custom operation with other futures or callbacks, even if they only use ordinary host APIs. Its scope remains installed while the body waits; sibling effects can be attributed to the wrong operation and cause incorrect replay or invocation failure. This misuse is not reliably detected.
+
+Await each nested operation before continuing its parent. Do not start detached futures or let callbacks outlive the body, including on failure. A failed `Future` does not cancel other futures: all outstanding work must terminate before the operation closes. Joining at the end does not make concurrent custom operations supported. This restriction does not apply to ordinary built-in durability when no custom operation is active.
+
 A returned `Left` is a normal typed result: the combinator finishes the invocation, persists the error, and returns the same error on replay. A thrown exception, failed `Future`, trap, or cancellation before `finish` instead leaves the resource unfinished without recording an `End`. Dropping the resource does not trigger a retry: a deterministic trap outside an atomic region fails the agent. If recovery later replays the incomplete invocation, its whole body runs again. Library authors must make repeated attempts safe with the correct operation classification, external idempotency keys, or transactions.
 
 ## Idempotence Mode
