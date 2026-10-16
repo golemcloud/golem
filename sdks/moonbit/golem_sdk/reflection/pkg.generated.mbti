@@ -29,7 +29,7 @@ pub(all) suberror ReflectError {
   Discovery(String)
   Identity(String)
   Schema(String)
-  Json(String)
+  Json(String, path~ : Array[String])
   Remote(AgentRpcError)
 } derive(Eq, @debug.Debug)
 
@@ -255,6 +255,7 @@ pub fn ScheduledInvocation::drop(Self) -> Unit
 pub struct SchemaRef {
   graph : @schema_model.SchemaGraph
   root : @schema_model.SchemaType
+  // private fields
 } derive(Eq, @debug.Debug)
 pub fn SchemaRef::contains_stream(Self) -> Bool
 pub fn SchemaRef::graph(Self) -> @schema_model.SchemaGraph
@@ -274,6 +275,7 @@ pub struct ToolArgument {
   default : @schema_model.SchemaValue?
   schema : SchemaRef
   optional_carrier : Bool
+  // private fields
 } derive(Eq, @debug.Debug)
 pub fn ToolArgument::aliases(Self) -> Array[String]
 pub fn ToolArgument::default(Self) -> @schema_model.SchemaValue? raise ReflectError
