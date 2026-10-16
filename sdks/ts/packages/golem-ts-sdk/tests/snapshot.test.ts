@@ -263,6 +263,80 @@ defineAgent({
 });
 
 describe('snapshot — typed state', () => {
+  it.each(['config', 'getId', 'getPhantomId', 'getPrincipal'])(
+    'rejects the reserved top-level state field %s during initialization and restoration',
+    async (key) => {
+      const message = JSON.stringify(`State field "${key}" is reserved by the SDK`).slice(1, -1);
+      for (const asynchronous of [false, true]) {
+        const name = `ReservedState${key}${asynchronous}`;
+        defineAgent({
+          name,
+          id: { name: z.string() },
+          snapshotting: { state: z.object({ [key]: z.string().optional() }) },
+          methods: {},
+        }).implement({
+          init: () => {
+            const state = { [key]: undefined };
+            return asynchronous ? Promise.resolve(state) : state;
+          },
+          methods: {},
+        });
+        await expect(initiate(name)).rejects.toThrow(`initialization failed: ${message}`);
+        await expect(
+          restore(name, new TextEncoder().encode(JSON.stringify({ [key]: 'collision' }))),
+        ).rejects.toThrow(`restoration failed: ${message}`);
+      }
+
+      const name = `ReservedCustomState${key}`;
+      defineAgent({
+        name,
+        id: { name: z.string() },
+        snapshotting: 'default',
+        methods: {},
+      }).implement({
+        init: () => ({}),
+        methods: {},
+        snapshot: {
+          save: () => new Uint8Array(),
+          load: () => ({ [key]: undefined }),
+        },
+      });
+      await expect(restore(name, new Uint8Array())).rejects.toThrow(
+        `restoration failed: ${message}`,
+      );
+    },
+  );
+
+  it('preserves nested state fields with reserved names', async () => {
+    const data = {
+      config: 'user config',
+      getId: 'id',
+      getPhantomId: 'phantom',
+      getPrincipal: 'user',
+    };
+    const name = 'NestedReservedState';
+    defineAgent({
+      name,
+      id: { name: z.string() },
+      snapshotting: {
+        state: z.object({
+          data: z.object({
+            config: z.string(),
+            getId: z.string(),
+            getPhantomId: z.string(),
+            getPrincipal: z.string(),
+          }),
+        }),
+      },
+      methods: {},
+    }).implement({ init: () => ({ data }), methods: {} });
+    const agent = await initiate(name);
+    const snapshot = simpleSnapshot(await agent.saveSnapshot());
+    expect(jsonOf(snapshot.data)).toEqual({ data });
+    const restored = await restore(name, snapshot.data);
+    expect(jsonOf(simpleSnapshot(await restored.saveSnapshot()).data)).toEqual({ data });
+  });
+
   it('serializes the declared state fields without config or helpers', async () => {
     const agent = await initiate('SnapTypedCounter');
     const snap = simpleSnapshot(await agent.saveSnapshot());
