@@ -16,7 +16,11 @@ use crate::Tracing;
 use golem_common::base_model::AgentId;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
-use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex};
+use golem_common::model::oplog::PublicOplogEntry;
+use golem_common::model::{
+    AgentStatus, IdempotencyKey, NamedRetryPolicy, OplogIndex, Predicate, PredicateValue,
+    RetryPolicy,
+};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::ResultValuePayload;
 use golem_common::{agent_id, data_value};
@@ -27,8 +31,8 @@ use golem_worker_executor::services::rdbms::RdbmsType;
 use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start,
+    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
+    WorkerExecutorTestDependencies, start, start_with_overrides,
 };
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -666,6 +670,104 @@ async fn postgres_transaction_recovery_test(
     let oplog_json = serde_json::to_string(&oplog);
     assert!(oplog_json.is_ok());
 
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn rdbms_transaction_status_give_up_does_not_fall_back_to_trap_policy(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    postgres: &DockerPostgresRdb,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            retry_policies: Some(vec![
+                NamedRetryPolicy {
+                    name: "status-give-up".to_string(),
+                    priority: 100,
+                    predicate: Predicate::PropEq {
+                        property: "verb".to_string(),
+                        value: PredicateValue::Text("transaction-status".to_string()),
+                    },
+                    policy: RetryPolicy::Never,
+                },
+                NamedRetryPolicy {
+                    name: "permissive-trap".to_string(),
+                    priority: 0,
+                    predicate: Predicate::True,
+                    policy: RetryPolicy::CountBox {
+                        max_retries: 5,
+                        inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(1))),
+                    },
+                },
+            ]),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let fail_on = TransactionFailOn::oplog_add_and_tx(
+        "CommittedRemoteTransaction",
+        1,
+        "GetTransactionStatusError",
+        1,
+    );
+    let workers = start_workers::<PostgresType>(
+        &executor,
+        &component,
+        &postgres.public_connection_string(),
+        &fail_on.name(),
+        1,
+    )
+    .await?;
+    let (worker_id, agent_id) = &workers[0];
+    let error = execute_worker_test::<PostgresType>(
+        &executor,
+        &component,
+        agent_id,
+        &IdempotencyKey::fresh(),
+        RdbmsTest::new(
+            vec![StatementTest::execute_test(
+                "SELECT 1".to_string(),
+                vec![],
+                None,
+            )],
+            Some(TransactionEnd::Commit),
+        ),
+    )
+    .await
+    .expect_err("status give-up must not retry under the permissive trap policy");
+    assert!(
+        error
+            .to_string()
+            .contains("transaction status resolution exhausted")
+    );
+    let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
+    let transaction_start = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start) if start.function_name == "<scope:transaction>" => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("the uncertain transaction must retain its Start");
+    assert!(
+        !oplog.iter().any(|entry| matches!(
+            &entry.entry,
+            PublicOplogEntry::End(end) if end.start_index == transaction_start
+        )),
+        "status give-up must not record a terminal transaction outcome"
+    );
     Ok(())
 }
 

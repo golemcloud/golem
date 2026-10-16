@@ -18375,16 +18375,12 @@ components:
           WriteLocal: '#/components/schemas/PublicDurableFunctionType_Empty'
           ReadRemote: '#/components/schemas/PublicDurableFunctionType_Empty'
           WriteRemote: '#/components/schemas/PublicDurableFunctionType_Empty'
-          WriteRemoteBatched: '#/components/schemas/PublicDurableFunctionType_WriteRemoteBatchedParameters'
-          WriteRemoteTransaction: '#/components/schemas/PublicDurableFunctionType_WriteRemoteTransactionParameters'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
       - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
       - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
       - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
-      - $ref: '#/components/schemas/PublicDurableFunctionType_WriteRemoteBatchedParameters'
-      - $ref: '#/components/schemas/PublicDurableFunctionType_WriteRemoteTransactionParameters'
     PublicDurableFunctionType_Empty:
       allOf:
       - type: object
@@ -18397,30 +18393,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/Empty'
-    PublicDurableFunctionType_WriteRemoteBatchedParameters:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: WriteRemoteBatched
-            type: string
-            enum:
-            - WriteRemoteBatched
-        required:
-        - type
-      - $ref: '#/components/schemas/WriteRemoteBatchedParameters'
-    PublicDurableFunctionType_WriteRemoteTransactionParameters:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: WriteRemoteTransaction
-            type: string
-            enum:
-            - WriteRemoteTransaction
-        required:
-        - type
-      - $ref: '#/components/schemas/WriteRemoteTransactionParameters'
     PublicEntityCallMode:
       type: string
       enum:
@@ -22209,20 +22181,6 @@ components:
           $ref: '#/components/schemas/ScanCursor'
       required:
       - workers
-    WriteRemoteBatchedParameters:
-      title: WriteRemoteBatchedParameters
-      type: object
-      properties:
-        index:
-          type: integer
-          format: uint64
-    WriteRemoteTransactionParameters:
-      title: WriteRemoteTransactionParameters
-      type: object
-      properties:
-        index:
-          type: integer
-          format: uint64
     r#ActivatePluginParams:
       title: r#ActivatePluginParams
       type: object

@@ -38,8 +38,7 @@ use golem_common::model::oplog::public_oplog_entry::{
     ResumedParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
     SnapshotConfirmedParams, SnapshotParams, StartParams, StreamCancelParams, StreamEndParams,
     StreamItemsParams, StreamRegisteredParams, StreamSessionParams, StringAttributeValue,
-    SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
-    WriteRemoteTransactionParameters,
+    SuccessfulUpdateParams, SuspendParams,
 };
 
 fn durable_invocation_id_to_wit(
@@ -1116,12 +1115,6 @@ impl From<PublicDurableFunctionType> for oplog::WrappedFunctionType {
             PublicDurableFunctionType::ReadLocal(_) => Self::ReadLocal,
             PublicDurableFunctionType::WriteRemote(_) => Self::WriteRemote,
             PublicDurableFunctionType::ReadRemote(_) => Self::ReadRemote,
-            PublicDurableFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
-                index: idx,
-            }) => Self::WriteRemoteBatched(idx.map(|idx| idx.into())),
-            PublicDurableFunctionType::WriteRemoteTransaction(
-                WriteRemoteTransactionParameters { index: idx },
-            ) => Self::WriteRemoteTransaction(idx.map(|idx| idx.into())),
         }
     }
 }

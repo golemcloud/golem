@@ -240,13 +240,7 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
             .end_function_impl(function_type, boundary.begin_index(), span_finished)
             .await?;
         if !self.ctx.state.snapshotting_mode
-            && (function_type == &DurableFunctionType::WriteRemote
-                || matches!(function_type, DurableFunctionType::WriteRemoteBatched(_))
-                || matches!(
-                    function_type,
-                    DurableFunctionType::WriteRemoteTransaction(_)
-                )
-                || forced_commit)
+            && (function_type == &DurableFunctionType::WriteRemote || forced_commit)
         {
             self.ctx
                 .public_state

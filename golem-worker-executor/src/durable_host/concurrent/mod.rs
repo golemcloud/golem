@@ -55,9 +55,9 @@ use crate::durable_host::durability::{
     semantic_trap_retry_override_error, try_trigger_host_trap_retry,
 };
 use crate::durable_host::durable_session::DroppedDurableInput;
-use crate::durable_host::replay_state::{ReplayState, ReplayToLiveRole, ScopeStartClaimOutcome};
+use crate::durable_host::replay_state::{ReplayState, ReplayToLiveRole};
 use crate::durable_host::{
-    BeginReplayToLive, DurableScopeKind, DurableWorkerCtx, FinishReplayToLive, PendingReplayToLive,
+    BeginReplayToLive, DurableWorkerCtx, FinishReplayToLive, PendingReplayToLive,
     PublicDurableWorkerState,
 };
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, PendingUpload};

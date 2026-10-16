@@ -1350,10 +1350,7 @@ pub(crate) async fn try_trigger_host_trap_retry(
 pub(crate) fn is_write_side_effect(function_type: &DurableFunctionType) -> bool {
     matches!(
         function_type,
-        DurableFunctionType::WriteLocal
-            | DurableFunctionType::WriteRemote
-            | DurableFunctionType::WriteRemoteBatched(_)
-            | DurableFunctionType::WriteRemoteTransaction(_)
+        DurableFunctionType::WriteLocal | DurableFunctionType::WriteRemote
     )
 }
 
@@ -1362,14 +1359,8 @@ impl From<durability::DurableFunctionType> for DurableFunctionType {
         match value {
             durability::DurableFunctionType::WriteRemote => DurableFunctionType::WriteRemote,
             durability::DurableFunctionType::WriteLocal => DurableFunctionType::WriteLocal,
-            durability::DurableFunctionType::WriteRemoteBatched(oplog_index) => {
-                DurableFunctionType::WriteRemoteBatched(oplog_index.map(OplogIndex::from_u64))
-            }
             durability::DurableFunctionType::ReadRemote => DurableFunctionType::ReadRemote,
             durability::DurableFunctionType::ReadLocal => DurableFunctionType::ReadLocal,
-            durability::DurableFunctionType::WriteRemoteTransaction(oplog_index) => {
-                DurableFunctionType::WriteRemoteTransaction(oplog_index.map(OplogIndex::from_u64))
-            }
         }
     }
 }
@@ -1379,18 +1370,8 @@ impl From<DurableFunctionType> for durability::DurableFunctionType {
         match value {
             DurableFunctionType::WriteRemote => durability::DurableFunctionType::WriteRemote,
             DurableFunctionType::WriteLocal => durability::DurableFunctionType::WriteLocal,
-            DurableFunctionType::WriteRemoteBatched(oplog_index) => {
-                durability::DurableFunctionType::WriteRemoteBatched(
-                    oplog_index.map(|idx| idx.into()),
-                )
-            }
             DurableFunctionType::ReadRemote => durability::DurableFunctionType::ReadRemote,
             DurableFunctionType::ReadLocal => durability::DurableFunctionType::ReadLocal,
-            DurableFunctionType::WriteRemoteTransaction(oplog_index) => {
-                durability::DurableFunctionType::WriteRemoteTransaction(
-                    oplog_index.map(|idx| idx.into()),
-                )
-            }
         }
     }
 }
@@ -1760,20 +1741,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
                     Ok(scope.owner_start_index)
                 })
                 .transpose()?;
-            let typed_parent = match &function_type {
-                DurableFunctionType::WriteRemoteBatched(Some(idx))
-                | DurableFunctionType::WriteRemoteTransaction(Some(idx)) => Some(*idx),
-                _ => None,
-            };
-            if contextual_parent.is_some()
-                && typed_parent.is_some()
-                && contextual_parent != typed_parent
-            {
-                return Err(anyhow::anyhow!(
-                    "custom durable invocation has conflicting contextual and function-type parents"
-                ));
-            }
-            let parent_start_index = contextual_parent.or(typed_parent);
+            let parent_start_index = contextual_parent;
             let anchor = parent_start_index
                 .or_else(|| ctx.invocation_anchor())
                 .ok_or_else(|| {
@@ -2258,10 +2226,8 @@ pub struct InFunctionRetryController {
     retry_state: InFunctionRetryState,
     /// Fully-qualified host-function name used as the retry decision's function label.
     function_label: &'static str,
-    /// Set for a child of a durable scope whose owner may re-execute the scope's effect under its
-    /// recorded `Start` (a re-issuable HTTP response body). Such a child may complete an incomplete
-    /// `Start` live although its own function type is not re-executable; the scope owner, not the
-    /// child's type, decides that the effect may repeat. It never widens in-function retry.
+    parent_start_index: Option<OplogIndex>,
+    /// The protocol owner authorizes repair or typed loss under the child's recorded Start.
     incomplete_repair_authorized_by_scope: bool,
 }
 
@@ -2276,12 +2242,18 @@ impl InFunctionRetryController {
             durable_execution_state,
             retry_state: InFunctionRetryState::new(),
             function_label,
+            parent_start_index: None,
             incomplete_repair_authorized_by_scope: false,
         }
     }
 
     pub fn function_type(&self) -> &DurableFunctionType {
         &self.function_type
+    }
+
+    pub fn with_parent_start_index(mut self, parent_start_index: Option<OplogIndex>) -> Self {
+        self.parent_start_index = parent_start_index;
+        self
     }
 
     pub fn with_incomplete_repair_authorized_by_scope(mut self, authorized: bool) -> Self {
@@ -2477,21 +2449,13 @@ impl InFunctionRetryController {
             | DurableFunctionType::ReadLocal
             | DurableFunctionType::WriteLocal
             | DurableFunctionType::WriteRemote => true,
-            DurableFunctionType::WriteRemoteBatched(_)
-            | DurableFunctionType::WriteRemoteTransaction(_) => false,
         }
     }
 
-    /// Whether a call of this function type may be safely re-executed when replay finds its
-    /// host-call `Start` committed but its `End` missing (see
-    /// [`crate::durable_host::concurrent::CallReplayOutcome::Incomplete`]). This is the set that
-    /// is eligible for in-function retry: reads and local/remote writes can be re-run;
-    /// external peers must deduplicate remote writes. Batched / transaction writes cannot,
-    /// and rely on durable-scope recovery instead. A batched child of a scope whose owner
-    /// re-executes the scope's effect call-locally is the one addition: the owner authorizes the
-    /// repair ([`Self::with_incomplete_repair_authorized_by_scope`]).
+    /// Top-level calls repair in place. A child requires its protocol owner's decision,
+    /// whether that decision re-executes an effect or records typed resource loss.
     pub fn can_reexecute_on_incomplete_replay(&self) -> bool {
-        self.is_eligible_for_internal_retry() || self.incomplete_repair_authorized_by_scope
+        self.parent_start_index.is_none() || self.incomplete_repair_authorized_by_scope
     }
 }
 
@@ -3400,49 +3364,29 @@ mod tests {
         assert_eq!(ctx.retry_entries_appended, 0);
     }
 
-    // Test 3b: WriteRemoteBatched is ineligible (always falls back to trap)
     #[test]
-    async fn batched_write_disables_in_function_retry() {
-        let mut ctx = MockDurabilityHost::new();
-        let mut controller =
-            make_retry_controller(&mut ctx, DurableFunctionType::WriteRemoteBatched(None)).await;
-
-        let result: Result<String, String> = Err("timeout".to_string());
-        let action = controller
-            .try_trigger_retry_or_loop_with_properties(
-                &mut ctx,
-                &result,
-                |_| HostFailureKind::Transient,
-                RetryProperties::new(),
-            )
-            .await
-            .expect("should not propagate error");
-
-        assert_eq!(action, InternalRetryResult::Persist);
-        assert_eq!(ctx.trap_triggered_count, 1);
-    }
-
-    // Test 3c: WriteRemoteTransaction is ineligible
-    #[test]
-    async fn transaction_write_disables_in_function_retry() {
-        let mut ctx = MockDurabilityHost::new();
-        let mut controller =
-            make_retry_controller(&mut ctx, DurableFunctionType::WriteRemoteTransaction(None))
-                .await;
-
-        let result: Result<String, String> = Err("timeout".to_string());
-        let action = controller
-            .try_trigger_retry_or_loop_with_properties(
-                &mut ctx,
-                &result,
-                |_| HostFailureKind::Transient,
-                RetryProperties::new(),
-            )
-            .await
-            .expect("should not propagate error");
-
-        assert_eq!(action, InternalRetryResult::Persist);
-        assert_eq!(ctx.trap_triggered_count, 1);
+    fn child_repair_requires_owner_authorization_for_every_function_type() {
+        for function_type in [
+            DurableFunctionType::ReadLocal,
+            DurableFunctionType::WriteLocal,
+            DurableFunctionType::ReadRemote,
+            DurableFunctionType::WriteRemote,
+        ] {
+            let ctx = MockDurabilityHost::new();
+            let controller = InFunctionRetryController::new(
+                function_type,
+                ctx.durable_execution_state(),
+                KeyvalueEventualGet::FQFN,
+            );
+            assert!(controller.can_reexecute_on_incomplete_replay());
+            let controller = controller.with_parent_start_index(Some(OplogIndex::from_u64(17)));
+            assert!(!controller.can_reexecute_on_incomplete_replay());
+            assert!(
+                controller
+                    .with_incomplete_repair_authorized_by_scope(true)
+                    .can_reexecute_on_incomplete_replay()
+            );
+        }
     }
 
     // Test 4: Interrupt during in-function retry sleep
@@ -3687,8 +3631,6 @@ mod tests {
             (DurableFunctionType::ReadLocal, true),
             (DurableFunctionType::WriteLocal, true),
             (DurableFunctionType::WriteRemote, true),
-            (DurableFunctionType::WriteRemoteBatched(None), false),
-            (DurableFunctionType::WriteRemoteTransaction(None), false),
         ];
 
         for (ft, expected) in cases {
@@ -4091,8 +4033,6 @@ mod tests {
         for ft in [
             DurableFunctionType::WriteLocal,
             DurableFunctionType::WriteRemote,
-            DurableFunctionType::WriteRemoteBatched(None),
-            DurableFunctionType::WriteRemoteTransaction(None),
         ] {
             let mut ctx = MockDurabilityHost::new();
             // read_only_method left as None.
@@ -4117,8 +4057,6 @@ mod tests {
         for ft in [
             DurableFunctionType::WriteLocal,
             DurableFunctionType::WriteRemote,
-            DurableFunctionType::WriteRemoteBatched(None),
-            DurableFunctionType::WriteRemoteTransaction(None),
         ] {
             let mut ctx = MockDurabilityHost::new();
             ctx.read_only_method = Some("agent::read-only-method".to_string());

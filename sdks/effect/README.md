@@ -723,8 +723,8 @@ On typed success or typed failure, `wrap` encodes the response and calls
 `finishCustomDurableInvocation`. On defect, interruption, response encoding failure, or any other
 unfinished exit, scope cleanup **drops** the live invocation instead of finishing it. This is the
 1.6 recovery contract: never manufacture a terminal result for work that did not complete.
-`writeRemoteBatched(...)` and `writeRemoteTransaction(...)` are supported by the same wrapper; the
-host resource owns their begin index and lifecycle.
+The four function types are `readLocal`, `writeLocal`, `readRemote`, and `writeRemote`.
+The host records nesting in `Start.parent_start_index`, not in a function-type payload.
 
 Other durability controls remain under `Durability`: oplog commits and `FunctionType` constructors.
 `Saga` provides fallible/infallible compensating transactions; compensations run in reverse order.

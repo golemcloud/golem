@@ -129,23 +129,6 @@ declare module 'golem:api/oplog@1.5.0' {
   /** The side-effect manipulates external state (for example an RPC call) */
   {
     tag: 'write-remote'
-  } |
-  /**
-   * The side-effect manipulates external state through multiple invoked functions (for example
-   * a HTTP request where reading the response involves multiple host function calls)
-   * On the first invocation of the batch, the parameter should be `None` - this triggers
-   * writing a scope `Start` entry in the oplog. Followup invocations should contain this
-   * entry's index as the parameter so their host-call `Start` entries can point back to the
-   * scope. In batched remote writes it is the caller's responsibility to manually write the
-   * matching scope `End` entry (using `end_function`) when the operation is completed.
-   */
-  {
-    tag: 'write-remote-batched'
-    val: OplogIndex | undefined
-  } |
-  {
-    tag: 'write-remote-transaction'
-    val: OplogIndex | undefined
   };
   export type PluginInstallationDescription = {
     environmentPluginGrantId: EnvironmentPluginGrantId;

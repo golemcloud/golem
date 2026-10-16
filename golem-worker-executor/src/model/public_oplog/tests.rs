@@ -934,7 +934,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             invocation_id: None,
             observational_owner: None,
             request: None,
-            durable_function_type: DurableFunctionType::WriteRemoteTransaction(None),
+            durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,
         })
         .await

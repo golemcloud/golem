@@ -31,7 +31,6 @@ use super::{
     PublicTypedAgentConfigEntry, PublicUpdateDescription, RawSnapshotData,
     SaveSnapshotResultParameters, SnapshotAssistedAutomaticUpdateParameters,
     SnapshotAssistedUpdateDetails, SnapshotBasedUpdateParameters, StringAttributeValue,
-    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use crate::base_model::OplogIndex;
 use crate::base_model::agent::AgentMode;
@@ -2792,7 +2791,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WrappedFunctionType>
     fn try_from(
         value: golem_api_grpc::proto::golem::worker::WrappedFunctionType,
     ) -> Result<Self, Self::Error> {
-        match value.r#type() {
+        match wrapped_function_type::Type::try_from(value.r#type).map_err(|err| err.to_string())? {
             wrapped_function_type::Type::ReadLocal => {
                 Ok(PublicDurableFunctionType::ReadLocal(Empty {}))
             }
@@ -2805,18 +2804,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WrappedFunctionType>
             wrapped_function_type::Type::WriteRemote => {
                 Ok(PublicDurableFunctionType::WriteRemote(Empty {}))
             }
-            wrapped_function_type::Type::WriteRemoteBatched => Ok(
-                PublicDurableFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
-                    index: value.oplog_index.map(OplogIndex::from_u64),
-                }),
-            ),
-            wrapped_function_type::Type::WriteRemoteTransaction => {
-                Ok(PublicDurableFunctionType::WriteRemoteTransaction(
-                    WriteRemoteTransactionParameters {
-                        index: value.oplog_index.map(OplogIndex::from_u64),
-                    },
-                ))
-            }
         }
     }
 }
@@ -2827,37 +2814,21 @@ impl From<PublicDurableFunctionType> for golem_api_grpc::proto::golem::worker::W
             PublicDurableFunctionType::ReadLocal(_) => {
                 golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                     r#type: wrapped_function_type::Type::ReadLocal as i32,
-                    oplog_index: None,
                 }
             }
             PublicDurableFunctionType::WriteLocal(_) => {
                 golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                     r#type: wrapped_function_type::Type::WriteLocal as i32,
-                    oplog_index: None,
                 }
             }
             PublicDurableFunctionType::ReadRemote(_) => {
                 golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                     r#type: wrapped_function_type::Type::ReadRemote as i32,
-                    oplog_index: None,
                 }
             }
             PublicDurableFunctionType::WriteRemote(_) => {
                 golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                     r#type: wrapped_function_type::Type::WriteRemote as i32,
-                    oplog_index: None,
-                }
-            }
-            PublicDurableFunctionType::WriteRemoteBatched(parameters) => {
-                golem_api_grpc::proto::golem::worker::WrappedFunctionType {
-                    r#type: wrapped_function_type::Type::WriteRemoteBatched as i32,
-                    oplog_index: parameters.index.map(|index| index.into()),
-                }
-            }
-            PublicDurableFunctionType::WriteRemoteTransaction(parameters) => {
-                golem_api_grpc::proto::golem::worker::WrappedFunctionType {
-                    r#type: wrapped_function_type::Type::WriteRemoteTransaction as i32,
-                    oplog_index: parameters.index.map(|index| index.into()),
                 }
             }
         }
@@ -4046,12 +4017,6 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     PublicDurableFunctionType::WriteLocal(_) => DurableFunctionType::WriteLocal,
                     PublicDurableFunctionType::ReadRemote(_) => DurableFunctionType::ReadRemote,
                     PublicDurableFunctionType::WriteRemote(_) => DurableFunctionType::WriteRemote,
-                    PublicDurableFunctionType::WriteRemoteBatched(params) => {
-                        DurableFunctionType::WriteRemoteBatched(params.index)
-                    }
-                    PublicDurableFunctionType::WriteRemoteTransaction(params) => {
-                        DurableFunctionType::WriteRemoteTransaction(params.index)
-                    }
                 };
 
                 let request = start
@@ -4748,37 +4713,21 @@ fn durable_function_type_to_proto(
         DurableFunctionType::ReadLocal => {
             golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                 r#type: wrapped_function_type::Type::ReadLocal as i32,
-                oplog_index: None,
             }
         }
         DurableFunctionType::WriteLocal => {
             golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                 r#type: wrapped_function_type::Type::WriteLocal as i32,
-                oplog_index: None,
             }
         }
         DurableFunctionType::ReadRemote => {
             golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                 r#type: wrapped_function_type::Type::ReadRemote as i32,
-                oplog_index: None,
             }
         }
         DurableFunctionType::WriteRemote => {
             golem_api_grpc::proto::golem::worker::WrappedFunctionType {
                 r#type: wrapped_function_type::Type::WriteRemote as i32,
-                oplog_index: None,
-            }
-        }
-        DurableFunctionType::WriteRemoteBatched(idx) => {
-            golem_api_grpc::proto::golem::worker::WrappedFunctionType {
-                r#type: wrapped_function_type::Type::WriteRemoteBatched as i32,
-                oplog_index: idx.map(|i| i.into()),
-            }
-        }
-        DurableFunctionType::WriteRemoteTransaction(idx) => {
-            golem_api_grpc::proto::golem::worker::WrappedFunctionType {
-                r#type: wrapped_function_type::Type::WriteRemoteTransaction as i32,
-                oplog_index: idx.map(|i| i.into()),
             }
         }
     }
@@ -4788,17 +4737,11 @@ fn durable_function_type_from_proto(
     wft: golem_api_grpc::proto::golem::worker::WrappedFunctionType,
 ) -> Result<DurableFunctionType, String> {
     use golem_api_grpc::proto::golem::worker::wrapped_function_type;
-    match wft.r#type() {
+    match wrapped_function_type::Type::try_from(wft.r#type).map_err(|err| err.to_string())? {
         wrapped_function_type::Type::ReadLocal => Ok(DurableFunctionType::ReadLocal),
         wrapped_function_type::Type::WriteLocal => Ok(DurableFunctionType::WriteLocal),
         wrapped_function_type::Type::ReadRemote => Ok(DurableFunctionType::ReadRemote),
         wrapped_function_type::Type::WriteRemote => Ok(DurableFunctionType::WriteRemote),
-        wrapped_function_type::Type::WriteRemoteBatched => Ok(
-            DurableFunctionType::WriteRemoteBatched(wft.oplog_index.map(OplogIndex::from_u64)),
-        ),
-        wrapped_function_type::Type::WriteRemoteTransaction => Ok(
-            DurableFunctionType::WriteRemoteTransaction(wft.oplog_index.map(OplogIndex::from_u64)),
-        ),
     }
 }
 

@@ -251,14 +251,8 @@ where
     let span_started_at = golem_common::model::Timestamp::now_utc();
     // Start admission itself can await a replay claim while the guest drops this send.
     // Keep request cleanup owned by the Store until either replay or live send takes it.
-    let replay_scope = Arc::new(Mutex::new(None));
     let (disarm_leak_guard_tx, disarm_leak_guard_rx) = oneshot::channel();
-    spawn_replayed_request_leak_guard::<Ctx, U>(
-        store,
-        req.rep(),
-        replay_scope.clone(),
-        disarm_leak_guard_rx,
-    );
+    spawn_replayed_request_leak_guard::<Ctx, U>(store, req.rep(), disarm_leak_guard_rx);
     let mut handle =
         DurableCallSession::<P3HttpClientSend, P>::start_access_with_options_and_indexed_span(
             store,
@@ -287,8 +281,6 @@ where
         )
         .await
         .map_err(HttpError::trap)?;
-    *replay_scope.lock().unwrap() = (handle.begin_index() != handle.start_index())
-        .then_some((function_type.clone(), handle.begin_index()));
     let send_start_index = handle.start_index();
     let observational_owner = handle.observational_owner();
 

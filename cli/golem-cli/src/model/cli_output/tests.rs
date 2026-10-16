@@ -2263,11 +2263,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             invocation_id: Some(DurableInvocationId::new(OplogIndex::from_u64(1), 3)),
             observational_owner: Some(OplogIndex::from_u64(2)),
             request: Some(typed_string_value("request")),
-            durable_function_type: PublicDurableFunctionType::WriteRemoteBatched(
-                WriteRemoteBatchedParameters {
-                    index: Some(OplogIndex::from_u64(1)),
-                },
-            ),
+            durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
             span_started: Some(PublicSpanStarted {
                 span_id: span_id("0000000000000001"),
                 trace_id: trace_id("00000000000000000000000000000002"),

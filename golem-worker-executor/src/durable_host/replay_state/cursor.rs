@@ -2074,99 +2074,6 @@ impl CursorTx<'_> {
         Ok(StartClaimAttempt::Claimed(handle, entry))
     }
 
-    /// Claims an exact scope `Start`. When `recover_missing` is set, a missing scope enters replay
-    /// settlement only after proving that doing so cannot abandon another concurrent operation.
-    pub(super) async fn claim_scope_start_with_missing_recovery(
-        &mut self,
-        claim: &StartClaim,
-        recover_missing: bool,
-    ) -> Result<StartClaimAttempt, WorkerExecutorError> {
-        debug_assert!(!claim.carries_request());
-        let outcome = self
-            .claim_start_matching(|entry| claim.matches_start_identity(entry), true)
-            .await?;
-        if !matches!(outcome, StartClaimAttempt::Missing) {
-            return Ok(outcome);
-        }
-        if let Some(bodies) = self.active_body_owning_head(
-            self.buffered_head_owner(),
-            claim.expected_parent_start_index(),
-        ) {
-            return Ok(StartClaimAttempt::Blocked(BlockedOn::ActiveBody(bodies)));
-        }
-        if !recover_missing {
-            return Ok(StartClaimAttempt::Missing);
-        }
-
-        if self.st.concurrent_resolver.has_any_claims()
-            || !self.st.claimed_starts.is_empty()
-            || !self.st.retained_starts.is_empty()
-            || !self.st.custom_subtrees.is_empty()
-        {
-            return Err(WorkerExecutorError::unexpected_oplog_entry(
-                claim.expected_description(),
-                "the scope Start is missing while another concurrent replay claim is active"
-                    .to_string(),
-            ));
-        }
-
-        let expected_name = claim.expected_function_name();
-        let replay_target = self.cursor.replay_target();
-        let name_collision = self
-            .cursor
-            .scan_oplog(
-                OplogIndex::INITIAL,
-                replay_target.next(),
-                &self.st.skipped_regions,
-                self.st
-                    .skipped_regions
-                    .find_next_deleted_region(OplogIndex::INITIAL),
-                OplogIndex::NONE,
-                |entry, _, _| {
-                    matches!(entry, OplogEntry::Start { function_name, invocation_id, .. }
-                        if function_name == expected_name
-                            && *invocation_id == claim.expected_invocation_id())
-                },
-                |_, _, _| true,
-            )
-            .await;
-        if matches!(name_collision, OplogEntryLookupResult::Found { .. }) {
-            return Err(WorkerExecutorError::unexpected_oplog_entry(
-                claim.expected_description(),
-                "a scope Start with the same invocation id exists but cannot be claimed"
-                    .to_string(),
-            ));
-        }
-
-        let suffix_start = self.cursor.last_replayed_index().next();
-        let unsafe_suffix = self
-            .cursor
-            .scan_oplog(
-                suffix_start,
-                replay_target.next(),
-                &self.st.skipped_regions,
-                self.st
-                    .skipped_regions
-                    .find_next_deleted_region(suffix_start),
-                OplogIndex::NONE,
-                |entry, _, index| {
-                    matches!(entry, OplogEntry::CompletionDelivered { .. })
-                        || self.is_stream_observation(index)
-                },
-                |_, _, _| true,
-            )
-            .await;
-        if matches!(unsafe_suffix, OplogEntryLookupResult::Found { .. }) {
-            return Err(WorkerExecutorError::unexpected_oplog_entry(
-                claim.expected_description(),
-                "the scope Start is missing before a guest observation boundary".to_string(),
-            ));
-        }
-
-        self.cursor.begin_settling();
-        Ok(StartClaimAttempt::MissingSettling { replay_target })
-    }
-
     /// Switches the cursor to live mode: records `ReplayFinished` if replay was still in progress,
     /// clamps the cursor head to the replay target, and wakes every still-suspended awaiter with
     /// `Incomplete` (any durable call whose `Start` was committed but whose terminal never was).
@@ -3366,16 +3273,6 @@ impl ReplayState {
     /// Enqueue exactly one advance-gate waiter before inspecting retained history. A retained
     /// miss keeps that queue position while progress wakes the state-only recheck; it is never
     /// evidence of divergence or permission to execute live.
-    pub(super) async fn with_claim_tx<R>(
-        &self,
-        claim: &StartClaim,
-        on_retained: impl FnOnce(ReplayCallHandle, Box<OplogEntry>) -> R,
-        gated: impl AsyncFnOnce(&mut CursorTx<'_>) -> Result<R, WorkerExecutorError>,
-    ) -> Result<R, WorkerExecutorError> {
-        self.with_claim_tx_admission(claim, None, on_retained, gated)
-            .await
-    }
-
     pub(super) async fn with_claim_tx_admission<R>(
         &self,
         claim: &StartClaim,

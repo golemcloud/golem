@@ -26,16 +26,6 @@ impl From<DurableFunctionType> for PublicDurableFunctionType {
             DurableFunctionType::WriteLocal => PublicDurableFunctionType::WriteLocal(Empty {}),
             DurableFunctionType::ReadRemote => PublicDurableFunctionType::ReadRemote(Empty {}),
             DurableFunctionType::WriteRemote => PublicDurableFunctionType::WriteRemote(Empty {}),
-            DurableFunctionType::WriteRemoteBatched(index) => {
-                PublicDurableFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
-                    index,
-                })
-            }
-            DurableFunctionType::WriteRemoteTransaction(index) => {
-                PublicDurableFunctionType::WriteRemoteTransaction(
-                    WriteRemoteTransactionParameters { index },
-                )
-            }
         }
     }
 }

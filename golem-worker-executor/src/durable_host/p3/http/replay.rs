@@ -14,18 +14,17 @@
 
 use super::serialization::{deserialize_error_code, serialize_error_code, serialize_headers};
 use super::*;
-use crate::durable_host::concurrent::end_durable_function_access_if_open;
 use crate::durable_host::p3::{DurableP3, durable_worker_ctx, wasi_http_view};
 use crate::durable_host::tail_work::TailActivity;
 use crate::services::oplog::Oplog;
 use crate::workerctx::WorkerCtx;
 use anyhow::Context as _;
 use bytes::Bytes;
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::payload::types::{
     SerializableP3HttpClientSendResult, SerializableP3HttpRequestBodyFrame,
     SerializableResponseHeaders,
 };
-use golem_common::model::oplog::{DurableFunctionType, OplogIndex};
 use http::{HeaderMap, HeaderName, HeaderValue};
 use http_body::Body as _;
 use http_body_util::BodyExt as _;
@@ -33,8 +32,8 @@ use http_body_util::Empty;
 use http_body_util::combinators::UnsyncBoxBody;
 use std::future::poll_fn;
 use std::marker::PhantomData;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::task::Poll;
 use tokio::sync::{Notify, oneshot};
 use tracing::warn;
@@ -146,7 +145,6 @@ pub(super) async fn consume_replayed_request<Ctx: WorkerCtx, U: Send + 'static>(
 pub(super) fn spawn_replayed_request_leak_guard<Ctx: WorkerCtx, U: Send + 'static>(
     store: &Accessor<U, DurableP3<Ctx>>,
     request_rep: u32,
-    scope: Arc<Mutex<Option<(DurableFunctionType, OplogIndex)>>>,
     disarm_rx: oneshot::Receiver<()>,
 ) {
     let activity = store.with(|mut access| {
@@ -156,7 +154,6 @@ pub(super) fn spawn_replayed_request_leak_guard<Ctx: WorkerCtx, U: Send + 'stati
     });
     store.spawn(ReplayedRequestLeakGuard::<Ctx> {
         request_rep,
-        scope,
         disarm_rx,
         activity,
         _phantom: PhantomData,
@@ -176,9 +173,7 @@ pub(super) fn spawn_replayed_request_leak_guard<Ctx: WorkerCtx, U: Send + 'stati
 ///
 /// The guard holds the request's table rep and waits on a disarm channel. It is
 /// armed before liveness is known; the send disarms it when request ownership
-/// transfers to inline replay consumption or live execution. The shared scope
-/// slot is filled once Start admission returns a handle. Before that, no scope
-/// has been installed in the durable context for the guard to close.
+/// transfers to inline replay consumption or live execution.
 /// Only when the send future is dropped without disarming does the
 /// guard consume the request itself — deleting it from the table and draining
 /// its outgoing body, which resolves the guest's writes just like a completed
@@ -187,7 +182,6 @@ pub(super) fn spawn_replayed_request_leak_guard<Ctx: WorkerCtx, U: Send + 'stati
 /// it.
 struct ReplayedRequestLeakGuard<Ctx> {
     request_rep: u32,
-    scope: Arc<Mutex<Option<(DurableFunctionType, OplogIndex)>>>,
     disarm_rx: oneshot::Receiver<()>,
     activity: TailActivity,
     _phantom: PhantomData<fn() -> Ctx>,
@@ -201,7 +195,6 @@ where
     async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
         let Self {
             request_rep,
-            scope,
             disarm_rx,
             activity,
             _phantom,
@@ -228,20 +221,6 @@ where
                     ?error,
                     "failed to consume a replayed p3 HTTP request dropped by the guest mid-replay"
                 );
-            }
-            // This cancellation path may be the invocation's final host call.
-            // Close this send's scope directly rather than draining unrelated
-            // drop events, so the scope can advance before the guard exits.
-            let scope = scope.lock().unwrap().clone();
-            if let Some((function_type, begin_index)) = scope {
-                end_durable_function_access_if_open(
-                    accessor,
-                    durable_worker_ctx::<Ctx, U>,
-                    function_type,
-                    begin_index,
-                    false,
-                )
-                .await?;
             }
         }
         drop(activity);

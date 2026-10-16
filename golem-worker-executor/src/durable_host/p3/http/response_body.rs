@@ -208,10 +208,10 @@ impl HttpBodyDemandSignal {
 }
 
 async fn require_recording_before_response_demand(
-    readiness: impl Future<Output = Result<(), String>>,
+    readiness: impl Future<Output = Result<(), WorkerExecutorError>>,
     demand_signal: Arc<HttpBodyDemandSignal>,
     request_body_progress: Option<Arc<ReplayedRequestBodyDrainProgress>>,
-) -> Result<(), String> {
+) -> Result<(), WorkerExecutorError> {
     let Some(request_body_progress) = request_body_progress else {
         return readiness.await;
     };
@@ -223,10 +223,9 @@ async fn require_recording_before_response_demand(
             tokio::select! {
                 biased;
                 result = &mut readiness => return result,
-                () = std::future::ready(()) => return Err(
-                    "response-body demand arrived while replay was waiting for more guest request-body data"
-                        .to_string(),
-                )
+                () = std::future::ready(()) => return Err(WorkerExecutorError::runtime(
+                    "response-body demand arrived while replay was waiting for more guest request-body data",
+                ))
             }
         }
 
@@ -1247,7 +1246,7 @@ where
         let mut delivered_bytes: u64 = 0;
         let mut delivered_digest = blake3::Hasher::new();
 
-        // Open the parent batched scope. Children nest under its begin index. Concurrently
+        // Open the parent call. Children nest under its Start index. Concurrently
         // consumed response bodies are told apart by the invocation id of each `consume-body`.
         let mut stream = match DurableDemandStream::<
             P3HttpClientConsumeBody,
@@ -1258,7 +1257,6 @@ where
             durable_worker_ctx::<Ctx, U>,
             demand_rx,
             AccessClaimOptions {
-                scope_function_name: Some(crate::durable_host::consume_body_scope_name()),
                 parent_start_index: None,
                 observational_owner,
                 scope_replay_recovery,
@@ -1319,6 +1317,9 @@ where
                 .await
             {
                 Ok(item) => item,
+                Err(error @ WorkerExecutorError::RecoveryRequired { .. }) => {
+                    return Err(error.into());
+                }
                 Err(error) => {
                     // Durable-machinery failure (not an HTTP body error): surface
                     // it to the in-flight guest read and leave the parent incomplete.
@@ -1961,6 +1962,9 @@ where
         };
         let (response, mut delivery) = match finish {
             Ok(result) => result,
+            Err(error) if matches!(&error.source, WorkerExecutorError::RecoveryRequired { .. }) => {
+                return Err(error.source.into());
+            }
             Err(error) => {
                 return fail_consume_body_task(
                     trailers_tx,
@@ -2271,14 +2275,14 @@ mod tests {
         request_body_progress.set_waiting_for_guest_body(true);
 
         let error = require_recording_before_response_demand(
-            std::future::pending::<Result<(), String>>(),
+            std::future::pending::<Result<(), WorkerExecutorError>>(),
             demand_signal,
             Some(request_body_progress),
         )
         .await
         .expect_err("response demand must bound a pending recording proof");
 
-        assert!(error.contains("response-body demand"));
+        assert!(error.to_string().contains("response-body demand"));
     }
 
     #[test]
@@ -2337,7 +2341,7 @@ mod tests {
                 request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                     HostRequestNoInput {},
                 )))),
-                durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+                durable_function_type: DurableFunctionType::WriteRemote,
                 span_started: None,
             })
             .await
@@ -2352,9 +2356,7 @@ mod tests {
                 request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                     HostRequestNoInput {},
                 )))),
-                durable_function_type: DurableFunctionType::WriteRemoteBatched(Some(
-                    OplogIndex::from_u64(1),
-                )),
+                durable_function_type: DurableFunctionType::WriteRemote,
                 span_started: None,
             })
             .await

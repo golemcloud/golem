@@ -146,10 +146,10 @@ agent is retired for its lost shard instead of retried. The refusal travels as a
 reinterpret a failure that already happened.
 
 The check sits at the commit, not at the effect. A call whose `Start` is only buffered when its
-effect runs — an idempotent `WriteRemote`, which opens no committed scope — can still run on an
-executor that has just lost the shard; its commit is then refused and the new owner runs it
-again, the same window as a crash before that commit. Non-idempotent, batched and transactional
-calls commit their scope `Start` first, so a refusal stops them before the effect. Oplogs that
+effect runs can still run on an executor that has just lost the shard; its commit is then
+refused and the new owner runs it again, the same window as a crash before that commit.
+Socket sends, DemandStream parents, and RDBMS protocol owners commit their actual `Start`
+before the effect, so a refusal stops them before the effect. Oplogs that
 assert no epoch are never refused: a handle opened before this executor has an assignment, and
 fork stages and their publication. The archive transfer is fenced like the primary oplog (see
 "Resharding, revocation and the oplog epoch fence" below), and so is an ephemeral agent's oplog,
@@ -544,10 +544,10 @@ order and skips hints. Key kinds:
   `Cancelled { start_index, partial, span_finished }`. A call is identified by
   its `Start` index; `End`/`Cancelled` is its *terminal*. A terminal is *visible* when it lies
   below the replay target and outside an operator `Revert`-skipped region
-  (`has_visible_terminal` / `visible_terminal_record`, `replay_state/cursor.rs`). Request-less Start/End pairs are *scopes* (batched writes, transactions),
-  named `<scope:batched-write>`, `<scope:batched-write:consume-body>` (the scope of a P3 HTTP
-  response body) or `<scope:transaction>`; replay tells concurrent scopes apart by the invocation
-  id of the call that opened them.
+  (`has_visible_terminal` / `visible_terminal_record`, `replay_state/cursor.rs`). RDBMS transaction
+  protocols retain request-less `<scope:transaction>` Start/End pairs. A P3 HTTP response body
+  uses its actual `consume-body` call as its parent. Neither creates a generic batched scope;
+  nesting uses `parent_start_index`, and invocation ids distinguish concurrent calls.
 - `AgentInvocationStarted` / `AgentInvocationFinished` bracket one invocation;
   `PendingAgentInvocation` (hint) is the durable queue entry.
 - `CompletionDelivered` / `CompletionDiscarded` (hints, always after their `End`) record the
@@ -649,22 +649,27 @@ can tell it from a top-level call of the primary; the custom tree itself (invoca
 initiation) keeps using the custom parent.
 
 `Incomplete` (`prepare_incomplete_live_repair`): the handle switches to live completion of the
-*existing* `Start` — no second `Start` is appended — if `can_reexecute_on_incomplete_replay`
-(`durability.rs`): `ReadLocal`, `ReadRemote`, `WriteLocal`, and `WriteRemote`;
-`WriteRemoteBatched`/`WriteRemoteTransaction` never, except a batched child of a scope whose
-owner re-executes the scope's effect call-locally (`ScopeReplayRecovery::Reexecute`, set by the
-owner through `AccessClaimOptions::incomplete_repair_authorized_by_scope`). Otherwise the session
-hard-errors and the enclosing durable scope's `ScopeReplayRecovery` decides whether recovery is
-possible; a hard error by itself is not a recovery.
+*existing* `Start` — no second `Start` is appended. The four function types are `ReadLocal`,
+`WriteLocal`, `ReadRemote`, and `WriteRemote`; nesting comes only from explicit
+`Start.parent_start_index`, never from a type payload or temporally open sibling call.
+Top-level incomplete calls repair in place. Ambient entity lineage records ancestry and keeps
+ordinary calls' own call-local repair; it grants no permission to explicitly parented protocol
+children. An explicit child requires its protocol owner's explicit
+`AccessClaimOptions::incomplete_repair_authorized_by_scope` decision, including when the owner
+records typed resource loss rather than repeating an effect. An unauthorized child reaching
+generic repair is an invariant error naming the function and Start index. `ScopeReplayRecovery`
+retains the protocol owner's recovery/readiness decision. There are no extra generic scope
+Start/End records; demand streams retain their actual parent call session, and RDBMS retains
+its transaction protocol Start/End. Snapshot and checkpoint admission use the in-flight live
+call counter, including permits owned by open transaction protocols.
 
 **P3 HTTP recovery is call-local.** `client::send` records `WriteRemote` for all methods
 (`p3/http/send.rs`). Method idempotence controls guest cancellation, not the durable call shape.
 A crash before the response headers therefore completes the recorded send
 `Start` in place (same index, same derived idempotency key, the deterministic guest re-produces
 the request body) and keeps every operation recorded next to it. The response body's
-`<scope:batched-write:consume-body>` scope opens with `ScopeReplayRecovery::Reexecute`;
-on replay an incomplete scope is retained
-(`execute_access_scope_start`), its recorded chunks replay to the guest, and the first live
+`P3HttpClientConsumeBody` parent call opens with `ScopeReplayRecovery::Reexecute`;
+on replay its original Start is retained, its recorded chunks replay to the guest, and the first live
 demand continues the body (`response_body.rs::resume_recorded_response`): nothing delivered means
 a fresh re-issue of the recorded request; a delivered prefix means a re-send with
 `Range: bytes=<delivered>-`, accepted as a `206` continuing at that offset or as a full response
@@ -743,13 +748,13 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   `CompletionDelivered` marker at the head may belong to a
   retained `Start`, so retained-first ordering is required, not an optimisation.
 - A delivery barrier blocks physical advancement, not adoption of already-retained history.
-  `with_claim_tx` first polls one gate waiter, then uses the restricted `RetainedClaims`
+  `with_claim_tx_admission` first polls one gate waiter, then uses the restricted `RetainedClaims`
   capability under the state mutex while that gate is unavailable. Using retained history means
   claiming a `Start` the reader has already passed, registering its resolver, and publishing its
   claimed position in `last_replayed_non_hint_index`. It does not move the physical reader.
   Advancing the reader means reading and committing the next entries through a gate-owning
   `CursorTx`. On a retained miss the claim keeps the same waiter and rechecks retained state on
-  progress; only a gated transaction may classify absence or enter missing-scope settlement.
+  progress; only a gated transaction may classify absence.
   This preserves the cleanup fence's queue ordering.
   Resolution likewise prefers a ready gate and completes the ordinary drain, but can return an
   already-routed host result when the gate remains held. Host readiness is not guest delivery:
@@ -871,7 +876,7 @@ Three different facts are involved, each with its own owner:
 3. **Entity-local liveness** — `store_is_live(mode, local_live_tail, shared_live_published)`
    (`durable_host/mod.rs`): the primary Store is live iff (2) has published; a
    `ReplayingCompleted` entity Store is never live; a `ReplayingIncomplete`/`Live` entity Store is
-   live iff its own `local_live_tail` is set by `PendingReplayToLive::finish` (`#[must_use]`).
+   live iff its own `local_live_tail` is set by `PendingReplayToLive::finish_at` (`#[must_use]`).
    For `ReplayToLiveRole::NonPrimary`, `switch_to_live` skips (2): the entity Store goes live for
    its own invocation scope (after attachment admission) without waiting for the primary.
 
@@ -923,13 +928,11 @@ executor restart, an old key returns the recorded result without re-running the 
 
 P3 HTTP send arms a Store-owned request leak guard before Start admission, not just before
 replay resolution. Guest cancellation can drop the send while its claim waits at the cursor gate.
-The guard fences owned cursor operations, deletes and drains the request, and closes its installed
-durable scope if one exists. This releases the guest's body/trailer writes without re-issuing the
-request. A shared slot receives the scope index when admission returns the handle; before that,
-no scope is installed in the durable context. Both replay consumption and live execution disarm
+The guard fences owned cursor operations, deletes and drains the request. This releases the
+guest's body/trailer writes without re-issuing the request. Both replay consumption and live execution disarm
 the guard when they take request ownership (`durable_host/p3/http/{send,replay}.rs`).
 
-P3 HTTP response frames remain batched parent/child durable calls, not consumer-journal records.
+P3 HTTP response frames remain explicit parent/child durable calls, not consumer-journal records.
 Data and ordinary EOF settle their child delivery tokens at Wasmtime's per-read consumption
 observer. Producer readiness is too early: it can reverse a timer/EOF ordering during replay.
 The producer exposes at most the guest read's capacity and retains the frame's suffix; the first
@@ -1408,7 +1411,7 @@ source revision of a manual update counts as an install, not a restore of saved 
 (`RestoreTree::gives_saved_times`), so the check after it can still find a tree of initial files.
 
 `SnapshotBoundaryConditions` lists what blocks taking a snapshot: replaying,
-open durable scope, snapshotting already, in-flight live host call, and open registered tool
+snapshotting already, in-flight live host call, and open registered tool
 attachments. Attachment producers, consumers, guest stdin-closure watchers and pending output
 regeneration need the history that a snapshot would skip. Internal observers alone do not block
 a snapshot. Automatic snapshots are revision-scoped and ignored once the revision changes.
@@ -1786,12 +1789,11 @@ A failed durable call has two recovery paths (`durable_host/durability.rs`):
 
 - **In-function retry** re-runs the effect inside the same host call under the same `Start`.
   `InFunctionRetryState::decide_retry_with_properties` allows it only when the function type is
-  `is_eligible_for_internal_retry` (`ReadLocal`/`ReadRemote`/`WriteLocal`/`WriteRemote`;
-  batched/transaction writes never — the same set as
-  `can_reexecute_on_incomplete_replay`, minus the scope-authorized batched child described
-  above), the resolved
+  `is_eligible_for_internal_retry` (`ReadLocal`/`ReadRemote`/`WriteLocal`/`WriteRemote`), the resolved
   `NamedRetryPolicy` still permits an attempt, and the delay is ≤ `max_in_function_retry_delay`.
   Each attempt appends and commits an `OplogEntry::Error { retry_from, .. }` hint.
+  RDBMS transaction statements bypass this loop: transaction membership and statement retry
+  refusal belong to the RDBMS protocol, independently of incomplete-repair authorization.
 - **Trap-based retry** is the fallback (`FallBackToTrap`/`Exhausted` →
   `try_trigger_host_trap_retry`): the invocation traps, `on_invocation_failure` produces a
   `RetryDecision`, and the whole worker is reconstructed and replayed to `retry_from`.

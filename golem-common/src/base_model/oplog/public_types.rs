@@ -453,22 +453,6 @@ pub struct PluginInstallationDescription {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct WriteRemoteBatchedParameters {
-    pub index: Option<OplogIndex>,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct WriteRemoteTransactionParameters {
-    pub index: Option<OplogIndex>,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
@@ -482,15 +466,6 @@ pub enum PublicDurableFunctionType {
     ReadRemote(Empty),
     /// The side-effect manipulates external state (for example an RPC call)
     WriteRemote(Empty),
-    /// The side-effect manipulates external state through multiple invoked functions (for example
-    /// a HTTP request where reading the response involves multiple host function calls)
-    ///
-    /// On the first invocation of the batch, the parameter should be `None` - this triggers
-    /// writing a scope `Start` entry in the oplog. Followup invocations should contain
-    /// this entry's index as the parameter. In batched remote writes it is the caller's responsibility
-    /// to manually write the matching scope `End` entry (using `end_function`) when the operation is completed.
-    WriteRemoteBatched(WriteRemoteBatchedParameters),
-    WriteRemoteTransaction(WriteRemoteTransactionParameters),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

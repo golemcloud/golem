@@ -1670,7 +1670,7 @@ async fn owner_lifecycle_interrupts_scope_resolution_without_crossing_delivery()
             let (_, scope) = replay
                 .claim_scope_start(
                     &HostFunctionName::Custom("<scope:batched-write>".to_string()),
-                    &DurableFunctionType::WriteRemoteBatched(None),
+                    &DurableFunctionType::WriteRemote,
                     None,
                 )
                 .await
@@ -3343,8 +3343,8 @@ async fn invocation_boundary_tolerates_abandoned_consume_body_scope_shape() {
     // The actual shape a fully abandoned P3 consume-body leaves behind:
     //
     //   [RecoverySucceeded,
-    //    Start(2, P3HttpClientConsumeBody, WriteRemoteBatched(None)),          — parent scope
-    //    Start(3, P3HttpClientConsumeBodyChunk, WriteRemoteBatched(Some(2)),
+    //    Start(2, P3HttpClientConsumeBody, WriteRemote),                         — parent scope
+    //    Start(3, P3HttpClientConsumeBodyChunk, WriteRemote,
     //          parent_start_index=2),                                          — child chunk
     //    End(3→4, Data),                                                       — persisted chunk
     //    CompletionDiscarded(3),                                               — never delivered
@@ -3368,7 +3368,7 @@ async fn invocation_boundary_tolerates_abandoned_consume_body_scope_shape() {
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 HostRequestNoInput {},
             )))),
-            durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+            durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,
         },
         OplogEntry::Start {
@@ -3380,9 +3380,7 @@ async fn invocation_boundary_tolerates_abandoned_consume_body_scope_shape() {
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 HostRequestNoInput {},
             )))),
-            durable_function_type: DurableFunctionType::WriteRemoteBatched(Some(
-                OplogIndex::from_u64(2),
-            )),
+            durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,
         },
         OplogEntry::End {
@@ -7099,7 +7097,7 @@ async fn overlap_layout_with_scope_end_behind_awaited_sibling() {
     let (scope_idx, scope_handle) = rs
         .claim_scope_start(
             &HostFunctionName::Custom("<scope:batched-write>".to_string()),
-            &DurableFunctionType::WriteRemoteBatched(None),
+            &DurableFunctionType::WriteRemote,
             None,
         )
         .await
@@ -7990,7 +7988,7 @@ fn transaction_scope_start(parent: Option<u64>) -> OplogEntry {
         invocation_id: None,
         observational_owner: None,
         request: None,
-        durable_function_type: DurableFunctionType::WriteRemoteTransaction(None),
+        durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
     }
 }
@@ -8037,11 +8035,7 @@ async fn transaction_failed_begin_cannot_steal_later_successful_begin() {
     .await;
     let name = HostFunctionName::Custom("<scope:transaction>".to_string());
     let (first, handle) = rs
-        .claim_scope_start(
-            &name,
-            &DurableFunctionType::WriteRemoteTransaction(None),
-            None,
-        )
+        .claim_scope_start(&name, &DurableFunctionType::WriteRemote, None)
         .await
         .unwrap();
     assert_eq!(first, OplogIndex::from_u64(2));
@@ -8064,11 +8058,7 @@ async fn transaction_failed_begin_cannot_steal_later_successful_begin() {
     };
     assert_eq!(response.outcome, failed);
     let (second, handle) = rs
-        .claim_scope_start(
-            &name,
-            &DurableFunctionType::WriteRemoteTransaction(None),
-            None,
-        )
+        .claim_scope_start(&name, &DurableFunctionType::WriteRemote, None)
         .await
         .unwrap();
     assert_eq!(second, OplogIndex::from_u64(4));
@@ -8119,7 +8109,7 @@ async fn transaction_interleaved_markers_resolve_by_owner_without_blocking_scope
         let (owner, handle) = rs
             .claim_scope_start(
                 &name,
-                &DurableFunctionType::WriteRemoteTransaction(None),
+                &DurableFunctionType::WriteRemote,
                 Some(OplogIndex::from_u64(2)),
             )
             .await
@@ -8178,7 +8168,7 @@ async fn rdbms_incomplete_stream_repair_reconstructs_typed_loss_at_original_star
     let scope = OplogIndex::from_u64(2);
     let original = OplogIndex::from_u64(3);
     let function = HostFunctionName::RdbmsMysqlDbConnectionQueryStream;
-    let function_type = DurableFunctionType::WriteRemoteBatched(Some(scope));
+    let function_type = DurableFunctionType::WriteRemote;
     let (rs, oplog) = replay_state_and_oplog_over(vec![
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
@@ -8200,7 +8190,7 @@ async fn rdbms_incomplete_stream_repair_reconstructs_typed_loss_at_original_star
     .await;
     let name = HostFunctionName::Custom("<scope:batched-write>".to_string());
     let (_, scope_handle) = rs
-        .claim_scope_start(&name, &DurableFunctionType::WriteRemoteBatched(None), None)
+        .claim_scope_start(&name, &DurableFunctionType::WriteRemote, None)
         .await
         .unwrap();
     let handle = rs
@@ -8246,7 +8236,7 @@ async fn rdbms_incomplete_stream_repair_reconstructs_typed_loss_at_original_star
     .await
     .unwrap();
     let (_, scope_handle) = recovered
-        .claim_scope_start(&name, &DurableFunctionType::WriteRemoteBatched(None), None)
+        .claim_scope_start(&name, &DurableFunctionType::WriteRemote, None)
         .await
         .unwrap();
     let handle = recovered
@@ -8639,7 +8629,7 @@ async fn concurrent_replay_overlap_with_scopes_and_markers_fuzz() {
                     let (got, handle) = rs
                         .claim_scope_start(
                             &HostFunctionName::Custom("<scope:batched-write>".to_string()),
-                            &DurableFunctionType::WriteRemoteBatched(None),
+                            &DurableFunctionType::WriteRemote,
                             None,
                         )
                         .await
@@ -9087,7 +9077,7 @@ fn suspend() -> OplogEntry {
 }
 
 /// A batched-write scope `Start` exactly as `begin_function` records it: request-less,
-/// top-level, `WriteRemoteBatched(None)`.
+/// top-level, `WriteRemote`.
 fn batched_scope_start() -> OplogEntry {
     OplogEntry::Start {
         timestamp: Timestamp::now_utc(),
@@ -9096,7 +9086,7 @@ fn batched_scope_start() -> OplogEntry {
         invocation_id: None,
         observational_owner: None,
         request: None,
-        durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+        durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
     }
 }
@@ -9132,7 +9122,7 @@ fn batched_scope_end(start_index: u64) -> OplogEntry {
 
 /// A host-call `Start` nested in the batched-write scope at `parent`, exactly as the
 /// sequential adapter records followup batched invocations:
-/// `parent_start_index: Some(scope)`, `WriteRemoteBatched(Some(scope))`.
+/// `parent_start_index: Some(scope)`, `WriteRemote`.
 fn batched_child_start(parent: u64) -> OplogEntry {
     OplogEntry::Start {
         timestamp: Timestamp::now_utc(),
@@ -9143,9 +9133,7 @@ fn batched_child_start(parent: u64) -> OplogEntry {
         request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
             HostRequestNoInput {},
         )))),
-        durable_function_type: DurableFunctionType::WriteRemoteBatched(Some(OplogIndex::from_u64(
-            parent,
-        ))),
+        durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
     }
 }
@@ -9160,7 +9148,7 @@ fn batched_child_start(parent: u64) -> OplogEntry {
 /// - a hint entry (`Suspend`) between calls,
 /// - an adjacent pair between positional retry-policy removals,
 /// - a batched-write scope (request-less scope `Start`, a child call pair recorded with
-///   `parent_start_index: Some(scope)` / `WriteRemoteBatched(Some(scope))`, and the
+///   `parent_start_index: Some(scope)` / `WriteRemote`, and the
 ///   response-less, forced-commit scope `End`),
 /// - no `Cancelled` entries and no overlapping calls anywhere.
 ///
@@ -9263,11 +9251,7 @@ async fn pre_migration_adjacent_pair_oplog_replays_through_concurrent_resolver()
     // is claimed by identity (parent_start_index), and the scope End resolves response-less.
     let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
     let (scope_idx, scope_handle) = rs
-        .claim_scope_start(
-            &scope_name,
-            &DurableFunctionType::WriteRemoteBatched(None),
-            None,
-        )
+        .claim_scope_start(&scope_name, &DurableFunctionType::WriteRemote, None)
         .await
         .unwrap();
     assert_eq!(scope_idx, OplogIndex::from_u64(11));
@@ -9275,7 +9259,7 @@ async fn pre_migration_adjacent_pair_oplog_replays_through_concurrent_resolver()
     let handle_d = rs
         .claim_owned_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
-            &DurableFunctionType::WriteRemoteBatched(Some(OplogIndex::from_u64(11))),
+            &DurableFunctionType::WriteRemote,
             OplogIndex::from_u64(11),
         )
         .await
@@ -9320,214 +9304,6 @@ async fn pre_migration_adjacent_pair_oplog_replays_through_concurrent_resolver()
 }
 
 #[test]
-async fn missing_scope_recovery_settles_then_switches_live_over_benign_suffix() {
-    let rs = replay_state_over(vec![
-        OplogEntry::RecoverySucceeded {
-            timestamp: Timestamp::now_utc(),
-        },
-        remove_retry_policy(),
-    ])
-    .await;
-    let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
-
-    let outcome = rs
-        .claim_scope_start_or_recover_missing(
-            &scope_name,
-            &DurableFunctionType::WriteRemoteBatched(None),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-
-    let ScopeStartClaimOutcome::MissingSettling { replay_target } = outcome else {
-        panic!("missing scope did not enter replay settlement");
-    };
-    assert!(rs.test_is_settling());
-    assert!(!rs.is_live());
-    assert!(matches!(
-        rs.finish_settling_to_live(
-            &replay_linear_memory(),
-            ReplayToLiveRole::PrimaryAgent,
-            replay_target,
-        )
-        .await
-        .unwrap(),
-        ReplayToLiveOutcome::Live { .. }
-    ));
-    assert!(rs.is_live());
-    assert!(rs.is_live_published());
-}
-
-#[test]
-async fn missing_scope_presence_check_does_not_switch_live() {
-    let foreign_start = OplogEntry::Start {
-        timestamp: Timestamp::now_utc(),
-        parent_start_index: None,
-        function_name: HostFunctionName::MonotonicClockNow,
-        invocation_id: None,
-        observational_owner: None,
-        request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
-            HostRequestNoInput {},
-        )))),
-        durable_function_type: DurableFunctionType::ReadLocal,
-        span_started: None,
-    };
-    let rs = replay_state_over(vec![
-        OplogEntry::RecoverySucceeded {
-            timestamp: Timestamp::now_utc(),
-        },
-        foreign_start,
-    ])
-    .await;
-    let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
-
-    let outcome = rs
-        .claim_scope_start_if_present(
-            &scope_name,
-            &DurableFunctionType::WriteRemoteBatched(None),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-
-    assert!(matches!(outcome, ScopeStartClaimOutcome::Missing));
-    assert!(!rs.is_live());
-}
-
-#[test]
-async fn existing_scope_claim_does_not_wait_for_missing_scope_recovery_readiness() {
-    let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
-    let scope_start = OplogEntry::Start {
-        timestamp: Timestamp::now_utc(),
-        parent_start_index: None,
-        function_name: scope_name.clone(),
-        invocation_id: None,
-        observational_owner: None,
-        request: None,
-        durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
-        span_started: None,
-    };
-    let rs = replay_state_over(vec![
-        OplogEntry::RecoverySucceeded {
-            timestamp: Timestamp::now_utc(),
-        },
-        scope_start,
-        batched_scope_end(2),
-    ])
-    .await;
-
-    let outcome = rs
-        .claim_scope_start_or_recover_missing_when_ready(
-            &scope_name,
-            &DurableFunctionType::WriteRemoteBatched(None),
-            None,
-            None,
-            async { panic!("recovery readiness must not be polled for an existing scope") },
-        )
-        .await
-        .unwrap();
-
-    let ScopeStartClaimOutcome::Claimed {
-        begin_index,
-        handle,
-    } = outcome
-    else {
-        panic!("expected the existing scope to be claimed")
-    };
-    assert_eq!(begin_index, OplogIndex::from_u64(2));
-    assert!(matches!(
-        rs.await_resolution_outcome(handle).await.unwrap(),
-        ResolutionOutcome::Resolved(Resolution::Completed { .. })
-    ));
-    assert!(rs.is_live());
-}
-
-#[test]
-async fn missing_scope_enters_settlement_without_consuming_foreign_incomplete_write() {
-    let foreign_write = OplogEntry::Start {
-        timestamp: Timestamp::now_utc(),
-        parent_start_index: None,
-        function_name: HostFunctionName::MonotonicClockNow,
-        invocation_id: None,
-        observational_owner: None,
-        request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
-            HostRequestNoInput {},
-        )))),
-        durable_function_type: DurableFunctionType::WriteRemote,
-        span_started: None,
-    };
-    let rs = replay_state_over(vec![OplogEntry::grow_memory(0), foreign_write]).await;
-    let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
-
-    let result = rs
-        .claim_scope_start_or_recover_missing(
-            &scope_name,
-            &DurableFunctionType::WriteRemoteBatched(None),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-    assert!(matches!(
-        result,
-        ScopeStartClaimOutcome::MissingSettling { .. }
-    ));
-    assert!(!rs.is_live());
-    let foreign = rs
-        .claim_concurrent_start(
-            &HostFunctionName::MonotonicClockNow,
-            &DurableFunctionType::WriteRemote,
-        )
-        .await
-        .unwrap();
-    assert_eq!(foreign.start_idx(), OplogIndex::from_u64(2));
-    assert!(matches!(
-        rs.await_resolution_outcome(foreign).await.unwrap(),
-        ResolutionOutcome::Incomplete
-    ));
-}
-
-#[test]
-async fn missing_scope_recovery_rejects_invocation_id_collision() {
-    let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
-    let conflicting_start = OplogEntry::Start {
-        timestamp: Timestamp::now_utc(),
-        parent_start_index: None,
-        function_name: scope_name.clone(),
-        invocation_id: Some(test_invocation_id(7)),
-        observational_owner: None,
-        request: None,
-        durable_function_type: DurableFunctionType::ReadLocal,
-        span_started: None,
-    };
-    let rs = replay_state_over(vec![
-        OplogEntry::RecoverySucceeded {
-            timestamp: Timestamp::now_utc(),
-        },
-        conflicting_start,
-    ])
-    .await;
-
-    let result = rs
-        .claim_scope_start_or_recover_missing(
-            &scope_name,
-            &DurableFunctionType::WriteRemoteBatched(None),
-            None,
-            Some(test_invocation_id(7)),
-        )
-        .await;
-    let error = match result {
-        Ok(_) => panic!("a scope Start with the same invocation id must not be treated as absent"),
-        Err(error) => error,
-    };
-
-    assert!(format!("{error}").contains("same invocation id exists"));
-    assert!(!rs.is_live());
-}
-
-#[test]
 async fn entity_owned_scope_claim_requires_the_recorded_parent() {
     let parent = OplogIndex::from_u64(7);
     let scope_start = OplogEntry::Start {
@@ -9537,7 +9313,7 @@ async fn entity_owned_scope_claim_requires_the_recorded_parent() {
         invocation_id: None,
         observational_owner: None,
         request: None,
-        durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+        durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
     };
     let rs = replay_state_over(vec![
@@ -9552,18 +9328,14 @@ async fn entity_owned_scope_claim_requires_the_recorded_parent() {
 
     rs.claim_scope_start(
         &scope_name,
-        &DurableFunctionType::WriteRemoteBatched(None),
+        &DurableFunctionType::WriteRemote,
         Some(OplogIndex::from_u64(8)),
     )
     .await
     .expect_err("a scope claim must not steal a sibling entity invocation's scope");
 
     let (scope_index, handle) = rs
-        .claim_scope_start(
-            &scope_name,
-            &DurableFunctionType::WriteRemoteBatched(None),
-            Some(parent),
-        )
+        .claim_scope_start(&scope_name, &DurableFunctionType::WriteRemote, Some(parent))
         .await
         .unwrap();
     assert_eq!(scope_index, OplogIndex::from_u64(2));
@@ -9584,26 +9356,18 @@ fn start_claim_requires_the_recorded_observational_owner() {
         invocation_id: None,
         observational_owner: Some(owner),
         request: None,
-        durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+        durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
     };
 
     assert!(
-        StartClaim::scope(
-            &scope_name,
-            &DurableFunctionType::WriteRemoteBatched(None),
-            None,
-        )
-        .with_observational_owner(Some(owner))
-        .matches_start_identity(&scope_start)
+        StartClaim::scope(&scope_name, &DurableFunctionType::WriteRemote, None,)
+            .with_observational_owner(Some(owner))
+            .matches_start_identity(&scope_start)
     );
     assert!(
-        !StartClaim::scope(
-            &scope_name,
-            &DurableFunctionType::WriteRemoteBatched(None),
-            None,
-        )
-        .matches_start_identity(&scope_start),
+        !StartClaim::scope(&scope_name, &DurableFunctionType::WriteRemote, None,)
+            .matches_start_identity(&scope_start),
         "an unowned replay claim must not steal an observationally owned scope"
     );
 
@@ -9638,11 +9402,8 @@ fn start_claim_expected_descriptions_are_stable() {
     let name = HostFunctionName::MonotonicClockNow;
 
     assert_eq!(
-        StartClaim::scope(&name, &DurableFunctionType::WriteRemoteBatched(None), None)
-            .expected_description(),
-        format!(
-            "Start {{ {name}, WriteRemoteBatched(None), request: None, parent_start_index: None }}"
-        )
+        StartClaim::scope(&name, &DurableFunctionType::WriteRemote, None).expected_description(),
+        format!("Start {{ {name}, WriteRemote, request: None, parent_start_index: None }}")
     );
 
     assert_eq!(
@@ -9650,13 +9411,14 @@ fn start_claim_expected_descriptions_are_stable() {
         format!("Start {{ {name}, ReadRemote, request: Some(..), parent_start_index: None }}")
     );
     assert_eq!(
-        StartClaim::unowned(
+        StartClaim::owned(
             &name,
-            &DurableFunctionType::WriteRemoteBatched(Some(OplogIndex::from_u64(4)))
+            &DurableFunctionType::WriteRemote,
+            OplogIndex::from_u64(4),
         )
         .expected_description(),
         format!(
-            "Start {{ {name}, WriteRemoteBatched(Some(OplogIndex(4))), request: Some(..), parent_start_index: Some(OplogIndex(4)) }}"
+            "Start {{ {name}, WriteRemote, request: Some(..), parent_start_index: Some(OplogIndex(4)) }}"
         )
     );
     assert_eq!(
@@ -11094,7 +10856,7 @@ async fn admission_refusal_reproduces_incomplete_scope_without_hiding_completed_
             .unwrap();
         let claim = StartClaim::scope(
             &HostFunctionName::Custom("<scope:batched-write>".into()),
-            &DurableFunctionType::WriteRemoteBatched(None),
+            &DurableFunctionType::WriteRemote,
             Some(OplogIndex::from_u64(2)),
         );
         let ReplayStartClaimOutcome::Claimed { handle, .. } =
@@ -11223,16 +10985,12 @@ fn scope_claim_requires_the_recorded_invocation_id() {
         invocation_id: invocation_id.map(test_invocation_id),
         observational_owner: None,
         request: None,
-        durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+        durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
     };
     let claim = |invocation_id: Option<u64>| {
-        StartClaim::scope(
-            &scope_name,
-            &DurableFunctionType::WriteRemoteBatched(None),
-            None,
-        )
-        .with_invocation_id(invocation_id.map(test_invocation_id))
+        StartClaim::scope(&scope_name, &DurableFunctionType::WriteRemote, None)
+            .with_invocation_id(invocation_id.map(test_invocation_id))
     };
 
     assert!(claim(Some(1)).matches_start_identity(&scope_start(Some(1))));

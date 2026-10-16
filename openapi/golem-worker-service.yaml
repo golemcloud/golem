@@ -6123,8 +6123,6 @@ components:
       - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
       - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
       - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
-      - $ref: '#/components/schemas/PublicDurableFunctionType_WriteRemoteBatchedParameters'
-      - $ref: '#/components/schemas/PublicDurableFunctionType_WriteRemoteTransactionParameters'
       discriminator:
         propertyName: type
         mapping:
@@ -6132,8 +6130,6 @@ components:
           WriteLocal: '#/components/schemas/PublicDurableFunctionType_Empty'
           ReadRemote: '#/components/schemas/PublicDurableFunctionType_Empty'
           WriteRemote: '#/components/schemas/PublicDurableFunctionType_Empty'
-          WriteRemoteBatched: '#/components/schemas/PublicDurableFunctionType_WriteRemoteBatchedParameters'
-          WriteRemoteTransaction: '#/components/schemas/PublicDurableFunctionType_WriteRemoteTransactionParameters'
     PublicDurableFunctionType_Empty:
       allOf:
       - type: object
@@ -6146,30 +6142,6 @@ components:
             - WriteRemote
             example: WriteRemote
       - $ref: '#/components/schemas/Empty'
-    PublicDurableFunctionType_WriteRemoteBatchedParameters:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - WriteRemoteBatched
-            example: WriteRemoteBatched
-      - $ref: '#/components/schemas/WriteRemoteBatchedParameters'
-    PublicDurableFunctionType_WriteRemoteTransactionParameters:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - WriteRemoteTransaction
-            example: WriteRemoteTransaction
-      - $ref: '#/components/schemas/WriteRemoteTransactionParameters'
     PublicEntityCallMode:
       type: string
       enum:
@@ -9958,20 +9930,6 @@ components:
             $ref: '#/components/schemas/AgentMetadataDto'
         cursor:
           $ref: '#/components/schemas/ScanCursor'
-    WriteRemoteBatchedParameters:
-      type: object
-      title: WriteRemoteBatchedParameters
-      properties:
-        index:
-          type: integer
-          format: uint64
-    WriteRemoteTransactionParameters:
-      type: object
-      title: WriteRemoteTransactionParameters
-      properties:
-        index:
-          type: integer
-          format: uint64
     r#ActivatePluginParams:
       type: object
       title: r#ActivatePluginParams

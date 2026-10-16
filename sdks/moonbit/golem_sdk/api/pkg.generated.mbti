@@ -99,8 +99,6 @@ pub(all) enum DurableFunctionType {
   WriteLocal
   ReadRemote
   WriteRemote
-  WriteRemoteBatched(UInt64?)
-  WriteRemoteTransaction(UInt64?)
 } derive(Eq, @debug.Debug)
 
 pub struct Duration {

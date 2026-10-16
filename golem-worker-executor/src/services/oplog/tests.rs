@@ -5078,7 +5078,7 @@ async fn completed_host_call_response_upload_failure_writes_no_start(_tracing: &
             HostFunctionName::Custom("completed-call".to_string()),
             &HostRequest::Custom(vec![1u8; 1024].into_typed_schema_value().unwrap()),
             &HostResponse::Custom(vec![2u8; 1024].into_typed_schema_value().unwrap()),
-            DurableFunctionType::WriteRemoteBatched(Some(OplogIndex::INITIAL)),
+            DurableFunctionType::WriteRemote,
             Some(OplogIndex::INITIAL),
             None,
         )
@@ -5096,7 +5096,7 @@ async fn completed_host_call_response_upload_failure_writes_no_start(_tracing: &
             function_name.clone(),
             &HostRequest::Custom(vec![1u8; 1024].into_typed_schema_value().unwrap()),
             &HostResponse::Custom(vec![2u8; 1024].into_typed_schema_value().unwrap()),
-            DurableFunctionType::WriteRemoteBatched(Some(parent)),
+            DurableFunctionType::WriteRemote,
             Some(parent),
             None,
         )

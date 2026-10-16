@@ -118,24 +118,12 @@ pub struct ClaimedConcurrentStart {
     pub timestamp: Timestamp,
 }
 
-pub(crate) enum ScopeStartClaimOutcome {
-    Claimed {
-        begin_index: OplogIndex,
-        handle: ReplayCallHandle,
-    },
-    Missing,
-    MissingSettling {
-        replay_target: OplogIndex,
-    },
-}
-
 /// Internal claim result. `Missing` is a completed semantic search with no matching `Start`;
 /// payload loading and decoding failures remain errors and must not enter missing-claim recovery.
 enum StartClaimAttempt {
     Claimed(ReplayCallHandle, Box<OplogEntry>),
     Blocked(BlockedOn),
     Missing,
-    MissingSettling { replay_target: OplogIndex },
 }
 
 /// Why a claim cannot be decided in its current cursor transaction, and therefore what it waits

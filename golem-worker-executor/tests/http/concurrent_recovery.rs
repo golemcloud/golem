@@ -306,10 +306,10 @@ async fn recover_concurrent_post(
             .wait_for(|arrived| *arrived),
     )
     .await??;
-    // Before the headers, the inference send itself is the incomplete call. After them, the
-    // send is complete and its consume-body scope is the incomplete one: at least one chunk is
-    // recorded under it, and the guest's next read, which the held server never answers, is the
-    // one incomplete chunk child. The sibling GET (send and body) is complete either way.
+    // Before the headers, the inference send itself is incomplete. After them, its body parent
+    // is incomplete and the guest has observed a committed prefix under it. The next read's
+    // Start may still be buffered, so it cannot synchronize a crash through the public oplog.
+    // The sibling GET (send and body) is complete either way.
     let before_crash = wait_for_oplog(
         &executor,
         &worker_id,
@@ -321,8 +321,20 @@ async fn recover_concurrent_post(
             if mode.holds_mid_body() {
                 sends.counts() == (0, 2, 0)
                     && bodies.counts() == (0, 1, 1)
-                    && !chunks.ended.is_empty()
-                    && chunks.incomplete.len() == 1
+                    && oplog.iter().any(|entry| {
+                        let PublicOplogEntry::Start(start) = &entry.entry else {
+                            return false;
+                        };
+                        start.parent_start_index == bodies.incomplete.first().copied()
+                            && chunks.ended.contains(&entry.oplog_index)
+                            && oplog.iter().any(|delivery| {
+                                matches!(
+                                    &delivery.entry,
+                                    PublicOplogEntry::CompletionDelivered(delivered)
+                                        if delivered.start_index == entry.oplog_index
+                                )
+                            })
+                    })
             } else {
                 sends.counts() == (0, 1, 1) && bodies.counts() == (0, 1, 0)
             }

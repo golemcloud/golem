@@ -21,9 +21,9 @@ use crate::durable_host::authorization::targets::tcp_target;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CallReplayOutcome, Cancellable, DemandDelivery, DemandDeliveryMode,
     DurableCallSession, DurableDemandItem, DurableDemandStream, InvocationIdSource,
-    authorize_live_permissions_at_serialized_access, closed_demand, deliver_demand, demand_channel,
-    reserve_access_invocation_id, reserve_invocation_id_before_await,
-    resolve_current_observational_owner,
+    ScopeReplayRecovery, authorize_live_permissions_at_serialized_access, closed_demand,
+    deliver_demand, demand_channel, reserve_access_invocation_id,
+    reserve_invocation_id_before_await, resolve_current_observational_owner,
 };
 use crate::durable_host::durability::{
     CustomInvocationContext, DurabilityHost, DurableCallTrapContext, mark_durable_call_trap_context,
@@ -33,6 +33,8 @@ use crate::durable_host::p3::{
     observe_function_call_store, run_read_access, wasi_sockets_view,
 };
 use crate::durable_host::tail_work::TailActivity;
+use crate::services::HasWorker;
+use crate::services::oplog::CommitLevel;
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use golem_common::model::oplog::host_functions::{
@@ -145,35 +147,30 @@ impl<D> FutureConsumer<D> for TcpSocketResultConsumer {
     }
 }
 
-/// Drains the guest's outgoing `send` stream into a buffer so an incomplete
-/// replayed `send` call can re-transmit the same bytes. The buffer is delivered
-/// once the guest stream is fully drained (on drop of the consumer). The bytes
-/// are never persisted to the oplog; only the send result is recorded.
-struct TcpSendCaptureConsumer {
-    contents: Vec<u8>,
-    result_tx: Option<oneshot::Sender<Vec<u8>>>,
+/// Drains replayed outgoing bytes without transmitting or retaining them.
+struct TcpSendDrainConsumer {
+    result_tx: Option<oneshot::Sender<()>>,
 }
 
-impl TcpSendCaptureConsumer {
-    fn new(result_tx: oneshot::Sender<Vec<u8>>) -> Self {
+impl TcpSendDrainConsumer {
+    fn new(result_tx: oneshot::Sender<()>) -> Self {
         Self {
-            contents: Vec::new(),
             result_tx: Some(result_tx),
         }
     }
 
     fn close(&mut self) {
         if let Some(result_tx) = self.result_tx.take() {
-            let _ = result_tx.send(std::mem::take(&mut self.contents));
+            let _ = result_tx.send(());
         }
     }
 }
 
-impl<D> StreamConsumer<D> for TcpSendCaptureConsumer {
+impl<D> StreamConsumer<D> for TcpSendDrainConsumer {
     type Item = u8;
 
     fn poll_consume(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
         store: StoreContextMut<D>,
         src: Source<Self::Item>,
@@ -185,16 +182,14 @@ impl<D> StreamConsumer<D> for TcpSendCaptureConsumer {
             return Poll::Ready(Ok(StreamResult::Completed));
         }
 
-        let chunk = bytes.to_vec();
-        let len = chunk.len();
+        let len = bytes.len();
         src.mark_read(len);
-        self.contents.extend_from_slice(&chunk);
 
         Poll::Ready(Ok(StreamResult::Completed))
     }
 }
 
-impl Drop for TcpSendCaptureConsumer {
+impl Drop for TcpSendDrainConsumer {
     fn drop(&mut self) {
         self.close();
     }
@@ -739,8 +734,7 @@ enum TcpSendMode {
         socket_result_rx: oneshot::Receiver<Result<(), types::ErrorCode>>,
     },
     Replay {
-        input_rx: oneshot::Receiver<Vec<u8>>,
-        socket: Resource<TcpSocket>,
+        input_rx: oneshot::Receiver<()>,
     },
 }
 
@@ -770,14 +764,13 @@ impl<Ctx> TcpSocketSendTask<Ctx> {
 
     fn replay(
         call: DurableCallSession<P3SocketsTypesTcpSocketSend, Cancellable>,
-        input_rx: oneshot::Receiver<Vec<u8>>,
-        socket: Resource<TcpSocket>,
+        input_rx: oneshot::Receiver<()>,
         result_tx: oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
         activity: TailActivity,
     ) -> Self {
         Self {
             call,
-            mode: TcpSendMode::Replay { input_rx, socket },
+            mode: TcpSendMode::Replay { input_rx },
             result_tx,
             activity,
             _phantom: PhantomData,
@@ -805,8 +798,8 @@ where
             TcpSendMode::Live { socket_result_rx } => {
                 complete_tcp_socket_send::<Ctx, U>(accessor, call, socket_result_rx).await
             }
-            TcpSendMode::Replay { input_rx, socket } => {
-                replay_tcp_socket_send::<Ctx, U>(accessor, call, input_rx, socket, &activity).await
+            TcpSendMode::Replay { input_rx } => {
+                replay_tcp_socket_send::<Ctx, U>(accessor, call, input_rx, &activity).await
             }
         };
         if !result_tx.is_closed() {
@@ -846,21 +839,19 @@ where
 
 /// Replay `send`: drain the (re-produced) guest bytes. If the call already
 /// completed, return the recorded result without re-sending. If the call is
-/// incomplete (a crash mid-send), re-send the captured bytes and record the
-/// result.
+/// incomplete (a crash mid-send), record connection loss under the original Start.
 async fn replay_tcp_socket_send<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     call: DurableCallSession<P3SocketsTypesTcpSocketSend, Cancellable>,
-    input_rx: oneshot::Receiver<Vec<u8>>,
-    socket: Resource<TcpSocket>,
+    input_rx: oneshot::Receiver<()>,
     activity: &TailActivity,
 ) -> wasmtime::Result<Result<(), types::ErrorCode>>
 where
     Ctx: WorkerCtx,
     U: Send + 'static,
 {
-    // Safe park: the captured bytes are re-produced by the replaying guest.
-    let contents = activity.park(input_rx).await.unwrap_or_default();
+    // Safe park: the bytes are re-produced by the replaying guest.
+    let _ = activity.park(input_rx).await;
 
     match call
         .replay_access(accessor, durable_worker_ctx::<Ctx, U>)
@@ -869,13 +860,12 @@ where
     {
         CallReplayOutcome::Replayed(response) => Ok(deserialize_tcp_stream_result(response.result)),
         CallReplayOutcome::Incomplete(call) => {
-            let result = send_captured_tcp_bytes::<Ctx, U>(accessor, socket, contents).await?;
             let response = call
                 .complete_access(
                     accessor,
                     durable_worker_ctx::<Ctx, U>,
                     HostResponseP3SocketsTcpSend {
-                        result: serialize_tcp_stream_result(result),
+                        result: Err(SerializableP3SocketErrorCode::ConnectionBroken),
                     },
                 )
                 .await
@@ -883,26 +873,6 @@ where
             Ok(deserialize_tcp_stream_result(response.result))
         }
     }
-}
-
-async fn send_captured_tcp_bytes<Ctx, U>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-    socket: Resource<TcpSocket>,
-    contents: Vec<u8>,
-) -> wasmtime::Result<Result<(), types::ErrorCode>>
-where
-    Ctx: WorkerCtx,
-    U: Send + 'static,
-{
-    let stream = accessor.with(|mut store| StreamReader::new(&mut store, contents))?;
-    let sockets = accessor.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
-    let future =
-        <WasiSockets as types::HostTcpSocketWithStore<U>>::send(&sockets, socket, stream).await?;
-    let (result_tx, result_rx) = oneshot::channel();
-    accessor.with(|mut store| future.pipe(&mut store, TcpSocketResultConsumer::new(result_tx)))?;
-    Ok(result_rx
-        .await
-        .unwrap_or(Err(types::ErrorCode::ConnectionBroken)))
 }
 
 struct TcpSocketReceiveTask<Ctx> {
@@ -987,9 +957,9 @@ fn fail_tcp_receive_task(
 /// Durable driver for a `receive` socket stream.
 ///
 /// Persists incoming socket bytes **chunk-by-chunk** under a single `receive`
-/// batched durable scope (mirroring the P3 HTTP incoming-body stream):
+/// parent call (mirroring the P3 HTTP incoming-body stream):
 ///
-/// * the parent `P3SocketsTypesTcpSocketReceive` call opens the batched scope and
+/// * the parent `P3SocketsTypesTcpSocketReceive` call owns the stream and
 ///   is finalized last with a marker carrying the terminal `Result<(), error>`;
 /// * every delivered chunk is persisted as a `P3SocketsTypesTcpSocketReceiveChunk`
 ///   child (`Data`) before its bytes are handed to the guest;
@@ -1012,7 +982,7 @@ where
     Ctx: WorkerCtx,
     U: Send + 'static,
 {
-    // Open the parent batched scope. The demand stream owns it until every requested child has
+    // Open the parent call. The demand stream owns it until every requested child has
     // reached its delivery boundary, so the parent terminal is necessarily written last.
     let mut stream = match DurableDemandStream::<
         P3SocketsTypesTcpSocketReceive,
@@ -1025,6 +995,7 @@ where
         AccessClaimOptions {
             observational_owner,
             invocation_id,
+            scope_replay_recovery: ScopeReplayRecovery::reexecute_when(async { Ok(()) }),
             ..Default::default()
         },
         DemandDeliveryMode::Markerless,
@@ -1083,9 +1054,13 @@ where
         }
     }
 
-    // The terminal, set on the live path; on replay it is taken from the parent
-    // marker instead.
-    let mut terminal: Result<(), types::ErrorCode> = Ok(());
+    // A completed parent supplies its recorded result. If the crash followed the final
+    // child but preceded the parent terminal, the missing result must still report loss.
+    let mut terminal = if stream.is_live() {
+        Ok(())
+    } else {
+        Err(types::ErrorCode::ConnectionBroken)
+    };
 
     loop {
         // Safe park: waiting for the guest to demand the next chunk.
@@ -1136,7 +1111,11 @@ where
                     .as_ref()
                     .map(|reply_tx| reply_tx.is_closed())
                     .unwrap_or(true);
-                let frame = if producer_gone {
+                let frame = if bytes_rx.is_none() {
+                    // Recorded chunks remain replayable, but their socket does not survive
+                    // reconstruction. Complete only the missing tail with explicit loss.
+                    TcpReceiveFrame::End(Err(types::ErrorCode::ConnectionBroken))
+                } else if producer_gone {
                     TcpReceiveFrame::End(Ok(()))
                 } else {
                     let bytes_rx = bytes_rx
@@ -1173,7 +1152,7 @@ where
                     tokio::select! {
                         frame = read_frame => frame,
                         kind = interrupt => {
-                            // Leave both starts incomplete so they re-execute on resume.
+                            // Leave both Starts incomplete for call-local loss completion.
                             child.abandon_for_trap();
                             stream.abandon_for_trap();
                             return Err(wasmtime::Error::from_anyhow(kind.into()));
@@ -1369,8 +1348,7 @@ where
 {
     // `ReadLocal`: the acquire is a local connectivity probe plus local shadow
     // bookkeeping with no external side effect, so it is safely re-executable on
-    // an incomplete replay and must never open a non-idempotent remote-write
-    // scope. The actual byte transmission stays a `WriteRemoteBatched` call. The
+    // an incomplete replay. The actual byte transmission is a `WriteRemote` call. The
     // recorded outcome is still persisted and replayed for determinism, exactly
     // like the clock `ReadLocal` calls.
     let response = run_read_access::<_, _, Ctx, Pair, _>(
@@ -1529,17 +1507,33 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
             });
         }
 
-        let call = DurableCallSession::<P3SocketsTypesTcpSocketSend, Cancellable>::start_access(
+        let call = DurableCallSession::<P3SocketsTypesTcpSocketSend, Cancellable>::start_access_with_options(
             accessor,
             durable_worker_ctx::<Ctx, U>,
-            HostRequestNoInput {},
-            DurableFunctionType::WriteRemoteBatched(None),
+            DurableFunctionType::WriteRemote,
+            AccessClaimOptions {
+                incomplete_repair_authorized_by_scope: true,
+                ..Default::default()
+            },
+            async |_| Ok(HostRequestNoInput {}),
         )
         .await
         .map_err(wasmtime::Error::from)?;
         let (result_tx, result_rx) = oneshot::channel();
 
         if call.is_live() {
+            if call.is_persisted() {
+                // Fence the original send Start before any bytes can reach the socket.
+                let public_state = accessor.with(|mut store| {
+                    durable_worker_ctx::<Ctx, U>(store.data_mut())
+                        .public_state
+                        .clone()
+                });
+                public_state
+                    .worker()
+                    .commit_oplog_and_update_state(CommitLevel::Always)
+                    .await?;
+            }
             // Forward the guest's outgoing bytes straight to the socket; only the
             // transmission result is persisted (no bytes in the oplog).
             let sockets = accessor.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
@@ -1562,16 +1556,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                 FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
             })
         } else {
-            // Replay: capture the re-produced guest bytes so an incomplete call can
-            // re-send them; a completed call returns its recorded result instead.
+            // Drain the replayed bytes without repeating a possibly completed send.
             let (input_tx, input_rx) = oneshot::channel();
             accessor.with(|mut store| {
-                data.pipe(&mut store, TcpSendCaptureConsumer::new(input_tx))?;
+                data.pipe(&mut store, TcpSendDrainConsumer::new(input_tx))?;
                 let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
                     .tail_work_tracker()
                     .activity();
                 store.spawn(TcpSocketSendTask::<Ctx>::replay(
-                    call, input_rx, socket, result_tx, activity,
+                    call, input_rx, result_tx, activity,
                 ));
                 FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
             })

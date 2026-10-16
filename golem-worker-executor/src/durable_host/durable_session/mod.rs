@@ -75,9 +75,9 @@ use golem_common::base_model::durable_stream::{
 use golem_common::base_model::oplog::OplogEntry;
 use golem_common::model::Timestamp;
 use golem_common::model::entity::OwnerRuntime;
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::payload::OplogPayload;
 use golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal;
-use golem_common::model::oplog::{DurableFunctionType, OplogIndex};
 use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_schema::schema::wit::{encode_value_with_streams, wire};
 use golem_schema::schema::{SchemaFingerprintV1, SchemaGraph, SchemaType, schema_fingerprint_v1};
@@ -7363,10 +7363,7 @@ impl DurableInputProducer {
                 if !ctx.is_live() {
                     let observation = if guest {
                         StreamConsumerObservation::Guest {
-                            parent_start_index: ctx.child_parent_start_index(
-                                &DurableFunctionType::ReadLocal,
-                                OplogIndex::INITIAL,
-                            ),
+                            parent_start_index: ctx.entity_parent_start_index(),
                         }
                     } else {
                         StreamConsumerObservation::Host
@@ -7427,10 +7424,7 @@ impl DurableInputProducer {
                 suspension,
                 if guest {
                     StreamConsumerObservation::Guest {
-                        parent_start_index: ctx.child_parent_start_index(
-                            &DurableFunctionType::ReadLocal,
-                            OplogIndex::INITIAL,
-                        ),
+                        parent_start_index: ctx.entity_parent_start_index(),
                     }
                 } else {
                     StreamConsumerObservation::Host

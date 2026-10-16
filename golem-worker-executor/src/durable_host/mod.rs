@@ -57,21 +57,6 @@ tokio::task_local! {
     static ENTITY_CANCELLATION_MASKED: ();
 }
 
-/// The recorded function name of a batched-write durable scope `Start`. Replay tells concurrent
-/// scopes apart by the invocation id of the call that opened them.
-pub(crate) fn batched_write_scope_name() -> HostFunctionName {
-    HostFunctionName::Custom(BATCHED_WRITE_SCOPE_NAME.to_string())
-}
-
-const BATCHED_WRITE_SCOPE_NAME: &str = "<scope:batched-write>";
-
-/// The recorded function name of the batched-write scope `Start` that a P3 HTTP `consume-body`
-/// opens. The name tells the scope of a response body apart from the scope of a send in the
-/// oplog; it does not identify the call.
-pub(crate) fn consume_body_scope_name() -> HostFunctionName {
-    HostFunctionName::Custom("<scope:batched-write:consume-body>".to_string())
-}
-
 /// The per-call quota an outbound durable call is charged against: the per-invocation call
 /// limits and the monthly account budgets exist for outgoing HTTP and for agent RPC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,8 +72,6 @@ impl QuotaClass {
     /// which classes still have an unclaimed retained `Start` waiting for its owner (see
     /// `WorkerState::durable_call_is_fresh`), so the two must agree on the recorded kinds.
     ///
-    /// HTTP requests are recorded under a batched-write scope, a name they share with other
-    /// batched writes; a retained scope of that name therefore counts as a possibly-HTTP one.
     pub(crate) fn of_recorded_call(function_name: &HostFunctionName) -> Option<Self> {
         match function_name {
             HostFunctionName::P3HttpClientSend
@@ -97,7 +80,6 @@ impl QuotaClass {
             | HostFunctionName::GolemAgentDurableStreamWriterAppend => Some(Self::Http),
             HostFunctionName::GolemRpcWasmRpcInvoke
             | HostFunctionName::GolemRpcWasmRpcInvokeAndAwaitResult => Some(Self::Rpc),
-            HostFunctionName::Custom(name) if name == BATCHED_WRITE_SCOPE_NAME => Some(Self::Http),
             _ => None,
         }
     }
@@ -1503,20 +1485,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    pub(crate) fn child_parent_start_index(
-        &self,
-        function_type: &DurableFunctionType,
-        begin_index: OplogIndex,
-    ) -> Option<OplogIndex> {
-        self.state
-            .child_parent_start_index(function_type, begin_index)
-            .or_else(|| {
-                self.entity_invocation_scope
-                    .as_ref()
-                    .map(|scope| scope.invocation_id().start_index())
-            })
-    }
-
     /// The index of the record that numbers the guest calls of the current invocation: the entity
     /// invocation `Start` of an entity Store, or the `AgentInvocationStarted` of the primary Store.
     pub(crate) fn invocation_anchor(&self) -> Option<OplogIndex> {
@@ -1525,20 +1493,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .filter(|index| *index != OplogIndex::NONE))
     }
 
-    /// The invocation id of a direct (Store-holding) durable call of `function_type`. A call
-    /// inside an open durable scope records the id of the call that opened the scope; any other
-    /// direct call reserves the next ordinal of its invocation. A direct call holds the Store, so
-    /// it reserves in guest call order.
+    /// Reserves the next ordinal in guest call order for a direct Store-holding durable call.
     pub(crate) fn direct_call_invocation_id(
         &mut self,
-        function_type: &DurableFunctionType,
+        _function_type: &DurableFunctionType,
     ) -> Result<Option<DurableInvocationId>, WorkerExecutorError> {
-        if let DurableFunctionType::WriteRemoteBatched(Some(scope))
-        | DurableFunctionType::WriteRemoteTransaction(Some(scope)) = function_type
-            && let Some(invocation_id) = self.state.durable_scope_invocation_id(*scope)
-        {
-            return Ok(invocation_id);
-        }
         if self.state.snapshotting_mode {
             return Ok(None);
         }
@@ -3363,14 +3322,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         Ok((index, recorded))
     }
 
-    /// Opens the durable scope of a call of `function_type`, when it has one. `invocation_id` is
-    /// the invocation id of the call: the scope `Start` carries it and replay claims the scope by
-    /// it.
+    /// Checks the effect fence and selects the retry fallback without writing protocol entries.
     async fn begin_function_impl(
         &mut self,
         function_type: &DurableFunctionType,
         span_started: Option<golem_common::model::oplog::SpanStarted>,
-        invocation_id: Option<DurableInvocationId>,
+        _invocation_id: Option<DurableInvocationId>,
     ) -> Result<(OplogIndex, Option<golem_common::model::oplog::SpanStarted>), WorkerExecutorError>
     {
         if self.state.durability_is_suppressed() {
@@ -3379,78 +3336,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             return Ok((begin_index, span_started));
         }
 
-        if self.state.opens_durable_scope(function_type) {
-            // During replay, the scope `End` is folded into the resolver: claiming the scope
-            // `Start` registers an awaiter keyed by its `begin_index`, and `end_function` awaits it
-            // instead of reading the `End` positionally. The handle is carried in the active scope
-            // and only stored when the scope continues replaying (not when recovery switches to live
-            // and re-runs the body, which appends a fresh `End` live).
-            let mut scope_replay_handle: Option<concurrent::ReplayCallHandle> = None;
-            let scope_name = batched_write_scope_name();
-            // A scope opened after the live transition may still own a recorded scope `Start`
-            // the cursor retained for it (see `WorkerState::durable_call_is_live`), so it claims
-            // first and appends a new `Start` only once replay reports none remains.
-            let claimed_scope = if self.state.durable_call_is_live() {
-                None
-            } else {
-                self.claim_durable_scope_start(&scope_name, function_type, invocation_id)
-                    .await?
-            };
-            let mut recorded_span_started = span_started.clone();
-            let result = if let Some((begin_index, scope_handle)) = claimed_scope {
-                // The recorded span metadata is authoritative on replay: the owning host path
-                // restores `SpanStarted` from the claimed scope `Start` rather than from the
-                // live caller's value.
-                recorded_span_started = match self.state.oplog.read(begin_index).await {
-                    OplogEntry::Start { span_started, .. } => span_started.map(|span| *span),
-                    other => {
-                        return Err(WorkerExecutorError::unexpected_oplog_entry(
-                            "durable scope Start",
-                            format!("{other:?}"),
-                        ));
-                    }
-                };
-                scope_replay_handle = Some(scope_handle);
-                begin_index
-            } else {
-                // Durable scopes are siblings rather than nested under other durable scopes. In an
-                // entity body they are direct children of the outer entity invocation; their own
-                // host calls point back at the scope Start through `child_parent_start_index`.
-                let entry = OplogEntry::Start {
-                    timestamp: Timestamp::now_utc(),
-                    parent_start_index: self.entity_parent_start_index(),
-                    function_name: scope_name,
-                    invocation_id,
-                    observational_owner: None,
-                    request: None,
-                    durable_function_type: function_type.clone(),
-                    span_started: span_started.map(Box::new),
-                };
-                // The scope's side effect runs as soon as this returns. A `Start` the storage
-                // refused has to stop it here: the shard's new owner has no record of the scope,
-                // so nothing would stop it running the effect a second time.
-                self.public_state
-                    .worker()
-                    .add_and_commit_oplog(entry)
-                    .await
-                    .map_err(WorkerExecutorError::from)?
-            };
-
-            // A durable scope (remote write / HTTP request) is now open until the matching
-            // `end_function`; the tip is inside it, so block mid-invocation checkpoints, and any
-            // `Start` written while it is open links back to it via `parent_start_index`.
-            self.state.push_durable_scope(
-                result,
-                DurableScopeKind::BatchedWrite,
-                invocation_id,
-                scope_replay_handle,
-            );
-
-            // The effective retry point now derives from the open scope; keep the global fallback
-            // pointing at the scope `Start` so it survives the scope being closed.
-            self.state.current_retry_point = result;
-            Ok((result, recorded_span_started))
-        } else {
+        {
             // No scope opens, so nothing is written before the side effect runs and a fence
             // already latched would only surface at the commit after it - by which time the
             // effect has happened and the shard's new owner, having no record of it, runs it
@@ -3459,23 +3345,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // moves *during* the call: that one needs a round trip per call, which is exactly what
             // an idempotent write is declared to avoid.
             if self.state.is_live()
-                && matches!(
-                    function_type,
-                    DurableFunctionType::WriteRemote
-                        | DurableFunctionType::WriteRemoteBatched(_)
-                        | DurableFunctionType::WriteRemoteTransaction(_)
-                )
+                && matches!(function_type, DurableFunctionType::WriteRemote)
                 && let Some(fence) = self.state.oplog.fence()
             {
                 return Err(WorkerExecutorError::from(OplogError::Fenced(fence)));
             }
 
-            // When there is no scope `Start` entry, the current retry point can only
-            // point to the last written non-hint entry. Hint entries must be ignored
-            // because they are nondeterministic.
-            // If the entry belongs to an open batched write or transaction, we need to
-            // set the current retry point to the index of the begin entry.
-            // The returned index, however, is going to be the current / last replayed index.
+            // Hints are nondeterministic and cannot serve as retry points.
 
             let begin_index = if self.state.is_live() {
                 self.state.oplog.current_oplog_index().await
@@ -3483,16 +3359,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 self.state.replay_state.last_replayed_non_hint_index()
             };
 
-            let new_retry_point = match function_type {
-                DurableFunctionType::WriteRemoteBatched(Some(idx)) => *idx,
-                DurableFunctionType::WriteRemoteTransaction(Some(idx)) => *idx,
-                _ => self
-                    .state
-                    .oplog
-                    .last_added_non_hint_entry()
-                    .await
-                    .unwrap_or(self.state.replay_state.last_replayed_non_hint_index()),
-            };
+            let new_retry_point = self
+                .state
+                .oplog
+                .last_added_non_hint_entry()
+                .await
+                .unwrap_or(self.state.replay_state.last_replayed_non_hint_index());
             self.state.current_retry_point = new_retry_point;
 
             Ok((begin_index, span_started))
@@ -3510,56 +3382,26 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     async fn end_function_impl(
         &mut self,
-        function_type: &DurableFunctionType,
-        begin_index: OplogIndex,
-        span_finished: Option<golem_common::model::oplog::SpanFinished>,
+        _function_type: &DurableFunctionType,
+        _begin_index: OplogIndex,
+        _span_finished: Option<golem_common::model::oplog::SpanFinished>,
     ) -> Result<(), WorkerExecutorError> {
-        if self.state.durability_is_suppressed() {
-            return Ok(());
-        }
-
-        if self.state.opens_durable_scope(function_type) {
-            if self.state.durable_scope_replays(begin_index) {
-                // The scope `End` was folded into the resolver at scope-open, so consume it
-                // through the resolver (never positionally, which under overlap could steal a
-                // concurrently-replaying sibling call's terminal). This also repairs a
-                // crash-induced half-pair and closes the in-memory scope.
-                self.close_durable_scope_replay(begin_index, span_finished)
-                    .await?;
-            } else {
-                let entry = OplogEntry::End {
-                    timestamp: Timestamp::now_utc(),
-                    start_index: begin_index,
-                    response: None,
-                    forced_commit: true,
-                    span_finished,
-                    span_attributes: None,
-                };
-                self.state.oplog.add(entry).await?;
-                // The durable scope opened in `begin_function` is now closed.
-                self.state.remove_durable_scope(begin_index)?;
-            }
-            Ok(())
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 
-    /// Replay-side admission of a durable scope `Start`: claims the recorded scope `Start`
-    /// (including one the cursor retained for this scope), or continues this Store live when
-    /// replay reports that no scope `Start` remains, in which case `None` is returned and the
-    /// caller appends a fresh live scope `Start`. A matching `Start` inside a deleted replay
-    /// region remains divergence, as for every other scope claim.
-    async fn claim_durable_scope_start(
+    /// Claims a transaction protocol Start, or continues live at the replay tail.
+    async fn claim_transaction_start(
         &mut self,
         scope_name: &HostFunctionName,
-        function_type: &DurableFunctionType,
         invocation_id: Option<DurableInvocationId>,
     ) -> Result<Option<(OplogIndex, concurrent::ReplayCallHandle)>, WorkerExecutorError> {
         loop {
-            let claim =
-                StartClaim::scope(scope_name, function_type, self.entity_parent_start_index())
-                    .with_invocation_id(invocation_id);
+            let claim = StartClaim::scope(
+                scope_name,
+                &DurableFunctionType::WriteRemote,
+                self.entity_parent_start_index(),
+            )
+            .with_invocation_id(invocation_id);
             let expected = claim.expected_description();
             let store_continued_live = self.state.store_continued_live();
             match self
@@ -3609,84 +3451,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    /// Closes a durable scope during replay by awaiting its `End` through the resolver, then
-    /// removing the in-memory scope. The scope `End` was registered as a resolver awaiter when its
-    /// `Start` was claimed (`claim_durable_scope_start`), so it is delivered here whether it is the
-    /// entry at the cursor head or was already auto-drained to this scope's handle by another
-    /// cursor driver.
-    ///
-    /// A crash between a scope's terminal marker and its `End` (`add_pair` gives contiguity, not
-    /// crash atomicity) truncates the oplog at the marker, so the awaited `End` resolves as
-    /// `Incomplete`; rather than hard-failing we append the missing `End` live to repair the pair for
-    /// future replays. A `None` handle means the scope was opened live (or recovery switched to
-    /// live at scope-open), in which case there is no recorded `End` to await.
-    async fn close_durable_scope_replay(
-        &mut self,
-        begin_index: OplogIndex,
-        span_finished: Option<golem_common::model::oplog::SpanFinished>,
-    ) -> Result<(), WorkerExecutorError> {
-        match self.state.take_durable_scope_replay_handle(begin_index) {
-            Some(handle) => {
-                match self
-                    .state
-                    .replay_state
-                    .await_resolution_outcome(handle)
-                    .await?
-                {
-                    concurrent::ResolutionOutcome::Resolved(
-                        concurrent::Resolution::Completed { .. },
-                    ) => {}
-                    concurrent::ResolutionOutcome::Resolved(
-                        concurrent::Resolution::Cancelled { .. },
-                    ) => {
-                        return Err(WorkerExecutorError::unexpected_oplog_entry(
-                            format!("End {{ start_index: {begin_index} }}"),
-                            format!("Cancelled {{ start_index: {begin_index} }}"),
-                        ));
-                    }
-                    concurrent::ResolutionOutcome::Resolved(
-                        concurrent::Resolution::CompletedButDiscarded {
-                            end_idx,
-                            marker_idx,
-                            ..
-                        },
-                    ) => {
-                        // Discarded completions are recorded only for accessor completion
-                        // futures; a marker referencing a durable scope `Start` means the oplog
-                        // does not match this code path.
-                        return Err(WorkerExecutorError::unexpected_oplog_entry(
-                            format!("End {{ start_index: {begin_index} }}"),
-                            format!(
-                                "End at {end_idx} marked CompletionDiscarded at {marker_idx} for a durable scope"
-                            ),
-                        ));
-                    }
-                    concurrent::ResolutionOutcome::Incomplete => {
-                        // Half-pair recovery: the scope `Start` (and any terminal marker) is
-                        // committed but the scope `End` was lost to a crash. Replay has reached the
-                        // end of the oplog, so append the missing `End` live to complete the pair.
-                        self.state
-                            .oplog
-                            .add(OplogEntry::End {
-                                timestamp: Timestamp::now_utc(),
-                                start_index: begin_index,
-                                response: None,
-                                forced_commit: true,
-                                span_finished,
-                                span_attributes: None,
-                            })
-                            .await?;
-                    }
-                }
-            }
-            None => {
-                // Opened live (or recovery switched to live at scope-open): no recorded `End` to
-                // await.
-            }
-        }
-        self.state.remove_durable_scope(begin_index)
-    }
-
     /// Best-effort mid-invocation clean status checkpoint. Called from `end_durable_function` after
     /// it commits, so the worker's `last_known_status` reflects the committed tip. Writes a
     /// checkpoint only when we are at a structurally clean boundary. The actual write is further
@@ -3716,20 +3480,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
 
         let scope_name = HostFunctionName::Custom("<scope:transaction>".to_string());
-        let invocation_id =
-            self.direct_call_invocation_id(&DurableFunctionType::WriteRemoteTransaction(None))?;
+        let invocation_id = self.direct_call_invocation_id(&DurableFunctionType::WriteRemote)?;
         // A transaction begun after the live transition claims first while unclaimed retained
         // `Start`s exist (see `WorkerState::durable_call_is_live`) and begins a fresh live
         // transaction only once replay reports that no scope `Start` remains.
         let claimed_scope = if self.state.durable_call_is_live() {
             None
         } else {
-            self.claim_durable_scope_start(
-                &scope_name,
-                &DurableFunctionType::WriteRemoteTransaction(None),
-                invocation_id,
-            )
-            .await?
+            self.claim_transaction_start(&scope_name, invocation_id)
+                .await?
         };
 
         let Some((scope_start_index, scope_handle)) = claimed_scope else {
@@ -3742,7 +3501,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 invocation_id,
                 observational_owner: None,
                 request: None,
-                durable_function_type: DurableFunctionType::WriteRemoteTransaction(None),
+                durable_function_type: DurableFunctionType::WriteRemote,
                 span_started: None,
             };
             let begin_index = self
@@ -3760,12 +3519,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
             // The transaction scope is now open until commit/rollback; block checkpoints. Opened
             // live, so there is no recorded scope `End` to await on close.
-            self.state.push_durable_scope(
-                begin_index,
-                DurableScopeKind::Transaction,
-                invocation_id,
-                None,
-            );
+            self.state
+                .open_transaction_protocol(begin_index, invocation_id, None);
             self.state.current_retry_point = begin_index;
 
             let (tx_id, tx) = match handler.create_new().await {
@@ -3802,9 +3557,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 matches!(entry, OplogEntry::BeginRemoteTransaction { .. })
             });
         let Some(begin_entry) = begin_entry else {
-            self.state.push_durable_scope(
+            self.state.open_transaction_protocol(
                 scope_start_index,
-                DurableScopeKind::Transaction,
                 invocation_id,
                 Some(scope_handle),
             );
@@ -3855,12 +3609,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let scope_replay_handle = Some(scope_handle);
 
         // Historical statements replay before the terminal resolves external transaction status.
-        self.state.push_durable_scope(
-            result,
-            DurableScopeKind::Transaction,
-            invocation_id,
-            scope_replay_handle,
-        );
+        self.state
+            .open_transaction_protocol(result, invocation_id, scope_replay_handle);
         self.state.current_retry_point = original_begin_index;
 
         Ok((result, tx))
@@ -3872,7 +3622,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<
         Option<golem_common::model::oplog::payload::types::SerializableRdbmsTransactionTerminal>,
     > {
-        let Some(handle) = self.state.take_durable_scope_replay_handle(begin_index) else {
+        let Some(handle) = self.state.take_transaction_replay_handle(begin_index) else {
             return Ok(None);
         };
         match self
@@ -3897,7 +3647,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 else {
                     return Err(anyhow!("Invalid transaction terminal response"));
                 };
-                self.state.remove_durable_scope(begin_index)?;
+                self.state.close_transaction_protocol(begin_index)?;
                 Ok(Some(response.outcome))
             }
             concurrent::ResolutionOutcome::Incomplete => Ok(None),
@@ -3950,7 +3700,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .worker()
             .commit_oplog_and_update_state(CommitLevel::Always)
             .await?;
-        self.state.remove_durable_scope(begin_index)?;
+        self.state.close_transaction_protocol(begin_index)?;
         self.maybe_mid_invocation_checkpoint().await;
         Ok(())
     }
@@ -7223,10 +6973,6 @@ impl PendingReplayToLive {
         self.role
     }
 
-    pub(crate) async fn finish(self) -> Result<FinishReplayToLive, WorkerExecutorError> {
-        self.finish_at(None).await
-    }
-
     pub(crate) async fn finish_at(
         self,
         boundary: Option<
@@ -7349,48 +7095,6 @@ async fn begin_replay_to_live<Ctx: WorkerCtx>(
     )
     .await?;
     match replay_state.switch_to_live(linear_memory, role).await? {
-        ReplayToLiveOutcome::ReplayResumed => Ok(BeginReplayToLive::ReplayResumed),
-        ReplayToLiveOutcome::Live { replay_target } => {
-            Ok(BeginReplayToLive::Pending(PendingReplayToLive {
-                replay_target,
-                role,
-                replaying_incomplete_entity,
-                tool_entity,
-                tool_operation,
-                local_live_tail,
-            }))
-        }
-    }
-}
-
-async fn finish_replay_to_live_from_settling<Ctx: WorkerCtx>(
-    replaying_incomplete_entity: bool,
-    tool_entity: bool,
-    tool_operation: Option<tool::operation::OwnerToolOperation>,
-    public_state: &PublicDurableWorkerState<Ctx>,
-    linear_memory: &LinearMemoryTracker,
-    replay_state: &ReplayState,
-    role: ReplayToLiveRole,
-    local_live_tail: Arc<AtomicBool>,
-    replay_target: OplogIndex,
-) -> Result<BeginReplayToLive, WorkerExecutorError> {
-    await_incomplete_tool_attachment_reconstruction(
-        replaying_incomplete_entity,
-        tool_entity,
-        tool_operation.as_ref(),
-        replay_state,
-    )
-    .await?;
-    activate_incomplete_entity_linear_memory(
-        replaying_incomplete_entity,
-        public_state,
-        linear_memory,
-    )
-    .await?;
-    match replay_state
-        .finish_settling_to_live(linear_memory, role, replay_target)
-        .await?
-    {
         ReplayToLiveOutcome::ReplayResumed => Ok(BeginReplayToLive::ReplayResumed),
         ReplayToLiveOutcome::Live { replay_target } => {
             Ok(BeginReplayToLive::Pending(PendingReplayToLive {
@@ -7968,7 +7672,10 @@ mod tests {
 
         assert_eq!(pending.replay_target(), OplogIndex::from_u64(42));
         assert!(!local_live_tail.load(Ordering::Acquire));
-        assert_eq!(pending.finish().await.unwrap(), FinishReplayToLive::Live);
+        assert_eq!(
+            pending.finish_at(None).await.unwrap(),
+            FinishReplayToLive::Live
+        );
         assert!(local_live_tail.load(Ordering::Acquire));
 
         let dropped_tail = Arc::new(AtomicBool::new(false));
@@ -8299,13 +8006,6 @@ mod tests {
             ),
             (
                 SnapshotBoundaryConditions {
-                    open_durable_scope: true,
-                    ..Default::default()
-                },
-                SnapshotBoundaryBlocker::OpenDurableScope,
-            ),
-            (
-                SnapshotBoundaryConditions {
                     snapshotting: true,
                     ..Default::default()
                 },
@@ -8337,15 +8037,14 @@ mod tests {
 
     #[test]
     fn snapshot_boundary_any_condition_combination_blocks() {
-        // Exhaustive truth table over the five conditions: a snapshot is admitted iff every
+        // Exhaustive truth table over the four conditions: a snapshot is admitted iff every
         // condition is clear, and the reported blocker is always one of the set conditions.
-        for bits in 0u32..32 {
+        for bits in 0u32..16 {
             let conditions = SnapshotBoundaryConditions {
                 replaying: bits & 1 != 0,
-                open_durable_scope: bits & 2 != 0,
+                in_flight_host_call: bits & 2 != 0,
                 snapshotting: bits & 4 != 0,
-                in_flight_host_call: bits & 8 != 0,
-                open_tool_attachment: bits & 16 != 0,
+                open_tool_attachment: bits & 8 != 0,
             };
             let blocker = conditions.blocker();
             assert_eq!(
@@ -8356,7 +8055,6 @@ mod tests {
             if let Some(blocker) = blocker {
                 let named_condition_is_set = match blocker {
                     SnapshotBoundaryBlocker::Replaying => conditions.replaying,
-                    SnapshotBoundaryBlocker::OpenDurableScope => conditions.open_durable_scope,
                     SnapshotBoundaryBlocker::Snapshotting => conditions.snapshotting,
                     SnapshotBoundaryBlocker::InFlightHostCall => conditions.in_flight_host_call,
                     SnapshotBoundaryBlocker::OpenToolAttachment => conditions.open_tool_attachment,
@@ -8375,17 +8073,17 @@ mod tests {
         // checkpoint is admitted iff every condition is clear.
         for bits in 0u32..8 {
             let replaying = bits & 1 != 0;
-            let open_durable_scope = bits & 2 != 0;
+            let in_flight_host_call = bits & 2 != 0;
             let snapshotting = bits & 4 != 0;
             assert_eq!(
                 PrivateDurableWorkerState::clean_checkpoint_boundary(
                     replaying,
-                    open_durable_scope,
+                    in_flight_host_call,
                     snapshotting,
                 ),
                 bits == 0,
                 "checkpoint must be admitted iff no condition is set; replaying: {replaying}, \
-                 open_durable_scope: {open_durable_scope}, \
+                 in_flight_host_call: {in_flight_host_call}, \
                  snapshotting: {snapshotting}"
             );
         }
@@ -8395,17 +8093,16 @@ mod tests {
     fn snapshot_boundary_is_checkpoint_boundary_without_live_resources() {
         // The documented sync invariant between the two predicates: `blocker() == None` is
         // equivalent to a clean checkpoint without in-flight calls or open tool attachments.
-        for bits in 0u32..32 {
+        for bits in 0u32..16 {
             let conditions = SnapshotBoundaryConditions {
                 replaying: bits & 1 != 0,
-                open_durable_scope: bits & 2 != 0,
+                in_flight_host_call: bits & 2 != 0,
                 snapshotting: bits & 4 != 0,
-                in_flight_host_call: bits & 8 != 0,
-                open_tool_attachment: bits & 16 != 0,
+                open_tool_attachment: bits & 8 != 0,
             };
             let at_checkpoint_boundary = PrivateDurableWorkerState::clean_checkpoint_boundary(
                 conditions.replaying,
-                conditions.open_durable_scope,
+                conditions.in_flight_host_call,
                 conditions.snapshotting,
             );
             assert_eq!(
@@ -10040,32 +9737,11 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
     stderr_entries.join("")
 }
 
-/// The kind of a durable scope, identified by the `OplogIndex` of its `Start` entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DurableScopeKind {
-    /// A batched remote write scope (`WriteRemoteBatched(None)`).
-    BatchedWrite,
-    /// A remote transaction scope.
-    Transaction,
-}
-
-/// A currently open durable scope. Durable scopes are first-class `Start`/`End` pairs
-/// (batched writes, non-idempotent writes, transactions) identified by their `Start` index.
-/// The innermost open scope provides the `parent_start_index` for any `Start` written while
-/// it is open, and contributes to the effective retry point (see `effective_retry_point`).
-#[derive(Debug)]
-struct ActiveDurableScope {
-    start_index: OplogIndex,
-    #[allow(dead_code)]
-    kind: DurableScopeKind,
-    /// The invocation id of the call that opened the scope. Calls made inside the scope record
-    /// the same id.
-    invocation_id: Option<DurableInvocationId>,
-    /// During replay, the resolver handle for this scope's `End`: registered when the scope
-    /// `Start` is claimed, awaited (and taken) when the scope closes. `None` on the live path (the
-    /// scope `End` is written, not replayed) and once the handle has been taken by the closing
-    /// `end_function` / transaction terminal.
+/// Resident ownership of a transaction protocol's terminal and checkpoint blocker.
+struct TransactionProtocol {
+    _invocation_id: Option<DurableInvocationId>,
     replay_end: Option<concurrent::ReplayCallHandle>,
+    _live_call_permit: concurrent::LiveCallPermit,
 }
 
 #[derive(Debug)]
@@ -10280,22 +9956,8 @@ struct PrivateDurableWorkerState {
     /// marker, so an overlapping call completing cannot clobber a sibling's grouping.
     current_retry_point: OplogIndex,
 
-    /// Currently open durable scopes: batched / remote writes
-    /// (`Start`..`End`) and remote transactions (`Start`..`End` wrapping the transaction markers).
-    /// Maintained by `begin_function`/`end_function` and the transaction lifecycle functions.
-    ///
-    /// While any such scope is open, the current oplog tip sits inside it, so a later trap/replay
-    /// can append a jump that deletes the tip — making a mid-invocation status checkpoint at the tip
-    /// unsafe (see `at_clean_checkpoint_boundary`). Only the *set* of open scopes matters for this.
-    ///
-    /// Durable scopes are **not** strictly nested: HTTP / RPC scopes are long-lived and overlap as
-    /// siblings (one opens while another is still pending), closing in arbitrary order. So this is
-    /// an order-independent collection, not a stack: `remove_durable_scope` removes the closed scope
-    /// wherever it is and hard-errors only if it was never open. `parent_start_index` is therefore
-    /// **not** derived from this collection (which scope is "innermost" is meaningless for siblings)
-    /// — it is threaded explicitly from the owning call/resource. A fresh state is built per worker
-    /// incarnation, so a scope left open by a trap is cleared on restart.
-    active_durable_scopes: Vec<ActiveDurableScope>,
+    /// Transaction-owned protocol terminals. Each entry holds a host-call permit until closed.
+    transaction_protocols: HashMap<OplogIndex, TransactionProtocol>,
 
     /// Number of live durable host calls currently in flight, including marker persistence.
     live_host_calls: Arc<AtomicUsize>,
@@ -10651,7 +10313,7 @@ impl PrivateDurableWorkerState {
             }),
             pending_update: tokio::sync::Mutex::new(pending_update),
             current_retry_point: OplogIndex::INITIAL,
-            active_durable_scopes: Vec::new(),
+            transaction_protocols: HashMap::new(),
             live_host_calls: Arc::new(AtomicUsize::new(0)),
             tail_work,
             invocation_deadline_exceeded: Arc::new(AtomicBool::new(false)),
@@ -10719,138 +10381,45 @@ impl PrivateDurableWorkerState {
             .insert(name.to_string(), None);
     }
 
-    /// The `parent_start_index` to attach to the host-call `Start` of a durable call, given the
-    /// function type and the `begin_index` returned by `begin_function`. This is derived
-    /// *explicitly* from the call itself, never from the set of temporally-open scopes (which scope
-    /// is "innermost" is meaningless when long-lived sibling scopes overlap):
-    ///
-    /// - if the call opened its own durable scope (non-idempotent `WriteRemote` /
-    ///   `WriteRemoteBatched(None)`), its host-call `Start` nests inside that scope (`begin_index`);
-    /// - otherwise it nests inside the enclosing scope encoded in the function type
-    ///   (`WriteRemoteBatched(Some)` / `WriteRemoteTransaction(Some)`), if any;
-    /// - otherwise it is a top-level call with no parent.
-    fn child_parent_start_index(
-        &self,
-        function_type: &DurableFunctionType,
-        begin_index: OplogIndex,
-    ) -> Option<OplogIndex> {
-        if self.opens_durable_scope(function_type) {
-            Some(begin_index)
-        } else {
-            match function_type {
-                DurableFunctionType::WriteRemoteBatched(Some(idx))
-                | DurableFunctionType::WriteRemoteTransaction(Some(idx)) => Some(*idx),
-                _ => None,
-            }
-        }
-    }
-
-    /// Whether a durable function of this `function_type` opens a durable scope — a first-class
-    /// `Start`/`End` pair, opened by [`DurableWorkerCtx::begin_function`] and closed by
-    /// [`DurableWorkerCtx::end_function`] — namely a non-idempotent remote write or the first
-    /// (`None`) call of a batched remote write.
-    ///
-    /// Unpersisted execution turns off persistence entirely, and `persist`/`replay` skip
-    /// `end_function`, so no scope must be opened either: otherwise the scope `Start` would be
-    /// committed with no matching `End`, corrupting later replay.
-    /// An unpersisted execution never straddles a single scope's begin/end, so guarding both ends
-    /// with the same predicate keeps the durable-scope stack balanced.
-    fn opens_durable_scope(&self, function_type: &DurableFunctionType) -> bool {
-        !self.durability_is_suppressed()
-            && matches!(
-                *function_type,
-                DurableFunctionType::WriteRemoteBatched(None)
-            )
-    }
-
-    /// Opens a durable scope identified by its `Start` index. Must be balanced by
-    /// `remove_durable_scope` on the matching `End`/`Cancelled`. `replay_end` is the resolver handle
-    /// for the scope `End` when the scope was claimed during replay, or `None` on the live
-    /// path.
-    fn push_durable_scope(
+    fn open_transaction_protocol(
         &mut self,
         start_index: OplogIndex,
-        kind: DurableScopeKind,
         invocation_id: Option<DurableInvocationId>,
         replay_end: Option<concurrent::ReplayCallHandle>,
     ) {
-        self.active_durable_scopes.push(ActiveDurableScope {
-            start_index,
-            kind,
-            invocation_id,
+        let protocol = TransactionProtocol {
+            _invocation_id: invocation_id,
             replay_end,
-        });
+            _live_call_permit: concurrent::LiveCallPermit::new(self.live_host_calls.clone()),
+        };
+        assert!(
+            self.transaction_protocols
+                .insert(start_index, protocol)
+                .is_none()
+        );
     }
 
-    /// The invocation id of the open durable scope at `start_index`, or `None` when no such scope
-    /// is open.
-    fn durable_scope_invocation_id(
-        &self,
-        start_index: OplogIndex,
-    ) -> Option<Option<DurableInvocationId>> {
-        self.active_durable_scopes
-            .iter()
-            .find(|scope| scope.start_index == start_index)
-            .map(|scope| scope.invocation_id)
-    }
-
-    /// Takes the resolver handle for the scope `End` of the open scope at `start_index`, if one was
-    /// registered during replay. Leaves the scope open (it is closed by `remove_durable_scope`
-    /// after the `End` has been awaited). Returns `None` if the scope was opened live or the handle
-    /// was already taken.
-    fn take_durable_scope_replay_handle(
+    fn take_transaction_replay_handle(
         &mut self,
         start_index: OplogIndex,
     ) -> Option<concurrent::ReplayCallHandle> {
-        self.active_durable_scopes
-            .iter_mut()
-            .find(|scope| scope.start_index == start_index)
-            .and_then(|scope| scope.replay_end.take())
+        self.transaction_protocols
+            .get_mut(&start_index)
+            .and_then(|protocol| protocol.replay_end.take())
     }
 
-    /// Whether the open durable scope at `start_index` closes through the replay resolver (its
-    /// `Start` was claimed during replay and its `End` is awaited) rather than by appending a live
-    /// `End`. A scope claimed by a Store that already published live (a late owner adopting a
-    /// retained scope `Start`) still resolves through the cursor, which is then at its target so
-    /// the awaited `End` is either already delivered or reported incomplete without parking. A
-    /// Store that continued live locally while the shared cursor still replays (an incomplete
-    /// entity past a deleted region) appends its `End` live, as it must not park on cursor
-    /// progress it cannot drive.
-    fn durable_scope_replays(&self, start_index: OplogIndex) -> bool {
-        self.active_durable_scopes
-            .iter()
-            .any(|scope| scope.start_index == start_index && scope.replay_end.is_some())
-            && (!self.is_live() || self.replay_state.is_live())
-    }
-
-    fn is_durable_scope_open(&self, start_index: OplogIndex) -> bool {
-        self.active_durable_scopes
-            .iter()
-            .any(|scope| scope.start_index == start_index)
-    }
-
-    /// Closes the durable scope opened at `start_index`. Durable scopes are not strictly nested
-    /// (long-lived HTTP / RPC scopes overlap as siblings and close in arbitrary order), so the
-    /// closed scope is removed wherever it is in the collection. It is a hard error only if the
-    /// scope was never open, which would mean the begin/end bookkeeping got out of sync.
-    fn remove_durable_scope(&mut self, start_index: OplogIndex) -> Result<(), WorkerExecutorError> {
-        match self
-            .active_durable_scopes
-            .iter()
-            .position(|scope| scope.start_index == start_index)
-        {
-            Some(pos) => {
-                self.active_durable_scopes.remove(pos);
-                Ok(())
-            }
-            None => Err(WorkerExecutorError::runtime(format!(
-                "Tried to close durable scope {start_index} but it is not open; open scopes: {:?}",
-                self.active_durable_scopes
-                    .iter()
-                    .map(|s| s.start_index)
-                    .collect::<Vec<_>>()
-            ))),
-        }
+    fn close_transaction_protocol(
+        &mut self,
+        start_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        self.transaction_protocols
+            .remove(&start_index)
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime(format!(
+                    "Transaction protocol {start_index} is not open"
+                ))
+            })?;
+        Ok(())
     }
 
     fn dropped_call_event_sender(
@@ -11053,12 +10622,12 @@ impl PrivateDurableWorkerState {
     }
 
     /// Whether the current oplog tip is a structurally clean boundary at which a mid-invocation
-    /// status checkpoint may be taken: we are live, no durable scope is open, and snapshotting
+    /// status checkpoint may be taken: we are live, no host call is in flight, and snapshotting
     /// is not active.
     pub fn at_clean_checkpoint_boundary(&self) -> bool {
         Self::clean_checkpoint_boundary(
             !self.is_live(),
-            !self.active_durable_scopes.is_empty(),
+            self.has_in_flight_live_host_calls(),
             self.durability_is_suppressed(),
         )
     }
@@ -11068,10 +10637,10 @@ impl PrivateDurableWorkerState {
     /// boundary is clean iff all of them are `false`.
     fn clean_checkpoint_boundary(
         replaying: bool,
-        open_durable_scope: bool,
+        in_flight_host_call: bool,
         snapshotting: bool,
     ) -> bool {
-        !replaying && !open_durable_scope && !snapshotting
+        !replaying && !in_flight_host_call && !snapshotting
     }
 
     /// The first condition currently blocking a snapshot, or `None` when the worker is at a safe
@@ -11083,7 +10652,7 @@ impl PrivateDurableWorkerState {
     /// but whose `End`/`Cancelled` is recorded after it would leave a terminal whose `Start` the
     /// post-snapshot replay never sees (the orphan terminal is drained harmlessly, but the call
     /// itself cannot be restored from the snapshot). Snapshots are therefore only taken at a
-    /// clean checkpoint boundary (no open durable scopes and no snapshotting)
+    /// clean checkpoint boundary (no in-flight host calls and no snapshotting)
     /// with no durable host call in flight or tool attachment needing the skipped history.
     ///
     /// The sampled conditions must stay in sync with [`Self::at_clean_checkpoint_boundary`]:
@@ -11092,7 +10661,6 @@ impl PrivateDurableWorkerState {
     pub fn snapshot_boundary_blocker(&self) -> Option<SnapshotBoundaryBlocker> {
         SnapshotBoundaryConditions {
             replaying: !self.is_live(),
-            open_durable_scope: !self.active_durable_scopes.is_empty(),
             snapshotting: self.snapshotting_mode,
             in_flight_host_call: self.has_in_flight_live_host_calls(),
             open_tool_attachment: self.replay_state.has_open_tool_attachments(),
@@ -11145,8 +10713,6 @@ impl PrivateDurableWorkerState {
 struct SnapshotBoundaryConditions {
     /// The worker is still replaying its oplog (snapshots are only taken in live mode).
     replaying: bool,
-    /// A durable scope is open: its `Start`/`End` pair would straddle the snapshot cut.
-    open_durable_scope: bool,
     /// A snapshotting function (save/load) call is already in progress.
     snapshotting: bool,
     /// A live durable host call is in flight: its `Start` may precede the cut while its
@@ -11162,8 +10728,6 @@ impl SnapshotBoundaryConditions {
     fn blocker(self) -> Option<SnapshotBoundaryBlocker> {
         if self.replaying {
             Some(SnapshotBoundaryBlocker::Replaying)
-        } else if self.open_durable_scope {
-            Some(SnapshotBoundaryBlocker::OpenDurableScope)
         } else if self.snapshotting {
             Some(SnapshotBoundaryBlocker::Snapshotting)
         } else if self.in_flight_host_call {
@@ -11181,7 +10745,6 @@ impl SnapshotBoundaryConditions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SnapshotBoundaryBlocker {
     Replaying,
-    OpenDurableScope,
     Snapshotting,
     InFlightHostCall,
     OpenToolAttachment,
@@ -11191,7 +10754,6 @@ impl Display for SnapshotBoundaryBlocker {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Replaying => write!(f, "the worker is still replaying its oplog"),
-            Self::OpenDurableScope => write!(f, "a durable scope is still open"),
             Self::Snapshotting => write!(f, "a snapshot function call is already in progress"),
             Self::InFlightHostCall => write!(f, "a durable host call is still in flight"),
             Self::OpenToolAttachment => {

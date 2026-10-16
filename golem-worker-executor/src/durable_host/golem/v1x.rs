@@ -1341,12 +1341,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             // The forked worker must inherit the source state from the source-side fork call's
             // durable replay point. The source call completes with `ForkResult::Original`.
             // Force a commit so the eager `Start` is durable for the source's crash recovery.
-            let copied_scope_start = self
-                .state
-                .opens_durable_scope(&DurableFunctionType::WriteRemote)
-                .then_some(handle.begin_index());
-            let oplog_index_cut_off =
-                copied_scope_start.unwrap_or_else(|| handle.start_index().previous());
+            let copied_scope_start = None;
+            let oplog_index_cut_off = handle.start_index().previous();
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)

@@ -495,6 +495,8 @@ Both resources, once constructed, provide a `get-next` function that returns a c
 
 The low-level `golem:durability@1.6.0` interface is for SDK and library authors who need to wrap raw host effects as one durable operation. Application code should use the normal high-level SDK APIs and Golem's built-in durability instead.
 
+The durable function type has four cases: `ReadLocal`, `WriteLocal`, `ReadRemote`, and `WriteRemote` (spelled `read-local`, `write-local`, `read-remote`, and `write-remote` in WIT). The cases classify local or remote reads and writes. They carry no oplog index. The executor records nesting separately in `Start.parent_start_index`; a nested remote write is still `WriteRemote`.
+
 A library opens the operation with `begin-custom-durable-invocation`, passing a stable function name, a typed request, and a durable function type. The executor synchronously allocates a replay-stable UUID before the host call can yield. The UUID identifies the logical call; the request remains its independently recorded and validated semantic input. This separation means a unit/no-input request remains correct for generators while concurrent calls still have distinct identities. The result selects one of two paths:
 
 - `live(live-invocation)`: perform the complete operation while the returned resource is active, then consume the resource by calling its static `finish` function with the typed result.

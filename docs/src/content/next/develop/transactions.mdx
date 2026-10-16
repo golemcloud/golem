@@ -6,6 +6,8 @@ The SDKs provide saga helpers for workflows that need **compensation actions** a
 
 Each host call remains durable on its own. A saga registers compensations for successful steps and runs them in reverse order when a later step fails. Compensation is a new external action, not deletion of the earlier effect.
 
+Sagas do not provide atomicity or isolation. Earlier calls and their compensations remain in history, and other tasks can observe effects before compensation runs.
+
 The SDK provides support for two different types of transactions:
 
 - **fallible transactions** are only dealing with domain errors
@@ -13,7 +15,7 @@ The SDK provides support for two different types of transactions:
 
 ### Fallible transactions
 
-Many times external operations (such as HTTP calls to remote hosts) need to be executed transactionally. If some operations failed, the transaction needs to be rolled back; compensation actions need to undo whatever the already successfully performed operations did.
+A workflow can use compensations to counter earlier successful operations when a later operation fails. For example, a compensation can request a refund after a charge. It does not erase the charge or hide it from other tasks, and the compensation itself can fail.
 
 A **fallible transaction** deals with domain errors. Successful steps register compensations. Propagating a domain error out of the transaction body triggers these compensations in reverse order; handling the error inside the body does not automatically trigger rollback. The failing step has no registered compensation. TypeScript, Rust, Scala and Go stop at the first compensation error and report partial rollback. Effect's `withFallibleCompensation` continues the remaining compensations and reports the first compensation error.
 
@@ -23,7 +25,7 @@ A **fallible transaction** deals with domain errors. Successful steps register c
         passing an async callback that can execute operations on the open transaction (see below).
     </Tabs.Tab>
     <Tabs.Tab>
-        In Effect TypeScript, wrap an Effect program with `Saga.fallibleTransaction`. Expected typed failures trigger registered compensations and return a `TransactionFailure` through the Effect error channel.
+        In Effect TypeScript, wrap an Effect program with `Saga.fallibleTransaction`. Expected typed failures trigger registered compensations and return a `TransactionFailure` through the Effect error channel. Structured cancellation also drains registered compensations, then propagates interruption without starting another attempt. Deterministic defects do not trigger compensation.
     </Tabs.Tab>
     <Tabs.Tab>
         In Rust, a fallible transaction can be executed using the async `fallible_transaction` function in

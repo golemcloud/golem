@@ -5814,9 +5814,7 @@
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "ReadLocal" } }, "additionalProperties": false },
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "WriteLocal" } }, "additionalProperties": false },
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "ReadRemote" } }, "additionalProperties": false },
-        { "type": "object", "required": ["type"], "properties": { "type": { "const": "WriteRemote" } }, "additionalProperties": false },
-        { "type": "object", "required": ["type"], "properties": { "type": { "const": "WriteRemoteBatched" }, "index": { "type": ["integer", "null"], "minimum": 0 } }, "additionalProperties": false },
-        { "type": "object", "required": ["type"], "properties": { "type": { "const": "WriteRemoteTransaction" }, "index": { "type": ["integer", "null"], "minimum": 0 } }, "additionalProperties": false }
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "WriteRemote" } }, "additionalProperties": false }
       ]
     },
     "PublicAgentInvocation": {

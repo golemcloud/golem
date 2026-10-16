@@ -52,8 +52,7 @@ impl HttpSpanCleanupRecorder {
             replay: ctx.state.replay_state.clone(),
             live: ctx.is_live(),
             persisted: persisted && !ctx.state.snapshotting_mode,
-            parent: ctx
-                .child_parent_start_index(&DurableFunctionType::ReadLocal, OplogIndex::INITIAL),
+            parent: ctx.entity_parent_start_index(),
             owner,
             send_start_index,
             invocation_id,
@@ -433,14 +432,6 @@ pub enum DropEvent {
         lifecycle: Arc<CustomBeginLifecycle>,
         terminal: Option<tokio::task::JoinHandle<Result<Option<OplogIndex>, WorkerExecutorError>>>,
     },
-    /// A guest-cancelled accessor future may leave a caller-managed durable scope with no code path
-    /// back into the resource's `drop`. Close that parent scope from the next safe store-access
-    /// window. The close is idempotent because the resource may be dropped before this event drains.
-    CloseDurableScope {
-        function_type: DurableFunctionType,
-        begin_index: OplogIndex,
-        span_finished: Option<golem_common::model::oplog::SpanFinished>,
-    },
     /// An invocation-context span whose owning resource was dropped from a synchronous host
     /// context (e.g. a p3 HTTP response dropped before its body was consumed). Finish it from the
     /// next drain point.
@@ -620,30 +611,6 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
                 ctx.state.active_custom_invocations.remove(&start_index);
             }
             lifecycle.release_initiation();
-        }
-        DropEvent::CloseDurableScope {
-            function_type,
-            begin_index,
-            span_finished,
-        } => {
-            if ctx.state.is_durable_scope_open(begin_index) {
-                if let Some(span_finished) = span_finished {
-                    ctx.end_durable_function_with_span(
-                        &function_type,
-                        begin_index,
-                        false,
-                        span_finished.clone(),
-                    )
-                    .await
-                    .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?;
-                    finish_span_in_memory(ctx, &span_finished.span_id)
-                        .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?;
-                } else {
-                    ctx.end_durable_function(&function_type, begin_index, false)
-                        .await
-                        .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?;
-                }
-            }
         }
         DropEvent::FinishSpan { span_id } => {
             finish_span_in_memory(ctx, &span_id)
@@ -995,57 +962,6 @@ where
                         });
                     }
                     lifecycle.release_initiation();
-                }
-            }
-            DropEvent::CloseDurableScope {
-                function_type,
-                begin_index,
-                span_finished,
-            } => {
-                let function_type = function_type.clone();
-                let begin_index = *begin_index;
-                let span_finished = span_finished.clone();
-                match end_durable_function_access_if_open_with_span(
-                    store,
-                    get_ctx,
-                    function_type,
-                    begin_index,
-                    false,
-                    span_finished.clone(),
-                )
-                .await
-                {
-                    Ok(true) => {
-                        if let Some(span_finished) = span_finished
-                            && let Err(err) = store.with(|mut access| {
-                                finish_span_in_memory(
-                                    get_ctx(access.data_mut()),
-                                    &span_finished.span_id,
-                                )
-                            })
-                            && first_error.is_none()
-                        {
-                            first_error = Some(TerminalCallError::new(
-                                err,
-                                store.with(|mut access| {
-                                    ambient_trap_context(get_ctx(access.data_mut()))
-                                }),
-                            ));
-                        }
-                        recorded += 1;
-                    }
-                    Ok(false) => {}
-                    Err(err) => {
-                        if first_error.is_none() {
-                            first_error = Some(TerminalCallError::new(
-                                err,
-                                store.with(|mut access| {
-                                    let ctx = get_ctx(access.data_mut());
-                                    ambient_trap_context(ctx)
-                                }),
-                            ));
-                        }
-                    }
                 }
             }
             DropEvent::FinishSpan { span_id } => {

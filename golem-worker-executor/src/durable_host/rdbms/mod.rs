@@ -14,15 +14,16 @@
 
 use crate::durable_host::authorization::targets::{RdbmsEngine, rdbms_sql_targets, rdbms_target};
 use crate::durable_host::concurrent::{
-    CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
+    AccessClaimOptions, CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
 };
-use crate::durable_host::durability::HostFailureKind;
+use crate::durable_host::durability::{ClassifiedHostError, DurabilityHost, HostFailureKind};
 use crate::durable_host::keyvalue::environment_owner;
 use crate::durable_host::rdbms::serialized::RdbmsRequest;
 use crate::durable_host::{
-    DurabilityHost, DurableWorkerCtx, InternalRetryResult, LiveAuthorizationPermit,
-    RemoteTransactionHandler,
+    DurableWorkerCtx, InternalRetryResult, LiveAuthorizationPermit, RemoteTransactionHandler,
 };
+use crate::services::HasWorker;
+use crate::services::oplog::CommitLevel;
 use crate::services::rdbms::{DbResult, DbRow, RdbmsType};
 use crate::services::rdbms::{RdbmsError, RdbmsService, RdbmsTransactionStatus, RdbmsTypeService};
 use crate::workerctx::WorkerCtx;
@@ -596,19 +597,29 @@ where
     } else {
         None
     };
-    let begin_index = ctx
-        .begin_durable_function(
-            &DurableFunctionType::WriteRemoteBatched(None),
-            "golem::rdbms::db-connection::query-stream",
-        )
-        .await?;
-    let mut handle = DurableCallSession::<T::ConnQueryStream, NotCancellable>::start(
+    let mut handle = DurableCallSession::<T::ConnQueryStream, NotCancellable>::start_with_options(
         ctx,
         HostRequestNoInput {},
-        DurableFunctionType::WriteRemoteBatched(Some(begin_index)),
+        DurableFunctionType::WriteRemote,
+        AccessClaimOptions {
+            incomplete_repair_authorized_by_scope: true,
+            ..Default::default()
+        },
     )
     .await?;
+    let begin_index = handle.start_index();
     let reconstructed = !handle.is_live();
+    if handle.is_live()
+        && handle.is_persisted()
+        && let Err(error) = ctx
+            .public_state
+            .worker()
+            .commit_oplog_and_update_state(CommitLevel::Always)
+            .await
+    {
+        handle.abandon_for_trap();
+        return Err(error.into());
+    }
 
     let result = 'result: {
         if !handle.is_live() {
@@ -697,16 +708,7 @@ where
             let resource = ctx.as_wasi_view().table().push(entry)?;
             Ok(Ok(resource))
         }
-        Err(error) => {
-            ctx.end_durable_function(
-                &DurableFunctionType::WriteRemoteBatched(None),
-                begin_index,
-                false,
-            )
-            .await?;
-
-            Ok(Err(RdbmsError::from(error).into()))
-        }
+        Err(error) => Ok(Err(RdbmsError::from(error).into())),
     }
 }
 
@@ -755,16 +757,15 @@ where
 {
     let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
 
-    let durable_function_type = if is_db_query_stream_in_transaction(ctx, entry)? {
-        DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx))
-    } else {
-        DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx))
-    };
-
-    let mut handle = DurableCallSession::<T::StreamGetColumns, NotCancellable>::start(
+    let mut handle = DurableCallSession::<T::StreamGetColumns, NotCancellable>::start_with_options(
         ctx,
         HostRequestNoInput {},
-        durable_function_type,
+        DurableFunctionType::WriteRemote,
+        AccessClaimOptions {
+            parent_start_index: Some(begin_oplog_idx),
+            incomplete_repair_authorized_by_scope: true,
+            ..Default::default()
+        },
     )
     .await?;
 
@@ -844,16 +845,15 @@ where
 {
     let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
 
-    let durable_function_type = if is_db_query_stream_in_transaction(ctx, entry)? {
-        DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx))
-    } else {
-        DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx))
-    };
-
-    let mut handle = DurableCallSession::<T::StreamGetNext, NotCancellable>::start(
+    let mut handle = DurableCallSession::<T::StreamGetNext, NotCancellable>::start_with_options(
         ctx,
         HostRequestNoInput {},
-        durable_function_type,
+        DurableFunctionType::WriteRemote,
+        AccessClaimOptions {
+            parent_start_index: Some(begin_oplog_idx),
+            incomplete_repair_authorized_by_scope: true,
+            ..Default::default()
+        },
     )
     .await?;
 
@@ -945,19 +945,9 @@ where
 {
     ctx.observe_function_call(T::durability_result_stream_interface(), "drop");
 
-    let entry = ctx
-        .as_wasi_view()
+    ctx.as_wasi_view()
         .table()
         .delete::<RdbmsResultStreamEntry<T>>(entry)?;
-
-    if entry.transaction_handle.is_none() {
-        ctx.end_durable_function(
-            &DurableFunctionType::WriteRemoteBatched(None),
-            entry.begin_index,
-            false,
-        )
-        .await?;
-    }
 
     Ok(())
 }
@@ -1008,10 +998,15 @@ where
         None
     };
 
-    let handle = DurableCallSession::<T::TxnQuery, NotCancellable>::start(
+    let handle = DurableCallSession::<T::TxnQuery, NotCancellable>::start_with_options(
         ctx,
         request,
-        DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
+        DurableFunctionType::WriteRemote,
+        AccessClaimOptions {
+            parent_start_index: Some(begin_oplog_idx),
+            incomplete_repair_authorized_by_scope: true,
+            ..Default::default()
+        },
     )
     .await?;
 
@@ -1109,10 +1104,15 @@ where
         None
     };
 
-    let handle = DurableCallSession::<T::TxnExecute, NotCancellable>::start(
+    let handle = DurableCallSession::<T::TxnExecute, NotCancellable>::start_with_options(
         ctx,
         request,
-        DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
+        DurableFunctionType::WriteRemote,
+        AccessClaimOptions {
+            parent_start_index: Some(begin_oplog_idx),
+            incomplete_repair_authorized_by_scope: true,
+            ..Default::default()
+        },
     )
     .await?;
 
@@ -1177,12 +1177,18 @@ where
     } else {
         None
     };
-    let handle = DurableCallSession::<T::TxnQueryStream, NotCancellable>::start(
+    let handle = DurableCallSession::<T::TxnQueryStream, NotCancellable>::start_with_options(
         ctx,
         HostRequestNoInput {},
-        DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
+        DurableFunctionType::WriteRemote,
+        AccessClaimOptions {
+            parent_start_index: Some(begin_oplog_idx),
+            incomplete_repair_authorized_by_scope: true,
+            ..Default::default()
+        },
     )
     .await?;
+    let stream_parent = handle.start_index();
     let reconstructed = !handle.is_live();
 
     let result = 'result: {
@@ -1233,7 +1239,7 @@ where
                     RdbmsResultStreamState::New
                 },
                 Some(entry_rep),
-                begin_oplog_idx,
+                stream_parent,
             );
             let resource = ctx.as_wasi_view().table().push(entry)?;
             Ok(Ok(resource))
@@ -1451,7 +1457,10 @@ async fn retry_transaction_resolution<Ctx: WorkerCtx, R>(
     let properties = rdbms_retry_properties(ctx, "transaction-status", pool_key);
     ctx.try_trigger_retry(anyhow!(error.clone()), properties)
         .await?;
-    Err(anyhow!(error))
+    Err(anyhow!(ClassifiedHostError {
+        kind: HostFailureKind::Permanent,
+        message: format!("transaction status resolution exhausted at Start {begin}: {error}"),
+    }))
 }
 
 async fn db_transaction_drop<Ctx, T>(

@@ -177,6 +177,7 @@ fn live_unfinished_handle<P: DropPolicy>(
         request_upload: PendingUpload::already_durable(),
         replay: None,
         finished: false,
+        scope_replay_recovery: ScopeReplayRecovery::default().into(),
         cancellation_span_id: None,
         span_observer: None,
         parked_undelivered_replay: false,
@@ -228,6 +229,7 @@ fn synthetic_finished_handle_with_scope<P: DropPolicy>(
         request_upload: PendingUpload::already_durable(),
         replay: None,
         finished: true,
+        scope_replay_recovery: ScopeReplayRecovery::default().into(),
         cancellation_span_id: None,
         span_observer: None,
         parked_undelivered_replay: false,
@@ -2247,28 +2249,6 @@ fn can_reexecute_matches_internal_retry_eligibility() {
     assert!(controller(DurableFunctionType::ReadRemote).can_reexecute_on_incomplete_replay());
     assert!(controller(DurableFunctionType::WriteLocal).can_reexecute_on_incomplete_replay());
     assert!(controller(DurableFunctionType::WriteRemote).can_reexecute_on_incomplete_replay());
-
-    // Batched / transaction writes are not — neither the `None` (scope-opening)
-    // nor the `Some(begin_index)` (in-scope host call) variants. The `Some(..)` variants are the
-    // ones a migrated batched/transaction host call carries, so a lone committed host-call
-    // `Start` for them must hard-error on incomplete replay rather than re-execute and risk
-    // duplicating an external write (`DurableCallSession::replay` Incomplete arm).
-    assert!(
-        !controller(DurableFunctionType::WriteRemoteBatched(None))
-            .can_reexecute_on_incomplete_replay()
-    );
-    assert!(
-        !controller(DurableFunctionType::WriteRemoteBatched(Some(idx(7))))
-            .can_reexecute_on_incomplete_replay()
-    );
-    assert!(
-        !controller(DurableFunctionType::WriteRemoteTransaction(None))
-            .can_reexecute_on_incomplete_replay()
-    );
-    assert!(
-        !controller(DurableFunctionType::WriteRemoteTransaction(Some(idx(9))))
-            .can_reexecute_on_incomplete_replay()
-    );
 }
 
 // ---- replay resolution classification ----

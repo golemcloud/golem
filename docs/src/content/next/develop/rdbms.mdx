@@ -108,7 +108,8 @@ The currently supported databases are:
           | { tag: 'query-parameter-failure'; val: string }
           | { tag: 'query-execution-failure'; val: string }
           | { tag: 'query-response-failure'; val: string }
-          | { tag: 'other'; val: string };
+          | { tag: 'other'; val: string }
+          | { tag: 'resource-lost'; val: string };
 
         export type SparseVec = {
           dim: number;
@@ -205,7 +206,8 @@ The currently supported databases are:
           | { tag: 'query-parameter-failure'; val: string }
           | { tag: 'query-execution-failure'; val: string }
           | { tag: 'query-response-failure'; val: string }
-          | { tag: 'other'; val: string };
+          | { tag: 'other'; val: string }
+          | { tag: 'resource-lost'; val: string };
 
         export type DbColumnType =
           | { tag: 'varchar' }
@@ -379,6 +381,7 @@ The currently supported databases are:
       final case class QueryExecutionFailure(message: String) extends DbError
       final case class QueryResponseFailure(message: String) extends DbError
       final case class Other(message: String) extends DbError
+      final case class ResourceLost(message: String) extends DbError
     }
 
     final case class DbColumn(ordinal: Long, name: String, dbTypeName: String)
@@ -483,6 +486,7 @@ The currently supported databases are:
       QueryExecutionFailure(String)
       QueryResponseFailure(String)
       Other(String)
+      ResourceLost(String)
     } derive(Debug, Eq)
 
     pub(all) struct SparseVec {
@@ -555,6 +559,7 @@ The currently supported databases are:
       QueryExecutionFailure(String)
       QueryResponseFailure(String)
       Other(String)
+      ResourceLost(String)
     } derive(Debug, Eq)
 
     pub(all) enum DbValue {
@@ -646,6 +651,7 @@ The currently supported databases are:
         QueryExecutionFailure
         QueryResponseFailure
         Other
+        ResourceLost
     )
     ```
 
@@ -1209,6 +1215,8 @@ get-next: func() -> result<option<list<db-row>>, error>;
 
 Handle the error arm before consuming columns or rows. Only a successful `none` from `get-next`
 means the stream ended. Recorded results replay unchanged. A transaction or stream that cannot
-continue after reconstruction reports typed loss at its live boundary; it does not silently rerun
-the transaction or neighboring effects. Open a new transaction explicitly and reconcile uncertain
-external outcomes before repeating business work. Loss does not prove a prior write failed.
+continue after reconstruction reports `resource-lost` (`ResourceLost` in the SDKs) at its live
+boundary. This error is permanent for that resource; retrying it does not restore the transaction
+or stream. Golem does not silently rerun the transaction or neighboring effects. Open a new
+transaction explicitly and reconcile uncertain external outcomes before repeating business work.
+Loss does not prove a prior write failed.

@@ -93,6 +93,72 @@ fn durable_invocation_id_uses_variable_length_integers() {
 }
 
 #[test]
+fn durable_function_type_contract() {
+    use golem_api_grpc::proto::golem::worker::{WrappedFunctionType, raw_oplog_entry};
+
+    for (function_type, name, tag) in [
+        (DurableFunctionType::ReadLocal, "ReadLocal", 0),
+        (DurableFunctionType::WriteLocal, "WriteLocal", 1),
+        (DurableFunctionType::ReadRemote, "ReadRemote", 2),
+        (DurableFunctionType::WriteRemote, "WriteRemote", 3),
+    ] {
+        let public = PublicDurableFunctionType::from(function_type.clone());
+        let json = serde_json::json!({ "type": name });
+        assert_eq!(serde_json::to_value(&public).unwrap(), json);
+        assert_eq!(
+            serde_json::from_value::<PublicDurableFunctionType>(json).unwrap(),
+            public
+        );
+        let proto: WrappedFunctionType = public.clone().into();
+        assert_eq!(proto.r#type, tag);
+        assert_eq!(PublicDurableFunctionType::try_from(proto).unwrap(), public);
+
+        let entry = OplogEntry::Start {
+            timestamp: Timestamp::now_utc().rounded(),
+            parent_start_index: Some(OplogIndex::from_u64(7)),
+            function_name: HostFunctionName::Custom("operation".to_string()),
+            invocation_id: None,
+            observational_owner: None,
+            request: None,
+            durable_function_type: function_type,
+            span_started: None,
+        };
+        let bytes = crate::serialization::serialize(&entry).unwrap();
+        assert_eq!(
+            crate::serialization::deserialize::<OplogEntry>(&bytes).unwrap(),
+            entry
+        );
+        let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+            entry.clone().try_into().unwrap();
+        assert_eq!(OplogEntry::try_from(proto.clone()).unwrap(), entry);
+        for invalid_tag in [4, 5, -1, 99] {
+            assert!(
+                PublicDurableFunctionType::try_from(WrappedFunctionType {
+                    r#type: invalid_tag,
+                })
+                .is_err()
+            );
+            let mut invalid = proto.clone();
+            let Some(raw_oplog_entry::Entry::Start(start)) = &mut invalid.entry else {
+                panic!("expected Start");
+            };
+            start.durable_function_type = Some(WrappedFunctionType {
+                r#type: invalid_tag,
+            });
+            assert!(OplogEntry::try_from(invalid).is_err());
+        }
+    }
+    for removed in ["WriteRemoteBatched", "WriteRemoteTransaction"] {
+        assert!(
+            serde_json::from_value::<PublicDurableFunctionType>(
+                serde_json::json!({ "type": removed, "index": 7 }),
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn start_desert_roundtrip() {
     use crate::model::invocation_context::AttributeValue;
     use crate::model::oplog::raw_types::{AttributeMap, SpanKind, SpanStarted};
@@ -2503,10 +2569,7 @@ mod scope_projection {
                     None,
                 ),
             ),
-            (
-                15,
-                start(Some(10), DurableFunctionType::WriteRemoteTransaction(None)),
-            ),
+            (15, start(Some(10), DurableFunctionType::WriteRemote)),
             (
                 16,
                 OplogEntry::BeginRemoteTransaction {
@@ -2551,10 +2614,7 @@ mod scope_projection {
     #[test]
     fn scope_projection_includes_retried_transaction_begin_marker() {
         let entries = [
-            (
-                10,
-                start(None, DurableFunctionType::WriteRemoteTransaction(None)),
-            ),
+            (10, start(None, DurableFunctionType::WriteRemote)),
             (
                 11,
                 OplogEntry::BeginRemoteTransaction {
@@ -2597,10 +2657,7 @@ mod scope_projection {
     fn scope_projection_excludes_adjacent_foreign_retried_transaction_begin_marker() {
         let entries = [
             (10, start(None, DurableFunctionType::WriteLocal)),
-            (
-                11,
-                start(Some(10), DurableFunctionType::WriteRemoteTransaction(None)),
-            ),
+            (11, start(Some(10), DurableFunctionType::WriteRemote)),
             (
                 12,
                 OplogEntry::BeginRemoteTransaction {

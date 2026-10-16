@@ -97,11 +97,8 @@ message WrappedFunctionType {
     WRITE_LOCAL = 1;
     READ_REMOTE = 2;
     WRITE_REMOTE = 3;
-    WRITE_REMOTE_BATCHED = 4;
-    WRITE_REMOTE_TRANSACTION = 5;
   }
   Type type = 1;
-  optional uint64 oplog_index = 2;
 }
 
 message PluginInstallationDescription {

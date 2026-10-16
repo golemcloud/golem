@@ -28,7 +28,6 @@ import (
 	apiOplog "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_oplog"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	witDurability "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_durability_durability"
-	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
 // GenerateIdempotencyKey returns a fresh idempotency key that is stable across
@@ -50,9 +49,7 @@ func OplogCommit(replicas uint8) {
 // ---------------------------------------------------------------------------
 
 // FunctionType selects how the executor commits and replays a custom
-// durable operation. Use ReadLocal/WriteLocal/ReadRemote/WriteRemote for the
-// common cases; the batched and transaction variants are for libraries that
-// coordinate a group of writes.
+// durable operation: ReadLocal, WriteLocal, ReadRemote, or WriteRemote.
 type FunctionType struct{ raw apiOplog.WrappedFunctionType }
 
 var (
@@ -65,27 +62,6 @@ var (
 	// WriteRemote writes to an external system (the usual choice for a side effect).
 	WriteRemote = FunctionType{apiOplog.MakeWrappedFunctionTypeWriteRemote()}
 )
-
-// WriteRemoteBatched marks a remote write that the executor may commit together
-// with adjacent batched writes. Pass the oplog index that begins the batch to
-// join an existing one; omit it to start a new batch.
-func WriteRemoteBatched(begin ...uint64) FunctionType {
-	return FunctionType{apiOplog.MakeWrappedFunctionTypeWriteRemoteBatched(optionalOplogIndex(begin))}
-}
-
-// WriteRemoteTransaction marks a remote write that participates in a durable
-// transaction. Pass the oplog index that begins the transaction to join an
-// existing one; omit it to start a new transaction.
-func WriteRemoteTransaction(begin ...uint64) FunctionType {
-	return FunctionType{apiOplog.MakeWrappedFunctionTypeWriteRemoteTransaction(optionalOplogIndex(begin))}
-}
-
-func optionalOplogIndex(begin []uint64) witTypes.Option[uint64] {
-	if len(begin) > 0 {
-		return witTypes.Some(begin[0])
-	}
-	return witTypes.None[uint64]()
-}
 
 // Spec describes one custom durable operation: which function it stands
 // for (Interface::Function, used as the persisted name) and its commit/replay

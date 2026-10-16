@@ -358,6 +358,7 @@ impl EntityInvocationDurability {
                 DurableFunctionType::WriteLocal,
                 AccessClaimOptions {
                     parent_start_index: Some(parent_start_index),
+                    incomplete_repair_authorized_by_scope: true,
                     ..AccessClaimOptions::default()
                 },
                 async move |_| Ok(request),
@@ -399,6 +400,7 @@ impl EntityInvocationDurability {
                         GolemToolInvocationRejected::HOST_FUNCTION_NAME,
                     ),
                     parent_start_index: Some(parent_start_index),
+                    incomplete_repair_authorized_by_scope: true,
                     ..AccessClaimOptions::default()
                 },
             )
@@ -1434,6 +1436,7 @@ where
         DurableFunctionType::WriteLocal,
         AccessClaimOptions {
             parent_start_index: Some(parent.start_index()),
+            incomplete_repair_authorized_by_scope: true,
             ..AccessClaimOptions::default()
         },
         async move |_| Ok(request),

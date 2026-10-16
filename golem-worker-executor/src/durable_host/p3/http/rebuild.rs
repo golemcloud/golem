@@ -24,6 +24,7 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::payload::types::{
     SerializableHttpMethod, SerializableP3HttpClientSend, SerializableP3HttpScheme,
 };
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use http::{HeaderMap, HeaderName, HeaderValue};
 use http_body_util::BodyExt as _;
 use http_body_util::combinators::UnsyncBoxBody;
@@ -112,7 +113,7 @@ pub(super) fn recorded_request_body_replayability<Ctx: WorkerCtx, U: 'static>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     rebuild: &mut P3HttpSendRebuild,
     recovery: RequestBodyRecovery,
-) -> impl std::future::Future<Output = Result<(), String>> + Send + 'static {
+) -> impl std::future::Future<Output = Result<(), WorkerExecutorError>> + Send + 'static {
     let durable_body_present = rebuild.durable_body.is_some();
     let replayed_request_body_drain = rebuild.replayed_request_body_drain.take();
     let send_start_index = rebuild.recorded_request_body;
@@ -133,13 +134,16 @@ pub(super) fn recorded_request_body_replayability<Ctx: WorkerCtx, U: 'static>(
                     .proof
                     .await
                     .map_err(|_| {
-                        "the replayed request-body drain ended before proving recording health"
-                            .to_string()
+                        WorkerExecutorError::runtime(
+                            "the replayed request-body drain ended before proving recording health",
+                        )
                     })?
                     .map_err(|error| {
-                        let message = error.to_string();
+                        let cause = error
+                            .recovery_error()
+                            .unwrap_or_else(|| WorkerExecutorError::runtime(error.to_string()));
                         recovery.transport_error(error);
-                        message
+                        cause
                     })?,
             ),
             None => None,
@@ -147,46 +151,45 @@ pub(super) fn recorded_request_body_replayability<Ctx: WorkerCtx, U: 'static>(
         let scan = scan_recorded_request_body_frames(oplog, send_start_index)
             .await
             .map_err(|error| {
-                let message =
-                    format!("the recorded request-body frames could not be read: {error}");
+                let cause = error
+                    .recovery_error()
+                    .unwrap_or_else(|| WorkerExecutorError::runtime(error.to_string()));
                 recovery.transport_error(error);
-                message
+                cause
             })?;
         match &scan.terminal {
             Some(RecordedRequestBodyTerminal::End) => {}
-            Some(RecordedRequestBodyTerminal::Error(error)) => Err(format!(
-                "the recorded request body ended with a guest body error: {error:?}"
+            Some(RecordedRequestBodyTerminal::Error(error)) => Err(WorkerExecutorError::runtime(
+                format!("the recorded request body ended with a guest body error: {error:?}"),
             ))?,
             None => {
-                return Err(
-                    "the recorded request body is incomplete (no terminal frame was recorded)"
-                        .to_string(),
-                );
+                return Err(WorkerExecutorError::runtime(
+                    "the recorded request body is incomplete (no terminal frame was recorded)",
+                ));
             }
         }
         if let Some(reproduced) = reproduced {
             if scan.covered_len != reproduced.final_length {
-                return Err(format!(
+                return Err(WorkerExecutorError::runtime(format!(
                     "the healed request-body recording covers {} bytes, but replay reproduced {} bytes",
                     scan.covered_len, reproduced.final_length
-                ));
+                )));
             }
             if scan
                 .data_frames
                 .iter()
                 .any(|frame| frame.offset.saturating_add(frame.len) > reproduced.final_length)
             {
-                return Err(
-                    "the request-body recording contains data beyond the length reproduced during replay"
-                        .to_string(),
-                );
+                return Err(WorkerExecutorError::runtime(
+                    "the request-body recording contains data beyond the length reproduced during replay",
+                ));
             }
             if scan.trailers_recorded() != reproduced.trailers_present {
-                return Err(format!(
+                return Err(WorkerExecutorError::runtime(format!(
                     "the healed request-body recording's trailer presence does not match replay (recorded: {}, reproduced: {})",
                     scan.trailers_recorded(),
                     reproduced.trailers_present
-                ));
+                )));
             }
         }
         Ok(())
@@ -366,7 +369,11 @@ pub(super) async fn resend_recorded_request<Ctx: WorkerCtx, U: 'static>(
         // live view may still be registered if its connection was torn down
         // without dropping the body — abandon it so the drain can proceed.
         durable_body.abandon_active_live_view();
-        match durable_body.drain_to_terminal().await {
+        let drained = durable_body.drain_to_terminal().await;
+        if let Some(error) = recovery.error() {
+            return ResendOutcome::RecoveryRequired(error);
+        }
+        match drained {
             DurableRequestBodyDrainOutcome::Replayable => durable_body.replayer().boxed_unsync(),
             DurableRequestBodyDrainOutcome::NotReplayable => {
                 return ResendOutcome::Refused(

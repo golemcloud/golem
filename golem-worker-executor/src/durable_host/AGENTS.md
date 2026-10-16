@@ -15,7 +15,7 @@ name, owner, optional request payload). *Observe* is the guest reading the resul
   (`store_is_live` / `is_live()` on the `DurableWorkerCtx`), never because the replay cursor is
   exhausted. Cursor exhaustion is an observation. The primary Store is live only after
   `ReplayState::switch_to_live` has settled every `HistoricalReconstruction` fence and published
-  the shared flag; an entity Store is live only after its own `PendingReplayToLive::finish` set
+  the shared flag; an entity Store is live only after its own `PendingReplayToLive::finish_at` set
   `local_live_tail` (a `ReplayingCompleted` entity Store is never live).
 - **Append** `Start` eagerly when a durable call begins and `End`/`Cancelled` when it terminates,
   through `begin_durable_function` / `end_durable_function` (`durability.rs`) and a
@@ -23,9 +23,9 @@ name, owner, optional request payload). *Observe* is the guest reading the resul
   (`abandon_for_trap`); never write `Cancelled` for a trap.
 - **Claim** during replay by identity (`StartClaim`, optional request-payload match). Scan-ahead
   claiming exists only to route concurrent completions to the right awaiter; a `Start` that does
-  not exist in history is a divergence error, not something to skip past. Scopes are named
-  `<scope:batched-write>` or `<scope:batched-write:DISCRIMINATOR>`; a discriminated claim never
-  falls back to a plain-named sibling.
+  not exist in history is a divergence error, not something to skip past. Actual protocol
+  parents retain their own identities, including `<scope:transaction>` for RDBMS; generic
+  batched scopes do not exist. A claim never falls back to a differently named sibling.
 - **Observe**: the guest's consumption of a completion is recorded by `CompletionDelivered` /
   `CompletionDiscarded` as the tail operation of the host function
   (`supersede_prior_completion_delivery` hard-errors otherwise). This applies to accessor
@@ -52,18 +52,17 @@ that reach the guest) derives from oplog indices or recorded data — `derive_id
 allowed only when appended and committed before the guest can observe them and read back on
 replay (as `caller_attempt_id` does); unrecorded guest-observable randomness is a bug.
 
-## Retry eligibility is part of the function type
+## Repair is owned by the call's protocol
 
-`DurableFunctionType` decides two things with one predicate (`is_eligible_for_internal_retry`,
-`durability.rs`): whether a failed call may be retried in-function under the same `Start` instead
-of trapping and reconstructing the worker, and whether an incomplete `Start` may be re-executed on
-replay (`can_reexecute_on_incomplete_replay`). `ReadLocal`/`ReadRemote`/`WriteLocal`/`WriteRemote`
-always; batched/transaction writes never. The one addition
-to the replay predicate is a batched child of a scope whose owner re-executes the scope's effect
-call-locally (`ScopeReplayRecovery::Reexecute`, the P3 consume-body scope): the owner authorizes
-the child's in-place completion through `AccessClaimOptions::incomplete_repair_authorized_by_scope`;
-it never widens in-function retry. Choose the type for re-execution safety, and test both the
-inline path and the fall-back-to-trap path (`tests/in_function_retry/`).
+`DurableFunctionType` has four cases: `ReadLocal`, `WriteLocal`, `ReadRemote`, and `WriteRemote`.
+Nesting is explicit in `Start.parent_start_index`. Top-level incomplete calls repair in place.
+Ambient entity lineage preserves ordinary call-local repair, but never authorizes an explicit
+protocol child. An explicit child requires its owner's `AccessClaimOptions::incomplete_repair_authorized_by_scope`
+authorization for repair or typed loss; an unauthorized child reaching generic repair is an
+invariant error naming the function and Start index. `ScopeReplayRecovery` retains protocol
+recovery/readiness decisions. Generic scope wrappers do not record additional Starts or Ends.
+RDBMS protocol state prevents statement in-function retry; function types do not encode
+transaction membership. Preserve both inline and trap-path tests (`tests/in_function_retry/`).
 
 A P3 HTTP send uses `WriteRemote`. It repairs an incomplete `Start` in place and keeps the
 operations recorded next to it. Nonresumable RDBMS handles complete incomplete calls with typed
@@ -160,7 +159,7 @@ rather than replaced by a recorded result.
   `execute_recorded_skipped_tool_call` returns it without a body. Incomplete replay completes
   under the original `Start` index.
 - An entity Store's liveness is its own (`store_is_live`): `ReplayingCompleted` is never live;
-  `ReplayingIncomplete`/`Live` become live when `PendingReplayToLive::finish` sets
+  `ReplayingIncomplete`/`Live` become live when `PendingReplayToLive::finish_at` sets
   `local_live_tail`, which for incomplete tool entities first requires
   `activate_live_attachment_memory_accounting` to admit them. Completed replays use historical
   memory charges, not current pressure.
