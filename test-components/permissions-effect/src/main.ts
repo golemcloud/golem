@@ -4,6 +4,8 @@ import {
   defineAgentClient,
   method,
   Permissions,
+  SelfAgentId,
+  WitTypes,
 } from "@golemcloud/effect-golem";
 
 const Probe = Schema.Struct({
@@ -16,6 +18,10 @@ type Probe = typeof Probe.Type;
 const calleeMethods = {
   probe: method({ input: {}, success: Probe }),
   deriveWithoutAuthority: method({ input: {}, success: Schema.String }),
+  receiveTemplate: method({
+    input: { card: WitTypes.PolymorphicPermissionCard },
+    success: Schema.Struct({ template: Schema.Boolean, concrete: Schema.Boolean }),
+  }),
 };
 const calleeId = { name: Schema.String };
 
@@ -71,6 +77,15 @@ Callee.implement({
           } satisfies Probe;
         }),
       ).pipe(Effect.orDie),
+    receiveTemplate: ({ card }) =>
+      Effect.gen(function* () {
+        const received = {
+          template: Schema.is(WitTypes.PolymorphicPermissionCard)(card),
+          concrete: Schema.is(WitTypes.PermissionCard)(card),
+        };
+        yield* Permissions.release(card);
+        return received;
+      }).pipe(Effect.orDie),
     deriveWithoutAuthority: () =>
       Effect.gen(function* () {
         const grant = {
@@ -124,10 +139,10 @@ defineAgent({
 
           const wallet = yield* Permissions.walletScoped;
           result.walletKinds = wallet.map((entry) => entry._tag).sort();
-          let walletCard: Permissions.PersistentCard | undefined;
+          let walletCard: Permissions.PolymorphicPermissionCard | undefined;
           let grant: Permissions.PatternGrant | undefined;
           for (const entry of wallet) {
-            if (entry._tag === "Scope") continue;
+            if (entry._tag !== "Template") continue;
             const view = yield* Effect.option(Permissions.inspect(entry.card));
             const found = Option.isSome(view)
               ? view.value.lowerPositive.find(isInspectGrant)
@@ -215,6 +230,49 @@ defineAgent({
               Permissions.Holder.account("00000000-0000-0000-0000-000000000001"),
             ),
           );
+
+          // 8. A scope card reports the earliest expiry of its roots, also to the callee. A
+          // persistent scope parent must be in the wallet, so install an expiring card on self.
+          // Only a lower bound: an upper bound on a wallet card is a ceiling for the agent.
+          const expiring = yield* Permissions.derive(
+            walletCard,
+            { lowerPositive: [grant] },
+            Permissions.Lifespan.fromDuration("1 hour"),
+          );
+          result.expiringExpiresAt = timestampText(yield* Permissions.expiresAt(expiring));
+          result.expiringExpiresInSeconds = Option.match(
+            yield* Permissions.expiresAt(expiring),
+            {
+              onNone: () => null,
+              onSome: ({ seconds }) => Number(seconds) - Math.floor(Date.now() / 1000),
+            },
+          );
+          yield* Permissions.install(
+            expiring,
+            Permissions.Holder.agent(yield* SelfAgentId.SelfAgentId),
+          );
+          const walletAfterInstall = yield* Permissions.walletScoped;
+          result.walletKindsAfterSelfInstall = walletAfterInstall
+            .map((entry) => entry._tag)
+            .sort();
+          const installedOnSelf = walletAfterInstall.find((entry) => entry._tag === "Concrete");
+          if (installedOnSelf === undefined)
+            return yield* Effect.die("the self-installed card is not in the wallet");
+          result.installedOnSelfExpiresAt = timestampText(
+            yield* Permissions.expiresAt(installedOnSelf.card),
+          );
+          const expiringScope = yield* Permissions.deriveScope(
+            [installedOnSelf.card, walletCard],
+            bounds,
+          );
+          result.expiringScopeExpiresAt = timestampText(
+            yield* Permissions.expiresAt(expiringScope),
+          );
+          result.calleeExpiringScope = yield* callee.probe.withScopeCard(expiringScope)({});
+
+          // 9. Send the root template wallet card to a method that declares a template card.
+          result.calleeReceivedTemplate = yield* callee.receiveTemplate({ card: walletCard });
+          result.templateSent = yield* errorTag(Permissions.inspect(walletCard));
 
           return JSON.stringify(result);
         }),

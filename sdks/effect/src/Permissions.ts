@@ -482,8 +482,15 @@ const wrapWalletCard = (entry: TypesHost.WalletCard): WalletCard => {
       return { _tag: "Template", card: wrap(entry.val, "template") }
     case "scope":
       return { _tag: "Scope", card: createScopeCard(entry.val) }
+    default:
+      throw new Error(`unknown wallet-card kind: ${(entry as { tag: string }).tag}`)
   }
 }
+
+const releaseRaw = (card: AnyCard): CoreTypes.PermissionCard | undefined =>
+  isScopeCard(card)
+    ? releaseScopeCard(card)
+    : releaseGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, requireCard(card))
 
 const toWitGrant = (grant: PatternGrant): TypesHost.PatternGrant => ({
   class_: grant.class,
@@ -752,9 +759,7 @@ export const release = (
     const host = yield* PermissionsClient
     yield* Effect.try({
       try: () => {
-        const raw = isScopeCard(card)
-          ? releaseScopeCard(card)
-          : releaseGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, requireCard(card))
+        const raw = releaseRaw(card)
         if (raw !== undefined) host.drop(raw)
       },
       catch: hostFailure("release"),
@@ -781,7 +786,27 @@ export const wallet: Effect.Effect<
 > = Effect.gen(function* () {
   const host = yield* PermissionsClient
   return yield* Effect.try({
-    try: () => host.wallet().map(wrapWalletCard),
+    try: () => {
+      const listed = host.wallet()
+      const entries: WalletCard[] = []
+      let index = 0
+      try {
+        for (; index < listed.length; index++) entries.push(wrapWalletCard(listed[index]!))
+      } catch (error) {
+        // Release the wrapped cards and drop the raw resources that no card owns yet.
+        const drop = (raw: CoreTypes.PermissionCard | undefined) => {
+          try {
+            if (raw !== undefined) host.drop(raw)
+          } catch {
+            // Keep dropping the remaining resources; the wrap failure is reported.
+          }
+        }
+        for (const entry of entries) drop(releaseRaw(entry.card))
+        for (const rest of listed.slice(index)) drop(rest.val)
+        throw error
+      }
+      return entries
+    },
     catch: hostFailure("wallet"),
   })
 })

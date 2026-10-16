@@ -82,8 +82,12 @@ const makeHost = (walletKinds: ReadonlyArray<WalletKind> = ["concrete", "templat
   const events: string[] = []
   const failures = new Map<string, unknown>()
   let serial = 0
-  const mint = (view: TypesHost.CardView, parents: number[] = []) => {
-    const card = { serial: ++serial, parents, view } as FakeCard
+  const mint = (
+    view: TypesHost.CardView,
+    parents: number[] = [],
+    expiresAt?: TypesHost.Timestamp,
+  ) => {
+    const card = { serial: ++serial, parents, view, expiresAt } as FakeCard
     Object.defineProperty(card, Symbol.dispose, {
       value: () => events.push(`dispose:${card.serial}`),
     })
@@ -107,9 +111,14 @@ const makeHost = (walletKinds: ReadonlyArray<WalletKind> = ["concrete", "templat
     derive: (parent, lowerPositive, lowerNegative, upperPositive, upperNegative, lifespan) => {
       fail("derive")
       events.push(`derive:${fake(parent).serial}:${lifespan?.iso8601 ?? "-"}`)
-      return mint({ lowerPositive, lowerNegative, upperPositive, upperNegative }, [
-        fake(parent).serial,
-      ])
+      // A lifespan gives the child a fixed fake expiry that names its serial.
+      return mint(
+        { lowerPositive, lowerNegative, upperPositive, upperNegative },
+        [fake(parent).serial],
+        lifespan === undefined
+          ? undefined
+          : { seconds: 1_000n + BigInt(serial + 1), nanoseconds: 5 },
+      )
     },
     deriveFromWallet: (lowerPositive, lowerNegative, upperPositive, upperNegative, lifespan) => {
       fail("deriveFromWallet")
@@ -118,9 +127,18 @@ const makeHost = (walletKinds: ReadonlyArray<WalletKind> = ["concrete", "templat
     },
     deriveScope: (parents, lowerPositive, lowerNegative, upperPositive, upperNegative) => {
       events.push(`deriveScope:${parents.map((p) => fake(p).serial).join(",")}`)
+      // Like the host, a scope card expires with the earliest of its parents.
+      const expiries = parents.flatMap((p) =>
+        fake(p).expiresAt === undefined ? [] : [fake(p).expiresAt!],
+      )
+      const earliest = expiries.reduce<TypesHost.Timestamp | undefined>(
+        (min, next) => (min === undefined || next.seconds < min.seconds ? next : min),
+        undefined,
+      )
       return mint(
         { lowerPositive, lowerNegative, upperPositive, upperNegative },
         parents.map((p) => fake(p).serial),
+        earliest,
       )
     },
     revoke: (card) => {
@@ -399,6 +417,35 @@ describe("Permissions", () => {
     expect(() => Permissions.Lifespan.fromDuration(-1n)).toThrow(/positive/)
   })
 
+  it.effect("reports the earliest root expiry of a scope card", () => {
+    const host = makeHost(["concrete", "template"])
+    return Effect.gen(function* () {
+      const [concrete, template] = yield* Permissions.wallet
+      const card = cardOf(concrete, "Concrete")
+      const short = yield* Permissions.derive(card, {}, Permissions.Lifespan.fromIso8601("PT1H"))
+      const long = yield* Permissions.derive(card, {}, Permissions.Lifespan.fromIso8601("P1D"))
+      const shortExpiry = yield* Permissions.expiresAt(short)
+      expect(shortExpiry).toEqual(Option.some({ seconds: 1_003n, nanoseconds: 5 }))
+      const scope = yield* Permissions.deriveScope([long, cardOf(template, "Template"), short], {})
+      expect(yield* Permissions.expiresAt(scope)).toEqual(shortExpiry)
+      const nested = yield* Permissions.deriveScope([scope, card], {})
+      expect(yield* Permissions.expiresAt(nested)).toEqual(shortExpiry)
+      expect(yield* Permissions.expiresAt(yield* Permissions.deriveScope([card], {}))).toEqual(
+        Option.none(),
+      )
+    }).pipe(Effect.provide(host.layer))
+  })
+
+  it.effect("releases wrapped wallet cards and drops the rest when a wallet entry fails", () => {
+    const host = makeHost(["concrete", "unknown" as WalletKind, "template"])
+    return Effect.gen(function* () {
+      const error = failureOf(yield* Effect.exit(Permissions.wallet))
+      expect(error).toBeInstanceOf(Permissions.PermissionsHostError)
+      expect(error.message).toContain("unknown wallet-card kind")
+      expect(host.events).toEqual(["drop:1", "drop:2", "drop:3"])
+    }).pipe(Effect.provide(host.layer))
+  })
+
   it.effect("releases wallet cards that are not kept", () => {
     const host = makeHost(["concrete", "template", "scope"])
     return Effect.gen(function* () {
@@ -462,6 +509,7 @@ describe("Permissions non-forgeability", () => {
         () =>
           new GuestPermissionCardHandle(Symbol("forged") as never, {} as CoreTypes.PermissionCard),
       ).toThrow(/internal SDK operation/)
+      // `Capability` exports the card types as types only, so it has no runtime value to forge.
       expect("PermissionCard" in Capability).toBe(false)
       expect(Object.keys(Permissions)).not.toContain("PermissionCard")
       expect(Object.keys(Package.Permissions)).toEqual(Object.keys(Permissions))
@@ -618,7 +666,6 @@ describe("wallet card kinds and polymorphic cards", () => {
       const template = cardOf((yield* Permissions.wallet)[0], "Template")
       const concrete = yield* Permissions.deriveFromWallet({})
       expect(() => JSON.stringify(template)).toThrow(/cannot be serialized/)
-      expect("PolymorphicPermissionCard" in Capability).toBe(false)
       expect(Object.keys(Permissions)).not.toContain("PolymorphicPermissionCard")
       expect(Schema.is(WitTypes.PolymorphicPermissionCard)({ serial: 1 })).toBe(false)
       expect(

@@ -298,6 +298,26 @@ type AssertEqual<X, Y> =
     void Bridge.polymorphicPermissionCardToSchemaValue(card)
     // @ts-expect-error a scope card is not a polymorphic schema card
     void Bridge.polymorphicPermissionCardToSchemaValue(scope)
+    // @ts-expect-error a concrete card is not the card of a Template wallet entry
+    const _concreteAsTemplateEntry: Permissions.WalletCard = { _tag: "Template", card }
+    void _concreteAsTemplateEntry
+    // @ts-expect-error a template card is not the card of a Concrete wallet entry
+    const _templateAsConcreteEntry: Permissions.WalletCard = { _tag: "Concrete", card: template }
+    void _templateAsConcreteEntry
+    // @ts-expect-error a template card is not the card of a Scope wallet entry
+    const _templateAsScopeEntry: Permissions.WalletCard = { _tag: "Scope", card: template }
+    void _templateAsScopeEntry
+    // @ts-expect-error an object literal is not a template card
+    const _literalTemplate: Permissions.PolymorphicPermissionCard = {
+      toJSON: () => undefined as never,
+    }
+    void _literalTemplate
+    // @ts-expect-error a spread copy of a card is not a template card
+    const _spreadTemplate: Permissions.PolymorphicPermissionCard = { ...template }
+    void _spreadTemplate
+    // @ts-expect-error a spread copy of a concrete card is not a template card
+    const _spreadConcrete: Permissions.PolymorphicPermissionCard = { ...card }
+    void _spreadConcrete
     // @ts-expect-error the polymorphic card type is type-only and has no runtime constructor
     void Capability.PolymorphicPermissionCard
     // @ts-expect-error a concrete schema does not carry template cards

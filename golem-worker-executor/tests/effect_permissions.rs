@@ -564,6 +564,29 @@ async fn effect_sdk_manages_permission_cards_end_to_end(
 
     assert_eq!(result["scopeExpiresAt"], Value::Null, "{result:#}");
 
+    let expiring = result["expiringExpiresAt"].clone();
+    assert!(expiring.is_string(), "{result:#}");
+    let expires_in = result["expiringExpiresInSeconds"]
+        .as_f64()
+        .expect("expiry in seconds");
+    assert!((3500.0..=3700.0).contains(&expires_in), "{result:#}");
+    assert_eq!(
+        result["walletKindsAfterSelfInstall"],
+        json!(["Concrete", "Template"]),
+        "{result:#}"
+    );
+    assert_eq!(result["installedOnSelfExpiresAt"], expiring, "{result:#}");
+    assert_eq!(result["expiringScopeExpiresAt"], expiring, "{result:#}");
+    assert_eq!(
+        result["calleeExpiringScope"],
+        json!({
+            "walletKinds": ["Scope", "Template"],
+            "inspectAllowed": true,
+            "scopeExpiresAt": expiring,
+        }),
+        "{result:#}"
+    );
+
     assert_eq!(
         result["calleeAfterInstall"],
         probe(&["Concrete", "Template"], true),
@@ -614,9 +637,24 @@ async fn effect_sdk_manages_permission_cards_end_to_end(
         .into_typed::<String>()?;
     assert_eq!(stale, "RpcCallError:denied");
 
+    assert_eq!(
+        result["calleeReceivedTemplate"],
+        json!({ "template": true, "concrete": false }),
+        "{result:#}"
+    );
+    assert_eq!(
+        result["templateSent"],
+        json!("PermissionsHostError"),
+        "{result:#}"
+    );
+
     let delivered = delivered.lock().unwrap().clone();
-    assert_eq!(delivered.len(), 1, "exactly one card reaches another agent");
-    assert_eq!(delivered[0].0, callee_worker);
+    let targets: Vec<_> = delivered.iter().map(|(target, _)| target.clone()).collect();
+    assert_eq!(
+        targets,
+        vec![callee_worker.clone(), caller_worker.clone()],
+        "the installed card reaches the callee and the self-installed card reaches the caller"
+    );
 
     let denied = executor
         .invoke_and_await_agent(&component, &callee, "deriveWithoutAuthority", data_value!())
