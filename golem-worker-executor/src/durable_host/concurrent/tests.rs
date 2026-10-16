@@ -181,6 +181,7 @@ fn live_unfinished_handle<P: DropPolicy>(
         cancellation_span_id: None,
         span_observer: None,
         parked_undelivered_replay: false,
+        host_internal_calls: false,
         execution_scope: CallExecutionScope {
             retry_from: start_idx,
             durable_scope: None,
@@ -233,6 +234,7 @@ fn synthetic_finished_handle_with_scope<P: DropPolicy>(
         cancellation_span_id: None,
         span_observer: None,
         parked_undelivered_replay: false,
+        host_internal_calls: false,
         execution_scope: scope,
         retry: InFunctionRetryController::new(
             DurableFunctionType::ReadLocal,

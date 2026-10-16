@@ -721,10 +721,13 @@ struct CursorState {
     /// such an entry it is auto-consumed like an awaited terminal instead of being handed to a
     /// positional reader; its resolver awaiter was registered at claim time.
     claimed_starts: HashSet<OplogIndex>,
-    /// Completed custom durable invocations replay as one logical subtree: once a root `Start`
-    /// is claimed, descendant `Start`s are replay-inert implementation details of that recorded
-    /// operation and are drained with their terminals while resolving the root. The map stores
-    /// every known member index for each root so nested descendants can be recognized by parent.
+    /// Replay-inert subtrees. Completed custom durable invocations replay as one logical subtree:
+    /// once a root `Start` is claimed, descendant `Start`s are replay-inert implementation details
+    /// of that recorded operation and are drained with their terminals while resolving the root.
+    /// The host-internal calls of a call that the guest cancelled before it delivered anything are
+    /// drained the same way: replay parks the call at its recorded cancellation and never makes
+    /// them again. The map stores every known member index for each root so nested descendants
+    /// can be recognized by parent.
     custom_subtrees: HashMap<OplogIndex, HashSet<OplogIndex>>,
     /// Durable-call `Start`s the cursor committed past before their owner claimed them, keyed by
     /// the `Start`'s index and kept in oplog order, together with the `End`/`Cancelled` that

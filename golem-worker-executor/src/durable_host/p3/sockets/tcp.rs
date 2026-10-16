@@ -999,7 +999,7 @@ where
             ..Default::default()
         },
         DemandDeliveryMode::Markerless,
-        async |_| Ok(HostRequestNoInput {}),
+        HostRequestNoInput {},
     )
     .await
     {
@@ -1513,7 +1513,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                 incomplete_repair_authorized_by_scope: true,
                 ..Default::default()
             },
-            async |_| Ok(HostRequestNoInput {}),
+            HostRequestNoInput {},
         )
         .await
         .map_err(wasmtime::Error::from)?;

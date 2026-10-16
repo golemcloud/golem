@@ -14,7 +14,7 @@
 
 use crate::durable_host::DurabilityHost;
 use crate::durable_host::concurrent::{
-    Cancellable, DeferredCallReplayOutcome, DurableCallSession, NotCancellable,
+    AccessClaimOptions, Cancellable, DeferredCallReplayOutcome, DurableCallSession, NotCancellable,
     reserve_invocation_id_before_await,
 };
 use crate::durable_host::p3::{DurableP3, DurableP3View, run_read_access};
@@ -151,16 +151,23 @@ impl<U: Send + 'static, Ctx: WorkerCtx> monotonic_clock::HostWithStore<U> for Du
         how_long: types::Duration,
     ) -> wasmtime::Result<()> {
         // The outer session owns cancellation throughout deadline reconstruction, including
-        // after the internal read completed but before the timer started waiting.
-        let wait = DurableCallSession::<P3MonotonicClockWaitFor, Cancellable>::start_access(
-            store,
-            super::durable_worker_ctx::<Ctx, U>,
-            HostRequestMonotonicClockDuration {
-                duration_in_nanos: how_long,
-            },
-            DurableFunctionType::ReadLocal,
-        )
-        .await?;
+        // after the internal read completed but before the timer started waiting. On replay, a
+        // recorded `Cancelled` makes the claim drain the records of the internal read, which a
+        // parked wait never makes again.
+        let wait =
+            DurableCallSession::<P3MonotonicClockWaitFor, Cancellable>::start_access_with_options(
+                store,
+                super::durable_worker_ctx::<Ctx, U>,
+                DurableFunctionType::ReadLocal,
+                AccessClaimOptions {
+                    host_internal_calls: true,
+                    ..Default::default()
+                },
+                HostRequestMonotonicClockDuration {
+                    duration_in_nanos: how_long,
+                },
+            )
+            .await?;
         let owner = wait.host_internal_owner();
         let (mut wait, replayed) = if wait.is_live() {
             (Some(wait), None)

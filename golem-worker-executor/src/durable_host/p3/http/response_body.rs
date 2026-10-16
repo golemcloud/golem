@@ -1264,7 +1264,7 @@ where
                 ..Default::default()
             },
             DemandDeliveryMode::Deferred,
-            async |_| Ok(HostRequestNoInput {}),
+            HostRequestNoInput {},
         )
         .await
         {

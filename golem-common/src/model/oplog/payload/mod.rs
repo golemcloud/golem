@@ -791,8 +791,8 @@ impl TryFrom<HostResponse> for HostResponseGolemRpcScheduledInvocationCompat {
     }
 }
 
-pub trait HostPayloadPair {
-    type Req: Into<HostRequest>;
+pub trait HostPayloadPair: Send + 'static {
+    type Req: Into<HostRequest> + Send + 'static;
     type Resp: Into<HostResponse> + TryFrom<HostResponse, Error = String> + Send + 'static;
 
     const INTERFACE: &'static str;

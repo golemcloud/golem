@@ -606,6 +606,19 @@ Live (guest-facing accessor path): append `Start` eagerly → run the live actio
 has no markers: its result is delivered when the host function returns. A trap while a call is
 in flight leaves `Start` incomplete (`abandon_for_trap`); a trap never writes `Cancelled`.
 
+**Owned starts.** The guest may cancel a pending accessor call at any point, including during its
+start (drop-event drain, boundary synchronization, `Start` append or claim, session construction).
+So that the oplog does not depend on where the cancellation found the start, every accessor entry
+point (`start_access*`) captures the call's identity in the guest's call and runs the start in an
+owned store task (`OwnedAccessStart`) when the accessor belongs to a guest-visible subtask. The
+task always appends or claims the `Start`; if the guest has dropped the call by then, it drops the
+session, and the drop policy records the call as if the guest had dropped it right after its
+start. A live call is prepared in the guest's call, so it counts as in flight from then on. The
+task holds a tail-work activity and races the worker's interrupt signal. Request builders run in
+the task and receive its accessor. Calls made by host-owned tasks and host-internal calls start
+inline. The start never waits on guest progress; authority waits inside request builders wait on
+card-authority recovery only.
+
 **Host-internal results** use `DurableCallSession::invoke_host_internal_access`: Start/End
 remain durable and identity-validated, but End returns the recorded result directly to the host.
 There is no guest-terminal observer, delivery token, delivery/discard marker, or markerless
@@ -616,6 +629,14 @@ wait parks without issuing the child, while an incomplete outer wait owns cancel
 before reconstructing the deadline from recorded `now + duration`. A completed outer requires
 a recorded completed child. Cancelling after the child's End settles the outer wait without an
 internal delivery marker. Only the outer wait has a real guest-delivery boundary.
+
+A `wait-for` that the guest dropped records `Start` and `Cancelled { partial: None }`, with
+whatever prefix of the `now` read the host reached in between (nothing, an open Start, or a closed
+one). Its claim sets `AccessClaimOptions::host_internal_calls`; when the claimed Start's
+replay-visible terminal is that `Cancelled`, the claim registers the Start as a replay-inert
+subtree root (the custom-invocation mechanism), so the recorded `now` read is drained whether or
+not the replayed host task reaches it. `invoke_host_internal_access` refuses an owner started
+without `host_internal_calls`. Tests: `tests/tool_streaming/dropped_waits.rs`.
 
 P3 timers always return `STARTED` before successful guest delivery, even for zero-duration or
 expired waits. Both live execution and replay yield before completing the outer timer. `wait-for`
