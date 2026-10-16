@@ -42,7 +42,11 @@ async fn delayed_pong(pong_timeout: Duration, byte_backpressure: bool) -> std::i
     } else {
         1
     });
-    let reader = read_websocket(websocket, incoming, bytes.clone());
+    let budgets = SessionBudgets {
+        input: bytes.clone(),
+        ..SessionBudgets::new()
+    };
+    let reader = read_websocket(websocket, incoming, budgets);
     futures::pin_mut!(reader);
     let ping = tokio::select! {
         ping = sent.recv() => ping.unwrap(),

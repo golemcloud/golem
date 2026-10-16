@@ -79,6 +79,7 @@ const WRITE_PROGRESS_TIMEOUT: std::time::Duration = std::time::Duration::from_se
 const CLIENT_GONE_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const SESSION_BYTE_BUDGET: usize = 64 * 1024 * 1024;
 const OUTPUT_BYTE_BUDGET: usize = 32 * 1024 * 1024;
+const INPUT_BYTE_BUDGET: usize = SESSION_BYTE_BUDGET - OUTPUT_BYTE_BUDGET;
 const CONTROL_BYTE_BUDGET: usize = 64 * 1024;
 const INPUT_UNACKNOWLEDGED_BYTE_BUDGET: usize = 16 * 1024 * 1024;
 const STREAM_BYTE_BUDGET: usize = 16 * 1024 * 1024;
@@ -93,12 +94,17 @@ mod keep_alive_tests;
 
 struct AdmittedRequest {
     request: InvocationRequest,
-    _session: OwnedSemaphorePermit,
+    _admission: InboundAdmission,
 }
 
 struct AdmittedMessage {
     message: Message,
-    session: OwnedSemaphorePermit,
+    admission: InboundAdmission,
+}
+
+struct InboundAdmission {
+    _input: OwnedSemaphorePermit,
+    _session: OwnedSemaphorePermit,
 }
 
 struct PendingInputAdmission {
@@ -142,6 +148,7 @@ impl QueuedMessage {
 #[derive(Clone)]
 struct SessionBudgets {
     session: Arc<Semaphore>,
+    input: Arc<Semaphore>,
     output: Arc<Semaphore>,
     control: Arc<Semaphore>,
     unacknowledged_input: Arc<Semaphore>,
@@ -154,6 +161,7 @@ impl SessionBudgets {
     fn new() -> Self {
         Self {
             session: Arc::new(Semaphore::new(SESSION_BYTE_BUDGET)),
+            input: Arc::new(Semaphore::new(INPUT_BYTE_BUDGET)),
             output: Arc::new(Semaphore::new(OUTPUT_BYTE_BUDGET)),
             control: Arc::new(Semaphore::new(CONTROL_BYTE_BUDGET)),
             unacknowledged_input: Arc::new(Semaphore::new(INPUT_UNACKNOWLEDGED_BYTE_BUDGET)),
@@ -161,6 +169,16 @@ impl SessionBudgets {
             stream_items: Arc::new(Mutex::new(HashMap::new())),
             cancelled_outputs: Arc::new(Mutex::new(HashSet::new())),
         }
+    }
+
+    async fn admit_inbound_frame(&self, bytes: usize) -> Result<InboundAdmission, ()> {
+        // Retain the input limit through private request delivery, leaving output headroom.
+        let input = acquire_bytes(&self.input, bytes).await?;
+        let session = acquire_bytes(&self.session, bytes).await?;
+        Ok(InboundAdmission {
+            _input: input,
+            _session: session,
+        })
     }
 
     async fn stream_budget(
@@ -356,19 +374,19 @@ enum InitialMessage {
     Start {
         start: PublicAgentSessionStart,
         attempt_id: Uuid,
-        _admission: OwnedSemaphorePermit,
+        _admission: InboundAdmission,
     },
     ToolStart {
         start: PublicToolSessionStart,
         attempt_id: Uuid,
-        _admission: OwnedSemaphorePermit,
+        _admission: InboundAdmission,
     },
     Resume {
         resume: PublicAgentSessionResume,
         attempt_id: Uuid,
         token_bindings: InvocationSessionTokenBindings,
         token_key_id: String,
-        _admission: OwnedSemaphorePermit,
+        _admission: InboundAdmission,
     },
 }
 
@@ -873,8 +891,7 @@ pub async fn serve_public_invocation_session(
     config: InvocationSessionConfig,
 ) {
     serve_invocation_session_connection(
-        socket,
-        config,
+        invocation_session_websocket(socket, config),
         move |incoming, outbound, budgets, setup_complete| {
             serve_session_messages(
                 incoming,
@@ -891,8 +908,11 @@ pub async fn serve_public_invocation_session(
 }
 
 async fn serve_invocation_session_connection<F>(
-    socket: WebSocketStream,
-    config: InvocationSessionConfig,
+    websocket: impl futures::Sink<Message, Error = std::io::Error>
+    + futures::Stream<Item = std::io::Result<Message>>
+    + Unpin
+    + Send
+    + 'static,
     handler: impl FnOnce(
         tokio_stream::wrappers::ReceiverStream<std::io::Result<AdmittedMessage>>,
         Outbound,
@@ -902,15 +922,14 @@ async fn serve_invocation_session_connection<F>(
 ) where
     F: std::future::Future<Output = ()>,
 {
-    let (mut websocket_sink, websocket_stream) =
-        invocation_session_websocket(socket, config).split();
+    let (mut websocket_sink, websocket_stream) = websocket.split();
     let budgets = SessionBudgets::new();
     let (incoming_tx, incoming_rx) = mpsc::channel(CHANNEL_CAPACITY);
     // Keep reading control frames while session setup waits for the executor.
     let mut reader = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(read_websocket(
         websocket_stream,
         incoming_tx,
-        budgets.session.clone(),
+        budgets.clone(),
     )));
     let websocket_stream = tokio_stream::wrappers::ReceiverStream::new(incoming_rx);
     let (outbound_tx, mut outbound_rx) = mpsc::channel::<QueuedMessage>(CHANNEL_CAPACITY);
@@ -921,18 +940,17 @@ async fn serve_invocation_session_connection<F>(
     let writer_budgets = budgets.clone();
     let force_close = tokio_util::sync::CancellationToken::new();
     let writer_force_close = force_close.clone();
-    let writer = tokio::spawn(async move {
+    let mut writer = tokio::spawn(async move {
         // A queued close frame is held back and sent as the final frame once the session ends,
         // so the client cannot observe the close handshake before the private session has been
         // drained. Everything queued after a close frame is dropped.
         let mut pending_close = None;
-        let mut sink_open = true;
         while let Some(message) = tokio::select! {
             biased;
             _ = writer_force_close.cancelled() => None,
             message = outbound_rx.recv() => message,
         } {
-            if !sink_open || pending_close.is_some() || message.should_drop(&writer_budgets).await {
+            if pending_close.is_some() || message.should_drop(&writer_budgets).await {
                 continue;
             }
             if message.message.is_close() {
@@ -945,12 +963,10 @@ async fn serve_invocation_session_connection<F>(
                 sent = tokio::time::timeout(WRITE_PROGRESS_TIMEOUT, websocket_sink.send(message.message)) => sent,
             };
             if !matches!(sent, Ok(Ok(()))) {
-                sink_open = false;
+                return;
             }
         }
-        if let Some(close) = pending_close
-            && sink_open
-        {
+        if let Some(close) = pending_close {
             let _ = tokio::time::timeout(WRITE_PROGRESS_TIMEOUT, websocket_sink.send(close)).await;
         }
         let _ = tokio::time::timeout(WRITE_PROGRESS_TIMEOUT, websocket_sink.close()).await;
@@ -962,9 +978,14 @@ async fn serve_invocation_session_connection<F>(
         tokio::select! {
             biased;
             _ = &mut session => false,
+            _ = &mut writer => return,
             _ = &mut reader => {
                 if setup_completed.try_recv().is_ok() {
-                    tokio::time::timeout(CLIENT_GONE_DRAIN_TIMEOUT, &mut session).await.is_err()
+                    tokio::select! {
+                        biased;
+                        drained = tokio::time::timeout(CLIENT_GONE_DRAIN_TIMEOUT, &mut session) => drained.is_err(),
+                        _ = &mut writer => return,
+                    }
                 } else {
                     true
                 }
@@ -1180,7 +1201,7 @@ fn invocation_session_websocket(
 async fn read_websocket(
     mut websocket: impl futures::Stream<Item = std::io::Result<Message>> + Unpin,
     incoming: mpsc::Sender<std::io::Result<AdmittedMessage>>,
-    session: Arc<Semaphore>,
+    budgets: SessionBudgets,
 ) -> std::io::Result<()> {
     loop {
         let message = tokio::select! {
@@ -1193,15 +1214,14 @@ async fn read_websocket(
             Some(Ok(Message::Close(_))) | None => return Ok(()),
             Some(Err(error)) => return Err(error),
             Some(Ok(message)) => {
-                let Ok(permit) = acquire_bytes(&session, message_size(&message).max(1)).await
+                let Ok(admission) = budgets
+                    .admit_inbound_frame(message_size(&message).max(1))
+                    .await
                 else {
                     return Ok(());
                 };
                 if incoming
-                    .send(Ok(AdmittedMessage {
-                        message,
-                        session: permit,
-                    }))
+                    .send(Ok(AdmittedMessage { message, admission }))
                     .await
                     .is_err()
                 {
@@ -1225,10 +1245,7 @@ where
         let Some(message) = websocket.next().await else {
             return Ok(None);
         };
-        let AdmittedMessage {
-            message,
-            session: admission,
-        } = match message {
+        let AdmittedMessage { message, admission } = match message {
             Ok(message) => message,
             Err(_) => return Ok(None),
         };
@@ -1450,7 +1467,7 @@ async fn handle_client_messages<S>(
     S: futures::Stream<Item = std::io::Result<AdmittedMessage>> + Unpin,
 {
     while let Some(message) = websocket.next().await {
-        let AdmittedMessage { message, session } = match message {
+        let AdmittedMessage { message, admission } = match message {
             Ok(message) => message,
             Err(_) => return,
         };
@@ -1475,7 +1492,7 @@ async fn handle_client_messages<S>(
                     Ok(message) => translate_client_text(message, &state).await,
                     Err(error) => Err(AdapterError::from(error)),
                 }
-                .map(|request| (request, session, text.len().max(1)))
+                .map(|request| (request, admission, text.len().max(1)))
             }
             message @ Message::Binary(_) => {
                 if message_size(&message) > MAX_WEBSOCKET_MESSAGE_SIZE {
@@ -1490,10 +1507,10 @@ async fn handle_client_messages<S>(
                     Ok(message) => translate_client_binary(message, &state).await,
                     Err(error) => Err(AdapterError::from(error)),
                 }
-                .map(|request| (request, session, size))
+                .map(|request| (request, admission, size))
             }
         };
-        let (request, session, _frame_size) = match request {
+        let (request, admission, _frame_size) = match request {
             Ok(request) => request,
             Err(error) => {
                 let safe_message = safe_rejection_message(error.code);
@@ -1554,7 +1571,7 @@ async fn handle_client_messages<S>(
         if requests
             .send(AdmittedRequest {
                 request,
-                _session: session,
+                _admission: admission,
             })
             .await
             .is_err()
@@ -3297,18 +3314,47 @@ mod tests {
     }
 
     fn active_input_state_with_schema(schema: SchemaType) -> Arc<Mutex<AdapterState>> {
+        active_input_state_with_stream_count(schema, 1)
+    }
+
+    fn active_input_state_with_stream_count(
+        schema: SchemaType,
+        count: usize,
+    ) -> Arc<Mutex<AdapterState>> {
+        let stream_types = (0..count)
+            .map(|_| SchemaType::stream(Some(schema.clone())))
+            .collect::<Vec<_>>();
         let graph = SchemaGraph {
             defs: Vec::new(),
-            root: SchemaType::stream(Some(schema.clone())),
+            root: if count == 1 {
+                stream_types.into_iter().next().unwrap()
+            } else {
+                SchemaType::tuple(stream_types)
+            },
         };
         let fingerprint = schema_fingerprint_v1(&graph, Some(&schema)).unwrap().0;
-        let mapping = private_mapping(7, StreamMappingRole::Input, fingerprint);
+        let mappings = (0..count)
+            .map(|index| private_mapping(7 + index as u64, StreamMappingRole::Input, fingerprint))
+            .collect::<Vec<_>>();
+        let mut streams = (0..count)
+            .map(|index| {
+                SchemaValue::Stream(SchemaValueStream::from_host_endpoint(7 + index as u64))
+            })
+            .collect::<Vec<_>>();
+        let input = if count == 1 {
+            streams.pop().unwrap()
+        } else {
+            SchemaValue::Tuple { elements: streams }
+        };
+        let input =
+            schema_value_to_proto_with_streams(input, |stream| stream.take_host_endpoint::<u64>())
+                .unwrap();
         let mut protocol_state = InvocationSessionState::default();
         protocol_state
             .validate_trusted_request(&request(invocation_request::Request::Start(
                 InvocationStart {
                     method_name: Some("run".to_string()),
-                    input: Some(stream_value(7)),
+                    input: Some(input),
                     idempotency_key: idempotency_key(),
                     ..Default::default()
                 },
@@ -3324,7 +3370,7 @@ mod tests {
                         attachment_id: Some(proto_uuid(1)),
                         attempt_id: Some(proto_uuid(2)),
                         epoch: 1,
-                        stream_mappings: vec![mapping.clone()],
+                        stream_mappings: mappings.clone(),
                         environment_id: Some(EnvironmentId {
                             value: Some(proto_uuid(3)),
                         }),
@@ -3335,28 +3381,35 @@ mod tests {
                 )),
             })
             .unwrap();
-        let private = PrivateMapping {
-            mapping,
-            durable_stream_id: Uuid::from_u128(107),
-            schema_fingerprint: fingerprint,
-            direction: PublicStreamDirection::Input,
-        };
         let mut channels = HashMap::new();
-        channels.insert(
-            1,
-            ChannelState {
-                transport_id: 7,
+        for (index, mapping) in mappings.into_iter().enumerate() {
+            let transport_id = mapping.transport_stream_id;
+            let private = PrivateMapping {
+                mapping,
+                durable_stream_id: Uuid::from_u128(100 + transport_id as u128),
+                schema_fingerprint: fingerprint,
                 direction: PublicStreamDirection::Input,
-                schema,
-                provisional_ref: None,
-                durable: Some(private),
-                stream_token: Some("stream-token".to_string()),
-                next_input_sequence: 0,
-                pending_input: VecDeque::new(),
-                exposed: true,
-                terminal: false,
-            },
-        );
+            };
+            channels.insert(
+                index as u32 + 1,
+                ChannelState {
+                    transport_id,
+                    direction: PublicStreamDirection::Input,
+                    schema: schema.clone(),
+                    provisional_ref: None,
+                    durable: Some(private),
+                    stream_token: Some("stream-token".to_string()),
+                    next_input_sequence: 0,
+                    pending_input: VecDeque::new(),
+                    exposed: true,
+                    terminal: false,
+                },
+            );
+        }
+        let channel_by_transport = channels
+            .iter()
+            .map(|(channel, state)| (state.transport_id, *channel))
+            .collect();
         Arc::new(Mutex::new(AdapterState {
             protocol_state,
             graph: Some(graph),
@@ -3364,10 +3417,10 @@ mod tests {
             identity: None,
             application: Some("app".to_string()),
             environment: Some("env".to_string()),
-            next_channel: 2,
-            next_transport_id: 8,
+            next_channel: count as u32 + 1,
+            next_transport_id: 7 + count as u64,
             channels,
-            channel_by_transport: HashMap::from([(7, 1)]),
+            channel_by_transport,
             provisional_refs: HashMap::new(),
             private_mappings: HashMap::new(),
             byte_roles: HashMap::new(),
@@ -3419,6 +3472,118 @@ mod tests {
             .unwrap()
             .pending_input
             .push_back(admission);
+    }
+
+    #[test]
+    #[test_r::timeout("15s")]
+    async fn input_ack_progresses_past_a_burst_from_independently_buffered_streams() {
+        let state = active_input_state_with_stream_count(
+            SchemaType::binary(BinaryRestrictions::default()),
+            11,
+        );
+        let budgets = SessionBudgets::new();
+        let (wire, received) = mpsc::channel(CHANNEL_CAPACITY);
+        for channel in 1..=11 {
+            let mut binary = BinaryMessage {
+                metadata: BinaryMessageMetadata {
+                    channel,
+                    cursor_token: None,
+                    item_count: DecimalU64(1),
+                    kind: BinaryMessageKind::InputBinary,
+                    mime_type: None,
+                    sequence: DecimalU64(0),
+                    version: 1,
+                },
+                payload: vec![0],
+            };
+            let envelope_bytes = 8 * 1024 * 1024;
+            let overhead = encode_binary_message(&binary).unwrap().len() - 1;
+            binary.payload = vec![0; envelope_bytes - overhead];
+            let encoded = encode_binary_message(&binary).unwrap();
+            assert_eq!(encoded.len(), envelope_bytes);
+            wire.send(Ok(Message::Binary(encoded))).await.unwrap();
+        }
+        let (incoming, messages) = mpsc::channel(CHANNEL_CAPACITY);
+        let reader = read_websocket(
+            tokio_stream::wrappers::ReceiverStream::new(received),
+            incoming,
+            budgets.clone(),
+        );
+        let (requests, mut executor) = mpsc::channel(CHANNEL_CAPACITY);
+        let (sender, mut outgoing) = mpsc::channel(CHANNEL_CAPACITY);
+        let outbound = Outbound {
+            sender,
+            budgets: budgets.clone(),
+        };
+        let attempt = Uuid::new_v4();
+        let client = handle_client_messages(
+            tokio_stream::wrappers::ReceiverStream::new(messages),
+            requests,
+            outbound.clone(),
+            state.clone(),
+            budgets.clone(),
+            attempt,
+        );
+        futures::pin_mut!(reader, client);
+        assert!(futures::poll!(&mut reader).is_pending());
+        assert!(futures::poll!(&mut client).is_pending());
+        assert!(futures::poll!(&mut reader).is_pending());
+        assert_eq!(executor.len(), 2);
+        let before_private_delivery = budgets.session.available_permits();
+        // The private consumer accepts two input items, then waits for ACK delivery.
+        for _ in 0..2 {
+            tokio::select! {
+                request = executor.recv() => drop(request.unwrap()),
+                _ = &mut reader => panic!("reader stopped while input was queued"),
+                _ = &mut client => panic!("input handler stopped before the ACK"),
+            }
+        }
+        assert!(futures::poll!(&mut reader).is_pending());
+        assert!(futures::poll!(&mut client).is_pending());
+        assert!(executor.try_recv().is_err());
+        let remaining = budgets.session.available_permits();
+        let (responses, received_responses) = mpsc::channel(1);
+        responses
+            .send(Ok(input_ack(0, durable_offset(5))))
+            .await
+            .unwrap();
+        let keyring = Arc::new(keyring());
+        let server = handle_private_responses(
+            tokio_stream::wrappers::ReceiverStream::new(received_responses),
+            outbound,
+            state,
+            keyring.clone(),
+            token_bindings(&AuthCtx::system()),
+            keyring.active_key_id().to_string(),
+            attempt,
+        );
+        futures::pin_mut!(server);
+        let ack = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::select! {
+                message = outgoing.recv() => message.unwrap(),
+                _ = &mut reader => panic!("reader stopped before ACK delivery"),
+                _ = &mut client => panic!("input handler stopped before ACK delivery"),
+                _ = &mut server => panic!("private response handler stopped before ACK delivery"),
+            }
+        })
+        .await
+        .expect("prefetched input must leave data credit available for ACKs");
+        let Message::Text(text) = &ack.message else {
+            panic!("expected ACK text");
+        };
+        assert!(matches!(
+            golem_common::model::invocation_session_public::decode_server_text(text.as_bytes())
+                .unwrap(),
+            PublicServerMessage::InputStreamAck { channel: 1, .. }
+        ));
+        assert!(
+            remaining >= OUTPUT_BYTE_BUDGET,
+            "input admission must preserve the entire outbound allowance"
+        );
+        assert!(
+            before_private_delivery >= OUTPUT_BYTE_BUDGET,
+            "the input limit must also cover requests queued for the private consumer"
+        );
     }
 
     /// A routing miss is an `Internal` rejection whose carried error names a shard or a fence.
@@ -4534,10 +4699,11 @@ mod tests {
         };
         let budgets = SessionBudgets::new();
         let message = Message::text(encode_text(&message).unwrap());
-        let session = acquire_bytes(&budgets.session, message_size(&message))
+        let admission = budgets
+            .admit_inbound_frame(message_size(&message))
             .await
             .unwrap();
-        let websocket = futures::stream::iter(vec![Ok(AdmittedMessage { message, session })]);
+        let websocket = futures::stream::iter(vec![Ok(AdmittedMessage { message, admission })]);
         futures::pin_mut!(websocket);
         let (sender, _receiver) = mpsc::channel(1);
         let outbound = Outbound {
@@ -4619,10 +4785,11 @@ mod tests {
         };
         let budgets = SessionBudgets::new();
         let message = Message::text(encode_text(&message).unwrap());
-        let session = acquire_bytes(&budgets.session, message_size(&message))
+        let admission = budgets
+            .admit_inbound_frame(message_size(&message))
             .await
             .unwrap();
-        let websocket = futures::stream::iter(vec![Ok(AdmittedMessage { message, session })]);
+        let websocket = futures::stream::iter(vec![Ok(AdmittedMessage { message, admission })]);
         futures::pin_mut!(websocket);
         let (sender, mut receiver) = mpsc::channel(1);
         let outbound = Outbound {

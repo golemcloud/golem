@@ -22,6 +22,63 @@ use std::time::Duration;
 use test_r::{test, timeout};
 use tokio_util::sync::CancellationToken;
 
+struct FailedOutput;
+
+impl futures::Sink<Message> for FailedOutput {
+    type Error = std::io::Error;
+    fn poll_ready(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Err(std::io::ErrorKind::TimedOut.into()))
+    }
+    fn start_send(self: std::pin::Pin<&mut Self>, _: Message) -> std::io::Result<()> {
+        unreachable!()
+    }
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+    fn poll_close(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+#[test]
+#[timeout("5s")]
+async fn failed_output_cancels_an_input_dependent_session_without_peer_input() {
+    let cancelled = CancellationToken::new();
+    let observed = cancelled.clone();
+    let socket = WebSocketKeepAlive::from_sink_and_stream(
+        futures::stream::pending::<std::io::Result<Message>>(),
+        FailedOutput,
+        Duration::from_secs(3600),
+        Duration::ZERO,
+    )
+    .map(|message| message.map_err(|_| std::io::Error::from(std::io::ErrorKind::TimedOut)));
+    let connection = serve_invocation_session_connection(
+        socket,
+        move |mut incoming, outbound, _budgets, setup_complete| async move {
+            let _cancelled = cancelled.drop_guard();
+            setup_complete.send(()).unwrap();
+            outbound
+                .send(Message::Text("output".into()), None)
+                .await
+                .unwrap();
+            let _ = incoming.next().await;
+        },
+    );
+    tokio::time::timeout(Duration::from_secs(1), connection)
+        .await
+        .expect("a failed output must terminate an input-dependent session");
+    assert!(observed.is_cancelled());
+}
+
 #[derive(Clone, Default)]
 struct PendingSetup {
     started: Arc<tokio::sync::Notify>,
@@ -36,8 +93,7 @@ async fn blocked_setup(websocket: WebSocket, state: Data<&PendingSetup>) -> impl
     websocket.on_upgrade(move |socket| async move {
         let config = state.config.clone();
         serve_invocation_session_connection(
-            socket,
-            config,
+            invocation_session_websocket(socket, config),
             move |incoming, outbound, budgets, setup_complete| async move {
                 let _cancelled = state.cancelled.drop_guard();
                 let _held = (incoming, outbound, budgets, setup_complete);
@@ -145,8 +201,7 @@ async fn draining_session(websocket: WebSocket, state: Data<&PendingSetup>) -> i
     let state = state.0.clone();
     websocket.on_upgrade(move |socket| async move {
         serve_invocation_session_connection(
-            socket,
-            state.config.clone(),
+            invocation_session_websocket(socket, state.config.clone()),
             move |mut incoming, outbound, budgets, setup_complete| async move {
                 let _held = (outbound, budgets);
                 setup_complete.send(()).unwrap();
@@ -216,11 +271,13 @@ async fn buffered_output(websocket: WebSocket, state: Data<&SlowOutput>) -> impl
         .protocols([INVOCATION_SESSION_SUBPROTOCOL])
         .on_upgrade(move |socket| async move {
             serve_invocation_session_connection(
-                socket,
-                InvocationSessionConfig {
-                    keep_alive_interval: INTERVAL,
-                    ..Default::default()
-                },
+                invocation_session_websocket(
+                    socket,
+                    InvocationSessionConfig {
+                        keep_alive_interval: INTERVAL,
+                        ..Default::default()
+                    },
+                ),
                 move |_incoming, outbound, _budgets, setup_complete| async move {
                     let _held = (_incoming, _budgets);
                     setup_complete.send(()).unwrap();
@@ -319,7 +376,7 @@ async fn silent_invocation(websocket: WebSocket, enabled: Data<&bool>) -> impl I
             let _reader = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(read_websocket(
                 stream,
                 incoming,
-                Arc::new(Semaphore::new(SESSION_BYTE_BUDGET)),
+                SessionBudgets::new(),
             )));
             tokio::time::sleep(SILENCE).await;
             let finished = PublicServerMessage::InvocationFinished {
@@ -406,16 +463,23 @@ async fn invocation_session_times_out_when_client_does_not_read_pings() {
 }
 
 #[test]
-async fn prefetched_websocket_messages_retain_the_session_byte_budget() {
-    let budget = Arc::new(Semaphore::new(128));
+async fn prefetched_websocket_messages_retain_input_and_session_byte_budgets() {
+    let budgets = SessionBudgets {
+        input: Arc::new(Semaphore::new(128)),
+        session: Arc::new(Semaphore::new(128)),
+        ..SessionBudgets::new()
+    };
     let (incoming, mut messages) = mpsc::channel(CHANNEL_CAPACITY);
     let stream = futures::stream::iter([Ok(Message::Text("test".to_string()))]);
-    read_websocket(stream, incoming, budget.clone())
+    read_websocket(stream, incoming, budgets.clone())
         .await
         .unwrap();
-    assert_eq!(budget.available_permits(), 124);
+    assert_eq!(budgets.input.available_permits(), 124);
+    assert_eq!(budgets.session.available_permits(), 124);
     let message = messages.recv().await.unwrap().unwrap();
-    assert_eq!(budget.available_permits(), 124);
+    assert_eq!(budgets.input.available_permits(), 124);
+    assert_eq!(budgets.session.available_permits(), 124);
     drop(message);
-    assert_eq!(budget.available_permits(), 128);
+    assert_eq!(budgets.input.available_permits(), 128);
+    assert_eq!(budgets.session.available_permits(), 128);
 }

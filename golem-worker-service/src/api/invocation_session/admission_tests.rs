@@ -18,10 +18,29 @@ use std::time::Duration;
 use test_r::{test, timeout};
 use tokio_stream::wrappers::ReceiverStream;
 
+#[test]
+async fn maximum_inbound_frame_leaves_the_full_output_allowance_available() {
+    let budgets = SessionBudgets::new();
+    assert_eq!(
+        budgets.input.available_permits() + budgets.output.available_permits(),
+        SESSION_BYTE_BUDGET
+    );
+    assert!(budgets.input.available_permits() >= MAX_WEBSOCKET_MESSAGE_SIZE);
+    let admission = budgets
+        .admit_inbound_frame(MAX_WEBSOCKET_MESSAGE_SIZE)
+        .await
+        .unwrap();
+    assert_eq!(budgets.session.available_permits(), OUTPUT_BYTE_BUDGET);
+    drop(admission);
+    assert_eq!(budgets.input.available_permits(), INPUT_BYTE_BUDGET);
+    assert_eq!(budgets.session.available_permits(), SESSION_BYTE_BUDGET);
+}
+
 async fn reject_initial_with_saturated_data_budgets(first: Message) -> Message {
     let bytes = message_size(&first);
     let budgets = SessionBudgets {
         session: Arc::new(Semaphore::new(2 * bytes)),
+        input: Arc::new(Semaphore::new(2 * bytes)),
         ..SessionBudgets::new()
     };
     let _output = acquire_bytes(&budgets.output, OUTPUT_BYTE_BUDGET)
@@ -33,11 +52,7 @@ async fn reject_initial_with_saturated_data_budgets(first: Message) -> Message {
         .await
         .unwrap();
     let (incoming, messages) = mpsc::channel(CHANNEL_CAPACITY);
-    let reader = read_websocket(
-        ReceiverStream::new(received),
-        incoming,
-        budgets.session.clone(),
-    );
+    let reader = read_websocket(ReceiverStream::new(received), incoming, budgets.clone());
     futures::pin_mut!(reader);
     assert!(futures::poll!(&mut reader).is_pending());
     assert_eq!(budgets.session.available_permits(), 0);
