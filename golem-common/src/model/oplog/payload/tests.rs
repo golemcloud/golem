@@ -857,7 +857,7 @@ use crate::model::oplog::types::{
 };
 use crate::model::oplog::{
     HostPayloadPair, HostRequest, HostRequestCliEnvironmentGetEnvironment,
-    HostRequestEntityInvocation, HostRequestFileSystemPath,
+    HostRequestEntityInvocation, HostRequestFileSystemPath, HostRequestFileSystemPermissionDenial,
     HostRequestGolemAgentGetAgentTypeByAgentId, HostRequestGolemApiOplogEnrich,
     HostRequestGolemApiOplogRead, HostRequestGolemRpcActivate, HostRequestGolemToolGetTool,
     HostRequestGolemToolInvocationRejected, HostRequestGolemToolInvoke,
@@ -867,18 +867,19 @@ use crate::model::oplog::{
     HostRequestP3HttpClientRequestBodyFrame, HostRequestP3HttpClientSend,
     HostRequestP3SocketsConnect, HostRequestP3SocketsUdpSend, HostRequestRandomBytes, HostResponse,
     HostResponseCliEnvironmentGetEnvironment, HostResponseEntityInvocation,
-    HostResponseGolemAgentAgentType, HostResponseGolemApiOplogChunk,
-    HostResponseGolemApiOplogEntries, HostResponseGolemApiUnit, HostResponseGolemRpcActivate,
-    HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcScheduledInvocationCompat,
-    HostResponseGolemToolInvokeResult, HostResponseGolemToolResponseSecretHoldAdmission,
-    HostResponseGolemToolTool, HostResponseGolemToolTools, HostResponseGolemToolUnitOrFailure,
-    HostResponseKVDelete, HostResponseKVGet, HostResponseKVUnit,
-    HostResponseMonotonicClockTimestamp, HostResponseP3BlobstoreIncomingValueStream,
-    HostResponseP3FileSystemStat, HostResponseP3FileSystemWriteAdmission,
-    HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
-    HostResponseP3HttpClientRequestBodyTransmission, HostResponseP3HttpClientSendResult,
-    HostResponseP3KeyvalueIncomingValueStream, HostResponseP3MonotonicClockUnit,
-    HostResponseP3SocketsConnect, HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
+    HostResponseFileSystemPermissionDenied, HostResponseGolemAgentAgentType,
+    HostResponseGolemApiOplogChunk, HostResponseGolemApiOplogEntries, HostResponseGolemApiUnit,
+    HostResponseGolemRpcActivate, HostResponseGolemRpcScheduledInvocation,
+    HostResponseGolemRpcScheduledInvocationCompat, HostResponseGolemToolInvokeResult,
+    HostResponseGolemToolResponseSecretHoldAdmission, HostResponseGolemToolTool,
+    HostResponseGolemToolTools, HostResponseGolemToolUnitOrFailure, HostResponseKVDelete,
+    HostResponseKVGet, HostResponseKVUnit, HostResponseMonotonicClockTimestamp,
+    HostResponseP3BlobstoreIncomingValueStream, HostResponseP3FileSystemStat,
+    HostResponseP3FileSystemWriteAdmission, HostResponseP3HttpClientConsumeBodyChunk,
+    HostResponseP3HttpClientConsumeBodyResult, HostResponseP3HttpClientRequestBodyTransmission,
+    HostResponseP3HttpClientSendResult, HostResponseP3KeyvalueIncomingValueStream,
+    HostResponseP3MonotonicClockUnit, HostResponseP3SocketsConnect,
+    HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
     HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend,
     HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponseRandomBytes,
     HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock, host_functions,
@@ -1882,6 +1883,15 @@ fn p3_filesystem_host_payload_pairs_roundtrip() {
                 SerializableP3FsErrorCode::NotPermitted,
             )),
         },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::FilesystemPermissionDenied>(
+        HostRequestFileSystemPermissionDenial {
+            requests: vec![
+                ("delete".to_string(), "/source.txt".to_string()),
+                ("write".to_string(), "/target.txt".to_string()),
+            ],
+        },
+        HostResponseFileSystemPermissionDenied {},
     );
 }
 

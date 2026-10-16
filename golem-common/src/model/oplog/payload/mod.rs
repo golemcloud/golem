@@ -430,6 +430,10 @@ oplog_payload! {
         ToolAttachmentEndpoint { attachment: ToolAttachmentId, operation_ordinal: u64 },
         ToolAttachmentFail { attachment: ToolAttachmentId, operation_ordinal: u64, reason: ByteStreamFailure },
         ToolAttachmentFinish { attachment: ToolAttachmentId, operation_ordinal: u64 },
+        FileSystemPermissionDenial {
+            /// The `(verb, guest path)` pairs that the denied check covered.
+            requests: Vec<(String, String)>
+        },
     }
 }
 
@@ -775,6 +779,7 @@ oplog_payload! {
         ToolAttachmentWrite { outcome: ToolAttachmentWriteOutcome },
         ToolAttachmentTerminalResult { outcome: ToolAttachmentTerminalOutcome },
         ToolAttachmentClosed { cause: ByteStreamCloseCause },
+        FileSystemPermissionDenied {},
     }
 }
 
@@ -1039,7 +1044,8 @@ pub mod host_functions {
         (GolemToolStdinWait => "golem::tool::host::tool-stdin-closed", "wait", ToolAttachmentEndpoint, ToolAttachmentClosed),
         (GolemToolOutputWrite => "golem::tool::streams::tool-output-writer", "write", ToolAttachmentWrite, ToolAttachmentWrite),
         (GolemToolOutputFinish => "golem::tool::streams::tool-output-writer", "finish", ToolAttachmentFinish, ToolAttachmentTerminalResult),
-        (GolemToolOutputFail => "golem::tool::streams::tool-output-writer", "fail", ToolAttachmentFail, ToolAttachmentTerminalResult)
+        (GolemToolOutputFail => "golem::tool::streams::tool-output-writer", "fail", ToolAttachmentFail, ToolAttachmentTerminalResult),
+        (FilesystemPermissionDenied => "filesystem::permissions", "denied", FileSystemPermissionDenial, FileSystemPermissionDenied)
     }
 }
 

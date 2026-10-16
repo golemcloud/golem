@@ -50,7 +50,7 @@ use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, registry_test_card, start_with_overrides,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -2448,6 +2448,35 @@ async fn filesystem_rename_preflights_both_paths_before_mutating_source(
     Ok(())
 }
 
+/// Probe operations that each make one protected descriptor import on the preopened root.
+const PROTECTED_DESCRIPTOR_OPERATIONS: [&str; 22] = [
+    "read",
+    "read-via-stream",
+    "write",
+    "write-via-stream",
+    "append-via-stream",
+    "set-size",
+    "set-times",
+    "sync-data",
+    "sync",
+    "read-directory",
+    "stat",
+    "stat-at",
+    "metadata-hash",
+    "metadata-hash-at",
+    "readlink-at",
+    "create-directory-at",
+    "set-times-at",
+    "symlink-at",
+    "remove-directory-at",
+    "unlink-file-at",
+    "rename-at",
+    "link-at",
+];
+
+const PROTECTED_OPEN_OPERATIONS: [&str; 4] =
+    ["open-read", "open-create", "open-write", "open-truncate"];
+
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
@@ -2469,32 +2498,8 @@ async fn every_protected_p2_and_p3_filesystem_import_enforces_permissions(
     configure_scope_card_root(&authority, &component, &agent)?;
     executor.start_agent(&component.id, agent.clone()).await?;
 
-    let descriptor_operations = [
-        "read",
-        "read-via-stream",
-        "write",
-        "write-via-stream",
-        "append-via-stream",
-        "set-size",
-        "set-times",
-        "sync-data",
-        "sync",
-        "read-directory",
-        "stat",
-        "stat-at",
-        "metadata-hash",
-        "metadata-hash-at",
-        "readlink-at",
-        "create-directory-at",
-        "set-times-at",
-        "symlink-at",
-        "remove-directory-at",
-        "unlink-file-at",
-        "rename-at",
-        "link-at",
-    ];
     for preview in ["probe_p2", "probe_p3"] {
-        for operation in descriptor_operations {
+        for operation in PROTECTED_DESCRIPTOR_OPERATIONS {
             if preview == "probe_p3" && matches!(operation, "read" | "write") {
                 continue;
             }
@@ -2512,7 +2517,7 @@ async fn every_protected_p2_and_p3_filesystem_import_enforces_permissions(
                 "{preview} {operation} must return a typed NotPermitted denial, got {denied:?}"
             );
         }
-        for operation in ["open-read", "open-create", "open-write", "open-truncate"] {
+        for operation in PROTECTED_OPEN_OPERATIONS {
             let denied = executor
                 .invoke_and_await_agent(
                     &component,
@@ -2564,6 +2569,167 @@ async fn every_protected_p2_and_p3_filesystem_import_enforces_permissions(
         );
     }
     Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn denied_filesystem_imports_are_recorded_and_replayed_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("FileSystem")
+        .add_rw_file(
+            "FileSystem",
+            "/mutable/entry.txt",
+            "initial-file-system/files/foo.txt",
+        )?
+        .update_agent_provision_config("FileSystem", |config| {
+            config.initial_permissions.lower_bound.positive.extend([
+                filesystem_permission("read", "/mutable"),
+                filesystem_permission("list", "/mutable"),
+            ]);
+        })
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "denials-replay-after-restart");
+    configure_scope_card_root(&authority, &component, &agent)?;
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+
+    let mut probes = Vec::new();
+    for preview in ["probe_p2", "probe_p3"] {
+        for operation in PROTECTED_DESCRIPTOR_OPERATIONS {
+            if preview == "probe_p3" && matches!(operation, "read" | "write") {
+                continue;
+            }
+            probes.push((
+                preview,
+                operation,
+                String::new(),
+                format!("{preview}-{operation}"),
+            ));
+        }
+        for operation in PROTECTED_OPEN_OPERATIONS {
+            probes.push((
+                preview,
+                operation,
+                format!("{preview}-{operation}"),
+                String::new(),
+            ));
+        }
+        probes.push((
+            preview,
+            "unlink-file-at-mutable",
+            "/mutable".to_string(),
+            "entry.txt".to_string(),
+        ));
+    }
+    for (preview, operation, path, other) in &probes {
+        let denied = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent,
+                preview,
+                data_value!(*operation, path.clone(), other.clone()),
+            )
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert!(
+            denied.as_ref().is_err_and(|error| is_not_permitted(error)),
+            "{preview} {operation} must return a typed NotPermitted denial, got {denied:?}"
+        );
+    }
+
+    // P3 write-via-stream and append-via-stream record their stream admission in their own call.
+    let decision_functions = [
+        "filesystem::permissions::denied",
+        "filesystem::types::descriptor::write-via-stream",
+        "filesystem::types::descriptor::append-via-stream",
+    ];
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let denial_starts = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params)
+                if decision_functions.contains(&params.function_name.as_str()) =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        denial_starts.len(),
+        probes.len(),
+        "every denied import must record exactly one decision"
+    );
+    for start in &denial_starts {
+        assert!(
+            oplog.iter().any(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::End(params) if params.start_index == *start
+            )),
+            "the denial recorded at {start} must be complete"
+        );
+    }
+
+    let root_before_restart = root_names(&executor, &worker_id).await?;
+
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    // The new invocation replays every recorded denial first.
+    let after_restart = tokio::time::timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent(
+            &component,
+            &agent,
+            "probe_p3",
+            data_value!("stat-at", "", "after-restart"),
+        ),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("the replay of the recorded denials did not finish"))??
+    .into_typed::<Result<(), String>>()?;
+    assert!(
+        after_restart
+            .as_ref()
+            .is_err_and(|error| is_not_permitted(error)),
+        "a new stat-at after the replay must be denied, got {after_restart:?}"
+    );
+    assert_eq!(
+        executor
+            .get_file_contents(&worker_id, "/mutable/entry.txt")
+            .await?
+            .as_ref(),
+        b"foo\n",
+        "the replay must not apply the denied unlink"
+    );
+    // A denial that replays as allowed would create the probe's file, directory, or link.
+    assert_eq!(
+        root_names(&executor, &worker_id).await?,
+        root_before_restart,
+        "the replay must not apply a denied mutation of the root directory"
+    );
+    Ok(())
+}
+
+async fn root_names(
+    executor: &TestWorkerExecutor,
+    worker_id: &AgentId,
+) -> anyhow::Result<BTreeSet<String>> {
+    Ok(executor
+        .get_file_system_node(worker_id, "/")
+        .await?
+        .into_iter()
+        .map(|node| node.name)
+        .collect())
 }
 
 #[test]

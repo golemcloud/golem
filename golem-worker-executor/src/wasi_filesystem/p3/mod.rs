@@ -22,13 +22,14 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use crate::durable_host::authorization::targets::CanonicalGuestPath;
+use crate::durable_host::concurrent::reserve_access_invocation_id;
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_p3_view, durable_worker_ctx, observe_function_call,
-    observe_function_call_store, reserve_invocation_id_before_await, run_read_access,
+    observe_function_call_store, run_read_access,
 };
 use crate::durable_host::tail_work::TailActivity;
 use crate::durable_host::{
-    CallReplayOutcome, DurableCallSession, LiveAuthorizationPermit, NotCancellable,
+    CallReplayOutcome, Cancellable, DurableCallSession, LiveAuthorizationPermit, NotCancellable,
     authorize_live_permissions_at_serialized_access,
 };
 use crate::services::agent_filesystem::{
@@ -38,9 +39,10 @@ use crate::services::agent_filesystem::{
     SymlinkTarget, Target as AgentTarget, TimeChange, TimeChanges, WritePlacement, WriteResult,
 };
 use crate::wasi_filesystem::{
-    AgentDescriptor, AgentOpenRequest, AgentOpenRouteError, advance_write_placement,
-    agent_descriptor_guest_path, calculate_metadata_hash_parts, delete_agent_descriptor,
-    filesystem_permission_targets, flush_level, get_agent_descriptor, push_agent_descriptor,
+    AgentDescriptor, AgentOpenRequest, AgentOpenRouteError, FilesystemAdmission,
+    advance_write_placement, agent_descriptor_guest_path, calculate_metadata_hash_parts,
+    delete_agent_descriptor, filesystem_admission, filesystem_permission_targets, flush_level,
+    get_agent_descriptor, permission_denial_request, push_agent_descriptor,
     resize_attribute_changes, route_agent_flush, route_agent_namespace_edit, route_agent_open,
     route_agent_set_attributes, route_agent_write, run_agent_filesystem_call,
 };
@@ -49,14 +51,17 @@ use bytes::{Bytes, BytesMut};
 use golem_common::model::card::FilesystemVerb;
 use golem_common::model::entity::FilesystemCapability;
 use golem_common::model::oplog::host_functions::{
-    P3FilesystemTypesDescriptorAppendViaStream, P3FilesystemTypesDescriptorStat,
-    P3FilesystemTypesDescriptorStatAt, P3FilesystemTypesDescriptorWriteViaStream,
+    FilesystemPermissionDenied, P3FilesystemTypesDescriptorAppendViaStream,
+    P3FilesystemTypesDescriptorStat, P3FilesystemTypesDescriptorStatAt,
+    P3FilesystemTypesDescriptorWriteViaStream,
 };
 use golem_common::model::oplog::types::{SerializableFileTimes, SerializableP3FileSystemError};
 use golem_common::model::oplog::{
-    DurableFunctionType, HostPayloadPair, HostRequestFileSystemPath, HostRequestNoInput,
-    HostResponseP3FileSystemStat, HostResponseP3FileSystemWriteAdmission,
+    DurableFunctionType, DurableInvocationId, HostPayloadPair, HostRequestFileSystemPath,
+    HostRequestNoInput, HostResponseFileSystemPermissionDenied, HostResponseP3FileSystemStat,
+    HostResponseP3FileSystemWriteAdmission,
 };
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use wasmtime::component::{
     Access, Accessor, AccessorTask, Destination, FutureReader, Linker, Resource, Source,
     StreamConsumer, StreamProducer, StreamReader, StreamResult,
@@ -135,28 +140,64 @@ fn p3_stable_initial_file_stat(mut stat: types::DescriptorStat) -> types::Descri
     stat
 }
 
-async fn authorize_paths<Ctx: WorkerCtx, U: 'static>(
+/// Checks the filesystem permissions of a protected guest import, and gives the decision a track
+/// in the oplog (see [`FilesystemAdmission`]). It reserves the invocation id of the import, so it
+/// must run before the import's first `await`.
+async fn authorize_paths<Ctx: WorkerCtx, U: Send + 'static>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     requests: &[(FilesystemVerb, CanonicalGuestPath)],
 ) -> FilesystemResult<Option<LiveAuthorizationPermit>> {
-    let targets = accessor.with(|mut access| {
-        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-        ctx.is_live()
-            .then(|| filesystem_permission_targets(ctx, requests))
-    });
-    let Some(targets) = targets else {
-        return Ok(None);
-    };
-    match authorize_live_permissions_at_serialized_access(
+    let invocation_id = reserve_access_invocation_id(accessor, durable_worker_ctx::<Ctx, U>)
+        .map_err(|error| FilesystemError::trap(wasmtime::Error::from(error)))?
+        .reserved();
+    let admission = accessor
+        .with(|mut access| {
+            filesystem_admission(
+                durable_worker_ctx::<Ctx, U>(access.data_mut()),
+                invocation_id,
+                requests,
+            )
+        })
+        .map_err(|error| FilesystemError::trap(wasmtime::Error::from(error)))?;
+    match admission {
+        FilesystemAdmission::ReplayedAllowed => Ok(None),
+        FilesystemAdmission::Check(targets) => {
+            match authorize_live_permissions_at_serialized_access(
+                accessor,
+                durable_worker_ctx::<Ctx, U>,
+                &targets,
+            )
+            .await
+            .map_err(|error| FilesystemError::trap(wasmtime::Error::from(error)))?
+            {
+                Ok(permit) => Ok(Some(permit)),
+                Err(_) => Err(record_permission_denial(accessor, invocation_id, requests).await),
+            }
+        }
+        FilesystemAdmission::RecordedDenial => {
+            Err(record_permission_denial(accessor, invocation_id, requests).await)
+        }
+    }
+}
+
+/// Records a live denial, or replays the recorded denial, under the invocation id of the import.
+async fn record_permission_denial<Ctx: WorkerCtx, U: Send + 'static>(
+    accessor: &Accessor<U, DurableP3<Ctx>>,
+    invocation_id: Option<DurableInvocationId>,
+    requests: &[(FilesystemVerb, CanonicalGuestPath)],
+) -> FilesystemError {
+    match DurableCallSession::<FilesystemPermissionDenied, Cancellable>::invoke_access_with_reserved_invocation_id(
         accessor,
         durable_worker_ctx::<Ctx, U>,
-        &targets,
+        invocation_id,
+        permission_denial_request(requests),
+        DurableFunctionType::ReadLocal,
+        async || -> wasmtime::Result<_> { Ok(HostResponseFileSystemPermissionDenied {}) },
     )
     .await
-    .map_err(|error| FilesystemError::trap(wasmtime::Error::from(error)))?
     {
-        Ok(permit) => Ok(Some(permit)),
-        Err(_) => Err(types::ErrorCode::NotPermitted.into()),
+        Ok(HostResponseFileSystemPermissionDenied {}) => types::ErrorCode::NotPermitted.into(),
+        Err(error) => FilesystemError::trap(error),
     }
 }
 
@@ -1216,17 +1257,8 @@ where
         DurableFunctionType::ReadLocal,
         async move |start| {
             if start.is_live {
-                let result = match descriptor_guest_path_from_accessor::<Ctx, U>(
-                    accessor,
-                    &Resource::new_borrow(fd_rep),
-                    "",
-                ) {
-                    Ok(path) => authorize_paths(accessor, &[(FilesystemVerb::Write, path)])
-                        .await
-                        .map_err(|_| ()),
-                    Err(_) => Err(()),
-                };
-                *authorization_for_start.lock().unwrap() = Some(result);
+                let permit = check_stream_write::<Ctx, U>(accessor, fd_rep).await?;
+                *authorization_for_start.lock().unwrap() = Some(permit);
             }
             Ok(HostRequestNoInput {})
         },
@@ -1236,17 +1268,13 @@ where
 
     let mut authorization_permit = None;
     let response = if handle.is_live() {
-        let result = authorization_result
-            .lock()
-            .unwrap()
-            .take()
-            .unwrap_or(Err(()));
-        let response = match result {
-            Ok(permit) => {
-                authorization_permit = permit;
+        let permit = authorization_result.lock().unwrap().take().flatten();
+        let response = match permit {
+            Some(permit) => {
+                authorization_permit = Some(permit);
                 HostResponseP3FileSystemWriteAdmission { result: Ok(()) }
             }
-            Err(()) => HostResponseP3FileSystemWriteAdmission {
+            None => HostResponseP3FileSystemWriteAdmission {
                 result: Err(serialize_write_admission_error(
                     types::ErrorCode::NotPermitted,
                 )),
@@ -1278,6 +1306,32 @@ where
     };
 
     Ok(deserialize_write_admission(response.result)?.map(|()| authorization_permit))
+}
+
+/// Checks the write permission of a stream write while live. `None` denies the write. An
+/// executor error fails the admission before it records its `Start`.
+async fn check_stream_write<Ctx: WorkerCtx, U: 'static>(
+    accessor: &Accessor<U, DurableP3<Ctx>>,
+    fd_rep: u32,
+) -> Result<Option<LiveAuthorizationPermit>, WorkerExecutorError> {
+    let Ok(path) =
+        descriptor_guest_path_from_accessor::<Ctx, U>(accessor, &Resource::new_borrow(fd_rep), "")
+    else {
+        return Ok(None);
+    };
+    let targets = accessor.with(|mut access| {
+        filesystem_permission_targets(
+            durable_worker_ctx::<Ctx, U>(access.data_mut()),
+            &[(FilesystemVerb::Write, path)],
+        )
+    });
+    Ok(authorize_live_permissions_at_serialized_access(
+        accessor,
+        durable_worker_ctx::<Ctx, U>,
+        &targets,
+    )
+    .await?
+    .ok())
 }
 
 fn serialize_stat_result(
@@ -1515,10 +1569,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
     ) -> wasmtime::Result<(StreamReader<u8>, FutureReader<Result<(), types::ErrorCode>>)> {
         let path = descriptor_guest_path_from_accessor::<Ctx, U>(accessor, &fd, "")?;
         if let Err(error) = authorize_paths(accessor, &[(FilesystemVerb::Read, path)]).await {
-            let code = error
-                .downcast_ref()
-                .cloned()
-                .unwrap_or(types::ErrorCode::NotPermitted);
+            let code = error.downcast()?;
             return accessor.with(|mut store| {
                 Ok((
                     StreamReader::new(&mut store, Vec::<u8>::new())?,
@@ -1865,9 +1916,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         FutureReader<Result<(), types::ErrorCode>>,
     )> {
         let path = descriptor_guest_path_from_accessor::<Ctx, U>(accessor, &fd, "")?;
-        let denied = authorize_paths(accessor, &[(FilesystemVerb::List, path)])
-            .await
-            .is_err();
+        let denied = match authorize_paths(accessor, &[(FilesystemVerb::List, path)]).await {
+            Ok(_) => None,
+            Err(error) => Some(error.downcast()?),
+        };
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1880,8 +1932,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         });
         let descriptor =
             accessor.with(|mut store| agent_descriptor_from_access::<Ctx, U>(&mut store, &fd))?;
-        let call = if denied {
-            Err(types::ErrorCode::NotPermitted.into())
+        let call = if let Some(code) = denied {
+            Err(code.into())
         } else {
             descriptor.with_node(|node| match node {
                 OpenNode::Directory(directory) => {
@@ -1975,8 +2027,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         store: &Accessor<U, Self>,
         fd: Resource<Descriptor>,
     ) -> FilesystemResult<types::DescriptorStat> {
-        reserve_invocation_id_before_await(store, durable_worker_ctx::<Ctx, U>)
-            .map_err(|error| FilesystemError::trap(wasmtime::Error::from(error)))?;
         let guest_path = descriptor_guest_path_from_accessor::<Ctx, U>(store, &fd, "")?;
         let _authorization_permit =
             authorize_paths(store, &[(FilesystemVerb::Stat, guest_path.clone())]).await?;
@@ -2038,8 +2088,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         path_flags: types::PathFlags,
         path: String,
     ) -> FilesystemResult<types::DescriptorStat> {
-        reserve_invocation_id_before_await(store, durable_worker_ctx::<Ctx, U>)
-            .map_err(|error| FilesystemError::trap(wasmtime::Error::from(error)))?;
         let guest_path = descriptor_guest_path_from_accessor::<Ctx, U>(store, &fd, &path)?;
         let _authorization_permit =
             authorize_paths(store, &[(FilesystemVerb::Stat, guest_path.clone())]).await?;

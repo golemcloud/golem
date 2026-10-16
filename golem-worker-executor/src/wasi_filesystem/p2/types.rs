@@ -43,22 +43,23 @@ use crate::services::agent_filesystem::{
 use crate::workerctx::WorkerCtx;
 use golem_common::model::card::FilesystemVerb;
 use golem_common::model::oplog::host_functions::{
-    FilesystemTypesDescriptorStat, FilesystemTypesDescriptorStatAt,
+    FilesystemPermissionDenied, FilesystemTypesDescriptorStat, FilesystemTypesDescriptorStatAt,
 };
 use golem_common::model::oplog::types::{
     FileSystemError, SerializableDateTime, SerializableFileTimes,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestFileSystemPath, HostResponseFileSystemStat,
+    DurableFunctionType, DurableInvocationId, HostRequestFileSystemPath,
+    HostResponseFileSystemPermissionDenied, HostResponseFileSystemStat,
 };
 
 use crate::wasi_filesystem::{
-    AgentDescriptor, AgentOpenRequest, AgentOpenRouteError, advance_write_placement,
-    agent_descriptor_guest_path, calculate_metadata_hash_parts, delete_agent_descriptor,
-    filesystem_permission_targets, flush_level, get_agent_descriptor, push_agent_descriptor,
-    resize_attribute_changes, route_agent_flush, route_agent_namespace_edit, route_agent_open,
-    route_agent_set_attributes, route_agent_write, route_replay_timestamp_restoration,
-    run_agent_filesystem_call,
+    AgentDescriptor, AgentOpenRequest, AgentOpenRouteError, FilesystemAdmission,
+    advance_write_placement, agent_descriptor_guest_path, calculate_metadata_hash_parts,
+    delete_agent_descriptor, filesystem_admission, flush_level, get_agent_descriptor,
+    permission_denial_request, push_agent_descriptor, resize_attribute_changes, route_agent_flush,
+    route_agent_namespace_edit, route_agent_open, route_agent_set_attributes, route_agent_write,
+    route_replay_timestamp_restoration, run_agent_filesystem_call,
 };
 
 fn p2_descriptor_guest_path(
@@ -97,17 +98,51 @@ fn p2_stable_initial_file_stat(mut stat: DescriptorStat) -> DescriptorStat {
     stat
 }
 
+/// Checks the filesystem permissions of a protected guest import, and gives the decision a track
+/// in the oplog (see [`FilesystemAdmission`]). It reserves the invocation id of the import, both
+/// live and during replay, so the ids of later calls do not depend on the decision.
 async fn authorize_paths<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     requests: &[(FilesystemVerb, CanonicalGuestPath)],
 ) -> Result<Option<LiveAuthorizationPermit>, FsError> {
-    if !ctx.is_live() {
-        return Ok(None);
+    let invocation_id = ctx
+        .direct_call_invocation_id(&DurableFunctionType::ReadLocal)
+        .map_err(|error| FsError::trap(wasmtime::Error::from(error)))?;
+    match filesystem_admission(ctx, invocation_id, requests)
+        .map_err(|error| FsError::trap(wasmtime::Error::from(error)))?
+    {
+        FilesystemAdmission::ReplayedAllowed => Ok(None),
+        FilesystemAdmission::Check(targets) => match ctx
+            .authorize_live_permissions(&targets)
+            .await
+            .map_err(|error| FsError::trap(wasmtime::Error::from(error)))?
+        {
+            Ok(permit) => Ok(Some(permit)),
+            Err(_) => Err(record_permission_denial(ctx, invocation_id, requests).await),
+        },
+        FilesystemAdmission::RecordedDenial => {
+            Err(record_permission_denial(ctx, invocation_id, requests).await)
+        }
     }
-    let targets = filesystem_permission_targets(ctx, requests);
-    match ctx.authorize_live_permissions(&targets).await {
-        Ok(Ok(permit)) => Ok(Some(permit)),
-        Ok(Err(_)) | Err(_) => Err(ErrorCode::NotPermitted.into()),
+}
+
+/// Records a live denial, or replays the recorded denial, under the invocation id of the import.
+async fn record_permission_denial<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    invocation_id: Option<DurableInvocationId>,
+    requests: &[(FilesystemVerb, CanonicalGuestPath)],
+) -> FsError {
+    match DurableCallSession::<FilesystemPermissionDenied, NotCancellable>::invoke_with_reserved_invocation_id(
+        ctx,
+        invocation_id,
+        permission_denial_request(requests),
+        DurableFunctionType::ReadLocal,
+        async |_ctx| -> wasmtime::Result<_> { Ok(HostResponseFileSystemPermissionDenied {}) },
+    )
+    .await
+    {
+        Ok(HostResponseFileSystemPermissionDenied {}) => ErrorCode::NotPermitted.into(),
+        Err(error) => FsError::trap(error),
     }
 }
 

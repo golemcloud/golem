@@ -1456,6 +1456,24 @@ a different oplog shape. The host-call observation counter is still incremented 
 fast path. The check lives in `services/agent_filesystem/lifecycle/mod.rs::is_immutable_initial_file`;
 the P2/P3 adapters live in `wasi_filesystem/{p2/types.rs,p3/mod.rs}`.
 
+Filesystem permission decisions have a track in the oplog. Every protected P2/P3 filesystem import
+reserves its durable invocation id at entry, live and during replay, and decides through
+`wasi_filesystem::filesystem_admission`. A live check that denies the import records a complete
+`filesystem::permissions::denied` `Start`/`End` (`ReadLocal`; the request holds the verbs and the
+guest paths) under that id and returns `not-permitted`. An allowed import records nothing. The
+recovery-metadata scan indexes these denials by invocation id (`ReplayCursor::permission_denials`;
+a growing replay target extends it, a shrinking target and `Jump`s prune it), so a replayed import
+whose id is indexed claims its recorded denial. An indexed id that reaches the import after
+`durable_call_is_live` traps instead of recording a second denial. Any other import that runs
+before the Store is live continues without a check: this includes new imports in the replay tail
+after a crash, before live publication, which is the same window every live-only authorization
+check has. The decision comes before the immutable initial-file fast path, so that path cannot hide
+a denial. P3 `write-via-stream` and `append-via-stream` keep recording their admission in their own
+call (`admit_stream_write`); an executor error of that check fails the call before its `Start`, and
+the repair of an incomplete admission `Start` completes it as allowed, because authorization cannot
+run during replay. Tests: `tests/scope_cards.rs::denied_filesystem_imports_are_recorded_and_replayed_after_restart`,
+`replay_state/tests.rs::recorded_permission_denials_follow_the_visible_replayed_range`.
+
 Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic
 capability escape refusal as `SandboxEscape`; P2/P3 return `access`, or EACCES, and keep the
 filesystem generation valid. Other `PermissionDenied` failures are terminal. The lifecycle can

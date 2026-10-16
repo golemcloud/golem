@@ -29,6 +29,9 @@ use crate::services::agent_filesystem::{
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use golem_common::model::card::{FilesystemVerb, PermissionTarget};
+use golem_common::model::oplog::DurableInvocationId;
+use golem_common::model::oplog::HostRequestFileSystemPermissionDenial;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use metrohash::MetroHash128;
 use wasmtime::component::{Resource, ResourceTableError};
 
@@ -106,6 +109,66 @@ fn canonical_guest_path_from_descriptor_path(
         path => format!("/{path}"),
     };
     CanonicalGuestPath::new(&absolute)?.resolve(relative)
+}
+
+/// How a protected filesystem import decides its permission check.
+///
+/// A live check that denies the import records the denial as a durable call under the
+/// invocation id of the import, and an allowed check records nothing. Replay never checks
+/// permissions: an import whose id has a recorded denial replays the denial, and any other import
+/// that runs before the Store is live continues as allowed.
+pub(crate) enum FilesystemAdmission {
+    /// The history records a denial of this import.
+    RecordedDenial,
+    /// The Store is live: check the targets now and record a denial.
+    Check(Vec<PermissionTarget>),
+    /// The Store is not live and the history records no denial of this import.
+    ReplayedAllowed,
+}
+
+/// Fails when the history records a denial for an import that can no longer replay it: a durable
+/// call admitted live would record a second denial under the same invocation id.
+pub(crate) fn filesystem_admission<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    invocation_id: Option<DurableInvocationId>,
+    requests: &[(FilesystemVerb, CanonicalGuestPath)],
+) -> Result<FilesystemAdmission, WorkerExecutorError> {
+    match invocation_id {
+        Some(invocation_id) if ctx.has_recorded_permission_denial(invocation_id) => {
+            if ctx.durable_call_is_live() {
+                Err(WorkerExecutorError::runtime(format!(
+                    "the filesystem permission denial of invocation id {invocation_id} is recorded, but the import runs after replay"
+                )))
+            } else {
+                Ok(FilesystemAdmission::RecordedDenial)
+            }
+        }
+        _ if ctx.is_live() => Ok(FilesystemAdmission::Check(filesystem_permission_targets(
+            ctx, requests,
+        ))),
+        _ => Ok(FilesystemAdmission::ReplayedAllowed),
+    }
+}
+
+/// The request of the durable call that records a filesystem permission denial.
+pub(crate) fn permission_denial_request(
+    requests: &[(FilesystemVerb, CanonicalGuestPath)],
+) -> HostRequestFileSystemPermissionDenial {
+    HostRequestFileSystemPermissionDenial {
+        requests: requests
+            .iter()
+            .map(|(verb, path)| {
+                let verb = match verb {
+                    FilesystemVerb::Read => "read",
+                    FilesystemVerb::Write => "write",
+                    FilesystemVerb::List => "list",
+                    FilesystemVerb::Stat => "stat",
+                    FilesystemVerb::Delete => "delete",
+                };
+                (verb.to_string(), path.as_str().to_string())
+            })
+            .collect(),
+    }
 }
 
 pub(crate) fn filesystem_permission_targets<Ctx: WorkerCtx>(

@@ -239,7 +239,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 pub(crate) use concurrent::{
-    CallReplayOutcome, DurableCallSession, NotCancellable,
+    CallReplayOutcome, Cancellable, DurableCallSession, NotCancellable,
     authorize_live_permissions_at_serialized_access,
 };
 pub use durability::*;
@@ -939,6 +939,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub(crate) fn is_live(&self) -> bool {
         self.state.is_live()
+    }
+
+    /// See [`WorkerState::durable_call_is_live`].
+    pub(crate) fn durable_call_is_live(&self) -> bool {
+        self.state.durable_call_is_live()
+    }
+
+    /// Whether the replayed history records a filesystem permission denial for the guest import
+    /// with `invocation_id`.
+    pub(crate) fn has_recorded_permission_denial(
+        &self,
+        invocation_id: golem_common::model::oplog::DurableInvocationId,
+    ) -> bool {
+        self.state
+            .replay_state
+            .has_recorded_permission_denial(invocation_id)
     }
 
     pub(crate) fn filesystem_generation_handle(&self) -> FilesystemGenerationHandle {

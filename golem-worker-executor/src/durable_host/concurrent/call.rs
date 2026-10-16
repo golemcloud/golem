@@ -1355,6 +1355,34 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             .await
     }
 
+    /// Like [`Self::invoke`], for a direct guest import that reserved its invocation id with
+    /// [`DurableWorkerCtx::direct_call_invocation_id`] before it decided to make this call.
+    pub(crate) async fn invoke_with_reserved_invocation_id<Ctx, A, E>(
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        invocation_id: Option<DurableInvocationId>,
+        request: Pair::Req,
+        function_type: DurableFunctionType,
+        live_action: A,
+    ) -> Result<Pair::Resp, E>
+    where
+        Ctx: WorkerCtx,
+        E: DurableCallTrapError,
+        A: AsyncFnOnce(&mut DurableWorkerCtx<Ctx>) -> Result<Pair::Resp, E>,
+    {
+        let begun = Self::begin_inner_with_invocation_id(
+            ctx,
+            function_type,
+            false,
+            InvocationIdSource::Reserved(invocation_id),
+        )
+        .await?;
+        let handle = match begun.resolve(ctx).await? {
+            ResolvedCall::Live(begun) => begun.start_live(ctx, request).await?,
+            ResolvedCall::Replay(handle) => handle,
+        };
+        handle.run(ctx, live_action).await
+    }
+
     async fn start_inner<Ctx: WorkerCtx>(
         ctx: &mut DurableWorkerCtx<Ctx>,
         request: Pair::Req,
@@ -3596,6 +3624,21 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         function_type: DurableFunctionType,
         requires_agent_authority: bool,
     ) -> Result<BegunCall<Pair, P>, WorkerExecutorError> {
+        Self::begin_inner_with_invocation_id(
+            ctx,
+            function_type,
+            requires_agent_authority,
+            InvocationIdSource::AtStart,
+        )
+        .await
+    }
+
+    async fn begin_inner_with_invocation_id<Ctx: WorkerCtx>(
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        function_type: DurableFunctionType,
+        requires_agent_authority: bool,
+        invocation_id: InvocationIdSource,
+    ) -> Result<BegunCall<Pair, P>, WorkerExecutorError> {
         // Capture and validate the host task's immutable initiation-time context before the first
         // await. Calls already in flight retain this owner after the guest leaves the lexical scope.
         let custom_invocation_scope =
@@ -3605,7 +3648,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 .and_then(CustomInvocationContext::current);
         let observational_owner = resolve_observational_owner(ctx, None, custom_invocation_scope)?;
         // A direct call holds the Store, so it reserves its invocation id in guest call order.
-        let invocation_id = ctx.direct_call_invocation_id(&function_type)?;
+        let invocation_id = match invocation_id {
+            InvocationIdSource::AtStart => ctx.direct_call_invocation_id(&function_type)?,
+            InvocationIdSource::Reserved(invocation_id) => invocation_id,
+        };
         drain_queued_dropped_call_events(ctx)
             .await
             .map_err(|err| err.source)?;
@@ -4217,11 +4263,58 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         A: AsyncFnOnce() -> Result<Pair::Resp, E>,
     {
         let call = Self::start_access(store, get_ctx, request, function_type).await?;
-        if call.is_live() {
-            call.run_live_action_access(store, get_ctx, live_action)
+        call.drive_access(store, get_ctx, live_action).await
+    }
+
+    /// [`Self::invoke_access`] for a guest import that reserved its invocation id earlier with
+    /// [`reserve_access_invocation_id`].
+    pub(crate) async fn invoke_access_with_reserved_invocation_id<T, D, Ctx, A, E>(
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        invocation_id: Option<DurableInvocationId>,
+        request: Pair::Req,
+        function_type: DurableFunctionType,
+        live_action: A,
+    ) -> Result<Pair::Resp, E>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+        E: DurableCallTrapError,
+        A: AsyncFnOnce() -> Result<Pair::Resp, E>,
+    {
+        let call = Self::start_access_with_options(
+            store,
+            get_ctx,
+            function_type,
+            AccessClaimOptions {
+                invocation_id: InvocationIdSource::Reserved(invocation_id),
+                ..AccessClaimOptions::default()
+            },
+            async move |_| Ok(request),
+        )
+        .await?;
+        call.drive_access(store, get_ctx, live_action).await
+    }
+
+    async fn drive_access<T, D, Ctx, A, E>(
+        self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        live_action: A,
+    ) -> Result<Pair::Resp, E>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+        E: DurableCallTrapError,
+        A: AsyncFnOnce() -> Result<Pair::Resp, E>,
+    {
+        if self.is_live() {
+            self.run_live_action_access(store, get_ctx, live_action)
                 .await
         } else {
-            match call.replay_access(store, get_ctx).await? {
+            match self.replay_access(store, get_ctx).await? {
                 CallReplayOutcome::Replayed(response) => Ok(response),
                 CallReplayOutcome::Incomplete(call) => {
                     call.run_live_action_access(store, get_ctx, live_action)
