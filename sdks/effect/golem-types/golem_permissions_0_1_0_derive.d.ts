@@ -6,8 +6,10 @@
  * upper-positive grants to retain and which lower-negative and
  * upper-negative grants to add, plus an optional lifespan.
  * Requested grants must be concrete. A grant with a slot variable (`?agent`,
- * `?env`, ...) is rejected with `invalid-pattern`; deriving a template card
- * is not supported yet.
+ * `?env`, ...) is rejected with `invalid-pattern`: deriving a new template
+ * card, with slot variables in its grants, is not supported yet. A template
+ * parent in the caller's wallet is resolved for the caller, so the child is
+ * a concrete card.
  */
 declare module 'golem:permissions/derive@0.1.0' {
   import * as golemCore200Types from 'golem:core/types@2.0.0';
