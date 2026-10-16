@@ -4258,6 +4258,7 @@ dependencies = [
  "tryhard",
  "url",
  "uuid",
+ "zstd",
 ]
 
 [[package]]
