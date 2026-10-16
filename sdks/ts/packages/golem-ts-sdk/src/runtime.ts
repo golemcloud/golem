@@ -93,6 +93,8 @@ import {
   CachePolicy,
 } from 'golem:agent/common@2.0.0';
 
+const reservedStateFields = new Set(['config', 'getId', 'getPhantomId', 'getPrincipal']);
+
 /**
  * Resolve a method's `readOnly` option to the WIT `read-only-config`, or
  * `undefined` when the method is not read-only. A bare `true` uses the
@@ -841,9 +843,7 @@ class ResolvedAgentImpl {
     }
 
     const { ordinary, databaseParts, fileDatabases } = takeDatabases(
-      Object.entries(this.instance).filter(
-        ([k]) => k !== 'config' && k !== 'getId' && k !== 'getPhantomId' && k !== 'getPrincipal',
-      ),
+      Object.entries(this.instance).filter(([k]) => !reservedStateFields.has(k)),
     );
     for (const [k, val] of Object.entries(ordinary)) {
       assertNoNestedSnapshotResources(val, k);
@@ -982,6 +982,14 @@ export function registerAgentInitiator(
   ): ResolvedAgentImpl => {
     const { sdkPrincipal, config } = context;
     const instance: Record<string, unknown> = { ...(state as Record<string, unknown>) };
+    for (const key of Object.keys(instance)) {
+      if (reservedStateFields.has(key)) {
+        const purpose = key === 'config' ? 'the agent configuration' : 'an SDK helper';
+        throw new Error(
+          `State field "${key}" is reserved by the SDK (this.${key} is ${purpose}); rename it.`,
+        );
+      }
+    }
     instance.getId = getRawSelfAgentId;
     instance.getPhantomId = () => getRawSelfAgentId().parsedWire()[2];
     instance.getPrincipal = () => sdkPrincipal;
@@ -1011,17 +1019,16 @@ export function registerAgentInitiator(
           phantomId,
           config,
         });
+        return {
+          tag: 'ok',
+          val: complete(state, resolved.val) as never,
+        };
       } catch (e) {
         return {
           tag: 'err',
           val: createCustomError(`Agent ${reg.name} initialization failed: ${errorMessage(e)}`),
         };
       }
-
-      return {
-        tag: 'ok',
-        val: complete(state, resolved.val) as never,
-      };
     },
     async loadSnapshot(constructorInput, principal, bytes, mimeType, databases, parts = new Map()) {
       const resolved = resolveContext(constructorInput, principal);
@@ -1088,13 +1095,13 @@ export function registerAgentInitiator(
 
           restoreDatabases(state as Record<string, unknown>, databases);
         }
+        return { tag: 'ok', val: complete(state, resolved.val) as never };
       } catch (e) {
         return {
           tag: 'err',
           val: createCustomError(`Agent ${reg.name} restoration failed: ${errorMessage(e)}`),
         };
       }
-      return { tag: 'ok', val: complete(state, resolved.val) as never };
     },
   });
 }

@@ -59,7 +59,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-initial-files` | Adding initial files to agent filesystems via golem.yaml |
 | `golem-file-io-rust` | Reading and writing files from agent code |
 | `golem-add-llm-rust` | Adding LLM and AI capabilities using golem-ai libraries |
-| `golem-make-http-request-rust` | Making outgoing HTTP requests from agent code using wstd |
+| `golem-make-http-request-rust` | Making outgoing HTTP requests from agent code using `golem_rust::http` (WASI HTTP p3) |
 | `golem-logging-rust` | Adding logging to a Rust Golem agent using the `log` crate |
 | `golem-enable-otlp-rust` | Enabling the OpenTelemetry (OTLP) plugin for a Rust agent — exporting traces, logs, and metrics to an OTLP collector, adding custom spans with the invocation context API |
 | `golem-view-agent-logs` | Viewing agent logs and output via streaming |
@@ -101,7 +101,7 @@ Golem **automatically retries** retryable host-operation failures using durable 
 
 Retryable failures in the following operations are handled transparently:
 
-- **HTTP requests** to external services (via `wstd::http`, `golem-wasi-http`, `wasi:http`, etc.)
+- **HTTP requests** to external services (via `golem_rust::http` or low-level WASI HTTP p3 bindings in `golem_rust::wasip3`)
 - **RPC calls** between agents
 - **Database / storage calls** — `golem:rdbms/postgres`, `golem:rdbms/mysql`, `golem:rdbms/ignite2`, `wasi:blobstore`, `wasi:keyvalue`
 
@@ -147,10 +147,9 @@ golem-temp/                       # Build artifacts (gitignored)
 
 From your component (or shared workspace) `Cargo.toml`:
 - `golem-rust` (with `export_golem_agentic` feature) — agent framework, durability, transactions
-- `wstd` — WASI standard library (HTTP client via `wstd::http`, async I/O, etc.)
+- `golem_rust::http` — WASI HTTP p3 client included in `golem-rust`; no additional HTTP dependency is needed. Build a `Request<Vec<u8>>` with the reexported standard `http` types, call `send(request).await`, then consume the response with `response_bytes`, `response_text`, or `response_json`. Use `golem_rust::wasip3` for low-level p3 bindings.
 - `log` — logging (uses `wasi-logger` backend, logs visible via `golem agent stream`)
 - `serde` / `serde_json` — serialization
-- Optional: `golem-wasi-http` — advanced HTTP client alternative
 
 To enable AI features, add the relevant golem-ai provider crate as a dependency (e.g., `golem-ai-llm-openai`).
 
@@ -189,4 +188,3 @@ If you see `This action requires confirmation, but the current shell is non-inte
 - Full docs: https://learn.golem.cloud
 - golem-rust SDK: https://docs.rs/golem-rust
 <!-- golem-managed:guide:rust:end -->
-
