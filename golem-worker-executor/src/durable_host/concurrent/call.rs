@@ -2643,6 +2643,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 )
             })?;
 
+        if is_live
+            && !prepared.unpersisted
+            && let Some(hook) =
+                store.with(|mut access| get_ctx(access.data_mut()).replay_admission_hook())
+        {
+            hook.before_replay_access_start(Pair::FQFN, ReplayAdmissionStage::BeforeLiveStart)
+                .await;
+        }
+
         if is_live {
             if prepared.unpersisted {
                 let start_idx = prepared.oplog.current_oplog_index().await;
