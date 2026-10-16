@@ -1261,7 +1261,7 @@ mod tests {
         let identity = identity();
         let owner = OwnedAgentId::new(identity.environment_id, &identity.agent_id);
         let oplog = TestOplog::default();
-        let first_cut = oplog.add(OplogEntry::no_op(None)).await.unwrap();
+        let first_cut = oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
         let entry =
             |record| DurableStreamOplogRecord::Session(None, Box::new(record)).into_inline_entry();
         let attached = |epoch| {
@@ -1333,7 +1333,7 @@ mod tests {
         let identity = identity();
         let owner = OwnedAgentId::new(identity.environment_id, &identity.agent_id);
         let oplog = TestOplog::default();
-        let cut_index = oplog.add(OplogEntry::no_op(None)).await.unwrap();
+        let cut_index = oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
         let mut cut = DurableStreamStore::prepare_fork_cut(
             &oplog,
             (&owner, identity.fingerprint),
@@ -1368,7 +1368,7 @@ mod tests {
         let identity = identity();
         let owner = OwnedAgentId::new(identity.environment_id, &identity.agent_id);
         let oplog = Arc::new(TestOplog::default());
-        oplog.add(OplogEntry::no_op(None)).await.unwrap();
+        oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
         let descriptor = prepared(&identity.invocation);
         let requests: Vec<_> = (0..2)
             .map(|path| {
@@ -1486,7 +1486,7 @@ mod tests {
         let fingerprint = AgentFingerprint(Uuid::from_u128(422));
         let oplog = TestOplog::default();
         for _ in 0..3 {
-            oplog.add(OplogEntry::no_op(None)).await.unwrap();
+            oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
         }
         let horizon = oplog
             .add(OplogEntry::revert(OplogRegion::from_range(2..=3)))
@@ -2361,9 +2361,13 @@ mod tests {
                             .unwrap(),
                         summary: None,
                     },
-                    _ => OplogEntry::NoOp {
+                    _ => OplogEntry::Log {
                         timestamp,
-                        entity_parent_start_index: None,
+                        parent_start_index: None,
+                        level: golem_common::model::oplog::LogLevel::Info,
+                        context: "fixture".to_string(),
+                        message: String::new(),
+                        trace_context: None,
                     },
                 };
                 oplog.add(entry).await.unwrap();

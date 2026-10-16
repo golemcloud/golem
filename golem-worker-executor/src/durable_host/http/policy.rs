@@ -12,51 +12,65 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Preview-neutral policy for durable outgoing HTTP.
-//!
-//! The WASI P2 (`durable_host::http`) and P3 (`durable_host::p3::http`) host
-//! implementations differ heavily in *mechanics* (P2 swaps stream resources in
-//! the resource table, P3 splices body frames inside a spawned task), but they
-//! must agree on *policy*: which methods are idempotent, when a transparent
-//! retry is allowed at all, which Golem-managed headers are injected into an
-//! outgoing request, and how a Range-based response-body resume response is
-//! interpreted. This module is the single home for those decisions; both
-//! preview trees call into it instead of maintaining parallel copies.
+//! Policy for durable outgoing HTTP: transparent retries,
+//! Golem-managed headers and Range-based response-body resumption.
 
 use crate::durable_host::DurableWorkerCtx;
-use crate::durable_host::durability::DurableExecutionState;
+use crate::durable_host::durability::{DurableExecutionState, HostFailureKind};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::oplog::types::SerializableHttpMethod;
+use golem_common::model::oplog::types::SerializableHttpErrorCode;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::headers::TraceContextHeaders;
 use http::{HeaderName, HeaderValue};
 use wasmtime_wasi_http::FieldMap;
 
-/// Returns true if the HTTP method is idempotent per RFC 9110 §9.2.2: the safe
-/// methods (GET, HEAD, OPTIONS, TRACE) plus PUT and DELETE. Idempotent methods
-/// are safe to transparently re-send even when the worker does not assume
-/// idempotence for remote writes.
-pub(crate) fn is_idempotent_http_method(method: &SerializableHttpMethod) -> bool {
-    matches!(
-        method,
-        SerializableHttpMethod::Get
-            | SerializableHttpMethod::Head
-            | SerializableHttpMethod::Put
-            | SerializableHttpMethod::Delete
-            | SerializableHttpMethod::Options
-            | SerializableHttpMethod::Trace
-    )
-}
-
-/// Whether a request may be transparently re-sent: either the worker-level
-/// `assume_idempotence` override is on, or the method itself is idempotent.
-pub(crate) fn is_http_request_idempotent(
-    assume_idempotence: bool,
-    method: &SerializableHttpMethod,
-) -> bool {
-    assume_idempotence || is_idempotent_http_method(method)
+/// Classifies HTTP failures independently of the generated WASI bindings.
+pub(crate) fn classify_serializable_http_error_code(
+    code: &SerializableHttpErrorCode,
+) -> HostFailureKind {
+    match code {
+        SerializableHttpErrorCode::TlsProtocolError
+        | SerializableHttpErrorCode::TlsAlertReceived(_)
+        | SerializableHttpErrorCode::TlsCertificateError
+        | SerializableHttpErrorCode::HttpRequestDenied
+        | SerializableHttpErrorCode::HttpRequestLengthRequired
+        | SerializableHttpErrorCode::HttpRequestBodySize(_)
+        | SerializableHttpErrorCode::HttpRequestMethodInvalid
+        | SerializableHttpErrorCode::HttpRequestUriInvalid
+        | SerializableHttpErrorCode::HttpRequestUriTooLong
+        | SerializableHttpErrorCode::HttpRequestHeaderSectionSize(_)
+        | SerializableHttpErrorCode::HttpRequestHeaderSize(_)
+        | SerializableHttpErrorCode::HttpRequestTrailerSectionSize(_)
+        | SerializableHttpErrorCode::HttpRequestTrailerSize(_)
+        | SerializableHttpErrorCode::HttpResponseHeaderSectionSize(_)
+        | SerializableHttpErrorCode::HttpResponseHeaderSize(_)
+        | SerializableHttpErrorCode::HttpResponseBodySize(_)
+        | SerializableHttpErrorCode::HttpResponseTrailerSectionSize(_)
+        | SerializableHttpErrorCode::HttpResponseTrailerSize(_)
+        | SerializableHttpErrorCode::HttpResponseTransferCoding(_)
+        | SerializableHttpErrorCode::HttpResponseContentCoding(_)
+        | SerializableHttpErrorCode::HttpUpgradeFailed => HostFailureKind::Permanent,
+        SerializableHttpErrorCode::DnsTimeout
+        | SerializableHttpErrorCode::DnsError(_)
+        | SerializableHttpErrorCode::DestinationNotFound
+        | SerializableHttpErrorCode::DestinationUnavailable
+        | SerializableHttpErrorCode::DestinationIpProhibited
+        | SerializableHttpErrorCode::DestinationIpUnroutable
+        | SerializableHttpErrorCode::ConnectionRefused
+        | SerializableHttpErrorCode::ConnectionTerminated
+        | SerializableHttpErrorCode::ConnectionTimeout
+        | SerializableHttpErrorCode::ConnectionReadTimeout
+        | SerializableHttpErrorCode::ConnectionWriteTimeout
+        | SerializableHttpErrorCode::ConnectionLimitReached
+        | SerializableHttpErrorCode::HttpProtocolError
+        | SerializableHttpErrorCode::LoopDetected
+        | SerializableHttpErrorCode::ConfigurationError
+        | SerializableHttpErrorCode::HttpResponseTimeout
+        | SerializableHttpErrorCode::HttpResponseIncomplete
+        | SerializableHttpErrorCode::InternalError(_) => HostFailureKind::Transient,
+    }
 }
 
 /// Reasons why the worker state forbids any transparent HTTP retry
@@ -67,42 +81,17 @@ pub(crate) enum HttpRetryDisallowedReason {
     NotLive,
     /// Worker is executing a snapshot load/save function.
     Snapshotting,
-    /// Worker is inside a user-defined atomic region; a failure must escalate
-    /// to trap+replay so the whole region re-executes.
-    InAtomicRegion,
-    /// The request method is not idempotent and `assume_idempotence` is false.
-    NotIdempotent,
 }
 
-/// Checks the worker-state conditions common to every transparent HTTP retry
-/// mechanism, on both previews. Method idempotence is checked separately (see
-/// [`http_transparent_retry_allowed`]) because P2's inline-retry eligibility
-/// interleaves preview-specific body-state checks before it.
+/// Checks the worker-state conditions common to transparent HTTP retries.
 pub(crate) fn http_worker_state_allows_retry(
     exec_state: &DurableExecutionState,
-    in_atomic_region: bool,
 ) -> Result<(), HttpRetryDisallowedReason> {
     if !exec_state.is_live {
         return Err(HttpRetryDisallowedReason::NotLive);
     }
     if exec_state.snapshotting_mode {
         return Err(HttpRetryDisallowedReason::Snapshotting);
-    }
-    if in_atomic_region {
-        return Err(HttpRetryDisallowedReason::InAtomicRegion);
-    }
-    Ok(())
-}
-
-/// The full preview-neutral gate: worker state plus method idempotence.
-pub(crate) fn http_transparent_retry_allowed(
-    exec_state: &DurableExecutionState,
-    in_atomic_region: bool,
-    method: &SerializableHttpMethod,
-) -> Result<(), HttpRetryDisallowedReason> {
-    http_worker_state_allows_retry(exec_state, in_atomic_region)?;
-    if !is_http_request_idempotent(exec_state.assume_idempotence, method) {
-        return Err(HttpRetryDisallowedReason::NotIdempotent);
     }
     Ok(())
 }
@@ -265,88 +254,30 @@ mod tests {
     use super::*;
     use test_r::test;
 
-    #[test]
-    fn idempotent_methods_follow_rfc_9110() {
-        assert!(is_idempotent_http_method(&SerializableHttpMethod::Get));
-        assert!(is_idempotent_http_method(&SerializableHttpMethod::Head));
-        assert!(is_idempotent_http_method(&SerializableHttpMethod::Put));
-        assert!(is_idempotent_http_method(&SerializableHttpMethod::Delete));
-        assert!(is_idempotent_http_method(&SerializableHttpMethod::Options));
-        assert!(is_idempotent_http_method(&SerializableHttpMethod::Trace));
-        assert!(!is_idempotent_http_method(&SerializableHttpMethod::Post));
-        assert!(!is_idempotent_http_method(&SerializableHttpMethod::Patch));
-        assert!(!is_idempotent_http_method(&SerializableHttpMethod::Connect));
-        assert!(!is_idempotent_http_method(&SerializableHttpMethod::Other(
-            "CUSTOM".to_string()
-        )));
-    }
-
-    #[test]
-    fn assume_idempotence_overrides_method() {
-        assert!(is_http_request_idempotent(
-            true,
-            &SerializableHttpMethod::Post
-        ));
-        assert!(!is_http_request_idempotent(
-            false,
-            &SerializableHttpMethod::Post
-        ));
-    }
-
     fn live_exec_state() -> DurableExecutionState {
         DurableExecutionState {
             is_live: true,
             snapshotting_mode: false,
-            assume_idempotence: false,
             max_in_function_retry_delay: std::time::Duration::from_secs(1),
         }
     }
 
     #[test]
     fn worker_state_gate() {
+        assert_eq!(http_worker_state_allows_retry(&live_exec_state()), Ok(()));
         assert_eq!(
-            http_worker_state_allows_retry(&live_exec_state(), false),
-            Ok(())
-        );
-        assert_eq!(
-            http_worker_state_allows_retry(
-                &DurableExecutionState {
-                    is_live: false,
-                    ..live_exec_state()
-                },
-                false
-            ),
+            http_worker_state_allows_retry(&DurableExecutionState {
+                is_live: false,
+                ..live_exec_state()
+            }),
             Err(HttpRetryDisallowedReason::NotLive)
         );
         assert_eq!(
-            http_worker_state_allows_retry(
-                &DurableExecutionState {
-                    snapshotting_mode: true,
-                    ..live_exec_state()
-                },
-                false
-            ),
+            http_worker_state_allows_retry(&DurableExecutionState {
+                snapshotting_mode: true,
+                ..live_exec_state()
+            }),
             Err(HttpRetryDisallowedReason::Snapshotting)
-        );
-        assert_eq!(
-            http_worker_state_allows_retry(&live_exec_state(), true),
-            Err(HttpRetryDisallowedReason::InAtomicRegion)
-        );
-    }
-
-    #[test]
-    fn full_gate_checks_idempotence() {
-        assert_eq!(
-            http_transparent_retry_allowed(
-                &live_exec_state(),
-                false,
-                &SerializableHttpMethod::Post
-            ),
-            Err(HttpRetryDisallowedReason::NotIdempotent)
-        );
-        assert_eq!(
-            http_transparent_retry_allowed(&live_exec_state(), false, &SerializableHttpMethod::Get),
-            Ok(())
         );
     }
 

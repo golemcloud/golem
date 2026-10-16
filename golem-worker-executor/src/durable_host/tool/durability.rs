@@ -22,7 +22,7 @@ use crate::preview2::golem::tool::host::{
 };
 use crate::services::oplog::OplogOps;
 use crate::services::{HasActiveAgents, HasWorker};
-use crate::workerctx::{InvocationHooks, ReplayAdmissionStage, WorkerCtx};
+use crate::workerctx::{ReplayAdmissionStage, WorkerCtx};
 use golem_common::model::Timestamp;
 use golem_common::model::oplog::attachment as model;
 use golem_common::model::oplog::payload::tool_attachment::{
@@ -53,8 +53,6 @@ pub(crate) fn native_host_failure<Ctx: WorkerCtx>(
     let trap = crate::model::TrapType::from_error::<Ctx>(
         &error,
         InFunctionRetryHost::current_retry_point(context),
-        InFunctionRetryHost::in_atomic_region(context),
-        context.current_atomic_region_had_side_effects(),
         context.agent_mode(),
     );
     let completed = context.entity_invocation_scope().is_some_and(|scope| {
@@ -1135,7 +1133,6 @@ pub(super) fn dispose_producer<Ctx: WorkerCtx>(
     let permit = live.then(|| LiveCallPermit::new(live_calls.clone()));
     let trap_context = crate::durable_host::durability::DurableCallTrapContext {
         retry_from: InFunctionRetryHost::current_retry_point(ctx),
-        in_atomic_region: InFunctionRetryHost::in_atomic_region(ctx),
     };
     let cleanup = ctx
         .state
@@ -1151,7 +1148,7 @@ pub(super) fn dispose_producer<Ctx: WorkerCtx>(
                 .runtime_append_tasks()
                 .register()
                 .ok_or(WorkerExecutorError::Interrupted {
-                    kind: InterruptKind::Jump,
+                    kind: InterruptKind::Restart,
                 })?;
             let worker = failure_context.worker.clone();
             let failed_controller = controller.clone();
@@ -1320,7 +1317,6 @@ pub(super) fn install_cancellation_effect<Ctx: WorkerCtx>(
         .expect("worker cleanup queue");
     let trap = DurableCallTrapContext {
         retry_from: InFunctionRetryHost::current_retry_point(ctx),
-        in_atomic_region: InFunctionRetryHost::in_atomic_region(ctx),
     };
     operation.set_cancellation_effect(Box::new(move |operation, controller| {
         let identity = controller.observer().identity();
@@ -1340,7 +1336,7 @@ pub(super) fn install_cancellation_effect<Ctx: WorkerCtx>(
         let setup = (|| {
             let recording = context.worker.runtime_append_tasks().register().ok_or(
                 WorkerExecutorError::Interrupted {
-                    kind: InterruptKind::Jump,
+                    kind: InterruptKind::Restart,
                 },
             )?;
             let worker = context.worker.clone();

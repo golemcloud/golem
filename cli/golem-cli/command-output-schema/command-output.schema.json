@@ -5352,12 +5352,9 @@
         { "$ref": "#/definitions/PublicOplogEntrySuspend" },
         { "$ref": "#/definitions/PublicOplogEntryError" },
         { "$ref": "#/definitions/PublicOplogEntryRecoverySucceeded" },
-        { "$ref": "#/definitions/PublicOplogEntryNoOp" },
         { "$ref": "#/definitions/PublicOplogEntryJump" },
         { "$ref": "#/definitions/PublicOplogEntryInterrupted" },
         { "$ref": "#/definitions/PublicOplogEntryExited" },
-        { "$ref": "#/definitions/PublicOplogEntryBeginAtomicRegion" },
-        { "$ref": "#/definitions/PublicOplogEntryEndAtomicRegion" },
         { "$ref": "#/definitions/PublicOplogEntryPendingAgentInvocation" },
         { "$ref": "#/definitions/PublicOplogEntryPendingUpdate" },
         { "$ref": "#/definitions/PublicOplogEntrySuccessfulUpdate" },
@@ -5533,22 +5530,19 @@
     },
     "PublicOplogEntrySuspend": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Suspend" } } }] },
     "PublicOplogEntryRecoverySucceeded": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "RecoverySucceeded" } } }] },
-    "PublicOplogEntryNoOp": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "NoOp" } } }] },
     "PublicOplogEntryInterrupted": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Interrupted" } } }] },
     "PublicOplogEntryExited": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Exited" } } }] },
-    "PublicOplogEntryBeginAtomicRegion": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "BeginAtomicRegion" } } }] },
     "PublicOplogEntryRestart": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Restart" } } }] },
     "PublicOplogEntryResumed": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Resumed" } } }] },
     "PublicOplogEntryError": {
       "type": "object",
-      "required": ["type", "timestamp", "kind", "error", "retryFrom", "insideAtomicRegion"],
+      "required": ["type", "timestamp", "kind", "error", "retryFrom"],
       "properties": {
         "type": { "const": "Error" },
         "timestamp": { "type": "string" },
         "kind": { "type": "string", "enum": ["invocation", "recovery"] },
         "error": { "type": "string" },
         "retryFrom": { "type": "integer", "minimum": 0 },
-        "insideAtomicRegion": { "type": "boolean" },
         "retryPolicyState": { "oneOf": [{ "$ref": "#/definitions/PublicRetryPolicyState" }, { "type": "null" }] }
       },
       "additionalProperties": false
@@ -5557,12 +5551,6 @@
       "type": "object",
       "required": ["type", "timestamp", "jump"],
       "properties": { "type": { "const": "Jump" }, "timestamp": { "type": "string" }, "jump": { "$ref": "#/definitions/OplogRegion" } },
-      "additionalProperties": false
-    },
-    "PublicOplogEntryEndAtomicRegion": {
-      "type": "object",
-      "required": ["type", "timestamp", "beginIndex"],
-      "properties": { "type": { "const": "EndAtomicRegion" }, "timestamp": { "type": "string" }, "beginIndex": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntryPendingAgentInvocation": {
@@ -5859,9 +5847,7 @@
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "ReadLocal" } }, "additionalProperties": false },
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "WriteLocal" } }, "additionalProperties": false },
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "ReadRemote" } }, "additionalProperties": false },
-        { "type": "object", "required": ["type"], "properties": { "type": { "const": "WriteRemote" } }, "additionalProperties": false },
-        { "type": "object", "required": ["type"], "properties": { "type": { "const": "WriteRemoteBatched" }, "index": { "type": ["integer", "null"], "minimum": 0 } }, "additionalProperties": false },
-        { "type": "object", "required": ["type"], "properties": { "type": { "const": "WriteRemoteTransaction" }, "index": { "type": ["integer", "null"], "minimum": 0 } }, "additionalProperties": false }
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "WriteRemote" } }, "additionalProperties": false }
       ]
     },
     "PublicAgentInvocation": {

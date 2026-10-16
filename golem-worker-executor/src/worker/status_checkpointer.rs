@@ -47,9 +47,8 @@ pub enum CheckpointReason {
     Snapshot,
     /// Written when the worker goes idle. Throttled by the configured min oplog-index delta.
     Idle,
-    /// Written *during* a long-running invocation at a structurally clean boundary (no open
-    /// rollback region) and below the outstanding `get_oplog_index` marker watermark. Throttled
-    /// exactly like [`CheckpointReason::Idle`].
+    /// Written *during* a long-running invocation at a structurally clean boundary.
+    /// Throttled exactly like [`CheckpointReason::Idle`].
     MidInvocation,
 }
 

@@ -121,7 +121,6 @@ fn entry(value: u64) -> OplogEntry {
         kind: OplogErrorKind::Invocation,
         error: AgentError::Unknown(value.to_string()),
         retry_from: OplogIndex::NONE,
-        inside_atomic_region: false,
         retry_policy_state: None,
     }
 }

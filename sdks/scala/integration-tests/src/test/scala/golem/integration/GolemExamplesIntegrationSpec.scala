@@ -481,18 +481,18 @@ object GolemExamplesIntegrationSpec extends ZIOSpec[GolemServer] {
       "guards-block",
       "samples/guards/repl-guards-block.ts",
       Contains(
-        (Seq("retry-visible-ok", "idem-ok", "atomic-ok") ++ GolemServer.scalaCliRetryPolicyNames)*
+        (Seq("retry-visible-ok") ++ GolemServer.scalaCliRetryPolicyNames)*
       )
     ),
     Sample(
       "guards-resource",
       "samples/guards/repl-guards-resource.ts",
-      Contains("Resource-style Guards Demo", "after drop():", "markAtomicOperation:")
+      Contains("Resource-style Guards Demo", "retry-visible-ok")
     ),
     Sample(
       "guards-oplog",
       "samples/guards/repl-oplog.ts",
-      Contains("current oplog index=", "markBeginOperation", "markEndOperation")
+      Contains("oplogCommit(1) completed")
     ),
 
     // --- Observability ---

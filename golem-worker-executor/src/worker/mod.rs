@@ -729,9 +729,6 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     /// request waits for it before it signals the Store, and an entity admission reopens only
     /// when it is still the last one.
     interrupt_establishment_tail: StdMutex<Arc<InterruptEstablishment>>,
-    /// Earliest oplog index requested for deletion by runtime recovery. The same lock is the
-    /// publication gate between accepting a cut and publishing a successful invocation.
-    pending_runtime_jump: Arc<Mutex<Option<OplogIndex>>>,
     runtime_append_tasks: Arc<StdMutex<Arc<tasks::RuntimeAppendTasks>>>,
     infrastructure_recovery_retry_config: RetryConfig,
     infrastructure_recovery_attempt: AtomicU32,
@@ -2695,7 +2692,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             linear_memory_grant: StdMutex::new(None),
             interrupts: Arc::default(),
             interrupt_establishment_tail: StdMutex::new(InterruptEstablishment::ready()),
-            pending_runtime_jump: Arc::new(Mutex::new(None)),
             runtime_append_tasks,
             infrastructure_recovery_retry_config: deps.config().retry.clone(),
             infrastructure_recovery_attempt: AtomicU32::new(0),
@@ -3940,7 +3936,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 OplogErrorKind::Recovery,
                 error,
                 retry_from,
-                false,
                 retry_policy_state,
             ))
             .await;
@@ -4075,47 +4070,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .await
     }
 
-    /// Accepts a destructive replay cut without depending on the requesting Store future to
-    /// remain polled. The owner loop performs teardown and commits the cut before constructing the
-    /// replacement Store. Competing requests collapse to the earliest deleted index.
-    pub async fn request_runtime_jump(self: &Arc<Self>, first_deleted: OplogIndex) {
-        {
-            let mut pending = self.pending_runtime_jump.lock().await;
-            // Publish the stream fence in the same non-yielding section that accepts the cut. Its
-            // detached drain is joined by startup, so requester cancellation cannot reopen it.
-            let _recovery = self.durable_stream_producer.begin_recovery();
-            *pending = Some(pending.map_or(first_deleted, |current| current.min(first_deleted)));
-        }
-
-        let worker = Arc::clone(self);
-        tokio::spawn(async move {
-            // A delayed wakeup from an already committed proposal must not interrupt the
-            // replacement generation.
-            let pending = worker.pending_runtime_jump.lock().await;
-            let establishment = if pending.is_some() {
-                worker
-                    .queue_interrupt(InterruptKind::Jump, false, UnloadReason::Restart, false)
-                    .await
-            } else {
-                None
-            };
-            drop(pending);
-            if let Some(establishment) = establishment {
-                worker
-                    .establish_queued_interrupt(InterruptKind::Jump, establishment)
-                    .await;
-            }
-        });
-    }
-
     pub fn runtime_append_tasks(&self) -> Arc<tasks::RuntimeAppendTasks> {
         self.runtime_append_tasks.lock().unwrap().clone()
-    }
-
-    pub async fn runtime_jump_publication_gate(
-        &self,
-    ) -> tokio::sync::MutexGuard<'_, Option<OplogIndex>> {
-        self.pending_runtime_jump.lock().await
     }
 
     async fn set_interrupting_internal(
@@ -10411,8 +10367,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 error.to_string(),
                             ),
                             retry_from: OplogIndex::INITIAL,
-                            in_atomic_region: false,
-                            atomic_region_had_side_effects: false,
                             semantic_trap_retry_override: None,
                         },
                         stderr: String::new(),
@@ -10925,26 +10879,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Writes a *clean* status checkpoint *during* a long-running invocation, taken from the current
     /// committed in-memory status (the caller must only invoke this right after a durable commit, so
     /// `last_known_status` reflects the committed oplog tip).
-    ///
-    /// In addition to the [`Self::checkpoint_status`] guards, this respects the per-invocation
-    /// `get_oplog_index` marker watermark: if the guest captured an oplog index `M` via
-    /// `get_oplog_index`, a later `set_oplog_index(M)` deletes `(M.next()..tip]` but preserves `M`,
-    /// so a checkpoint must not advance past `M` or it would be discarded after such a jump. When a
-    /// marker is present and the committed tip is already beyond it, we skip the checkpoint (a cheap
-    /// no-op) rather than write one that a later jump would invalidate.
-    pub(crate) async fn checkpoint_status_mid_invocation(
-        &self,
-        min_exposed_marker: Option<OplogIndex>,
-    ) {
+    pub(crate) async fn checkpoint_status_mid_invocation(&self) {
         if self.last_known_status_detached.load(Ordering::Acquire) {
             return;
         }
         let status = self.last_known_status.load_full();
-        if let Some(marker) = min_exposed_marker
-            && status.oplog_idx > marker
-        {
-            return;
-        }
         self.status_checkpointer
             .maybe_checkpoint(
                 &status,
@@ -11638,8 +11577,7 @@ impl StartFilesystem {
         })
     }
 
-    /// The replay inputs of the plan. The suffix-rollback check reads them before the filesystem
-    /// is built.
+    /// The replay inputs of the plan.
     fn replay(&self) -> &filesystem_snapshots::ReplayBaseline {
         &self.plan.replay
     }
@@ -12031,14 +11969,6 @@ impl RunningWorker {
         parent.runtime_append_tasks().seal_and_wait().await;
         let wallet_installation_guard = parent.card_event_boundary_lock.clone().lock_owned().await;
 
-        if parent.durable_stream_producer.is_recovering() {
-            parent
-                .durable_stream_producer
-                .begin_recovery()
-                .await
-                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
-        }
-
         // Drain buffered work from the previous runtime before constructing its replacement.
         parent
             .commit_oplog_and_update_state(CommitLevel::Always)
@@ -12319,52 +12249,6 @@ impl RunningWorker {
         let skipped_regions = start_filesystem
             .replay()
             .skipped_regions(&worker_metadata.last_known_status.skipped_regions);
-
-        if parent.agent_mode() == AgentMode::Durable {
-            let mut pending_runtime_jump = parent.pending_runtime_jump.lock().await;
-            let region = crate::durable_host::replay_state::suffix_rollback_region(
-                &worker_metadata.last_known_status.atomic_rollback,
-                &skipped_regions,
-                worker_metadata.last_known_status.oplog_idx,
-                *pending_runtime_jump,
-            )?;
-            if let Some(region) = region {
-                if !parent.durable_stream_producer.is_recovering() {
-                    parent
-                        .durable_stream_producer
-                        .begin_recovery()
-                        .await
-                        .map_err(|error| {
-                            error.into_worker_executor_error(WorkerExecutorError::runtime)
-                        })?;
-                    // The first horizon was only a prediction. Commit every accepted stream
-                    // mutation, then reload metadata and plan the cut at the resulting fixed tip.
-                    parent
-                        .commit_oplog_and_update_state(CommitLevel::Always)
-                        .await
-                        .map_err(WorkerExecutorError::from)?;
-                    drop(pending_runtime_jump);
-                    drop(wallet_installation_guard);
-                    return Box::pin(Self::create_instance(
-                        parent,
-                        concurrent_agent_permit,
-                        filesystem_snapshot_slot,
-                    ))
-                    .await;
-                }
-                parent
-                    .add_and_commit_oplog(OplogEntry::jump(None, region))
-                    .await
-                    .map_err(WorkerExecutorError::from)?;
-                *pending_runtime_jump = None;
-                return Err(WorkerExecutorError::Interrupted {
-                    kind: InterruptKind::Jump,
-                }
-                .into());
-            }
-            *pending_runtime_jump = None;
-            parent.durable_stream_producer.finish_recovery();
-        }
 
         let filesystems = parent.active_agents().agent_filesystems();
         let initial_files = parent
@@ -13230,10 +13114,7 @@ impl InvocationResult {
                     })
                 }
                 OplogEntry::Error {
-                    error,
-                    retry_from,
-                    inside_atomic_region,
-                    ..
+                    error, retry_from, ..
                 } => {
                     let stderr =
                         recover_stderr_logs(services, owned_agent_id, agent_mode, oplog_idx).await;
@@ -13241,11 +13122,6 @@ impl InvocationResult {
                         trap_type: TrapType::Error {
                             error,
                             retry_from,
-                            // Membership is not persisted; only the side-effect flag is. This
-                            // reconstructed trap is used for error reporting, not for re-deciding
-                            // recovery, so the membership bit is irrelevant here.
-                            in_atomic_region: inside_atomic_region,
-                            atomic_region_had_side_effects: inside_atomic_region,
                             semantic_trap_retry_override: None,
                         },
                         stderr,
@@ -14568,8 +14444,6 @@ mod tests {
                     trap_type: TrapType::Error {
                         error: AgentError::TransientError("in-function retry".to_string()),
                         retry_from: OplogIndex::from_u64(17),
-                        in_atomic_region: false,
-                        atomic_region_had_side_effects: false,
                         semantic_trap_retry_override: None,
                     },
                     stderr: String::new(),
@@ -14591,8 +14465,6 @@ mod tests {
                     trap_type: TrapType::Error {
                         error: AgentError::TransientError("in-function retry".to_string()),
                         retry_from: OplogIndex::from_u64(17),
-                        in_atomic_region: false,
-                        atomic_region_had_side_effects: false,
                         semantic_trap_retry_override: None,
                     },
                     stderr: String::new(),
@@ -14625,8 +14497,6 @@ mod tests {
                     trap_type: TrapType::Error {
                         error: AgentError::TransientError("prior retry".to_string()),
                         retry_from: OplogIndex::from_u64(17),
-                        in_atomic_region: false,
-                        atomic_region_had_side_effects: false,
                         semantic_trap_retry_override: None,
                     },
                     stderr: String::new(),
@@ -14648,8 +14518,6 @@ mod tests {
                     trap_type: TrapType::Error {
                         error: AgentError::PermissionDenied("permission denied".to_string()),
                         retry_from: OplogIndex::from_u64(17),
-                        in_atomic_region: false,
-                        atomic_region_had_side_effects: false,
                         semantic_trap_retry_override: None,
                     },
                     stderr: String::new(),

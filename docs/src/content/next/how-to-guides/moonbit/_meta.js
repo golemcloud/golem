@@ -8,7 +8,6 @@ export default {
   "golem-add-config-moonbit": "Adding Typed Configuration to an Agent (MoonBit)",
   "golem-agent-reflection-moonbit": "Agent Reflection and Client Approaches (MoonBit)",
   "golem-annotate-agent-moonbit": "Annotating Agent Methods (MoonBit)",
-  "golem-atomic-block-moonbit": "Atomic Blocks and Durability Controls (MoonBit)",
   "golem-call-tool-moonbit": "Call a Golem tool from MoonBit",
   "golem-call-from-external-moonbit": "Calling Agents from External MoonBit Applications",
   "golem-call-another-agent-moonbit": "Calling Another Agent (MoonBit)",

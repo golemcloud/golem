@@ -150,10 +150,12 @@ const stockLevel = (sku: string) =>
 ```
 
 Pass an `error` schema to also record typed failures; without it, only successes are recorded.
-Defects and interruption leave the invocation unfinished, so it runs again on recovery. Use
+Defects and interruption leave the resource unfinished. That does not make a deterministic guest
+defect retryable: it remains permanent. Eligible recovery may reconstruct incomplete work. Use
 `Durability.wrapInfallible` for bodies that cannot fail. Choose `functionType`
-(`readLocal`, `writeLocal`, `readRemote`, `writeRemote`, `writeRemoteBatched`,
-`writeRemoteTransaction`) by whether re-executing the call after a crash is safe.
+(`readLocal`, `writeLocal`, `readRemote`, or `writeRemote`) by whether the operation
+reads or writes local or remote state. Nesting is recorded by the host in
+`Start.parent_start_index`, not in the function type.
 
 Golem's built-in host APIs (HTTP, RPC, key-value, blob storage, databases) are already durable;
 do not wrap them again.

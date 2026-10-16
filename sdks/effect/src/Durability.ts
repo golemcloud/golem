@@ -6,9 +6,7 @@
  * `golem:durability/durability@1.6.0` typed-invocation wrapper
  * decoupled (and to avoid a module-level cycle):
  *
- * - `internal/durabilityMode.ts` — idempotence / atomic regions /
- *   oplog-commit / idempotency keys / `unwrapOrRevert`
- *   / `checkpoint` / `compensable`.
+ * - `internal/durabilityMode.ts` — oplog-commit / idempotency keys.
  * - `internal/durableFunction.ts` — `wrap` / `wrapInfallible` /
  *   `FunctionType` and the lower-level escape hatches around the
  *   durability host interface.

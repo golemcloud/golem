@@ -446,27 +446,34 @@ func ByName(name string) (NamedPolicy, bool) {
 
 // Resolve returns the [Policy] the runtime would apply to an operation with the
 // given verb, noun URI and context properties (the highest-priority matching
-// rule), reporting false if no rule matches. A property value is a string, an
-// integer type or a bool; any other type panics, as does a malformed policy
-// graph from the host.
-func Resolve(verb, nounURI string, props map[string]any) (Policy, bool) {
+// rule), reporting false if no rule matches. Invalid properties, malformed
+// policies and host evaluation failures return an error.
+func Resolve(verb, nounURI string, props map[string]any) (Policy, bool, error) {
 	tuples := make([]witTypes.Tuple2[string, apiRetry.PredicateValue], 0, len(props))
 	for k, v := range props {
 		pv, err := toPredicateValue(v)
 		if err != nil {
-			panic(fmt.Errorf("golem/retry: property %q: %w", k, err))
+			return Policy{}, false, fmt.Errorf("golem/retry: property %q: %w", k, err)
 		}
 		tuples = append(tuples, witTypes.Tuple2[string, apiRetry.PredicateValue]{F0: k, F1: pv})
 	}
-	opt := apiRetry.ResolveRetryPolicy(verb, nounURI, tuples)
+	result := apiRetry.ResolveRetryPolicy(verb, nounURI, tuples)
+	return resolveResult(result)
+}
+
+func resolveResult(result witTypes.Result[witTypes.Option[apiRetry.RetryPolicy], string]) (Policy, bool, error) {
+	if result.IsErr() {
+		return Policy{}, false, errors.New(result.Err())
+	}
+	opt := result.Ok()
 	if opt.IsNone() {
-		return Policy{}, false
+		return Policy{}, false, nil
 	}
 	pol, err := decodePolicy(opt.Some())
 	if err != nil {
-		panic(fmt.Errorf("%w (in the policy the host resolved)", err))
+		return Policy{}, false, fmt.Errorf("%w (in the policy the host resolved)", err)
 	}
-	return pol, true
+	return pol, true, nil
 }
 
 func mustDecodeNamed(raw apiRetry.NamedRetryPolicy) NamedPolicy {

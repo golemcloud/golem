@@ -2,6 +2,15 @@ import { Callout, Tabs } from "nextra/components"
 
 # HTTP requests
 
+## Response continuation after recovery
+
+Recorded HTTP outcomes replay unchanged. If a response body cannot continue after reconstruction
+(for example, its recorded prefix no longer matches or the server rejects the resume range), the
+WASI P3 stream reports the existing `http-response-incomplete` error code without semantic retry.
+This means **response continuation was lost**, not that the request did not execute. Reconcile the
+remote outcome before repeating business work. Storage outages remain infrastructure recovery
+(`RecoveryRequired`), not response-loss results.
+
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
     HTTP requests can be made with the standard `fetch` function.

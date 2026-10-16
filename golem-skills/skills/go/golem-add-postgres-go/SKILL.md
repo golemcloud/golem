@@ -95,7 +95,7 @@ func init() {
 }
 ```
 
-`golem.Must` unwraps `(value, error)` and panics on error (failing the agent, or retrying the invocation inside `durability.Atomically`); `golem.Must0` does the same for an error-only return like `Scan`.
+`golem.Must` unwraps `(value, error)` and panics on error, failing the invocation without retry; `golem.Must0` does the same for an error-only return like `Scan`.
 
 ## Parameters and Row Getters
 
@@ -148,7 +148,7 @@ For manual control use `db.Begin()` then `tx.Exec` / `tx.Query` and `tx.Commit()
 
 ## Returning Host Errors to the Caller
 
-`golem.Must*` turns a host error into a panic, which traps the component: the agent fails, or the invocation is retried inside `durability.Atomically`. To let the caller *observe* a failure as a value instead, keep the fallible call's `error` and model the method output as `golem.Result[Ok, Err]`:
+`golem.Must*` turns a returned host error into a panic, which traps the component and fails the invocation without retry. To let the caller *observe* a failure as a value instead, keep the fallible call's `error` and model the method output as `golem.Result[Ok, Err]`:
 
 ```go
 db, err := postgres.Open(in.Addr)

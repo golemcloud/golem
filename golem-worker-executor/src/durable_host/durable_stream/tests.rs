@@ -2161,7 +2161,7 @@ async fn delayed_stream_records_retain_registration_entity_attribution() {
     let handle = live.register(None, request).await.unwrap().value;
 
     oplog
-        .add(OplogEntry::no_op(None))
+        .add(OplogEntry::recovery_succeeded())
         .await
         .expect("oplog write");
     live.write_items(
@@ -6581,7 +6581,7 @@ async fn reverted_result_replay_preserves_foreign_handles_without_live_authority
         for retained_stage in 0..3 {
             let identity = identity();
             let oplog = Arc::new(TestOplog::default());
-            let before_source = oplog.add(OplogEntry::no_op(None)).await.unwrap();
+            let before_source = oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
             let live = producer(oplog.clone(), &identity, None).await;
             let source_request = root_registration(&identity);
             let stale = live
@@ -6628,7 +6628,7 @@ async fn reverted_result_replay_preserves_foreign_handles_without_live_authority
                 .await
                 .unwrap();
             let after_result = oplog.current_oplog_index().await;
-            oplog.add(OplogEntry::no_op(None)).await.unwrap();
+            oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
             oplog.commit(CommitLevel::Always).await.unwrap();
             let owner = OwnedAgentId::new(identity.environment_id, &identity.agent_id);
             let cut = DurableStreamStore::prepare_fork_cut(

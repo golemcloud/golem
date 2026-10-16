@@ -771,15 +771,6 @@ fn update_status_with_precomputed_regions(
     let deleted_regions = &deleted;
     let skipped_regions = &skipped;
     let active_plugins = last_known.active_plugins.clone();
-    let mut atomic_rollback = last_known.atomic_rollback;
-    for (index, entry) in &new_entries {
-        if !skipped_regions.is_in_deleted_region(*index)
-            && !deleted_regions.is_in_deleted_region(*index)
-        {
-            atomic_rollback.observe(*index, entry);
-        }
-    }
-
     let (status, last_error_kind, current_retry_state, overridden_retry_config) =
         calculate_latest_worker_status(
             last_known.status,
@@ -914,7 +905,6 @@ fn update_status_with_precomputed_regions(
         pending_invocations,
         pending_card_events,
         skipped_regions: skipped,
-        atomic_rollback,
         pending_updates,
         failed_updates,
         successful_updates,
@@ -960,8 +950,8 @@ fn calculate_latest_worker_status(
     Option<RetryConfig>,
 ) {
     for (idx, entry) in entries {
-        // Errors are counted in skipped regions too (but not in deleted ones),
-        // otherwise we would not be able to know how many times we retried failures in atomic regions.
+        // Errors are counted in skipped regions too (but not in deleted ones), so retained
+        // retry state survives a Jump.
         // This must happen before the skipped-region continue below.
         if !deleted_regions.is_in_deleted_region(*idx)
             && let OplogEntry::Error {
@@ -984,7 +974,6 @@ fn calculate_latest_worker_status(
                 kind,
                 error,
                 retry_from,
-                inside_atomic_region,
                 retry_policy_state,
                 ..
             } = entry
@@ -1008,7 +997,6 @@ fn calculate_latest_worker_status(
                             .unwrap_or(default_retry_policy),
                         error,
                         count,
-                        *inside_atomic_region,
                         retry_policy_state.as_ref(),
                     )
                 {
@@ -1053,9 +1041,6 @@ fn calculate_latest_worker_status(
             OplogEntry::Suspend { .. } => {
                 current_status = AgentStatus::Suspended;
             }
-            OplogEntry::NoOp { .. } => {
-                current_status = AgentStatus::Running;
-            }
             OplogEntry::Jump { .. } => {
                 current_status = AgentStatus::Running;
             }
@@ -1072,12 +1057,6 @@ fn calculate_latest_worker_status(
                 current_status = AgentStatus::Running;
             }
             OplogEntry::RemoveRetryPolicy { .. } => {
-                current_status = AgentStatus::Running;
-            }
-            OplogEntry::BeginAtomicRegion { .. } => {
-                current_status = AgentStatus::Running;
-            }
-            OplogEntry::EndAtomicRegion { .. } => {
                 current_status = AgentStatus::Running;
             }
             OplogEntry::PendingAgentInvocation { .. } => {}
@@ -1453,7 +1432,7 @@ fn calculate_received_card_transfers(
     transfers
 }
 
-// Atomic jumps retain external stream effects; explicit reverts discard the removed history.
+// Jumps retain external stream effects; explicit reverts discard the removed history.
 fn calculate_durable_stream_sessions(
     mut sessions: DurableStreamSessionIndex,
     deleted_regions: &DeletedRegions,
@@ -1467,7 +1446,7 @@ fn calculate_durable_stream_sessions(
     Ok(sessions)
 }
 
-// Atomic jumps retain admitted external effects. Reverts force a fold from an earlier baseline,
+// Jumps retain admitted external effects. Reverts force a fold from an earlier baseline,
 // where records in their deleted regions are excluded before this index is reconstructed.
 fn calculate_export_fork_admissions(
     mut admissions: ExportForkAdmissions,
@@ -2041,18 +2020,17 @@ fn is_worker_error_retriable(
     retry_config: &RetryConfig,
     error: &AgentError,
     retry_count: u32,
-    inside_atomic_region: bool,
     semantic_retry_state: Option<&RetryPolicyState>,
 ) -> bool {
+    if matches!(error, AgentError::DeterministicTrap(_)) {
+        return false;
+    }
     if let Some(state) = semantic_retry_state {
         return !state.is_exhausted();
     }
 
     match error {
         AgentError::Unknown(_) | AgentError::TransientError(_) => {
-            retry_count < retry_config.max_attempts
-        }
-        AgentError::DeterministicTrap(_) if inside_atomic_region => {
             retry_count < retry_config.max_attempts
         }
         AgentError::InvalidRequest(_) => false,

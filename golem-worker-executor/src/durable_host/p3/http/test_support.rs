@@ -80,6 +80,19 @@ impl FrameTestOplog {
         self.entries.lock().unwrap().clone()
     }
 
+    pub(super) fn make_frame_payload_unavailable(&self, index: OplogIndex) {
+        let mut entries = self.entries.lock().unwrap();
+        let OplogEntry::HostStreamFrame { payload, .. } = &mut entries[index.as_u64() as usize - 1]
+        else {
+            panic!("expected a request-body frame");
+        };
+        *payload = OplogPayload::External {
+            payload_id: PayloadId::new(),
+            md5_hash: Vec::new(),
+            cached: None,
+        };
+    }
+
     /// The request-body frames recorded for `parent`, in oplog order. Frames
     /// recorded for other parents are ignored.
     pub(super) fn recorded_frames_for(
@@ -230,7 +243,7 @@ impl Oplog for FrameTestOplog {
         _payload_id: PayloadId,
         _md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
-        unimplemented!()
+        Err("test payload storage is unavailable".to_string())
     }
 }
 

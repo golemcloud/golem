@@ -499,14 +499,6 @@ impl InvocationHooks for Context {
         self.durable_ctx.get_current_retry_point().await
     }
 
-    fn current_in_atomic_region(&self) -> bool {
-        self.durable_ctx.current_in_atomic_region()
-    }
-
-    fn current_atomic_region_had_side_effects(&self) -> bool {
-        self.durable_ctx.current_atomic_region_had_side_effects()
-    }
-
     fn enter_read_only_mode(&mut self, method_name: String) {
         self.durable_ctx.enter_read_only_mode(method_name)
     }
@@ -1019,10 +1011,6 @@ impl WorkerCtx for Context {
 
     fn as_wasi_view(&mut self) -> impl WasiView {
         self.durable_ctx.as_wasi_view()
-    }
-
-    fn as_wasi_http_view(&mut self) -> wasmtime_wasi_http::p2::WasiHttpCtxView<'_> {
-        self.durable_ctx.as_wasi_http_view()
     }
 
     fn get_public_state(&self) -> &Self::PublicState {

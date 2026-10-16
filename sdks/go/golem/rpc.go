@@ -41,8 +41,8 @@ import (
 // replays deterministically, so a failure that reaches the guest is terminal.
 // Each call form has a Must variant ([MethodDef.MustCall], [Future.MustGet], …)
 // that panics instead; a panic in an agent method traps the component, as in
-// Rust, so the worker fails (or, inside an atomic region, the region is
-// retried). Model *expected* outcomes as a [Result] in the method's output.
+// Rust, so the worker fails. Model *expected* outcomes as a [Result] in the
+// method's output.
 //
 // Misuse — a zero Client, an input that does not encode, a stream on a
 // fire-and-forget form — panics in every form.

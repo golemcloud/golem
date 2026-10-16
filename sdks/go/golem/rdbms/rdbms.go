@@ -199,4 +199,6 @@ const (
 	QueryResponseFailure
 	// Other is any error the host did not classify.
 	Other
+	// ResourceLost means a resident transaction or result stream cannot be resumed.
+	ResourceLost
 )

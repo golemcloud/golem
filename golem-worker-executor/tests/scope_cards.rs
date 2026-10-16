@@ -3413,21 +3413,6 @@ async fn every_protected_network_http_and_websocket_import_enforces_permissions(
     let http = agent_id!("RawWasiHttp", "every-protected-http-import");
     configure_scope_card_root(&authority, &component, &http)?;
     executor.start_agent(&component.id, http.clone()).await?;
-    let p2_http_denied = executor
-        .invoke_and_await_agent(
-            &component,
-            &http,
-            "probe_p2",
-            data_value!("outgoing-handler-handle", "127.0.0.1:9"),
-        )
-        .await?
-        .into_typed::<Result<(), String>>()?;
-    assert!(
-        p2_http_denied
-            .as_ref()
-            .is_err_and(|error| normalized_error_contains(error, "httprequestdenied")),
-        "P2 HTTP handle must return HttpRequestDenied, got {p2_http_denied:?}"
-    );
     let p3_http_denied = executor
         .invoke_and_await_agent(
             &component,

@@ -2651,7 +2651,6 @@ mod transfer_lifecycle_tests {
                     kind: OplogErrorKind::Invocation,
                     error: AgentError::Unknown(index.to_string()),
                     retry_from: OplogIndex::NONE,
-                    inside_atomic_region: false,
                     retry_policy_state: None,
                 }
                 .rounded()
