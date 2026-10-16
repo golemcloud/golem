@@ -10,11 +10,9 @@ invoke-and-await; a fire-and-forget streaming call is rejected with `RpcError::P
 
 ### Identity
 
-Outside atomic regions, streaming RPC derives its child invocation key from the caller invocation
-key and the exact physical `Start` index. Inside an atomic region, both streaming entry points use
-`derive_idempotency_key` to reserve the outermost region's logical counter once per call, on live
-and replay paths alike. The persisted request and dispatch metadata reuse that key, so rollback
-can append a new physical `Start` without creating another logical target invocation.
+Streaming RPC derives its child invocation key from the caller invocation key and the exact
+physical `Start` index. Incomplete-call repair retains that `Start` and reuses the key for both
+the persisted request and dispatch metadata. A new guest-code saga attempt appends a new call.
 
 The durable session descriptor compares semantic execution configuration, with environment entries
 encoded in key order. Retry tracing does not change invocation identity; the target retains the
@@ -69,18 +67,17 @@ belong to the final target; discarding a losing stage never deletes the target's
 Fork publication commits the exact prefix, `ForkCut`, and any synthetic guest result before
 exposing the target. The immutable marker binds the source generation, cut and request kind;
 retries reconcile it even if the target has advanced. Guest `fork()` derives its phantom ID from
-the source generation and durable call's logical idempotency key, reserving the logical counter
-on live and replay paths. The recorded `Start` anchors both the key and the pre-call cut, so
+the source generation and durable call's idempotency key derived from its own `Start`.
+The recorded `Start` anchors both the key and the pre-call cut, so
 skipped log hints cannot change either. A crash after child publication but before the caller's
-result resumes the same child; independent phantom siblings cannot collide. Guest `fork()`
-inside an active atomic region returns an error before creating a child: rollback would discard
-the synthetic fork result. Tests: `guest_fork_retries_same_child_after_crash_before_caller_result`,
+result resumes the same child; independent phantom siblings cannot collide.
+Tests: `guest_fork_retries_same_child_after_crash_before_caller_result`,
 `guest_fork_same_key_on_phantom_siblings_creates_distinct_children`.
 
 Export forks use the same publication path (`services/worker_fork/export.rs`). The gateway maps
 `{base}/forks/{fork}/invocations/{session}/streams/{slot}` to a deterministic phantom agent and
 routes creation to the source executor. The executor pins one committed source horizon, resolves
-the opaque cursor plus message/byte sub-offset, and validates atomic/transaction cuts against
+the opaque cursor plus message/byte sub-offset, and validates the cut against
 that horizon's skipped regions. JSON sub-offsets count flattened messages; binary sub-offsets
 cannot cross the next append boundary. A terminal cursor retains its physical position, while
 the selected stream's continuation starts open unless the create request closes it.
@@ -137,8 +134,8 @@ Byte-limit failures precede quota reservation. The source commits `ExportForkAdm
 existing worker instance lock before publishing the target. Its chosen cut and quota charge are
 folded into `AgentStatusRecord.export_fork_admissions`; losing cached status cannot erase them.
 The immutable `Create.instance_id` excludes copied ancestor admissions even when a fork reverts
-before its creation marker. Explicit reverts discard deleted admissions, while atomic jumps retain
-them. Retired owners and failed status reconstruction reject admission. A read-only precheck rejects
+before its creation marker. Explicit reverts discard deleted admissions.
+Retired owners and failed status reconstruction reject admission. A read-only precheck rejects
 exhausted budgets before copying; no separate admission KV ledger exists.
 HTTP stream responses expose no fork headers; Golem's session manifest exposes provenance.
 Tests: `exported_fork_initial_content_and_receipt_survive_lost_resume_response`, the custom-API
@@ -296,11 +293,22 @@ readiness reads consume no source item and record nothing. Host projections reta
 journaling and batching. Their records are skippable hints, distinguished from guest observations
 by the consumer discriminant rather than the source binding.
 
-Atomic rollback retains the logical consumer input. If a `Jump` deleted its physical observation,
-the re-executed read records a replacement boundary with `reobserves` referencing the original.
-Append and replay validate identical logical content. Consumer progress advances only for the
-original record, and nested reader identities retain its introducing index; replacement records
-introduce no readers. Each re-executed read adds one physical boundary, not another logical item.
+Guest observation writes coalesce their commits. The owned write calls
+`DurableStreamStore::commit_through` with the reserved index and skips its own commit when the
+owner's published horizon already covers that index. The horizon is the published
+`last_known_status.oplog_idx` of a durable agent whose status is attached. Only the status task
+publishes it, after a successful commit and the fold of that commit, and that commit flushed the
+whole buffer through its sampled tip. A skipped write therefore returns a receipt that still means
+durable and folded, and it writes nothing that could hide a fence: the next append or commit still
+reports one. Ephemeral agents and a detached status have no horizon, because a weaker commit level
+folds without storage and a detached status is not a fold. The read path also stays off the
+`PrimaryOplog` actor, which runs commits inline. Only a re-observation reads the current oplog
+index to bound its reference, and `upload_raw_payload` returns a payload at or below
+`max_payload_size` inline without an actor request; a retired oplog still takes the actor path and
+reports termination. Without these three rules each read waited behind the previous read's commit,
+and each commit flushed about one entry. Tests:
+`consumer_observation_commits_only_past_the_published_horizon` and
+`blocked_durable_stream_batch_prepares_before_atomic_commit_and_append`.
 
 Cancellation replay has an open limit: the adapter does not reconstruct the canonical
 inline-versus-blocked cancellation return disposition. When cancellation cannot retain a
@@ -461,8 +469,7 @@ descriptor supplies the producer ID and epoch. JSON values
 are individually encoded and framed by the host, preserving nested arrays and integer lexemes.
 The SDK assigns an immutable pending request before awaiting, advances the sequence only after
 acknowledgment, and retains uncertain requests across cancellation. Completed replay performs no
-HTTP. Incomplete writes repair with the same tuple under the existing idempotence policy;
-disabling idempotence retains fail-closed recovery. The host never changes that global mode.
+HTTP. Incomplete writes repair with the same tuple under the existing `Start`.
 An acknowledgment ahead of the submitted sequence is a producer-diverged error for these
 non-pipelined writers, not permission to renumber data.
 

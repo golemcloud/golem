@@ -22,7 +22,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{GolemUserPrincipal, Principal};
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
-    PublicSnapshotData,
+    PublicOplogPageEntry, PublicSnapshotData,
 };
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentEvent, AgentId, AgentStatus, OwnedAgentId};
@@ -1877,6 +1877,200 @@ async fn snapshot_based_recovery(
         106,
         "Counter should continue from 106 after snapshot recovery"
     );
+
+    drop(executor);
+    Ok(())
+}
+
+#[test]
+#[timeout("240s")]
+#[tracing::instrument]
+async fn oplog_returns_snapshots_larger_than_the_grpc_message_limit(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    // Larger than the 32 MiB gRPC message limit between the executor and its clients.
+    const STATE_SIZE: u64 = 40 * 1024 * 1024;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let agent_id = agent_id!("LargeOplogEntryAgent", "large-snapshot");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "set_state_size",
+            data_value!(STATE_SIZE),
+        )
+        .await?;
+    // The executor writes a snapshot after it publishes the result of an invocation, so the
+    // snapshot of the first invocation is in the oplog once the second invocation completes.
+    let state_size = executor
+        .invoke_and_await_agent(&component, &agent_id, "state_size", data_value!())
+        .await?;
+    assert_eq!(state_size.into_typed::<u64>()?, STATE_SIZE);
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let latest_snapshot = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Snapshot(params) => Some(&params.data),
+            _ => None,
+        })
+        .next_back()
+        .expect("every invocation should create a snapshot");
+    let PublicSnapshotData::Raw(snapshot) = latest_snapshot else {
+        panic!("the oplog should include the full snapshot payload, got {latest_snapshot:?}");
+    };
+    assert_eq!(snapshot.mime_type, "application/octet-stream");
+    // The state bytes of `LargeOplogEntryAgent`, which follow the envelope of the Rust SDK.
+    let expected_state: Vec<u8> = (0..STATE_SIZE).map(|i| (i % 251) as u8).collect();
+    assert!(
+        snapshot.data.ends_with(&expected_state),
+        "the snapshot payload of {} bytes should end with the {STATE_SIZE} byte agent state",
+        snapshot.data.len()
+    );
+
+    drop(executor);
+    Ok(())
+}
+
+#[test]
+#[timeout("240s")]
+#[tracing::instrument]
+async fn oplog_returns_host_call_entries_larger_than_the_page_entry_limit(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    // The recorded response is several MiB once encoded: larger than the 1 MiB limit for an
+    // entry in an oplog page, and larger than one chunk of the oplog entry stream.
+    const LENGTH: u64 = 1536 * 1024;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let agent_id = agent_id!("LargeOplogEntryAgent", "large-host-call");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let length = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "read_random_bytes",
+            data_value!(LENGTH),
+        )
+        .await?;
+    assert_eq!(length.into_typed::<u64>()?, LENGTH);
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let encoded_size_of = |entry: &PublicOplogEntryWithIndex| -> anyhow::Result<usize> {
+        Ok(prost::Message::encoded_len(
+            &golem_api_grpc::proto::golem::worker::OplogEntryWithIndex::try_from(entry.clone())
+                .map_err(|err| anyhow::anyhow!(err))?,
+        ))
+    };
+    // The agent makes other, small random host calls too; the largest response is the one of
+    // `read_random_bytes`.
+    let mut random_bytes_ends = Vec::new();
+    for entry in &oplog {
+        if let PublicOplogEntry::End(end) = &entry.entry
+            && let Some(start) = oplog
+                .iter()
+                .find(|start| start.oplog_index == end.start_index)
+            && let PublicOplogEntry::Start(start) = &start.entry
+            && start.function_name.contains("random")
+        {
+            random_bytes_ends.push((encoded_size_of(entry)?, entry));
+        }
+    }
+    let (encoded_size, random_bytes_end) = random_bytes_ends
+        .into_iter()
+        .max_by_key(|(size, _)| *size)
+        .expect("the oplog should hold the random bytes host call");
+    assert!(
+        encoded_size > 4 * 1024 * 1024,
+        "the full host call response should be in the oplog, got an entry of {encoded_size} bytes"
+    );
+
+    // A single oplog page leaves the entry out and describes it instead.
+    let page = executor
+        .client
+        .clone()
+        .get_oplog(
+            golem_api_grpc::proto::golem::workerexecutor::v1::GetOplogRequest {
+                agent_id: Some(worker_id.clone().into()),
+                from_oplog_index: random_bytes_end.oplog_index.into(),
+                cursor: None,
+                count: 1,
+                environment_id: Some(component.environment_id.into()),
+                auth_ctx: Some(executor.auth_ctx().into()),
+            },
+        )
+        .await?
+        .into_inner();
+    let Some(
+        golem_api_grpc::proto::golem::workerexecutor::v1::get_oplog_response::Result::Success(page),
+    ) = page.result
+    else {
+        panic!("the oplog page read should succeed");
+    };
+    let page_entries = page
+        .entries
+        .into_iter()
+        .map(PublicOplogPageEntry::try_from)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| anyhow::anyhow!(err))?;
+    let [PublicOplogPageEntry::Omitted(omitted)] = page_entries.as_slice() else {
+        let kinds: Vec<_> = page_entries
+            .iter()
+            .map(|entry| match entry {
+                PublicOplogPageEntry::Included(entry) => {
+                    format!("included {}", entry.entry.entry_type())
+                }
+                PublicOplogPageEntry::Omitted(omitted) => format!("omitted {}", omitted.entry_type),
+            })
+            .collect();
+        panic!("the page should omit the large entry, got {kinds:?}");
+    };
+    assert_eq!(omitted.oplog_index, random_bytes_end.oplog_index);
+    assert_eq!(omitted.entry_type, "End");
+    assert_eq!(omitted.size, encoded_size as u64);
+    assert_eq!(omitted.component_revision, component.revision);
+
+    // A read with the revision of the page and a read that scans the oplog for it agree.
+    for component_revision in [Some(omitted.component_revision), None] {
+        let entry = executor
+            .get_oplog_entry(
+                &worker_id,
+                component.environment_id,
+                omitted.oplog_index,
+                component_revision,
+            )
+            .await?;
+        assert_eq!(&entry, random_bytes_end);
+    }
 
     drop(executor);
     Ok(())

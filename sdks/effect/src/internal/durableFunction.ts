@@ -13,12 +13,6 @@ const sdkErrorBrand: unique symbol = Symbol.for("effect-golem/durable-function/s
 export type DurableFunctionType = DurabilityHost.DurableFunctionType
 /** @since 1.6.0 @category models */
 export type PersistedDurableFunctionInvocation = DurabilityHost.PersistedDurableFunctionInvocation
-type OplogIndex =
-  Extract<DurableFunctionType, { tag: "write-remote-batched" }> extends {
-    val: infer I | undefined
-  }
-    ? I
-    : never
 
 /** @since 1.6.0 @category errors */
 export class DurabilityReplayMismatchError {
@@ -55,8 +49,6 @@ export const FunctionType = {
   writeLocal: { tag: "write-local" } as const,
   readRemote: { tag: "read-remote" } as const,
   writeRemote: { tag: "write-remote" } as const,
-  writeRemoteBatched: (val?: OplogIndex) => ({ tag: "write-remote-batched", val }) as const,
-  writeRemoteTransaction: (val?: OplogIndex) => ({ tag: "write-remote-transaction", val }) as const,
 } as const
 
 void ({
@@ -64,8 +56,6 @@ void ({
   "write-local": FunctionType.writeLocal,
   "read-remote": FunctionType.readRemote,
   "write-remote": FunctionType.writeRemote,
-  "write-remote-batched": FunctionType.writeRemoteBatched,
-  "write-remote-transaction": FunctionType.writeRemoteTransaction,
 } satisfies Record<DurableFunctionType["tag"], unknown>)
 
 /** @since 1.6.0 @category host bindings */
@@ -199,9 +189,7 @@ const sdkErrorsToDefects = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   >
 
 const sameFunctionType = (left: DurableFunctionType, right: DurableFunctionType): boolean =>
-  left.tag === right.tag &&
-  ((left.tag !== "write-remote-batched" && left.tag !== "write-remote-transaction") ||
-    left.val === (right as typeof left).val)
+  left.tag === right.tag
 
 const run = <
   RequestS extends Schema.Top,

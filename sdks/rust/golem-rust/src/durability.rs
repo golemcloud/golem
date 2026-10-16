@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::bindings::golem::api::oplog::OplogIndex;
 use crate::bindings::golem::durability::durability::{
     CustomDurableInvocation, CustomInvocationContext,
     DurableFunctionType as RawDurableFunctionType, LiveCustomDurableInvocation,
@@ -120,8 +119,6 @@ pub enum DurableFunctionType {
     WriteLocal,
     ReadRemote,
     WriteRemote,
-    WriteRemoteBatched(Option<OplogIndex>),
-    WriteRemoteTransaction(Option<OplogIndex>),
 }
 
 impl From<DurableFunctionType> for RawDurableFunctionType {
@@ -131,10 +128,6 @@ impl From<DurableFunctionType> for RawDurableFunctionType {
             DurableFunctionType::WriteLocal => Self::WriteLocal,
             DurableFunctionType::ReadRemote => Self::ReadRemote,
             DurableFunctionType::WriteRemote => Self::WriteRemote,
-            DurableFunctionType::WriteRemoteBatched(index) => Self::WriteRemoteBatched(index),
-            DurableFunctionType::WriteRemoteTransaction(index) => {
-                Self::WriteRemoteTransaction(index)
-            }
         }
     }
 }

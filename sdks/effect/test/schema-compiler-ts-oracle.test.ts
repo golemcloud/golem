@@ -153,10 +153,11 @@ describe("Effect authoring to TypeScript canonical schema oracle", () => {
       const card = createGuestPermissionCardHandle(
         PERMISSION_CARD_INTERNAL,
         {} as RawPermissionCard,
+        "concrete",
       )
       const Capabilities = Schema.Struct({
         quota: GolemSchema.QuotaToken({ resourceName: "calls" }),
-        card: GolemSchema.PermissionCard({ polymorphic: false }),
+        card: GolemSchema.PermissionCard,
         secret: GolemSchema.Secret(Schema.String, { category: "credential" }),
       })
       const secret = createGuestSecretHandle(SECRET_INTERNAL, {} as RawSecret)

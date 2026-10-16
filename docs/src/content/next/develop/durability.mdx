@@ -2,48 +2,38 @@ import { Tabs } from "nextra/components"
 
 # Control durability guarantees
 
-Golem provides a set of functions components can call to control details of the durable execution engine.
+Durable agents record host interactions in the oplog. Recovery replays completed calls from their
+recorded outcomes and repairs an eligible incomplete call at its own `Start`. It does not rerun a
+group of completed effects. Guests cannot disable recording or change the execution cursor.
 
-### General concepts
+Use [SDK sagas](/next/develop/transactions) for workflows that need compensation. Use
+[retry policies](/next/develop/retries) for retryable host operations. A trap is permanent;
+return an error for a transient condition and use a retry schedule. Throwing after an HTTP response
+does not retry that completed request.
 
-The high-level SDKs let applications control idempotence, define atomic regions, commit the oplog, and change retry policies (discussed in [the next page](/next/develop/retries)).
+A Rust panic is permanent, including inside code that formerly used `atomically`. It no longer
+retries the block or rewinds completed effects.
 
-All these features are regional - they can be changed for a section of the code within a single exported function.
+## Remote-write safety
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
-    <Tabs.Tab>
-        In TypeScript, the SDK provides scoped helpers such as `withIdempotenceMode` and
-        `withRetryPolicy`. They run a sync or async callback with the requested setting, then restore the previous
-        settings afterwards.
-    </Tabs.Tab>
-    <Tabs.Tab>
-        In Effect TypeScript, `Durability.withIdempotenceMode` scopes the setting to an Effect and restores it when the Effect completes, fails, or is interrupted. Other durability controls such as `atomically` and `oplogCommit` return Effect values.
-    </Tabs.Tab>
-    <Tabs.Tab>
-        The `golem_rust` crate provides scoped helpers such as `with_idempotence_mode`,
-        with `_async` variants for async code. They execute a closure with the requested setting, then restore the
-        previous settings afterwards.
-    </Tabs.Tab>
-    <Tabs.Tab>
-        In Scala, `golem.Guards` provides scoped helpers such as `withIdempotenceMode` and
-        `withRetryPolicy`. They execute a `Future`-returning block with the requested setting, then restore the
-        previous settings afterwards.
-    </Tabs.Tab>
-    <Tabs.Tab>
-        In MoonBit, the SDK provides scoped helpers such as `with_idempotence_mode` and
-        `with_retry_policy`. They execute a callback with the requested setting, then restore the previous settings
-        afterwards.
-    </Tabs.Tab>
-    <Tabs.Tab>
-        In Go, the `durability` package provides helpers such as `durability.WithIdempotenceMode`, and the `retry`
-        package provides `retry.With`. They apply the requested setting and return a `restore` function, usually
-        called with `defer` so the previous settings are restored when the surrounding function returns.
-    </Tabs.Tab>
-</Tabs>
+Golem treats remote writes as eligible for re-execution. An incomplete call can therefore be
+retried even when the peer might already have applied it. External exactly-once behavior requires
+the peer to enforce an idempotency key; a header alone is not a guarantee.
 
-### Custom durable operations
+There is no guest idempotence-mode switch. Make writes duplicate-safe at the peer before relying
+on retries or crash recovery. A lost response does not prove the write failed. Retry predicates
+must not use `is-idempotent`: the host no longer supplies that property.
 
-Applications normally rely on Golem's built-in durability and should not call the low-level `golem:durability@1.6.0` interface. It is intended for SDK and library authors who need to turn an otherwise raw operation into one logical durable call.
+## Custom durable operations
+
+The low-level `golem:durability@1.6.0` interface is for SDK and library authors. Its live resource
+groups raw observational host effects into one logical call with a typed request and response.
+Finishing the resource records the result; replay returns that result without evaluating the
+body. Dropping it unfinished does not trigger a retry. Recovery of an eligible incomplete custom
+call reruns its whole body, so the library must make repeated attempts safe.
+
+Use the SDK combinator rather than managing the resource manually. See
+[custom durable invocations](/next/develop/additional) for the lifecycle and SDK entry points.
 
 **TypeScript, Effect, Scala, MoonBit, and Go: sequential execution only.** In these SDKs, a custom operation's execution scope remains installed while its body waits. Do not run unrelated guest work concurrently with it, including ordinary host calls or another custom operation. A sibling's effects can be attributed to the wrong operation, causing incorrect replay or invocation failure. The SDKs do not reliably detect this misuse.
 
@@ -59,266 +49,60 @@ Do not leave detached promises, fibers, futures, tasks, goroutines, or callbacks
 | MoonBit | Use `@api.durable` and `durable_async` sequentially; do not overlap them with other tasks. |
 | Go | Use `durability.Run` sequentially; its blocking body can yield to other goroutines, so a synchronous-looking call is not a concurrency safeguard. |
 
-These restrictions concern custom durability in the five SDKs above, not ordinary built-in durable HTTP/RPC APIs or the Rust scope integration described below.
+These restrictions concern custom durability in the five SDKs above, not ordinary built-in durable HTTP/RPC APIs or the Rust scope integration.
 
-A custom durable operation has a replay-stable UUID, a semantic request, and one typed response. The executor allocates the UUID synchronously when the operation begins. The UUID is independent of the request value, so a generator with no input is distinct from another concurrent call of the same generator.
+## Nonresumable handles
 
-1. `begin-custom-durable-invocation` takes the function name, typed request, and function type. It returns `live(live-invocation)` for a new or incomplete operation, or `replayed(recorded-response)` for an operation that already completed.
-2. On the live path, keep the returned resource alive and install its execution scope while performing the operation's host effects. Begin installs the scope on the current guest task. Host calls initiated in the installed scope are recorded as replay-inert observational entries owned by the custom operation. Holding the resource alone does not install its scope.
-3. Finish consumes the live resource and records the operation's complete success or failure result. On replay, decode and return the recorded response without executing the operation body.
+A live connection is not durable state. Nonresumable handles report typed loss after
+reconstruction. Handle the loss by explicitly opening and initializing a new session. Do not
+silently resend pending traffic: loss does not prove that an earlier write never reached the peer.
+See [WebSockets](/next/develop/websocket) for the supported reconstruction policies.
 
-Golem derives the UUID from the top-level idempotency key, the parent custom invocation when nested, and a deterministic ordinal in that logical parent's namespace. Child operations do not shift later root identities when a completed parent is skipped during replay. The function metadata and request are recorded and validated independently.
+## Commit oplog
 
-The live invocation is an affine resource: it can be finished only once. Dropping it without finishing removes observational ownership but does not write a matching `End` entry. If recovery later replays the incomplete custom operation, its whole body runs again.
-
-Dropping the resource does not trigger a retry. A deterministic trap outside an atomic region fails the agent without retry; inside an atomic region, the region is retried according to the applicable retry policy. When recovery replays an incomplete custom operation, it runs the **whole custom operation**, not individual effects inside it. Library authors must therefore choose an appropriate function type and make repeated attempts safe, for example with an external idempotency key or transactional API.
-
-Requests, responses, operation names, and observational host calls can be visible to oplog search, logs, metrics, and other observability tooling. Record useful names and schemas, but redact secrets and avoid putting unnecessary or unbounded payloads into observable values.
-
-Use the SDK combinator for this lifecycle instead of managing the affine resource directly: `golem_rust::durability::Durability::run*` in Rust, `durable` in TypeScript, `Durability.wrap`/`wrapInfallible` in Effect TypeScript, `DurabilityApi.durable`/`durableAsync` in Scala, `@api.durable`/`durable_async` in MoonBit, or `durability.Run` in Go. Each combinator starts the invocation before evaluating the body, skips the body on replay, finishes after the complete live body returns, and drops any live resource left unfinished.
-
-In Rust, `Durability::new` only prepares the request. Synchronous runners begin when called; async runners begin on their first poll, including call observation for logs and metrics. An async runner that is never polled opens no invocation. Code between construction and execution is outside that custom operation. Async runners install their scope while polling or destroying the body and restore the actual caller's scope afterwards. Concurrent Rust futures can therefore run sibling custom operations without falsely nesting them. Borrowed and non-`Send` futures remain supported.
-
-Nested custom operations must finish or be dropped before their parent finishes. Keep nested work inside the body and await it there; detached `spawn_local` work does not automatically acquire its parent's scope. Restoring a context snapshot does not make escaped live children safe.
-
-The low-level `exchange-custom-invocation-context` operation lets a guest runtime capture, install, and restore a resident execution context without yielding or writing to the oplog. A snapshot cannot be installed in another invocation or after any of its custom scopes have closed. It does not keep those scopes alive. The Rust SDK uses this mechanism around execution and destruction. TypeScript, Effect, Scala, MoonBit, and Go combinators do not yet propagate scopes across concurrent continuations. Their sequential and properly nested use remains unchanged; concurrent custom operations in those SDKs are not fixed by the new host mechanism or generated bindings.
-
-In Effect TypeScript, `Durability.wrap` records both successes and typed failures described by its error schema. Defects, interruption, and response-encoding failures leave the live invocation unfinished. `Durability.wrapInfallible` accepts an Effect with no typed error channel.
-
-### Idempotence mode
-
-Golem assumes that HTTP requests are idempotent by default. This means that in case of a failure, if the system cannot determine whether the request successfully reached the target or not, it will be retried.
+`oplog-commit` waits for replication before execution continues. It is a replication barrier,
+not a transaction commit for external services, and it does not undo any effect.
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
-        This behavior can be changed using the `withIdempotenceMode` function:
-
-        ```typescript
-        import {withIdempotenceMode} from "@golemcloud/golem-ts-sdk"
-
-        const result: string = withIdempotenceMode(false, () => {
-          // this closure runs with idempotence mode disabled
-          return "hello"
-        })
-        ```
-    </Tabs.Tab>
-    <Tabs.Tab>
-        Use `Durability.withIdempotenceMode` to scope the setting to an Effect:
-
-        ```typescript
-        import { Effect } from "effect"
-        import { Durability } from "@golemcloud/effect-golem"
-
-        const result = Durability.withIdempotenceMode(
-          false,
-          Effect.succeed("hello"),
-        )
-        ```
-    </Tabs.Tab>
-    <Tabs.Tab>
-        This behavior can be changed using the `with_idempotence_mode` function:
-
-        ```rust
-        use golem_rust::with_idempotence_mode;
-
-        let result: &str = with_idempotence_mode(false, || {
-          // this block runs with idempotence mode disabled
-          "hello"
-        });
-        ```
-    </Tabs.Tab>
-    <Tabs.Tab>
-        This behavior can be changed using the `Guards.withIdempotenceMode` function:
-
-        ```scala
-        import golem.Guards
-
-        import scala.concurrent.Future
-
-        val result: Future[String] =
-          Guards.withIdempotenceMode(false) {
-            // this block runs with idempotence mode disabled
-            Future.successful("hello")
-          }
-        ```
-    </Tabs.Tab>
-    <Tabs.Tab>
-        Assuming the `golemcloud/golem_sdk/api` package is imported as `@api`, use the `with_idempotence_mode` function:
-
-        ```moonbit
-        let result : String = @api.with_idempotence_mode(false, fn() {
-          // this callback runs with idempotence mode disabled
-          "hello"
-        })
-        ```
-    </Tabs.Tab>
-    <Tabs.Tab>
-        This behavior can be changed using the `durability.WithIdempotenceMode` function, which returns a function restoring the previous mode:
-
-        ```go
-        import "github.com/golemcloud/golem/sdks/go/golem/durability"
-
-        result := func() string {
-            defer durability.WithIdempotenceMode(false)()
-            // this function runs with idempotence mode disabled
-            return "hello"
-        }()
-        ```
-    </Tabs.Tab>
-</Tabs>
-
-With disabled idempotence mode, in case Golem cannot determine if the request was sent or not, it won't retry it, but the agent will fail.
-
-### Atomic regions
-
-By default, side effects are persisted and retried one by one. It is possible to group them together into atomic regions, in which case the execution is retried for some reason (the agent failed or interrupted within the region), all the side effects will be reexecuted.
-
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
-    <Tabs.Tab>
-        The `golem-ts-sdk` library exports the `atomically` function for using atomic regions:
-
-        ```typescript
-        import {atomically} from "@golemcloud/golem-ts-sdk"
-
-        const result: [string, string] = atomically<[string, string]>(() => {
-          const firstResult: string = firstSideEffect()
-          const secondResult: string = secondSideEffect(firstResult)
-          return [firstResult, secondResult]
-        })
-        ```
-    </Tabs.Tab>
-    <Tabs.Tab>
-        `Durability.atomically` runs an Effect in an atomic region:
-
-        ```typescript
-        import { Effect } from "effect"
-        import { Durability } from "@golemcloud/effect-golem"
-
-        const result = Durability.atomically(
-          Effect.gen(function* () {
-            const first = yield* firstSideEffect
-            const second = yield* secondSideEffect(first)
-            return [first, second] as const
-          }),
-        )
-        ```
-    </Tabs.Tab>
-    <Tabs.Tab>
-        The `golem_rust` crate exports the `atomically` function for using atomic regions:
-
-        ```rust
-        use golem_rust::atomically;
-
-        let result = atomically(|| {
-            let first_result = first_side_effect();
-            let second_result = second_side_effect(&first_result);
-            (first_result, second_result)
-        });
-        ```
-    </Tabs.Tab>
-    <Tabs.Tab>
-        The Scala SDK exposes `Guards.atomically` for using atomic regions:
-
-        ```scala
-        import golem.Guards
-
-        import scala.concurrent.Future
-
-        val result: Future[(String, String)] =
-          Guards.atomically {
-            val firstResult = firstSideEffect()
-            val secondResult = secondSideEffect(firstResult)
-            Future.successful((firstResult, secondResult))
-          }
-        ```
-    </Tabs.Tab>
-    <Tabs.Tab>
-        Assuming the `golemcloud/golem_sdk/api` package is imported as `@api`, use the `with_atomic_operation` function:
-
-        ```moonbit
-        let result : (String, String) = @api.with_atomic_operation(fn() {
-          let first_result : String = first_side_effect()
-          let second_result : String = second_side_effect(first_result)
-          (first_result, second_result)
-        })
-        ```
-    </Tabs.Tab>
-    <Tabs.Tab>
-        The `durability` package exports the `Atomically` function for using atomic regions. Its callback returns nothing, so results are captured in outer variables:
-
-        ```go
-        import "github.com/golemcloud/golem/sdks/go/golem/durability"
-
-        var firstResult, secondResult string
-        durability.Atomically(func() {
-            firstResult = firstSideEffect()
-            secondResult = secondSideEffect(firstResult)
-        })
-        ```
-
-        A panic in the callback traps the component at once, even where something above would recover it, so the region stays open and runs again on retry.
-    </Tabs.Tab>
-
-</Tabs>
-
-### Commit oplog
-
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
-    <Tabs.Tab>
-        Wait until the oplog is replicated to a specified number of replicas before continuing:
-
         ```typescript
         import { oplogCommit } from '@golemcloud/golem-ts-sdk';
-
-        // Ensure oplog is replicated to 3 replicas before proceeding
         oplogCommit(3);
         ```
     </Tabs.Tab>
     <Tabs.Tab>
-        Wait until the oplog is replicated to a specified number of replicas before continuing:
-
         ```typescript
         import { Durability } from "@golemcloud/effect-golem"
-
         const committed = Durability.oplogCommit(3)
         ```
     </Tabs.Tab>
     <Tabs.Tab>
-        Wait until the oplog is replicated to a specified number of replicas before continuing:
-
         ```rust
         use golem_rust::oplog_commit;
-
-        // Ensure oplog is replicated to 3 replicas before proceeding
         oplog_commit(3);
         ```
     </Tabs.Tab>
     <Tabs.Tab>
-        Wait until the oplog is replicated to a specified number of replicas before continuing:
-
         ```scala
         import golem.HostApi
-
-        // Ensure oplog is replicated to 3 replicas before proceeding
         HostApi.oplogCommit(3)
         ```
     </Tabs.Tab>
     <Tabs.Tab>
-        Assuming the `golemcloud/golem_sdk/api` package is imported as `@api`, wait until the oplog is replicated to a specified number of replicas before continuing:
-
         ```moonbit
-        // Ensure oplog is replicated to 3 replicas before proceeding
         @api.oplog_commit(3)
         ```
     </Tabs.Tab>
     <Tabs.Tab>
-        Wait until the oplog is replicated to a specified number of replicas before continuing:
-
         ```go
         import "github.com/golemcloud/golem/sdks/go/golem/durability"
-
-        // Ensure oplog is replicated to 3 replicas before proceeding
         durability.OplogCommit(3)
         ```
     </Tabs.Tab>
 </Tabs>
+
+## Operator recovery
+
+External operators can [revert or fork an agent](/next/cli/agents) at validated oplog cuts.
+These are management operations, not guest-code retry primitives. They do not undo effects
+already applied by an external service. Reconcile those effects before repeating business work.

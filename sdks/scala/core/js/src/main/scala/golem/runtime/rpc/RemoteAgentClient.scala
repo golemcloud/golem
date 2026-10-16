@@ -20,6 +20,7 @@ import golem.Datetime
 import golem.Uuid
 import golem.config.{ConfigOverride, ConfigOverrideEncoder}
 import golem.FutureInterop
+import golem.host.PermissionsApi.ScopeCard
 import golem.host.js.schema.{JsSchemaValueTree, JsTypedAgentConfigValue, JsUuid}
 import golem.runtime.rpc.host.AgentHostApi.RegisteredAgentType
 import golem.runtime.rpc.host.WasmRpcApi.WasmRpcClient
@@ -37,33 +38,38 @@ final case class RemoteAgentClient(
 ) {
   def invokeAndAwait(
     functionName: String,
-    input: JsSchemaValueTree
+    input: JsSchemaValueTree,
+    scopeCard: Option[ScopeCard] = None
   ): Either[String, Option[JsSchemaValueTree]] =
-    rpc.invokeAndAwait(functionName, input)
+    rpc.invokeAndAwait(functionName, input, scopeCard)
 
   def asyncInvokeAndAwait(
     functionName: String,
-    input: JsSchemaValueTree
+    input: JsSchemaValueTree,
+    scopeCard: Option[ScopeCard] = None
   ): Future[Option[JsSchemaValueTree]] =
-    rpc.asyncInvokeAndAwait(functionName, input)
+    rpc.asyncInvokeAndAwait(functionName, input, scopeCard)
 
   def invokeAndAwaitWithMetadata(
     functionName: String,
-    input: JsSchemaValueTree
+    input: JsSchemaValueTree,
+    scopeCard: Option[ScopeCard] = None
   ): Either[String, InvocationResult[Option[JsSchemaValueTree]]] =
-    rpc.invokeAndAwaitWithMetadata(functionName, input)
+    rpc.invokeAndAwaitWithMetadata(functionName, input, scopeCard)
 
   def cancelableAsyncInvokeAndAwait(
     functionName: String,
-    input: JsSchemaValueTree
+    input: JsSchemaValueTree,
+    scopeCard: Option[ScopeCard] = None
   ): (Future[Option[JsSchemaValueTree]], CancellationToken) =
-    rpc.cancelableAsyncInvokeAndAwait(functionName, input)
+    rpc.cancelableAsyncInvokeAndAwait(functionName, input, scopeCard)
 
   def cancelableAsyncInvokeAndAwaitWithMetadata(
     functionName: String,
-    input: JsSchemaValueTree
+    input: JsSchemaValueTree,
+    scopeCard: Option[ScopeCard] = None
   ): Either[String, CancelableAsyncInvocation[Option[JsSchemaValueTree]]] =
-    rpc.asyncInvokeAndAwaitWithMetadata(functionName, input).map { invocation =>
+    rpc.asyncInvokeAndAwaitWithMetadata(functionName, input, scopeCard).map { invocation =>
       CancelableAsyncInvocation(
         invocation.metadata,
         invocation.result,
@@ -146,20 +152,34 @@ object RemoteAgentClient {
         }
       }
 
-  private final class WasmRpcInvoker(client: WasmRpcClient) extends RpcInvoker {
+  private[rpc] final class WasmRpcInvoker(client: WasmRpcClient) extends RpcInvoker {
+
+    /**
+     * Borrows the scope card for one host call. A moved card throws
+     * `IllegalStateException` before the host is called.
+     */
+    private def withScopeCard[A](scopeCard: Option[ScopeCard])(call: js.Any => A): A =
+      scopeCard match {
+        case Some(card) => card.borrowRaw(call)
+        case None       => call(js.undefined)
+      }
+
     override def invokeAndAwait(
       functionName: String,
-      input: JsSchemaValueTree
+      input: JsSchemaValueTree,
+      scopeCard: Option[ScopeCard]
     ): Either[String, Option[JsSchemaValueTree]] =
-      invokeWithFallback(functionName)(fn => client.invokeAndAwait(fn, input).map(_.toOption).left.map(_.toString))
+      invokeWithFallback(functionName)(fn =>
+        withScopeCard(scopeCard)(client.invokeAndAwait(fn, input, _)).map(_.toOption).left.map(_.toString)
+      )
 
     override def invokeAndAwaitWithMetadata(
       functionName: String,
-      input: JsSchemaValueTree
+      input: JsSchemaValueTree,
+      scopeCard: Option[ScopeCard]
     ): Either[String, InvocationResult[Option[JsSchemaValueTree]]] =
       invokeWithFallback(functionName)(fn =>
-        client
-          .invokeAndAwaitWithMetadata(fn, input)
+        withScopeCard(scopeCard)(client.invokeAndAwaitWithMetadata(fn, input, _))
           .map(value => value.copy(value = value.value.toOption))
           .left
           .map(_.toString)
@@ -167,36 +187,41 @@ object RemoteAgentClient {
 
     override def asyncInvokeAndAwait(
       functionName: String,
-      input: JsSchemaValueTree
+      input: JsSchemaValueTree,
+      scopeCard: Option[ScopeCard]
     ): Future[Option[JsSchemaValueTree]] =
-      safeCall(client.asyncInvokeAndAwait(functionName, input).left.map(_.toString)) match {
+      safeCall(
+        withScopeCard(scopeCard)(client.asyncInvokeAndAwait(functionName, input, _)).left.map(_.toString)
+      ) match {
         case Left(err)           => Future.failed(JavaScriptException(err))
         case Right(futureResult) => awaitFutureResult(futureResult)
       }
 
     override def asyncInvokeAndAwaitWithMetadata(
       functionName: String,
-      input: JsSchemaValueTree
+      input: JsSchemaValueTree,
+      scopeCard: Option[ScopeCard]
     ): Either[String, AsyncInvocation[Option[JsSchemaValueTree]]] =
       invokeWithFallback(functionName)(fn =>
-        client
-          .asyncInvokeAndAwaitWithMetadata(fn, input)
-          .map { case (metadata, futureResult) =>
+        withScopeCard(scopeCard)(client.asyncInvokeAndAwaitWithMetadata(fn, input, _)).map {
+          case (metadata, futureResult) =>
             AsyncInvocation(
               metadata,
               awaitFutureResult(futureResult),
               CancellationToken.fromFunction(() => futureResult.cancel())
             )
-          }
-          .left
+        }.left
           .map(_.toString)
       )
 
     override def cancelableAsyncInvokeAndAwait(
       functionName: String,
-      input: JsSchemaValueTree
+      input: JsSchemaValueTree,
+      scopeCard: Option[ScopeCard]
     ): (Future[Option[JsSchemaValueTree]], CancellationToken) =
-      safeCall(client.asyncInvokeAndAwait(functionName, input).left.map(_.toString)) match {
+      safeCall(
+        withScopeCard(scopeCard)(client.asyncInvokeAndAwait(functionName, input, _)).left.map(_.toString)
+      ) match {
         case Left(err) =>
           (Future.failed(JavaScriptException(err)), CancellationToken.fromFunction(() => ()))
         case Right(futureResult) =>

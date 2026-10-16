@@ -27,6 +27,7 @@ use super::{
     DurableStreamsHandler, MAX_BYTES, MAX_ITEMS, rejection_response, response, route_method,
     route_stream_load_key,
 };
+use crate::metrics::{ActiveHttpApiStream, HttpApiStreamKind};
 use crate::service::worker::WorkerService;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ReadStreamSlotRequest, ReadStreamSlotSuccess, StreamSlotReadAdmission,
@@ -286,9 +287,10 @@ fn sse_body(
     cursor: Option<u64>,
     representation: DurableStreamRepresentation,
 ) -> poem::Body {
+    let active = ActiveHttpApiStream::open(HttpApiStreamKind::DurableStreamSse);
     let stream = futures::stream::try_unfold(
-        (Some(first), read_request, permit, false, cursor),
-        move |(next, mut request, permit, done, mut cursor)| {
+        (Some(first), read_request, (permit, active), false, cursor),
+        move |(next, mut request, held, done, mut cursor)| {
             let service = service.clone();
             let agent_id = agent_id.clone();
             async move {
@@ -315,7 +317,7 @@ fn sse_body(
                     .map_err(std::io::Error::other)?;
                 Ok::<_, std::io::Error>(Some((
                     bytes::Bytes::from(data),
-                    (None, request, permit, closed, cursor),
+                    (None, request, held, closed, cursor),
                 )))
             }
         },

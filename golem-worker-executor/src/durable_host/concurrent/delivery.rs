@@ -378,10 +378,11 @@ impl CompletionDelivery {
     pub async fn wait_terminal(
         &mut self,
         terminal: tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<(), TerminalCallError> {
         let CompletionDeliveryState::Live(live) = &mut self.state else {
             panic!("only a live completion can own a pending terminal");
         };
+        let trap_context = live.trap_context;
         live.pending_append = Some(OrderedAppend::Task(terminal));
         let Some(OrderedAppend::Task(terminal)) = &mut live.pending_append else {
             unreachable!();
@@ -396,7 +397,7 @@ impl CompletionDelivery {
         if result.is_err() {
             self.settle();
         }
-        result
+        result.map_err(|err| TerminalCallError::new(err, trap_context))
     }
 
     pub fn live(
@@ -806,7 +807,6 @@ impl CompletionDelivery {
                 },
                 trap_context: DurableCallTrapContext {
                     retry_from: start_idx,
-                    in_atomic_region: false,
                 },
                 live_call_permit: None,
                 cleanup_sink: None,
@@ -849,7 +849,6 @@ impl CompletionDelivery {
             recorder,
             DurableCallTrapContext {
                 retry_from: start_idx,
-                in_atomic_region: false,
             },
             cleanup_sink,
             TeardownProbe::never(),

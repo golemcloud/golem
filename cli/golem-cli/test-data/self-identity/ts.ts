@@ -7,7 +7,7 @@ import {
   getRawSelfAgentId,
   getSelfMetadata,
   getAgentMetadata,
-  getOplogIndex,
+  generateIdempotencyKey,
   ParsedAgentId,
 } from "@golemcloud/golem-ts-sdk";
 
@@ -19,7 +19,6 @@ for (const snapshots of [false, true]) {
     methods: {
       observe: method({ input: {}, returns: z.string() }),
       status: method({ input: {}, returns: z.string() }),
-      checkpoint: method({ input: {}, returns: z.string() }),
       forkNamed: method({
         input: { name: z.string(), cutoff: z.string() },
         returns: z.void(),
@@ -40,7 +39,7 @@ for (const snapshots of [false, true]) {
         const self = this.getId().value;
         // Different durable calls make an incorrect historical identity diverge.
         if (self.includes('"parent"')) getSelfMetadata();
-        else getOplogIndex();
+        else generateIdempotencyKey();
         this.trace.push(self);
         return self;
       },
@@ -61,9 +60,6 @@ for (const snapshots of [false, true]) {
           metadata: metadata.agentId.agentId,
           addressed: addressed?.agentId.agentId,
         });
-      },
-      checkpoint() {
-        return getOplogIndex().toString();
       },
       forkNamed({ name, cutoff }) {
         const source = {

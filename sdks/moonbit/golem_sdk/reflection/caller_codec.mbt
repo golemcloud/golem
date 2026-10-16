@@ -276,14 +276,29 @@ fn full_from_id_with_config(
 }
 
 ///|
+/// Sets the scope card that awaited invocations of this client attach when the
+/// call does not pass its own `scope_card`. `None` removes the default. The
+/// client borrows the card; trigger and schedule invocations never attach it.
+pub fn FullAgentClient::set_default_scope_card(
+  self : FullAgentClient,
+  card : @permissions.ScopeCard?,
+) -> Unit {
+  self.transport.default_scope_card = card
+}
+
+///|
+/// `scope_card` lends an invocation-local scope card to the callee for this
+/// call and overrides the client default. The card is borrowed, not consumed.
 pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] FullAgentClient::invoke(
   self : FullAgentClient,
   method_name : String,
   input : I,
+  scope_card? : @permissions.ScopeCard,
 ) -> Invocation[O] {
   let invocation = self.transport.invoke_value(
     method_name,
     @schema.to_value_as(input),
+    scope_card,
   )
   let value = match invocation.value {
     Some(value) => decode_typed_output(value)
@@ -293,14 +308,18 @@ pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] FullAgentClient::in
 }
 
 ///|
+/// `scope_card` lends an invocation-local scope card to the callee for this
+/// call and overrides the client default. The card is borrowed, not consumed.
 pub async fn[I : @schema.IntoSchema] FullAgentClient::invoke_unit(
   self : FullAgentClient,
   method_name : String,
   input : I,
+  scope_card? : @permissions.ScopeCard,
 ) -> Invocation[Unit] {
   let invocation = self.transport.invoke_value(
     method_name,
     @schema.to_value_as(input),
+    scope_card,
   )
   require_unit_output(invocation.value)
   { metadata: invocation.metadata, value: (), }
@@ -394,21 +413,38 @@ pub fn FullAgentClient::drop(self : FullAgentClient) -> Unit {
 }
 
 ///|
+/// Sets the scope card that awaited invocations of this client attach when the
+/// call does not pass its own `scope_card`. `None` removes the default. The
+/// client borrows the card; trigger and schedule invocations never attach it.
+pub fn MethodOnlyAgentClient::set_default_scope_card(
+  self : MethodOnlyAgentClient,
+  card : @permissions.ScopeCard?,
+) -> Unit {
+  self.inner.set_default_scope_card(card)
+}
+
+///|
+/// `scope_card` lends an invocation-local scope card to the callee for this
+/// call and overrides the client default. The card is borrowed, not consumed.
 pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] MethodOnlyAgentClient::invoke(
   self : MethodOnlyAgentClient,
   method_name : String,
   input : I,
+  scope_card? : @permissions.ScopeCard,
 ) -> Invocation[O] {
-  self.inner.invoke(method_name, input)
+  self.inner.invoke(method_name, input, scope_card?)
 }
 
 ///|
+/// `scope_card` lends an invocation-local scope card to the callee for this
+/// call and overrides the client default. The card is borrowed, not consumed.
 pub async fn[I : @schema.IntoSchema] MethodOnlyAgentClient::invoke_unit(
   self : MethodOnlyAgentClient,
   method_name : String,
   input : I,
+  scope_card? : @permissions.ScopeCard,
 ) -> Invocation[Unit] {
-  self.inner.invoke_unit(method_name, input)
+  self.inner.invoke_unit(method_name, input, scope_card?)
 }
 
 ///|

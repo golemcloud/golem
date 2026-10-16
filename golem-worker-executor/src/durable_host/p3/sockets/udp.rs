@@ -14,13 +14,15 @@
 
 use crate::durable_host::authorization::targets::udp_target;
 use crate::durable_host::concurrent::{
-    CallReplayOutcome, DurableCallSession, NotCancellable,
+    AccessClaimOptions, CallReplayOutcome, Cancellable, DurableCallSession, NotCancellable,
     authorize_live_permissions_at_serialized_access, reserve_invocation_id_before_await,
 };
+use crate::durable_host::durability::DurabilityHost;
 use crate::durable_host::p3::{
-    DurableP3, DurableP3View, durable_worker_ctx, observe_function_call, run_read_access,
-    wasi_sockets_view,
+    DurableP3, DurableP3View, durable_worker_ctx, observe_function_call, wasi_sockets_view,
 };
+use crate::services::HasWorker;
+use crate::services::oplog::CommitLevel;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::host_functions::{
     P3SocketsTypesUdpSocketConnect, P3SocketsTypesUdpSocketReceive, P3SocketsTypesUdpSocketSend,
@@ -280,39 +282,75 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostUdpSocketWithStore<U> for Dur
         } else {
             false
         };
-        let response = run_read_access::<_, _, Ctx, P3SocketsTypesUdpSocketSend, _>(
-            store,
-            HostRequestP3SocketsUdpSend {
-                data: data.clone(),
-                remote_address: remote_address.map(Into::into),
-            },
-            DurableFunctionType::WriteRemoteBatched(None),
-            || async {
-                if denied {
-                    return Ok(HostResponseP3SocketsUdpSend {
-                        result: Err(SerializableP3SocketErrorCode::AccessDenied),
-                    });
+        let mut call =
+            DurableCallSession::<P3SocketsTypesUdpSocketSend, Cancellable>::start_access_with_options(
+                store,
+                durable_worker_ctx::<Ctx, U>,
+                DurableFunctionType::WriteRemote,
+                AccessClaimOptions {
+                    incomplete_repair_authorized_by_scope: true,
+                    ..Default::default()
+                },
+                async |_| Ok(HostRequestP3SocketsUdpSend {
+                    data: data.clone(),
+                    remote_address: remote_address.map(Into::into),
+                }),
+            )
+            .await
+            .map_err(SocketError::trap)?;
+        let result = if !call.is_live() {
+            match call
+                .replay_access(store, durable_worker_ctx::<Ctx, U>)
+                .await
+                .map_err(SocketError::trap)?
+            {
+                CallReplayOutcome::Replayed(response) => {
+                    return response
+                        .result
+                        .map_err(|error| types::ErrorCode::from(error).into());
                 }
-                let sockets = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
-                let result = <WasiSockets as types::HostUdpSocketWithStore<U>>::send(
-                    &sockets,
-                    socket,
-                    data,
-                    remote_address,
-                )
-                .await;
-
-                Ok(HostResponseP3SocketsUdpSend {
-                    result: match result {
-                        Ok(()) => Ok(()),
-                        Err(error) => Err(serialize_socket_error(error)?),
-                    },
-                })
-            },
-        )
-        .await
-        .map_err(SocketError::trap)?;
-
+                CallReplayOutcome::Incomplete(incomplete) => {
+                    call = incomplete;
+                    Err(SerializableP3SocketErrorCode::ConnectionBroken)
+                }
+            }
+        } else if denied {
+            Err(SerializableP3SocketErrorCode::AccessDenied)
+        } else {
+            if call.is_persisted() {
+                // Fence the original send Start before the datagram can leave the worker.
+                let public_state = store.with(|mut access| {
+                    durable_worker_ctx::<Ctx, U>(access.data_mut())
+                        .public_state
+                        .clone()
+                });
+                public_state
+                    .worker()
+                    .commit_oplog_and_update_state(CommitLevel::Always)
+                    .await
+                    .map_err(SocketError::trap)?;
+            }
+            let sockets = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
+            match <WasiSockets as types::HostUdpSocketWithStore<U>>::send(
+                &sockets,
+                socket,
+                data,
+                remote_address,
+            )
+            .await
+            {
+                Ok(()) => Ok(()),
+                Err(error) => Err(serialize_socket_error(error).map_err(SocketError::trap)?),
+            }
+        };
+        let response = call
+            .complete_access(
+                store,
+                durable_worker_ctx::<Ctx, U>,
+                HostResponseP3SocketsUdpSend { result },
+            )
+            .await
+            .map_err(SocketError::trap)?;
         match response.result {
             Ok(()) => Ok(()),
             Err(error) => Err(types::ErrorCode::from(error).into()),
@@ -323,17 +361,42 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostUdpSocketWithStore<U> for Dur
         store: &Accessor<U, Self>,
         socket: Resource<UdpSocket>,
     ) -> SocketResult<(Vec<u8>, types::IpSocketAddress)> {
-        let response = run_read_access::<_, _, Ctx, P3SocketsTypesUdpSocketReceive, _>(
+        let mut call = DurableCallSession::<P3SocketsTypesUdpSocketReceive, Cancellable>::start_access_with_options(
             store,
-            HostRequestNoInput {},
+            durable_worker_ctx::<Ctx, U>,
             DurableFunctionType::ReadRemote,
-            || async {
+            AccessClaimOptions::default(),
+            async |_| Ok(HostRequestNoInput {}),
+        )
+        .await
+        .map_err(SocketError::trap)?;
+        if !call.is_live() {
+            match call
+                .replay_access(store, durable_worker_ctx::<Ctx, U>)
+                .await
+                .map_err(SocketError::trap)?
+            {
+                CallReplayOutcome::Replayed(response) => {
+                    return response
+                        .result
+                        .map(|datagram| (datagram.data, datagram.remote_address.into()))
+                        .map_err(|error| types::ErrorCode::from(error).into());
+                }
+                CallReplayOutcome::Incomplete(incomplete) => call = incomplete,
+            }
+        }
+        let response =
+            call.run_live_action_access(store, durable_worker_ctx::<Ctx, U>, || async {
                 let sockets = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
-                let result =
-                    <WasiSockets as types::HostUdpSocketWithStore<U>>::receive(&sockets, socket)
-                        .await;
+                let interrupt = store.with(|mut access| {
+                    durable_worker_ctx::<Ctx, U>(access.data_mut()).create_interrupt_signal()
+                });
+                let result = tokio::select! {
+                    result = <WasiSockets as types::HostUdpSocketWithStore<U>>::receive(&sockets, socket) => result,
+                    kind = interrupt => return Err(wasmtime::Error::from_anyhow(kind.into())),
+                };
 
-                Ok(HostResponseP3SocketsUdpReceive {
+                Ok::<_, wasmtime::Error>(HostResponseP3SocketsUdpReceive {
                     result: match result {
                         Ok((data, remote_address)) => Ok(SerializableP3UdpDatagram {
                             data,
@@ -342,10 +405,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostUdpSocketWithStore<U> for Dur
                         Err(error) => Err(serialize_socket_error(error)?),
                     },
                 })
-            },
-        )
-        .await
-        .map_err(SocketError::trap)?;
+            })
+            .await
+            .map_err(SocketError::trap)?;
 
         match response.result {
             Ok(SerializableP3UdpDatagram {

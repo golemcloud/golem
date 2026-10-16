@@ -23,9 +23,13 @@ import { throwIfAborted } from '../src/internal/pollableUtils';
 import {
   secretHandleToSchemaValue,
   secretHandleFromSchemaValue,
-  permissionCardHandleToSchemaValue,
-  permissionCardHandleFromSchemaValue,
+  permissionCardToSchemaValue,
+  permissionCardFromSchemaValue,
 } from '../src/bridge/schema';
+import type { PermissionCard } from '../src/host/permissions';
+import { permissionCardFromRaw } from './permissionCardTestSupport';
+import { peekGuestPermissionCardHandle } from '../src/internal/schema-model/permissionCardHandle';
+import { PERMISSION_CARD_INTERNAL } from '../src/internal/schema-model/permissionCardInternal';
 import { withCapabilityAdoptionTransaction } from '../src/internal/schema-model/capabilityTransaction';
 import { compileSchema } from '../src/schema/adapter';
 import { s } from '../src/schema/markers';
@@ -34,6 +38,7 @@ import {
   GuestSchemaValueStreamHandle,
   schemaValueFromWit,
   schemaValueToWitAsync,
+  type SchemaValue,
   v,
 } from '../src/internal/schema-model';
 
@@ -44,6 +49,17 @@ function streamNode(
     SchemaValueTree['valueNodes'][number],
     { tag: 'stream-value' }
   >;
+}
+
+const streamItemCards = new WeakMap<object, PermissionCard>();
+
+function streamItemCard(raw: never): PermissionCard {
+  let card = streamItemCards.get(raw);
+  if (card === undefined) {
+    card = permissionCardFromRaw(raw);
+    streamItemCards.set(raw, card);
+  }
+  return card;
 }
 
 describe('schema-native AgentStream', () => {
@@ -380,7 +396,16 @@ describe('native typed conversion ownership', () => {
 
   it.each([
     ['secret', secretHandleToSchemaValue, secretHandleFromSchemaValue],
-    ['permission card', permissionCardHandleToSchemaValue, permissionCardHandleFromSchemaValue],
+    [
+      'permission card',
+      (raw: never) => permissionCardToSchemaValue(streamItemCard(raw)),
+      (value: SchemaValue) => {
+        // The card still holds its resource, so decoding its value is rejected.
+        expect(() => permissionCardFromSchemaValue(value)).toThrow(/already held by another card/);
+        if (value.tag !== 'permission-card') throw new Error('expected a permission card');
+        return peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value.handle);
+      },
+    ],
   ] as const)(
     'rolls back %s adoption when a generated lazy item encoder fails',
     async (_, encode, decode) => {

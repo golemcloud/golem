@@ -43,9 +43,9 @@ const total = yield* collector.getTotal({});
 
 Client construction and remote calls have typed RPC/configuration errors. Handle or map them when
 they are domain-relevant. Use `Effect.orDie` to turn an unexpected failure into a defect rather
-than declaring an unrelated domain error. An unhandled defect outside an atomic region fails the
-agent without retry. When a failure should retry the complete region, put the RPC Effect inside
-`Durability.atomically`; the region is retried according to the applicable retry policy.
+than declaring an unrelated domain error. An unhandled defect fails the invocation without retry.
+Host retry policies govern retryable RPC failures. Use an SDK saga for business-level
+compensation and explicit guest-code attempts.
 
 ## Stateful Multi-Instance Example
 

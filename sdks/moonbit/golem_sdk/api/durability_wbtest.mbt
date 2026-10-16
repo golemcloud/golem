@@ -15,11 +15,11 @@ test "durable function types map to raw wrapped function types" {
     @oplog.WrappedFunctionType::WriteRemote,
   )
   assert_eq(
-    DurableFunctionType::WriteRemoteBatched(Some(42UL)).to_raw(),
-    @oplog.WrappedFunctionType::WriteRemoteBatched(Some(42UL)),
+    DurableFunctionType::WriteLocal.to_raw(),
+    @oplog.WrappedFunctionType::WriteLocal,
   )
   assert_eq(
-    DurableFunctionType::WriteRemoteTransaction(None).to_raw(),
-    @oplog.WrappedFunctionType::WriteRemoteTransaction(None),
+    DurableFunctionType::ReadRemote.to_raw(),
+    @oplog.WrappedFunctionType::ReadRemote,
   )
 }

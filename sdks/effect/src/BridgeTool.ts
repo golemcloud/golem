@@ -12,6 +12,7 @@ import { CollectionOwnership } from "./internal/tool/collectionOwnership.js"
 import { discardRejectedPayload } from "./internal/tool/discardRejectedPayload.js"
 import {
   schemaGraphFromWit,
+  restoreEncodedCapabilitiesOnAbort,
   schemaGraphToWit,
   schemaValueToWitAsync,
 } from "./internal/schema-model/wit.js"
@@ -117,7 +118,8 @@ export const createToolClientRuntime = (tool: string, reflected = false): ToolCl
       const wireInput = {
         graph: schemaGraphToWit(input.graph),
         value: yield* Effect.tryPromise({
-          try: (signal) => schemaValueToWitAsync(input.value, signal),
+          try: (signal) =>
+            restoreEncodedCapabilitiesOnAbort(signal, schemaValueToWitAsync(input.value, signal)),
           catch: (error) => protocol("failed to encode tool input", error),
         }),
       }

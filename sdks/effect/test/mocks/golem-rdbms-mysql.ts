@@ -111,6 +111,7 @@ export interface DbResult {
 
 export type Error =
   | { tag: "connection-failure"; val: string }
+  | { tag: "resource-lost"; val: string }
   | { tag: "query-parameter-failure"; val: string }
   | { tag: "query-execution-failure"; val: string }
   | { tag: "query-response-failure"; val: string }

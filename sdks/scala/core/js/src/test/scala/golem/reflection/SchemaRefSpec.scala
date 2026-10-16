@@ -63,6 +63,94 @@ object SchemaRefSpec extends ZIOSpecDefault {
         ref.validateValue(RecordValue(List(StringValue("too-short")))).isLeft
       )
     },
+    test("JSON packing issues carry the JSON path of the failing value") {
+      val nested = SchemaRef(
+        SchemaGraph(
+          ListMap.empty,
+          SchemaType(
+            RecordType(
+              List(
+                NamedFieldType(
+                  "items",
+                  SchemaType(ListType(SchemaType(RecordType(List(NamedFieldType("name", SchemaType(StringType)))))))
+                ),
+                NamedFieldType(
+                  "pairs",
+                  SchemaType(
+                    MapType(
+                      SchemaType(StringType),
+                      SchemaType(S32Type(Some(NumericRestrictions(max = Some(NumericBound.Signed(3))))))
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+      def input(items: Json, pairs: Json) = Json.Object("items" -> items, "pairs" -> pairs)
+      val wrongType                       = input(Json.Array(Json.Object("name" -> Json.Number(BigDecimal(1)))), Json.Array())
+      val missing                         = input(Json.Array(Json.Object(), Json.Object()), Json.Array())
+      val unknown                         = input(Json.Array(Json.Object("name" -> Json.String("a"), "x" -> Json.Null)), Json.Array())
+      val refined                         =
+        input(Json.Array(), Json.Array(Json.Array(Json.String("k"), Json.Number(BigDecimal(4)))))
+      assertTrue(
+        nested.validateJson(wrongType) == Left(List(SchemaIssue("expected a JSON string", List("items", "0", "name")))),
+        nested.validateJson(missing) == Left(List(SchemaIssue("missing field 'name'", List("items", "0", "name")))),
+        nested.validateJson(unknown) == Left(List(SchemaIssue("unknown field 'x'", List("items", "0", "x")))),
+        nested.packJson(Json.Object("items" -> Json.Array())) ==
+          Left(SchemaIssue("missing field 'pairs'", List("pairs"))),
+        nested.validateJson(refined).left.toOption.exists(_.map(_.path) == List(List("pairs", "0", "1")))
+      )
+    },
+    test("root JSON defaults fill omitted fields only on the JSON surface") {
+      val record = SchemaType(
+        RecordType(
+          List(
+            NamedFieldType("name", SchemaType(StringType)),
+            NamedFieldType("ratio", SchemaType(F64Type(None))),
+            NamedFieldType("label", SchemaType(OptionType(SchemaType(StringType)))),
+            NamedFieldType("count", SchemaType(U32Type(None)))
+          )
+        )
+      )
+      val plain     = SchemaRef(SchemaGraph(ListMap.empty, record))
+      val defaulted = plain.withJsonDefaults(
+        ListMap(
+          "ratio" -> F64Value(Double.NaN),
+          "label" -> OptionValue(Some(StringValue("none"))),
+          "count" -> U32Value(7)
+        )
+      )
+      val rendered   = defaulted.toJsonSchema()
+      val properties = rendered.get("properties").one.toOption.get
+      val packed     = defaulted.packJson(Json.Object("name" -> Json.String("n")))
+      assertTrue(
+        packed.toOption.exists {
+          case RecordValue(
+                List(StringValue("n"), F64Value(ratio), OptionValue(Some(StringValue("none"))), U32Value(7))
+              ) =>
+            ratio.isNaN
+          case _ => false
+        },
+        defaulted
+          .packJson(Json.Object("name" -> Json.String("n"), "label" -> Json.Null, "count" -> Json.Number(1)))
+          .toOption
+          .exists {
+            case RecordValue(List(_, _, OptionValue(None), U32Value(1))) => true
+            case _                                                       => false
+          },
+        plain.packJson(Json.Object("name" -> Json.String("n"))) ==
+          Left(SchemaIssue("missing field 'ratio'", List("ratio"))),
+        rendered.get("required").one == Right(Json.Array(Json.String("name"))),
+        properties.get("ratio").one.flatMap(_.get("default").one).isLeft,
+        properties.get("label").one.flatMap(_.get("default").one) == Right(Json.String("none")),
+        properties.get("count").one.flatMap(_.get("default").one) == Right(Json.Number(BigDecimal(7))),
+        properties.get("name").one.flatMap(_.get("default").one).isLeft,
+        plain.toJsonSchema().get("required").one ==
+          Right(Json.Array(Json.String("name"), Json.String("ratio"), Json.String("count")))
+      )
+    },
     test("round-trips rich canonical JSON values") {
       val rich = SchemaRef(
         SchemaGraph(

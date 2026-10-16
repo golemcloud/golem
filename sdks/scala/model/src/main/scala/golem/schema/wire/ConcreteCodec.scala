@@ -148,9 +148,10 @@ final class WireValuesReader(val tree: WitSchemaValueTree) {
 
   def abort(): Unit = {
     tree.valueNodes.foreach {
-      case WitSchemaValueNode.SecretValue(handle)          => handle.take()
-      case WitSchemaValueNode.QuotaTokenHandle(handle)     => handle.take()
-      case WitSchemaValueNode.PermissionCardHandle(handle) => handle.take()
+      case WitSchemaValueNode.SecretValue(handle)      => handle.take()
+      case WitSchemaValueNode.QuotaTokenHandle(handle) => handle.take()
+      // A holder that a card object owns belongs to that card, not to this tree.
+      case WitSchemaValueNode.PermissionCardHandle(handle) => if (!handle.isClaimedByCard) handle.take()
       case WitSchemaValueNode.StreamValue(handle)          => handle.take().foreach(streams.add)
       case _                                               => ()
     }

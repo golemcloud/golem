@@ -1,0 +1,13 @@
+error[E0603]: module `wallet` is private
+ --> tests/ui/fail/permission_raw_bindings_private.rs:2:55
+  |
+2 |     let _ = golem_rust::bindings::golem::permissions::wallet::self_wallet();
+  |                                                       ^^^^^^  ----------- function `self_wallet` is not publicly re-exported
+  |                                                       |
+  |                                                       private module
+  |
+note: the module `wallet` is defined here
+ --> src/lib.rs
+  |
+  |                 derive, inspect, kernel_introspection, revoke, types, wallet,
+  |                                                                       ^^^^^^

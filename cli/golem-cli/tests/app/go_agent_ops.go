@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
-	"github.com/golemcloud/golem/sdks/go/golem/durability"
 	"github.com/golemcloud/golem/sdks/go/golem/oplog"
 	"github.com/golemcloud/golem/sdks/go/golem/reflection"
 	"github.com/golemcloud/golem/sdks/go/golem/retry"
@@ -322,13 +321,14 @@ func init() {
 		return fmt.Sprintf("%s %s", md.AgentID.AgentID, md.Status)
 	})
 
-	// Each revert rewinds this agent, but not the counter it calls, so the
-	// retries converge.
+	// Each durable call advances the counter until it reaches the target.
 	ops.Handle(RetryUntil3, func(_ *golem.Context[opsState], in NameIn) int64 {
-		cp := durability.NewCheckpoint()
-		n := Increment.MustCall(counterClient(in.Name), golem.Unit{})
-		cp.AssertOrRevert(n >= 3)
-		return n
+		for {
+			n := Increment.MustCall(counterClient(in.Name), golem.Unit{})
+			if n >= 3 {
+				return n
+			}
+		}
 	})
 
 	ops.Handle(ForkJoin, func(*golem.Context[opsState], golem.Unit) string {

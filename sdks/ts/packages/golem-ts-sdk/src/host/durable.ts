@@ -11,8 +11,6 @@ import {
   observeFunctionCall,
 } from 'golem:durability/durability@1.6.0';
 
-import type { OplogIndex } from 'golem:api/oplog@1.5.0';
-
 import { compileSchema } from '../schema/adapter';
 import type { SchemaCodec } from '../schema/codec';
 import { buildResultCodec } from '../schema/result';
@@ -28,18 +26,12 @@ import { Result } from './result';
  * - `writeLocal` — a local mutating side effect (FS write, spawning a process).
  * - `readRemote` — an idempotent remote read (polling a job, fetching a page).
  * - `writeRemote` — a non-idempotent remote write (sending an LLM prompt, a DB insert).
- * - `writeRemoteBatched(begin?)` / `writeRemoteTransaction(begin?)` — multi-step
- *   remote writes; the optional oplog index links follow-up steps to the batch.
  */
 export const FunctionType = {
   readLocal: { tag: 'read-local' } as const,
   writeLocal: { tag: 'write-local' } as const,
   readRemote: { tag: 'read-remote' } as const,
   writeRemote: { tag: 'write-remote' } as const,
-  writeRemoteBatched: (begin?: OplogIndex) =>
-    ({ tag: 'write-remote-batched', val: begin }) as const,
-  writeRemoteTransaction: (begin?: OplogIndex) =>
-    ({ tag: 'write-remote-transaction', val: begin }) as const,
 } as const;
 
 /** Static descriptor of a durable function: what it is + how its I/O is typed. */

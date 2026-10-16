@@ -69,6 +69,7 @@ use golem_worker_executor::durable_host::DurableWorkerCtxView;
 use golem_worker_executor::preview2::golem::agent::host::Host as AgentHost;
 use golem_worker_executor::preview2::golem::secrets::reveal::Host as SecretRevealHost;
 use golem_worker_executor::preview2::golem_api_1_x::host::Host as GolemApiHost;
+use golem_worker_executor::preview2::golem_api_1_x::retry::Host as RetryHost;
 use golem_worker_executor::services::HasComponentService;
 use golem_worker_executor::services::active_agents::ActiveAgent;
 use golem_worker_executor::services::card::{CardService, CardState};
@@ -361,7 +362,7 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
                     let borrowed = || {
                         parents
                             .iter()
-                            .map(|p| Resource::new_borrow(p.rep()))
+                            .map(|p| Resource::new_borrow(wallet_card_handle(p).rep()))
                             .collect()
                     };
                     let scope = derive::Host::derive_scope(
@@ -399,13 +400,9 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
                         vec![],
                         None,
                     )
-                    .await
-                    .expect_err("other namespace wallet must refuse before persistent creation");
+                    .await?;
                     assert!(
-                        matches!(
-                            wrong.downcast_ref::<types::PermissionError>(),
-                            Some(types::PermissionError::LowerBoundTooBroad(_))
-                        ),
+                        matches!(wrong, Err(types::PermissionError::LowerBoundTooBroad(_))),
                         "other namespace wallet must be refused: historical={historical}, {wrong:?}"
                     );
                     if !historical {
@@ -471,6 +468,7 @@ async fn observed_wallet(store: &mut Store<TestWorkerCtx>) -> anyhow::Result<(Ve
     let ctx = store.data_mut().durable_ctx_mut();
     let mut ids = Vec::new();
     for handle in wallet::Host::self_wallet(ctx).await? {
+        let handle = into_wallet_card_handle(handle);
         let id =
             types::Host::id(ctx, wasmtime::component::Resource::new_borrow(handle.rep())).await?;
         ids.push(CardId(golem_schema::model::CardId::from(id).uuid));
@@ -578,6 +576,7 @@ async fn cross_store_wallet_change(
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: vec![grant],
+        expires_at: None,
     });
     let parent_start = active
         .execution()
@@ -693,6 +692,7 @@ async fn cross_store_wallet_change(
                 if matches!(change, WalletChange::Transfer) {
                     let mut source = None;
                     for handle in wallet::Host::self_wallet(ctx).await? {
+                        let handle = into_wallet_card_handle(handle);
                         let id = types::Host::id(
                             ctx,
                             wasmtime::component::Resource::new_borrow(handle.rep()),
@@ -1401,7 +1401,6 @@ async fn stage_entity_boundary(
         plan: EntityInvocationPlanReference::Root {
             plan: EntityInvocationPlan::new(layers).unwrap(),
         },
-        assume_idempotence: scope.assume_idempotence(),
         authority_wallet: active.primary().get_wallet_cards().await?,
     };
     let index = active
@@ -1496,7 +1495,6 @@ fn invocation_scope(
         principal,
         InvocationExecutionMode::Live,
         IdempotencyKey::new("instance-layer-live-scope".to_string()),
-        true,
         false,
         IdempotencyKey::new("instance-layer-live-streams".to_string()),
     )
@@ -1525,7 +1523,6 @@ fn replay_invocation_scope(
         principal,
         InvocationExecutionMode::ReplayingCompleted,
         IdempotencyKey::new("instance-layer-replay-scope".to_string()),
-        true,
         false,
         IdempotencyKey::new("instance-layer-replay-streams".to_string()),
     )
@@ -1536,7 +1533,7 @@ async fn completed_entity_replay_rejects_positional_calls(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     agent_rpc_rust: &PrecompiledComponent,
-    record_noop: bool,
+    record_policy_removal: bool,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -1587,8 +1584,12 @@ async fn completed_entity_replay_rejects_positional_calls(
             EntityCallMode::Synchronous,
             move |_instance, store| {
                 Box::pin(async move {
-                    if record_noop {
-                        GolemApiHost::get_oplog_index(store.data_mut().durable_ctx_mut()).await?;
+                    if record_policy_removal {
+                        RetryHost::remove_retry_policy(
+                            store.data_mut().durable_ctx_mut(),
+                            "completed-positional-tail".to_string(),
+                        )
+                        .await?;
                     }
                     Ok(())
                 })
@@ -1635,33 +1636,41 @@ async fn completed_entity_replay_rejects_positional_calls(
         move |_instance, store| {
             Box::pin(async move {
                 let ctx = store.data_mut().durable_ctx_mut();
-                let (first, second) = if record_noop {
+                let policy = NamedRetryPolicy::default_from_config(&Default::default());
+                let (first, second) = if record_policy_removal {
                     (
-                        GolemApiHost::mark_begin_operation(ctx)
+                        RetryHost::set_retry_policy(ctx, policy.into())
                             .await
                             .expect_err("a mismatched positional call must fail"),
-                        GolemApiHost::get_oplog_index(ctx)
-                            .await
-                            .expect_err("a failed mismatch must not make the entity live"),
+                        RetryHost::remove_retry_policy(
+                            ctx,
+                            "completed-positional-tail".to_string(),
+                        )
+                        .await
+                        .expect_err("a failed mismatch must not make the entity live"),
                     )
                 } else {
                     (
-                        GolemApiHost::get_oplog_index(ctx)
-                            .await
-                            .expect_err("a completed entity must reject a new positional call"),
-                        GolemApiHost::mark_begin_operation(ctx)
+                        RetryHost::remove_retry_policy(
+                            ctx,
+                            "completed-positional-tail".to_string(),
+                        )
+                        .await
+                        .expect_err("a completed entity must reject a new positional call"),
+                        RetryHost::set_retry_policy(ctx, policy.into())
                             .await
                             .expect_err("a rejected positional call must not make the entity live"),
                     )
                 };
                 let first = first.to_string();
                 let second = second.to_string();
-                assert!(first.contains("NoOp"));
-                assert!(second.contains("NoOp") || second.contains("BeginAtomicRegion"));
-                if record_noop {
-                    assert!(first.contains("BeginAtomicRegion"));
+                if record_policy_removal {
+                    assert!(first.contains("SetRetryPolicy"), "{first}");
+                    assert!(first.contains("RemoveRetryPolicy"), "{first}");
+                    assert!(second.contains("RemoveRetryPolicy"), "{second}");
                 } else {
-                    assert!(second.contains("BeginAtomicRegion"));
+                    assert!(first.contains("RemoveRetryPolicy"), "{first}");
+                    assert!(second.contains("SetRetryPolicy"), "{second}");
                 }
                 Ok(())
             })
@@ -1678,6 +1687,223 @@ async fn completed_entity_replay_rejects_positional_calls(
         .test_settle_entity_boundary(claim)
         .await?;
     drop(replay_primary);
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn retry_decisions_replay_jitter_and_typed_errors(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::retry_policy::{
+        NamedRetryPolicy, Predicate, PredicateValue, RetryPolicy,
+    };
+    use std::time::Duration;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let agent_id = agent_id!("RpcCounter", "retry-decisions");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
+        .await?;
+    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let active = executor.active_agent(&owner_id).await.unwrap();
+    let metadata = owner_component_metadata(&active, component.id, component.revision).await?;
+    let name = ToolMiddlewareName::try_from("retry-decisions").unwrap();
+    let entity = AgentEntity::ToolMiddleware(name.clone());
+    let principal = Principal::Agent(AgentPrincipal {
+        agent_id: owner_id.agent_id.clone(),
+    });
+    let activation = Arc::new(middleware_activation(
+        ExecutableTarget::new(component.id, component.revision),
+        name,
+    ));
+    let parent_start = active.execution().oplog().current_oplog_index().await;
+    let entity_start = parent_start.next();
+    let parent_id = OwnerInvocationId::Agent(parent_start);
+    let lane = active.execution().lane();
+    let scope = invocation_scope(
+        &owner_id,
+        &entity,
+        entity_start,
+        parent_start,
+        activation.clone(),
+        principal.clone(),
+    );
+    let selector_fallback = RetryPolicy::CountBox {
+        max_retries: 3,
+        inner: Box::new(RetryPolicy::Periodic(Duration::from_secs(2))),
+    };
+    let mut live_result = None;
+    for replay in [false, true] {
+        let primary = lane.enter_primary(parent_start)?.acquire().await?;
+        let claim = if replay {
+            Some(
+                active
+                    .execution()
+                    .test_claim_entity_boundary(parent_start)
+                    .await?,
+            )
+        } else {
+            stage_entity_boundary(&active, &scope).await?;
+            None
+        };
+        let before = active.execution().oplog().current_oplog_index().await;
+        let scope = if replay {
+            replay_invocation_scope(
+                &owner_id,
+                &entity,
+                entity_start,
+                parent_start,
+                activation.clone(),
+                principal.clone(),
+            )
+        } else {
+            scope.clone()
+        };
+        let selector_fallback_policy = selector_fallback.clone();
+        let result = active
+            .start_entity_invocation(
+                parent_id.clone(),
+                scope,
+                metadata.clone(),
+                EntityCallMode::Synchronous,
+                move |_instance, store| {
+                    Box::pin(async move {
+                        let ctx = store.data_mut().durable_ctx_mut();
+                        RetryHost::set_retry_policy(
+                            ctx,
+                            NamedRetryPolicy {
+                                name: "selector-fallback".into(),
+                                priority: 1,
+                                predicate: Predicate::True,
+                                policy: selector_fallback_policy,
+                            }
+                            .into(),
+                        )
+                        .await?;
+                        RetryHost::set_retry_policy(
+                            ctx,
+                            NamedRetryPolicy {
+                                name: "strict-selector".into(),
+                                priority: u32::MAX,
+                                predicate: Predicate::PropGt {
+                                    property: "selector-attempt".into(),
+                                    value: PredicateValue::Integer(0),
+                                },
+                                policy: RetryPolicy::Never,
+                            }
+                            .into(),
+                        )
+                        .await?;
+                        let missing_selector = RetryHost::resolve_retry_policy(
+                            ctx,
+                            "saga".into(),
+                            "test:retry".into(),
+                            vec![],
+                        )
+                        .await?
+                        .map_err(anyhow::Error::msg)?
+                        .map(RetryPolicy::try_from)
+                        .transpose()
+                        .map_err(anyhow::Error::msg)?;
+                        let selector_error = RetryHost::resolve_retry_policy(
+                            ctx,
+                            "saga".into(),
+                            "test:retry".into(),
+                            vec![(
+                                "selector-attempt".into(),
+                                PredicateValue::Text("invalid".into()).into(),
+                            )],
+                        )
+                        .await?
+                        .expect_err("a mistyped selector property must be a typed error");
+                        let policy = RetryPolicy::CountBox {
+                            max_retries: 1,
+                            inner: Box::new(RetryPolicy::Jitter {
+                                factor: 0.5,
+                                inner: Box::new(RetryPolicy::Periodic(Duration::from_secs(1))),
+                            }),
+                        };
+                        let decision = RetryHost::next_retry_delay(
+                            ctx,
+                            Some(policy.into()),
+                            vec![],
+                            0,
+                            "saga".into(),
+                            "test:retry".into(),
+                            vec![],
+                        )
+                        .await?
+                        .map_err(anyhow::Error::msg)?;
+                        let error = RetryHost::next_retry_delay(
+                            ctx,
+                            Some(RetryPolicy::Immediate.into()),
+                            vec![],
+                            0,
+                            "saga".into(),
+                            "test:retry".into(),
+                            vec![],
+                        )
+                        .await?
+                        .expect_err("unbounded saga must return a typed error");
+                        Ok((
+                            decision.state,
+                            decision.delay,
+                            error,
+                            selector_error,
+                            missing_selector,
+                        ))
+                    })
+                },
+                std::future::ready,
+            )?
+            .await_result(&parent_id)
+            .await?;
+        if let Some(expected) = &live_result {
+            assert_eq!(&result, expected);
+            assert_eq!(
+                before,
+                active.execution().oplog().current_oplog_index().await
+            );
+            active
+                .execution()
+                .test_settle_entity_boundary(claim.unwrap())
+                .await?;
+            drop(primary);
+        } else {
+            assert!(result.1.is_some());
+            assert!(result.2.contains("finite"));
+            assert!(result.3.contains("selector-attempt"));
+            assert_eq!(result.4.as_ref(), Some(&selector_fallback));
+            live_result = Some(result);
+            finish_entity_boundary(&active, entity_start).await?;
+            drop(primary);
+            active
+                .execution()
+                .commit(CommitLevel::Always)
+                .await
+                .map_err(|fence| anyhow::anyhow!("retry test commit fenced: {fence:?}"))?;
+            active
+                .execution()
+                .install_replay_generation(
+                    DeletedRegions::from_regions([OplogRegion::from_index_range(
+                        OplogIndex::INITIAL.next()..=parent_start,
+                    )]),
+                    None,
+                )
+                .await?;
+        }
+    }
     Ok(())
 }
 
@@ -1838,7 +2064,7 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
                         reveal.is_err(),
                         "the wallet-negative secret reveal must be durably denied"
                     );
-                    GolemApiHost::get_oplog_index(ctx).await?;
+                    GolemApiHost::generate_idempotency_key(ctx).await?;
                     Ok(())
                 })
             }
@@ -1914,7 +2140,6 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         principal.clone(),
         InvocationExecutionMode::ReplayingIncomplete,
         IdempotencyKey::new("instance-layer-incomplete-replay-scope".to_string()),
-        true,
         false,
         IdempotencyKey::new("instance-layer-incomplete-replay-streams".to_string()),
     )
@@ -1938,7 +2163,7 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
                     config_repair_expected,
                 )
                 .await?;
-                GolemApiHost::get_oplog_index(ctx).await?;
+                GolemApiHost::generate_idempotency_key(ctx).await?;
                 Ok(recorded)
             })
         },
@@ -2102,7 +2327,7 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
                     let handle = ctx.secret_handle_from_snapshot(&snapshot)?;
                     let denied = SecretRevealHost::reveal(ctx, handle, expected).await?;
                     assert!(denied.is_err(), "wallet-negative reveal must be denied");
-                    GolemApiHost::get_oplog_index(ctx).await?;
+                    GolemApiHost::generate_idempotency_key(ctx).await?;
                     Ok(())
                 })
             }
@@ -2183,7 +2408,6 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
             principal,
             InvocationExecutionMode::ReplayingIncomplete,
             IdempotencyKey::new("instance-layer-incomplete-wallet-reveal".to_string()),
-            true,
             false,
             IdempotencyKey::new("instance-layer-incomplete-wallet-reveal-streams".to_string()),
         )
@@ -2202,7 +2426,7 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
                     let handle = ctx.secret_handle_from_snapshot(&snapshot)?;
                     fail_checks.store(fail_authority_check, Ordering::SeqCst);
                     let repaired = SecretRevealHost::reveal(ctx, handle, expected).await?;
-                    GolemApiHost::get_oplog_index(ctx).await?;
+                    GolemApiHost::generate_idempotency_key(ctx).await?;
                     Ok(repaired)
                 })
             }
@@ -2306,6 +2530,7 @@ async fn gol838_retained_entity_roots_survive_body_cleanup_and_detached_settleme
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
             upper_negative: Vec::new(),
+            expires_at: None,
         }));
         let (cleaned, cleanup) = tokio::sync::oneshot::channel();
         let (release, released) = tokio::sync::oneshot::channel();
@@ -2468,7 +2693,6 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         principal.clone(),
         InvocationExecutionMode::Live,
         IdempotencyKey::new("owner-entity-scope".to_string()),
-        true,
         false,
         IdempotencyKey::new("owner-entity-streams".to_string()),
     )
@@ -2564,7 +2788,6 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
         IdempotencyKey::new("second-entity-scope".to_string()),
-        true,
         false,
         IdempotencyKey::new("second-entity-streams".to_string()),
     )
@@ -2606,7 +2829,6 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
         IdempotencyKey::new("cancelled-entity-scope".to_string()),
-        true,
         false,
         IdempotencyKey::new("cancelled-entity-streams".to_string()),
     )
@@ -2690,7 +2912,6 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
         IdempotencyKey::new("panicking-entity-scope".to_string()),
-        true,
         false,
         IdempotencyKey::new("panicking-entity-streams".to_string()),
     )
@@ -4093,7 +4314,7 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
                     denied,
                     Err(golem_worker_executor::preview2::golem::agent::host::ConfigValueError::PermissionDenied)
                 ));
-                GolemApiHost::get_oplog_index(ctx).await?;
+                GolemApiHost::generate_idempotency_key(ctx).await?;
                 Ok(())
             })
         },
@@ -4190,7 +4411,7 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
                     replay_expected_secret,
                 )
                 .await?;
-                GolemApiHost::get_oplog_index(ctx).await?;
+                GolemApiHost::generate_idempotency_key(ctx).await?;
                 Ok(recorded)
             })
         },
@@ -4277,7 +4498,7 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
                 config_loaded_in_call.store(true, Ordering::SeqCst);
                 let denied = SecretRevealHost::reveal(ctx, handle, expected_plaintext).await?;
                 assert!(denied.is_err(), "empty reveal scope must deny plaintext");
-                GolemApiHost::get_oplog_index(ctx).await?;
+                GolemApiHost::generate_idempotency_key(ctx).await?;
                 Ok(())
             })
         },
@@ -4392,7 +4613,7 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
                 let recorded =
                     SecretRevealHost::reveal(ctx, handle, completed_replay_expected_plaintext)
                         .await?;
-                GolemApiHost::get_oplog_index(ctx).await?;
+                GolemApiHost::generate_idempotency_key(ctx).await?;
                 Ok(recorded)
             })
         },
@@ -4440,7 +4661,6 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
         }),
         InvocationExecutionMode::ReplayingIncomplete,
         IdempotencyKey::new("instance-layer-secret-reveal-repair".to_string()),
-        true,
         false,
         IdempotencyKey::new("instance-layer-secret-reveal-repair-streams".to_string()),
     )
@@ -4475,7 +4695,7 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
                 let handle = ctx.secret_handle_from_snapshot(&snapshot)?;
                 let repaired =
                     SecretRevealHost::reveal(ctx, handle, replay_expected_plaintext).await?;
-                GolemApiHost::get_oplog_index(ctx).await?;
+                GolemApiHost::generate_idempotency_key(ctx).await?;
                 Ok(repaired.is_err())
             })
         },
@@ -4710,4 +4930,26 @@ async fn entity_agent_config_uses_owner_component_declarations(
         }
     }
     Ok(())
+}
+
+fn wallet_card_handle(
+    card: &golem_worker_executor::preview2::golem::permissions::types::WalletCard,
+) -> &wasmtime::component::Resource<golem_schema::schema::wit::PermissionCardHandleRep> {
+    use golem_worker_executor::preview2::golem::permissions::types::WalletCard;
+    match card {
+        WalletCard::Concrete(handle) | WalletCard::Template(handle) | WalletCard::Scope(handle) => {
+            handle
+        }
+    }
+}
+
+fn into_wallet_card_handle(
+    card: golem_worker_executor::preview2::golem::permissions::types::WalletCard,
+) -> wasmtime::component::Resource<golem_schema::schema::wit::PermissionCardHandleRep> {
+    use golem_worker_executor::preview2::golem::permissions::types::WalletCard;
+    match card {
+        WalletCard::Concrete(handle) | WalletCard::Template(handle) | WalletCard::Scope(handle) => {
+            handle
+        }
+    }
 }

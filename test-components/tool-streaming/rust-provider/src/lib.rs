@@ -3,13 +3,10 @@ use golem_rust::agentic::{
     AgentStream, InputStream, OutputStream, Principal, Secret as ConfigSecret, pump_tool_stdin,
     spawn_local,
 };
-use golem_rust::bindings::golem::permissions::{
-    derive as permission_derive, types as permission_types,
-};
 use golem_rust::golem_agentic::golem::agent::host as agent_host;
 use golem_rust::golem_agentic::golem::tool::host::{self as tool_host, ByteStreamFailure, ToolRpc};
 use golem_rust::quota::QuotaToken;
-use golem_rust::schema::wit::GuestPermissionCardHandle;
+use golem_rust::permissions::{self, PermissionCard};
 use golem_rust::schema::wit::direct::{
     WireError, WirePreflight, WireReader, WireSchemaBuilder, WireWriter,
 };
@@ -433,19 +430,19 @@ pub struct QuotaExchange {
     pub token: MatrixCapacityToken,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[derive(Debug, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 #[schema(rename_all = "camelCase")]
 pub struct PermissionExchange {
     pub provider: String,
     pub principal: String,
     pub owner_agent_id: String,
-    pub card: GuestPermissionCardHandle,
+    pub card: PermissionCard,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[derive(Debug, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 #[schema(rename_all = "camelCase")]
 pub struct PermissionIssue {
-    pub card: GuestPermissionCardHandle,
+    pub card: PermissionCard,
     pub issuer: String,
     pub principal: String,
     pub owner_agent_id: String,
@@ -461,14 +458,14 @@ struct MatrixPermissionIssuerImpl;
 #[tool_implementation]
 impl MatrixPermissionIssuer for MatrixPermissionIssuerImpl {
     async fn issue(&self, principal: Principal) -> PermissionIssue {
-        let card = permission_derive::derive_from_wallet(&[], &[], &[], &[], None)
+        let card = permissions::derive_from_wallet(&Default::default(), None)
             .expect("matrix permission issuer derives a card from the owner wallet");
         let owner_agent_id = golem_rust::get_self_metadata()
             .expect("matrix permission issuer owner metadata")
             .agent_id
             .agent_id;
         PermissionIssue {
-            card: GuestPermissionCardHandle::new(card),
+            card,
             issuer: "rust".to_string(),
             principal: matrix_principal(&principal),
             owner_agent_id,
@@ -591,7 +588,7 @@ impl Quota for QuotaImpl {
 pub trait Permissions {
     async fn exchange(
         &self,
-        card: GuestPermissionCardHandle,
+        card: PermissionCard,
         principal: golem_rust::agentic::Principal,
     ) -> PermissionExchange;
 }
@@ -602,14 +599,11 @@ struct PermissionsImpl;
 impl Permissions for PermissionsImpl {
     async fn exchange(
         &self,
-        card: GuestPermissionCardHandle,
+        card: PermissionCard,
         principal: Principal,
     ) -> PermissionExchange {
-        assert_eq!(
-            card.with_handle(permission_types::is_polymorphic),
-            Some(false),
-            "matrix resource permission card must be non-polymorphic"
-        );
+        // Panics unless the received card is present and known to the host.
+        let _ = card.id();
         let (provider, principal, owner_agent_id) = matrix_resource_evidence(&principal);
         PermissionExchange {
             provider,
@@ -1476,45 +1470,45 @@ async fn wait_at_crash_checkpoint<T>(_retained: &T, name: &str) {
         .expect("provider crash checkpoint gate port is configured")
         .parse()
         .expect("provider crash checkpoint gate port is a valid port");
-    let headers = types::Fields::from_list(&[]).expect("valid checkpoint fields");
-    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
-    let (request, transmit) = types::Request::new(headers, None, trailers_rx, None);
-    request
-        .set_method(&types::Method::Post)
-        .expect("set checkpoint method");
-    request
-        .set_scheme(Some(&types::Scheme::Http))
-        .expect("set checkpoint scheme");
-    request
-        .set_authority(Some(&format!("127.0.0.1:{port}")))
-        .expect("set checkpoint authority");
-    request
-        .set_path_with_query(Some(&format!("/{name}")))
-        .expect("set checkpoint path");
-    let receive_response = async move {
-        client::send(request)
+    loop {
+        let headers = types::Fields::from_list(&[]).expect("valid checkpoint fields");
+        let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+        let (request, transmit) = types::Request::new(headers, None, trailers_rx, None);
+        request
+            .set_method(&types::Method::Post)
+            .expect("set checkpoint method");
+        request
+            .set_scheme(Some(&types::Scheme::Http))
+            .expect("set checkpoint scheme");
+        request
+            .set_authority(Some(&format!("127.0.0.1:{port}")))
+            .expect("set checkpoint authority");
+        request
+            .set_path_with_query(Some(&format!("/{name}")))
+            .expect("set checkpoint path");
+        let receive_response = async move {
+            client::send(request)
+                .await
+                .expect("send checkpoint request")
+        };
+        let finish_request = async move {
+            trailers_tx
+                .write(Ok(None))
+                .await
+                .expect("finish checkpoint request");
+            transmit.await.expect("transmit checkpoint request");
+        };
+        let (response, ()) = (receive_response, finish_request).join().await;
+        assert_eq!(response.get_status_code(), 204);
+        let (response_done_tx, response_done_rx) = wit_future::new(|| Ok(()));
+        let (body, trailers) = types::Response::consume_body(response, response_done_rx);
+        response_done_tx
+            .write(Ok(()))
             .await
-            .expect("send checkpoint request")
-    };
-    let finish_request = async move {
-        trailers_tx
-            .write(Ok(None))
-            .await
-            .expect("finish checkpoint request");
-        transmit.await.expect("transmit checkpoint request");
-    };
-    let (response, ()) = (receive_response, finish_request).join().await;
-    assert_eq!(response.get_status_code(), 204);
-    let (response_done_tx, response_done_rx) = wit_future::new(|| Ok(()));
-    let (body, trailers) = types::Response::consume_body(response, response_done_rx);
-    response_done_tx
-        .write(Ok(()))
-        .await
-        .expect("finish checkpoint response");
-    drop(body);
-    drop(trailers);
+            .expect("finish checkpoint response");
+        drop(body);
+        drop(trailers);
 
-    golem_rust::atomically_async(|| async {
         let socket =
             TcpSocket::create(IpAddressFamily::Ipv4).expect("create checkpoint gate socket");
         socket
@@ -1540,10 +1534,17 @@ async fn wait_at_crash_checkpoint<T>(_retained: &T, name: &str) {
             }
         }
         drop(stream);
-        received.await.expect("finish checkpoint gate receive");
+        match received.await {
+            Ok(()) => {}
+            Err(
+                golem_rust::wasip3::sockets::types::ErrorCode::InvalidState
+                | golem_rust::wasip3::sockets::types::ErrorCode::ConnectionBroken,
+            ) => continue,
+            Err(error) => panic!("finish checkpoint gate receive: {error:?}"),
+        }
         assert_eq!(bytes, [1], "checkpoint gate returns one release byte");
-    })
-    .await;
+        break;
+    }
 }
 
 async fn wait_at_promise_checkpoint(name: &str) {
@@ -1870,8 +1871,7 @@ impl Streaming for StreamingImpl {
                 return Ok(summary);
             }
             "entity-custom-root" => {
-                // A positional atomic region of this body, then a root custom invocation of this
-                // body: both are recorded under the entity invocation.
+                // Record a custom invocation under the entity invocation after draining stdin.
                 while let Some(item) = stdin.next().await {
                     if let Ok(chunk) = item {
                         summary.chunks_read += 1;
@@ -1879,7 +1879,6 @@ impl Streaming for StreamingImpl {
                     }
                 }
                 let _ = stdout.finish().await;
-                golem_rust::atomically_async(|| async {}).await;
                 golem_rust::durability::Durability::<(), String>::new(
                     "golem-it",
                     "entity-custom-root",
@@ -1926,36 +1925,13 @@ impl Streaming for StreamingImpl {
             wait_at_crash_checkpoint(&(), "provider-clean-stdout-before-trap").await;
             panic!("deterministic streaming tool trap after clean stdout");
         }
-        if mode == "changing-stdout-in-atomic-region" {
-            golem_rust::atomically_async(|| async {
-                let first_attempt = is_first_trap_attempt().await;
-                stdout
-                    .write(if first_attempt {
-                        b"first".to_vec()
-                    } else {
-                        b"second".to_vec()
-                    })
-                    .await
-                    .expect("publish attempt-dependent stdout");
-                stdout
-                    .finish()
-                    .await
-                    .expect("finish attempt-dependent stdout");
-                if first_attempt {
-                    wait_at_crash_checkpoint(&(), "provider-changing-stdout").await;
-                }
-            })
-            .await;
-            return Ok(summary);
-        }
-
         summary.output_closed |= stdout.finish().await.is_err();
         Ok(summary)
     }
 
     async fn no_stream(&self, value: String) -> Result<String, StreamingError> {
         if value == "first" || value == "second" {
-            let _ = golem_rust::get_oplog_index();
+            golem_rust::oplog_commit(0);
         }
         if value == "hold-attempt-identity" {
             wait_at_crash_checkpoint(&value, "attempt-identity-accepted").await;
@@ -2159,17 +2135,12 @@ impl CapableStreaming for CapableStreamingImpl {
             write_owner_file(path, &bytes)
                 .expect("capable trap marker must share the owner filesystem");
             let _effect = golem_rust::generate_idempotency_key();
-            golem_rust::atomically_async(|| async {
-                if is_first_trap_attempt().await {
-                    panic!("deterministic capable streaming tool first-attempt trap");
-                }
-            })
-            .await;
+            while is_first_trap_attempt().await {}
             bytes.clone()
         } else if let Some(path) = path.strip_prefix("hold-body:") {
             write_owner_file(path, &bytes)
                 .expect("capable body checkpoint must share the owner filesystem");
-            let _ = golem_rust::get_oplog_index();
+            golem_rust::oplog_commit(0);
             stdout
                 .write(b"body-checkpoint".to_vec())
                 .await
@@ -2185,7 +2156,7 @@ impl CapableStreaming for CapableStreamingImpl {
                 .expect("buffer capable output before the checkpoint");
             append_owner_file(path, b":buffered")
                 .expect("record buffered capable completion checkpoint");
-            let _ = golem_rust::get_oplog_index();
+            golem_rust::oplog_commit(0);
             stdout
                 .write(b"completion-checkpoint".to_vec())
                 .await
@@ -2207,10 +2178,7 @@ impl CapableStreaming for CapableStreamingImpl {
             launch_retained_crash_child();
             bytes.clone()
         } else if path == "atomic-idempotency-parent" {
-            golem_rust::atomically_async(|| async {
-                launch_atomic_idempotency_child();
-            })
-            .await;
+            launch_atomic_idempotency_child();
             bytes.clone()
         } else {
             write_owner_file(&path, &bytes).expect("capable tool must share the owner filesystem");

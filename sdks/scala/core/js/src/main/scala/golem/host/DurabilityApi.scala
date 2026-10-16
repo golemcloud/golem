@@ -45,8 +45,6 @@ import scala.scalajs.js.annotation.JSImport
  */
 object DurabilityApi {
 
-  type OplogIndex = BigInt
-
   // --- WIT: wrapped-function-type variant (aliased as durable-function-type) ---
 
   sealed trait DurableFunctionType extends Product with Serializable {
@@ -54,47 +52,25 @@ object DurabilityApi {
   }
 
   object DurableFunctionType {
-    case object ReadLocal                                          extends DurableFunctionType { val tag = "read-local"   }
-    case object WriteLocal                                         extends DurableFunctionType { val tag = "write-local"  }
-    case object ReadRemote                                         extends DurableFunctionType { val tag = "read-remote"  }
-    case object WriteRemote                                        extends DurableFunctionType { val tag = "write-remote" }
-    final case class WriteRemoteBatched(begin: Option[OplogIndex]) extends DurableFunctionType {
-      val tag = "write-remote-batched"
-    }
-    final case class WriteRemoteTransaction(begin: Option[OplogIndex]) extends DurableFunctionType {
-      val tag = "write-remote-transaction"
-    }
+    case object ReadLocal   extends DurableFunctionType { val tag = "read-local"   }
+    case object WriteLocal  extends DurableFunctionType { val tag = "write-local"  }
+    case object ReadRemote  extends DurableFunctionType { val tag = "read-remote"  }
+    case object WriteRemote extends DurableFunctionType { val tag = "write-remote" }
 
     def fromJs(raw: JsWrappedFunctionType): DurableFunctionType =
       raw.tag match {
-        case "read-local"           => ReadLocal
-        case "write-local"          => WriteLocal
-        case "read-remote"          => ReadRemote
-        case "write-remote"         => WriteRemote
-        case "write-remote-batched" =>
-          val v   = raw.asInstanceOf[JsWrappedFunctionTypeBatched].value
-          val idx = v.toOption.map(bi => BigInt(bi.toString))
-          WriteRemoteBatched(idx)
-        case "write-remote-transaction" =>
-          val v   = raw.asInstanceOf[JsWrappedFunctionTypeTransaction].value
-          val idx = v.toOption.map(bi => BigInt(bi.toString))
-          WriteRemoteTransaction(idx)
-        case other => throw new IllegalArgumentException(s"Unknown DurableFunctionType tag: $other")
+        case "read-local"   => ReadLocal
+        case "write-local"  => WriteLocal
+        case "read-remote"  => ReadRemote
+        case "write-remote" => WriteRemote
+        case other          => throw new IllegalArgumentException(s"Unknown DurableFunctionType tag: $other")
       }
 
     def toJs(ft: DurableFunctionType): JsWrappedFunctionType = ft match {
-      case ReadLocal               => JsWrappedFunctionType.readLocal
-      case WriteLocal              => JsWrappedFunctionType.writeLocal
-      case ReadRemote              => JsWrappedFunctionType.readRemote
-      case WriteRemote             => JsWrappedFunctionType.writeRemote
-      case WriteRemoteBatched(idx) =>
-        JsWrappedFunctionType.writeRemoteBatched(
-          idx.fold[js.UndefOr[js.BigInt]](js.undefined)(i => js.BigInt(i.toString))
-        )
-      case WriteRemoteTransaction(idx) =>
-        JsWrappedFunctionType.writeRemoteTransaction(
-          idx.fold[js.UndefOr[js.BigInt]](js.undefined)(i => js.BigInt(i.toString))
-        )
+      case ReadLocal   => JsWrappedFunctionType.readLocal
+      case WriteLocal  => JsWrappedFunctionType.writeLocal
+      case ReadRemote  => JsWrappedFunctionType.readRemote
+      case WriteRemote => JsWrappedFunctionType.writeRemote
     }
 
   }

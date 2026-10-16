@@ -84,7 +84,7 @@ impl ServerCertVerifier for InsecureServerCertVerifier {
     }
 }
 
-pub(super) fn insecure_connector() -> anyhow::Result<Connector> {
+pub(crate) fn insecure_connector() -> anyhow::Result<Connector> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let verifier = InsecureServerCertVerifier {
         signature_algorithms: provider.signature_verification_algorithms,
@@ -252,6 +252,7 @@ impl AgentConnection {
         } else {
             None
         };
+        let connector = golem_client::tls::connector_for(request.uri(), connector)?;
 
         Ok((request, connector))
     }

@@ -507,6 +507,7 @@ dependencies = [
  "streaming-tool-guest-client",
  "typed-output-stream-tool-guest-client",
  "wallet-mutation-tool-guest-client",
+ "wit-bindgen 0.59.0",
 ]
 
 [[package]]
