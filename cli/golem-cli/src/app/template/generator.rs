@@ -447,10 +447,6 @@ fn transform(
                     "GOLEM_RUST_SERDE_JSON_VERSION",
                     versions::rust_dep::SERDE_JSON.to_string(),
                 );
-                replacements.insert(
-                    "GOLEM_RUST_WSTD_VERSION",
-                    versions::rust_dep::WSTD.to_string(),
-                );
             }
             Transform::ScalaSdk => {
                 replacements.insert("GOLEM_SCALA_SDK_VERSION", sdk_overrides.scala_sdk_dep());

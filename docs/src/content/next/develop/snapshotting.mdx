@@ -114,6 +114,10 @@ The target revision must be able to decode the snapshots of the agents you updat
         ```
 
         A changed field type makes decoding fail. Implement `golem.Snapshotter` to convert an earlier state format.
+
+        <Callout type="warning">
+        A Go agent cannot take a manual (snapshot-based) update yet, so a target revision does not load a Go snapshot during an update. Snapshot-based recovery and automatic updates work. See [Updating agents](/next/develop/updating#manual-snapshot-based-update).
+        </Callout>
     </Tabs.Tab>
 </Tabs>
 

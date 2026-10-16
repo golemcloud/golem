@@ -380,6 +380,11 @@ CASES += [
      "timeout 0.3 sleep 5; echo st=$?; timeout 5 sleep 0.1; echo st=$?; "
      "timeout 0.3 bash -c 'while :; do :; done'; echo st=$?; "
      "timeout 0.3 bash -c 'while [[ 1 ]]; do x=$((x+1)); done'; echo st=$?"),
+    # Each round starts new pipeline stages; the loop still gives the timer a turn.
+    ("tool-layer: timeout stops a loop of pipelines",
+     "timeout 0.3 bash -c 'while :; do echo 1 | cat >/dev/null; done'; echo st=$?; "
+     "timeout 0.3 bash -c 'n=0; while :; do n=$((n+1)); echo $n | while read -r x; do :; done; done'; "
+     "echo st=$?"),
     ("tool-layer: timeout passes on the command's status and output",
      "timeout 1 sh -c 'exit 3'; echo st=$?; timeout 1 echo hi there; timeout 1 printf '%s\\n' a b; "
      "echo in | timeout 1 cat; timeout 1 bash -c 'echo $0' x; timeout 0 sh -c 'echo ran'; "

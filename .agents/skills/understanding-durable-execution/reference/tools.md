@@ -57,18 +57,84 @@ entity `Start`.
   Store after replay. A revoked or expired root removes the inherited scope, as it removes the
   primary's scope, and descendants started later inherit no scope.
 - `rederive_agent_effective_surface_from_wallet` re-derives entity surfaces too. Card events are
-  consumed by whichever of the owner's Stores reaches a boundary first, so at each live boundary
-  every Store, primary or entity, runs `synchronize_owner_authority`: it excludes every card the
-  worker status lists as revoked or pending revocation from its effective and delegation surfaces
-  (`authority_wallet_cards`), and removes a scope with a revoked root. Without it, a revocation drained by a middleware Store left the card authorizing the
-  primary's own calls.
+  consumed by whichever Store reaches the serialized boundary first, but all live Stores read
+  one immutable `OwnerWallet` snapshot belonging to their `OwnerExecution` replay generation.
+  Membership, wallet generation and component metadata are published together. Stores own scopes
+  and cached effective/delegation surfaces, not independent live membership maps. At each live
+  boundary, `synchronize_owner_authority` also excludes pending/recorded revocations and removes
+  a scope with a revoked root. A sibling's install or concrete source transfer therefore changes
+  the next authorization in an existing Store without requiring the producer to return.
 - Removing a scope also removes its upper restrictions, so the Store continues with its wallet
   authority. This is the primary Store's policy, which entity Stores follow.
-- Known gap: Stores reconcile revocations recorded or pending in the owner status, but
-  cross-Store wallet updates and owner-wide card-interest registration remain incomplete. Card
-  installs and transfers drained by another Store do not reach an existing entity Store's wallet
-  copy, and a Store that refreshes card interest from a stale wallet can unregister a card that
-  another Store relies on, so a later revocation of that card may not reach the owner status.
+- Card interest is the union of canonical wallet IDs, independent scope roots and admission
+  candidates. RAII contributions release only their own interest. Entity finalization owns the
+  scope contribution before Store construction; the Store retains it through repair and retained
+  settlement. Result observer loss or sibling refresh cannot erase another contribution. Generation
+  matching and serialized activation/cache removal prevent old cleanup from removing replacement
+  interest. Accepted wallet work retains candidate interest until canonical publication takes over.
+
+### Wallet publication and historical reconstruction
+
+Live wallet writes prepare from the serialized predecessor under the card-event boundary and
+validate generation admission **before append**. The existing status actor owns accepted
+`WalletCommit` work, its append token, candidate contribution and guard through commit/fold,
+snapshot publication and authority invalidation. Cancellation before acceptance publishes nothing;
+cancellation after acceptance cannot abandon publication. The actor never waits for a Store to
+resume. Source transfer releases the source boundary before target delivery and resynchronizes
+afterward. Save-hook live transfer/revoke uses the same transaction path.
+
+Generation replacement seals old append admission and drains accepted work without holding the
+card boundary or the Worker instance lock. Under the boundary it then settles buffered work,
+selects one committed horizon, and builds the wallet and replay state from the same baseline and
+horizon before installing them with a fresh matching append handle. The wallet starts from the
+component or selected snapshot. The existing replay cursor reserves an owner projection only when
+it commits a wallet event, never on speculative reads. There is no auxiliary wallet-history scan
+or wallet cache in agent status. Each event carries its physical-prefix receipt through ordinary
+delivery, including deferral to retained Starts. Revision metadata preparation runs independently
+of delivery; Root installs initial files and metadata when it receives the update. Stale handles
+cannot publish into the replacement generation.
+Config reads classify a key as local or secret only after durable-call resolution, including an
+incomplete call's live continuation. Classification captured before preparation can miss a new
+secret-hold requirement when an update changes the key's source.
+
+Failed retained preparation enters the existing owner-failure election before retiring the wallet
+generation. It releases its typed error receipt before election or entity drainage: an in-progress
+terminal selection can need that receipt before election can proceed. The elected cleanup
+interrupts the primary and fences the matching entity execution;
+it does not enqueue a generic restart. An elected `RecoveryRequired` remains an infrastructure
+recovery failure even if retirement makes the observing host call return `Jump`. An earlier
+trap or lifecycle winner keeps priority, and ephemeral agents retain their fail-stop behavior.
+
+Historical Stores retain their recorded admission wallet and ordered replay preparation, not the
+latest canonical snapshot. Each outstanding entity retains a wallet-prefix receipt captured at
+its first committed body entry or Start, before trailing hints. Before that boundary exists, its
+claim-time prefix allows pre-Start body work to run without waiting for itself. Delivered events
+advance the local generation; later physical read-ahead cannot change the retained seed. Store
+construction uses this evidence, not the cursor's latest prefix. This does not record otherwise
+unrecorded wallet observations.
+Primary pins resolve definitions at their own physical index, even when a sibling consumed the
+install. Retained Starts preserve pending preparation; cancellation lets the next boundary help
+finish it. Completed bodies remain historical through validation; incomplete bodies adopt canonical
+authority only at their own live transition. Root-only effects do not mutate an entity's historical
+view. Ordinary event delivery changes local membership, not the complete physical projection:
+another Store can have advanced that projection past events still deferred to an unclaimed Start.
+Runtime-derived-card audits retain their physical-prefix evidence independently of the delivered
+event queue. Lookup drives ordinary replay and consumes that evidence without reading history
+again. Evidence ends with its primary invocation or entity reconstruction lifetime. For example,
+Start 11, install 12/gen 1, End 13, audit 14/gen 1 must validate against generation 1, not Start 11's
+generation. A missing post-End audit is repaired only after ordinary replay exhaustion and the
+call's normal live continuation; unrelated committed hints do not prevent that repair.
+
+Live authority publication waits for the physically consumed prefix and its final projection,
+outside the card boundary, then rechecks under the reservation lock. It publishes reconstruction
+once; subsequent live commits cannot be overwritten by historical projection. Target growth after
+publication retires the generation for ordinary reconstruction rather than folding old history
+over live state. Live revocation and expiry checks remain part of authority synchronization.
+
+Wallet observation recording is unchanged. Adjacent unrecorded wallet reads can still diverge
+after reconstruction when a wallet event falls between the reads; canonical live ownership does
+not supply that missing historical observation association. Do not substitute current live state
+for recorded inputs or weaken replay checks to hide this limit.
 
 ### Structural tool authorization
 
@@ -372,6 +438,91 @@ Store's `local_live_tail`; completed replays reuse historical memory charges and
 pressure (`completed_tool_replay_bypasses_current_attachment_memory_pressure`,
 `incomplete_tool_replay_persists_attachment_upgrade_rejection`). Attachments
 (`tool/attachment.rs`) are in-memory stdin/stdout endpoints and are recreated, never preserved.
+
+An admission refusal records its exact demand in `SerializableToolOperationTerminal`, independently
+of the returned tool error. The demand is a typed Start claim, a validated recorded-entry index,
+a positional request, a session input read, or an attachment disposal. Replay prefers recorded
+effects and reproduces a refusal only at the missing demand. Start probing and claiming share the
+cursor lock. Consumed NoOp markers reproduce refusal after the marker, not before consuming it.
+Input tasks capture the session binding, read ordinal and observation class before spawning;
+recorded consumer observations bypass missing-source admission. Concurrent missing demands wait
+on the operation's existing watch channel without retaining the Store or cursor.
+
+Historical refusal is sticky evidence, not a live ordinary-terminal reservation. It prevents later
+cancellation from replacing the refusal but still lets a reconstructing child elect an independent
+owner failure. Cancellation selected before observation wins. Finalization distinguishes a caught
+admission error from an unrelated body or cleanup failure; a caught error cannot turn refused
+admission into success. Refusal does not wait for the complete output subtree before returning:
+the body may need to catch the error and continue to regenerate that subtree.
+
+Explicit attachment constructors register owner-relative identities in the shared replay state.
+Their producer calls use ordinary durable-call envelopes with lengths, digests and exact outcomes,
+not byte bodies. `AttachmentInputProducer` records consumed payloads through
+`PrepareAttachmentObservation` and `InputObservationDelivery`. Guest reads reserve their boundary at
+actual consumption; host pipe reads commit their observation before handing bytes to transport.
+The host boundary is the adapter take, not the downstream tool's later consumption. Direct component
+stdin uses the same producer adapter. `NativeAttachmentInput` records at the host return boundary.
+The raw session bridge retains its existing durable-stream journal rather than adding attachment
+read payloads. A plain
+`AttachmentConsumer::read_next` or `AttachmentWriter` does not itself journal bytes or operations.
+
+Replay serves historical reads from their payloads and validates regenerated producer arguments
+against metadata. Accepted unread output is restored before acknowledgment delivery and before
+completed-cancelled entity destruction. Crossing a read reconciles its resident ranges; scan-ahead
+alone grants no capacity. Snapshot eligibility uses the same attachment registry: open producers,
+consumers, guest stdin-closure watchers and pending regeneration block a cut that would skip their
+history. Cloned asynchronous watcher waits retain that lifetime; internal observers alone do not.
+
+Semantic writer abandonment and rejection enqueue an owned terminal receipt through the existing
+cleanup queue. Live selection is synchronous; publication follows commit. Generic Rust destruction
+and runtime teardown record nothing. Retained terminal effects restore at their crossed replay
+boundary even if their host-call waiter no longer exists. Missing-terminal repair waits outside
+cleanup drains so reconstruction can still make progress, and retries if the replay target grows.
+The context registers these admission jobs synchronously in a separate owned task set, reusing
+`NativeReconstructionTasks` and `WorkerTasks`, not Store tail activity. Successful completion drains
+cleanup, joins admissions, then drains their handoffs before publishing its terminal. The primary
+does not join before consuming a historical Finished; successful replay exit also drains pending
+disposals. A failed entity body closes and aborts admission jobs, but still joins already accepted
+terminal publications and native accepted-write reconstruction. Later destructors and unaccepted
+queued disposals cannot start repair in that failed context. Context destruction transfers abort
+and join ownership to the existing worker task scope.
+An exact recorded disposal refusal takes precedence over a later owner-finalization terminal:
+that terminal does not prove the requested disposal succeeded. Other retained disposals stay no-ops.
+
+`HistoricalAttachmentWriteJob` captures the durable-call preparation, invocation ID and argument
+ownership before spawning. Accessors reserve the guest import's ID through the existing import-order
+check. Native calls reserve an ordinal synchronously under the entity invocation's anchor; their
+continuations retain that ID rather than reserving one when polled. Claims use invocation IDs;
+attachment writes, terminal operations and stdin waits separately validate their recorded requests.
+A retained typed read can back the regenerated write after its complete request digest
+matches; otherwise the job retains charged inline bytes. The job validates the recorded acceptance
+and publishes reconstruction independently of the caller's acknowledgment future. It returns the
+existing completion token; discarded or delayed acknowledgment does not retain the original argument.
+Incomplete entity activation waits for the same reconstruction obligations before closing historical
+memory reservations.
+
+Custom durable invocations own reconstruction of their observational effects. A completed custom
+invocation returns its recorded result without rerunning nested tool calls. An incomplete custom
+invocation reruns its body live, not by replaying the old observational descendants. The attachment
+index excludes both kinds of custom subtree from executor-owned reconstruction obligations, using
+structural parents and observational owners transitively. It keeps their physical metadata and
+consumer payloads for validation. Ordinary sibling writes remain fenced even before they are claimed.
+
+Historical consumer hydration uses one slot per reader, independent of producer admission. The slot
+is acquired before download and follows the prepared item through the channel and offered buffer
+until transfer or destruction. Native reads release it at synchronous return. The declared body
+length must fit the recorded attachment capacity before download. Raw range validation uses a
+separate shared slot so it cannot wait for a consumer that is itself waiting for a producer result.
+These slots bound adapter-owned bodies, not storage codec scratch or downstream allocations.
+
+Attachment read identity belongs to the invocation that introduced the reader binding, including
+when later methods retain or transfer the reader. After a cut deletes its physical observation,
+the replacement references the original logical outcome and payload without copying bytes. The
+replacement may be a host pipe or a guest read regardless of the deleted boundary's class; its
+attribution and attempt belong to the new physical consumption. A surviving boundary must still
+match its exact class, attempt, attribution and replay position. Hydrating an original payload does
+not establish a surviving boundary: a zero-cancelled guest preparation can transfer to a host pipe
+without consuming a value ordinal. Both paths retain the ordinary observation receipt and cleanup.
 
 Before constructing any Store, `RunningWorker::create_instance` normalizes incomplete atomic
 regions against a fixed committed horizon and the effective snapshot/skipped prefix. It preserves

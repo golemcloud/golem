@@ -1,12 +1,15 @@
 /** Runtime support for exact graph-backed generated tool bridges. @since 1.6.0 */
 import type * as Host from "golem:tool/host@0.1.0"
 import type * as Common from "golem:tool/common@0.1.0"
-import { Effect, Option, Result, Scope, Stream } from "effect"
+import { Effect, Exit, Option, Result, Scope, Stream } from "effect"
 import * as Bridge from "./Bridge.js"
 import { ToolClient } from "./host/ToolClient.js"
 import { liveToolStart, ToolClientError, ToolTransport } from "./Tool.js"
 import { schemaGraphsEquivalent, type TypedSchemaValue } from "./internal/schema-model/model.js"
 import { schemaValueMatches } from "./internal/reflection/schemaValidation.js"
+import { bindResultDetach, resultDetach, wholeToolCall } from "./internal/tool/resultObserver.js"
+import { CollectionOwnership } from "./internal/tool/collectionOwnership.js"
+import { discardRejectedPayload } from "./internal/tool/discardRejectedPayload.js"
 import {
   schemaGraphFromWit,
   schemaGraphToWit,
@@ -43,6 +46,8 @@ export interface StartedToolInvocation<A, E, R = never> {
   readonly stderr?: Stream.Stream<Uint8Array, ToolRuntimeError<E>>
   readonly result: Effect.Effect<A, ToolRuntimeError<E>, R>
   readonly cancel: Effect.Effect<void>
+  /** Stop result delivery without cancelling the invocation or outputs. */
+  readonly detach: Effect.Effect<void>
   readonly collect: Effect.Effect<CollectedToolInvocation<A, ToolRuntimeError<E>>, never, R>
 }
 
@@ -60,6 +65,7 @@ export interface ToolClientRuntime {
       readonly stderr?: Stream.Stream<Uint8Array, ToolRuntimeError<E>>
       readonly result: Effect.Effect<ToolInvocationResult, ToolRuntimeError<E>>
       readonly cancel: Effect.Effect<void>
+      readonly detach: Effect.Effect<void>
     },
     ToolRuntimeError<E>,
     ToolClient | Scope.Scope
@@ -123,18 +129,51 @@ export const createToolClientRuntime = (tool: string, reflected = false): ToolCl
           : liveToolStart(tool, path, wireInput, inputStream, stdout, stderr, reflected).pipe(
               Effect.mapError((error) => runtimeError<E>("tool invocation failed", error)),
             ),
-        (started) => started.cancel.pipe(Effect.ignoreCause),
+        (started) => started.detach.pipe(Effect.ignoreCause),
       )
+      const detach = invocation.detach
+      const cancel = bindResultDetach(invocation.cancel, detach)
       const stdoutIterator = invocation.stdout?.[Symbol.asyncIterator]()
       const stderrIterator = invocation.stderr?.[Symbol.asyncIterator]()
+      yield* Effect.addFinalizer(() =>
+        Effect.all(
+          [stdoutIterator, stderrIterator].map((iterator) =>
+            Effect.promise(async () => {
+              await iterator?.return?.()
+            }).pipe(Effect.ignoreCause),
+          ),
+          { concurrency: "unbounded" },
+        ),
+      )
       return {
         stdout: stdoutIterator ? byteStream<E>(stdoutIterator, "stdout") : undefined,
         stderr: stderrIterator ? byteStream<E>(stderrIterator, "stderr") : undefined,
         result: invocation.result.pipe(
+          Effect.tap((result) =>
+            Effect.serviceOption(CollectionOwnership).pipe(
+              Effect.map((owner) => {
+                if (Option.isSome(owner)) owner.value.retain(result.result)
+              }),
+            ),
+          ),
           Effect.map((result) => ({ result: result.result })),
           Effect.mapError((error) => runtimeError<E>("tool result failed", error)),
+          Effect.tapError((error) =>
+            Effect.serviceOption(CollectionOwnership).pipe(
+              Effect.map((owner) => {
+                if (
+                  Option.isSome(owner) &&
+                  error.tag === "rpc" &&
+                  error.error.tag === "remote-tool-error" &&
+                  error.error.val.tag === "custom-error"
+                )
+                  owner.value.retain(error.error.val.val.payload)
+              }),
+            ),
+          ),
         ),
-        cancel: invocation.cancel,
+        cancel,
+        detach,
       }
     }),
 })
@@ -164,16 +203,40 @@ export const collectToolInvocation = <
     stream === undefined
       ? Effect.succeed(undefined)
       : Stream.runCollect(stream).pipe(Effect.map(concatBytes))
-  return Effect.scoped(
-    Effect.all(
-      [
-        Effect.result(result),
-        Effect.result(collectOutput(stdout)),
-        Effect.result(collectOutput(stderr)),
-      ],
-      { concurrency: "unbounded" },
-    ),
-  ).pipe(Effect.map(([result, stdout, stderr]) => ({ result, stdout, stderr })))
+  return Effect.suspend(() => {
+    const payloads = new Set<Common.TypedSchemaValue>()
+    const discards = new Set<() => Promise<void>>()
+    return Effect.scoped(
+      Effect.all(
+        [
+          Effect.result(result),
+          Effect.result(collectOutput(stdout)),
+          Effect.result(collectOutput(stderr)),
+        ],
+        { concurrency: "unbounded" },
+      ),
+    ).pipe(
+      Effect.map(([result, stdout, stderr]) => ({ result, stdout, stderr })),
+      Effect.provideService(CollectionOwnership, {
+        retain: (payload) => {
+          if (payload) payloads.add(payload)
+        },
+        retainDiscard: (discard) => {
+          discards.add(discard)
+        },
+      }),
+      Effect.onExit((exit) =>
+        Effect.all([
+          Effect.forEach(payloads, (payload) =>
+            discardRejectedPayload(payload, exit).pipe(Effect.ignoreCause),
+          ),
+          Effect.forEach(discards, (discard) =>
+            Exit.isFailure(exit) ? Effect.promise(discard).pipe(Effect.ignoreCause) : Effect.void,
+          ),
+        ]),
+      ),
+    )
+  })
 }
 
 /** Construct a streaming generated invocation. @since 1.6.0 @category constructors */
@@ -187,7 +250,10 @@ export const startedToolInvocation = <A, E, R>(
   stderr,
   result,
   cancel,
-  collect: collectToolInvocation(result, stdout, stderr),
+  detach: resultDetach(cancel),
+  collect: wholeToolCall(Effect.succeed({ cancel }), () =>
+    collectToolInvocation(result, stdout, stderr),
+  ),
 })
 
 const concatBytes = (chunks: ReadonlyArray<Uint8Array>): Uint8Array => {

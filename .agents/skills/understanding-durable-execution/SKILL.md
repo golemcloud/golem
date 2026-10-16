@@ -211,7 +211,12 @@ each recorded invocation in `InvocationMode::Replay`, and when there is no furth
 `AgentInitialization`, and only when their resolved owner is a typed agent. Component-baseline
 tool owners instantiate the deployed component but never queue or replay an agent constructor.
 Replay starts from the chosen snapshot baseline
-(see Snapshots and updates), not necessarily from `OplogIndex::INITIAL`. Interruption kinds
+(see Snapshots and updates), not necessarily from `OplogIndex::INITIAL`. A new replay generation
+scans the replayed range for recovery metadata (delivery markers, guest stream observations and
+tool attachment indexes) before it resolves any call. A snapshot start scans only the entries
+after the snapshot (`replay_state/cursor.rs::recovery_metadata_floor`): no durable construct
+spans a snapshot, so nothing after it refers to metadata before it. A start without a snapshot
+replays the whole history and scans it. Interruption kinds
 (`Worker::set_interrupting`): `Interrupt` stays interrupted, `Restart` is a simulated crash with
 automatic recovery, `Suspend` unloads and resumes on demand — each of these three reconstructs on
 this same executor. `ShardLost` does not: it means this executor lost the agent's shard (a
@@ -1314,8 +1319,8 @@ run at the same time: a save call starts a run only while it holds the save mark
 save call whose periodic job an admission replaced while the call only waited for its late writes
 runs on as a tail that starts no run and no write, and the next save of the agent runs beside
 it. The metrics are
-`filesystem_snapshot_cleanups_pending`, `filesystem_snapshot_copy_seconds` and
-`filesystem_snapshot_failed_space_reclaims_total`. `upload_now` answers `Stopped` after a lost
+`filesystem_snapshot_cleanups_pending`, `filesystem_snapshot_copy_seconds`,
+`filesystem_snapshot_delete_seconds` and `filesystem_snapshot_prune_seconds`. `upload_now` answers `Stopped` after a lost
 shard, a shutdown or `delete_all_snapshots`, unless the save had already finished; ephemeral
 agents make no store call.
 
@@ -1391,8 +1396,10 @@ source revision of a manual update counts as an install, not a restore of saved 
 (`RestoreTree::gives_saved_times`), so the check after it can still find a tree of initial files.
 
 `SnapshotBoundaryConditions` lists what blocks taking a snapshot: replaying, open atomic region,
-open durable scope, snapshotting already, in-flight live host call. Automatic snapshots are
-revision-scoped and ignored once the revision changes.
+open durable scope, snapshotting already, in-flight live host call, and open registered tool
+attachments. Attachment producers, consumers, guest stdin-closure watchers and pending output
+regeneration need the history that a snapshot would skip. Internal observers alone do not block
+a snapshot. Automatic snapshots are revision-scoped and ignored once the revision changes.
 
 Resetting a cursor is not recreating an instance: component metadata, revision and plugin context
 come from instance creation. When history or provenance changes, go through the outer loop.
@@ -1674,7 +1681,13 @@ cursor (`OwnerExecution`, `worker/instance.rs`).
   context before the body runs; keep this reconstruction boundary covered.
 - Every live admission, ambient or underlying, authorizes the command and arguments its layer
   receives, after replay claims and boundary projection; entity Stores authorize with the owner's
-  wallet and the caller's inherited invocation scope. The root `Start` records the pinned
+  generation-bound canonical live wallet and the caller's inherited invocation scope. Stores retain
+  scopes and derived surfaces, not independent live membership. Accepted wallet commits publish
+  through the status actor even if their producer is cancelled; owner-wide interest is the union
+  of wallet, scope and admission-candidate contributions. Historical bodies retain recorded wallets
+  and pins until their own live transition, never borrowing the latest live snapshot. Adjacent
+  unrecorded wallet observations still lack an exact historical association; this ownership model
+  does not change observation recording. The root `Start` records the pinned
   chain plan; descendants record root plus position, and every occurrence retains the original
   calling principal and typed static installation parameters. Component and host leaves use the
   same dispatch path.

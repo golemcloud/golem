@@ -47,6 +47,7 @@ type CollectedNames = (
 pub struct TypeScriptToolBridgeGenerator {
     tool: Tool,
     tool_name: String,
+    rpc_tool_name: String,
     target_path: Utf8PathBuf,
     testing: bool,
     inner: TypeScriptBridgeGenerator,
@@ -57,6 +58,19 @@ pub struct TypeScriptToolBridgeGenerator {
 
 impl TypeScriptToolBridgeGenerator {
     pub fn new(tool: Tool, target_path: &Utf8Path, testing: bool) -> anyhow::Result<Self> {
+        let tool_name = tool
+            .name()
+            .context("tool command tree must contain a root command")?
+            .to_string();
+        Self::new_with_rpc_tool_name(tool, tool_name, target_path, testing)
+    }
+
+    pub fn new_with_rpc_tool_name(
+        tool: Tool,
+        rpc_tool_name: String,
+        target_path: &Utf8Path,
+        testing: bool,
+    ) -> anyhow::Result<Self> {
         let tool_name = tool
             .commands
             .nodes
@@ -76,6 +90,7 @@ impl TypeScriptToolBridgeGenerator {
         Ok(Self {
             tool,
             tool_name,
+            rpc_tool_name,
             target_path: target_path.to_path_buf(),
             testing,
             inner,
@@ -87,7 +102,7 @@ impl TypeScriptToolBridgeGenerator {
 
     pub fn generate(&mut self) -> anyhow::Result<()> {
         std::fs::create_dir_all(&self.target_path)?;
-        let package_name = tool_bridge_client_directory_name(&self.tool_name);
+        let package_name = tool_bridge_client_directory_name(&self.rpc_tool_name);
         let dependency = TypeScriptBridgeGenerator::sdk_package_dep(self.testing)?;
         let package = json!({
             "name": package_name, "version": "0.0.1", "type": "module",
@@ -164,7 +179,7 @@ impl TypeScriptToolBridgeGenerator {
         };
         out.push_str(&format!("export class {} {{\n  constructor(private readonly runtime: base.ToolClientRuntime, private readonly inherited: {inherited}) {{}}\n", client.class_name));
         if client.index == 0 {
-            out.push_str(&format!("  static create(runtime: base.ToolClientRuntime = base.createToolClientRuntime({})): {} {{ return new {}(runtime, []); }}\n  static newClient(): {} {{ return this.create(); }}\n", q(&self.tool_name)?, client.class_name, client.class_name, client.class_name));
+            out.push_str(&format!("  static create(runtime: base.ToolClientRuntime = base.createToolClientRuntime({})): {} {{ return new {}(runtime, []); }}\n  static newClient(): {} {{ return this.create(); }}\n", q(&self.rpc_tool_name)?, client.class_name, client.class_name, client.class_name));
         }
         let mut member_names = ParameterNaming::new();
         member_names.reserve_many(["constructor", "create", "newClient", "runtime", "inherited"]);
@@ -757,4 +772,108 @@ fn collect_names(tool: &Tool, name: &str) -> anyhow::Result<CollectedNames> {
     let mut u = BTreeSet::from(["protocol".to_string(), "ToolInputStream".to_string()]);
     visit(tool, name, 0, vec![], vec![], &mut c, &mut e, &mut u)?;
     Ok((c, e, u.into_iter().collect()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bridge_gen::effect::effect_tool::EffectToolBridgeGenerator;
+    use golem_common::schema::tool::{CommandIndex, CommandTree, Doc, Globals, Positionals};
+    use test_r::test;
+
+    fn presented_tool() -> Tool {
+        let node = |name: &str, subcommands| CommandNode {
+            name: name.to_string(),
+            aliases: vec![],
+            doc: Doc::default(),
+            globals: Globals::default(),
+            subcommands,
+            body: Some(CommandBody {
+                positionals: Positionals::default(),
+                options: vec![],
+                flags: vec![],
+                constraints: vec![],
+                stdin: None,
+                stdout: None,
+                stderr: None,
+                result: None,
+                errors: vec![],
+                annotations: None,
+            }),
+        };
+        Tool {
+            version: "1.0.0".to_string(),
+            requires_filesystem: false,
+            commands: CommandTree {
+                nodes: vec![
+                    node("presented-search", vec![CommandIndex(1)]),
+                    node("find", vec![]),
+                ],
+            },
+            schema: SchemaGraph::empty(),
+        }
+    }
+
+    fn assert_presented_tool_package(target: &Utf8Path, effect: bool) {
+        let package: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(target.join("package.json")).unwrap())
+                .unwrap();
+        assert_eq!(package["name"], "lookup-tool-tool-guest-client");
+        assert_eq!(package["main"], "lookup-tool-tool-guest-client.js");
+        assert_eq!(package["types"], "lookup-tool-tool-guest-client.d.ts");
+        let source =
+            std::fs::read_to_string(target.join("lookup-tool-tool-guest-client.ts")).unwrap();
+        assert!(
+            source.contains("export class PresentedSearchClient"),
+            "{source}"
+        );
+        assert!(source.contains("presented_search("), "{source}");
+        assert!(source.contains("find("), "{source}");
+        assert!(
+            source.contains("base.createToolClientRuntime(\"lookup-tool\")"),
+            "{source}"
+        );
+        assert!(
+            !source.contains("base.createToolClientRuntime(\"presented-search\")"),
+            "{source}"
+        );
+        if effect {
+            assert!(
+                source.contains("base.client(PresentedSearchClient, \"lookup-tool\")"),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn typescript_presented_tool_generation_keeps_rpc_lookup_identity() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target = Utf8Path::from_path(dir.path()).unwrap();
+        TypeScriptToolBridgeGenerator::new_with_rpc_tool_name(
+            presented_tool(),
+            "lookup-tool".to_string(),
+            target,
+            true,
+        )
+        .unwrap()
+        .generate()
+        .unwrap();
+        assert_presented_tool_package(target, false);
+    }
+
+    #[test]
+    fn effect_presented_tool_generation_keeps_rpc_lookup_identity() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target = Utf8Path::from_path(dir.path()).unwrap();
+        EffectToolBridgeGenerator::new_with_rpc_tool_name(
+            presented_tool(),
+            "lookup-tool".to_string(),
+            target,
+            true,
+        )
+        .unwrap()
+        .generate()
+        .unwrap();
+        assert_presented_tool_package(target, true);
+    }
 }

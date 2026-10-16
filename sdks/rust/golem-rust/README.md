@@ -4,6 +4,36 @@ A library that help writing [Golem](https://golem.cloud) programs by providing h
 wrappers for Golem's runtime APIs, including functions for defining and performing operations
 transactionally.
 
+## Outgoing HTTP
+
+Use `golem_rust::http` for WASI HTTP p3 requests in async agent methods. No separate
+HTTP client crate is needed. The SDK uses standard `http` request builders:
+
+```rust,no_run
+use golem_rust::http::{self, Request};
+
+async fn fetch_text(url: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let request = Request::get(url).body(Vec::new())?;
+    let response = http::send(request).await?;
+    if !response.status().is_success() {
+        return Err(format!("HTTP {}", response.status()).into());
+    }
+    Ok(http::response_text(response).await?)
+}
+```
+
+`send` accepts a buffered `Request<Vec<u8>>` and checks upload and transmission
+errors. It does not reject HTTP error statuses, follow redirects, or retry on its
+own. Read status and headers before consuming the response with `response_bytes`,
+`response_text`, or `response_json::<T>` (the default `json` feature). These helpers
+buffer the entire remaining body and propagate final body errors. For large bodies,
+read frames from `response.into_body()` using `http_body_util::BodyExt` instead.
+
+For JSON requests, set `Content-Type: application/json` and use
+`.body(serde_json::to_vec(&value)?)`. Low-level p3 bindings and HTTP adapters are
+available through `golem_rust::wasip3::{http, http_compat}`. Sending requires the
+Golem WASI p3 runtime, not a native socket executor.
+
 ## Self metadata and restrictive permissions
 
 `get_self_metadata()` returns `Result<AgentMetadata, AgentOperationError>`. Handle
@@ -171,6 +201,42 @@ invocations return `InvalidToolName`; agent initialization and invocation return
 `InvalidInput`. Snapshot load returns an unsupported error. Agent definition
 and snapshot save trap with an explicit unsupported message because their WIT
 signatures have no error result.
+
+## Tool output and result ownership
+
+After a tool handler returns success or a declared error, the generated dispatch
+attempts to finish stdout and stderr independently. A finish failure does not
+replace the structured outcome. An explicit `OutputStream::finish` or `fail`
+consumes the shared writer, so implicit finishing cannot replace its terminal.
+SDK result-encoding failures and host declaration-validation failures (including
+undeclared named errors with decodable payloads) are `InvalidResult`; outputs
+finish normally for these returned outcomes. Structurally undecodable wire
+payloads can instead produce host runtime or protocol errors. An ordinary handler panic
+remains a panic or trap, not `InvalidResult`. The SDK does not guarantee implicit
+finishing during panic unwinding or after a trap.
+
+`ToolInvocationOutput::close` permanently closes only that output. It does not
+close its sibling or cancel the invocation. Later `next` calls return `None`.
+Dropping a pending `next` future does not guarantee that a later read resumes it;
+the SDK adds no pending-read or buffering mechanism.
+
+`ToolInvocation::detach_result` permanently stops structured result delivery.
+Pending and future `result` observers return
+`ToolError::Rpc(RpcError::Protocol("tool result delivery is detached"))`, not
+`RpcError::Cancelled`. This is a local observation error, not invocation
+cancellation. Dropping one `result` future is not detachment: other observers
+and outputs still share the cached outcome.
+Detachment releases unclaimed cached results and discards late results, including
+their unclaimed capabilities. Capabilities already delivered to a caller remain
+owned by that caller.
+
+Detachment continues the shared host observation in a background task, so output
+readers and filesystem-capable calls still make progress, even without a result
+consumer. Physical disposal of an unsettled host observer waits for settlement;
+a call that never settles can retain that observer. `ToolInvocation::cancel`
+remains an explicit invocation cancellation request while the observer exists.
+After physical disposal, `cancel` is a no-op. Closing or dropping local outputs
+does not issue an invocation cancellation request.
 
 ## File response headers
 

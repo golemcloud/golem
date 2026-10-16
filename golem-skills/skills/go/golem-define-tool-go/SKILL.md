@@ -87,9 +87,10 @@ var _ = Greet.Handle(func(ctx *tool.Context, a GreetArgs) (string, error) {
 
 Handlers can live in an `impl` package; blank-import it from `main.go`, the same as an agent's. A component can export tools without defining any agent.
 
-- Return a declared case with `ErrX.New(payload)` (`golem.Unit` for none). Returning a case the command did not list in `s.Raises` fails as an invalid result, and so does any other error or a panic.
+- Return a declared case with `ErrX.New(payload)` (`golem.Unit` for none). Returning a case the command did not list in `s.Raises`, or a malformed result, fails as an invalid result. An unclassified returned error, such as `errors.New("disk full")`, or an ordinary panic traps the component. Use declared errors or SDK rejections for expected failures.
 - Reject the call itself with `tool.InvalidInput(format, args...)` or `tool.ConstraintViolation(format, args...)`; the caller sees a `*tool.CallError` of that kind.
 - Use `golem.Unit` as the result type for a command that returns nothing.
+- Use `golem.ProcessExitStatus` as the result type for a command that completes with a shell status: `return golem.ProcessExitStatus{ExitCode: 2}, nil`. The built-in Bash tool takes `ExitCode` as the command's `$?`, while stdout stays the command's output. A nonzero status is a completed command, not an error; use a declared case for a failure.
 
 ## Command Tree and Globals
 
@@ -171,7 +172,7 @@ var _ = Upper.Handle(func(ctx *tool.OutputContext, a UpperArgs) (golem.Unit, err
 ```
 
 - `s.Stdout()` and `s.Stderr()` return the stream's spec: `.Doc`, `.Mime`, and `.Required()`. An output is optional unless required: a caller may leave it out, and then what the handler writes to it is discarded (`ctx.Stderr().Attached()` tells). A call without a required one is refused before the handler runs.
-- Each output is finished when the handler returns a result or a declared error, and failed when it returns any other error or panics; `ctx.Stdout().Fail(tool.OutputFailed("reason"))` ends one with a specific cause. Writing to an output the command does not declare is an error.
+- Each output is finished independently for returned outcomes, including declared errors, invalid results and SDK rejections. An ordinary panic or unclassified returned error fails each output best effort and traps the component. Implicit cleanup cannot replace the outcome or an explicit output terminal. `ctx.Stdout().Fail(tool.OutputFailed("reason"))` ends one output with a specific cause. Writing to an output the command does not declare is an error.
 - A producer failure on stdin surfaces as a `*tool.OutputError`, never as `io.EOF`. An empty stdin chunk breaks the stream protocol and rejects the invocation as invalid input.
 
 ## Deploy

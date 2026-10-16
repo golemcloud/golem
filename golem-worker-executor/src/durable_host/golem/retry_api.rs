@@ -24,6 +24,7 @@ use golem_common::model::oplog::host_functions::{
     GolemApiRetryGetRetryPolicies, GolemApiRetryGetRetryPolicyByName,
     GolemApiRetryResolveRetryPolicy,
 };
+use golem_common::model::oplog::payload::types::SerializableToolPositionalRequest;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemRetryPolicyByName, HostRequestGolemRetryResolvePolicy,
     HostRequestNoInput, HostResponseGolemRetryNamedPolicy, HostResponseGolemRetryPolicies,
@@ -131,7 +132,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         if self.state.durability_is_suppressed() {
             // Apply the in-memory change without creating durable history.
         } else if let Some((_, entry)) = self
-            .get_oplog_entry_or_continue_live("SetRetryPolicy")
+            .get_oplog_entry_or_continue_live(SerializableToolPositionalRequest::SetRetryPolicy)
             .await?
         {
             if !matches!(entry, OplogEntry::SetRetryPolicy { .. }) {
@@ -160,7 +161,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         if self.state.durability_is_suppressed() {
             // Apply the in-memory change without creating durable history.
         } else if let Some((_, entry)) = self
-            .get_oplog_entry_or_continue_live("RemoveRetryPolicy")
+            .get_oplog_entry_or_continue_live(SerializableToolPositionalRequest::RemoveRetryPolicy)
             .await?
         {
             if !matches!(entry, OplogEntry::RemoveRetryPolicy { .. }) {

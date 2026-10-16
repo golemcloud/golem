@@ -3,6 +3,16 @@ use golem_rust::wasip3::http::{client, types};
 use golem_rust::wasip3::{wit_future, wit_stream};
 use golem_rust::{ConfigSchema, agent_definition, agent_implementation, description};
 
+#[path = "../../agent-updates-v1/src/wallet_replay.rs"]
+mod wallet_replay;
+
+#[derive(ConfigSchema)]
+pub struct WalletReplayConfig {
+    #[config_schema(secret)]
+    pub probe: golem_rust::agentic::Secret<Option<String>>,
+    pub control: Option<String>,
+}
+
 #[derive(ConfigSchema)]
 pub struct CounterAgentConfig {
     pub var1: String,
