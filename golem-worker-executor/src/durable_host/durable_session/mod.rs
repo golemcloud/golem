@@ -144,7 +144,7 @@ pub struct StreamSession {
     input_schema: Option<Arc<DurableInputSchema>>,
     rpc: Option<Arc<dyn Rpc>>,
     consumer_journal: Option<Arc<dyn DurableStreamConsumerJournal>>,
-    auth_ctx: Option<AuthCtx>,
+    auth_ctx: Option<Arc<AuthCtx>>,
     runtime_source: Option<RuntimeSource>,
     require_root_attachment_before_production: bool,
     next_transport_stream_id: Arc<AtomicU64>,
@@ -560,7 +560,7 @@ impl StreamSession {
     }
 
     /// Preserves the original consumer authorization for routed source operations.
-    pub fn with_auth_ctx(mut self, auth_ctx: AuthCtx) -> Self {
+    pub fn with_auth_ctx(mut self, auth_ctx: Arc<AuthCtx>) -> Self {
         self.auth_ctx = Some(auth_ctx);
         self
     }
@@ -6921,14 +6921,7 @@ impl DurableInputEndpoint {
             let mut nested_mappings = Vec::new();
             let mut pending_observation = None;
             let mut guest_bytes = None;
-            let (introduced, introducing_index) = oneshot::channel::<Result<OplogIndex, String>>();
-            let introducing_index = async move {
-                introducing_index
-                    .await
-                    .map_err(|_| "parent stream item was not observed".to_string())?
-            }
-            .boxed()
-            .shared();
+            let mut introducing_index = None;
             if let Some(event) = &event {
                 let record = match &event.payload {
                     CommittedProducerStreamEventPayload::Value(bytes) => {
@@ -7119,10 +7112,24 @@ impl DurableInputEndpoint {
                     }),
                 };
                 if guest {
+                    // Only nested readers wait for the parent's oplog index.
+                    let introduced = (!nested_mappings.is_empty()).then(|| {
+                        let (introduced, index) = oneshot::channel::<Result<OplogIndex, String>>();
+                        introducing_index = Some(
+                            async move {
+                                index.await.map_err(|_| {
+                                    "parent stream item was not observed".to_string()
+                                })?
+                            }
+                            .boxed()
+                            .shared(),
+                        );
+                        introduced
+                    });
                     pending_observation = Some(PendingConsumerObservation {
                         record,
                         recorded: recorded_observation,
-                        introduced: Some(introduced),
+                        introduced,
                     });
                 } else if !journaled {
                     streams.append_record(None, record).await?;
@@ -7157,7 +7164,9 @@ impl DurableInputEndpoint {
             }
             for (position, mapping) in nested_mappings.into_iter().enumerate() {
                 streams.insert_mapping(mapping.clone())?;
-                let endpoint = if guest && !journaled {
+                let endpoint = if let Some(introducing_index) =
+                    introducing_index.as_ref().filter(|_| !journaled)
+                {
                     let introducing_index = introducing_index.clone();
                     DurableInputEndpoint {
                         reader: None,
