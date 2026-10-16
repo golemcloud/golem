@@ -448,6 +448,23 @@ func TestDeriveScopeBorrowsItsParents(t *testing.T) {
 		t.Errorf("a scope card as a parent reached the host as %v, %v", f.scope, err)
 	}
 
+	// Wallet cards of every kind, the lent scope card among them, are parents
+	// too, and keep their handles.
+	wallet := Wallet()
+	f.next = &types.PermissionCard{}
+	if _, err := DeriveScope(Bounds{}, wallet[0], wallet[1], wallet[2]); err != nil || !reflect.DeepEqual(f.scope, []*types.PermissionCard{f.wallet[0].Concrete(), f.wallet[1].Template(), f.wallet[2].Scope()}) {
+		t.Errorf("wallet cards as parents reached the host as %v, %v", f.scope, err)
+	}
+	concrete, _ := wallet[0].Concrete()
+	template, _ := wallet[1].Template()
+	lent, _ := wallet[2].Scope()
+	if concrete.st.h != f.wallet[0].Concrete() || template.pst.h != f.wallet[1].Template() || lent.sst.h != f.wallet[2].Scope() {
+		t.Error("deriving a scope card moved a wallet card")
+	}
+	if got := scopeCardHandle(lent); got.IsNone() || got.Some() != f.wallet[2].Scope() {
+		t.Error("the lent scope card cannot be attached after it was a parent")
+	}
+
 	scope.Release()
 	mustPanicMoved(t, "attaching", func() { scopeCardHandle(scope) })
 	mustPanicMoved(t, "deriving from", func() { _, _ = DeriveScope(Bounds{}, a, scope) })
