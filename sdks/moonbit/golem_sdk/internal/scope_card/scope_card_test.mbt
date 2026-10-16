@@ -19,10 +19,16 @@ fn scope_cards() -> Array[@permissions.ScopeCard] raise {
   for _ in 0..<8 {
     push_permission_host_buffer(guest_malloc(256), 256)
   }
-  let wallet = @permissions.wallet()
+  let parents = []
+  for card in @permissions.wallet() {
+    match card {
+      Concrete(card) => parents.push(card)
+      other => other.drop()
+    }
+  }
   [
-    @permissions.derive_scope(wallet, @permissions.Bounds::new()),
-    @permissions.derive_scope(wallet, @permissions.Bounds::new()),
+    @permissions.derive_scope(parents, @permissions.Bounds::new()),
+    @permissions.derive_scope(parents, @permissions.Bounds::new()),
   ]
 }
 

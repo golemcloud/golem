@@ -1,9 +1,11 @@
 // Typed permission-card management over `golem:permissions@0.1.0`.
 //
-// A `PermissionCard` wraps an owned persistent `golem:core/types.permission-card`
-// resource in a take-once holder, and a `ScopeCard` wraps the handle of an
-// invocation-local scope card. `PatternGrant`, `CardView`, `Bounds`, `Lifespan`
-// and `CardId` are plain data; nothing in this package turns them into a card.
+// A `PermissionCard` (concrete) or a `PolymorphicPermissionCard` (template)
+// wraps an owned persistent `golem:core/types.permission-card` resource in a
+// take-once holder, and a `ScopeCard` wraps the handle of an invocation-local
+// scope card. `wallet` labels each card with its kind as a `WalletCard`.
+// `PatternGrant`, `CardView`, `Bounds`, `Lifespan` and `CardId` are plain
+// data; nothing in this package turns them into a card.
 // Derivation inputs are requests that the host validates against the parent's
 // lattice.
 //
@@ -12,7 +14,7 @@
 // wallet and derivations) and from decoded agent and tool values. The raw
 // generated `@types.PermissionCard` is a public `Int` wrapper, so user code
 // can put any handle index into a raw wire tree and decode it. Decoding
-// rejects a handle that a `PermissionCard` or `ScopeCard` holds, so such data
+// rejects a handle that any card holds, so such data
 // cannot alias a held card. A handle that no card holds decodes into a card;
 // the host traps on it when the handle is unknown, and otherwise it names a
 // card that the agent already owns through the raw bindings.
@@ -374,7 +376,8 @@ fn CardId::from_raw(raw : @types.CardId) -> CardId {
 }
 
 ///|
-/// A permission card held by this agent.
+/// A concrete permission card held by this agent: every grant names concrete
+/// owners and resources.
 ///
 /// The card wraps the owned host resource in a take-once holder. Borrowing
 /// operations (`id`, `parents`, `expires_at`, `inspect`, `derive_child`, and
@@ -387,6 +390,12 @@ fn CardId::from_raw(raw : @types.CardId) -> CardId {
 /// There is no public constructor, and a card has no JSON codec. A card value
 /// can travel only as an owned resource handle. Decoding a value never yields
 /// a second card for a handle that a card already holds.
+///
+/// No operation turns a `PermissionCard` into a `PolymorphicPermissionCard` or
+/// a `ScopeCard`, and a schema value of a held card decodes only into the
+/// card's own type. A card that moves into a wire tree is no longer held: the
+/// type that decodes the tree decides its kind, as for a card that an agent
+/// receives. The host keeps the real kind of every card.
 pub struct PermissionCard {
   priv handle : @card.GuestPermissionCardHandle
 }
@@ -395,24 +404,65 @@ pub struct PermissionCard {
 const CARD_MOVED : String = "permission card has already been moved (revoked, installed, dropped or transferred) and can no longer be used"
 
 ///|
+fn borrow_held(
+  handle : @card.GuestPermissionCardHandle,
+) -> @types.PermissionCard {
+  match @card.borrow(handle) {
+    Some(raw) => raw
+    None => abort(CARD_MOVED)
+  }
+}
+
+///|
+fn take_held(handle : @card.GuestPermissionCardHandle) -> @types.PermissionCard {
+  match @card.take(handle) {
+    Some(raw) => raw
+    None => abort(CARD_MOVED)
+  }
+}
+
+///|
+fn drop_held(handle : @card.GuestPermissionCardHandle) -> Unit {
+  match @card.take(handle) {
+    Some(raw) => raw.drop()
+    None => ()
+  }
+}
+
+///|
+fn timestamp_from_raw(raw : @raw.Timestamp) -> Timestamp {
+  { seconds: raw.seconds, nanoseconds: raw.nanoseconds, }
+}
+
+///|
+fn derive_child_raw(
+  parent : @types.PermissionCard,
+  bounds : Bounds,
+  lifespan : Lifespan?,
+) -> PermissionCard raise PermissionError {
+  let raw = lift_result(
+    @rawDerive.derive_(
+      parent,
+      grants_to_raw(bounds.lower_positive),
+      grants_to_raw(bounds.lower_negative),
+      grants_to_raw(bounds.upper_positive),
+      grants_to_raw(bounds.upper_negative),
+      lifespan_to_raw(lifespan),
+    ),
+  )
+  PermissionCard::from_raw(raw)
+}
+
+///|
 fn PermissionCard::from_raw(raw : @types.PermissionCard) -> PermissionCard {
-  { handle: @card.adopt(raw), }
+  let handle = @card.adopt(raw)
+  ignore(@card.claim_kind(handle, false))
+  { handle, }
 }
 
 ///|
 fn PermissionCard::borrow_raw(self : PermissionCard) -> @types.PermissionCard {
-  match @card.borrow(self.handle) {
-    Some(raw) => raw
-    None => abort(CARD_MOVED)
-  }
-}
-
-///|
-fn PermissionCard::take_raw(self : PermissionCard) -> @types.PermissionCard {
-  match @card.take(self.handle) {
-    Some(raw) => raw
-    None => abort(CARD_MOVED)
-  }
+  borrow_held(self.handle)
 }
 
 ///|
@@ -436,9 +486,7 @@ pub fn PermissionCard::parents(self : PermissionCard) -> Array[CardId] {
 ///
 /// Traps if the host does not know the handle. Aborts if this card was moved.
 pub fn PermissionCard::expires_at(self : PermissionCard) -> Timestamp? {
-  @raw.expires_at(self.borrow_raw()).map(fn(raw) {
-    { seconds: raw.seconds, nanoseconds: raw.nanoseconds, }
-  })
+  @raw.expires_at(self.borrow_raw()).map(timestamp_from_raw)
 }
 
 ///|
@@ -471,17 +519,7 @@ pub fn PermissionCard::derive_child(
   bounds : Bounds,
   lifespan? : Lifespan,
 ) -> PermissionCard raise PermissionError {
-  let raw = lift_result(
-    @rawDerive.derive_(
-      self.borrow_raw(),
-      grants_to_raw(bounds.lower_positive),
-      grants_to_raw(bounds.lower_negative),
-      grants_to_raw(bounds.upper_positive),
-      grants_to_raw(bounds.upper_negative),
-      lifespan_to_raw(lifespan),
-    ),
-  )
-  PermissionCard::from_raw(raw)
+  derive_child_raw(self.borrow_raw(), bounds, lifespan)
 }
 
 ///|
@@ -493,7 +531,7 @@ pub fn PermissionCard::derive_child(
 pub fn PermissionCard::revoke(
   self : PermissionCard,
 ) -> UInt raise PermissionError {
-  lift_result(@rawRevoke.revoke_card(self.take_raw()))
+  lift_result(@rawRevoke.revoke_card(take_held(self.handle)))
 }
 
 ///|
@@ -506,7 +544,7 @@ pub fn PermissionCard::install(
   self : PermissionCard,
   target : Holder,
 ) -> Unit raise PermissionError {
-  lift_result(@rawWallet.install_card(self.take_raw(), target.to_raw()))
+  lift_result(@rawWallet.install_card(take_held(self.handle), target.to_raw()))
 }
 
 ///|
@@ -520,29 +558,192 @@ pub fn PermissionCard::is_moved(self : PermissionCard) -> Bool {
 /// Releases this card's handle without revoking the card. Dropping a moved card
 /// does nothing.
 pub fn PermissionCard::drop(self : PermissionCard) -> Unit {
-  match @card.take(self.handle) {
-    Some(raw) => raw.drop()
-    None => ()
+  drop_held(self.handle)
+}
+
+///|
+/// A template permission card held by this agent: its grants may contain slot
+/// variables (`?agent`, `?env`, ...), which the host resolves for each holder.
+///
+/// It has the operations of `PermissionCard`, with the same borrowing and
+/// consuming rules, and the same non-forgeability: there is no public
+/// constructor, no JSON codec, and decoding never yields a second card for a
+/// handle that a card already holds. `derive_child` returns a concrete
+/// `PermissionCard`. As an agent or tool parameter or return value its schema
+/// is `permission-card { polymorphic: true }`; a `PermissionCard` declares
+/// `polymorphic: false`. The schema flag is metadata: the host does not check
+/// the kind of a received card, which decodes into the type that the parameter
+/// or return value declares.
+pub struct PolymorphicPermissionCard {
+  priv handle : @card.GuestPermissionCardHandle
+}
+
+///|
+fn PolymorphicPermissionCard::borrow_raw(
+  self : PolymorphicPermissionCard,
+) -> @types.PermissionCard {
+  borrow_held(self.handle)
+}
+
+///|
+/// The identifier of this card.
+///
+/// Traps if the host does not know the handle. Aborts if this card was moved.
+pub fn PolymorphicPermissionCard::id(
+  self : PolymorphicPermissionCard,
+) -> CardId {
+  CardId::from_raw(@raw.id(self.borrow_raw()))
+}
+
+///|
+/// The identifiers of the cards this card was derived from.
+///
+/// Traps if the host does not know the handle. Aborts if this card was moved.
+pub fn PolymorphicPermissionCard::parents(
+  self : PolymorphicPermissionCard,
+) -> Array[CardId] {
+  @raw.parents(self.borrow_raw()).map(CardId::from_raw)
+}
+
+///|
+/// The expiry of this card, or `None` for a card without a lifespan.
+///
+/// Traps if the host does not know the handle. Aborts if this card was moved.
+pub fn PolymorphicPermissionCard::expires_at(
+  self : PolymorphicPermissionCard,
+) -> Timestamp? {
+  @raw.expires_at(self.borrow_raw()).map(timestamp_from_raw)
+}
+
+///|
+/// The complete grant lattice of this card, with its slot variables
+/// unresolved. Requires `card:inspect` authority.
+pub fn PolymorphicPermissionCard::inspect(
+  self : PolymorphicPermissionCard,
+) -> CardView raise PermissionError {
+  view_from_raw(lift_result(@rawInspect.inspect_card(self.borrow_raw())))
+}
+
+///|
+/// Derives a narrower concrete child card from this card. This card is kept.
+///
+/// The host accepts a template parent only when this card is in the caller's
+/// wallet, so a template card received as an agent or tool value fails with
+/// `PermissionError::NotPermitted`. The host resolves the slot variables of
+/// this card for the caller, and
+/// checks `bounds` against the result. The requested grants must be concrete:
+/// a slot variable in `bounds` raises `PermissionError::InvalidPattern`. The
+/// rules for `bounds` and `lifespan` are those of
+/// `PermissionCard::derive_child`. Requires `card:derive` authority.
+pub fn PolymorphicPermissionCard::derive_child(
+  self : PolymorphicPermissionCard,
+  bounds : Bounds,
+  lifespan? : Lifespan,
+) -> PermissionCard raise PermissionError {
+  derive_child_raw(self.borrow_raw(), bounds, lifespan)
+}
+
+///|
+/// Revokes this card and every card derived from it, and returns the number of
+/// revoked cards. Requires `card:revoke` authority.
+///
+/// This consumes the card even when the host returns an error, because the host
+/// drops the handle in both cases.
+pub fn PolymorphicPermissionCard::revoke(
+  self : PolymorphicPermissionCard,
+) -> UInt raise PermissionError {
+  lift_result(@rawRevoke.revoke_card(take_held(self.handle)))
+}
+
+///|
+/// Installs a concrete card in the wallet of `target`: the host resolves the
+/// slot variables of this card for `target` and installs the result. Requires
+/// `card:install` authority. The host currently supports only `Holder::Agent`
+/// targets.
+///
+/// This consumes the card even when the host returns an error, because the host
+/// drops the handle in both cases.
+pub fn PolymorphicPermissionCard::install(
+  self : PolymorphicPermissionCard,
+  target : Holder,
+) -> Unit raise PermissionError {
+  lift_result(@rawWallet.install_card(take_held(self.handle), target.to_raw()))
+}
+
+///|
+/// Whether this card was moved by `revoke`, `install`, `drop`, or a transfer as
+/// an agent or tool value. A moved card can no longer be used.
+pub fn PolymorphicPermissionCard::is_moved(
+  self : PolymorphicPermissionCard,
+) -> Bool {
+  !self.handle.is_present()
+}
+
+///|
+/// Releases this card's handle without revoking the card. Dropping a moved card
+/// does nothing.
+pub fn PolymorphicPermissionCard::drop(
+  self : PolymorphicPermissionCard,
+) -> Unit {
+  drop_held(self.handle)
+}
+
+///|
+/// A card in the caller's wallet, labelled with its kind by the host. Each case
+/// holds a new owned handle. User code can match a `WalletCard` but cannot
+/// build one.
+pub enum WalletCard {
+  /// A concrete card: every grant names concrete owners and resources.
+  Concrete(PermissionCard)
+  /// A template card: its grants may contain slot variables, which resolve for
+  /// each holder.
+  Template(PolymorphicPermissionCard)
+  /// The scope card that the caller lent to the current invocation. The host
+  /// lists it only when this agent holds `card:inspect`, and retires it at the
+  /// end of the invocation.
+  Scope(ScopeCard)
+}
+
+///|
+fn WalletCard::from_raw(raw : @raw.WalletCard) -> WalletCard {
+  match raw {
+    Concrete(raw) => Concrete(PermissionCard::from_raw(raw))
+    Template(raw) => {
+      let handle = @card.adopt(raw)
+      ignore(@card.claim_kind(handle, true))
+      Template({ handle, })
+    }
+    Scope(raw) => Scope({ handle: @card.adopt_scope(raw), })
   }
 }
 
 ///|
-/// The cards installed in the caller's wallet, as new owned handles. Release
-/// the cards you do not keep with `PermissionCard::drop` or `drop_all`.
+/// Releases the handle of this wallet entry. Dropping a moved card does
+/// nothing.
+pub fn WalletCard::drop(self : WalletCard) -> Unit {
+  match self {
+    Concrete(card) => card.drop()
+    Template(card) => card.drop()
+    Scope(card) => card.drop()
+  }
+}
+
+///|
+/// The cards installed in the caller's wallet, each labelled with its kind, as
+/// new owned handles. Release the cards you do not keep with `drop` or
+/// `drop_all`.
 ///
 /// In a callee that holds `card:inspect`, the result also contains the scope
-/// card that the caller lent to the current invocation, typed as a
-/// `PermissionCard`. The host rejects
-/// `revoke`, `install` and `derive_child` on it; a rejected `revoke` or
-/// `install` still consumes the handle. Sending it as an agent or tool value
-/// fails, and the host retires it at the end of the invocation.
-pub fn wallet() -> Array[PermissionCard] {
-  @rawWallet.self_wallet().map(PermissionCard::from_raw)
+/// card that the caller lent to the current invocation, as a
+/// `WalletCard::Scope`. It has the operations of any `ScopeCard`, and the host
+/// retires it at the end of the invocation.
+pub fn wallet() -> Array[WalletCard] {
+  @rawWallet.self_wallet().map(WalletCard::from_raw)
 }
 
 ///|
 /// Releases every card in `cards`. Moved cards are skipped.
-pub fn drop_all(cards : Array[PermissionCard]) -> Unit {
+pub fn drop_all(cards : Array[WalletCard]) -> Unit {
   for card in cards {
     card.drop()
   }
@@ -583,12 +784,14 @@ pub fn derive_from_wallet(
 }
 
 ///|
-/// An invocation-local scope card, derived with `derive_scope`.
+/// An invocation-local scope card, derived with `derive_scope` or lent to the
+/// current invocation by its caller (`WalletCard::Scope`).
 ///
-/// A scope card is valid only during the invocation that derived it. Attach it
-/// to an awaited RPC call to lend its authority to the callee for that call.
-/// After that invocation the host retires the handle. Attaching a retired
-/// scope card, per call or as a client default, makes the host deny the call:
+/// A scope card is valid only during the invocation that derived or received
+/// it. Attach it to an awaited RPC call to lend its authority to the callee for
+/// that call. After that invocation the host retires the handle. Attaching a
+/// retired scope card, per call or as a client default, makes the host deny
+/// the call:
 /// `@rpc` and the generated typed clients abort with `RPC denied`, and the
 /// reflection clients raise `Remote(Denied)`. On a denial the host discards
 /// the whole input tree, argument cards included. `derive_scope` with a
@@ -638,14 +841,13 @@ pub fn ScopeCard::parents(self : ScopeCard) -> Array[CardId] {
 }
 
 ///|
-/// The expiry of this scope card, or `None` when it has none.
+/// The earliest expiry of the root cards of this scope card, or `None` when no
+/// root card expires. The scope card stops authorizing then.
 ///
 /// Traps if the host does not know the handle. Aborts if this scope card was
 /// dropped.
 pub fn ScopeCard::expires_at(self : ScopeCard) -> Timestamp? {
-  @raw.expires_at(self.borrow_raw()).map(fn(raw) {
-    { seconds: raw.seconds, nanoseconds: raw.nanoseconds, }
-  })
+  @raw.expires_at(self.borrow_raw()).map(timestamp_from_raw)
 }
 
 ///|
@@ -674,18 +876,29 @@ pub fn ScopeCard::drop(self : ScopeCard) -> Unit {
 
 ///|
 /// Derives an invocation-local scope card from one or more parents. The
-/// parents are kept. `parents` are persistent cards and `scope_parents` are
-/// scope cards of the current invocation; `ScopeCard::parents` of the result
-/// names the root cards of all of them. The four lists of `bounds` are the
-/// complete requested lattice.
+/// parents are kept. `parents` are concrete persistent cards,
+/// `template_parents` are template persistent cards, whose slot variables the
+/// host resolves for the caller, and `scope_parents` are scope cards of the
+/// current invocation; `ScopeCard::parents` of the result names the root cards
+/// of all of them. The four lists of `bounds` are the complete requested
+/// lattice, and its grants must be concrete. The host accepts a persistent
+/// parent, concrete or template, only when it is in the caller's wallet, and
+/// fails with `PermissionError::NotPermitted` otherwise, for example for a
+/// card that this agent derived or received as a value.
+/// `ScopeCard::expires_at` of the result is the earliest expiry of those root
+/// cards.
 ///
 /// Aborts if a parent was moved.
 pub fn derive_scope(
   parents : Array[PermissionCard],
   bounds : Bounds,
+  template_parents? : Array[PolymorphicPermissionCard] = [],
   scope_parents? : Array[ScopeCard] = [],
 ) -> ScopeCard raise PermissionError {
   let raw_parents = parents.map(PermissionCard::borrow_raw)
+  for template_parent in template_parents {
+    raw_parents.push(template_parent.borrow_raw())
+  }
   for scope_parent in scope_parents {
     raw_parents.push(scope_parent.borrow_raw())
   }

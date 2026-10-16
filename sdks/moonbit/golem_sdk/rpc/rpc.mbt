@@ -170,9 +170,9 @@ pub fn AgentClient::phantom_id(self : AgentClient) -> @types.Uuid? {
 /// The client borrows the scope card: the card is kept, and every awaited
 /// invocation lends it to the callee for the duration of that call.
 /// Invocations that only trigger or schedule work never attach a scope card.
-/// A scope card is valid only during the invocation that derived it. In a later
-/// invocation the host denies the call and discards its whole input tree,
-/// argument cards included, and the awaited invocation aborts with
+/// A scope card is valid only during the invocation that derived or received
+/// it. In a later invocation the host denies the call and discards its whole
+/// input tree, argument cards included, and the awaited invocation aborts with
 /// `RPC denied`. An awaited invocation also aborts if the default scope card
 /// was dropped in the meantime.
 pub fn AgentClient::set_default_scope_card(

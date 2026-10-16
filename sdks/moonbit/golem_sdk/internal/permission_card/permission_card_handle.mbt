@@ -58,15 +58,39 @@ pub fn drop_unless_held(raw : @types.PermissionCard) -> Unit {
 /// resource.
 pub struct GuestPermissionCardHandle {
   priv mut cell : @types.PermissionCard?
+  /// The kind of typed card that shares this holder: `Some(true)` for a
+  /// template card, `Some(false)` for a concrete card, and `None` until a
+  /// typed card claims a holder lifted from a wire tree.
+  priv mut polymorphic : Bool?
 }
 
 ///|
 /// Wraps a handle that a host call returned. Use this only for a handle that
 /// comes directly from the host, never for a handle read from a wire tree.
 pub fn adopt(raw : @types.PermissionCard) -> GuestPermissionCardHandle {
-  let handle : GuestPermissionCardHandle = { cell: Some(raw), }
+  let handle : GuestPermissionCardHandle = {
+    cell: Some(raw),
+    polymorphic: None,
+  }
   register(raw, () => handle.cell = None)
   handle
+}
+
+///|
+/// Records that a typed card of the given kind shares `handle`. Returns
+/// `false`, and records nothing, when a card of the other kind already shares
+/// it, so that one holder never backs both a concrete and a template card.
+pub fn claim_kind(
+  handle : GuestPermissionCardHandle,
+  polymorphic : Bool,
+) -> Bool {
+  match handle.polymorphic {
+    None => {
+      handle.polymorphic = Some(polymorphic)
+      true
+    }
+    Some(kind) => kind == polymorphic
+  }
 }
 
 ///|

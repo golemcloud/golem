@@ -3212,8 +3212,14 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             SchemaType::QuotaToken { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
                 Ok("@quota.QuotaToken".to_string())
             }
-            SchemaType::PermissionCard { .. } if self.mode == MoonBitBridgeMode::GuestWasmRpc => {
-                Ok("@permissions.PermissionCard".to_string())
+            SchemaType::PermissionCard { spec, .. }
+                if self.mode == MoonBitBridgeMode::GuestWasmRpc =>
+            {
+                if spec.polymorphic {
+                    Ok("@permissions.PolymorphicPermissionCard".to_string())
+                } else {
+                    Ok("@permissions.PermissionCard".to_string())
+                }
             }
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }

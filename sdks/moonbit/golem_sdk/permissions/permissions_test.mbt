@@ -1,7 +1,9 @@
 // Tests for the typed permission-card API.
 //
 // The host calls run against the fake `golem:permissions` host in
-// `scripts/run-wasm-test.mjs`. Its wallet holds the handles 11 and 12, derived
+// `scripts/run-wasm-test.mjs`. Its wallet holds the concrete card 11 and the
+// template card 12, and after `lend_permission_scope_card` also the lent scope
+// card 13, whose root 12 expires. Derived
 // cards get fresh handles, `revoke-card` succeeds only for handle 11,
 // `install-card` always reports an install recipient mismatch, and
 // `derive-from-wallet` rejects a request whose first lower-positive verb is
@@ -15,6 +17,9 @@ extern "wasm" fn resource_drop_count(kind : Int) -> Int = "golem:test" "resource
 
 ///|
 extern "wasm" fn reset_permission_host() = "golem:test" "reset-permission-host"
+
+///|
+extern "wasm" fn lend_permission_scope_card() = "golem:test" "lend-permission-scope-card"
 
 ///|
 extern "wasm" fn push_permission_host_buffer(ptr : Int, size : Int) = "golem:test" "push-permission-host-buffer"
@@ -56,6 +61,30 @@ fn[T] expect_error(
 }
 
 ///|
+fn concrete(card : @permissions.WalletCard) -> @permissions.PermissionCard {
+  guard card is Concrete(card) else { abort("expected a concrete wallet card") }
+  card
+}
+
+///|
+fn template(
+  card : @permissions.WalletCard,
+) -> @permissions.PolymorphicPermissionCard {
+  guard card is Template(card) else { abort("expected a template wallet card") }
+  card
+}
+
+///|
+/// The concrete card 11 and the template card 12 of the fake wallet.
+fn wallet_cards() -> (
+  @permissions.PermissionCard,
+  @permissions.PolymorphicPermissionCard,
+) {
+  let wallet = @permissions.wallet()
+  (concrete(wallet[0]), template(wallet[1]))
+}
+
+///|
 fn grant(verb : String) -> @permissions.PatternGrant {
   { class: "card", owner: "*", recipient: "*", verb, resource_id: "*", }
 }
@@ -63,10 +92,7 @@ fn grant(verb : String) -> @permissions.PatternGrant {
 ///|
 test "wallet cards compare by id with the parents of a derived card" {
   fresh_host()
-  let cards = @permissions.wallet()
-  assert_eq(cards.length(), 2)
-  let first = cards[0]
-  let second = cards[1]
+  let (first, second) = wallet_cards()
   assert_true(first.id() == first.id())
   assert_true(first.id() != second.id())
   let child = first.derive_child(@permissions.Bounds::new())
@@ -87,7 +113,8 @@ test "wallet cards compare by id with the parents of a derived card" {
 ///|
 test "derive_child borrows the parent and sends the lifespan" {
   fresh_host()
-  let parent = @permissions.wallet()[1]
+  // A template parent derives a concrete card.
+  let parent = wallet_cards().1
   let child = parent.derive_child(
     @permissions.Bounds::new(upper_positive=[grant("inspect")]),
     lifespan=@permissions.Lifespan::iso8601("PT1H"),
@@ -103,12 +130,17 @@ test "derive_child borrows the parent and sends the lifespan" {
   let indefinite = parent.derive_child(@permissions.Bounds::new())
   assert_eq(permission_host_stat(6), -1)
   debug_inspect(indefinite.expires_at(), content="None")
+  let grandchild : @permissions.PermissionCard = child.derive_child(
+    @permissions.Bounds::new(),
+  )
+  assert_eq(permission_host_stat(4), 100)
+  assert_true(grandchild.parents() == [child.id()])
 }
 
 ///|
 test "revoke returns the host count and moves the card" {
   fresh_host()
-  let card = @permissions.wallet()[0]
+  let card = wallet_cards().0
   assert_eq(card.revoke(), 3U)
   assert_eq(permission_host_stat(0), 1)
   assert_eq(permission_host_stat(1), 11)
@@ -120,7 +152,7 @@ test "revoke returns the host count and moves the card" {
 ///|
 test "a failed revoke still moves the card" {
   fresh_host()
-  let card = @permissions.wallet()[1]
+  let card = wallet_cards().1
   let error = expect_error(() => card.revoke())
   guard error is CardRevoked(message) else {
     fail("expected card-revoked, got \{repr(error)}")
@@ -134,11 +166,15 @@ test "a failed revoke still moves the card" {
 ///|
 test "install maps a recipient mismatch and moves the card" {
   fresh_host()
-  let card = @permissions.wallet()[1]
+  let (concrete_card, card) = wallet_cards()
   let target : @permissions.Holder = Agent({
     component_id: { uuid: { high_bits: 1, low_bits: 2, }, },
     agent_id: "Target(\"other\")",
   })
+  let concrete_error = expect_error(() => concrete_card.install(target))
+  assert_eq(concrete_error.kind(), "install-recipient-mismatch")
+  assert_eq(permission_host_stat(3), 11)
+  assert_true(concrete_card.is_moved())
   let error = expect_error(() => card.install(target))
   assert_eq(error.kind(), "install-recipient-mismatch")
   assert_eq(error.message(), "card does not cover the recipient")
@@ -170,70 +206,75 @@ test "derive_from_wallet maps not-permitted" {
     ),
   )
   assert_eq(permission_host_stat(6), "PT1M30S".length())
-  assert_true(card.parents() == [@permissions.wallet()[0].id()])
+  assert_true(card.parents() == [wallet_cards().0.id()])
 }
 
 ///|
 test "derive_scope borrows every parent" {
   fresh_host()
   let wallet = @permissions.wallet()
+  let (first, second) = (concrete(wallet[0]), template(wallet[1]))
   let scope = @permissions.derive_scope(
-    wallet,
+    [first],
     @permissions.Bounds::new(lower_positive=[grant("inspect")]),
+    template_parents=[second],
   )
   assert_eq(permission_host_stat(5), 2)
-  assert_true(scope.parents() == [wallet[0].id(), wallet[1].id()])
+  assert_true(scope.parents() == [first.id(), second.id()])
   @permissions.drop_all(wallet)
   assert_eq(resource_drop_count(PERMISSION_CARD_DROPS), 2)
+  assert_true(first.is_moved())
+  assert_true(second.is_moved())
   assert_false(scope.is_moved())
 }
 
 ///|
 test "a scope card can be a parent of a scope card" {
   fresh_host()
-  let wallet = @permissions.wallet()
-  let outer = @permissions.derive_scope([wallet[0]], @permissions.Bounds::new())
+  let (first, second) = wallet_cards()
+  let outer = @permissions.derive_scope([first], @permissions.Bounds::new())
   let inner = @permissions.derive_scope(
-    [wallet[1]],
+    [],
     @permissions.Bounds::new(),
+    template_parents=[second],
     scope_parents=[outer],
   )
   assert_eq(permission_host_stat(5), 2)
   // `parents` names root card ids, sorted and without duplicates: `outer`
   // contributes its root.
-  assert_true(inner.parents() == [wallet[0].id(), wallet[1].id()])
+  assert_true(inner.parents() == [first.id(), second.id()])
   let repeated = @permissions.derive_scope(
-    [wallet[0]],
+    [first],
     @permissions.Bounds::new(),
     scope_parents=[outer, inner],
   )
   assert_eq(permission_host_stat(5), 3)
-  assert_true(repeated.parents() == [wallet[0].id(), wallet[1].id()])
+  assert_true(repeated.parents() == [first.id(), second.id()])
   let scope_only = @permissions.derive_scope([], @permissions.Bounds::new(), scope_parents=[
     outer,
   ])
   assert_eq(permission_host_stat(5), 1)
-  assert_true(scope_only.parents() == [wallet[0].id()])
+  assert_true(scope_only.parents() == [first.id()])
   debug_inspect(outer.expires_at(), content="None")
 }
 
 ///|
 test "drop releases a scope card once" {
   fresh_host()
-  let wallet = @permissions.wallet()
-  let scope = @permissions.derive_scope(wallet, @permissions.Bounds::new())
+  let (first, _) = wallet_cards()
+  let scope = @permissions.derive_scope([first], @permissions.Bounds::new())
   scope.drop()
   scope.drop()
   assert_true(scope.is_moved())
   assert_eq(resource_drop_count(PERMISSION_CARD_DROPS), 1)
-  assert_false(wallet[0].is_moved())
+  assert_false(first.is_moved())
 }
 
 ///|
 test "panic using a dropped scope card aborts" {
   fresh_host()
   let scope = @permissions.derive_scope(
-    @permissions.wallet(),
+    [wallet_cards().0],
     @permissions.Bounds::new(),
   )
   scope.drop()
@@ -243,9 +284,9 @@ test "panic using a dropped scope card aborts" {
 ///|
 test "inspect lifts the card view" {
   fresh_host()
-  let wallet = @permissions.wallet()
+  let (first, second) = wallet_cards()
   debug_inspect(
-    wallet[0].inspect(),
+    first.inspect(),
     content=(
       #|{
       #|  lower_positive: [
@@ -263,7 +304,7 @@ test "inspect lifts the card view" {
       #|}
     ),
   )
-  let denied = expect_error(() => wallet[1].inspect())
+  let denied = expect_error(() => second.inspect())
   guard denied is NotPermitted(_) else {
     fail("expected not-permitted, got \{repr(denied)}")
   }
@@ -292,24 +333,49 @@ test "kernel introspection and wallet version lift host data" {
 ///|
 test "drop releases a held card once" {
   fresh_host()
-  let card = @permissions.wallet()[0]
+  let (card, template_card) = wallet_cards()
   card.drop()
   card.drop()
-  assert_eq(resource_drop_count(PERMISSION_CARD_DROPS), 1)
+  template_card.drop()
+  template_card.drop()
+  assert_true(template_card.is_moved())
+  assert_eq(resource_drop_count(PERMISSION_CARD_DROPS), 2)
 }
 
 ///|
 test "panic using a revoked card aborts" {
   fresh_host()
-  let card = @permissions.wallet()[0]
+  let card = wallet_cards().0
   ignore(card.revoke())
+  ignore(card.id())
+}
+
+///|
+test "panic using a revoked template card aborts" {
+  fresh_host()
+  let card = wallet_cards().1
+  ignore(card.revoke()) catch {
+    _ => ()
+  }
   ignore(card.id())
 }
 
 ///|
 test "panic revoking an installed card aborts" {
   fresh_host()
-  let card = @permissions.wallet()[1]
+  let card = wallet_cards().0
+  card.install(App({ high_bits: 0, low_bits: 0, })) catch {
+    _ => ()
+  }
+  ignore(card.revoke()) catch {
+    _ => ()
+  }
+}
+
+///|
+test "panic revoking an installed template card aborts" {
+  fresh_host()
+  let card = wallet_cards().1
   card.install(App({ high_bits: 0, low_bits: 0, })) catch {
     _ => ()
   }
@@ -321,9 +387,23 @@ test "panic revoking an installed card aborts" {
 ///|
 test "panic deriving a scope from a moved parent aborts" {
   fresh_host()
-  let wallet = @permissions.wallet()
-  wallet[0].drop()
-  ignore(@permissions.derive_scope(wallet, @permissions.Bounds::new())) catch {
+  let (first, _) = wallet_cards()
+  first.drop()
+  ignore(@permissions.derive_scope([first], @permissions.Bounds::new())) catch {
+    _ => ()
+  }
+}
+
+///|
+test "panic deriving a scope from a moved template parent aborts" {
+  fresh_host()
+  let (first, second) = wallet_cards()
+  second.drop()
+  ignore(
+    @permissions.derive_scope([first], @permissions.Bounds::new(), template_parents=[
+      second,
+    ]),
+  ) catch {
     _ => ()
   }
 }
@@ -331,7 +411,7 @@ test "panic deriving a scope from a moved parent aborts" {
 ///|
 test "a card lowered into an agent value moves exactly once" {
   fresh_host()
-  let card = @permissions.wallet()[0]
+  let card = wallet_cards().0
   let value = @schema.to_value_as(card)
   guard value is PermissionCard(_) else {
     fail("expected a permission-card schema value, got \{repr(value)}")
@@ -361,8 +441,8 @@ fn forged_tree(index : Int) -> @types.SchemaValueTree {
 ///|
 test "decoding never aliases a held permission or scope card" {
   fresh_host()
-  let wallet = @permissions.wallet()
-  let scope = @permissions.derive_scope(wallet, @permissions.Bounds::new())
+  let (first, second) = wallet_cards()
+  let scope = @permissions.derive_scope([first], @permissions.Bounds::new())
   let wire_alias : @permissions.PermissionCard? = Some(
     @schema.from_wire(forged_tree(11)),
   ) catch {
@@ -382,16 +462,16 @@ test "decoding never aliases a held permission or scope card" {
   assert_true(scope_alias is None)
   // The rejected decodes neither released nor moved the held cards.
   assert_eq(resource_drop_count(PERMISSION_CARD_DROPS), 0)
-  assert_false(wallet[0].is_moved())
-  assert_false(wallet[1].is_moved())
+  assert_false(first.is_moved())
+  assert_false(second.is_moved())
   assert_false(scope.is_moved())
   // A schema value of a card shares the card's take-once holder, so the
   // decoded card is the same card.
   let shared : @permissions.PermissionCard = @schema.from_value_as(
-    @schema.to_value_as(wallet[0]),
+    @schema.to_value_as(first),
   )
   shared.drop()
-  assert_true(wallet[0].is_moved())
+  assert_true(first.is_moved())
   assert_eq(resource_drop_count(PERMISSION_CARD_DROPS), 1)
 }
 
@@ -477,4 +557,163 @@ test "lifespan rejects zero and negative durations" {
     })
     assert_eq(error.kind(), "invalid-pattern")
   }
+}
+
+///|
+test "wallet labels each card with its kind" {
+  fresh_host()
+  lend_permission_scope_card()
+  let wallet = @permissions.wallet()
+  let kinds = wallet.map(fn(card) {
+    match card {
+      Concrete(_) => "concrete"
+      Template(_) => "template"
+      Scope(_) => "scope"
+    }
+  })
+  debug_inspect(kinds, content="[\"concrete\", \"template\", \"scope\"]")
+  guard wallet[2] is Scope(lent) else { fail("expected the lent scope card") }
+  assert_true(lent.expires_at() is Some(_))
+  // The lent scope card works as a scope parent and reports its root.
+  let narrowed = @permissions.derive_scope([], @permissions.Bounds::new(), scope_parents=[
+    lent,
+  ])
+  assert_true(narrowed.parents() == [template(wallet[1]).id()])
+  assert_true(narrowed.parents() == lent.parents())
+  @permissions.drop_all(wallet)
+  assert_eq(resource_drop_count(PERMISSION_CARD_DROPS), 3)
+  assert_true(lent.is_moved())
+}
+
+///|
+test "a scope card reports the expiry of its roots" {
+  fresh_host()
+  let (first, _) = wallet_cards()
+  let expiring = first.derive_child(
+    @permissions.Bounds::new(),
+    lifespan=@permissions.Lifespan::iso8601("PT1H"),
+  )
+  let open_ended = @permissions.derive_scope(
+    [first],
+    @permissions.Bounds::new(),
+  )
+  debug_inspect(open_ended.expires_at(), content="None")
+  let bounded = @permissions.derive_scope(
+    [first, expiring],
+    @permissions.Bounds::new(),
+  )
+  assert_true(bounded.expires_at() == expiring.expires_at())
+  assert_true(bounded.expires_at() is Some(_))
+}
+
+///|
+test "template card schema is a polymorphic capability node" {
+  let graph = @schema.into_schema_graph(
+    (
+      @schema.type_tag() :
+      @schema.TypeTag[@permissions.PolymorphicPermissionCard]),
+  )
+  inspect(graph.defs.length(), content="0")
+  debug_inspect(
+    graph.root.body,
+    content="PermissionCard({ polymorphic: true })",
+  )
+  let decoded : @permissions.PolymorphicPermissionCard? = Some(
+    @schema.from_value_as(@model.SchemaValue::String("card-id")),
+  ) catch {
+    _ => None
+  }
+  guard decoded is None else {
+    fail("a string must not decode into a template card")
+  }
+}
+
+///|
+test "a template card lowered into an agent value moves exactly once" {
+  fresh_host()
+  let card = wallet_cards().1
+  let tree = @model.schema_value_to_wit(@schema.to_value_as(card))
+  debug_inspect(
+    tree.value_nodes,
+    content="[PermissionCardHandle(PermissionCard(12))]",
+  )
+  assert_true(card.is_moved())
+  card.drop()
+  assert_eq(resource_drop_count(PERMISSION_CARD_DROPS), 0)
+  // A received card takes the kind that the decoded type declares.
+  let received : @permissions.PolymorphicPermissionCard = @schema.from_wire(
+    tree,
+  )
+  assert_false(received.is_moved())
+}
+
+///|
+test "decoding never turns a card into the other kind or aliases it" {
+  fresh_host()
+  let (first, second) = wallet_cards()
+  // The raw handle of a held template card does not decode into either kind.
+  let wire_template : @permissions.PolymorphicPermissionCard? = Some(
+    @schema.from_wire(forged_tree(12)),
+  ) catch {
+    _ => None
+  }
+  assert_true(wire_template is None)
+  let wire_concrete : @permissions.PolymorphicPermissionCard? = Some(
+    @schema.from_wire(forged_tree(11)),
+  ) catch {
+    _ => None
+  }
+  assert_true(wire_concrete is None)
+  // A schema value shares the card's holder, and decodes only into the card's
+  // own kind.
+  let as_template : @permissions.PolymorphicPermissionCard? = Some(
+    @schema.from_value_as(@schema.to_value_as(first)),
+  ) catch {
+    _ => None
+  }
+  assert_true(as_template is None)
+  let as_concrete : @permissions.PermissionCard? = Some(
+    @schema.from_value_as(@schema.to_value_as(second)),
+  ) catch {
+    _ => None
+  }
+  assert_true(as_concrete is None)
+  assert_false(first.is_moved())
+  assert_false(second.is_moved())
+  assert_eq(resource_drop_count(PERMISSION_CARD_DROPS), 0)
+  // A value decoded from a wire tree takes the kind of its first decode.
+  let value = @model_host.schema_value_from_wit(forged_tree(78))
+  let received : @permissions.PolymorphicPermissionCard = @schema.from_value_as(
+    value,
+  )
+  let again : @permissions.PermissionCard? = Some(@schema.from_value_as(value)) catch {
+    _ => None
+  }
+  assert_true(again is None)
+  assert_false(received.is_moved())
+}
+
+///|
+test "a card decoded from a wire tree keeps the kind that decoded it" {
+  fresh_host()
+  let template_card : @permissions.PolymorphicPermissionCard = @schema.from_wire(
+    forged_tree(81),
+  )
+  let as_concrete : @permissions.PermissionCard? = Some(
+    @schema.from_value_as(@schema.to_value_as(template_card)),
+  ) catch {
+    _ => None
+  }
+  assert_true(as_concrete is None)
+  let concrete_card : @permissions.PermissionCard = @schema.from_wire(
+    forged_tree(82),
+  )
+  let as_template : @permissions.PolymorphicPermissionCard? = Some(
+    @schema.from_value_as(@schema.to_value_as(concrete_card)),
+  ) catch {
+    _ => None
+  }
+  assert_true(as_template is None)
+  assert_false(template_card.is_moved())
+  assert_false(concrete_card.is_moved())
 }

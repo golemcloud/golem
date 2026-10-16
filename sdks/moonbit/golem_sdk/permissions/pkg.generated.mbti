@@ -12,15 +12,15 @@ import {
 // Values
 pub fn derive_from_wallet(Bounds, lifespan? : Lifespan) -> PermissionCard raise PermissionError
 
-pub fn derive_scope(Array[PermissionCard], Bounds, scope_parents? : Array[ScopeCard]) -> ScopeCard raise PermissionError
+pub fn derive_scope(Array[PermissionCard], Bounds, template_parents? : Array[PolymorphicPermissionCard], scope_parents? : Array[ScopeCard]) -> ScopeCard raise PermissionError
 
-pub fn drop_all(Array[PermissionCard]) -> Unit
+pub fn drop_all(Array[WalletCard]) -> Unit
 
 pub fn list_modules() -> Array[KernelModule]
 
 pub fn validate_grant(PatternGrant) -> Unit raise PermissionError
 
-pub fn wallet() -> Array[PermissionCard]
+pub fn wallet() -> Array[WalletCard]
 
 pub fn wallet_version() -> WalletVersionToken
 
@@ -112,6 +112,24 @@ pub impl @schema.IntoSchema for PermissionCard
 pub impl @schema.IntoWire for PermissionCard
 pub impl @schema.WireSchema for PermissionCard
 
+pub struct PolymorphicPermissionCard {
+  // private fields
+}
+pub fn PolymorphicPermissionCard::derive_child(Self, Bounds, lifespan? : Lifespan) -> PermissionCard raise PermissionError
+pub fn PolymorphicPermissionCard::drop(Self) -> Unit
+pub fn PolymorphicPermissionCard::expires_at(Self) -> Timestamp?
+pub fn PolymorphicPermissionCard::id(Self) -> CardId
+pub fn PolymorphicPermissionCard::inspect(Self) -> CardView raise PermissionError
+pub fn PolymorphicPermissionCard::install(Self, Holder) -> Unit raise PermissionError
+pub fn PolymorphicPermissionCard::is_moved(Self) -> Bool
+pub fn PolymorphicPermissionCard::parents(Self) -> Array[CardId]
+pub fn PolymorphicPermissionCard::revoke(Self) -> UInt raise PermissionError
+pub impl @schema.FromSchema for PolymorphicPermissionCard
+pub impl @schema.FromWire for PolymorphicPermissionCard
+pub impl @schema.IntoSchema for PolymorphicPermissionCard
+pub impl @schema.IntoWire for PolymorphicPermissionCard
+pub impl @schema.WireSchema for PolymorphicPermissionCard
+
 pub struct ScopeCard {
   handle : @permission_card.ScopeCardHandle
 }
@@ -126,6 +144,13 @@ pub(all) struct Timestamp {
   seconds : Int64
   nanoseconds : UInt
 } derive(Compare, Eq, @debug.Debug)
+
+pub enum WalletCard {
+  Concrete(PermissionCard)
+  Template(PolymorphicPermissionCard)
+  Scope(ScopeCard)
+}
+pub fn WalletCard::drop(Self) -> Unit
 
 pub(all) struct WalletVersionToken {
   wallet_id_hash : Bytes

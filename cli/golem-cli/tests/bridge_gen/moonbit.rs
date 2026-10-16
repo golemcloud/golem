@@ -45,8 +45,8 @@ use golem_common::schema::unstructured::{
     unstructured_binary_schema_type, unstructured_text_schema_type,
 };
 use golem_common::schema::{
-    AgentTypeSchema, MetadataEnvelope, ResultSpec, Role, SchemaGraph, SchemaType, SchemaTypeDef,
-    TypeId,
+    AgentTypeSchema, MetadataEnvelope, PermissionCardSpec, ResultSpec, Role, SchemaGraph,
+    SchemaType, SchemaTypeDef, TypeId,
 };
 use tempfile::TempDir;
 use test_r::{test, test_dep};
@@ -1128,6 +1128,89 @@ fn guest_mode_attaches_scope_cards_to_awaited_calls_only() {
 }
 
 #[test]
+fn guest_mode_maps_polymorphic_permission_cards_to_template_cards() {
+    let template = || SchemaType::permission_card(PermissionCardSpec { polymorphic: true });
+    let concrete = || SchemaType::permission_card(PermissionCardSpec { polymorphic: false });
+    let agent_type = agent(
+        "TemplateHolder",
+        "moonbit",
+        vec![],
+        vec![
+            method(
+                "exchange",
+                vec![field("template", template()), field("card", concrete())],
+                Some(template()),
+            ),
+            method(
+                "templates",
+                vec![field("cards", SchemaType::list(template()))],
+                Some(SchemaType::option(concrete())),
+            ),
+        ],
+        vec![],
+        AgentMode::Durable,
+    );
+    let guest = generate_without_check(agent_type, MoonBitBridgeMode::GuestWasmRpc);
+    let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
+
+    assert!(source.contains(
+        "pub async fn TemplateHolderClient::exchange(self : TemplateHolderClient, template : @permissions.PolymorphicPermissionCard, card : @permissions.PermissionCard, scope_card? : @permissions.ScopeCard) -> @permissions.PolymorphicPermissionCard {"
+    ));
+    assert!(source.contains(
+        "pub async fn TemplateHolderClient::templates(self : TemplateHolderClient, cards : Array[@permissions.PolymorphicPermissionCard], scope_card? : @permissions.ScopeCard) -> @permissions.PermissionCard? {"
+    ));
+
+    // The typed client accepts each card only where its kind is declared.
+    std::fs::create_dir(guest.path().join("consumer")).unwrap();
+    let consumer_package = "import {\n  \"template-holder-guest-client/client\" @client,\n  \"golemcloud/golem_sdk/permissions\",\n}\n";
+    std::fs::write(guest.path().join("consumer/moon.pkg"), consumer_package).unwrap();
+    std::fs::write(
+        guest.path().join("consumer/consumer.mbt"),
+        r#"pub async fn exchange(
+  template : @permissions.PolymorphicPermissionCard,
+  card : @permissions.PermissionCard,
+) -> @permissions.PermissionCard? {
+  let client = @client.TemplateHolderClient::get()
+  defer client.drop()
+  let returned = client.exchange(template, card)
+  client.templates([returned])
+}
+"#,
+    )
+    .unwrap();
+    moon_check_wasm(guest.path());
+
+    std::fs::write(
+        guest.path().join("consumer/consumer.mbt"),
+        r#"pub async fn swap(
+  template : @permissions.PolymorphicPermissionCard,
+  card : @permissions.PermissionCard,
+) -> Unit {
+  ignore(@client.TemplateHolderClient::get().exchange(card, template))
+}
+"#,
+    )
+    .unwrap();
+    let output = std::process::Command::new("moon")
+        .arg("-C")
+        .arg(guest.path())
+        .arg("check")
+        .arg("--target")
+        .arg("wasm")
+        .output()
+        .expect("failed to run moon; is it installed?");
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !output.status.success() && diagnostics.contains("Expr Type Mismatch"),
+        "swapped card kinds unexpectedly compiled:\n{diagnostics}"
+    );
+}
+
+#[test]
 fn guest_mode_consumers_cannot_forge_or_serialize_permission_cards() {
     let agent_type = agent(
         "CardHolder",
@@ -1243,6 +1326,58 @@ fn guest_mode_consumers_cannot_forge_or_serialize_permission_cards() {
 }
 "#,
         "package golemcloud/golem_sdk/internal/permission_card is not imported",
+    );
+    // A template card is built only by the SDK, has no JSON codec, and is not
+    // a concrete card or a scope card.
+    assert_rejected(
+        permissions,
+        r#"pub fn forge(card : @permissions.PermissionCard) -> @permissions.PolymorphicPermissionCard {
+  { handle: card.handle }
+}
+"#,
+        "Cannot create values of the read-only type: @golemcloud/golem_sdk/permissions.PolymorphicPermissionCard",
+    );
+    assert_rejected(
+        permissions,
+        r#"pub fn forge() -> @permissions.PolymorphicPermissionCard {
+  @permissions.PolymorphicPermissionCard::from_raw(@types.PermissionCard::PermissionCard(7))
+}
+"#,
+        "has no method from_raw",
+    );
+    assert_rejected(
+        permissions,
+        r#"pub fn serialize(card : @permissions.PolymorphicPermissionCard) -> Json {
+  card.to_json()
+}
+"#,
+        "has no method to_json",
+    );
+    assert_rejected(
+        permissions,
+        r#"pub fn convert(card : @permissions.PolymorphicPermissionCard) -> @permissions.PermissionCard {
+  card
+}
+"#,
+        "Expr Type Mismatch",
+    );
+    assert_rejected(
+        permissions,
+        r#"pub fn scope(card : @permissions.PolymorphicPermissionCard) -> @permissions.ScopeCard raise {
+  @permissions.derive_scope([], @permissions.Bounds::new(), scope_parents=[card])
+}
+"#,
+        "Expr Type Mismatch",
+    );
+    // A wallet entry is built only by the SDK, so user code cannot label a
+    // card.
+    assert_rejected(
+        permissions,
+        r#"pub fn label(card : @permissions.PolymorphicPermissionCard) -> @permissions.WalletCard {
+  Template(card)
+}
+"#,
+        "Cannot create values of the read-only type: Template",
     );
     // A scope card is a different type: no struct literal builds one, it has
     // no consuming operations and no schema support, and it is not a

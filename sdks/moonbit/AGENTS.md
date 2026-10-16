@@ -466,14 +466,24 @@ each is registered in the single generated `fn init {}`.
 
 ### Permission cards (`permissions`)
 
-The `permissions` package is the typed API over `golem:permissions@0.1.0`. `PermissionCard` wraps
-an owned persistent card in `@card.GuestPermissionCardHandle`, and `ScopeCard` wraps the handle of
-an invocation-local scope card in `@card.ScopeCardHandle`. Both holders live in the internal package
+The `permissions` package is the typed API over `golem:permissions@0.1.0`. `PermissionCard`
+(concrete) and `PolymorphicPermissionCard` (template) wrap an owned persistent card in
+`@card.GuestPermissionCardHandle`, and `ScopeCard` wraps the handle of an invocation-local scope
+card in `@card.ScopeCardHandle`. Both holders live in the internal package
 `internal/permission_card`. MoonBit lets only packages of the `golemcloud/golem_sdk` module import
 it, and calling a method of a type needs an import of the type's package. So code outside the SDK
 can keep a holder that it receives (`SchemaValue::PermissionCard`, `ScopeCard::handle`), but cannot
 create one, take or borrow its raw handle, or call any other operation on it.
 
+- `wallet()` returns the closed enum `WalletCard` (`Concrete`, `Template`, `Scope`) from the WIT
+  `wallet-card` variant. The enum is `pub`, so user code can match it but cannot build one. A
+  `GuestPermissionCardHandle` records the kind of the typed card that shares it (`claim_kind`):
+  host results and `FromWire` claim it at once, a holder lifted by `schema_value_from_wit` is
+  claimed by its first typed decode, and `FromSchema` rejects a holder of the other kind. So a
+  schema value never turns a held card into the other kind. A failed compound decode can leave the
+  claim on the holder. A card encoded into a wire tree leaves its holder, so decoding that tree
+  chooses the kind again, as for a received card. Both card types share the
+  `SchemaValue::PermissionCard` value and wire node; only the schema's `polymorphic` flag differs.
 - `revoke` and `install` take the handle out of the holder before the host call, because the host
   drops it even on failure. Using a moved card aborts.
 - A failed invocation-input encode rolls back without taking permission cards: the wire path uses
@@ -484,10 +494,12 @@ create one, take or borrow its raw handle, or call any other operation on it.
   payload that fails to encode. Every other release, such as `@schema.release_wire` and
   `SchemaValue::release_resources`, drops cards. The sync `schema_value_to_wit` rejects a native
   stream before it moves any capability.
-- `ScopeCard` is a separate type. `derive_scope` returns it; it has `id`, `parents` (root card ids), `expires_at`,
-  `inspect`, `drop` and `is_moved`, can be a `scope_parents` entry of `derive_scope`, and has no
+- `ScopeCard` is a separate type. `derive_scope` returns it, and `wallet()` returns the scope card
+  lent to the current invocation as `WalletCard::Scope`. It has `id`, `parents` (root card ids),
+  `expires_at` (the earliest root expiry), `inspect`, `drop` and `is_moved`, can be a
+  `scope_parents` entry of `derive_scope`, and has no
   revoke, install, persistent derive, schema or wire support. A scope card is valid only during the
-  invocation that derived it; after it the host retires the handle, so attaching it is denied and
+  invocation that derived or received it; after it the host retires the handle, so attaching it is denied and
   deriving from it is not permitted, while dropping it stays safe.
 - `PermissionError` mirrors the WIT `permission-error`. `permissions/moon.pkg` turns the
   `partial_match` warning into an error, so a new WIT case breaks the build at the exhaustive

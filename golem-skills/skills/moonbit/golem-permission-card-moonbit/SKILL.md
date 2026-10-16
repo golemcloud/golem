@@ -19,12 +19,19 @@ import {
 
 ## Cards and plain data
 
-- `@permissions.PermissionCard` — a persistent card held by this agent. It has no public
-  constructor and no JSON codec. You get cards from the host (`@permissions.wallet()` or a
-  derivation) and from agent or tool values that carry a card.
-- `@permissions.ScopeCard` — an invocation-local scope card from `derive_scope`. It is a separate
-  type: only scope cards attach to RPC calls, and a scope card cannot be revoked, installed, used
-  as the parent of a persistent card, or passed as an agent or tool value.
+- `@permissions.PermissionCard` — a concrete persistent card held by this agent: every grant
+  names concrete owners and resources. It has no public constructor and no JSON codec. You get
+  cards from the host (`@permissions.wallet()` or a derivation) and from agent or tool values that
+  carry a card.
+- `@permissions.PolymorphicPermissionCard` — a template persistent card. Its grants may contain
+  slot variables (`?agent`, `?env`, ...), which the host resolves for each holder. It has the same
+  operations and rules as `PermissionCard`; its `derive_child` returns a concrete `PermissionCard`.
+- `@permissions.ScopeCard` — an invocation-local scope card from `derive_scope`, or lent to the
+  current invocation by its caller. Only scope cards attach to RPC calls, and a scope card cannot
+  be revoked, installed, used as the parent of a persistent card, or passed as an agent or tool
+  value.
+- `@permissions.WalletCard` — one entry of `wallet()`: `Concrete(PermissionCard)`,
+  `Template(PolymorphicPermissionCard)` or `Scope(ScopeCard)`. The host labels each card.
 - `PatternGrant { class, owner, recipient, verb, resource_id }`, `CardView` (the four grant lists),
   `Bounds`, `Lifespan`, `Timestamp`, `WalletVersionToken`, `KernelModule` and `Holder` are plain
   data. Nothing turns them into a card; derivation inputs are requests that the host validates.
@@ -32,20 +39,31 @@ import {
   `other.parents()`. It has no constructor, no UUID or string accessor, and no parser. Printing,
   debugging and JSON output show `CardId(<redacted>)`.
 
+The three card types are distinct. No operation turns one into another, a schema value of a held
+card decodes only into the card's own type, and user code cannot build a `WalletCard`. A card that
+moves into a wire tree is no longer held, so the type that decodes the tree decides its kind, as for
+a card that an agent receives. The host keeps the real kind of every card.
+
 ## Operations
 
 | Kind | Operation |
 |------|-----------|
 | Borrow the card | `card.id()`, `card.parents()`, `card.expires_at()`, `card.inspect()`, `card.derive_child(bounds, lifespan?)` |
 | Consume the card | `card.revoke() -> UInt`, `card.install(holder)`, `card.drop()` |
-| Scope card | `scope.id()`, `scope.parents()` (root card ids), `scope.expires_at()`, `scope.inspect()`, `scope.drop()`, `scope.is_moved()` |
-| Module level | `wallet()`, `wallet_version()`, `derive_from_wallet(bounds, lifespan?)`, `derive_scope(parents, bounds, scope_parents?)`, `list_modules()`, `validate_grant(grant)`, `drop_all(cards)` |
+| Scope card | `scope.id()`, `scope.parents()` (root card ids), `scope.expires_at()` (earliest root expiry), `scope.inspect()`, `scope.drop()`, `scope.is_moved()` |
+| Module level | `wallet() -> Array[WalletCard]`, `wallet_version()`, `derive_from_wallet(bounds, lifespan?)`, `derive_scope(parents, bounds, template_parents?, scope_parents?)`, `list_modules()`, `validate_grant(grant)`, `drop_all(wallet_cards)` |
+
+The card rows apply to both `PermissionCard` and `PolymorphicPermissionCard`.
 
 `derive` is a MoonBit keyword, so the card method is `derive_child`.
 
 Requested grants must be concrete. A grant with a slot variable such as `?agent` or `?env` in its
-owner, for example one that `inspect` returns from a template card, raises `InvalidPattern`;
-deriving a template card is not supported yet.
+owner, for example one that `inspect` returns from a template card, raises `InvalidPattern`, so
+you cannot derive a new template card. A template card can be a parent: the host resolves its slot
+variables for this agent before it checks the request. The host accepts a template parent of
+`derive_child`, and any persistent parent of `derive_scope`, only when the card is in this agent's
+wallet; a card that you derived, or received as an agent or tool value, fails there with
+`NotPermitted`.
 
 Expected failures raise `@permissions.PermissionError` (one case per WIT `permission-error` case,
 with `kind()` and `message()`). `CardRevoked` reports a card that the host knows to be revoked; a
@@ -90,12 +108,25 @@ pub fn MyAgent::delegate(self : Self, target : @types.AgentId) -> Result[UInt, S
 - Passing a card as an agent or tool argument or return value also moves it. When the value fails
   to encode, the host never takes the card and you keep it.
 - Using a moved card aborts the invocation.
-- `wallet()` returns new owned handles. Release the ones you do not keep with `card.drop()` or
-  `@permissions.drop_all(cards)`. Dropping releases the handle; it does not revoke the card.
+- `wallet()` returns new owned handles. Release the ones you do not keep with `entry.drop()`,
+  `card.drop()` or `@permissions.drop_all(wallet_cards)`. Dropping releases the handle; it does not
+  revoke the card.
 - In a callee that holds `card:inspect`, `wallet()` also returns the scope card that the caller
-  lent to the current invocation, typed as a `PermissionCard`. The host rejects `revoke`, `install` and
-  `derive_child` on it, and a rejected `revoke` or `install` still consumes the handle. Sending it
-  as an agent or tool value fails, and the host retires it when the invocation ends.
+  lent to the current invocation, as a `Scope` entry. Use it like any `ScopeCard`; the host
+  retires it when the invocation ends.
+
+```moonbit
+let cards = @permissions.wallet()
+defer @permissions.drop_all(cards)
+let template_ids = []
+for card in cards {
+  match card {
+    Concrete(_) => ()
+    Template(template) => template_ids.push(template.id())
+    Scope(scope) => ignore(scope.expires_at())
+  }
+}
+```
 
 ### Lifespans
 
@@ -108,17 +139,21 @@ duration. A child of a card that expires needs a lifespan that ends no later tha
 
 `install` currently accepts only `Holder::Agent(@types.AgentId)`. `Account` and `App` targets fail
 with `NotPermitted`. A card whose grants do not cover the recipient fails with
-`InstallRecipientMismatch`.
+`InstallRecipientMismatch`. Installing a template card installs a concrete card: the host resolves
+the slot variables for the target.
 
 ## Scope cards on RPC calls
 
-`derive_scope(parents, bounds, scope_parents?)` derives an invocation-local `ScopeCard` that the
-host never persists. `parents` are persistent cards and `scope_parents` are scope cards of the
-current invocation. Attach the scope card to an awaited RPC call to lend its authority to the
-callee for that call only. Attaching borrows the scope card; it is not consumed.
+`derive_scope(parents, bounds, template_parents?, scope_parents?)` derives an invocation-local
+`ScopeCard` that the host never persists. `parents` are concrete persistent cards,
+`template_parents` are template cards and `scope_parents` are scope cards of the current
+invocation. `scope.expires_at()` is the earliest expiry of the root cards, or `None` when no root
+card expires; the scope card stops authorizing then. Attach the scope card to an awaited RPC call
+to lend its authority to the callee for that call only. Attaching borrows the scope card; it is
+not consumed.
 
-A scope card is valid only during the invocation that derived it; after it the host retires the
-handle. If you keep one, or a client whose default scope card is one, for a later invocation, the
+A scope card is valid only during the invocation that derived or received it; after it the host
+retires the handle. If you keep one, or a client whose default scope card is one, for a later invocation, the
 host denies awaited calls that attach it and discards their whole input, argument cards included.
 Typed clients (`@rpc` and generated) then abort with `RPC denied`; reflection clients raise
 `Remote(Denied)`. `derive_scope` with a retired scope card as a parent fails with `NotPermitted`.
@@ -144,9 +179,12 @@ methods never attach one. The same `scope_card?` option and `set_default_scope_c
 
 ## Cards in agent and tool signatures
 
-`PermissionCard` implements the schema traits, so it can be a method parameter, a return value, or
-a field of a `#derive.golem_schema` type. Its schema is a concrete (non-polymorphic)
-`permission-card` node.
+`PermissionCard` and `PolymorphicPermissionCard` implement the schema traits, so they can be a
+method parameter, a return value, or a field of a `#derive.golem_schema` type. A `PermissionCard`
+declares `permission-card { polymorphic: false }` and a `PolymorphicPermissionCard` declares
+`permission-card { polymorphic: true }`. The host does not check the kind of a card in a value:
+a received card becomes the type that the parameter or return value declares. Generated clients
+map `polymorphic: true` to `PolymorphicPermissionCard`.
 
 ## Raw bindings
 
@@ -154,8 +192,9 @@ The SDK keeps its card holders in an internal package that user code cannot impo
 cannot build a holder or read its raw handle. The generated raw bindings under
 `golemcloud/golem_sdk/interface/golem/...` remain importable, and their `@types.PermissionCard`
 is a plain wrapper around a resource index. Code can put such an index into a raw wire tree and
-decode it with `@schema.from_wire` or `schema_value_from_wit`. Decoding rejects an index that a
-`PermissionCard` or `ScopeCard` already holds, so it cannot alias a held card. An index that no
+decode it with `@schema.from_wire` or `schema_value_from_wit`. Decoding rejects an index that any
+card already holds, so it cannot alias a held card, and a schema value of a held card decodes only
+into that card's own type. An index that no
 card holds decodes into a card. This gains no authority: the host traps on an unknown handle, and
 a known one carries only authority that the agent already has. Do not use the raw bindings for
 cards.

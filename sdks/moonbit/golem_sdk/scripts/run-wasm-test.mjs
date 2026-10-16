@@ -47,6 +47,7 @@ const permissionHost = {
   lastDeriveParent: -1,
   lastScopeParentCount: -1,
   lastLifespan: null,
+  lentScope: false,
 }
 
 function resetPermissionHost() {
@@ -62,6 +63,7 @@ function resetPermissionHost() {
   permissionHost.lastDeriveParent = -1
   permissionHost.lastScopeParentCount = -1
   permissionHost.lastLifespan = null
+  permissionHost.lentScope = false
 }
 
 function permissionHostAllocate(size) {
@@ -230,7 +232,12 @@ const permissionHostImports = {
       const roots = [
         ...new Set(parents.flatMap(parent => permissionHost.scopeRoots.get(parent) ?? [parent])),
       ].sort((left, right) => left - right)
-      const handle = permissionHostNewCard(roots, false)
+      // A scope card expires when one of its roots expires. The fake host
+      // returns one fixed timestamp for every expiring card.
+      const handle = permissionHostNewCard(
+        roots,
+        roots.some(root => permissionHost.expiring.has(root)),
+      )
       permissionHost.scopeRoots.set(handle, roots)
       permissionHostOkCard(retPtr, handle)
     },
@@ -251,9 +258,13 @@ const permissionHostImports = {
   "golem:permissions/wallet@0.1.0": {
     "self-wallet"(retPtr) {
       const memory = new DataView(instance.exports.memory.buffer)
-      permissionHostWriteList(memory, retPtr, 4, [11, 12], (at, handle) =>
-        memory.setInt32(at, handle, true),
-      )
+      // `wallet-card` cases: 0 concrete, 1 template, 2 scope.
+      const entries = [[0, 11], [1, 12]]
+      if (permissionHost.lentScope) entries.push([2, 13])
+      permissionHostWriteList(memory, retPtr, 8, entries, (at, [tag, handle]) => {
+        memory.setUint8(at, tag)
+        memory.setInt32(at + 4, handle, true)
+      })
     },
     "self-version"(retPtr) {
       const memory = new DataView(instance.exports.memory.buffer)
@@ -420,6 +431,14 @@ const importObject = {
     },
     "reset-permission-host"() {
       resetPermissionHost()
+    },
+    "lend-permission-scope-card"() {
+      // The lent scope card 13 has the root 12, which expires.
+      permissionHost.lentScope = true
+      permissionHost.parents.set(13, [12])
+      permissionHost.scopeRoots.set(13, [12])
+      permissionHost.expiring.add(12)
+      permissionHost.expiring.add(13)
     },
     "push-permission-host-buffer"(ptr, size) {
       permissionHost.buffers.push({ ptr, size })
