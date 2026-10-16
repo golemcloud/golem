@@ -44,6 +44,22 @@ tool error remains nested: `HostResult<Result<T, MyToolError>>`. The macro maps 
 declared remote tool error, while failure of the outer `HostResult` becomes an executor failure.
 Do not turn infrastructure errors or host panics into declared tool errors.
 
+## Native streams borrow the handler context
+
+`NativeToolInvocation<Ctx>` carries `NativeToolStdin<Ctx>` and `NativeToolOutput<Ctx>` attachments.
+Pass the handler's context to each operation: `stdin.read(ctx).await`,
+`stdout.write(ctx, bytes).await`, and `stdout.finish(ctx).await`. Each boxed `Send` future borrows
+the context until it completes, just like a native host import. Operations within one invocation
+are sequential; separate invocations can run concurrently with their own contexts. Do not clone
+the context or substitute a unit context when forwarding an invocation.
+
+Tools that work with any host context can declare a generic trait such as `trait Tool<Ctx: Send>`
+and implement it on a generic type. The implementation type must carry its generic parameters,
+for example `struct ToolImpl<Ctx>(std::marker::PhantomData<fn(Ctx)>)`, with
+`impl<Ctx: Send + 'static> Tool<Ctx> for ToolImpl<Ctx>`. Generic contexts and stream attachments
+do not appear in the tool metadata. Serialized input and result types must remain concrete.
+Generic subtree declarations use the same context, for example `#[command(subtree = Child::<Ctx>)]`.
+
 ## Install at startup
 
 Create one `NativeToolDefinition` from the generated invoker and use that same definition in both

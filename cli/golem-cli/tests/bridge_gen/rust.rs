@@ -1402,6 +1402,8 @@ fn guest_generation_emits_wasm_rpc_cargo_dependencies_and_api_shape() {
 
     let output = std::process::Command::new("cargo")
         .arg("check")
+        .arg("--target-dir")
+        .arg(crate::workspace_path().join("target/shared_bridge_tests"))
         .current_dir(&target_path)
         .output()
         .unwrap();
@@ -1437,6 +1439,8 @@ fn guest_generation_compiles_with_non_copy_constructor_parameters() {
 
     let output = std::process::Command::new("cargo")
         .arg("check")
+        .arg("--target-dir")
+        .arg(crate::workspace_path().join("target/shared_bridge_tests"))
         .current_dir(&target_path)
         .output()
         .unwrap();
@@ -1472,6 +1476,8 @@ fn guest_generation_compiles_when_constructor_parameter_matches_internal_name() 
 
     let output = std::process::Command::new("cargo")
         .arg("check")
+        .arg("--target-dir")
+        .arg(crate::workspace_path().join("target/shared_bridge_tests"))
         .current_dir(&target_path)
         .output()
         .unwrap();
@@ -1503,6 +1509,8 @@ fn guest_generation_compiles_when_agent_type_name_matches_guest_client_error() {
 
     let output = std::process::Command::new("cargo")
         .arg("check")
+        .arg("--target-dir")
+        .arg(crate::workspace_path().join("target/shared_bridge_tests"))
         .current_dir(&target_path)
         .output()
         .unwrap();
@@ -1535,6 +1543,8 @@ fn guest_generation_compiles_when_agent_type_name_matches_guest_runtime_module()
 
     let output = std::process::Command::new("cargo")
         .arg("check")
+        .arg("--target-dir")
+        .arg(crate::workspace_path().join("target/shared_bridge_tests"))
         .current_dir(&target_path)
         .output()
         .unwrap();
@@ -1577,6 +1587,8 @@ fn guest_generation_compiles_when_method_parameter_is_named_when() {
 
     let output = std::process::Command::new("cargo")
         .arg("check")
+        .arg("--target-dir")
+        .arg(crate::workspace_path().join("target/shared_bridge_tests"))
         .current_dir(&target_path)
         .output()
         .unwrap();
@@ -1616,6 +1628,8 @@ fn guest_generation_compiles_when_method_name_matches_phantom_id_helper() {
 
     let output = std::process::Command::new("cargo")
         .arg("check")
+        .arg("--target-dir")
+        .arg(crate::workspace_path().join("target/shared_bridge_tests"))
         .current_dir(&target_path)
         .output()
         .unwrap();
@@ -1655,6 +1669,8 @@ fn guest_generation_compiles_when_method_name_matches_removed_agent_id_field() {
 
     let output = std::process::Command::new("cargo")
         .arg("check")
+        .arg("--target-dir")
+        .arg(crate::workspace_path().join("target/shared_bridge_tests"))
         .current_dir(&target_path)
         .output()
         .unwrap();
@@ -1695,6 +1711,8 @@ fn guest_generation_compiles_when_method_name_matches_guest_get_helper() {
 
     let output = std::process::Command::new("cargo")
         .arg("check")
+        .arg("--target-dir")
+        .arg(crate::workspace_path().join("target/shared_bridge_tests"))
         .current_dir(&target_path)
         .output()
         .unwrap();
@@ -1737,6 +1755,8 @@ fn guest_generation_compiles_when_get_helper_deconflicted_name_matches_user_meth
 
     let output = std::process::Command::new("cargo")
         .arg("check")
+        .arg("--target-dir")
+        .arg(crate::workspace_path().join("target/shared_bridge_tests"))
         .current_dir(&target_path)
         .output()
         .unwrap();
@@ -1778,6 +1798,8 @@ fn guest_generation_compiles_when_method_name_matches_trigger_wrapper_for_anothe
 
     let output = std::process::Command::new("cargo")
         .arg("check")
+        .arg("--target-dir")
+        .arg(crate::workspace_path().join("target/shared_bridge_tests"))
         .current_dir(&target_path)
         .output()
         .unwrap();
@@ -1820,6 +1842,8 @@ fn guest_generation_compiles_when_reserved_trigger_wrapper_suffix_matches_anothe
 
     let output = std::process::Command::new("cargo")
         .arg("check")
+        .arg("--target-dir")
+        .arg(crate::workspace_path().join("target/shared_bridge_tests"))
         .current_dir(&target_path)
         .output()
         .unwrap();
@@ -1862,6 +1886,8 @@ fn guest_generation_compiles_when_rust_method_name_matches_reserved_trigger_wrap
 
     let output = std::process::Command::new("cargo")
         .arg("check")
+        .arg("--target-dir")
+        .arg(crate::workspace_path().join("target/shared_bridge_tests"))
         .current_dir(&target_path)
         .output()
         .unwrap();
@@ -1902,6 +1928,8 @@ fn guest_generation_compiles_when_constructor_parameter_matches_config_parameter
 
     let output = std::process::Command::new("cargo")
         .arg("check")
+        .arg("--target-dir")
+        .arg(crate::workspace_path().join("target/shared_bridge_tests"))
         .current_dir(&target_path)
         .output()
         .unwrap();
@@ -1965,6 +1993,8 @@ fn guest_generation_emits_self_contained_typed_config_schema_values() {
 
     let output = std::process::Command::new("cargo")
         .arg("check")
+        .arg("--target-dir")
+        .arg(crate::workspace_path().join("target/shared_bridge_tests"))
         .current_dir(&target_path)
         .output()
         .unwrap();
@@ -2005,6 +2035,8 @@ fn guest_generation_compiles_when_constructor_parameter_is_named_agent_config() 
 
     let output = std::process::Command::new("cargo")
         .arg("check")
+        .arg("--target-dir")
+        .arg(crate::workspace_path().join("target/shared_bridge_tests"))
         .current_dir(&target_path)
         .output()
         .unwrap();
@@ -2041,6 +2073,8 @@ fn guest_generation_compiles_when_rust_constructor_parameter_matches_reserved_ph
 
     let output = std::process::Command::new("cargo")
         .arg("check")
+        .arg("--target-dir")
+        .arg(crate::workspace_path().join("target/shared_bridge_tests"))
         .current_dir(&target_path)
         .output()
         .unwrap();
@@ -2083,6 +2117,8 @@ fn guest_generation_compiles_when_method_parameter_names_sanitize_to_same_ident(
 
     let output = std::process::Command::new("cargo")
         .arg("check")
+        .arg("--target-dir")
+        .arg(crate::workspace_path().join("target/shared_bridge_tests"))
         .current_dir(&target_path)
         .output()
         .unwrap();

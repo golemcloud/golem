@@ -18,6 +18,8 @@ test_r::enable!();
 pub use uuid::Uuid;
 pub use wasip3;
 
+pub mod http;
+
 #[doc(hidden)]
 #[cfg(feature = "export_golem_agentic")]
 pub fn __link_golem_component_exports() {

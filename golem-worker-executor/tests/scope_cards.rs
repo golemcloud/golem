@@ -1596,6 +1596,139 @@ async fn accessor_boundary_preserves_install_before_revoke_order(
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
+async fn runtime_card_audit_recovers_after_unrelated_committed_hint(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend(scope_card_initial_permissions());
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", "audit-recovery-after-hint");
+    configure_scope_card_root(&authority, &component, &caller)?;
+    let worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let release = executor
+        .invoke_and_await_agent(&component, &caller, "create_release_promise", data_value!())
+        .await?
+        .into_typed::<PromiseId>()?;
+    let key = IdempotencyKey::fresh();
+    let mut gate = executor.gate_next_call_end(&worker, true).await;
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &caller,
+            &key,
+            "derive_before_promise",
+            data_value!(release.clone()),
+        )
+        .await?;
+    let start = loop {
+        tokio::time::timeout(Duration::from_secs(10), gate.entered()).await?;
+        let start = gate.start_index();
+        let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        if entries.iter().any(|entry| {
+            entry.oplog_index == start
+                && matches!(&entry.entry, PublicOplogEntry::Start(params)
+                    if params.function_name.ends_with("::persist-derived-card"))
+        }) {
+            break start;
+        }
+        let next = executor.gate_next_call_end(&worker, true).await;
+        drop(gate);
+        gate = next;
+    };
+    let queued = IdempotencyKey::fresh();
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &caller,
+            &queued,
+            "wallet_card_count",
+            data_value!(),
+        )
+        .await?;
+    let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let end = entries
+        .iter()
+        .find(|entry| matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == start))
+        .expect("the gated creation End is committed")
+        .oplog_index;
+    assert!(entries.iter().any(|entry| entry.oplog_index > end
+        && matches!(&entry.entry, PublicOplogEntry::PendingAgentInvocation(_))));
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| matches!(&entry.entry, PublicOplogEntry::CardDerived(_)))
+    );
+    assert_eq!(authority.create_card_count.load(Ordering::SeqCst), 1);
+    gate.abort();
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(gate);
+    drop(executor);
+
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    executor.complete_promise(&release, vec![1]).await?;
+    executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &key,
+            "derive_before_promise",
+            data_value!(release),
+        )
+        .await?
+        .into_typed::<SchemaCardId>()?;
+    executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &queued,
+            "wallet_card_count",
+            data_value!(),
+        )
+        .await?;
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &caller, "wallet_card_count", data_value!())
+        .await?;
+    let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(authority.create_card_count.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(&entry.entry,
+        PublicOplogEntry::End(params) if params.start_index == start))
+            .count(),
+        1
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::CardDerived(_)))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
 async fn replayed_wallet_authorization_uses_pinned_cards_until_live_transition(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

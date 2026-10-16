@@ -237,8 +237,11 @@ async fn remote_release_bridge_automatically_reconciles_its_environment_grant(
                     tool_name.clone(),
                     publisher_tool_config(),
                 )]),
-                tool_middlewares: Vec::new(),
-                tool_middleware_provision_configs: BTreeMap::new(),
+                tool_middlewares: vec![remote_release_middleware("1.2.0")],
+                tool_middleware_provision_configs: BTreeMap::from([(
+                    ToolMiddlewareName::try_from("audit").unwrap(),
+                    publisher_tool_config().provision,
+                )]),
             },
             File::open(&component_wasm).await?,
             None::<File>,
@@ -253,6 +256,9 @@ async fn remote_release_bridge_automatically_reconciles_its_environment_grant(
     publisher_hash_input
         .published_tools
         .insert(tool_name.to_string());
+    publisher_hash_input
+        .published_tool_middlewares
+        .insert("audit".into());
     publisher
         .client
         .deploy_environment(
@@ -267,7 +273,7 @@ async fn remote_release_bridge_automatically_reconciles_its_environment_grant(
                 publish_tools: vec![tool_name.clone()],
                 remote_tools: Vec::new(),
                 mcp_imports: Vec::new(),
-                publish_tool_middlewares: Vec::new(),
+                publish_tool_middlewares: vec![ToolMiddlewareName::try_from("audit").unwrap()],
                 remote_tool_middlewares: Vec::new(),
                 universal_tool_middlewares: Vec::new(),
                 environment_tool_middleware_bindings: BTreeMap::new(),
@@ -297,6 +303,12 @@ tools:
       account: {publisher_account}
       name: search
       version: "1.2.0"
+  middleware:
+    audit:
+      release:
+        account: {publisher_account}
+        name: audit
+        version: "1.2.0"
 
 environments:
   {environment}:
@@ -306,6 +318,9 @@ environments:
       allowInsecure: true
       auth:
         staticToken: {token}
+    tools:
+      search:
+        middleware: [audit]
 
 bridge:
   rust:
@@ -389,6 +404,14 @@ bridge:
     let grant = &grants[0];
     assert!(grant.grant.automatic);
     assert_eq!(grant.release.id, release.id);
+    let middleware_grants = consumer
+        .client
+        .list_environment_tool_middleware_grants(&consumer_environment.id.0)
+        .await?
+        .values;
+    assert_eq!(middleware_grants.len(), 1);
+    assert!(middleware_grants[0].grant.automatic);
+    assert_eq!(middleware_grants[0].release.name.as_str(), "audit");
     assert!(
         ctx.cwd_path_join("generated/search-tool-guest-client/Cargo.toml")
             .is_file()

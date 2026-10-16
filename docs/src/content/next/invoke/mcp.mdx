@@ -265,7 +265,8 @@ Declare imports in order for each environment:
 mcp:
   imports:
     local:
-      - url: https://tools.example.com/mcp
+      - name: catalog
+        url: https://tools.example.com/mcp
         prefix: catalog
         include: ["search*"]
 ```
@@ -340,14 +341,29 @@ OAuth-protected imports need consent before generating typed clients. The enviro
 and security scheme must already exist, but the import need not be deployed:
 
 ```shell
-golem api mcp-import authorize 0 --manifest
+golem api mcp-import authorize catalog --manifest
 # Open the authorization URL, then copy the full callback URL.
-golem api mcp-import complete 0 --manifest '<callback-url>'
-golem api mcp-import status 0 --manifest
+golem api mcp-import complete catalog --manifest '<callback-url>'
+golem api mcp-import status catalog --manifest
 ```
 
-The index is zero-based in the selected environment's import list. Keep the import
-declaration and its rendered environment variables unchanged between authorization
+The optional `name` is CLI metadata and must match `[a-z][a-z0-9_-]*`, unique within
+the environment. Without a name, use the exact resolved full URL as the selector.
+If several imports share a URL, add distinct names and select one. Names do not
+change tool precedence, reach the server, or isolate OAuth grants.
+URL selection ignores declarations whose URLs cannot be rendered when exactly
+one successfully rendered URL matches. If none matches, the CLI reports which
+declarations could not be rendered.
+
+Command output uses the selected declaration's name, even when selected by URL.
+For unnamed imports, structured output contains `"import": null` and human output
+uses "Unnamed MCP import". The CLI does not echo the import URL because it can
+contain credentials. For unnamed OAuth imports, replace `'<import-url>'` in the
+printed completion command with the original exact URL. Keep the printed
+`--revision` or `--manifest` option.
+
+These commands do not add imports: declaring an OAuth-protected upstream does not
+authorize it. Keep the import configuration and its rendered environment variables unchanged between authorization
 and completion: consent is bound to that exact target. The CLI does not start a
 callback listener. These operations require permission to update the security
 scheme. Golem stores the grant under the environment owner's account; the provider
@@ -355,15 +371,24 @@ identity is the one used during consent.
 
 For a deployed import, omit `--manifest` and use the revision printed by
 `authorize` when completing consent. `--manifest` and `--revision` are mutually
-exclusive. To revoke a grant, use `golem api mcp-import disconnect 0 --manifest`,
+exclusive. To revoke a grant, use `golem api mcp-import disconnect catalog --manifest`,
 or select a deployed revision instead. Redeploying alone does not grant consent.
 
 ### Inspect and refresh deployed definitions
 
 ```shell
-golem api mcp-import tools 0 --revision 42
-golem api mcp-import refresh 0 --revision 42
+golem api mcp-import tools catalog --revision 42
+golem api mcp-import refresh catalog --revision 42
+# A name is not required for an import with a unique URL:
+golem api mcp-import tools 'https://tools.example.com/mcp' --revision 42
 ```
+
+Deployed commands require a local manifest and permission to view the deployment
+summary. The CLI matches the selected import's complete configuration against the
+selected revision, so local reordering does not change the target. A missing match
+requires the declaration and environment values for that revision, or deployment
+of the changed configuration. Identical deployed configurations cannot be selected
+unambiguously even with distinct CLI names; use distinct configurations.
 
 Omitting `--revision` selects the environment's current deployment. Inspection
 shows that import's projected definitions before native and earlier-import

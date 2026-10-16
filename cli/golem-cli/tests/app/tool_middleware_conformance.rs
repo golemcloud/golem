@@ -351,9 +351,90 @@ async fn middleware_declared_error_retry_transformation_and_replay_are_counted()
 
 #[test]
 #[timeout("20m")]
+async fn selected_gen_bridge_ignores_unused_remote_bindings() {
+    let mut ctx = TestContext::new();
+    prepare_fixture(&mut ctx);
+    let path = ctx.cwd_path_join("golem.yaml");
+    let mut manifest: Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    manifest.as_object_mut().unwrap().remove("bridge");
+    manifest["components"]["conformance:caller"]
+        .as_object_mut()
+        .unwrap()
+        .remove("dependencies");
+    manifest["components"]["conformance:caller"]["tools"]["unused-remote"] =
+        json!({ "middleware": ["unused-remote-middleware"] });
+    manifest["tools"]["unused-remote"] =
+        json!({ "release": { "releaseId": "00000000-0000-0000-0000-000000000001" } });
+    manifest["tools"]["middleware"]["unused-remote-middleware"] =
+        json!({ "release": { "releaseId": "00000000-0000-0000-0000-000000000002" } });
+    for tools in [
+        None,
+        Some(json!([])),
+        Some(json!(["conformance:middleware"])),
+    ] {
+        if let Some(tools) = tools {
+            manifest["bridge"] = json!({ "rust": { "internal": { "tools": tools } } });
+        }
+        std::fs::write(&path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
+        let output = ctx
+            .cli([
+                flag::YES,
+                cmd::BUILD,
+                "conformance:caller",
+                "--step",
+                "gen-bridge",
+            ])
+            .await;
+        assert!(output.success_or_dump());
+    }
+}
+
+#[test]
+#[timeout("20m")]
 async fn structural_projection_strict_rejection_and_nominal_runtime_validation() {
     let mut ctx = TestContext::new();
     prepare_fixture(&mut ctx);
+    let path = ctx.cwd_path_join("golem.yaml");
+    let mut manifest: Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    manifest.as_object_mut().unwrap().remove("agents");
+    manifest.as_object_mut().unwrap().remove("bridge");
+    manifest["components"]["conformance:caller"]
+        .as_object_mut()
+        .unwrap()
+        .remove("dependencies");
+    std::fs::write(path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
+    // CLI tool invocations need a separate owner, not a generated client whose API
+    // changes with each environment presentation used below.
+    let caller_manifest = ctx.cwd_path_join("caller/Cargo.toml");
+    let contents = std::fs::read_to_string(&caller_manifest).unwrap();
+    let contents = contents
+        .lines()
+        .filter(|line| !line.contains("-tool-guest-client ="))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(caller_manifest, contents).unwrap();
+    std::fs::write(
+        ctx.cwd_path_join("caller/src/lib.rs"),
+        r#"use golem_rust::{agent_definition, agent_implementation};
+
+#[agent_definition]
+pub trait ToolInvocationOwner {
+    fn new() -> Self;
+}
+
+struct ToolInvocationOwnerImpl;
+
+#[agent_implementation]
+impl ToolInvocationOwner for ToolInvocationOwnerImpl {
+    fn new() -> Self {
+        Self
+    }
+}
+"#,
+    )
+    .unwrap();
     set_compatibility_case(
         &ctx,
         "compat-leaf",
@@ -475,6 +556,309 @@ async fn adapter_uses_lookup_identity_with_presented_metadata_and_generated_clie
         .await;
     assert!(help.success_or_dump());
     assert!(help.stdout_text().contains("presented-adapter"));
+}
+
+#[test]
+#[timeout("20m")]
+async fn typescript_adapter_uses_lookup_identity_with_presented_metadata_and_generated_client() {
+    let mut ctx = TestContext::new();
+    prepare_fixture(&mut ctx);
+    std::fs::create_dir_all(ctx.cwd_path_join("adapter")).unwrap();
+    fs_extra::dir::copy(
+        ctx.cwd_path_join("middleware"),
+        ctx.cwd_path_join("adapter"),
+        &fs_extra::dir::CopyOptions::new().content_only(true),
+    )
+    .unwrap();
+    let adapter_manifest = ctx.cwd_path_join("adapter/Cargo.toml");
+    let contents = std::fs::read_to_string(&adapter_manifest).unwrap();
+    std::fs::write(
+        adapter_manifest,
+        contents.replace("conformance_middleware", "conformance_adapter"),
+    )
+    .unwrap();
+    let adapter_source = ctx.cwd_path_join("adapter/src/lib.rs");
+    let contents = std::fs::read_to_string(&adapter_source).unwrap();
+    std::fs::write(adapter_source, contents.replace("mod provider;", "")).unwrap();
+    std::fs::write(
+        ctx.cwd_path_join("middleware/src/lib.rs"),
+        "mod provider;\n",
+    )
+    .unwrap();
+    let output = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "ts",
+            flag::COMPONENT_NAME,
+            "conformance:typescript-consumer",
+        ])
+        .await;
+    assert!(output.success_or_dump());
+
+    let path = ctx.cwd_path_join("golem.yaml");
+    let mut manifest: Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    manifest["components"]["conformance:adapter"] = json!({
+        "dir": "adapter",
+        "templates": "rust"
+    });
+    for declaration in manifest["tools"]["middleware"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        declaration["component"] = json!("conformance:adapter");
+    }
+    manifest["tools"]["middleware"]["structural-adapter"]
+        .as_object_mut()
+        .unwrap()
+        .remove("component");
+    manifest["components"]["conformance:typescript-consumer"]["dependencies"]["tools"] =
+        json!(["conformance:middleware/compat-leaf"]);
+    manifest["components"]
+        .as_object_mut()
+        .unwrap()
+        .remove("conformance:caller");
+    manifest["environments"]
+        .as_object_mut()
+        .unwrap()
+        .remove("cloud");
+    manifest["environments"]["local"]["tools"]["compat-leaf"]["middleware"] =
+        json!([{ "name": "structural-adapter", "filesystemAccess": "allowed" }]);
+    manifest["agents"] = json!({
+        "TypeScriptAdapterConformanceAgent": {
+            "tools": { "compat-leaf": { "filesystemAccess": "allowed" } }
+        }
+    });
+    std::fs::write(path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
+
+    std::fs::copy(
+        ctx.cwd_path_join("typescript-consumer.ts"),
+        ctx.cwd_path_join("conformance-typescript-consumer/src/counter-agent.ts"),
+    )
+    .unwrap();
+    let path = ctx.cwd_path_join("conformance-typescript-consumer/tsconfig.json");
+    let mut tsconfig: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    tsconfig["compilerOptions"]["paths"]["compat-leaf-tool-guest-client"] = json!([
+        "../golem-temp/bridge-sdk/ts/internal/compat-leaf-tool-guest-client/compat-leaf-tool-guest-client.ts"
+    ]);
+    tsconfig["include"].as_array_mut().unwrap().extend([
+        json!("src/**/*.ts"),
+        json!("../golem-temp/bridge-sdk/ts/internal/compat-leaf-tool-guest-client/*.ts"),
+    ]);
+    std::fs::write(path, serde_json::to_string_pretty(&tsconfig).unwrap()).unwrap();
+
+    let path = ctx.cwd_path_join("golem.yaml");
+    let dependency_manifest = std::fs::read_to_string(&path).unwrap();
+    let mut explicit: Value = serde_yaml::from_str(&dependency_manifest).unwrap();
+    explicit["bridge"] = json!({ "ts": { "internal": { "tools": ["conformance:middleware"] } } });
+    explicit["tools"]["middleware"]["structural-adapter"]["component"] =
+        json!("conformance:adapter");
+    std::fs::write(&path, serde_yaml::to_string(&explicit).unwrap()).unwrap();
+    let missing = ctx
+        .cli([
+            flag::YES,
+            cmd::BUILD,
+            "conformance:middleware",
+            "--step",
+            "gen-bridge",
+        ])
+        .await;
+    assert!(!missing.success_or_dump());
+    let output = ctx
+        .cli([flag::YES, cmd::BUILD, "conformance:middleware"])
+        .await;
+    assert!(output.success_or_dump());
+    let explicit_client = std::fs::read_to_string(ctx.cwd_path_join("golem-temp/bridge-sdk/ts/internal/compat-leaf-tool-guest-client/compat-leaf-tool-guest-client.ts")).unwrap();
+    assert!(
+        explicit_client.contains("class PresentedAdapterClient"),
+        "{explicit_client}"
+    );
+    std::fs::write(path, &dependency_manifest).unwrap();
+
+    let output = ctx
+        .cli([flag::YES, cmd::BUILD, "conformance:typescript-consumer"])
+        .await;
+    assert!(output.success_or_dump());
+    let generated = std::fs::read_to_string(ctx.cwd_path_join(
+        "golem-temp/bridge-sdk/ts/internal/compat-leaf-tool-guest-client/compat-leaf-tool-guest-client.ts",
+    ))
+    .unwrap();
+    assert!(
+        generated.contains("class PresentedAdapterClient"),
+        "{generated}"
+    );
+    assert!(
+        generated.contains("base.createToolClientRuntime(\"compat-leaf\")"),
+        "{generated}"
+    );
+    assert!(generated.contains("export type CompatInput"), "{generated}");
+    assert!(
+        generated.contains("export type CompatOutput"),
+        "{generated}"
+    );
+
+    // A dependency-only provider must not activate its component matcher, even in
+    // a request that also matches an explicitly selected component.
+    let path = ctx.cwd_path_join("golem.yaml");
+    let mut scoped: Value = serde_yaml::from_str(&dependency_manifest).unwrap();
+    scoped["tools"]["middleware"]["structural-adapter"]["component"] = json!("conformance:adapter");
+    scoped["bridge"] = json!({ "ts": { "internal": {
+        "tools": ["conformance:middleware", "conformance:typescript-consumer"]
+    } } });
+    scoped["components"]["conformance:unused-adapter"] =
+        json!({ "componentWasm": "unused-adapter.wasm" });
+    scoped["tools"]["middleware"]["unused-adapter"] =
+        json!({ "component": "conformance:unused-adapter" });
+    scoped["environments"]["local"]["tools"]["manifest-probe"]["middleware"] =
+        json!(["unused-adapter"]);
+    std::fs::write(&path, serde_yaml::to_string(&scoped).unwrap()).unwrap();
+    let output = ctx
+        .cli([flag::YES, cmd::BUILD, "conformance:typescript-consumer"])
+        .await;
+    assert!(output.success_or_dump());
+    let output = ctx
+        .cli([flag::YES, cmd::BUILD, "conformance:middleware"])
+        .await;
+    let diagnostic = format!(
+        "{}\n{}",
+        output.stdout_text(),
+        output.stderr().collect::<Vec<_>>().join("\n")
+    );
+    assert!(!output.success_or_dump());
+    assert!(diagnostic.contains("unused-adapter.wasm"), "{diagnostic}");
+    std::fs::write(path, &dependency_manifest).unwrap();
+
+    ctx.start_server().await;
+    let output = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(output.success_or_dump());
+    let agent = format!("typescript-adapter-{}", Uuid::new_v4());
+    let result = invoke_agent(
+        &mut ctx,
+        "TypeScriptAdapterConformanceAgent",
+        &agent,
+        "invoke",
+        &["\"through-adapter\""],
+    )
+    .await;
+    assert!(result.contains("ok:leaf: through-adapter"), "{result}");
+
+    let adapter_source = ctx.cwd_path_join("adapter/src/lib.rs");
+    let source = std::fs::read_to_string(&adapter_source).unwrap();
+    let source = source.replace(
+        "pub trait PresentedAdapter {\n        async fn execute(&self, input: CompatInput) -> Result<CompatOutput, CompatError>;",
+        "pub trait PresentedAdapter {\n        async fn execute(&self, input: CompatInput) -> Result<CompatOutput, CompatError>;\n        async fn refresh(&self, input: CompatInput) -> Result<CompatOutput, CompatError>;",
+    ).replace(
+        "underlying.execute(input).await\n    }\n}\n\npub mod projected_compat",
+        "underlying.execute(input).await\n    }\n    async fn refresh(\n        &self,\n        underlying: &expected_compat::CompatLeafUnderlying,\n        input: presented_compat::CompatInput,\n    ) -> Result<presented_compat::CompatOutput, ToolInvokeError<presented_compat::CompatError>> {\n        underlying.execute(input).await\n    }\n}\n\npub mod projected_compat",
+    );
+    assert!(source.contains("async fn refresh"));
+    std::fs::write(adapter_source, source).unwrap();
+    let output = ctx
+        .cli([flag::YES, cmd::BUILD, "conformance:typescript-consumer"])
+        .await;
+    assert!(output.success_or_dump());
+    let generated = std::fs::read_to_string(ctx.cwd_path_join(
+        "golem-temp/bridge-sdk/ts/internal/compat-leaf-tool-guest-client/compat-leaf-tool-guest-client.ts",
+    )).unwrap();
+    assert!(generated.contains("refresh("), "{generated}");
+
+    let adapter_source = ctx.cwd_path_join("adapter/src/lib.rs");
+    let source = std::fs::read_to_string(&adapter_source)
+        .unwrap()
+        .replace("async fn refresh(", "async fn refresh_again(");
+    std::fs::write(adapter_source, source).unwrap();
+    let output = ctx
+        .cli([
+            flag::YES,
+            cmd::BUILD,
+            "conformance:adapter",
+            "--step",
+            "build",
+        ])
+        .await;
+    assert!(output.success_or_dump());
+    let output = ctx
+        .cli([
+            flag::YES,
+            cmd::BUILD,
+            "conformance:typescript-consumer",
+            "--step",
+            "add-metadata",
+            "--step",
+            "gen-bridge",
+        ])
+        .await;
+    assert!(output.success_or_dump());
+    let generated = std::fs::read_to_string(ctx.cwd_path_join("golem-temp/bridge-sdk/ts/internal/compat-leaf-tool-guest-client/compat-leaf-tool-guest-client.ts")).unwrap();
+    assert!(generated.contains("async refresh_again("), "{generated}");
+    assert!(!generated.contains("async refresh("), "{generated}");
+    std::fs::remove_file(ctx.cwd_path_join("golem-temp/agents/conformance_adapter_release.wasm"))
+        .unwrap();
+    let output = ctx
+        .cli([
+            flag::YES,
+            cmd::BUILD,
+            "conformance:typescript-consumer",
+            "--step",
+            "add-metadata",
+            "--step",
+            "gen-bridge",
+        ])
+        .await;
+    assert!(output.success_or_dump());
+
+    let path = ctx.cwd_path_join("golem.yaml");
+    let mut manifest: Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    manifest["agents"]["TypeScriptAdapterConformanceAgent"]["tools"]["compat-leaf"] = json!({
+        "filesystemAccess": "allowed",
+        "middleware": [],
+        "middlewareMergeMode": "replace"
+    });
+    std::fs::write(path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
+    let output = ctx.cli([flag::YES, cmd::BUILD, flag::FORCE_BUILD]).await;
+    let diagnostic = format!(
+        "{}\n{}",
+        output.stdout_text(),
+        output.stderr().collect::<Vec<_>>().join("\n")
+    );
+    assert!(!output.success_or_dump());
+    for expected in [
+        "TypeScriptAdapterConformanceAgent",
+        "compat-leaf",
+        "environment-generated",
+    ] {
+        assert!(diagnostic.contains(expected), "{diagnostic}");
+    }
+
+    let path = ctx.cwd_path_join("golem.yaml");
+    manifest["agents"]["TypeScriptAdapterConformanceAgent"]["tools"]["compat-leaf"] =
+        json!({ "filesystemAccess": "allowed" });
+    manifest["components"]["conformance:adapter"]["dependencies"]["agents"] =
+        json!(["conformance:typescript-consumer/TypeScriptAdapterConformanceAgent"]);
+    std::fs::write(path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
+    let output = ctx
+        .cli([flag::YES, cmd::BUILD, "conformance:typescript-consumer"])
+        .await;
+    let diagnostic = format!(
+        "{}\n{}",
+        output.stdout_text(),
+        output.stderr().collect::<Vec<_>>().join("\n")
+    );
+    assert!(!output.success_or_dump());
+    for expected in [
+        "cycle",
+        "middleware",
+        "conformance:adapter",
+        "conformance:typescript-consumer",
+    ] {
+        assert!(diagnostic.contains(expected), "{diagnostic}");
+    }
 }
 
 #[test]
