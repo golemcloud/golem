@@ -21,31 +21,241 @@ import zio.test._
 
 import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import scala.scalajs.js
+import scala.scalajs.js.JSConverters._
+import scala.scalajs.js.typedarray.Uint8Array
 
 object TransactionsSpec extends ZIOSpecDefault {
   import Transactions._
 
   private def f[A](a: A): Future[A] = Future.successful(a)
 
-  def spec = suite("TransactionsSpec")(
-    test("synchronous body exceptions trap without retrying") {
-      ZIO
-        .foreach(List("fallible", "infallible")) { mode =>
-          var attempts         = 0
-          def crash(): Nothing = {
-            attempts += 1
-            throw new IllegalStateException("body defect")
-          }
-          ZIO.fromFuture { _ =>
-            val result =
-              if (mode == "fallible") fallibleTransaction[Int, String](_ => crash())
-              else infallibleTransaction[Int](_ => crash())
-            result.map(_ => "unexpected success").recover { case error => error.getMessage }
-          }.map(message =>
-            assertTrue(message.contains(s"${mode}Transaction failed:"), message.contains("body defect"), attempts == 1)
+  private var restoreHost: () => Unit = () => ()
+
+  private final class Host(delays: List[BigInt] = List(0, 0)) {
+    private val previous = js.Dynamic.global.globalThis.selectDynamic("__golemScalaTestHost")
+    restoreHost = () => js.Dynamic.global.globalThis.updateDynamic("__golemScalaTestHost")(previous)
+    var elapsed                                                                                              = BigInt(0)
+    var calls                                                                                                = 0
+    var contexts                                                                                             = List.empty[String]
+    var tokens                                                                                               = List.empty[List[Int]]
+    var waits                                                                                                = List.empty[BigInt]
+    var evaluationError: Option[String]                                                                      = None
+    var resolutionError: Option[String]                                                                      = None
+    var resolved: js.Any                                                                                     = js.undefined
+    private var context                                                                                      = ""
+    private def describe(verb: String, noun: String, props: js.Array[js.Tuple2[String, js.Dynamic]]): String =
+      verb + ":" + noun + ":" + props.map(p => p._1 + "=" + p._2.selectDynamic("val").toString).mkString(",")
+    js.Dynamic.global.globalThis.__golemScalaTestHost = js.Dynamic.literal(
+      now = (() => js.BigInt(elapsed.toString)): js.Function0[js.BigInt],
+      waitFor = ((delay: js.BigInt) => {
+        val n = BigInt(delay.toString)
+        waits :+= n
+        elapsed += n
+        js.Promise.resolve[Unit](())
+      }): js.Function1[js.BigInt, js.Promise[Unit]],
+      getSelfMetadata = (
+        () =>
+          js.Dynamic.literal(
+            status = "running",
+            agentId = js.Dynamic.literal(
+              agentId = "Order(1)",
+              componentId =
+                js.Dynamic.literal(uuid = js.Dynamic.literal(highBits = js.BigInt("0"), lowBits = js.BigInt("1")))
+            )
+          )
+      ): js.Function0[js.Dynamic],
+      resolveRetryPolicy = (
+        (verb: String, noun: String, props: js.Array[js.Tuple2[String, js.Dynamic]]) => {
+          context = describe(verb, noun, props)
+          resolutionError.foreach(reason => throw js.JavaScriptException(reason))
+          resolved
+        }
+      ): js.Function3[String, String, js.Array[js.Tuple2[String, js.Dynamic]], js.Any],
+      nextRetryDelay = (
+        (
+          policy: js.Any,
+          token: Uint8Array,
+          duration: js.BigInt,
+          verb: String,
+          noun: String,
+          props: js.Array[js.Tuple2[String, js.Dynamic]]
+        ) => {
+          require(policy == resolved)
+          require(describe(verb, noun, props) == context)
+          require(BigInt(duration.toString) == elapsed)
+          contexts :+= context
+          tokens :+= (0 until token.length).map(i => token(i).toInt).toList
+          calls += 1
+          evaluationError.foreach(reason => throw new IllegalArgumentException(reason))
+          js.Dynamic.literal(
+            state = new Uint8Array(js.Array(calls.toShort)),
+            delay = delays.lift(calls - 1).map(n => js.BigInt(n.toString)).orUndefined
           )
         }
-        .map(results => results.reduce(_ && _))
+      ): js.Function6[js.Any, Uint8Array, js.BigInt, String, String, js.Array[
+        js.Tuple2[String, js.Dynamic]
+      ], js.Dynamic]
+    )
+  }
+
+  def spec = suite("TransactionsSpec")(
+    test("fallible synchronous body exceptions rethrow the original without retrying") {
+      val cause = new RuntimeException("body defect", null, false, true) {}
+      ZIO.fromFuture { _ =>
+        fallibleTransaction[Int, String](_ => throw cause).failed
+      }.map(error => assertTrue(error eq cause))
+    },
+    test("fallible thrown operation compensates successful operations in reverse and keeps its cause") {
+      var order = List.empty[Int]
+      val cause = new IllegalStateException("operation defect")
+      val step  = operation[Int, Int, String](i => f(Right(i))) { (i, _) => order :+= i; f(Right(())) }
+      val crash = operation[Unit, Int, String](_ => throw cause)((_, _) => f(Right(())))
+      ZIO.fromFuture { _ =>
+        fallibleTransaction[Int, String] { tx =>
+          tx.execute(step, 1).flatMap(_ => tx.execute(step, 2)).flatMap(_ => tx.execute(crash, ()))
+        }.failed
+      }.map(error => assertTrue(error eq cause, order == List(2, 1)))
+    },
+    test("exhaustion retains returned failure and includes work and compensation time") {
+      val host     = new Host(List(10))
+      var attempts = 0
+      val step     = operation[Unit, Int, String] { _ => host.elapsed += 3; f(Right(1)) } { (_, _) =>
+        host.elapsed += 7; f(Right(()))
+      }
+      val fail = operation[Unit, Int, String](_ => f(Left("domain")))((_, _) => f(Right(())))
+      ZIO.fromFuture { _ =>
+        namedInfallibleTransaction(Some("checkout")) { tx =>
+          attempts += 1
+          tx.execute(step, ()).flatMap(_ => tx.execute(fail, ()))
+        }
+      }.map(result =>
+        assertTrue(
+          result == Left(TransactionFailure.RetryExhausted("domain")),
+          attempts == 2,
+          host.elapsed == 30,
+          host.tokens == List(Nil, List(1)),
+          host.contexts.head == "saga:urn:worker:00000000-0000-0000-0000-000000000001/Order(1):attempt=1,error-kind=operation-error,transaction-name=checkout",
+          host.contexts.last.contains("attempt=2"),
+          host.waits == List(BigInt(10))
+        )
+      )
+    },
+    test("caught exceptions use the host policy and preserve original cause on exhaustion") {
+      val host  = new Host(Nil)
+      val cause = new IllegalArgumentException("body")
+      ZIO
+        .fromFuture(_ => infallibleTransaction[Int](_ => throw cause))
+        .map(result =>
+          assertTrue(
+            result == Left(TransactionFailure.RetryExhausted(cause)),
+            host.calls == 1,
+            host.contexts.head.contains("error-kind=exception")
+          )
+        )
+    },
+    test("interruption is compensated and passed to the retry evaluator") {
+      val host        = new Host(Nil)
+      val cause       = new InterruptedException("cancelled")
+      var compensated = false
+      val step        = operation[Unit, Int, String](_ => f(Right(1))) { (_, _) => compensated = true; f(Right(())) }
+      ZIO.fromFuture { _ =>
+        infallibleTransaction(tx => tx.execute(step, ()).flatMap(_ => Future.failed[Int](cause)))
+      }.map(result =>
+        assertTrue(
+          result == Left(TransactionFailure.RetryExhausted(cause)),
+          compensated,
+          host.contexts.head.contains("error-kind=interrupted")
+        )
+      )
+    },
+    test("host resolver JavaScript errors preserve the original saga failure") {
+      val host = new Host()
+      host.resolutionError = Some("invalid resolver predicate")
+      val original = new IllegalStateException("original")
+      ZIO.fromFuture { _ =>
+        infallibleTransaction[Int](_ => Future.failed(original))
+      }.map {
+        case Left(TransactionFailure.RetryEvaluationFailed(error: Throwable, reason)) =>
+          assertTrue(
+            error eq original,
+            reason.contains("invalid resolver predicate"),
+            host.calls == 0,
+            host.waits.isEmpty
+          )
+        case _ => assertTrue(false)
+      }
+    },
+    test("host evaluation errors are typed failures, not traps or fresh budgets") {
+      val host = new Host()
+      host.evaluationError = Some("unbounded saga policy")
+      ZIO.fromFuture { _ =>
+        infallibleTransaction[Int](_ => Future.failed(new IllegalStateException("original")))
+      }.map {
+        case Left(TransactionFailure.RetryEvaluationFailed(error: Throwable, reason)) =>
+          assertTrue(
+            error.getMessage == "original",
+            reason == "unbounded saga policy",
+            host.calls == 1,
+            host.waits.isEmpty
+          )
+        case _ => assertTrue(false)
+      }
+    },
+    test("policy changes do not reset the opaque continuation") {
+      val host     = new Host(List(5))
+      var attempts = 0
+      ZIO.fromFuture { _ =>
+        infallibleTransaction[Int] { _ =>
+          attempts += 1
+          if (attempts == 2) {
+            host.resolved = js.Dynamic.literal(nodes = js.Array(js.Dynamic.literal(tag = "never")))
+            host.evaluationError = Some("retry policy changed")
+          }
+          Future.failed(new IllegalStateException("original"))
+        }
+      }.map {
+        case Left(TransactionFailure.RetryEvaluationFailed(_, reason)) =>
+          assertTrue(
+            reason == "retry policy changed",
+            host.tokens == List(Nil, List(1)),
+            attempts == 2,
+            host.waits == List(BigInt(5))
+          )
+        case _ => assertTrue(false)
+      }
+    },
+    test("infallible compensation interruption returns partial evidence without another attempt") {
+      val host         = new Host()
+      val interruption = new InterruptedException("undo")
+      val step         = operation[Unit, Int, String](_ => f(Right(1)))((_, _) => throw interruption)
+      val fail         = operation[Unit, Int, String](_ => f(Left("domain")))((_, _) => f(Right(())))
+      ZIO.fromFuture { _ =>
+        infallibleTransaction(tx => tx.execute(step, ()).flatMap(_ => tx.execute(fail, ())))
+      }.map(result =>
+        assertTrue(
+          result == Left(TransactionFailure.FailedAndRolledBackPartially("domain", interruption)),
+          host.calls == 0,
+          host.waits.isEmpty
+        )
+      )
+    },
+    test("fallible partial rollback retains both failures when suppression is disabled") {
+      val cause        = new RuntimeException("original", null, false, true) {}
+      val interruption = new InterruptedException("undo interrupted")
+      val step         = operation[Unit, Int, String](_ => f(Right(1)))((_, _) => throw interruption)
+      ZIO.fromFuture { _ =>
+        fallibleTransaction[Int, String](tx => tx.execute(step, ()).flatMap(_ => Future.failed(cause))).failed
+      }.map(error =>
+        assertTrue(
+          error ne cause,
+          error match {
+            case PartialRollbackException(original, compensation: Throwable) =>
+              (original eq cause) && (compensation eq interruption)
+            case _ => false
+          }
+        )
+      )
     },
     test("fallible body can handle a failed operation and continue") {
       var undos = 0
@@ -60,6 +270,7 @@ object TransactionsSpec extends ZIOSpecDefault {
       }.map(result => assertTrue(result == Right(42), undos == 0))
     },
     test("swallowed execute failure retries and rejects follow-up operations") {
+      val host     = new Host()
       var attempts = 0
       var runs     = 0
       var undos    = 0
@@ -86,9 +297,12 @@ object TransactionsSpec extends ZIOSpecDefault {
             else f("done")
           }
         }
-      }.map(result => assertTrue(result == "done", attempts == 2, runs == 2, undos == 1, rejected == 2))
+      }.map(result =>
+        assertTrue(result == Right("done"), attempts == 2, runs == 2, undos == 1, rejected == 2, host.calls == 1)
+      )
     },
     test("swallowed compensation failure cannot succeed or retry") {
+      val host     = new Host()
       var attempts = 0
       var runs     = 0
       var undos    = 0
@@ -103,10 +317,19 @@ object TransactionsSpec extends ZIOSpecDefault {
           tx.execute(step, ())
             .flatMap(_ => tx.execute(fail, ()).recover { case _ => 0 })
             .flatMap(_ => tx.execute(step, ()).recover { case _ => 0 })
-        }.map(_ => "unexpected success").recover { case error => error.getMessage }
-      }.map(message => assertTrue(message.contains("broken compensation"), attempts == 1, runs == 1, undos == 1))
+        }
+      }.map(result =>
+        assertTrue(
+          result == Left(TransactionFailure.FailedAndRolledBackPartially("retry", "broken compensation")),
+          attempts == 1,
+          runs == 1,
+          undos == 1,
+          host.calls == 0
+        )
+      )
     },
     test("infallible saga compensates in reverse order and starts fresh attempts") {
+      val host               = new Host(List(10, 20))
       var attempts           = 0
       var identity           = 0
       var events             = List.empty[String]
@@ -133,7 +356,9 @@ object TransactionsSpec extends ZIOSpecDefault {
         }
       }.map { result =>
         assertTrue(
-          result == 506,
+          result == Right(506),
+          host.waits == List(BigInt(10), BigInt(20)),
+          host.tokens == List(Nil, List(1)),
           attempts == 3,
           events == List(
             "run-a-1",
@@ -216,6 +441,8 @@ object TransactionsSpec extends ZIOSpecDefault {
       def describe[E](f: TransactionFailure[E]): String = f match {
         case TransactionFailure.FailedAndRolledBackCompletely(e)    => s"complete($e)"
         case TransactionFailure.FailedAndRolledBackPartially(e, ce) => s"partial($e, $ce)"
+        case TransactionFailure.RetryExhausted(e)                   => s"exhausted($e)"
+        case TransactionFailure.RetryEvaluationFailed(e, reason)    => s"evaluation($e, $reason)"
       }
       val f1 = TransactionFailure.FailedAndRolledBackCompletely("a")
       val f2 = TransactionFailure.FailedAndRolledBackPartially("a", "b")
@@ -348,5 +575,8 @@ object TransactionsSpec extends ZIOSpecDefault {
       )
       ZIO.fromFuture(_ => op.compensate(42, "ok")).map(r => assertTrue(r == Right(())))
     }
-  )
+  ) @@ TestAspect.after(ZIO.succeed {
+    restoreHost()
+    restoreHost = () => ()
+  }) @@ TestAspect.sequential
 }

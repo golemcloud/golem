@@ -14,15 +14,13 @@
 
 use super::rebuild::AbortOnDropIoTask;
 use super::rebuild::P3HttpSendRebuild;
-use super::serialization::{
-    serialize_error_code, serialize_method, serialize_request, serialize_response_headers,
-};
+use super::serialization::{serialize_error_code, serialize_request, serialize_response_headers};
 use super::*;
 use crate::durable_host::authorization::targets::http_target;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CallSpanObserver, Cancellable, DeferredCallReplayOutcome, DropPolicy,
-    DurableCallSession, LeaveIncompleteOnDrop, authorize_live_permissions_at_serialized_access,
-    finish_span_in_memory, reserve_access_invocation_id,
+    DurableCallSession, authorize_live_permissions_at_serialized_access, finish_span_in_memory,
+    reserve_access_invocation_id,
 };
 use crate::durable_host::durability::{
     AsyncRetryDecision, ClassifiedHostError, DurabilityHost, HostFailureKind, InFunctionRetryHost,
@@ -31,7 +29,7 @@ use crate::durable_host::durability::{
 };
 use crate::durable_host::http::policy::{
     apply_managed_http_headers, classify_serializable_http_error_code, golem_managed_http_headers,
-    http_worker_state_allows_retry, is_idempotent_http_method,
+    http_worker_state_allows_retry,
 };
 use crate::durable_host::p3::{DurableP3, DurableP3View, durable_worker_ctx, wasi_http_view};
 use crate::services::HasWorker;
@@ -69,8 +67,8 @@ use wasmtime::AsContextMut;
 use wasmtime::component::{Accessor, AccessorTask, Resource, TerminalConsumption};
 use wasmtime_wasi_http::P3PooledConnection;
 use wasmtime_wasi_http::p3::WasiHttp;
+use wasmtime_wasi_http::p3::bindings::http::client;
 use wasmtime_wasi_http::p3::bindings::http::types::{ErrorCode, Request, Response};
-use wasmtime_wasi_http::p3::bindings::http::{client, types};
 
 impl<Ctx: WorkerCtx> client::Host for DurableP3View<'_, Ctx> {}
 
@@ -79,39 +77,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> client::HostWithStore<U> for DurableP3<C
         store: &Accessor<U, Self>,
         req: Resource<Request>,
     ) -> HttpResult<Resource<Response>> {
-        let method = {
-            let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
-            http_store.with(|mut access| {
-                let mut view = access.get();
-                types::HostRequest::get_method(&mut view, borrow_resource(&req))
-                    .map_err(HttpError::trap)
-            })?
-        };
-
-        // Repair an incomplete send under its original Start and idempotency key. Method
-        // idempotence controls guest cancellation, not the durable call shape.
-        let serialized_method = serialize_method(method);
-        if is_idempotent_http_method(&serialized_method) {
-            send_with_durability::<Ctx, U, LeaveIncompleteOnDrop>(
-                store,
-                req,
-                DurableFunctionType::WriteRemote,
-            )
+        send_with_durability::<Ctx, U, Cancellable>(store, req, DurableFunctionType::WriteRemote)
             .await
-        } else {
-            send_with_durability::<Ctx, U, Cancellable>(
-                store,
-                req,
-                DurableFunctionType::WriteRemote,
-            )
-            .await
-        }
     }
 }
 
 pub(super) async fn send_with_durability<Ctx, U, P>(
     store: &Accessor<U, DurableP3<Ctx>>,
-    req: Resource<Request>,
+    mut req: Resource<Request>,
     function_type: DurableFunctionType,
 ) -> HttpResult<Resource<Response>>
 where
@@ -335,33 +308,43 @@ where
         .map_err(HttpError::trap)?;
     handle.close_span_on_cancellation(span.span_id.clone());
 
+    let mut restored_body = None;
+    let mut restored_transmission = None;
     if !handle.is_live() {
+        // Intake cannot wait for send resolution: the guest writer can issue another durable
+        // call after its last write, whose retained completion must advance the replay cursor
+        // before this send can be classified as incomplete.
+        let _ = disarm_leak_guard_tx.send(());
+        let replayed_request_body_drain = consume_replayed_request::<Ctx, U>(
+            store,
+            req,
+            Some(ReplayedRequestBodyRecording {
+                send_start_index,
+                trap_context: handle.trap_context(),
+                recording_complete_at_end: false,
+            }),
+        )
+        .await
+        .map_err(|error| HttpError::trap(wasmtime::Error::from_anyhow(handle.trap(error))))?;
+        if let Some(drain) = &replayed_request_body_drain {
+            let progress = drain.progress.clone();
+            handle.require_incomplete_repair_readiness(
+                async move { progress.recording_ready().await },
+            );
+        }
+        let trap_context = handle.trap_context();
         match handle
             .replay_access_deferred(store, durable_worker_ctx::<Ctx, U>)
             .await
-            .map_err(HttpError::trap)?
-        {
+            .map_err(|error| {
+                HttpError::trap(wasmtime::Error::from_anyhow(
+                    crate::durable_host::durability::mark_durable_call_trap_context(
+                        error.into(),
+                        trap_context,
+                    ),
+                ))
+            })? {
             DeferredCallReplayOutcome::Replayed(response, delivery) => {
-                let _ = disarm_leak_guard_tx.send(());
-                // The live path consumes the request inside `WasiHttp::send`.
-                // On replay we never call `send`, so consume it here (delete
-                // it, drain its outgoing body) before returning the recorded
-                // response — otherwise the request leaks and a guest
-                // streaming a body or awaiting its transmission future hangs.
-                // The recorded-request-body metadata additionally lets the drain complete an
-                // interrupted frame recording (self-heal).
-                let recorded_request_body = match &response.result {
-                    SerializableP3HttpClientSendResult::SuccessWithRecordedRequestBody {
-                        recording_complete_at_end,
-                        ..
-                    } => Some(ReplayedRequestBodyRecording {
-                        send_start_index,
-                        recording_complete_at_end: *recording_complete_at_end,
-                    }),
-                    SerializableP3HttpClientSendResult::HttpError(_) => None,
-                };
-                let replayed_request_body_drain =
-                    consume_replayed_request::<Ctx, U>(store, req, recorded_request_body).await?;
                 let recorded_status = match &response.result {
                     SerializableP3HttpClientSendResult::SuccessWithRecordedRequestBody {
                         headers,
@@ -474,8 +457,120 @@ where
                 }
             }
             DeferredCallReplayOutcome::Incomplete(live_handle) => {
-                let _ = disarm_leak_guard_tx.send(());
-                handle = live_handle
+                handle = live_handle;
+                let continuation = replayed_request_body_drain
+                    .as_ref()
+                    .and_then(|drain| drain.progress.take_continuation());
+                let mut rebuild = P3HttpSendRebuild {
+                    request: serialized_request.clone(),
+                    injected_headers: Vec::new(),
+                    recorded_status: 0,
+                    recorded_request_body: send_start_index,
+                    durable_body: None,
+                    replayed_request_body_drain,
+                };
+                let recovery = RequestBodyRecovery::default();
+                if recorded_request_body_replayability(
+                    store,
+                    &mut rebuild,
+                    recovery.clone(),
+                    continuation.is_some(),
+                )
+                .await
+                .is_err()
+                {
+                    if let Some(error) = recovery.error() {
+                        return Err(HttpError::trap(wasmtime::Error::from_anyhow(
+                            handle.trap(error),
+                        )));
+                    }
+                    let error_code = ErrorCode::HttpResponseIncomplete;
+                    let (_, delivery) = handle
+                        .complete_access_deferred_with_span(
+                            store,
+                            durable_worker_ctx::<Ctx, U>,
+                            HostResponseP3HttpClientSendResult {
+                                result: SerializableP3HttpClientSendResult::HttpError(
+                                    serialize_error_code(&error_code),
+                                ),
+                            },
+                            p3_send_span_finished(
+                                &span,
+                                golem_common::model::oplog::SpanOutcome::Failed,
+                            ),
+                        )
+                        .await
+                        .map_err(HttpError::trap)?;
+                    if let Err(error) = finish_p3_send_span_in_memory::<Ctx, U>(store, &span) {
+                        delivery.suppress();
+                        return Err(HttpError::trap(error));
+                    }
+                    start_transmission_recording::<Ctx, U>(
+                        store,
+                        pending_transmission,
+                        observational_owner,
+                        invocation_id,
+                    );
+                    span.claim_closure();
+                    send_terminal
+                        .attach(store, delivery)
+                        .await
+                        .map_err(HttpError::trap)?;
+                    return Err(error_code.into());
+                }
+                let oplog = store.with(|mut access| {
+                    durable_worker_ctx::<Ctx, U>(access.data_mut())
+                        .state
+                        .oplog
+                        .clone()
+                });
+                let scan = scan_recorded_request_body_frames(oplog.clone(), send_start_index)
+                    .await
+                    .map_err(|error| {
+                        let error = error
+                            .recovery_error()
+                            .unwrap_or_else(|| WorkerExecutorError::runtime(error.to_string()));
+                        HttpError::trap(wasmtime::Error::from_anyhow(handle.trap(error)))
+                    })?;
+                let recording_tasks = store.with(|mut access| {
+                    durable_worker_ctx::<Ctx, U>(access.data_mut())
+                        .public_state
+                        .worker()
+                        .runtime_append_tasks()
+                });
+                let continuation = match continuation {
+                    Some(continuation) => {
+                        restored_transmission = continuation.transmission;
+                        continuation.body
+                    }
+                    None => http_body_util::Empty::new()
+                        .map_err(|never| match never {})
+                        .boxed_unsync(),
+                };
+                restored_body = Some(DurableRequestBody::from_recording(
+                    continuation,
+                    oplog,
+                    send_start_index,
+                    recording_tasks,
+                    scan,
+                    recovery,
+                ));
+                let request = build_rebuilt_request(
+                    &rebuild,
+                    &[],
+                    restored_body.as_ref().unwrap().replayer().boxed_unsync(),
+                )
+                .map_err(|error| {
+                    HttpError::trap(wasmtime::Error::from_anyhow(
+                        handle.trap(WorkerExecutorError::runtime(error)),
+                    ))
+                })?;
+                req = store
+                    .with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>)
+                    .with(|mut access| access.get().table.push(request))
+                    .map_err(|error| {
+                        HttpError::trap(wasmtime::Error::from_anyhow(handle.trap(error)))
+                    })?;
             }
         }
     } else {
@@ -563,6 +658,8 @@ where
         req,
         handle.start_index(),
         recording_enabled,
+        restored_body,
+        restored_transmission,
     )
     .await
     {
@@ -663,8 +760,9 @@ where
         };
 
         if let Some(error) = physical.body.recovery.error() {
-            handle.abandon_for_trap();
-            return Err(HttpError::trap(error));
+            return Err(HttpError::trap(wasmtime::Error::from_anyhow(
+                handle.trap(error),
+            )));
         }
         match attempt_result {
             Ok((response, io, pooled_connection)) => {
@@ -1133,12 +1231,15 @@ pub(super) async fn convert_physical_send_request<Ctx, U>(
     req: Resource<Request>,
     send_start_index: OplogIndex,
     recording_enabled: bool,
+    restored_body: Option<DurableRequestBody>,
+    restored_transmission: Option<oneshot::Sender<Result<(), ErrorCode>>>,
 ) -> Result<PhysicalSend<Ctx>, PhysicalSendConversionError>
 where
     Ctx: WorkerCtx,
     U: Send + 'static,
 {
     let (final_transmission_tx, final_transmission_rx) = oneshot::channel();
+    let final_transmission_tx = restored_transmission.unwrap_or(final_transmission_tx);
     let (pool, oplog) = store.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
         (
@@ -1194,13 +1295,15 @@ where
         uri: parts.uri,
         version: parts.version,
         headers: parts.headers,
-        body: DurableRequestBody::new(
-            body,
-            oplog,
-            send_start_index,
-            recording_enabled,
-            structural_append_tasks,
-        ),
+        body: restored_body.unwrap_or_else(|| {
+            DurableRequestBody::new(
+                body,
+                oplog,
+                send_start_index,
+                recording_enabled,
+                structural_append_tasks,
+            )
+        }),
         options,
         final_transmission_tx,
         _phantom: PhantomData,

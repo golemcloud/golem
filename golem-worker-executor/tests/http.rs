@@ -2226,12 +2226,8 @@ async fn outgoing_http_replayed_cancelled_body_read_preserves_delivered_bytes(
     Ok(())
 }
 
-/// Dropping a still-pending P3 response future of an idempotent (GET) send
-/// must abort the underlying HTTP request instead of leaving the socket
-/// parked waiting for response headers, and leave the committed `Start`
-/// without a terminal (`LeaveIncompleteOnDrop`): the restarted invocation
-/// re-executes the incomplete send live and the deterministic guest cancels
-/// it again, then a fresh cancellation runs live.
+/// Dropping a pending GET aborts the request and records Cancelled. Reconstruction replays that
+/// terminal without a resend; only the fresh invocation opens another connection.
 #[test]
 #[tracing::instrument]
 async fn outgoing_http_response_future_cancel_aborts_request_and_replays(
@@ -2312,23 +2308,20 @@ async fn outgoing_http_response_future_cancel_aborts_request_and_replays(
         "the first invocation must issue exactly one live request"
     );
 
-    // An idempotent (GET) send uses the `LeaveIncompleteOnDrop` drop policy:
-    // dropping the pending response future leaves its committed
-    // `Start`(http::client::send) without a terminal, so replay re-executes
-    // the send live and the deterministic guest cancels it again.
+    // Guest cancellation is terminal even for GET. Reconstruction must not resend it.
     {
         use golem_common::model::oplog::OplogIndex;
         let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
         let sends = partition_starts(&oplog, "http::client::send");
         assert_eq!(
             sends.counts(),
-            (0, 0, 1),
-            "the dropped pending idempotent send must leave exactly one incomplete Start: \
+            (1, 0, 0),
+            "the dropped pending GET must record exactly one Cancelled terminal: \
              {sends:?}"
         );
         assert_cancelled_send_spans(
             &oplog,
-            golem_common::model::oplog::PublicSpanOutcome::Abandoned,
+            golem_common::model::oplog::PublicSpanOutcome::Cancelled,
         );
     }
 
@@ -2347,19 +2340,11 @@ async fn outgoing_http_response_future_cancel_aborts_request_and_replays(
         .await?
         .into_typed::<String>()?;
     assert_eq!(result2, "cancelled-before-response");
-    // Post-restart connections: the replayed invocation re-executes the
-    // historical incomplete send live and the deterministic guest drops it
-    // again, then the fresh invocation issues its own send (also dropped).
-    // During replay the recorded cancel timer resolves instantly from the
-    // oplog, so the re-executed send may be aborted before or after its TCP
-    // connect reaches the server: the fresh invocation's connection is
-    // guaranteed, the re-executed one contributes at most one more. Every
-    // connection that did land must be aborted at the socket level.
+    // Only the fresh invocation may open a connection after reconstruction.
     let post_restart_accepted = accepted.load(Ordering::SeqCst) - 1;
-    assert!(
-        (1..=2).contains(&post_restart_accepted),
-        "post-restart there must be the fresh invocation's connection plus at most one from \
-         the re-executed incomplete send, got {post_restart_accepted}"
+    assert_eq!(
+        post_restart_accepted, 1,
+        "replaying the cancelled GET must not re-issue the request"
     );
     for _ in 0..post_restart_accepted {
         assert!(
@@ -2368,22 +2353,19 @@ async fn outgoing_http_response_future_cancel_aborts_request_and_replays(
         );
     }
 
-    // The replayed first send re-executed live from its claimed incomplete
-    // `Start` and was cancelled again (no new entries); the second live send
-    // appended another `Start` that was likewise left incomplete on drop.
+    // Replay retains the first terminal; the fresh send records its own cancellation.
     {
         use golem_common::model::oplog::OplogIndex;
         let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
         let sends = partition_starts(&oplog, "http::client::send");
         assert_eq!(
             sends.counts(),
-            (0, 0, 2),
-            "the replayed and the fresh cancelled idempotent sends must both leave \
-             incomplete Starts: {sends:?}"
+            (2, 0, 0),
+            "both cancelled GET sends must retain their Cancelled terminals: {sends:?}"
         );
         assert_cancelled_send_spans(
             &oplog,
-            golem_common::model::oplog::PublicSpanOutcome::Abandoned,
+            golem_common::model::oplog::PublicSpanOutcome::Cancelled,
         );
     }
 

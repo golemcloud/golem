@@ -27,7 +27,7 @@ export default {
   "golem-logging-effect": "Logging and Tracing from an Effect Agent",
   "golem-make-http-request-effect": "Making Outgoing HTTP Requests from Effect Golem Agents",
   "golem-parallel-workers-effect": "Parallel Workers with Effect",
-  "golem-permission-card-effect": "Permission-card transfer",
+  "golem-permission-card-effect": "Permission cards in Effect",
   "golem-multi-instance-agent-effect": "Phantom Agents in Effect Golem",
   "golem-read-only-method-effect": "Read-only Effect methods",
   "golem-recurring-task-effect": "Recurring Tasks via Self-Scheduling in Effect",

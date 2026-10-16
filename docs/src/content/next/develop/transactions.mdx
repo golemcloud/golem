@@ -10,8 +10,8 @@ Sagas do not provide atomicity or isolation. Earlier calls and their compensatio
 
 The SDK provides support for two different types of transactions:
 
-- **fallible transactions** are only dealing with domain errors
-- **infallible transactions** compensate domain errors and loop in guest code, appending new calls for the next attempt
+- **fallible transactions** compensate failures and report the outcome
+- **infallible transactions** compensate failures and ask the host policy before appending a new attempt
 
 ### Fallible transactions
 
@@ -25,7 +25,7 @@ A **fallible transaction** deals with domain errors. Successful steps register c
         passing an async callback that can execute operations on the open transaction (see below).
     </Tabs.Tab>
     <Tabs.Tab>
-        In Effect TypeScript, wrap an Effect program with `Saga.fallibleTransaction`. Expected typed failures trigger registered compensations and return a `TransactionFailure` through the Effect error channel. Structured cancellation also drains registered compensations, then propagates interruption without starting another attempt. Deterministic defects do not trigger compensation.
+        In Effect TypeScript, wrap an Effect program with `Saga.fallibleTransaction`. Typed failures, caught defects and interruption trigger registered compensations. Complete rollback preserves the original Cause; partial rollback retains original and compensation failures. External cancellation terminates retries without losing this evidence.
     </Tabs.Tab>
     <Tabs.Tab>
         In Rust, a fallible transaction can be executed using the async `fallible_transaction` function in
@@ -51,11 +51,22 @@ A **fallible transaction** deals with domain errors. Successful steps register c
 
 ### Infallible transactions
 
-In an infallible transaction, a propagated domain error runs compensations and then starts another guest-code attempt. Both the failed attempt and its compensations remain in history. New attempt calls have new `Start` positions; reconstruction of an incomplete call repairs that call at its own `Start`. This loop does not use the host retry policy and can run forever on a deterministic domain failure. Unexpected traps fail the invocation and do not guarantee compensation. Do not use interruption as a business retry signal.
+After each failed, fully compensated infallible attempt, the SDK resolves a host policy with verb
+`saga`, noun the agent URN, and `attempt`/`error-kind` properties. The host's `next-retry-delay`
+uses the existing evaluator and an opaque binary continuation. SDKs carry that state unchanged
+and use durable clocks and timers. No matching policy selects the agent default. Unbounded
+policies are rejected rather than silently capped. Count/time/never exhaustion returns a typed
+guest failure; selector/evaluator errors retain the original failure too.
 
-The Rust, TypeScript, Scala, and Go helpers provide no built-in attempt bound or backoff guarantee
-for this guest-code loop. Eventual success is not guaranteed. MoonBit has no public saga helper;
-the same warning applies to an application that implements the compensate-and-loop pattern.
+New attempts append calls and retain failed attempts and compensations. Bounds keep attempts
+finite; they do not rewind history. Reconstruction repairs an incomplete call at its original
+`Start`, without discarding sibling history. TS, Effect, Scala and Go compensate caught failures
+in reverse order. Fallible helpers propagate the original exception/panic only after complete
+rollback; partial rollback retains both failures. Effect external cancellation stops retries and
+preserves original and compensation evidence in Cause; self-interruption is policy-retryable.
+Rust WASM panic aborts without compensation. An uncatchable deterministic guest trap permanently
+fails the invocation; generic infrastructure retry handling is unchanged. MoonBit exposes the
+retry API but has no saga helper.
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
@@ -63,12 +74,12 @@ the same warning applies to an application that implements the compensate-and-lo
         passing an async callback that can execute operations on the open transaction (see below).
     </Tabs.Tab>
     <Tabs.Tab>
-        `Saga.infallibleTransaction` currently requires a body whose typed error channel is `never`. `Saga.operation` includes `DurabilityHostError` in its error channel, so operations cannot be passed directly to this helper as in the fallible example.
+        `Saga.infallibleTransaction` accepts a typed failure channel. Fully compensated failures, caught defects and self-interruption can be policy-retried; exhaustion, policy errors and partial rollback return `SagaRetryFailure`.
     </Tabs.Tab>
     <Tabs.Tab>
         In Rust, an infallible transaction can be executed using the async `infallible_transaction` function in
         `golem_rust`, by passing a closure wrapped with `boxed(async move { ... })` that can execute operations on the
-        open transaction (see below).
+        open transaction (see below). Return Result from the closure and handle the helper's Result for compensation failure, exhaustion and policy errors.
     </Tabs.Tab>
     <Tabs.Tab>
         In Scala, an infallible transaction can be executed using `Transactions.infallibleTransaction`, by passing a
@@ -80,8 +91,7 @@ the same warning applies to an application that implements the compensate-and-lo
     </Tabs.Tab>
     <Tabs.Tab>
         In Go, an infallible transaction can be executed using the `transaction.Infallible` function, by passing a
-        function that can execute operations on the open transaction (see below). It returns the plain result
-        value. If a compensation fails while rolling back for the retry, the transaction panics.
+        function that can execute operations on the open transaction (see below). It returns a Result, including compensation failure, exhaustion and policy errors while retaining the original failure.
     </Tabs.Tab>
 </Tabs>
 
@@ -359,9 +369,9 @@ The defined operations can be executed in _fallible_ or _infallible_ mode:
     let result_infallible = infallible_transaction(|tx| {
         let op = op.clone();
         boxed(async move {
-            let first_id = tx.execute(op.clone(), 1).await;
-            let second_id = tx.execute(op, 2).await;
-            (first_id, second_id)
+            let first_id = tx.execute(op.clone(), 1).await?;
+            let second_id = tx.execute(op, 2).await?;
+            Ok((first_id, second_id))
         })
     })
     .await;
@@ -394,13 +404,14 @@ The defined operations can be executed in _fallible_ or _infallible_ mode:
         }
       }
 
-    val resultInfallible: Future[(String, String)] =
+    val resultInfallible: Future[Either[Transactions.TransactionFailure[Any], (String, String)]] =
       Transactions.infallibleTransaction { tx =>
         for {
           firstId <- tx.execute(op, 1)
           secondId <- tx.execute(op, 2)
         } yield (firstId, secondId)
       }
+    // Handle Left outcomes for exhaustion, policy error or partial rollback.
     ```
     </Tabs.Tab>
     <Tabs.Tab>
@@ -431,7 +442,9 @@ The defined operations can be executed in _fallible_ or _infallible_ mode:
           if a compensation failed:
             return partial-rollback(original error, compensation error)
           in fallible mode, return the original domain error
-          otherwise, start the next attempt
+          otherwise, resolve the saga policy and call next-retry-delay with continuation state
+          if exhausted or invalid, return failure preserving the original error
+          await the delay with a durable timer, then start the next attempt
       if all steps succeeded, return success
     ```
 
@@ -488,7 +501,6 @@ The defined operations can be executed in _fallible_ or _infallible_ mode:
     })
     ```
 
-    `resultFallible` is a `golem.Result[Pair, transaction.Failure[string]]`, and `resultInfallible` is the plain
-    `Pair`.
+    Both `resultFallible` and `resultInfallible` are `golem.Result[Pair, transaction.Failure[string]]`.
     </Tabs.Tab>
 </Tabs>

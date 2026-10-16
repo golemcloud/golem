@@ -55,7 +55,7 @@ use golem_common::model::filesystem::{
     validate_file_read_path,
 };
 use golem_common::model::oplog::OplogCursor;
-use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex, PublicOplogPageEntry};
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
 use golem_common::model::worker::{AgentMetadataDto, ResolvedRevert, RevertWorkerTarget};
@@ -72,7 +72,7 @@ use golem_service_base::service::routing_table::{HasRoutingTableService, Routing
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::mpsc;
+use tokio::sync::{Semaphore, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Channel;
 use tonic::{Code, Status};
@@ -568,6 +568,17 @@ pub trait WorkerClient: Send + Sync {
         auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
 
+    /// Reads one oplog entry in full. The executor streams the entry in chunks, so the entry
+    /// can be larger than the gRPC message size limit.
+    async fn get_oplog_entry(
+        &self,
+        agent_id: &AgentId,
+        oplog_index: OplogIndex,
+        component_revision: Option<ComponentRevision>,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+    ) -> Result<PublicOplogEntryWithIndex, WorkerServiceError>;
+
     async fn get_file_system_node(
         &self,
         agent_id: &AgentId,
@@ -798,6 +809,8 @@ pub struct WorkerExecutorWorkerClient {
     //       rather it emits a warn log and resets the retry state.
     worker_executor_retries: RetryConfig,
     routing_table_service: Arc<RoutingTableService>,
+    /// Admits oplog entry reads, each of which holds one full oplog entry in memory.
+    oplog_entry_reads: Arc<Semaphore>,
 }
 
 impl WorkerExecutorWorkerClient {
@@ -807,11 +820,13 @@ impl WorkerExecutorWorkerClient {
         >,
         worker_executor_retries: RetryConfig,
         routing_table_service: Arc<RoutingTableService>,
+        max_concurrent_oplog_entry_reads: usize,
     ) -> Self {
         Self {
             worker_executor_clients,
             worker_executor_retries,
             routing_table_service,
+            oplog_entry_reads: Arc::new(Semaphore::new(max_concurrent_oplog_entry_reads)),
         }
     }
 
@@ -1450,7 +1465,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             },
                         )),
                 } => {
-                    let entries: Vec<PublicOplogEntryWithIndex> = entries
+                    let entries: Vec<PublicOplogPageEntry> = entries
                         .into_iter()
                         .map(|e| e.try_into())
                         .collect::<Result<Vec<_>, _>>()
@@ -1470,6 +1485,69 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     result: Some(workerexecutor::v1::get_oplog_response::Result::Failure(err)),
                 } => Err(err.into()),
                 workerexecutor::v1::GetOplogResponse { .. } => Err("Empty response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
+    async fn get_oplog_entry(
+        &self,
+        agent_id: &AgentId,
+        oplog_index: OplogIndex,
+        component_revision: Option<ComponentRevision>,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+    ) -> Result<PublicOplogEntryWithIndex, WorkerServiceError> {
+        let _admission = self
+            .oplog_entry_reads
+            .acquire()
+            .await
+            .expect("the oplog entry read semaphore is never closed");
+        let agent_id = agent_id.clone();
+        self.call_worker_executor(
+            agent_id.clone(),
+            "get_oplog_entry",
+            move |worker_executor_client| {
+                let request = workerexecutor::v1::GetOplogEntryRequest {
+                    agent_id: Some(agent_id.clone().into()),
+                    environment_id: Some(environment_id.into()),
+                    auth_ctx: Some(auth_ctx.clone().into()),
+                    oplog_index: oplog_index.into(),
+                    component_revision: component_revision.map(Into::into),
+                };
+                Box::pin(async move {
+                    use workerexecutor::v1::get_oplog_entry_response::Result as Frame;
+
+                    let mut stream = worker_executor_client
+                        .get_oplog_entry(request)
+                        .await?
+                        .into_inner();
+                    let mut encoded = Vec::new();
+                    while let Some(response) = stream.message().await? {
+                        match response.result {
+                            Some(Frame::Chunk(chunk)) => encoded.extend(chunk),
+                            Some(Frame::Failure(error)) => return Ok(Err(error)),
+                            None => return Err(Status::internal("Empty oplog entry response")),
+                        }
+                    }
+                    Ok(Ok(encoded))
+                })
+            },
+            |result| match result {
+                Ok(encoded) => {
+                    let entry: golem_api_grpc::proto::golem::worker::OplogEntryWithIndex =
+                        prost::Message::decode(encoded.as_slice()).map_err(|err| {
+                            WorkerExecutorError::unknown(format!(
+                                "Failed to decode oplog entry: {err}"
+                            ))
+                        })?;
+                    drop(encoded);
+                    Ok(entry.try_into().map_err(|err| {
+                        WorkerExecutorError::unknown(format!("Unexpected oplog entry: {err}"))
+                    })?)
+                }
+                Err(error) => Err(error.into()),
             },
             WorkerServiceError::InternalCallError,
         )
@@ -1514,12 +1592,12 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                              },
                          )),
                 } => {
-                    let entries: Vec<PublicOplogEntryWithIndex> = entries
+                    let entries: Vec<PublicOplogPageEntry> = entries
                         .into_iter()
                         .map(|e| e.try_into())
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|err| WorkerExecutorError::unknown(format!("Unexpected oplog entries in error: {err}")))?;
-                    let first_index_in_chunk = entries.first().map(|entry| entry.oplog_index).unwrap_or(OplogIndex::INITIAL).into();
+                    let first_index_in_chunk = entries.first().map(|entry| entry.oplog_index()).unwrap_or(OplogIndex::INITIAL).into();
                     Ok(GetOplogResponse {
                         entries,
                         next: next.map(|c| c.into()),
@@ -3229,6 +3307,7 @@ mod rejection_mapping_tests {
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::AgentError as OplogAgentError;
+    use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
     use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
     use golem_common::model::{AgentId, RetryConfig, RoutingTable, ShardEpoch};
     use golem_schema::proto::golem::schema::{SchemaValue, schema_value};
@@ -3429,6 +3508,9 @@ mod rejection_mapping_tests {
         /// Receives `(call index, frames after the opening one)` once a call's request stream has
         /// ended, which happens after the call returned its response stream.
         tail_frames: Option<tokio::sync::mpsc::UnboundedSender<(usize, usize)>>,
+        /// With this set, `get_oplog_entry` counts the call in `calls`, waits for one permit of
+        /// the semaphore, and returns a `Log` entry at the requested index.
+        oplog_entry_release: Option<Arc<tokio::sync::Semaphore>>,
     }
 
     macro_rules! unimplemented_unary {
@@ -3462,6 +3544,8 @@ mod rejection_mapping_tests {
         >;
         type GetFileContentsStream =
             Pin<Box<dyn Stream<Item = Result<GetFileContentsResponse, Status>> + Send>>;
+        type GetOplogEntryStream =
+            Pin<Box<dyn Stream<Item = Result<GetOplogEntryResponse, Status>> + Send>>;
         type InvokeAgentSessionStream =
             Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send>>;
 
@@ -3586,6 +3670,39 @@ mod rejection_mapping_tests {
             _request: Request<GetFileContentsRequest>,
         ) -> Result<Response<Self::GetFileContentsStream>, Status> {
             Err(Status::unimplemented("get_file_contents"))
+        }
+
+        async fn get_oplog_entry(
+            &self,
+            request: Request<GetOplogEntryRequest>,
+        ) -> Result<Response<Self::GetOplogEntryStream>, Status> {
+            use golem_api_grpc::proto::golem::workerexecutor::v1::get_oplog_entry_response::Result as Frame;
+
+            let Some(release) = self.oplog_entry_release.clone() else {
+                return Err(Status::unimplemented("get_oplog_entry"));
+            };
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            release.acquire().await.unwrap().forget();
+            let entry: golem_api_grpc::proto::golem::worker::OplogEntryWithIndex =
+                PublicOplogEntryWithIndex {
+                    oplog_index: OplogIndex::from_u64(request.into_inner().oplog_index),
+                    attribution: golem_common::model::oplog::PublicOplogEntryAttribution::agent(),
+                    entry: golem_common::model::oplog::PublicOplogEntry::Log(
+                        golem_common::model::oplog::public_oplog_entry::LogParams {
+                            timestamp: golem_common::model::Timestamp::now_utc(),
+                            level: golem_common::model::oplog::LogLevel::Info,
+                            context: String::new(),
+                            message: String::new(),
+                            trace_context: None,
+                        },
+                    ),
+                }
+                .try_into()
+                .unwrap();
+            let frame = GetOplogEntryResponse {
+                result: Some(Frame::Chunk(prost::Message::encode_to_vec(&entry))),
+            };
+            Ok(Response::new(Box::pin(futures::stream::iter([Ok(frame)]))))
         }
 
         async fn invoke_agent_session(
@@ -3723,7 +3840,7 @@ mod rejection_mapping_tests {
             },
             GrpcClientConfig::default(),
         );
-        let client = WorkerExecutorWorkerClient::new(clients, RetryConfig::default(), routing);
+        let client = WorkerExecutorWorkerClient::new(clients, RetryConfig::default(), routing, 1);
         let agent_id = AgentId {
             component_id: ComponentId::new(),
             agent_id: "missing".to_string(),
@@ -3768,6 +3885,62 @@ mod rejection_mapping_tests {
             matches!(public_error.error, Some(agent_error::Error::NotFound(_))),
             "InvocationRejected(NotFound) must remain a public not-found error, got {public_error:?}"
         );
+    }
+
+    #[test]
+    async fn oplog_entry_reads_beyond_the_limit_wait_for_a_running_read_to_end() {
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let executor = RejectingExecutor {
+            oplog_entry_release: Some(release.clone()),
+            ..Default::default()
+        };
+        let calls = executor.calls.clone();
+        // `client_against` admits one oplog entry read at a time.
+        let (client, agent_id) = client_against(executor).await;
+        let read = |oplog_index: u64| {
+            let client = client.clone();
+            let agent_id = agent_id.clone();
+            tokio::spawn(async move {
+                client
+                    .get_oplog_entry(
+                        &agent_id,
+                        OplogIndex::from_u64(oplog_index),
+                        None,
+                        EnvironmentId::new(),
+                        AuthCtx::System,
+                    )
+                    .await
+                    .map(|entry| entry.oplog_index)
+            })
+        };
+        let wait_for_calls = |expected: usize| {
+            let calls = calls.clone();
+            async move {
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    while calls.load(Ordering::SeqCst) < expected {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .expect("the executor should receive the read");
+            }
+        };
+
+        let first = read(3);
+        wait_for_calls(1).await;
+        let second = read(4);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "the second read must wait while the first one holds the only admission"
+        );
+
+        release.add_permits(1);
+        assert_eq!(first.await.unwrap().unwrap(), OplogIndex::from_u64(3));
+        wait_for_calls(2).await;
+        release.add_permits(1);
+        assert_eq!(second.await.unwrap().unwrap(), OplogIndex::from_u64(4));
     }
 
     #[test]

@@ -15,6 +15,7 @@ import {
 import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
 import { AgentHostClient } from "./host/AgentHostClient.js"
 import { RpcClient, type RpcConnection } from "./host/RpcClient.js"
+import type { InvokeOptions } from "./DynamicClient.js"
 import { dynamicMethod } from "./internal/dynamicMethod.js"
 import { wrapHostThrow } from "./internal/rpc.js"
 import { field, t, type SchemaGraph, type SchemaType } from "./internal/schema-model/model.js"
@@ -78,9 +79,11 @@ export interface ReflectedMethod {
   readonly definition: AgentMethod
   readonly invoke: (
     input: JsonValue,
+    options?: InvokeOptions,
   ) => Effect.Effect<ReflectedInvocation<JsonValue>, ReflectionError>
   readonly invokeValue: (
     input: CoreTypes.SchemaValueTree,
+    options?: InvokeOptions,
   ) => Effect.Effect<ReflectedInvocation<CoreTypes.SchemaValueTree>, ReflectionError>
   readonly trigger: (
     input: JsonValue,
@@ -621,9 +624,9 @@ const reflectedClient = (type: AgentType, rpc: RpcConnection): ReflectedAgentCli
       const definition = type.method(name)
       if (definition === undefined) return Effect.fail(new UnknownMethodError(type.name, name))
       const method = dynamicMethod(rpc, name)
-      const invokeValue = (input: CoreTypes.SchemaValueTree) =>
+      const invokeValue = (input: CoreTypes.SchemaValueTree, options?: InvokeOptions) =>
         validate(definition.input, input).pipe(
-          Effect.flatMap(() => method.invoke(input)),
+          Effect.flatMap(() => method.invoke(input, options)),
           Effect.flatMap((invocation) => {
             if (definition.output === undefined)
               return invocation.value === undefined
@@ -644,9 +647,9 @@ const reflectedClient = (type: AgentType, rpc: RpcConnection): ReflectedAgentCli
       const reflected: ReflectedMethod = Object.freeze({
         definition,
         invokeValue,
-        invoke: (input: JsonValue) =>
+        invoke: (input: JsonValue, options?: InvokeOptions) =>
           pack(definition.input, input).pipe(
-            Effect.flatMap(invokeValue),
+            Effect.flatMap((value) => invokeValue(value, options)),
             Effect.flatMap((result) =>
               result.value === undefined
                 ? Effect.succeed({ metadata: result.metadata })

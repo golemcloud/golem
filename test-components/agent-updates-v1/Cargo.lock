@@ -543,6 +543,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "wit-bindgen 0.59.0",
 ]
 
 [[package]]

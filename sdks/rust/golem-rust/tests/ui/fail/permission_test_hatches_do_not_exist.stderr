@@ -1,0 +1,11 @@
+error[E0599]: no method named `__reveal_for_tests` found for reference `&golem_rust::permissions::CardId` in the current scope
+ --> tests/ui/fail/permission_test_hatches_do_not_exist.rs:4:16
+  |
+4 |     let _ = id.__reveal_for_tests();
+  |                ^^^^^^^^^^^^^^^^^^ method not found in `&golem_rust::permissions::CardId`
+
+error[E0599]: no method named `__raw_handle_for_host_api_tests` found for reference `&ScopeCard` in the current scope
+ --> tests/ui/fail/permission_test_hatches_do_not_exist.rs:8:18
+  |
+8 |     let _ = card.__raw_handle_for_host_api_tests();
+  |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `&ScopeCard`

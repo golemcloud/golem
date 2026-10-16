@@ -18,6 +18,7 @@ use crate::command::tool::{
     ToolReleaseSubcommand, ToolSubcommand,
 };
 use crate::command_handler::Handlers;
+use crate::command_handler::agent::insecure_connector;
 use crate::command_handler::agent::invocation_session::CliSessionRequestProvider;
 use crate::command_handler::log::render_command_output_document_masked;
 use crate::context::Context;
@@ -461,9 +462,14 @@ impl ToolCommandHandler {
                 None if args.stderr => Box::pin(EndsOnClosedPipe(tokio::io::stderr())),
                 None => Box::pin(tokio::io::sink()),
             };
+            let connector = if self.ctx.allow_insecure() {
+                Some(insecure_connector()?)
+            } else {
+                None
+            };
             let session = InvocationSession::open(
                 Arc::new(CliSessionRequestProvider::new(self.ctx.clone())),
-                None,
+                connector,
                 initial,
                 false,
                 Arc::new(()),

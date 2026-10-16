@@ -361,19 +361,31 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostUdpSocketWithStore<U> for Dur
         store: &Accessor<U, Self>,
         socket: Resource<UdpSocket>,
     ) -> SocketResult<(Vec<u8>, types::IpSocketAddress)> {
-        let call = DurableCallSession::<P3SocketsTypesUdpSocketReceive, Cancellable>::start_access_with_options(
+        let mut call = DurableCallSession::<P3SocketsTypesUdpSocketReceive, Cancellable>::start_access_with_options(
             store,
             durable_worker_ctx::<Ctx, U>,
             DurableFunctionType::ReadRemote,
-            AccessClaimOptions {
-                incomplete_repair_authorized_by_scope: true,
-                ..Default::default()
-            },
+            AccessClaimOptions::default(),
             HostRequestNoInput {},
         )
         .await
         .map_err(SocketError::trap)?;
-        let response = if call.is_live() {
+        if !call.is_live() {
+            match call
+                .replay_access(store, durable_worker_ctx::<Ctx, U>)
+                .await
+                .map_err(SocketError::trap)?
+            {
+                CallReplayOutcome::Replayed(response) => {
+                    return response
+                        .result
+                        .map(|datagram| (datagram.data, datagram.remote_address.into()))
+                        .map_err(|error| types::ErrorCode::from(error).into());
+                }
+                CallReplayOutcome::Incomplete(incomplete) => call = incomplete,
+            }
+        }
+        let response =
             call.run_live_action_access(store, durable_worker_ctx::<Ctx, U>, || async {
                 let sockets = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
                 let interrupt = store.with(|mut access| {
@@ -395,26 +407,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostUdpSocketWithStore<U> for Dur
                 })
             })
             .await
-            .map_err(SocketError::trap)?
-        } else {
-            match call
-                .replay_access(store, durable_worker_ctx::<Ctx, U>)
-                .await
-                .map_err(SocketError::trap)?
-            {
-                CallReplayOutcome::Replayed(response) => response,
-                CallReplayOutcome::Incomplete(call) => call
-                    .complete_access(
-                        store,
-                        durable_worker_ctx::<Ctx, U>,
-                        HostResponseP3SocketsUdpReceive {
-                            result: Err(SerializableP3SocketErrorCode::ConnectionBroken),
-                        },
-                    )
-                    .await
-                    .map_err(SocketError::trap)?,
-            }
-        };
+            .map_err(SocketError::trap)?;
 
         match response.result {
             Ok(SerializableP3UdpDatagram {

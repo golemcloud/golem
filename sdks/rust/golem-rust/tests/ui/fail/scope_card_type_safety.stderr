@@ -1,0 +1,80 @@
+error[E0308]: mismatched types
+  --> tests/ui/fail/scope_card_type_safety.rs:23:26
+   |
+23 |         .with_scope_card(card)
+   |          --------------- ^^^^ expected `&ScopeCard`, found `&PermissionCard`
+   |          |
+   |          arguments to this method are incorrect
+   |
+   = note: expected reference `&ScopeCard`
+              found reference `&golem_rust::permissions::PermissionCard`
+note: method defined here
+  --> tests/ui/fail/scope_card_type_safety.rs:4:1
+   |
+ 4 | #[agent_definition]
+   | ^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `agent_definition` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> tests/ui/fail/scope_card_type_safety.rs:30:35
+   |
+30 |     client.set_default_scope_card(card);
+   |            ---------------------- ^^^^ expected `&ScopeCard`, found `&PermissionCard`
+   |            |
+   |            arguments to this method are incorrect
+   |
+   = note: expected reference `&ScopeCard`
+              found reference `&golem_rust::permissions::PermissionCard`
+note: method defined here
+  --> tests/ui/fail/scope_card_type_safety.rs:4:1
+   |
+ 4 | #[agent_definition]
+   | ^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `agent_definition` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no method named `trigger_call` found for struct `ReceiverClientWithScopeCard<'a>` in the current scope
+  --> tests/ui/fail/scope_card_type_safety.rs:36:10
+   |
+ 4 |   #[agent_definition]
+   |   ------------------- method `trigger_call` not found for this struct
+...
+34 |       ReceiverClient::get("target".to_string())
+   |       -----------------------------------------
+   |       |
+   |  _____method `trigger_call` is available on `&ReceiverClient`
+   | |
+35 | |         .with_scope_card(card)
+36 | |         .trigger_call();
+   | |         -^^^^^^^^^^^^ method not found in `ReceiverClientWithScopeCard<'_>`
+   | |_________|
+   |
+   |
+help: one of the expressions' fields has a method of the same name
+   |
+36 |         .client.trigger_call();
+   |          +++++++
+
+error[E0277]: the trait bound `ScopeCard: IntoSchema` is not satisfied
+  --> tests/ui/fail/scope_card_type_safety.rs:40:38
+   |
+40 |     golem_rust::IntoSchema::to_value(card)
+   |     -------------------------------- ^^^^ the trait `IntoSchema` is not implemented for `ScopeCard`
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: the following other types implement trait `IntoSchema`:
+             &T
+             ()
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+             (T0, T1, T2, T3, T4, T5)
+             (T0, T1, T2, T3, T4, T5, T6)
+           and $N others
+
+error[E0599]: no method named `revoke` found for struct `ScopeCard` in the current scope
+  --> tests/ui/fail/scope_card_type_safety.rs:44:18
+   |
+44 |     let _ = card.revoke();
+   |                  ^^^^^^ method not found in `ScopeCard`

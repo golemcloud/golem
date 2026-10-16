@@ -33,7 +33,7 @@ use golem_common::schema::agent::{
 use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef};
 use golem_common::schema::metadata::TypeId;
 use golem_common::schema::schema_type::{
-    BinaryRestrictions, NumericBound, NumericRestrictions, TextRestrictions,
+    BinaryRestrictions, NumericBound, NumericRestrictions, PermissionCardSpec, TextRestrictions,
 };
 use golem_common::schema::tool::{
     BoolFlagShape, CommandBody, CommandIndex, CommandNode, CommandTree, Doc, ErrorCase, ErrorKind,
@@ -501,10 +501,12 @@ fn guest_generation_uses_logical_ephemeral_proxies_and_invocation_metadata() {
 fn guest_generation_compiles_host_managed_capability_methods() {
     let dir = TempDir::new().unwrap();
     let target_path = Utf8Path::from_path(dir.path()).unwrap();
+    let template_card = || SchemaType::permission_card(PermissionCardSpec { polymorphic: true });
     let capability_tuple = SchemaType::tuple(vec![
         SchemaType::secret(Default::default()),
         SchemaType::quota_token(Default::default()),
         SchemaType::permission_card(Default::default()),
+        template_card(),
     ]);
     let envelope = SchemaType::record(vec![named_field(
         "capabilities",
@@ -533,8 +535,30 @@ fn guest_generation_compiles_host_managed_capability_methods() {
                 vec![field("capabilities", capability_modalities.clone())],
                 Some(capability_modalities),
             ),
+            method(
+                "delegate",
+                vec![
+                    field("template", template_card()),
+                    field("concrete", SchemaType::permission_card(Default::default())),
+                ],
+                Some(template_card()),
+            ),
+            method("with_scope_card", vec![], None),
+            method("set_default_scope_card", vec![], None),
+            method("clear_default_scope_card", vec![], None),
+            method(
+                "describe",
+                vec![],
+                Some(ref_to("CapabilityAgentWithScopeCard")),
+            ),
         ],
-        vec![def("CapabilityEnvelope", envelope)],
+        vec![
+            def("CapabilityEnvelope", envelope),
+            def(
+                "CapabilityAgentWithScopeCard",
+                SchemaType::record(vec![named_field("name", SchemaType::string())]),
+            ),
+        ],
         AgentMode::Durable,
     );
     let config =
@@ -553,11 +577,74 @@ fn guest_generation_compiles_host_managed_capability_methods() {
     for capability_type in [
         "golem_rust::secrets::GuestSecretHandle",
         "golem_rust::quota::QuotaToken",
-        "golem_rust::schema::wit::GuestPermissionCardHandle",
+        "golem_rust::permissions::PermissionCard",
+        "golem_rust::permissions::PolymorphicPermissionCard",
     ] {
         assert!(
             lib_rs.contains(capability_type),
             "missing capability type {capability_type}:\n{lib_rs}"
+        );
+    }
+    // A `polymorphic: true` card is a template card on both sides of a call;
+    // a `polymorphic: false` card stays a concrete card.
+    let delegate = lib_rs
+        .split("pub async fn delegate(")
+        .nth(1)
+        .and_then(|rest| rest.split('{').next())
+        .unwrap_or_else(|| panic!("missing delegate method:\n{lib_rs}"));
+    let delegate = delegate.split_whitespace().collect::<Vec<_>>().join(" ");
+    let (parameters, result) = delegate
+        .split_once(") ->")
+        .unwrap_or_else(|| panic!("delegate has no result type: {delegate}"));
+    assert!(
+        parameters.contains("template: golem_rust::permissions::PolymorphicPermissionCard,")
+            && parameters.contains("concrete: golem_rust::permissions::PermissionCard,")
+            && result.contains("golem_rust::permissions::PolymorphicPermissionCard"),
+        "unexpected delegate signature: {delegate}"
+    );
+    // User method and type names win over the generated scope-card members,
+    // which are renamed.
+    for scope_card_item in [
+        "pub async fn with_scope_card(",
+        "pub async fn set_default_scope_card(",
+        "pub async fn clear_default_scope_card(",
+        "pub fn with_scope_card1<'a>(",
+        "pub fn set_default_scope_card1(",
+        "pub fn clear_default_scope_card1(",
+        "pub struct CapabilityAgentWithScopeCard<'a>",
+        "scope_card: &'a golem_rust::permissions::ScopeCard",
+    ] {
+        assert!(
+            lib_rs.contains(scope_card_item),
+            "missing scope-card item {scope_card_item}:\n{lib_rs}"
+        );
+    }
+    assert_eq!(
+        lib_rs
+            .matches("golem_rust::permissions::__async_invoke_and_await")
+            .count(),
+        7,
+        "every awaited call, and only awaited calls, must go through the scope-card helper:\n{lib_rs}"
+    );
+    assert!(!lib_rs.contains("wasm_rpc.async_invoke_and_await"));
+    // Every awaited implementation resolves the scope card before it encodes
+    // the input, so a dropped default fails before any argument card moves.
+    let impls = lib_rs
+        .split("async fn __golem_bridge_invoke_")
+        .skip(1)
+        .collect::<Vec<_>>();
+    assert_eq!(impls.len(), 7, "{lib_rs}");
+    for body in impls {
+        let body = body.split("pub async fn").next().unwrap();
+        let resolve = body
+            .find("resolve(__golem_bridge_scope_card)")
+            .unwrap_or_else(|| panic!("missing scope-card resolution:\n{body}"));
+        let encode = body
+            .find("let method_parameters")
+            .unwrap_or_else(|| panic!("missing input encoding:\n{body}"));
+        assert!(
+            resolve < encode,
+            "scope card resolved after encoding:\n{body}"
         );
     }
     assert!(!lib_rs.contains("#[derive(Debug, Clone)]\npub struct CapabilityEnvelope"));

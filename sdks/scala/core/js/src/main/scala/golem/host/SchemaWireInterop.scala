@@ -194,6 +194,31 @@ object SchemaWireInterop {
     raw.asInstanceOf[js.Any]
   }
 
+  /**
+   * Give the owned handles that lowering took from `wit` back to their holders.
+   * Use it only when the lowered tree never reached the host. A card released
+   * meanwhile is dropped instead. Stream arguments cannot be returned: they are
+   * closed, as a failed lowering closes them.
+   */
+  private[golem] def returnCapabilityHandles(wit: WitSchemaValueTree, lowered: JsSchemaValueTree): Unit = {
+    wit.valueNodes.zipWithIndex.foreach { case (node, index) =>
+      val loweredNode                          = lowered.valueNodes(index).asInstanceOf[js.Dynamic]
+      val raw                                  = loweredNode.selectDynamic("val")
+      def giveBack(restore: Any => Unit): Unit =
+        if (!js.isUndefined(raw)) {
+          loweredNode.updateDynamic("val")(js.undefined)
+          restore(raw)
+        }
+      node match {
+        case WitSchemaValueNode.SecretValue(handle)          => giveBack(handle.giveBack)
+        case WitSchemaValueNode.QuotaTokenHandle(handle)     => giveBack(handle.giveBack)
+        case WitSchemaValueNode.PermissionCardHandle(handle) => giveBack(PermissionsApi.returnCardHandle(handle, _))
+        case _                                               => ()
+      }
+    }
+    drainJsCapabilityHandles(lowered.valueNodes)
+  }
+
   private def drainJsCapabilityHandles(nodes: js.Array[JsSchemaValueNode]): Unit =
     for (index <- nodes.indices) {
       try {

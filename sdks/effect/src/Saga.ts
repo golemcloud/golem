@@ -25,23 +25,10 @@
  * `Effect<void, E, R>`; the first such failure surfaces as
  * `FailedAndRolledBackPartially { error, compensationError }`.
  *
- * **Failure-cause routing summary**
- *
- * | Cause class             | Fallible saga                              | Infallible saga                                       |
- * | ----------------------- | ------------------------------------------ | ----------------------------------------------------- |
- * | `Effect.fail` (typed E) | compensate (LIFO) → `TransactionFailure`   | compensate (LIFO) → new attempt |
- * | `Effect.interrupt`      | compensate (LIFO) → propagate interrupt    | compensate (LIFO) → propagate interrupt |
- * | `Effect.die` (defect)   | NO compensation → call `host.trap(reason)` | NO compensation, NO rewind → call `host.trap(reason)` |
- *
- * Defects intentionally bypass the typed protocol AND call the
- * host's uncatchable `trap` so user code outside the saga cannot
- * observe the unexpected throw with `Effect.catchAll` and continue
- * with a half-rolled-back state. This mirrors the
- * `catch (e) { trap(...); throw e }` pattern in `golem-ts-sdk`'s
- * `host/transaction.ts`. Interrupts are deliberately NOT trapped —
- * they are structured cancellation in Effect (`Effect.timeout`,
- * `race`, parent-scope teardown), and trapping would make those
- * patterns kill the worker.
+ * All catchable causes drain compensation under an interruption mask.
+ * Fallible sagas preserve defects and interruption after complete rollback.
+ * Infallible sagas ask the host for a bounded retry decision after complete
+ * rollback; exhaustion and policy errors are typed `SagaRetryFailure` values.
  *
  * Nested transactions on the same fiber tree are rejected with
  * {@link NestedSagaError} to keep compensation ownership unambiguous.
@@ -50,8 +37,10 @@
  */
 
 import { Cause, Context, Effect, Option, Ref, Scope } from "effect"
-import { formatCauseForTrap } from "./internal/durabilityMode.js"
 import { AgentHostClient } from "./host/AgentHostClient.js"
+import { RetryClient } from "./host/RetryClient.js"
+import type { PredicateValue } from "golem:api/retry@1.5.0"
+import { uuidToString } from "golem:core/types@2.0.0"
 
 // ---------------------------------------------------------------------------
 // Internal fiber-local references
@@ -145,6 +134,20 @@ export type TransactionFailure<E> =
       readonly error: E
       readonly compensationError: unknown
     }
+
+/**
+ * An exhausted or cancelled retry, invalid policy, or incomplete compensation.
+ * @since 1.5.0
+ * @category errors
+ */
+export class SagaRetryFailure {
+  readonly _tag = "SagaRetryFailure"
+  constructor(
+    readonly cause: Cause.Cause<unknown>,
+    readonly compensationError?: Cause.Cause<unknown>,
+    readonly policyError?: unknown,
+  ) {}
+}
 
 // ---------------------------------------------------------------------------
 // withCompensation — canonical, infallible-compensation combinator
@@ -334,24 +337,6 @@ export const operation = <In, Out, E, R, R2>(input: {
 // ---------------------------------------------------------------------------
 
 /**
- * Cause-classification policy for the saga entry points:
- *
- * - typed failure → trigger compensation drain
- * - interruption → trigger compensation drain (matches official SDKs'
- *   "RAII-on-panic" behaviour and Effect's expectation that
- *   compensations are interrupt-safe);
- * - defect → propagate unchanged, no compensation.
- *
- * @internal
- */
-const shouldCompensateCause = <E>(cause: Cause.Cause<E>): boolean => {
-  return (
-    !cause.reasons.some(Cause.isDieReason) &&
-    cause.reasons.some((reason) => Cause.isFailReason(reason) || Cause.isInterruptReason(reason))
-  )
-}
-
-/**
  * Build the per-transaction context value, including the
  * compensation-error sink.
  *
@@ -376,6 +361,34 @@ const makeSagaContextValue = (
     })),
   )
 
+// Restore boundaries in Effect 4 replace the exit with a pending external
+// interruption. Keep the saga outcome outside those boundaries. The exit
+// finalizer polls pending cancellation and combines it with the saved outcome.
+const preserveInterruptedOutcome = <A, E, R>(
+  run: (remember: (cause: Cause.Cause<unknown> | undefined) => void) => Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> =>
+  Effect.suspend(() => {
+    let outcome: Cause.Cause<unknown> | undefined
+    let pollCancellation: Effect.Effect<void> = Effect.void
+    return Effect.uninterruptibleMask((restore) => {
+      pollCancellation = restore(Effect.void)
+      return restore(
+        run((cause) => {
+          outcome = cause
+        }),
+      )
+    }).pipe(
+      Effect.onExit(() =>
+        Effect.gen(function* () {
+          const cancellation = yield* Effect.exit(pollCancellation)
+          if (cancellation._tag === "Failure" && outcome !== undefined) {
+            return yield* Effect.failCause(Cause.combine(cancellation.cause, outcome))
+          }
+        }),
+      ),
+    ) as Effect.Effect<A, E, R>
+  })
+
 // ---------------------------------------------------------------------------
 // fallibleTransaction
 // ---------------------------------------------------------------------------
@@ -395,12 +408,12 @@ const makeSagaContextValue = (
  *   failed; subsequent compensations still ran best-effort, but only
  *   the first failure is reported.
  *
- * Interruption propagates unchanged (the body's compensations still
- * run via the surrounding scope, but the outer result is interruption,
- * not a `TransactionFailure`).
+ * External cancellation retains interruption together with the rollback
+ * outcome in the final cause. Partial rollback retains both the body cause
+ * and the compensation failure.
  *
- * Defects (`Effect.die` / unexpected throws) propagate unchanged
- * without triggering compensation.
+ * Defects (`Effect.die` / unexpected throws) propagate unchanged after
+ * compensation. Partial rollback retains the original cause in `error`.
  *
  * Nesting another saga inside the body raises {@link NestedSagaError}.
  *
@@ -411,84 +424,73 @@ export const fallibleTransaction = <A, E, R>(
   body: Effect.Effect<A, E, R>,
 ): Effect.Effect<
   A,
-  TransactionFailure<E> | NestedSagaError,
+  TransactionFailure<E | Cause.Cause<E>> | NestedSagaError,
   Exclude<R, Scope.Scope> | AgentHostClient
 > =>
-  Effect.gen(function* () {
-    const existing = yield* Effect.service(InsideSagaRef)
-    if (existing !== null) return yield* Effect.fail(new NestedSagaError(existing.mode))
+  preserveInterruptedOutcome((remember) =>
+    Effect.gen(function* () {
+      const existing = yield* Effect.service(InsideSagaRef)
+      if (existing !== null) return yield* Effect.fail(new NestedSagaError(existing.mode))
 
-    const { value: contextValue, readError } = yield* makeSagaContextValue("fallible")
-    const causeStore: CauseStoreValue = { cause: null }
+      const { value: contextValue, readError } = yield* makeSagaContextValue("fallible")
+      const causeStore: CauseStoreValue = { cause: null }
 
-    const scope = yield* Scope.make()
-    return yield* Effect.uninterruptibleMask((restore) =>
-      Effect.gen(function* () {
-        const exit = yield* Effect.exit(
-          restore(
-            (body as Effect.Effect<A, E, R | Scope.Scope>).pipe(
-              Effect.provideService(InsideSagaRef, contextValue),
-              Effect.provideService(CauseStoreRef, causeStore),
-              Scope.provide(scope),
-            ),
-          ),
-        )
-        if (exit._tag === "Success") return exit.value
-
-        if (!shouldCompensateCause(exit.cause)) {
-          // Defect path — call the host's uncatchable trap so user code
-          // outside the saga cannot observe the unexpected throw and
-          // continue with a half-rolled-back state. Mirrors the
-          // `catch (e) { trap(...); throw e }` pattern in
-          // `golem-ts-sdk` `host/transaction.ts`.
-          const host = yield* AgentHostClient
-          yield* Effect.sync(() =>
-            host.trap(`fallibleTransaction failed: ${formatCauseForTrap(exit.cause)}`),
-          )
-          return yield* Effect.failCause(exit.cause)
-        }
-
-        // Make the cause visible to the registered compensations,
-        // then close the scope to drain them in LIFO order.
-        causeStore.cause = exit.cause as Cause.Cause<unknown>
-        yield* Scope.close(scope, exit).pipe(Effect.orDie)
-
-        const compensationFailure = yield* readError
-        if (
-          Option.isSome(compensationFailure) &&
-          compensationFailure.value.reasons.some(Cause.isDieReason)
-        ) {
-          const host = yield* AgentHostClient
-          yield* Effect.sync(() =>
-            host.trap(
-              `fallibleTransaction compensation failed: ${Cause.pretty(compensationFailure.value)}`,
+      const scope = yield* Scope.make()
+      return yield* Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const exit = yield* Effect.exit(
+            restore(
+              (body as Effect.Effect<A, E, R | Scope.Scope>).pipe(
+                Effect.provideService(InsideSagaRef, contextValue),
+                Effect.provideService(CauseStoreRef, causeStore),
+                Scope.provide(scope),
+              ),
             ),
           )
-          return yield* Effect.failCause(compensationFailure.value as Cause.Cause<never>)
-        }
-        const failures = exit.cause.reasons.filter(Cause.isFailReason) as Array<Cause.Fail<E>>
-        if (failures.length === 0) {
-          // Interrupt-only cause — propagate interruption unchanged.
-          return yield* Effect.failCause(exit.cause)
-        }
-        const error = failures[0]!.error
-        if (Option.isSome(compensationFailure)) {
-          const failure = compensationFailure.value.reasons.find(Cause.isFailReason)
+          if (exit._tag === "Success") return exit.value
+
+          // Make the cause visible to the registered compensations,
+          // then close the scope to drain them in LIFO order.
+          causeStore.cause = exit.cause as Cause.Cause<unknown>
+          yield* Scope.close(scope, exit).pipe(Effect.orDie)
+
+          const compensationFailure = yield* readError
+          const failures = exit.cause.reasons.filter(Cause.isFailReason) as Array<Cause.Fail<E>>
+          const unexpected = exit.cause.reasons.some(
+            (reason) => Cause.isDieReason(reason) || Cause.isInterruptReason(reason),
+          )
+          if (unexpected && Option.isNone(compensationFailure)) {
+            return yield* Effect.failCause(exit.cause)
+          }
+          const error = !unexpected && failures.length > 0 ? failures[0]!.error : exit.cause
+          if (Option.isSome(compensationFailure)) {
+            const failure = compensationFailure.value.reasons.find(Cause.isFailReason)
+            return yield* Effect.fail({
+              _tag: "FailedAndRolledBackPartially",
+              error,
+              compensationError:
+                failure && compensationFailure.value.reasons.every(Cause.isFailReason)
+                  ? failure.error
+                  : compensationFailure.value,
+            } as const satisfies TransactionFailure<E | Cause.Cause<E>>)
+          }
           return yield* Effect.fail({
-            _tag: "FailedAndRolledBackPartially",
+            _tag: "FailedAndRolledBackCompletely",
             error,
-            compensationError: failure ? failure.error : compensationFailure.value,
-          } as const satisfies TransactionFailure<E>)
-        }
-        return yield* Effect.fail({
-          _tag: "FailedAndRolledBackCompletely",
-          error,
-        } as const satisfies TransactionFailure<E>)
-      }).pipe(Effect.onExit((exit) => Scope.close(scope, exit))),
-    )
-  }) as Effect.Effect<
+          } as const satisfies TransactionFailure<E | Cause.Cause<E>>)
+        }).pipe(
+          Effect.onExit((exit) => Scope.close(scope, exit)),
+          Effect.onExit((exit) =>
+            Effect.sync(() => {
+              if (exit._tag === "Failure") remember(exit.cause)
+            }),
+          ),
+        ),
+      )
+    }),
+  ) as Effect.Effect<
     A,
-    TransactionFailure<E> | NestedSagaError,
+    TransactionFailure<E | Cause.Cause<E>> | NestedSagaError,
     Exclude<R, Scope.Scope> | AgentHostClient
   >
 
@@ -505,8 +507,11 @@ export const fallibleTransaction = <A, E, R>(
  * compensate state changes explicitly. Reusing an external idempotency
  * key after compensation can suppress the new operation.
  *
- * Cancellation drains compensations and propagates. Defects trap without
- * compensation. Neither failure mode rewinds or retries a guest trap.
+ * Caught defects and self-interruption also drain compensation before the host
+ * retry decision. External cancellation stops retries and retains the latest
+ * body cause and rollback outcome together with interruption in the final cause.
+ * Uncatchable guest traps cannot run guest compensation.
+ * The host owns policy evaluation, jitter, continuation state and bounds.
  *
  * Nesting another saga inside the body raises {@link NestedSagaError}.
  *
@@ -515,57 +520,100 @@ export const fallibleTransaction = <A, E, R>(
  */
 export const infallibleTransaction = <A, E, R>(
   body: Effect.Effect<A, E, R>,
-): Effect.Effect<A, NestedSagaError, Exclude<R, Scope.Scope> | AgentHostClient> =>
-  Effect.gen(function* () {
-    const existing = yield* Effect.service(InsideSagaRef)
-    if (existing !== null) return yield* Effect.fail(new NestedSagaError(existing.mode))
+): Effect.Effect<
+  A,
+  NestedSagaError | SagaRetryFailure,
+  Exclude<R, Scope.Scope> | AgentHostClient | RetryClient
+> =>
+  preserveInterruptedOutcome((remember) =>
+    Effect.gen(function* () {
+      const existing = yield* Effect.service(InsideSagaRef)
+      if (existing !== null) return yield* Effect.fail(new NestedSagaError(existing.mode))
 
-    while (true) {
-      const { value: contextValue, readError } = yield* makeSagaContextValue("infallible")
-      const causeStore: CauseStoreValue = { cause: null }
+      const retry = yield* RetryClient
+      const host = yield* AgentHostClient
+      const started = yield* Effect.sync(() => retry.now())
+      let state: Uint8Array = new Uint8Array()
+      let failedAttempts = 0n
+      while (true) {
+        const { value: contextValue, readError } = yield* makeSagaContextValue("infallible")
+        const causeStore: CauseStoreValue = { cause: null }
 
-      const scope = yield* Scope.make()
-      const attempt = yield* Effect.uninterruptibleMask((restore) =>
-        Effect.gen(function* () {
-          const exit = yield* Effect.exit(
-            restore(
-              (body as Effect.Effect<A, E, R | Scope.Scope>).pipe(
-                Effect.provideService(InsideSagaRef, contextValue),
-                Effect.provideService(CauseStoreRef, causeStore),
-                Scope.provide(scope),
+        const scope = yield* Scope.make()
+        const attempt = yield* Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const exit = yield* Effect.exit(
+              restore(
+                (body as Effect.Effect<A, E, R | Scope.Scope>).pipe(
+                  Effect.provideService(InsideSagaRef, contextValue),
+                  Effect.provideService(CauseStoreRef, causeStore),
+                  Scope.provide(scope),
+                ),
               ),
+            )
+            if (exit._tag === "Success") {
+              remember(undefined)
+              return { value: exit.value }
+            }
+
+            causeStore.cause = exit.cause
+            remember(Cause.fail(new SagaRetryFailure(exit.cause)))
+            yield* Scope.close(scope, exit).pipe(Effect.orDie)
+
+            const compensationFailure = yield* readError
+            if (Option.isSome(compensationFailure)) {
+              return yield* Effect.fail(new SagaRetryFailure(exit.cause, compensationFailure.value))
+            }
+            const decision = yield* Effect.try({
+              try: () => {
+                const id = host.getSelfMetadata().agentId
+                const noun = `urn:worker:${uuidToString(id.componentId.uuid)}/${id.agentId}`
+                const kind = exit.cause.reasons.some(Cause.isInterruptReason)
+                  ? "interrupted"
+                  : exit.cause.reasons.some(Cause.isDieReason)
+                    ? "exception"
+                    : "operation-error"
+                const properties: [string, PredicateValue][] = [
+                  ["attempt", { tag: "integer", val: ++failedAttempts }],
+                  ["error-kind", { tag: "text", val: kind }],
+                ]
+                const policy = retry.resolveRetryPolicy("saga", noun, properties)
+                const elapsed = retry.now() - started
+                return retry.nextRetryDelay(
+                  policy,
+                  state,
+                  elapsed < 0n ? 0n : elapsed,
+                  "saga",
+                  noun,
+                  properties,
+                )
+              },
+              catch: (error) => new SagaRetryFailure(exit.cause, undefined, error),
+            })
+            state = decision.state
+            if (decision.delay === undefined)
+              return yield* Effect.fail(new SagaRetryFailure(exit.cause))
+            return { delay: decision.delay }
+          }).pipe(
+            Effect.onExit((exit) => Scope.close(scope, exit)),
+            Effect.onExit((exit) =>
+              Effect.sync(() => {
+                if (exit._tag === "Failure") remember(exit.cause)
+              }),
             ),
-          )
-          if (exit._tag === "Success") return { value: exit.value }
-
-          if (!shouldCompensateCause(exit.cause)) {
-            // Defect path — same trap protocol as `fallibleTransaction`.
-            const host = yield* AgentHostClient
-            yield* Effect.sync(() =>
-              host.trap(`infallibleTransaction failed: ${formatCauseForTrap(exit.cause)}`),
-            )
-            return yield* Effect.failCause(exit.cause as Cause.Cause<never>)
-          }
-
-          causeStore.cause = exit.cause
-          yield* Scope.close(scope, exit).pipe(Effect.orDie)
-
-          const compensationFailure = yield* readError
-          if (Option.isSome(compensationFailure)) {
-            const host = yield* AgentHostClient
-            yield* Effect.sync(() =>
-              host.trap(
-                `infallibleTransaction compensation failed: ${Cause.pretty(compensationFailure.value)}`,
-              ),
-            )
-            return yield* Effect.failCause(compensationFailure.value as Cause.Cause<never>)
-          }
-          if (exit.cause.reasons.some(Cause.isInterruptReason)) {
-            return yield* Effect.failCause(exit.cause as Cause.Cause<never>)
-          }
-          return undefined
-        }).pipe(Effect.onExit((exit) => Scope.close(scope, exit))),
-      )
-      if (attempt !== undefined) return attempt.value
-    }
-  }) as Effect.Effect<A, NestedSagaError, Exclude<R, Scope.Scope> | AgentHostClient>
+          ),
+        )
+        if ("value" in attempt) return attempt.value
+        let milliseconds = (attempt.delay + 999_999n) / 1_000_000n
+        while (milliseconds > 0n) {
+          const chunk = Number(milliseconds > 2_147_483_647n ? 2_147_483_647n : milliseconds)
+          yield* Effect.sleep(chunk)
+          milliseconds -= BigInt(chunk)
+        }
+      }
+    }),
+  ) as Effect.Effect<
+    A,
+    NestedSagaError | SagaRetryFailure,
+    Exclude<R, Scope.Scope> | AgentHostClient | RetryClient
+  >

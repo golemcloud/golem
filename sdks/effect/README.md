@@ -642,11 +642,124 @@ Use started calls when either output is required and drain both outputs concurre
 caller-packed value when the deployed schema is unavailable and does not infer validation rules.
 Reflected failures are typed Effect errors, including `ToolReflectionError` for malformed output.
 
-`WitTypes.PermissionCard({ polymorphic })` represents a permission card. Cards are opaque affine
+`WitTypes.PermissionCard` (`permission-card { polymorphic: false }`) represents a concrete
+permission card, whose grants name concrete owners and resources.
+`WitTypes.PolymorphicPermissionCard` (`polymorphic: true`) represents a template card, whose grants
+may contain slot variables (`?agent`, `?env`, ...) that resolve for each holder. A schema encodes
+only cards of its own kind, and a decoded card takes the type that the parameter or result
+declares. The host refuses an agent call input or output whose card does not match the declared
+kind. Cards are opaque affine
 capabilities: successful encoding transfers the exact handle across agent RPC, tool calls, and
 middleware. The sender must not inspect or reuse a transferred card. Transactional graph encoding
 does not consume it if validation or another sibling conversion fails, so a corrected retry remains
-possible. The SDK intentionally has no card inspection, wallet, derivation, or installation API.
+possible. Use `Permissions` to inspect, derive, scope, revoke, and install cards.
+
+Decoding never turns plain data into a card: the card schemas,
+`Bridge.permissionCardFromSchemaValue`, and `Bridge.polymorphicPermissionCardFromSchemaValue`
+accept only cards that the SDK lifted from a host value. The SDK has no conversion API between
+`PermissionCard`, `PolymorphicPermissionCard`, and `ScopeCard`. A card that a schema decodes takes
+the type that the schema declares, also after an encode in the same component; the host keeps the
+real kind of the card, so this gives no authority. A `ScopeCard` never encodes.
+The SDK keeps its card registry on `globalThis`, because the main and middleware bundles share
+cards. Code in the same component can therefore reach the registry and alias a host resource into
+two card objects. This does not create authority: the host checks every use, and the second use of
+a moved resource fails.
+
+### Permission-card management
+
+`Permissions` wraps `golem:permissions@0.1.0`. Every function returns an Effect that requires
+`PermissionsClient`, which the agent runtime provides. Expected host failures are
+`PermissionError` values whose `kind` is the WIT case, such as `"not-permitted"` or
+`"install-recipient-mismatch"`. Moved cards, invalid holders, and unexpected host exceptions are
+`PermissionsHostError` values. The `id`, `parents`, and `expiresAt` accessors trap in the host when
+the card is unknown or revoked.
+
+```ts
+import { Effect } from "effect"
+import { Permissions } from "@golemcloud/effect-golem"
+
+const grant = {
+  class: "kv",
+  owner: "?env",
+  recipient: "*",
+  verb: "read",
+  resourceId: "store.key",
+}
+
+const program = Effect.gen(function* () {
+  const card = yield* Permissions.deriveFromWallet({
+    lowerPositive: [grant],
+    upperPositive: [grant],
+  })
+  const view = yield* Permissions.inspect(card)
+  const child = yield* Permissions.derive(
+    card,
+    { lowerPositive: view.lowerPositive, upperPositive: view.upperPositive },
+    Permissions.Lifespan.fromDuration("1 hour"),
+  )
+  const wallet = yield* Permissions.walletScoped
+  const scope = yield* Permissions.deriveScope(
+    wallet.map((entry) => entry.card),
+    {
+      lowerPositive: [grant],
+      upperPositive: [grant],
+    },
+  )
+  // Reader is a defineAgent spec whose read method needs the kv grant;
+  // ReaderClient is the matching defineAgentClient definition.
+  const reader = yield* Reader.client.get({ name: "reader" })
+  yield* reader.read.withScopeCard(scope)({ key: "key" })
+  const holder = yield* Permissions.agentHolder(yield* ReaderClient.agentId({ name: "reader" }))
+  yield* Permissions.install(child, holder)
+  return yield* Permissions.revoke(card)
+}).pipe(Effect.scoped)
+```
+
+- `wallet` returns `WalletCard` entries, a closed union labelled with the card kind:
+  `{ _tag: "Concrete", card: PermissionCard }`, `{ _tag: "Template", card: PolymorphicPermissionCard }`,
+  or `{ _tag: "Scope", card: ScopeCard }`. A `Scope` entry is the scope card lent to the current
+  invocation; the host lists it only when the agent holds `card:inspect`.
+- `PolymorphicPermissionCard` supports the same operations as `PermissionCard`. `derive` from a
+  template card returns a `PermissionCard`, because the host resolves the template for the holder.
+- `deriveScope` returns a `ScopeCard`, which is a separate type from `PermissionCard`. Its parents
+  are persistent cards or scope cards of the current invocation. A scope card supports `id`,
+  `parents`, `expiresAt`, `inspect`, `release`, and use as a `deriveScope` parent. It cannot be
+  revoked, installed, derived from with `derive`, or sent as an agent-method argument or result.
+- `expiresAt` of a scope card is the earliest expiry of the root cards of this scope card, or none
+  when no root card expires. The scope card stops authorizing then.
+- A scope card is valid only during the invocation that derived it. If you keep one, or a client
+  whose default is one, for a later invocation, the host denies its awaited calls with an
+  `RpcCallError` whose cause is `denied`.
+- `derive` treats the positive bounds as the parent grants to retain and the negative bounds as
+  denials to add. `deriveFromWallet` and `deriveScope` take the complete requested lattice.
+  Omitted bound lists are empty.
+- `Lifespan.fromIso8601("P30D")` and `Lifespan.fromDuration(...)` build lifespans. The host
+  accepts durations in days and time units (`PnDTnHnMnS`) and rejects calendar units.
+  `fromDuration` rejects infinite, zero, and negative durations and sends whole and fractional
+  seconds.
+- `id`, `parents`, `expiresAt`, `inspect`, `derive`, and `deriveScope` borrow the card. `revoke`,
+  `install`, and `release` move the card before the host call, because the host drops the
+  handle even when the call fails. Any later use fails with `PermissionsHostError`.
+- `CardId` is opaque. Compare IDs with `Equal.equals` or use them in Effect collections. Printing,
+  logging, and JSON serialization show `CardId(<redacted>)`.
+- `wallet` returns owned cards; release the ones that you do not keep with `release`, or use
+  `walletScoped` to release them when the scope closes.
+- `install` accepts `Holder.agent(...)` or `agentHolder(identity)`. The host rejects account and
+  app holders with `not-permitted`.
+- Scope cards attach only to awaited calls: `method.withScopeCard(scope)(input)` for one call, or
+  the `scopeCard` option of `get`, `getPhantom`, `newPhantom`, and `bindWithConfig` for every
+  awaited call of a client. `DynamicMethod.invoke` and the reflected `invoke` and `invokeValue`
+  take a `{ scopeCard }` option for one call. Generated Effect bridges have
+  `client.withScopeCard(scope)` for a client default and `client.method.withScopeCard(scope)(...args)`
+  for one call. Attaching borrows the card. Triggers, schedules, and tool calls never carry a scope
+  card.
+- The SDK checks the scope card before it encodes the call input. A released scope card fails the
+  call with `ScopeCardUnavailableError`, and no argument card is moved.
+- When an awaited call fails or is interrupted before the host receives its input, the SDK gives
+  the permission cards, secrets, and quota tokens that it encoded back to their handles. A card
+  released while it was encoded is dropped instead. Streams in the input stay moved, and the SDK closes their wire side. After the
+  host call starts, nothing is given back, even when the call fails. `DynamicMethod.invoke` never
+  changes a caller-supplied tree; on failure the caller still owns its resources.
 
 ### Restrictive evaluator permissions
 
@@ -685,8 +798,8 @@ must not read those fields; do not treat self-view as a harmless bootstrap permi
 `Agents.getSelfMetadata` returns an `AgentsHostError` in the Effect error channel and retains
 the host failure as its cause. `SelfAgentId.SelfAgentId` preserves its defect-based failure
 contract, including during restoration with an explicit snapshot strategy. Neither path changes
-the card or retries with broader permissions. Saga traps preserve typed error
-messages as well as native error stacks, regardless of which host operation failed.
+the card or retries with broader permissions. Sagas retain original failures when
+compensation fails.
 
 ## Tool middleware
 
@@ -739,12 +852,17 @@ The host records nesting in `Start.parent_start_index`, not in a function-type p
 Other durability controls remain under `Durability`: oplog commits and `FunctionType` constructors.
 `Saga` provides fallible/infallible compensating transactions; compensations run in reverse order.
 
-`Saga.infallibleTransaction` compensates typed failures and runs another attempt. Attempts append
+`Saga.infallibleTransaction` compensates typed failures, caught defects and interruption, then asks
+the host for a bounded retry decision. Attempts append
 new durable calls without deleting prior calls or restoring JavaScript state. Compensate local
 state explicitly. Do not reuse a compensated external operation's idempotency key for a new
-attempt: the remote peer can suppress that operation. Defects trap without compensation or
-automatic retry. Cancellation compensates and propagates. `Saga.fallibleTransaction` reports
-complete or partial compensation instead of retrying. `Agents.revertAgent` remains an external
+attempt: the remote peer can suppress that operation. The host resolves the `saga` policy for the
+agent URI after each compensated failure, using `attempt` and `error-kind` properties. No selected
+policy uses `config.retry`. The host rejects policy changes and unbounded policies. Exhaustion,
+policy errors and incomplete compensation return `SagaRetryFailure` in the typed error channel.
+Compensation runs under an interruption mask. `Saga.fallibleTransaction` reports complete or
+partial compensation instead of retrying, and preserves defects and interruption after complete
+rollback. Uncatchable guest traps cannot run guest compensation. `Agents.revertAgent` remains an external
 management operation; management self-revert is unsupported.
 
 ## Existing Effect integrations

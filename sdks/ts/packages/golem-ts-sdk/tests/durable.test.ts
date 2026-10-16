@@ -34,6 +34,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.doUnmock('golem:durability/durability@1.6.0');
   vi.doUnmock('golem:api/host@1.5.0');
+  vi.doUnmock('golem:api/retry@1.5.0');
   vi.resetModules();
 });
 
@@ -76,9 +77,26 @@ async function load() {
     };
   });
   vi.doMock('golem:api/host@1.5.0', () => ({
+    getSelfMetadata: () => ({
+      agentId: { componentId: { uuid: { highBits: 0n, lowBits: 1n } }, agentId: 'TestAgent()' },
+      args: [],
+      env: [],
+      config: [],
+      status: 'idle',
+      componentRevision: 0n,
+      retryCount: 0n,
+      environmentId: { uuid: { highBits: 0n, lowBits: 2n } },
+    }),
     trap: () => {
       throw new Error('trap');
     },
+  }));
+  vi.doMock('golem:api/retry@1.5.0', () => ({
+    resolveRetryPolicy: () => undefined,
+    nextRetryDelay: (_policy: unknown, state: Uint8Array) => ({
+      state: new Uint8Array([(state[0] ?? 0) + 1]),
+      delay: state[0] === 2 ? undefined : 0n,
+    }),
   }));
   await import('../src/schema/zod'); // side-effect: registers the Zod walker
   const durableMod = await import('../src/host/durable');
@@ -146,7 +164,7 @@ describe('durable()', () => {
         return { flight, hotel, receipt };
       });
 
-    expect(await run()).toEqual({ flight: 5, hotel: 6, receipt: 73 });
+    expect((await run()).val).toEqual({ flight: 5, hotel: 6, receipt: 73 });
     expect(effects).toEqual([
       'reserve:flight:1',
       'reserve:hotel:2',
@@ -181,7 +199,7 @@ describe('durable()', () => {
     const liveEffects = [...effects];
     live = false;
     replayCursor = 0;
-    expect(await run()).toEqual({ flight: 5, hotel: 6, receipt: 73 });
+    expect((await run()).val).toEqual({ flight: 5, hotel: 6, receipt: 73 });
     expect(replayCursor).toBe(13);
     expect(oplog).toEqual(history);
     expect(effects).toEqual(liveEffects);

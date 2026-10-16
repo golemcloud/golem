@@ -20,7 +20,7 @@ use golem_rust::{
 };
 use serde::{Deserialize, Serialize};
 
-mod gated_host_bindings {
+pub(crate) mod gated_host_bindings {
     wit_bindgen::generate!({
         path: "../../sdks/rust/golem-rust/wit",
         world: "golem-rust",
@@ -356,6 +356,12 @@ impl GolemHostApi for GolemHostApiImpl {
             })
         })
         .await
+        .unwrap_or_else(|failure| match failure {
+            golem_rust::TransactionFailure::RetryExhausted(_) => 0,
+            golem_rust::TransactionFailure::RetryPolicyError { .. } => 1,
+            golem_rust::TransactionFailure::FailedAndRolledBackPartially { .. } => 2,
+            golem_rust::TransactionFailure::FailedAndRolledBackCompletely(_) => 3,
+        })
     }
 
     fn fork_test(&self, input: String) -> String {

@@ -104,7 +104,7 @@ where
         let observational_owner = claim_options.observational_owner;
         let children_repair_incomplete = matches!(
             claim_options.scope_replay_recovery,
-            ScopeReplayRecovery::Reexecute { .. }
+            ScopeReplayRecovery::Reexecute { .. } | ScopeReplayRecovery::CompleteWithLoss
         );
         // The parent's own `Start` is completed in place as well: when every recorded child
         // replayed but the crash preceded the parent's terminal, the stream finishes live under
@@ -189,6 +189,7 @@ where
                 parent_start_index: Some(self.parent.start_index()),
                 observational_owner: self.observational_owner,
                 incomplete_repair_authorized_by_scope: self.children_repair_incomplete,
+                scope_replay_recovery: self.parent.child_replay_recovery(),
                 ..Default::default()
             },
             request,
@@ -300,7 +301,7 @@ where
         self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-        response: Parent::Resp,
+        response: impl FnOnce() -> Parent::Resp,
     ) -> Result<(Parent::Resp, CompletionDelivery), TerminalCallError>
     where
         T: 'static,
@@ -316,8 +317,7 @@ where
         self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-        response: Parent::Resp,
-        span_finished: golem_common::model::oplog::SpanFinished,
+        response: impl FnOnce() -> (Parent::Resp, golem_common::model::oplog::SpanFinished),
     ) -> Result<(Parent::Resp, CompletionDelivery), TerminalCallError>
     where
         T: 'static,
@@ -325,7 +325,7 @@ where
         Ctx: WorkerCtx,
     {
         self.parent
-            .finish_access_deferred_with_span(store, get_ctx, response, span_finished)
+            .finish_access_deferred_with_span(store, get_ctx, response)
             .await
     }
 }

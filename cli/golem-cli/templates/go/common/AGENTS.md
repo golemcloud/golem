@@ -59,7 +59,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-cors-go` | Configuring CORS on HTTP endpoints |
 | `golem-add-webhook-go` | Receiving external webhook callbacks |
 | `golem-quota-go` | Resource quotas: rate limits, capacity and concurrency with quota tokens |
-| `golem-permission-card-go` | Passing permission cards (delegated authority) through agent and tool calls |
+| `golem-permission-card-go` | Passing, deriving, inspecting, installing and revoking permission cards, and lending scope cards to agent calls |
 | `golem-make-http-request-go` | Making outgoing HTTP requests via `net/http` |
 | `golem-mark-read-only-go` | Marking methods read-only (side-effect-free) with result caching |
 | `golem-retry-policies-go` | Configuring semantic retry policies |
@@ -112,7 +112,7 @@ The following are retried transparently:
 - **RPC calls** between agents
 - **Database / storage calls** — `golem:rdbms/postgres`, `golem:rdbms/mysql`, `wasi:blobstore`, `wasi:keyvalue`
 
-A panic is a deterministic guest trap and fails the invocation without retry. Recovery replays completed outcomes and repairs only an eligible incomplete call at its own `Start`. Use sagas for domain compensation; new attempts append fresh calls without rewinding history. Infallible saga loops have no built-in attempt bound or backoff guarantee.
+An uncaught panic permanently fails the invocation. Sagas compensate caught panics and errors in reverse order; fallible helpers re-panic only after complete rollback, and partial rollback retains both failures. Recovery repairs eligible incomplete calls at their original `Start`. New saga attempts append history without rewinding; after complete rollback, infallible sagas use the bounded host policy and durable backoff. Handle the Result for compensation failure, exhaustion and policy errors, retaining the original failure.
 
 Only customize when the *strategy* needs to change (different backoff, give-up conditions, per-status-code policies). For that, see the Go SDK's retry-policy helpers.
 

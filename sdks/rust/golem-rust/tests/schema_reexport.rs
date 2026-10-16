@@ -7,12 +7,65 @@ use golem_rust::{
 };
 use test_r::test;
 
-// Every public golem:permissions interface must remain available through the SDK bindings.
+// Every golem:permissions function is available through the typed permissions API.
 #[test]
-fn all_permission_wit_bindings_are_publicly_exposed() {
-    use golem_rust::bindings::golem::permissions::kernel_introspection;
+fn every_permission_operation_is_exposed_through_the_typed_api() {
+    use golem_rust::permissions::{
+        self, Bounds, CardId, CardView, Holder, KernelModule, Lifespan, PatternGrant,
+        PermissionCard, PermissionError, PolymorphicPermissionCard, ScopeCard, ScopeParent,
+        Timestamp, WalletCard, WalletVersionToken,
+    };
 
-    let _ = kernel_introspection::list_modules;
+    let _: fn(&PermissionCard) -> CardId = PermissionCard::id;
+    let _: fn(&PermissionCard) -> Vec<CardId> = PermissionCard::parents;
+    let _: fn(&PermissionCard) -> Option<Timestamp> = PermissionCard::expires_at;
+    let _: fn(&PermissionCard) -> Result<CardView, PermissionError> = PermissionCard::inspect;
+    let _: fn(
+        &PermissionCard,
+        &Bounds,
+        Option<&Lifespan>,
+    ) -> Result<PermissionCard, PermissionError> = PermissionCard::derive;
+    let _: fn(PermissionCard) -> Result<u32, PermissionError> = PermissionCard::revoke;
+    let _: fn(PermissionCard, &Holder) -> Result<(), PermissionError> = PermissionCard::install;
+    let _: fn(&PolymorphicPermissionCard) -> CardId = PolymorphicPermissionCard::id;
+    let _: fn(&PolymorphicPermissionCard) -> Vec<CardId> = PolymorphicPermissionCard::parents;
+    let _: fn(&PolymorphicPermissionCard) -> Option<Timestamp> =
+        PolymorphicPermissionCard::expires_at;
+    let _: fn(&PolymorphicPermissionCard) -> Result<CardView, PermissionError> =
+        PolymorphicPermissionCard::inspect;
+    let _: fn(
+        &PolymorphicPermissionCard,
+        &Bounds,
+        Option<&Lifespan>,
+    ) -> Result<PermissionCard, PermissionError> = PolymorphicPermissionCard::derive;
+    let _: fn(PolymorphicPermissionCard) -> Result<u32, PermissionError> =
+        PolymorphicPermissionCard::revoke;
+    let _: fn(PolymorphicPermissionCard, &Holder) -> Result<(), PermissionError> =
+        PolymorphicPermissionCard::install;
+    let _: fn() -> Vec<WalletCard> = permissions::wallet;
+    let _: fn(&WalletCard) -> CardId = WalletCard::id;
+    fn scope_parent(card: &WalletCard) -> ScopeParent<'_> {
+        match card {
+            WalletCard::Concrete(card) => ScopeParent::from(card),
+            WalletCard::Template(card) => ScopeParent::from(card),
+            WalletCard::Scope(card) => ScopeParent::from(card),
+        }
+    }
+    let _: for<'a> fn(&'a WalletCard) -> ScopeParent<'a> = scope_parent;
+    let _ = |card: &WalletCard| {
+        let _: ScopeParent<'_> = card.into();
+    };
+    let _: fn() -> WalletVersionToken = permissions::wallet_version;
+    let _: fn(&Bounds, Option<&Lifespan>) -> Result<PermissionCard, PermissionError> =
+        permissions::derive_from_wallet;
+    let _: fn(&[ScopeParent<'_>], &Bounds) -> Result<ScopeCard, PermissionError> =
+        permissions::derive_scope;
+    let _: fn(&ScopeCard) -> CardId = ScopeCard::id;
+    let _: fn(&ScopeCard) -> Vec<CardId> = ScopeCard::parents;
+    let _: fn(&ScopeCard) -> Option<Timestamp> = ScopeCard::expires_at;
+    let _: fn(&ScopeCard) -> Result<CardView, PermissionError> = ScopeCard::inspect;
+    let _: fn() -> Vec<KernelModule> = permissions::list_modules;
+    let _: fn(&PatternGrant) -> Result<(), PermissionError> = permissions::validate_grant;
 }
 
 #[derive(Clone, Debug, PartialEq, IntoSchema, FromSchema)]

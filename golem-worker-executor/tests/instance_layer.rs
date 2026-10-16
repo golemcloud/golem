@@ -362,7 +362,7 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
                     let borrowed = || {
                         parents
                             .iter()
-                            .map(|p| Resource::new_borrow(p.rep()))
+                            .map(|p| Resource::new_borrow(wallet_card_handle(p).rep()))
                             .collect()
                     };
                     let scope = derive::Host::derive_scope(
@@ -400,13 +400,9 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
                         vec![],
                         None,
                     )
-                    .await
-                    .expect_err("other namespace wallet must refuse before persistent creation");
+                    .await?;
                     assert!(
-                        matches!(
-                            wrong.downcast_ref::<types::PermissionError>(),
-                            Some(types::PermissionError::LowerBoundTooBroad(_))
-                        ),
+                        matches!(wrong, Err(types::PermissionError::LowerBoundTooBroad(_))),
                         "other namespace wallet must be refused: historical={historical}, {wrong:?}"
                     );
                     if !historical {
@@ -472,6 +468,7 @@ async fn observed_wallet(store: &mut Store<TestWorkerCtx>) -> anyhow::Result<(Ve
     let ctx = store.data_mut().durable_ctx_mut();
     let mut ids = Vec::new();
     for handle in wallet::Host::self_wallet(ctx).await? {
+        let handle = into_wallet_card_handle(handle);
         let id =
             types::Host::id(ctx, wasmtime::component::Resource::new_borrow(handle.rep())).await?;
         ids.push(CardId(golem_schema::model::CardId::from(id).uuid));
@@ -579,6 +576,7 @@ async fn cross_store_wallet_change(
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: vec![grant],
+        expires_at: None,
     });
     let parent_start = active
         .execution()
@@ -694,6 +692,7 @@ async fn cross_store_wallet_change(
                 if matches!(change, WalletChange::Transfer) {
                     let mut source = None;
                     for handle in wallet::Host::self_wallet(ctx).await? {
+                        let handle = into_wallet_card_handle(handle);
                         let id = types::Host::id(
                             ctx,
                             wasmtime::component::Resource::new_borrow(handle.rep()),
@@ -1693,6 +1692,223 @@ async fn completed_entity_replay_rejects_positional_calls(
 
 #[test]
 #[timeout("120s")]
+async fn retry_decisions_replay_jitter_and_typed_errors(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::retry_policy::{
+        NamedRetryPolicy, Predicate, PredicateValue, RetryPolicy,
+    };
+    use std::time::Duration;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let agent_id = agent_id!("RpcCounter", "retry-decisions");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
+        .await?;
+    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let active = executor.active_agent(&owner_id).await.unwrap();
+    let metadata = owner_component_metadata(&active, component.id, component.revision).await?;
+    let name = ToolMiddlewareName::try_from("retry-decisions").unwrap();
+    let entity = AgentEntity::ToolMiddleware(name.clone());
+    let principal = Principal::Agent(AgentPrincipal {
+        agent_id: owner_id.agent_id.clone(),
+    });
+    let activation = Arc::new(middleware_activation(
+        ExecutableTarget::new(component.id, component.revision),
+        name,
+    ));
+    let parent_start = active.execution().oplog().current_oplog_index().await;
+    let entity_start = parent_start.next();
+    let parent_id = OwnerInvocationId::Agent(parent_start);
+    let lane = active.execution().lane();
+    let scope = invocation_scope(
+        &owner_id,
+        &entity,
+        entity_start,
+        parent_start,
+        activation.clone(),
+        principal.clone(),
+    );
+    let selector_fallback = RetryPolicy::CountBox {
+        max_retries: 3,
+        inner: Box::new(RetryPolicy::Periodic(Duration::from_secs(2))),
+    };
+    let mut live_result = None;
+    for replay in [false, true] {
+        let primary = lane.enter_primary(parent_start)?.acquire().await?;
+        let claim = if replay {
+            Some(
+                active
+                    .execution()
+                    .test_claim_entity_boundary(parent_start)
+                    .await?,
+            )
+        } else {
+            stage_entity_boundary(&active, &scope).await?;
+            None
+        };
+        let before = active.execution().oplog().current_oplog_index().await;
+        let scope = if replay {
+            replay_invocation_scope(
+                &owner_id,
+                &entity,
+                entity_start,
+                parent_start,
+                activation.clone(),
+                principal.clone(),
+            )
+        } else {
+            scope.clone()
+        };
+        let selector_fallback_policy = selector_fallback.clone();
+        let result = active
+            .start_entity_invocation(
+                parent_id.clone(),
+                scope,
+                metadata.clone(),
+                EntityCallMode::Synchronous,
+                move |_instance, store| {
+                    Box::pin(async move {
+                        let ctx = store.data_mut().durable_ctx_mut();
+                        RetryHost::set_retry_policy(
+                            ctx,
+                            NamedRetryPolicy {
+                                name: "selector-fallback".into(),
+                                priority: 1,
+                                predicate: Predicate::True,
+                                policy: selector_fallback_policy,
+                            }
+                            .into(),
+                        )
+                        .await?;
+                        RetryHost::set_retry_policy(
+                            ctx,
+                            NamedRetryPolicy {
+                                name: "strict-selector".into(),
+                                priority: u32::MAX,
+                                predicate: Predicate::PropGt {
+                                    property: "selector-attempt".into(),
+                                    value: PredicateValue::Integer(0),
+                                },
+                                policy: RetryPolicy::Never,
+                            }
+                            .into(),
+                        )
+                        .await?;
+                        let missing_selector = RetryHost::resolve_retry_policy(
+                            ctx,
+                            "saga".into(),
+                            "test:retry".into(),
+                            vec![],
+                        )
+                        .await?
+                        .map_err(anyhow::Error::msg)?
+                        .map(RetryPolicy::try_from)
+                        .transpose()
+                        .map_err(anyhow::Error::msg)?;
+                        let selector_error = RetryHost::resolve_retry_policy(
+                            ctx,
+                            "saga".into(),
+                            "test:retry".into(),
+                            vec![(
+                                "selector-attempt".into(),
+                                PredicateValue::Text("invalid".into()).into(),
+                            )],
+                        )
+                        .await?
+                        .expect_err("a mistyped selector property must be a typed error");
+                        let policy = RetryPolicy::CountBox {
+                            max_retries: 1,
+                            inner: Box::new(RetryPolicy::Jitter {
+                                factor: 0.5,
+                                inner: Box::new(RetryPolicy::Periodic(Duration::from_secs(1))),
+                            }),
+                        };
+                        let decision = RetryHost::next_retry_delay(
+                            ctx,
+                            Some(policy.into()),
+                            vec![],
+                            0,
+                            "saga".into(),
+                            "test:retry".into(),
+                            vec![],
+                        )
+                        .await?
+                        .map_err(anyhow::Error::msg)?;
+                        let error = RetryHost::next_retry_delay(
+                            ctx,
+                            Some(RetryPolicy::Immediate.into()),
+                            vec![],
+                            0,
+                            "saga".into(),
+                            "test:retry".into(),
+                            vec![],
+                        )
+                        .await?
+                        .expect_err("unbounded saga must return a typed error");
+                        Ok((
+                            decision.state,
+                            decision.delay,
+                            error,
+                            selector_error,
+                            missing_selector,
+                        ))
+                    })
+                },
+                std::future::ready,
+            )?
+            .await_result(&parent_id)
+            .await?;
+        if let Some(expected) = &live_result {
+            assert_eq!(&result, expected);
+            assert_eq!(
+                before,
+                active.execution().oplog().current_oplog_index().await
+            );
+            active
+                .execution()
+                .test_settle_entity_boundary(claim.unwrap())
+                .await?;
+            drop(primary);
+        } else {
+            assert!(result.1.is_some());
+            assert!(result.2.contains("finite"));
+            assert!(result.3.contains("selector-attempt"));
+            assert_eq!(result.4.as_ref(), Some(&selector_fallback));
+            live_result = Some(result);
+            finish_entity_boundary(&active, entity_start).await?;
+            drop(primary);
+            active
+                .execution()
+                .commit(CommitLevel::Always)
+                .await
+                .map_err(|fence| anyhow::anyhow!("retry test commit fenced: {fence:?}"))?;
+            active
+                .execution()
+                .install_replay_generation(
+                    DeletedRegions::from_regions([OplogRegion::from_index_range(
+                        OplogIndex::INITIAL.next()..=parent_start,
+                    )]),
+                    None,
+                )
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
 async fn completed_entity_replay_rejects_positional_calls_at_its_terminal(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2314,6 +2530,7 @@ async fn gol838_retained_entity_roots_survive_body_cleanup_and_detached_settleme
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
             upper_negative: Vec::new(),
+            expires_at: None,
         }));
         let (cleaned, cleanup) = tokio::sync::oneshot::channel();
         let (release, released) = tokio::sync::oneshot::channel();
@@ -4713,4 +4930,26 @@ async fn entity_agent_config_uses_owner_component_declarations(
         }
     }
     Ok(())
+}
+
+fn wallet_card_handle(
+    card: &golem_worker_executor::preview2::golem::permissions::types::WalletCard,
+) -> &wasmtime::component::Resource<golem_schema::schema::wit::PermissionCardHandleRep> {
+    use golem_worker_executor::preview2::golem::permissions::types::WalletCard;
+    match card {
+        WalletCard::Concrete(handle) | WalletCard::Template(handle) | WalletCard::Scope(handle) => {
+            handle
+        }
+    }
+}
+
+fn into_wallet_card_handle(
+    card: golem_worker_executor::preview2::golem::permissions::types::WalletCard,
+) -> wasmtime::component::Resource<golem_schema::schema::wit::PermissionCardHandleRep> {
+    use golem_worker_executor::preview2::golem::permissions::types::WalletCard;
+    match card {
+        WalletCard::Concrete(handle) | WalletCard::Template(handle) | WalletCard::Scope(handle) => {
+            handle
+        }
+    }
 }

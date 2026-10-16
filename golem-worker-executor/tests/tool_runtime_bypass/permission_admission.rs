@@ -410,6 +410,7 @@ fn scope_card(
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative,
+        expires_at: None,
     }
 }
 

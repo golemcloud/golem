@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::filesystem_pressure::{FilesystemWriteRecovery, FilesystemWriteRecoveryOutcome};
+use crate::metrics::agent_filesystem::{self, StorageRefusal};
 #[cfg(test)]
 use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
 use crate::sandbox_filesystem::{
@@ -3053,7 +3054,7 @@ async fn execute_open<Adapter: SandboxFilesystemAdapter>(
                         return Err(Error::RuntimeInvalidated);
                     }
                     EffectDecision::ReclaimCapacityThenRetry => {
-                        return Err(Error::PhysicalCapacity(error));
+                        return Err(classified_error(FailureCause::PhysicalCapacity, error));
                     }
                     EffectDecision::Succeed | EffectDecision::RetryUnwrittenSuffix => {
                         generation.invalidate();
@@ -3527,7 +3528,7 @@ async fn execute_write<Adapter: SandboxFilesystemAdapter>(
                 return Err(Error::RuntimeInvalidated);
             }
             EffectDecision::ReclaimCapacityThenRetry => {
-                return Err(Error::PhysicalCapacity(error));
+                return Err(classified_error(FailureCause::PhysicalCapacity, error));
             }
             EffectDecision::Succeed => return Ok(WriteResult { written: completed }),
         }
@@ -3741,7 +3742,7 @@ async fn execute_create_directory<Adapter: SandboxFilesystemAdapter>(
             EffectDecision::ReclaimCapacityThenRetry if budget.consume() => continue,
             EffectDecision::ReturnFailure(cause) => return Err(classified_error(cause, error)),
             EffectDecision::ReclaimCapacityThenRetry => {
-                return Err(Error::PhysicalCapacity(error));
+                return Err(classified_error(FailureCause::PhysicalCapacity, error));
             }
             _ => {
                 generation.invalidate();
@@ -3788,7 +3789,7 @@ async fn execute_create_symlink<Adapter: SandboxFilesystemAdapter>(
             EffectDecision::ReclaimCapacityThenRetry if budget.consume() => continue,
             EffectDecision::ReturnFailure(cause) => return Err(classified_error(cause, error)),
             EffectDecision::ReclaimCapacityThenRetry => {
-                return Err(Error::PhysicalCapacity(error));
+                return Err(classified_error(FailureCause::PhysicalCapacity, error));
             }
             _ => {
                 generation.invalidate();
@@ -3846,7 +3847,7 @@ async fn execute_hard_link<Adapter: SandboxFilesystemAdapter>(
             EffectDecision::ReclaimCapacityThenRetry if budget.consume() => continue,
             EffectDecision::ReturnFailure(cause) => return Err(classified_error(cause, error)),
             EffectDecision::ReclaimCapacityThenRetry => {
-                return Err(Error::PhysicalCapacity(error));
+                return Err(classified_error(FailureCause::PhysicalCapacity, error));
             }
             _ => {
                 generation.invalidate();
@@ -3897,7 +3898,7 @@ async fn execute_rename<Adapter: SandboxFilesystemAdapter>(
             EffectDecision::ReclaimCapacityThenRetry if budget.consume() => continue,
             EffectDecision::ReturnFailure(cause) => return Err(classified_error(cause, error)),
             EffectDecision::ReclaimCapacityThenRetry => {
-                return Err(Error::PhysicalCapacity(error));
+                return Err(classified_error(FailureCause::PhysicalCapacity, error));
             }
             _ => {
                 generation.invalidate();
@@ -3956,7 +3957,7 @@ async fn execute_remove<Adapter: SandboxFilesystemAdapter>(
             EffectDecision::RetryAfterProvenNoEffect if budget.consume() => continue,
             EffectDecision::ReturnFailure(cause) => return Err(classified_error(cause, error)),
             EffectDecision::ReclaimCapacityThenRetry => {
-                return Err(Error::PhysicalCapacity(error));
+                return Err(classified_error(FailureCause::PhysicalCapacity, error));
             }
             _ => {
                 generation.invalidate();
@@ -4231,7 +4232,7 @@ async fn execute_close<Adapter: SandboxFilesystemAdapter>(
             EffectDecision::RetryAfterProvenNoEffect if budget.consume() => continue,
             EffectDecision::ReturnFailure(cause) => return Err(classified_error(cause, error)),
             EffectDecision::ReclaimCapacityThenRetry => {
-                return Err(Error::PhysicalCapacity(error));
+                return Err(classified_error(FailureCause::PhysicalCapacity, error));
             }
             _ => {
                 generation.invalidate();
@@ -4429,10 +4430,18 @@ async fn decide_resize_effect<Adapter: SandboxFilesystemAdapter>(
     }
 }
 
+/// Gives the error of a failure with `cause`. Each storage refusal goes through here, so the metric
+/// counts each refused call once.
 fn classified_error(cause: FailureCause, source: FilesystemStorageError) -> Error {
     match cause {
-        FailureCause::AgentQuota => Error::AgentQuota(source),
-        FailureCause::PhysicalCapacity => Error::PhysicalCapacity(source),
+        FailureCause::AgentQuota => {
+            agent_filesystem::record_storage_refusal(StorageRefusal::AgentQuota);
+            Error::AgentQuota(source)
+        }
+        FailureCause::PhysicalCapacity => {
+            agent_filesystem::record_storage_refusal(StorageRefusal::PhysicalCapacity);
+            Error::PhysicalCapacity(source)
+        }
         FailureCause::TerminalInfrastructure => Error::RuntimeInvalidated,
         FailureCause::Guest | FailureCause::TransientBackend | FailureCause::UnclassifiedIo => {
             Error::Sandbox(source)

@@ -40,6 +40,8 @@ pub fn get_retry_policy_by_name(String) -> @retry.NamedRetryPolicy?
 
 pub fn get_self_metadata() -> @host.AgentMetadata
 
+pub fn next_retry_delay(@retry.RetryPolicy?, FixedArray[Byte], UInt64, String, String, Array[(String, @retry.PredicateValue)]) -> Result[@retry.RetryDecision, String]
+
 pub fn oplog_commit(Byte) -> Unit
 
 pub fn remove_retry_policy(String) -> Unit
@@ -50,7 +52,7 @@ pub fn resolve_agent_id_strict(String, String) -> @types.AgentId?
 
 pub fn resolve_component_id(String) -> @types.ComponentId?
 
-pub fn resolve_retry_policy(String, String, Array[(String, @retry.PredicateValue)]) -> @retry.RetryPolicy?
+pub fn resolve_retry_policy(String, String, Array[(String, @retry.PredicateValue)]) -> Result[@retry.RetryPolicy?, String]
 
 pub async fn[T, E] retry_local(@retry.RetryPolicy, async () -> Result[T, E], properties? : (E) -> Array[(String, @retry.PredicateValue)]) -> Result[T, E]
 
@@ -249,6 +251,8 @@ pub using @retry {type NamedRetryPolicy}
 pub using @retry {type PredicateValue}
 
 pub using @types {type PromiseId}
+
+pub using @retry {type RetryDecision}
 
 pub using @retry {type RetryPolicy}
 

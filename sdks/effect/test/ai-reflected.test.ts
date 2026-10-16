@@ -544,6 +544,41 @@ describe("reflected Effect AI tool adapter", () => {
     expect(observed).toEqual([{ constructor: "safe" }, { constructor: "explicit" }])
   })
 
+  it("leaves declared defaults to the reflected command and reports invalid parameters readably", async () => {
+    const definition = toolDefinition("reflected-bash").body((body) =>
+      body
+        .positional("script", Schema.String)
+        .positional("shell", Schema.String, { default: "sh" })
+        .option("timeout", Schema.Number, { default: 600 })
+        .flag("login"),
+    )
+    const reflected = new ToolType(registration(definition))
+    const commandDefinition = reflected.client.command([])
+    const toolkit = await Effect.runPromise(
+      reflectedToolkit(reflected, [
+        command([], { needsApproval: (parameters) => parameters.shell !== "sh" }),
+      ]).pipe(Effect.provideService(ToolClient, host)),
+    )
+    const tool = toolkit.tools["reflected-bash"] as unknown as {
+      readonly jsonSchema: Record<string, JsonValue>
+      readonly needsApproval: (
+        parameters: Record<string, unknown>,
+        context: unknown,
+      ) => Effect.Effect<boolean, unknown>
+    }
+    expect(tool.jsonSchema.required).toEqual(["script"])
+    for (const property of Object.values(tool.jsonSchema.properties as Record<string, object>))
+      expect(property).not.toHaveProperty("default")
+    expect(commandDefinition.inputSchema!.toJsonSchema()).toMatchObject({
+      properties: { shell: { default: "sh" }, timeout: { default: 600 } },
+    })
+
+    await expect(Effect.runPromise(tool.needsApproval({ script: "true" }, {}))).resolves.toBe(false)
+    const failure = await Effect.runPromise(Effect.flip(tool.needsApproval({}, {})))
+    expect(failure).toBeInstanceOf(TypeError)
+    expect((failure as Error).message).toBe("invalid tool parameters: missing field 'script'")
+  })
+
   it("validates reflected stdout limits on plain selection objects", () => {
     const definition = toolDefinition("reflected-limit").body((body) => body.output())
     const reflected = new ToolType(registration(definition))

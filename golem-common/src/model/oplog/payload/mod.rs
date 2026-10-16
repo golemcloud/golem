@@ -280,6 +280,14 @@ oplog_payload! {
         GolemRetryPolicyByName {
             name: String
         },
+        GolemRetryNextDelay {
+            policy: String,
+            state: Vec<u8>,
+            elapsed: u64,
+            verb: String,
+            noun_uri: String,
+            properties: Vec<(String, PredicateValue)>
+        },
         GolemRetryResolvePolicy {
             verb: String,
             noun_uri: String,
@@ -631,7 +639,10 @@ oplog_payload! {
             policy: Option<NamedRetryPolicy>
         },
         GolemRetryResolvedPolicy {
-            policy: Option<RetryPolicy>
+            result: Result<Option<RetryPolicy>, String>
+        },
+        GolemRetryNextDelay {
+            result: Result<(Vec<u8>, Option<u64>), String>
         },
         GolemRpcCreate {
             target_fingerprint: AgentFingerprint,
@@ -916,6 +927,7 @@ pub mod host_functions {
         (GolemApiRetryGetRetryPolicies => "golem::api::retry", "get_retry_policies", NoInput, GolemRetryPolicies),
         (GolemApiRetryGetRetryPolicyByName => "golem::api::retry", "get_retry_policy_by_name", GolemRetryPolicyByName, GolemRetryNamedPolicy),
         (GolemApiRetryResolveRetryPolicy => "golem::api::retry", "resolve_retry_policy", GolemRetryResolvePolicy, GolemRetryResolvedPolicy),
+        (GolemApiRetryNextRetryDelay => "golem::api::retry", "next_retry_delay", GolemRetryNextDelay, GolemRetryNextDelay),
         (GolemRpcWasmRpcNew => "golem::rpc::wasm-rpc", "new", GolemRpcCreate, GolemRpcCreate),
         (GolemRpcWasmRpcDrop => "golem::rpc::wasm-rpc", "drop", GolemRpcResource, GolemRpcUnit),
         (GolemRpcWasmRpcAsyncInvokeRejection => "golem::rpc::wasm-rpc", "async-invoke-rejection", GolemRpcAsyncInvokeRejection, GolemRpcInvokeAndAwait),

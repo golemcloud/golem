@@ -685,14 +685,25 @@ Start/End records; demand streams retain their actual parent call session, and R
 its transaction protocol Start/End. Snapshot and checkpoint admission use the in-flight live
 call counter, including permits owned by open transaction protocols.
 
+Authorization and protocol readiness precede live publication. Terminal refusal abandons replay
+for failure (`authoritative_replay_failure`), not publication over sibling history. Never rewind
+or discard another task's history. A typed-loss End belongs to the original Start: HTTP without
+resend returns `http-response-incomplete`, RDBMS `resource-lost`, and TCP `connection-broken`.
+UDP `ReadRemote` instead re-executes receive after rebind.
+
 **P3 HTTP recovery is call-local.** `client::send` records `WriteRemote` for all methods
-(`p3/http/send.rs`). Method idempotence controls guest cancellation, not the durable call shape.
+(`p3/http/send.rs`). Every method uses `Cancellable`: a guest drop records `Cancelled` and
+replay never resends that cancelled call. Only crash-like loss leaves an incomplete send.
+Request-body intake continues while replay resolution waits, so a streamed writer can reach its
+next durable call. A trap leaves the Start incomplete, never Cancelled.
 A crash before the response headers therefore completes the recorded send
 `Start` in place (same index, same derived idempotency key, the deterministic guest re-produces
 the request body) and keeps every operation recorded next to it. The response body's
-`P3HttpClientConsumeBody` parent call opens with `ScopeReplayRecovery::Reexecute`;
-on replay its original Start is retained, its recorded chunks replay to the guest, and the first live
-demand continues the body (`response_body.rs::resume_recorded_response`): nothing delivered means
+`P3HttpClientConsumeBody` parent chooses owner-authorized re-execution only after request-body
+readiness, or `ScopeReplayRecovery::CompleteWithLoss` when no reconstructable resend exists.
+On replay its original Start is retained and its recorded chunks replay to the guest. Without a
+resend, the live tail ends with `HttpResponseIncomplete` under that original Start. With a resend,
+the first live demand continues the body (`response_body.rs::resume_recorded_response`): nothing delivered means
 a fresh re-issue of the recorded request; a delivered prefix means a re-send with
 `Range: bytes=<delivered>-`, accepted as a `206` continuing at that offset or as a full response
 whose prefix is byte-identical to the delivered bytes (a blake3 digest accumulated over delivered
@@ -1622,6 +1633,12 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
   own oplog in ordinal order. Replay performs no source RPC, authorization, or attachment; only
   the live suffix reads the source after the last journaled offset. An unread input may be
   forwarded as its original foreign handle without first attaching or consuming it.
+- **A guest observation commits only past the published horizon.** Its owned write calls
+  `DurableStreamStore::commit_through` with the reserved index. Every commit flushes the whole
+  oplog buffer, so a durable agent's attached published status at or above that index proves an
+  earlier commit made the record durable and folded it; the write returns its receipt without a
+  commit. Ephemeral status (weaker levels fold without storage) and detached status prove nothing,
+  so those writes always commit. The receipt still means durable and folded.
 - **RPC result and stream draining are separate.** The caller's durable call completes with the
   result *stripped of streams*, so the RPC `End` may be recorded while items still flow.
   Streaming keys follow the RPC identity rule above. Terminals finalize once; protocol terminals fence
@@ -1765,9 +1782,19 @@ cursor (`OwnerExecution`, `worker/instance.rs`).
   handle reports typed loss; application code must explicitly open and initialize another session.
   Loss does not prove that an earlier write failed.
 - SDK sagas compensate and loop in guest code. New attempts append new calls and retain earlier
-  attempts and compensations. A guest trap is not a retry signal and does not guarantee compensation.
-  Infallible loops have no built-in attempt bound or backoff guarantee. MoonBit has no public saga
-  helper; application code owns any compensate-and-loop workflow.
+  attempts and compensations. After each fully compensated failed infallible attempt, resolve the
+  policy with verb `saga`, noun the agent URN, and `attempt`/`error-kind` properties. The host's
+  `next-retry-delay` uses the existing evaluator and an opaque binary continuation; SDKs pass it
+  unchanged and use durable clocks and timers. No selected policy means the agent default.
+  Unbounded policies are rejected with a typed policy failure, not an invented attempt limit.
+  Count/time/never exhaustion returns a typed guest failure; selector/evaluator errors retain the
+  original failure. Bounds keep attempts finite without rewinding history.
+  TS, Effect, Scala and Go compensate caught failures in reverse order. Fallible helpers propagate
+  the original exception/panic only after complete rollback; partial rollback retains both failures.
+  Effect external cancellation stops retries and retains original and compensation evidence in
+  `Cause`; self-interruption is policy-retryable. Rust WASM panic aborts without compensation;
+  Result failures are typed, and `infallible_transaction` returns Result for compensation failure,
+  policy errors and exhaustion. MoonBit exposes the retry API but has no public saga helper.
 - Guests cannot disable recording, group effects into atomic regions, or get/set an execution
   cursor. External operator revert/fork remains available at validated cuts. `oplog-commit` is a
   replication barrier, not an external transaction commit or an undo operation.

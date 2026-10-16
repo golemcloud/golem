@@ -4767,7 +4767,7 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
-async fn incomplete_p3_udp_receive_reports_loss_without_consuming_a_new_datagram(
+async fn incomplete_p3_udp_receive_repairs_original_start_and_replays_completed_datagram(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
@@ -4852,7 +4852,7 @@ async fn incomplete_p3_udp_receive_reports_loss_without_consuming_a_new_datagram
     assert!(!oplog.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == receive_start)));
 
     executor.resume(&worker_id, false).await?;
-    // A mistaken native receive on reconstruction would consume this later datagram.
+    // Reconstruction rebinds the socket and repairs the original receive with the next datagram.
     let recovered = tokio::time::timeout(Duration::from_secs(30), async {
         let result = executor.invoke_and_await_agent_with_key(
             &component,
@@ -4872,13 +4872,25 @@ async fn incomplete_p3_udp_receive_reports_loss_without_consuming_a_new_datagram
     })
     .await??
     .into_typed::<Result<String, String>>()?;
-    assert_eq!(recovered, Err("ErrorCode::ConnectionBroken".to_string()));
+    assert_eq!(recovered, Ok("later".to_string()));
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == receive_start)).count(), 1);
+    assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "sockets::types::udp-socket::receive")).count(), 1);
 
     for payload in ["fresh", "after-restart"] {
         if payload == "after-restart" {
             executor.simulated_crash(&worker_id).await?;
+            let replayed = executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &agent_id,
+                    &key,
+                    "udp_receive_p3",
+                    data_value!(port, ready_port),
+                )
+                .await?
+                .into_typed::<Result<String, String>>()?;
+            assert_eq!(replayed, Ok("later".to_string()));
         }
         let (result, sent) = tokio::join!(
             executor.invoke_and_await_agent(
@@ -4902,6 +4914,16 @@ async fn incomplete_p3_udp_receive_reports_loss_without_consuming_a_new_datagram
             Ok(payload.to_string())
         );
     }
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "sockets::types::udp-socket::receive")).count(), 3);
+    assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "sockets::types::udp-socket::send")).count(), 3);
+    assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == receive_start)).count(), 1);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), peer.recv_from(&mut buffer))
+            .await
+            .is_err(),
+        "completed replay must not send another readiness datagram"
+    );
     executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
 }

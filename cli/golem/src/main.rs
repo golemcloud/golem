@@ -22,6 +22,10 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 fn main() -> ExitCode {
+    // This binary links rustls with both the `ring` and the `aws-lc-rs` provider, so rustls cannot
+    // choose a process default. TLS clients that do not name a provider use this one.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     if let Some(flag) = std::env::args_os()
         .nth(1)
         .and_then(|flag| flag.into_string().ok())

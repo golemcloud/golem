@@ -66,6 +66,8 @@ pub trait HttpClient4 {
     /// failed send renders as `error(..)`.
     async fn post_with_concurrent_get(&self) -> String;
 
+    async fn post_with_writer_get(&self) -> String;
+
     /// Sends a non-idempotent POST concurrently with a GET.
     async fn post_non_idempotent_with_concurrent_get(&self) -> String;
 
@@ -231,6 +233,11 @@ impl HttpClient4 for HttpClient4Impl {
 
     async fn post_with_concurrent_get(&self) -> String {
         do_post_with_concurrent_get().await
+    }
+
+    async fn post_with_writer_get(&self) -> String {
+        let port = std::env::var("PORT").unwrap();
+        do_post_inference_streamed(&port, true).await
     }
 
     async fn post_non_idempotent_with_concurrent_get(&self) -> String {
@@ -991,7 +998,7 @@ async fn do_post_with_concurrent_get() -> String {
     use futures_concurrency::prelude::*;
 
     let port = std::env::var("PORT").unwrap_or("9999".to_string());
-    let post = do_post_inference_streamed(&port);
+    let post = do_post_inference_streamed(&port, false);
     let get = async {
         match wasi_fetch::Client::new()
             .get(&format!("http://localhost:{port}/sibling"))
@@ -1015,7 +1022,7 @@ async fn do_post_with_concurrent_get() -> String {
 /// Streams a POST with a deterministic eight-chunk request body to `/inference` and reads the
 /// response body to its end. The result reports the status and the body bytes the guest
 /// observed; a body that ends with an error (an incomplete response) is reported after them.
-async fn do_post_inference_streamed(port: &str) -> String {
+async fn do_post_inference_streamed(port: &str, get_after_write: bool) -> String {
     use futures_concurrency::prelude::*;
     use golem_rust::wasip3::http::{client, types};
     use golem_rust::wasip3::wit_bindgen::StreamResult;
@@ -1034,7 +1041,7 @@ async fn do_post_inference_streamed(port: &str) -> String {
         .unwrap();
     request.set_path_with_query(Some("/inference")).unwrap();
 
-    let (send_result, _transmit_result, ()) = (
+    let (send_result, _transmit_result, sibling) = (
         async { client::send(request).await },
         async { transmit.await },
         async {
@@ -1046,6 +1053,22 @@ async fn do_post_inference_streamed(port: &str) -> String {
             }
             drop(body_tx);
             let _ = trailers_tx.write(Ok(None)).await;
+            if get_after_write {
+                let response = wasi_fetch::Client::new()
+                    .get(&format!("http://localhost:{port}/sibling"))
+                    .send()
+                    .await
+                    .expect("sibling request failed");
+                let status = response.status().as_u16();
+                let body = response
+                    .into_body()
+                    .text()
+                    .await
+                    .expect("sibling body failed");
+                Some(format!("get={status} {body}"))
+            } else {
+                None
+            }
         },
     )
         .join()
@@ -1058,6 +1081,13 @@ async fn do_post_inference_streamed(port: &str) -> String {
     let status = response.get_status_code();
     let (response_done_tx, response_done_rx) = wit_future::new(|| Ok(()));
     let (mut body, trailers) = types::Response::consume_body(response, response_done_rx);
+    if std::env::var_os("WAIT_BEFORE_RESPONSE_READ").is_some() {
+        wasi_fetch::Client::new()
+            .get(&format!("http://localhost:{port}/allow-body-read"))
+            .send()
+            .await
+            .expect("body-read permission failed");
+    }
     let mut body_bytes = Vec::new();
     let mut buffer = Vec::with_capacity(1024);
     loop {
@@ -1067,6 +1097,9 @@ async fn do_post_inference_streamed(port: &str) -> String {
             StreamResult::Complete(n) => {
                 body_bytes.extend_from_slice(&buffer[..n]);
                 buffer.clear();
+                if get_after_write {
+                    golem_rust::oplog_commit(0);
+                }
             }
             StreamResult::Dropped => break,
             StreamResult::Cancelled => panic!("response body read was cancelled"),
@@ -1076,9 +1109,13 @@ async fn do_post_inference_streamed(port: &str) -> String {
     let trailers = trailers.await;
     let _ = response_done_tx.write(Ok(())).await;
     let body_text = String::from_utf8_lossy(&body_bytes);
-    match trailers {
+    let post = match trailers {
         Ok(_) => format!("post={status} {body_text}"),
         Err(error) => format!("post={status} {body_text} incomplete({error:?})"),
+    };
+    match sibling {
+        Some(sibling) => format!("{post} | {sibling}"),
+        None => post,
     }
 }
 

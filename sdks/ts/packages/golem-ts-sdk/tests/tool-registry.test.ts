@@ -37,12 +37,29 @@ import {
   v,
 } from '../src/internal/schema-model';
 import { tool } from '../src';
+import { withWireValueOwnership } from '../src/tool';
 import { encodeToolValue } from '../src/internal/tool/invocationResult';
+import { PermissionCard } from '../src/host/permissions';
 import {
-  GuestPermissionCardHandle,
-  peekGuestPermissionCardHandle,
-} from '../src/internal/schema-model/permissionCardHandle';
-import { PERMISSION_CARD_INTERNAL } from '../src/internal/schema-model/permissionCardInternal';
+  permissionCardFromRaw,
+  polymorphicPermissionCardFromRaw,
+  rawOfPermissionCard,
+  fakeRawCard,
+} from './permissionCardTestSupport';
+
+// Each permission-card schema flag with a card of its declared type.
+const cardKinds = [
+  {
+    kind: 'concrete',
+    schema: () => s.permissionCard({ polymorphic: false }),
+    card: (raw: unknown) => permissionCardFromRaw(raw),
+  },
+  {
+    kind: 'template',
+    schema: () => s.permissionCard({ polymorphic: true }),
+    card: (raw: unknown) => polymorphicPermissionCardFromRaw(raw),
+  },
+] as const;
 import type { ByteStreamFailure } from 'golem:tool/host@0.1.0';
 
 const streamFailures = [
@@ -1152,11 +1169,11 @@ describe('tool guest exports', () => {
   });
 
   it('encodes an owned permission-card returned by a tool handler', async () => {
-    const raw = { id: 'opaque-permission-card' } as never;
+    const raw = fakeRawCard({ id: 'opaque-permission-card' }) as never;
     toolDefinition('permission-card-result')
       .body((body) => body.returns(s.permissionCard({ polymorphic: false })))
       .implement({
-        'permission-card-result': async () => ok(raw),
+        'permission-card-result': async () => ok(permissionCardFromRaw(raw)),
       });
     const registered = ToolRegistry.get('permission-card-result');
     const commandNode = registered?.extended.commandByPath([]);
@@ -1178,14 +1195,12 @@ describe('tool guest exports', () => {
     expect(result.result).toBeDefined();
     const decoded = typedSchemaValueFromWit(result.result!);
     const card = commandNode.body?.result?.codec.fromValue(decoded.value);
-    expect(card).toBeInstanceOf(GuestPermissionCardHandle);
-    expect(
-      peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, card as GuestPermissionCardHandle),
-    ).toBe(raw);
+    expect(card).toBeInstanceOf(PermissionCard);
+    expect(rawOfPermissionCard(card)).toBe(raw);
   });
 
   it('forwards a wire-lifted permission card through a tool handler without consuming it during validation', async () => {
-    const raw = { id: 'forwarded-permission-card' } as never;
+    const raw = fakeRawCard({ id: 'forwarded-permission-card' }) as never;
     toolDefinition('permission-card-forward')
       .body((body) =>
         body
@@ -1198,7 +1213,9 @@ describe('tool guest exports', () => {
     const registered = ToolRegistry.get('permission-card-forward')!;
     const commandNode = registered.extended.commandByPath([])!;
     const input = typedSchemaValueToWit(
-      registered.extended.canonicalInputModel(commandNode).encodeTyped({ card: raw }),
+      registered.extended
+        .canonicalInputModel(commandNode)
+        .encodeTyped({ card: permissionCardFromRaw(raw) }),
     );
     const result = await tool.invoke(
       'permission-card-forward',
@@ -1211,9 +1228,9 @@ describe('tool guest exports', () => {
     );
     const output = commandNode.body!.result!.codec.fromValue(
       typedSchemaValueFromWit(result.result!).value,
-    ) as { label: string; card: GuestPermissionCardHandle };
+    ) as { label: string; card: PermissionCard };
     expect(output.label).toBe('forwarded');
-    expect(peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, output.card)).toBe(raw);
+    expect(rawOfPermissionCard(output.card)).toBe(raw);
   });
 
   it('validates native stream input and output without consuming endpoints or pulling producers', async () => {
@@ -1263,13 +1280,14 @@ describe('tool guest exports', () => {
   });
 
   it('releases a permission card after a non-canonical result so it can be retried', async () => {
-    const raw = { id: 'retry-permission-card' } as never;
+    const raw = fakeRawCard({ id: 'retry-permission-card' }) as never;
+    const card = permissionCardFromRaw(raw);
     let attempt = 0;
     toolDefinition('permission-card-result-retry')
       .body((body) => body.returns(z.object({ card: s.permissionCard({ polymorphic: false }) })))
       .implement({
         'permission-card-result-retry': async () =>
-          ok(attempt++ === 0 ? ({ card: raw, extra: true } as never) : { card: raw }),
+          ok(attempt++ === 0 ? ({ card, extra: true } as never) : { card }),
       });
     const registered = ToolRegistry.get('permission-card-result-retry');
     const commandNode = registered?.extended.commandByPath([]);
@@ -1296,15 +1314,14 @@ describe('tool guest exports', () => {
     expect(result.result).toBeDefined();
     const decoded = typedSchemaValueFromWit(result.result!);
     const output = commandNode.body?.result?.codec.fromValue(decoded.value) as {
-      card: GuestPermissionCardHandle;
+      card: PermissionCard;
     };
-    expect(peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, output.card)).toBe(raw);
+    expect(rawOfPermissionCard(output.card)).toBe(raw);
   });
 
   it.each([
     ['secret', s.secret(z.string())],
     ['quota-token', s.quotaToken()],
-    ['permission-card', s.permissionCard({ polymorphic: false })],
   ] as const)('rolls back partial %s result adoption before retry', (_name, schema) => {
     const raw = {} as never;
     const codec = compileSchema(z.array(schema));
@@ -1316,7 +1333,6 @@ describe('tool guest exports', () => {
   it.each([
     ['secret', s.secret(z.string())],
     ['quota-token', s.quotaToken()],
-    ['permission-card', s.permissionCard({ polymorphic: false })],
   ] as const)('rolls back %s adoption when a later property getter throws', (_name, schema) => {
     const raw = {} as never;
     const codec = compileSchema(z.object({ capability: schema, later: z.string() }));
@@ -1335,10 +1351,70 @@ describe('tool guest exports', () => {
     });
   });
 
+  it.each(cardKinds)(
+    'rejects an aliased $kind permission card in a result and keeps it usable for a retry',
+    ({ schema, card: cardFromRaw }) => {
+      const raw = fakeRawCard() as never;
+      const card = cardFromRaw(raw);
+      const codec = compileSchema(z.array(schema()));
+      expect(() => encodeToolValue(codec, [card, card], 'tool result')).toThrow();
+      expect(card.isMoved()).toBe(false);
+      const result = encodeToolValue(codec, [card], 'tool result');
+      const [decoded] = codec.fromValue(typedSchemaValueFromWit(result).value) as PermissionCard[];
+      expect(decoded).toBeInstanceOf(card.constructor);
+      expect(rawOfPermissionCard(decoded)).toBe(raw);
+    },
+  );
+
+  it.each(cardKinds)(
+    'keeps a $kind permission card usable when a later property getter throws',
+    ({ schema, card: cardFromRaw }) => {
+      const raw = fakeRawCard() as never;
+      const card = cardFromRaw(raw);
+      const codec = compileSchema(z.object({ capability: schema(), later: z.string() }));
+      expect(() =>
+        codec.toValue({
+          capability: card,
+          get later() {
+            throw new Error('getter failed');
+          },
+        }),
+      ).toThrow('getter failed');
+      const result = encodeToolValue(codec, { capability: card, later: 'ok' }, 'tool result');
+      const decoded = codec.fromValue(typedSchemaValueFromWit(result).value) as {
+        capability: PermissionCard;
+        later: string;
+      };
+      expect(decoded.capability).toBeInstanceOf(card.constructor);
+      expect(rawOfPermissionCard(decoded.capability)).toBe(raw);
+      expect(decoded.later).toBe('ok');
+    },
+  );
+
+  it('moves a lifted card whose resource is disposed after a failed decode', () => {
+    const dispose = vi.fn();
+    const raw = fakeRawCard({ [Symbol.dispose]: dispose });
+    const codec = compileSchema(s.permissionCard({ polymorphic: false }));
+    const wire = typedSchemaValueToWit({
+      graph: codec.graph,
+      value: codec.toValue(permissionCardFromRaw(raw)),
+    });
+    let lifted: PermissionCard | undefined;
+    expect(() =>
+      withWireValueOwnership(wire, (lift) => {
+        lifted = codec.fromValue(lift().value) as PermissionCard;
+        throw new Error('later validation failed');
+      }),
+    ).toThrow('later validation failed');
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(lifted?.isMoved()).toBe(true);
+    expect(() => lifted?.inspect()).toThrow(/already been moved/);
+  });
+
   it('delivers an owned permission-card input to a tool handler', async () => {
-    const raw = { id: 'opaque-permission-card-input' } as never;
-    const handler = vi.fn(async ({ card }: { card: GuestPermissionCardHandle }) => {
-      expect(peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, card)).toBe(raw);
+    const raw = fakeRawCard({ id: 'opaque-permission-card-input' }) as never;
+    const handler = vi.fn(async ({ card }: { card: PermissionCard }) => {
+      expect(rawOfPermissionCard(card)).toBe(raw);
       return ok(undefined);
     });
     toolDefinition('permission-card-input')
@@ -1350,7 +1426,9 @@ describe('tool guest exports', () => {
     const commandNode = registered?.extended.commandByPath([]);
     if (!registered || !commandNode) throw new Error('permission-card-input was not registered');
     const input = typedSchemaValueToWit(
-      registered.extended.canonicalInputModel(commandNode).encodeTyped({ card: raw }),
+      registered.extended
+        .canonicalInputModel(commandNode)
+        .encodeTyped({ card: permissionCardFromRaw(raw) }),
     );
 
     await expect(
@@ -1362,7 +1440,7 @@ describe('tool guest exports', () => {
   });
 
   it('still rejects non-canonical values nested beside a permission card', async () => {
-    const raw = { id: 'opaque-permission-card-with-literal' } as never;
+    const raw = fakeRawCard({ id: 'opaque-permission-card-with-literal' }) as never;
     const handler = vi.fn(async () => ok(undefined));
     toolDefinition('permission-card-canonicality')
       .body((body) =>
@@ -1384,7 +1462,7 @@ describe('tool guest exports', () => {
     }
     const encoded = registered.extended
       .canonicalInputModel(commandNode)
-      .encodeTyped({ payload: { card: raw, mode: 'right' } });
+      .encodeTyped({ payload: { card: permissionCardFromRaw(raw), mode: 'right' } });
     if (encoded.value.tag !== 'record') throw new Error('expected canonical input record');
     const carrier = encoded.value.fields[0];
     const payload = carrier.tag === 'option' ? carrier.value : carrier;

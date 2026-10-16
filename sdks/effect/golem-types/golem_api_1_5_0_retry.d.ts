@@ -13,8 +13,20 @@ declare module 'golem:api/retry@1.5.0' {
    * Resolve the matching retry policy for a given operation context.
    * Evaluates named policies in descending priority order; returns the
    * policy from the first rule whose predicate matches, or none.
+   * Invalid predicates return an error without trapping the invocation.
+   * @throws string
    */
   export function resolveRetryPolicy(verb: string, nounUri: string, properties: [string, PredicateValue][]): RetryPolicy | undefined;
+  /**
+   * Advance the host's retry evaluator once after a failed, compensated attempt.
+   * Empty state starts a sequence. None selects the configured default retry policy.
+   * Elapsed includes work, compensation and durable waits since the first attempt.
+   * The continuation binds the effective policy and retains elapsed high-water marks.
+   * A changed policy or invalid continuation returns an error, never a reset budget.
+   * The host records the decision, including jitter and errors, for deterministic replay.
+   * @throws string
+   */
+  export function nextRetryDelay(policy: RetryPolicy | undefined, state: Uint8Array, elapsed: Duration, verb: string, nounUri: string, properties: [string, PredicateValue][]): RetryDecision;
   /**
    * Add or overwrite a named retry policy (persisted to oplog).
    * If a policy with the same name exists, it is replaced.
@@ -244,4 +256,11 @@ declare module 'golem:api/retry@1.5.0' {
     predicate: RetryPredicate;
     policy: RetryPolicy;
   };
+  export type RetryDecision = {
+    /** Opaque continuation for this retry sequence. Pass it unchanged to the next decision. */
+    state: Uint8Array;
+    /** None means exhausted. A zero delay still permits another attempt. */
+    delay?: Duration;
+  };
+  export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

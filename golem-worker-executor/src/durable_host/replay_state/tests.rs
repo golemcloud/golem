@@ -9,7 +9,8 @@ use golem_common::model::entity::EntityCallMode;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::TraceId;
 use golem_common::model::oplog::payload::types::{
-    SerializableP3HttpBodyChunk, SerializableP3HttpConsumeBodyResult, SerializableToolRpcError,
+    SerializableHttpErrorCode, SerializableP3HttpBodyChunk, SerializableP3HttpConsumeBodyResult,
+    SerializableToolRpcError,
 };
 use golem_common::model::oplog::{
     AgentError, DurableFunctionType, DurableInvocationId, FilesystemSnapshotName, HostRequest,
@@ -1015,6 +1016,103 @@ fn fork_start() -> OplogEntry {
 
 async fn replay_state_over(entries: Vec<OplogEntry>) -> ReplayState {
     replay_state_and_oplog_over(entries).await.0
+}
+
+#[test]
+async fn refused_or_typed_loss_repair_keeps_a_completed_write_sibling() {
+    for typed_loss in [false, true] {
+        let owner_name = HostFunctionName::Custom("test:owner".to_string());
+        let sibling_name = HostFunctionName::Custom("test:sibling-write".to_string());
+        let write_start = |name| {
+            let mut start = start_named(name);
+            if let OplogEntry::Start {
+                durable_function_type,
+                ..
+            } = &mut start
+            {
+                *durable_function_type = DurableFunctionType::WriteRemote;
+            }
+            start
+        };
+        let (replay, oplog) = replay_state_and_oplog_over(vec![
+            OplogEntry::RecoverySucceeded {
+                timestamp: Timestamp::now_utc(),
+            },
+            write_start(owner_name.clone()),
+            write_start(sibling_name.clone()),
+            end_for(3, 42),
+        ])
+        .await;
+        let before = oplog.entries.lock().unwrap().clone();
+        let owner = replay
+            .claim_concurrent_start(&owner_name, &DurableFunctionType::WriteRemote)
+            .await
+            .unwrap();
+        assert!(matches!(
+            replay.await_resolution_outcome(owner).await.unwrap(),
+            ResolutionOutcome::Incomplete
+        ));
+        let loss = HostResponse::P3HttpClientConsumeBodyResult(
+            HostResponseP3HttpClientConsumeBodyResult {
+                result: SerializableP3HttpConsumeBodyResult::HttpError(
+                    SerializableHttpErrorCode::HttpResponseIncomplete,
+                ),
+            },
+        );
+        if typed_loss {
+            let mut terminal = end_for(2, 0);
+            let OplogEntry::End { response, .. } = &mut terminal else {
+                unreachable!()
+            };
+            *response = Some(OplogPayload::Inline(Box::new(loss.clone())));
+            oplog.add(terminal).await.unwrap();
+        } else {
+            replay.abandon_replay_for_failure().await.unwrap();
+        }
+        assert!(!replay.is_live_published());
+        let sibling = replay
+            .claim_concurrent_start(&sibling_name, &DurableFunctionType::WriteRemote)
+            .await
+            .unwrap();
+        assert_eq!(sibling.start_idx(), OplogIndex::from_u64(3));
+        assert!(
+            matches!(replay.await_resolution(sibling).await.unwrap(), Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(4))
+        );
+        {
+            let entries = oplog.entries.lock().unwrap();
+            assert_eq!(&entries[..before.len()], before.as_slice());
+            assert_eq!(entries.len(), before.len() + usize::from(typed_loss));
+        }
+        if typed_loss {
+            let recovered = test_replay_state(
+                test_agent_id(),
+                oplog.clone(),
+                DeletedRegions::default(),
+                None,
+            )
+            .await
+            .unwrap();
+            let owner = recovered
+                .claim_concurrent_start(&owner_name, &DurableFunctionType::WriteRemote)
+                .await
+                .unwrap();
+            let Resolution::Completed {
+                response: Some(OplogPayload::Inline(response)),
+                ..
+            } = recovered.await_resolution(owner).await.unwrap()
+            else {
+                panic!("typed loss must replay under the original Start");
+            };
+            assert_eq!(*response, loss);
+            let sibling = recovered
+                .claim_concurrent_start(&sibling_name, &DurableFunctionType::WriteRemote)
+                .await
+                .unwrap();
+            assert!(
+                matches!(recovered.await_resolution(sibling).await.unwrap(), Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(4))
+            );
+        }
+    }
 }
 
 async fn replay_state_and_oplog_over(

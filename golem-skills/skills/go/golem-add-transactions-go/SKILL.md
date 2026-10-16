@@ -19,17 +19,19 @@ The Go API lives in the `transaction` package (`github.com/golemcloud/golem/sdks
 - `transaction.Fallible[Out, E](...)` — rolls back on failure and **returns** a
   `transaction.Failure[E]`.
 - `transaction.Infallible[Out, E](...)` — rolls back and **retries** the whole
-  transaction until it succeeds.
+  transaction under the host policy, returning a Result.
 
 Expected step failures are modeled as the **error arm** of a `golem.Result` (type
-`E`, often `string`). A `panic` fails the invocation without guaranteed compensation.
+`E`, often `string`). Caught panics also run compensation in reverse order. A fallible
+transaction re-panics with the original value only after complete rollback; partial rollback
+preserves both the original panic and compensation failure.
 
 ## Steps
 
 1. **Define each operation** with `transaction.NewOperation(execute, compensate)`.
-2. **Choose a transaction flavor** — fallible (failure is acceptable) or infallible (must eventually succeed).
+2. **Choose a transaction flavor** — fallible (report failure after rollback) or infallible (policy-driven retries after rollback).
 3. **Run the steps** with `tx.Step(op, input)` inside the transaction body.
-4. **Handle the outcome** — inspect the `golem.Result` (fallible) or use the returned value (infallible).
+4. **Handle the outcome** — inspect the `golem.Result` from either helper.
 
 ## Defining Operations
 
@@ -124,12 +126,15 @@ if result.IsErr() {
 
 On a step failure, the completed steps are compensated in reverse and the helper
 starts a new guest-code attempt. Each attempt appends new durable calls and keeps the
-earlier attempts and compensations in history. The helper returns a plain `Out` if an
-attempt succeeds; a permanent domain failure can loop forever. This loop does not rewind
-history and has no built-in attempt bound or backoff guarantee:
+earlier attempts and compensations in history. After each completely compensated failure,
+resolve verb `saga`, noun the agent URN, with `attempt`/`error-kind`. `next-retry-delay` uses
+the existing host evaluator and opaque binary continuation; the SDK uses durable clocks and
+timers. No matching policy selects the agent default. Unbounded policies are rejected rather
+than silently capped. Count/time/never exhaustion and selector/evaluator errors return typed
+failures retaining the original failure. The helper returns a Result:
 
 ```go
-orderID := transaction.Infallible(func(tx *transaction.Tx[string]) golem.Result[string, string] {
+result := transaction.Infallible(func(tx *transaction.Tx[string]) golem.Result[string, string] {
 	r1 := tx.Step(reserveInventory, "SKU-123")
 	if r1.IsErr() {
 		return golem.Err[string, string](r1.Err())
@@ -140,13 +145,11 @@ orderID := transaction.Infallible(func(tx *transaction.Tx[string]) golem.Result[
 	}
 	return golem.Ok[string, string](r1.Ok() + ":" + r2.Ok())
 })
-// orderID is a plain string — the transaction retried until it succeeded.
+// Inspect result for success, partial rollback, retry exhaustion or policy error.
 ```
 
-Use `transaction.Infallible` only when the steps are expected to **eventually
-succeed** — a deterministic failure would retry forever. If a compensation itself
-fails during a rollback-for-retry, the transaction cannot be made consistent and
-the helper **panics** (surfacing which compensation failed).
+Use `transaction.Infallible` only when another policy-authorized attempt is appropriate.
+Compensation failure stops retries and returns a failure retaining both causes.
 
 ## Not available in the Go SDK
 
@@ -169,7 +172,7 @@ so the error type comes from the transaction itself.
 - Compensation runs in **reverse** order of execution.
 - All steps in one transaction share the error type `E` (commonly `string`).
 - Use `transaction.Fallible` when failure is an acceptable outcome;
-  `transaction.Infallible` when the operation must eventually succeed.
+  `transaction.Infallible` when another policy-authorized attempt is appropriate.
 - Host retry policies remain responsible for retryable individual calls. Reconstruction
   repairs an eligible incomplete call at its own `Start`; it does not rerun completed steps.
 

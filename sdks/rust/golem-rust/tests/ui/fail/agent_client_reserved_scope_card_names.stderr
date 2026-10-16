@@ -1,0 +1,17 @@
+error: agent_client method name `with_scope_card` is reserved
+ --> tests/ui/fail/agent_client_reserved_scope_card_names.rs:4:7
+  |
+4 | trait ReservedWithScopeCard {
+  |       ^^^^^^^^^^^^^^^^^^^^^
+
+error: agent_client method name `set_default_scope_card` is reserved
+ --> tests/ui/fail/agent_client_reserved_scope_card_names.rs:9:7
+  |
+9 | trait ReservedSetDefault {
+  |       ^^^^^^^^^^^^^^^^^^
+
+error: agent_client method name `clear_default_scope_card` is reserved
+  --> tests/ui/fail/agent_client_reserved_scope_card_names.rs:14:7
+   |
+14 | trait ReservedClearDefault {
+   |       ^^^^^^^^^^^^^^^^^^^^

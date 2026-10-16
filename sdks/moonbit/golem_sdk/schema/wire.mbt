@@ -40,9 +40,13 @@ impl IntoWire with fn release_wire(_self, _releaser) {
 }
 
 ///|
+/// Collects the resources that a value releases. A rollback of a failed
+/// invocation-input encode keeps permission cards with their holders, because
+/// the host never took them; every other release drops them.
 pub struct WireReleaser {
   resources : Array[@types.SchemaValueNode]
   native_streams : Array[@async-core.Stream[@types.SchemaValueTree]]
+  keeps_permission_cards : Bool
 }
 
 ///|
@@ -58,7 +62,11 @@ fn WireReleaser::resource(
 ///|
 /// Releases concrete values without encoding them or allocating a schema model.
 pub fn[T : IntoWire] release_wire(value : T) -> Unit {
-  let releaser : WireReleaser = { resources: [], native_streams: [], }
+  let releaser : WireReleaser = {
+    resources: [],
+    native_streams: [],
+    keeps_permission_cards: false,
+  }
   T::release_wire(value, releaser)
   for node in releaser.resources {
     drop_wire_resource(node)
@@ -126,7 +134,7 @@ fn drop_wire_resource(node : @types.SchemaValueNode) -> Unit {
   match node {
     @types.SecretValue(raw) => raw.drop()
     @types.QuotaTokenHandle(raw) => raw.drop()
-    @types.PermissionCardHandle(raw) => raw.drop()
+    @types.PermissionCardHandle(raw) => @card.drop_unless_held(raw)
     @types.StreamValue(raw) => raw.drop()
     _ => ()
   }
@@ -198,11 +206,12 @@ pub async fn[T : IntoWire] into_wire_async(value : T) -> @types.SchemaValueTree 
 }
 
 ///|
-/// Encode heterogeneous invocation fields as one ownership transaction.
+/// Encode heterogeneous invocation input fields as one ownership transaction.
+/// A failed encode rolls the fields back with `rollback_wire_fields`.
 pub fn into_wire_record(
   values : Array[&IntoWire],
 ) -> @types.SchemaValueTree raise WireError {
-  errdefer release_wire_fields(values)
+  errdefer rollback_wire_fields(values)
   let encoder = WireEncoder::new()
   let fields = values.map(value => value.append_wire(encoder))
   let root = encoder.push(@types.RecordValue(fields))
@@ -213,7 +222,7 @@ pub fn into_wire_record(
 pub async fn into_wire_record_async(
   values : Array[&IntoWire],
 ) -> @types.SchemaValueTree {
-  errdefer release_wire_fields(values)
+  errdefer rollback_wire_fields(values)
   let encoder = WireEncoder::new()
   let fields = values.map(value => value.append_wire(encoder))
   let root = encoder.push(@types.RecordValue(fields))
@@ -221,8 +230,38 @@ pub async fn into_wire_record_async(
 }
 
 ///|
-pub fn release_wire_fields(values : Array[&IntoWire]) -> Unit {
-  let releaser : WireReleaser = { resources: [], native_streams: [], }
+/// Encodes the fields of an output payload, such as a multi-field tool error,
+/// as one ownership transaction. A failed encode releases every field
+/// resource, permission cards included, because nothing else owns the
+/// discarded payload.
+pub async fn into_wire_payload_record_async(
+  values : Array[&IntoWire],
+) -> @types.SchemaValueTree {
+  errdefer release_wire_values(values, false)
+  let encoder = WireEncoder::new()
+  let fields = values.map(value => value.append_wire(encoder))
+  let root = encoder.push(@types.RecordValue(fields))
+  encoder.finish_async(root)
+}
+
+///|
+/// Rolls back invocation input fields that were not sent: releases their
+/// resources except permission cards, which stay with their holders because
+/// the host never took them.
+pub fn rollback_wire_fields(values : Array[&IntoWire]) -> Unit {
+  release_wire_values(values, true)
+}
+
+///|
+fn release_wire_values(
+  values : Array[&IntoWire],
+  keeps_permission_cards : Bool,
+) -> Unit {
+  let releaser : WireReleaser = {
+    resources: [],
+    native_streams: [],
+    keeps_permission_cards,
+  }
   for value in values {
     value.release_wire(releaser)
   }
@@ -795,14 +834,20 @@ pub impl IntoWire for @model.GuestQuotaTokenHandle with fn append_wire(
 }
 
 ///|
-pub impl FromWire for @model.GuestPermissionCardHandle with fn read_wire(
+pub impl FromWire for @card.GuestPermissionCardHandle with fn read_wire(
   reader,
   index,
 ) {
   match wire_node(reader, index) {
     @types.PermissionCardHandle(raw) => {
-      let handle = @model.GuestPermissionCardHandle::new(raw)
-      reader.rollback.push(() => ignore(handle.take()))
+      // Lift only a handle that no card holds, so that a tree built by user
+      // code cannot alias a card.
+      guard @card.lift(raw) is Some(handle) else {
+        raise WireError::Invalid(
+          "permission card handle is already held by another card",
+        )
+      }
+      reader.rollback.push(() => ignore(@card.take(handle)))
       handle
     }
     _ => raise WireError::Invalid("expected permission card value")
@@ -810,16 +855,15 @@ pub impl FromWire for @model.GuestPermissionCardHandle with fn read_wire(
 }
 
 ///|
-pub impl IntoWire for @model.GuestPermissionCardHandle with fn append_wire(
+pub impl IntoWire for @card.GuestPermissionCardHandle with fn append_wire(
   self,
   encoder,
 ) {
-  let raw = self.with_handle(raw => raw)
-  guard raw is Some(raw) else {
+  guard @card.borrow(self) is Some(raw) else {
     raise WireError::Invalid("permission card has already been transferred")
   }
   encoder.checks.push(() => self.is_present())
-  encoder.transfers.push(() => ignore(self.take()))
+  encoder.transfers.push(() => ignore(@card.take(self)))
   encoder.push(@types.PermissionCardHandle(raw))
 }
 
@@ -869,11 +913,16 @@ pub impl IntoWire for @model.GuestQuotaTokenHandle with fn release_wire(
 }
 
 ///|
-pub impl IntoWire for @model.GuestPermissionCardHandle with fn release_wire(
+/// A rollback of a failed invocation-input encode keeps the card with its
+/// holder; every other release drops it.
+pub impl IntoWire for @card.GuestPermissionCardHandle with fn release_wire(
   self,
   releaser,
 ) {
-  if self.take() is Some(raw) {
+  if releaser.keeps_permission_cards {
+    return
+  }
+  if @card.take(self) is Some(raw) {
     releaser.resource(@types.PermissionCardHandle(raw))
   }
 }

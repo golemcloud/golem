@@ -293,6 +293,23 @@ readiness reads consume no source item and record nothing. Host projections reta
 journaling and batching. Their records are skippable hints, distinguished from guest observations
 by the consumer discriminant rather than the source binding.
 
+Guest observation writes coalesce their commits. The owned write calls
+`DurableStreamStore::commit_through` with the reserved index and skips its own commit when the
+owner's published horizon already covers that index. The horizon is the published
+`last_known_status.oplog_idx` of a durable agent whose status is attached. Only the status task
+publishes it, after a successful commit and the fold of that commit, and that commit flushed the
+whole buffer through its sampled tip. A skipped write therefore returns a receipt that still means
+durable and folded, and it writes nothing that could hide a fence: the next append or commit still
+reports one. Ephemeral agents and a detached status have no horizon, because a weaker commit level
+folds without storage and a detached status is not a fold. The read path also stays off the
+`PrimaryOplog` actor, which runs commits inline. Only a re-observation reads the current oplog
+index to bound its reference, and `upload_raw_payload` returns a payload at or below
+`max_payload_size` inline without an actor request; a retired oplog still takes the actor path and
+reports termination. Without these three rules each read waited behind the previous read's commit,
+and each commit flushed about one entry. Tests:
+`consumer_observation_commits_only_past_the_published_horizon` and
+`blocked_durable_stream_batch_prepares_before_atomic_commit_and_append`.
+
 Cancellation replay has an open limit: the adapter does not reconstruct the canonical
 inline-versus-blocked cancellation return disposition. When cancellation cannot retain a
 recorded guest delivery, it reports `UnexpectedOplogEntry` and poisons replay instead of

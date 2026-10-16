@@ -53,6 +53,12 @@ It is recommended to do a full build before starting working on Golem and openin
 cargo build -p golem-worker-service-base
 ```
 
+For local server and CLI binaries, use `cargo make build-golem` and
+`cargo make build-golem-cli`. These tasks also prepare missing or changed built-in
+WASMs. A warm build preserves manually replaced WASMs. Plain `cargo build` does
+not prepare built-ins. See [Built-in artifacts](BUILTIN_ARTIFACTS.md) for source
+overrides, CI caching, and the tagged release workflow.
+
 #### If cargo runs out of memory
 Depending on the number of CPU cores and available memory, building everything can use a lot of memory. If cargo runs out of memory or just uses too much, you can limit the number of parallel jobs by providing a cargo `config.toml` file, for example:
 

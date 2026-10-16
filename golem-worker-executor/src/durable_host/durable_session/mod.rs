@@ -144,7 +144,7 @@ pub struct StreamSession {
     input_schema: Option<Arc<DurableInputSchema>>,
     rpc: Option<Arc<dyn Rpc>>,
     consumer_journal: Option<Arc<dyn DurableStreamConsumerJournal>>,
-    auth_ctx: Option<AuthCtx>,
+    auth_ctx: Option<Arc<AuthCtx>>,
     runtime_source: Option<RuntimeSource>,
     require_root_attachment_before_production: bool,
     next_transport_stream_id: Arc<AtomicU64>,
@@ -560,7 +560,7 @@ impl StreamSession {
     }
 
     /// Preserves the original consumer authorization for routed source operations.
-    pub fn with_auth_ctx(mut self, auth_ctx: AuthCtx) -> Self {
+    pub fn with_auth_ctx(mut self, auth_ctx: Arc<AuthCtx>) -> Self {
         self.auth_ctx = Some(auth_ctx);
         self
     }
@@ -6249,6 +6249,8 @@ pub struct DurableInputProducer {
     dropping: bool,
     drop_event_sink: Option<mpsc::UnboundedSender<DropEvent>>,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
+    /// Receives the reason of a cancel by the input's producer before the end is returned.
+    producer_cancel: Option<Arc<OnceLock<StreamCancelReason>>>,
 }
 
 struct PrepareInputObservation {
@@ -6655,7 +6657,19 @@ impl DurableInputProducer {
             dropping: false,
             drop_event_sink: None,
             runtime_teardown: Arc::new(|| false),
+            producer_cancel: None,
         }
+    }
+
+    /// Reports the reason of a cancel by the input's producer through `reason`. The reader still
+    /// reads the end of the input; a reader whose ABI has a failure item can read the reason
+    /// as one.
+    pub(crate) fn with_producer_cancel_observer(
+        mut self,
+        reason: Arc<OnceLock<StreamCancelReason>>,
+    ) -> Self {
+        self.producer_cancel = Some(reason);
+        self
     }
 
     /// Installs cancellation cleanup to run when the guest drops unread input.
@@ -6714,8 +6728,12 @@ impl DurableInputProducer {
             ),
             CommittedProducerStreamEventPayload::Cancel {
                 role: StreamCancelRole::InputProducer | StreamCancelRole::OutputProducer,
+                reason,
                 ..
             } => {
+                if let Some(observer) = &self.producer_cancel {
+                    let _ = observer.set(reason);
+                }
                 self.finished = true;
                 Ok(DurableInputEvent::End)
             }
@@ -6921,14 +6939,7 @@ impl DurableInputEndpoint {
             let mut nested_mappings = Vec::new();
             let mut pending_observation = None;
             let mut guest_bytes = None;
-            let (introduced, introducing_index) = oneshot::channel::<Result<OplogIndex, String>>();
-            let introducing_index = async move {
-                introducing_index
-                    .await
-                    .map_err(|_| "parent stream item was not observed".to_string())?
-            }
-            .boxed()
-            .shared();
+            let mut introducing_index = None;
             if let Some(event) = &event {
                 let record = match &event.payload {
                     CommittedProducerStreamEventPayload::Value(bytes) => {
@@ -7119,10 +7130,24 @@ impl DurableInputEndpoint {
                     }),
                 };
                 if guest {
+                    // Only nested readers wait for the parent's oplog index.
+                    let introduced = (!nested_mappings.is_empty()).then(|| {
+                        let (introduced, index) = oneshot::channel::<Result<OplogIndex, String>>();
+                        introducing_index = Some(
+                            async move {
+                                index.await.map_err(|_| {
+                                    "parent stream item was not observed".to_string()
+                                })?
+                            }
+                            .boxed()
+                            .shared(),
+                        );
+                        introduced
+                    });
                     pending_observation = Some(PendingConsumerObservation {
                         record,
                         recorded: recorded_observation,
-                        introduced: Some(introduced),
+                        introduced,
                     });
                 } else if !journaled {
                     streams.append_record(None, record).await?;
@@ -7157,7 +7182,9 @@ impl DurableInputEndpoint {
             }
             for (position, mapping) in nested_mappings.into_iter().enumerate() {
                 streams.insert_mapping(mapping.clone())?;
-                let endpoint = if guest && !journaled {
+                let endpoint = if let Some(introducing_index) =
+                    introducing_index.as_ref().filter(|_| !journaled)
+                {
                     let introducing_index = introducing_index.clone();
                     DurableInputEndpoint {
                         reader: None,
@@ -7452,8 +7479,11 @@ impl DurableInputProducer {
             Ok(DurableInputEvent::End) => {
                 return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Dropped)));
             }
+            // A consumer cancel that this read did not request (`finish` returned above), such
+            // as the end of the invocation that owns an unread input, ends the stream for the
+            // reader. Wasmtime accepts `Cancelled` only as the answer to `finish`.
             Ok(DurableInputEvent::Cancelled) => {
-                return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Cancelled)));
+                return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Dropped)));
             }
             Err(error) => {
                 self.finished = true;

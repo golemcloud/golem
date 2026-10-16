@@ -64,11 +64,39 @@ recovery/readiness decisions. Generic scope wrappers do not record additional St
 RDBMS protocol state prevents statement in-function retry; function types do not encode
 transaction membership. Preserve both inline and trap-path tests (`tests/in_function_retry/`).
 
+Decide child authorization and protocol readiness before publishing live. Terminal refusal
+abandons replay for failure (`authoritative_replay_failure`); it must not publish over sibling
+history. A typed-loss `End` belongs to the original `Start`. Never rewind or discard another
+task's history to make repair possible. HTTP without a safe resend reports
+`http-response-incomplete`, RDBMS reports `resource-lost`, and TCP reports `connection-broken`.
+UDP `ReadRemote` re-executes receive after rebind rather than manufacturing connection loss.
+
+Preview 2 HTTP is removed. Preview 3 send keeps request-body intake running while awaiting
+replay resolution: a streamed writer must reach its next durable call without deadlock.
+Every method uses `Cancellable` guest drop, records `Cancelled`, and does not resend on replay.
+Only crash-like loss leaves an incomplete send eligible for repair. A trap is never cancellation;
+guest panic and deterministic traps are permanent failures, without changing infrastructure retries.
+
 A P3 HTTP send uses `WriteRemote`. It repairs an incomplete `Start` in place and keeps the
 operations recorded next to it. Nonresumable RDBMS handles complete incomplete calls with typed
 loss under the original `Start`, without replacing the transaction or requerying the stream.
 Transaction phase hints carry their owning scope's `Start` and are indexed before replay;
 they must not be consumed positionally by another transaction.
+
+## Saga attempts use semantic retry policies
+
+After complete compensation, infallible SDK sagas resolve verb `saga` against the agent URN
+with `attempt` and `error-kind` properties. The host's `next-retry-delay` uses the existing
+retry evaluator and an opaque continuation; SDKs use durable clocks and timers. When no rule
+matches, use the agent default. Reject unbounded saga policies; exhaustion and policy errors
+return typed failures preserving the original failure. Each attempt and compensation appends
+history; the policy bound keeps that history finite. Partial compensation stops retries.
+
+TS, Effect, Scala and Go compensate catchable failures in reverse order. Propagate the original
+exception or panic only after complete rollback; partial rollback retains both failures.
+Effect external cancellation stops retries while retaining failure evidence in the Cause.
+Rust WASM panics abort without compensation; Result failures, including exhaustion and partial
+rollback from `infallible_transaction`, remain typed. MoonBit has no public saga helper.
 
 ## RPC
 

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
 	"io"
 	"reflect"
 	"slices"
@@ -1029,9 +1030,18 @@ func (d *definitions) buildCommandBody(g *engine.GraphBuilder, ce *commandEntry,
 	return body
 }
 
-// decode fills an argument struct from a canonical input record.
-func (l *commandLayout) decode(tree types.SchemaValueTree, dst reflect.Value) error {
+// decode fills an argument struct from a canonical input record. A failed
+// decode gives every permission card in the record back to the host, and a
+// successful one the cards it did not reach.
+func (l *commandLayout) decode(tree types.SchemaValueTree, dst reflect.Value) (err error) {
 	dec := engine.Decoder{Nodes: tree.ValueNodes}
+	defer func() {
+		if err != nil {
+			dec.ReleaseCards(link.ReleaseCard)
+		} else {
+			dec.ReleaseRest(link.ReleaseCard)
+		}
+	}()
 	if len(dec.Nodes) == 0 {
 		if len(l.fields) == 0 {
 			return nil
@@ -1059,8 +1069,9 @@ func (l *commandLayout) decode(tree types.SchemaValueTree, dst reflect.Value) er
 
 // encode renders an argument struct as the canonical input record, together
 // with a graph rooted at the record's type, which is what the host checks the
-// input against.
-func (l *commandLayout) encode(d *definitions, args reflect.Value) types.TypedSchemaValue {
+// input against. Encoding moves the cards in args; restore gives them back,
+// for an input the host never took.
+func (l *commandLayout) encode(d *definitions, args reflect.Value) (input types.TypedSchemaValue, restore func()) {
 	g := engine.GraphBuilder{E: d.Engine}
 	fields := make([]types.NamedFieldType, 0, len(l.fields))
 	for _, a := range l.fields {
@@ -1072,12 +1083,13 @@ func (l *commandLayout) encode(d *definitions, args reflect.Value) types.TypedSc
 	graph.Root = root
 
 	var b engine.ValBuilder
+	defer b.RestoreOnPanic()
 	idxs := make([]int32, 0, len(l.fields))
 	for _, a := range l.fields {
 		idxs = append(idxs, a.field.Encode(&b, args.FieldByIndex(a.path)))
 	}
 	valueRoot := b.Push(types.MakeSchemaValueNodeRecordValue(idxs))
-	return types.TypedSchemaValue{Graph: graph, Value: types.SchemaValueTree{ValueNodes: b.Nodes, Root: valueRoot}}
+	return types.TypedSchemaValue{Graph: graph, Value: types.SchemaValueTree{ValueNodes: b.Nodes, Root: valueRoot}}, b.Restorer()
 }
 
 // invokeCommand runs one command: resolve it, decode the arguments, call the
@@ -1160,6 +1172,12 @@ func (ce *commandEntry) decodeArgs(
 		e := toolDefinitionError(d)
 		return reflect.Value{}, &e
 	}
+	// Refuse a missing standard input before the decode takes any card out of
+	// the input.
+	if l.stdin != nil && !l.stdin.optional && !stdin.present() {
+		e := types.MakeToolErrorInvalidInput(fmt.Sprintf("command %s requires standard input", ce.label()))
+		return reflect.Value{}, &e
+	}
 	args := reflect.New(ce.argsType).Elem()
 	if err := l.decode(input.Value, args); err != nil {
 		e := types.MakeToolErrorInvalidInput(err.Error())
@@ -1168,14 +1186,8 @@ func (ce *commandEntry) decodeArgs(
 	if l.principal != nil && principal != nil {
 		args.FieldByIndex(l.principal).Set(reflect.ValueOf(&principal).Elem())
 	}
-	if l.stdin != nil {
-		switch {
-		case stdin.present():
-			args.FieldByIndex(l.stdin.path).Set(reflect.ValueOf(io.Reader(stdin)))
-		case !l.stdin.optional:
-			e := types.MakeToolErrorInvalidInput(fmt.Sprintf("command %s requires standard input", ce.label()))
-			return reflect.Value{}, &e
-		}
+	if l.stdin != nil && stdin.present() {
+		args.FieldByIndex(l.stdin.path).Set(reflect.ValueOf(io.Reader(stdin)))
 	}
 	return args, nil
 }
@@ -1202,14 +1214,30 @@ func (d *definitions) encodeResult(ce *commandEntry, out reflect.Value) (result 
 		root := g.Node(c)
 		graph := g.Build()
 		graph.Root = root
-		res.Result = witTypes.Some(types.TypedSchemaValue{Graph: graph, Value: engine.EncodeWith(c, out)})
+		res.Result = witTypes.Some(types.TypedSchemaValue{Graph: graph, Value: encodeOwned(c, out)})
 	}
 	return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](res)
 }
 
+// encodeOwned encodes a value a handler handed to the host: a result or a
+// declared error's payload. The handler gave its cards up with it, so an
+// encode that fails releases the cards it already took instead of giving them
+// back to a value nobody keeps, and panics again.
+func encodeOwned(c *engine.Codec, v reflect.Value) types.SchemaValueTree {
+	var b engine.ValBuilder
+	defer func() {
+		if r := recover(); r != nil {
+			engine.ReleaseCardsIn(b.Nodes, link.ReleaseCard)
+			panic(r)
+		}
+	}()
+	root := c.Encode(&b, v)
+	return types.SchemaValueTree{ValueNodes: b.Nodes, Root: root}
+}
+
 // handlerError turns what a handler failed with into the wire error: a
 // declared case of the command, a failure of a tool it called passed through
-// unchanged, or an invalid result.
+// as [passThroughToolError] passes it, or an invalid result.
 func (d *definitions) handlerError(ce *commandEntry, err error) (result types.ToolError) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -1232,7 +1260,9 @@ func (d *definitions) handlerError(ce *commandEntry, err error) (result types.To
 }
 
 // passThroughToolError turns what a handler failed with into the wire error.
-// A failure a called tool reported as its own error is kept unchanged; a
+// A failure a called tool reported as its own error is passed on as
+// [sendableToolError] allows: as it is, or as an invalid result when a Match
+// took its payload's cards; a
 // rejection built with [InvalidInput] or [ConstraintViolation] keeps its kind;
 // a failure of the call itself is mapped as the other SDKs map it — denial,
 // cancellation and exhaustion become constraint violations, protocol and
@@ -1250,7 +1280,7 @@ func passThroughToolError(err error) types.ToolError {
 		panic(err)
 	}
 	if call.wire != nil {
-		return *call.wire
+		return sendableToolError(*call.wire)
 	}
 	switch call.Kind {
 	case CallInvalidInput:
@@ -1269,6 +1299,35 @@ func passThroughToolError(err error) types.ToolError {
 		return types.MakeToolErrorInvalidCommandPath(slices.Clone(call.CommandPath))
 	}
 	return types.MakeToolErrorInvalidResult(err.Error())
+}
+
+// sendableToolError is a tool error received from the layer beneath, to be
+// passed on. A Match that decoded its payload took the payload's cards, so it
+// can no longer be passed on whole: it becomes an invalid result, and the
+// payload's remaining cards go back to the host. A payload passed on moves its
+// cards with it, so the same error cannot be passed on twice.
+func sendableToolError(te types.ToolError) types.ToolError {
+	if te.Tag() != types.ToolErrorCustomError {
+		return te
+	}
+	custom := te.CustomError()
+	if err := engine.CheckCardsPresent(custom.Payload.Value); err != nil {
+		engine.ReleaseCardsIn(custom.Payload.Value.ValueNodes, link.ReleaseCard)
+		return types.MakeToolErrorInvalidResult(fmt.Sprintf("declared error %s: %v", custom.Name, err))
+	}
+	return types.MakeToolErrorCustomError(types.CustomToolError{Name: custom.Name, Payload: sendOnce(custom.Payload)})
+}
+
+// sendOnce returns v to be returned to the host, which lowers it after this
+// component's code has finished. The host lowers a copy of v's nodes, and the
+// cards in v itself are marked sent: a value returned twice — by a middleware
+// that caches results, say — fails the second time instead of naming handles
+// the host already owns.
+func sendOnce(v types.TypedSchemaValue) types.TypedSchemaValue {
+	sent := v
+	sent.Value.ValueNodes = slices.Clone(v.Value.ValueNodes)
+	engine.MarkCardsSent(v.Value.ValueNodes)
+	return sent
 }
 
 // runWithOutputs finishes each output independently for returned outcomes,
@@ -1343,7 +1402,7 @@ func (d *definitions) declaredToolError(ce *commandEntry, raised *RaisedError) t
 		root := g.Node(c)
 		graph := g.Build()
 		graph.Root = root
-		payload = types.TypedSchemaValue{Graph: graph, Value: engine.EncodeWith(c, raised.payload)}
+		payload = types.TypedSchemaValue{Graph: graph, Value: encodeOwned(c, raised.payload)}
 	}
 	return types.MakeToolErrorCustomError(types.CustomToolError{Name: raised.info.name, Payload: payload})
 }

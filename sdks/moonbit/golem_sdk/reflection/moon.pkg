@@ -11,6 +11,8 @@ import {
   "golemcloud/golem_sdk/schema_model" @model,
   "golemcloud/golem_sdk/schema_model_host" @model_host,
   "golemcloud/golem_sdk/rpc",
+  "golemcloud/golem_sdk/internal/scope_card",
+  "golemcloud/golem_sdk/permissions",
   "golemcloud/golem_sdk/tool-core" @tool_core,
   "golemcloud/golem_sdk/tool",
   "moonbitlang/core/string",
@@ -18,5 +20,10 @@ import {
   "moonbitlang/core/encoding/base64",
   "moonbitlang/core/json",
 }
+
+import {
+  "golemcloud/golem_sdk/internal/permission_card" @card,
+  "golemcloud/golem_sdk/internal/test_support",
+} for "wbtest"
 
 supported_targets = "+wasm"

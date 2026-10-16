@@ -142,7 +142,7 @@ use golem_worker_executor::services::golem_config::{
 use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValueService};
 use golem_worker_executor::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
-    OplogService, OrderedOplogStart, RawOplogPayloadDownloadError,
+    OplogService, OrderedOplogStart, RawOplogPayloadDownloadError, ReservedRawStartBuilder,
 };
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::quota::QuotaService;
@@ -1486,6 +1486,28 @@ impl TestWorkerExecutor {
             .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
         let _ = worker.set_interrupting(kind).await;
         Ok(())
+    }
+
+    /// Signals a simulated crash of the loaded worker, as `simulated_crash` does, but returns as
+    /// soon as the running Store has been signalled. The returned future waits for the Store to
+    /// unwind; release any test gate the Store is blocked on before awaiting it.
+    pub async fn signal_simulated_crash(
+        &self,
+        agent_id: &AgentId,
+    ) -> anyhow::Result<impl Future<Output = anyhow::Result<()>> + use<>> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(&owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
+        let receiver = worker.set_interrupting(InterruptKind::Restart).await?;
+        Ok(async move {
+            if let Some(mut receiver) = receiver {
+                receiver.recv().await?;
+            }
+            Ok(())
+        })
     }
 
     pub async fn queue_card_revocation(
@@ -5369,10 +5391,13 @@ impl TestOplog {
     }
 
     fn is_consume_body_scope_start(entry: &OplogEntry) -> bool {
-        matches!(entry, OplogEntry::Start {
-            function_name: HostFunctionName::Custom(function_name),
-            ..
-        } if function_name == "<scope:batched-write:consume-body>")
+        matches!(
+            entry,
+            OplogEntry::Start {
+                function_name: HostFunctionName::P3HttpClientConsumeBody,
+                ..
+            }
+        )
     }
 
     async fn pause_before_consume_body_scope_start(&self) -> bool {
@@ -5386,6 +5411,12 @@ impl TestOplog {
         if !gate.armed.swap(false, Ordering::SeqCst) {
             return false;
         }
+        Self::hold_at_consume_body_scope_start_gate(&gate).await
+    }
+
+    /// Signals that the gated scope `Start` was reached, waits for the test to release the gate
+    /// and returns whether the append must be aborted.
+    async fn hold_at_consume_body_scope_start_gate(gate: &ConsumeBodyScopeStartGate) -> bool {
         if let Some(reached_tx) = gate.reached_tx.lock().unwrap().take() {
             let _ = reached_tx.send(());
         }
@@ -5396,6 +5427,67 @@ impl TestOplog {
             .expect("the consume-body scope Start gate semaphore was closed");
         permit.forget();
         gate.abort_append.load(Ordering::SeqCst)
+    }
+
+    /// Wraps a reserved `Start` builder so that an armed consume-body scope `Start` gate refuses
+    /// the scope `Start` inside the leaf's ordering step. The leaf then appends nothing, and
+    /// [`Self::hold_intercepted_consume_body_scope_start`] holds the append like the request-less
+    /// path of [`Self::add`] does.
+    fn intercept_consume_body_scope_start(
+        gate: Option<Arc<ConsumeBodyScopeStartGate>>,
+        intercepted: Arc<AtomicBool>,
+        build_start: ReservedRawStartBuilder,
+    ) -> ReservedRawStartBuilder {
+        let Some(gate) = gate else {
+            return build_start;
+        };
+        Box::new(move |raw| {
+            let entry = build_start(raw)?;
+            if Self::is_consume_body_scope_start(&entry) && gate.armed.swap(false, Ordering::SeqCst)
+            {
+                intercepted.store(true, Ordering::SeqCst);
+                return Err("the consume-body scope Start gate intercepted the append".into());
+            }
+            Ok(entry)
+        })
+    }
+
+    /// Holds a scope `Start` that [`Self::intercept_consume_body_scope_start`] refused. An aborted
+    /// gate holds the append until executor shutdown fences the oplog, so dropping the executor
+    /// simulates process loss before the scope `Start` became durable. The caller may hold the
+    /// owner boundary across this append, so the hold must end at shutdown for the executor's
+    /// tasks to exit. The refused `Start` cannot be appended after the fact, so releasing the
+    /// gate without aborting fails the append.
+    async fn hold_intercepted_consume_body_scope_start(
+        gate: Option<Arc<ConsumeBodyScopeStartGate>>,
+    ) -> Result<OrderedOplogStart, golem_worker_executor::services::oplog::OplogError> {
+        let gate = gate.expect("an intercepted consume-body scope Start has a gate");
+        if Self::hold_at_consume_body_scope_start_gate(&gate).await {
+            gate.shutdown.cancelled().await;
+            return Err(golem_worker_executor::services::oplog::OplogError::Payload(
+                "consume-body scope Start abandoned at executor shutdown".into(),
+            ));
+        }
+        Err(golem_worker_executor::services::oplog::OplogError::Payload(
+            "a payload-carrying consume-body scope Start gate supports only abort_append".into(),
+        ))
+    }
+
+    /// Tracks a consume-body scope `Start` appended through a reserved-payload path, so that the
+    /// scope `End` gate recognizes its `End`.
+    async fn track_reserved_consume_body_scope_start(&self, ordered: &OrderedOplogStart) {
+        if Self::is_consume_body_scope_start(&ordered.entry)
+            && self
+                .additional_test_deps
+                .consume_body_scope_end_gate(&self.owned_agent_id.agent_id)
+                .await
+                .is_some()
+        {
+            self.consume_body_scope_starts
+                .lock()
+                .unwrap()
+                .insert(ordered.index);
+        }
     }
 
     /// Recognizes the `End` of a tracked consume-body scope `Start`.
@@ -5545,6 +5637,12 @@ impl Oplog for TestOplog {
                 // receipts only after the oplog fence also refuses completion markers.
                 let _ = deps
                     .agent_initialization_enqueue_gates
+                    .read_sync(&agent_id, |_, gate| gate.shutdown.cancel());
+                let _ = deps
+                    .consume_body_scope_start_gates
+                    .read_sync(&agent_id, |_, gate| gate.shutdown.cancel());
+                let _ = deps
+                    .consume_body_scope_end_gates
                     .read_sync(&agent_id, |_, gate| gate.shutdown.cancel());
             },
             move || {
@@ -5705,6 +5803,34 @@ impl Oplog for TestOplog {
                     )
                 })
             });
+        }
+        if self.is_consume_body_scope_end(&entry) {
+            let scope_end_gate = self
+                .additional_test_deps
+                .consume_body_scope_end_gates
+                .read_sync(&self.owned_agent_id.agent_id, |_, gate| {
+                    gate.armed
+                        .swap(false, Ordering::SeqCst)
+                        .then(|| gate.clone())
+                })
+                .flatten();
+            if let Some(gate) = scope_end_gate {
+                // The scope `End` is never enqueued: a later release cannot restore its ordering
+                // position, so this path supports only `abort_append`, which simulates process
+                // loss before the `End` became durable and ends at the executor shutdown fence.
+                return Box::pin(async move {
+                    if let Some(reached_tx) = gate.reached_tx.lock().unwrap().take() {
+                        let _ = reached_tx.send(());
+                    }
+                    gate.release.acquire().await.unwrap().forget();
+                    if gate.abort_append.load(Ordering::SeqCst) {
+                        gate.shutdown.cancelled().await;
+                    }
+                    Err(golem_worker_executor::services::oplog::OplogError::Payload(
+                        "consume-body scope End abandoned by its test gate".into(),
+                    ))
+                });
+            }
         }
         let gated = self.is_consume_body_chunk_data_end(&entry);
         let ended_start = match &entry {
@@ -6007,10 +6133,27 @@ impl Oplog for TestOplog {
         serialized_request: Vec<u8>,
         build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
     ) -> Result<OrderedOplogStart, golem_worker_executor::services::oplog::OplogError> {
-        let ordered = self
+        let gate = self
+            .additional_test_deps
+            .consume_body_scope_start_gate(&self.owned_agent_id.agent_id)
+            .await;
+        let intercepted = Arc::new(AtomicBool::new(false));
+        let build_start = Self::intercept_consume_body_scope_start(
+            gate.clone(),
+            intercepted.clone(),
+            build_start,
+        );
+        let ordered = match self
             .oplog
             .add_start_with_reserved_raw_payload(serialized_request, build_start)
-            .await?;
+            .await
+        {
+            Err(_) if intercepted.load(Ordering::SeqCst) => {
+                return Self::hold_intercepted_consume_body_scope_start(gate).await;
+            }
+            result => result?,
+        };
+        self.track_reserved_consume_body_scope_start(&ordered).await;
         if let OplogEntry::Start { function_name, .. } = &ordered.entry {
             self.observe_end_failure_target(ordered.index, function_name);
         }
@@ -6041,10 +6184,33 @@ impl Oplog for TestOplog {
         &self,
         build_request: IndexedReservedStartBuilder,
     ) -> Result<OrderedOplogStart, golem_worker_executor::services::oplog::OplogError> {
-        let ordered = self
+        let gate = self
+            .additional_test_deps
+            .consume_body_scope_start_gate(&self.owned_agent_id.agent_id)
+            .await;
+        let intercepted = Arc::new(AtomicBool::new(false));
+        let build_request: IndexedReservedStartBuilder = {
+            let gate = gate.clone();
+            let intercepted = intercepted.clone();
+            Box::new(move |start_index| {
+                let (serialized_request, build_start) = build_request(start_index)?;
+                Ok((
+                    serialized_request,
+                    Self::intercept_consume_body_scope_start(gate, intercepted, build_start),
+                ))
+            })
+        };
+        let ordered = match self
             .oplog
             .add_start_with_indexed_reserved_raw_payload(build_request)
-            .await?;
+            .await
+        {
+            Err(_) if intercepted.load(Ordering::SeqCst) => {
+                return Self::hold_intercepted_consume_body_scope_start(gate).await;
+            }
+            result => result?,
+        };
+        self.track_reserved_consume_body_scope_start(&ordered).await;
         if let OplogEntry::Start { function_name, .. } = &ordered.entry {
             self.observe_end_failure_target(ordered.index, function_name);
         }
@@ -6823,6 +6989,7 @@ impl AdditionalTestDeps {
         let gate = Arc::new(ConsumeBodyScopeStartGate {
             armed: AtomicBool::new(true),
             abort_append: AtomicBool::new(false),
+            shutdown: tokio_util::sync::CancellationToken::new(),
             reached_tx: std::sync::Mutex::new(Some(reached_tx)),
             release: tokio::sync::Semaphore::new(0),
         });
@@ -6851,6 +7018,7 @@ impl AdditionalTestDeps {
         let gate = Arc::new(ConsumeBodyScopeEndGate {
             armed: AtomicBool::new(true),
             abort_append: AtomicBool::new(false),
+            shutdown: tokio_util::sync::CancellationToken::new(),
             reached_tx: std::sync::Mutex::new(Some(reached_tx)),
             release: tokio::sync::Semaphore::new(0),
         });
@@ -7703,6 +7871,7 @@ impl EntityInvocationBodyHook for TestEntityInvocationBodyHook {
 struct ConsumeBodyScopeStartGate {
     armed: AtomicBool,
     abort_append: AtomicBool,
+    shutdown: tokio_util::sync::CancellationToken,
     reached_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     release: tokio::sync::Semaphore,
 }
@@ -7740,6 +7909,7 @@ impl Drop for ConsumeBodyScopeStartGateHandle {
 struct ConsumeBodyScopeEndGate {
     armed: AtomicBool,
     abort_append: AtomicBool,
+    shutdown: tokio_util::sync::CancellationToken,
     reached_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     release: tokio::sync::Semaphore,
 }
