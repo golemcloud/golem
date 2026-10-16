@@ -632,14 +632,23 @@ concurrently. `Reflection.DynamicToolClient` accepts a
 caller-packed value when the deployed schema is unavailable and does not infer validation rules.
 Reflected failures are typed Effect errors, including `ToolReflectionError` for malformed output.
 
-`WitTypes.PermissionCard({ polymorphic })` represents a permission card. Cards are opaque affine
+`WitTypes.PermissionCard` (`permission-card { polymorphic: false }`) represents a concrete
+permission card, whose grants name concrete owners and resources.
+`WitTypes.PolymorphicPermissionCard` (`polymorphic: true`) represents a template card, whose grants
+may contain slot variables (`?agent`, `?env`, ...) that resolve for each holder. A schema encodes
+only cards of its own kind, and a decoded card takes the type that the parameter or result
+declares; the host does not check the kind. Cards are opaque affine
 capabilities: successful encoding transfers the exact handle across agent RPC, tool calls, and
 middleware. The sender must not inspect or reuse a transferred card. Transactional graph encoding
 does not consume it if validation or another sibling conversion fails, so a corrected retry remains
 possible. Use `Permissions` to inspect, derive, scope, revoke, and install cards.
 
-Decoding never turns plain data into a card: `WitTypes.PermissionCard` schemas and
-`Bridge.permissionCardFromSchemaValue` accept only cards that the SDK lifted from a host value.
+Decoding never turns plain data into a card: the card schemas,
+`Bridge.permissionCardFromSchemaValue`, and `Bridge.polymorphicPermissionCardFromSchemaValue`
+accept only cards that the SDK lifted from a host value. The SDK has no conversion API between
+`PermissionCard`, `PolymorphicPermissionCard`, and `ScopeCard`. A card that a schema decodes takes
+the type that the schema declares, also after an encode in the same component; the host keeps the
+real kind of the card, so this gives no authority. A `ScopeCard` never encodes.
 The SDK keeps its card registry on `globalThis`, because the main and middleware bundles share
 cards. Code in the same component can therefore reach the registry and alias a host resource into
 two card objects. This does not create authority: the host checks every use, and the second use of
@@ -678,10 +687,13 @@ const program = Effect.gen(function* () {
     Permissions.Lifespan.fromDuration("1 hour"),
   )
   const wallet = yield* Permissions.walletScoped
-  const scope = yield* Permissions.deriveScope(wallet, {
-    lowerPositive: [grant],
-    upperPositive: [grant],
-  })
+  const scope = yield* Permissions.deriveScope(
+    wallet.map((entry) => entry.card),
+    {
+      lowerPositive: [grant],
+      upperPositive: [grant],
+    },
+  )
   // Reader is a defineAgent spec whose read method needs the kv grant;
   // ReaderClient is the matching defineAgentClient definition.
   const reader = yield* Reader.client.get({ name: "reader" })
@@ -692,10 +704,18 @@ const program = Effect.gen(function* () {
 }).pipe(Effect.scoped)
 ```
 
+- `wallet` returns `WalletCard` entries, a closed union labelled with the card kind:
+  `{ _tag: "Concrete", card: PermissionCard }`, `{ _tag: "Template", card: PolymorphicPermissionCard }`,
+  or `{ _tag: "Scope", card: ScopeCard }`. A `Scope` entry is the scope card lent to the current
+  invocation; the host lists it only when the agent holds `card:inspect`.
+- `PolymorphicPermissionCard` supports the same operations as `PermissionCard`. `derive` from a
+  template card returns a `PermissionCard`, because the host resolves the template for the holder.
 - `deriveScope` returns a `ScopeCard`, which is a separate type from `PermissionCard`. Its parents
   are persistent cards or scope cards of the current invocation. A scope card supports `id`,
   `parents`, `expiresAt`, `inspect`, `release`, and use as a `deriveScope` parent. It cannot be
   revoked, installed, derived from with `derive`, or sent as an agent-method argument or result.
+- `expiresAt` of a scope card is the earliest expiry of the root cards of this scope card, or none
+  when no root card expires. The scope card stops authorizing then.
 - A scope card is valid only during the invocation that derived it. If you keep one, or a client
   whose default is one, for a later invocation, the host denies its awaited calls with an
   `RpcCallError` whose cause is `denied`.

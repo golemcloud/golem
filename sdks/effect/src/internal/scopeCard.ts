@@ -25,7 +25,7 @@ export class GuestScopeCard {
 
   constructor(key: typeof SCOPE_CARD_INTERNAL, raw: RawPermissionCard) {
     if (key !== SCOPE_CARD_INTERNAL) {
-      throw new Error("scope cards are created only by Permissions.deriveScope")
+      throw new Error("scope cards are created only by the SDK")
     }
     states.set(this, { raw })
   }

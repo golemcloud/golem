@@ -2,16 +2,22 @@
  * Effect-typed permission-card management over `golem:permissions@0.1.0`.
  *
  * A {@link PermissionCard} is the opaque affine capability that agent schemas already carry
- * (`WitTypes.PermissionCard`). Borrowing operations (`id`, `parents`, `expiresAt`, `inspect`,
- * `derive`, `deriveScope`) leave the card usable. Consuming operations (`revoke`, `install`,
- * `release`) move the card before they call the host, because the host drops the handle even
- * when the call fails; any later use of a moved card fails with {@link PermissionsHostError}.
+ * (`WitTypes.PermissionCard`); its grants name concrete owners and resources. A
+ * {@link PolymorphicPermissionCard} (`WitTypes.PolymorphicPermissionCard`) is a template card
+ * whose grants may contain slot variables (`?agent`, `?env`, ...), which resolve for each holder.
+ * Both support the same operations, and the SDK has no conversion API between them; a card that a
+ * schema decodes takes the type that the schema declares. Borrowing operations
+ * (`id`, `parents`, `expiresAt`, `inspect`, `derive`, `deriveScope`) leave the card usable.
+ * Consuming operations (`revoke`, `install`, `release`) move the card before they call the host,
+ * because the host drops the handle even when the call fails; any later use of a moved card fails
+ * with {@link PermissionsHostError}.
  *
- * A {@link ScopeCard} is a separate, invocation-local card from {@link deriveScope}. Only scope
- * cards attach to awaited agent calls. A scope card supports `id`, `parents`, `expiresAt`,
+ * A {@link ScopeCard} is a separate, invocation-local card from {@link deriveScope}, or the scope
+ * card lent to the current invocation, listed by {@link wallet}. Only scope cards attach to
+ * awaited agent calls. A scope card supports `id`, `parents`, `expiresAt`,
  * `inspect`, `release`, and use as a `deriveScope` parent. It has no schema codec, so it cannot
  * be an agent-method argument or result, and it cannot be revoked, installed, or derived from.
- * It is valid only during the invocation that derived it.
+ * It is valid only during the invocation that derived or received it.
  *
  * Cards cannot be constructed, parsed, or deserialized by user code. Grants, bounds, views, and
  * card identifiers are plain data: the host validates every derivation request against the
@@ -34,6 +40,7 @@ import {
   createGuestPermissionCardHandle,
   type GuestPermissionCardHandle,
   isGuestPermissionCardHandle,
+  type PermissionCardKind,
   peekGuestPermissionCardHandle,
   releaseGuestPermissionCardHandle,
   takeGuestPermissionCardHandle,
@@ -48,19 +55,41 @@ import {
 } from "./internal/scopeCard.js"
 
 /**
- * An owned, opaque permission card. It is the same value that `WitTypes.PermissionCard`
- * schemas decode and encode, so cards returned here can be passed to agent methods, tools, and
- * middleware, and cards received there can be managed here.
+ * An owned, opaque concrete permission card: every grant names concrete owners and resources. It
+ * is the same value that `WitTypes.PermissionCard` schemas (`polymorphic: false`) decode and
+ * encode, so cards returned here can be passed to agent methods, tools, and middleware, and
+ * cards received there can be managed here.
  *
  * @since 1.6.0
  * @category models
  */
-export type PermissionCard = GuestPermissionCardHandle
+export type PermissionCard = GuestPermissionCardHandle<"concrete">
 
 /**
- * An invocation-local scope card from {@link deriveScope}. Attach it to awaited agent calls with
+ * An owned, opaque template permission card: its grants may contain slot variables (`?agent`,
+ * `?env`, ...), which resolve for each holder. It is the same value that
+ * `WitTypes.PolymorphicPermissionCard` schemas (`polymorphic: true`) decode and encode. It
+ * supports the same operations as a {@link PermissionCard}; {@link derive} from it returns a
+ * {@link PermissionCard}, because the host resolves the template for the holder.
+ *
+ * @since 1.6.0
+ * @category models
+ */
+export type PolymorphicPermissionCard = GuestPermissionCardHandle<"template">
+
+/**
+ * A card that can be derived from, revoked, and installed.
+ *
+ * @since 1.6.0
+ * @category models
+ */
+export type PersistentCard = PermissionCard | PolymorphicPermissionCard
+
+/**
+ * An invocation-local scope card from {@link deriveScope}, or the scope card lent to the current
+ * invocation (a `Scope` entry of {@link wallet}). Attach it to awaited agent calls with
  * `withScopeCard` or a client's `scopeCard` option; each call borrows it. It is valid only during
- * the invocation that derived it: keeping it, or a client whose default is it, for a later
+ * the invocation that derived or received it: keeping it, or a client whose default is it, for a later
  * invocation makes the host deny awaited calls with `denied`. It is not a {@link PermissionCard}
  * and has no schema or wire codec.
  *
@@ -75,7 +104,18 @@ export type ScopeCard = GuestScopeCard
  * @since 1.6.0
  * @category models
  */
-export type AnyCard = PermissionCard | ScopeCard
+export type AnyCard = PersistentCard | ScopeCard
+
+/**
+ * A card in the caller's wallet, labelled with its kind. Each kind has its own card type.
+ *
+ * @since 1.6.0
+ * @category models
+ */
+export type WalletCard =
+  | { readonly _tag: "Concrete"; readonly card: PermissionCard }
+  | { readonly _tag: "Template"; readonly card: PolymorphicPermissionCard }
+  | { readonly _tag: "Scope"; readonly card: ScopeCard }
 
 /**
  * One grant pattern: `class(owner) @ recipient : verb : resourceId`.
@@ -403,13 +443,13 @@ const hostFailure =
   (cause: unknown): PermissionsHostError =>
     new PermissionsHostError(operation, cause)
 
-const requireCard = (card: PermissionCard): PermissionCard => {
+const requireCard = (card: PersistentCard): PersistentCard => {
   if (!isGuestPermissionCardHandle(card)) throw new TypeError("not a permission card")
   assertCapabilityReady(card)
   return card
 }
 
-const borrow = (card: PermissionCard): CoreTypes.PermissionCard => {
+const borrow = (card: PersistentCard): CoreTypes.PermissionCard => {
   const raw = peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, requireCard(card))
   if (raw === undefined) throw new Error("permission card has already been moved")
   return raw
@@ -422,14 +462,28 @@ const borrowAny = (card: AnyCard): CoreTypes.PermissionCard => {
   return raw
 }
 
-const take = (card: PermissionCard): CoreTypes.PermissionCard => {
+const take = (card: PersistentCard): CoreTypes.PermissionCard => {
   const raw = takeGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, requireCard(card))
   if (raw === undefined) throw new Error("permission card has already been moved")
   return raw
 }
 
-const wrap = (raw: CoreTypes.PermissionCard): PermissionCard =>
-  createGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, raw)
+const wrap = <K extends PermissionCardKind>(
+  raw: CoreTypes.PermissionCard,
+  kind: K,
+): GuestPermissionCardHandle<K> =>
+  createGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, raw, kind)
+
+const wrapWalletCard = (entry: TypesHost.WalletCard): WalletCard => {
+  switch (entry.tag) {
+    case "concrete":
+      return { _tag: "Concrete", card: wrap(entry.val, "concrete") }
+    case "template":
+      return { _tag: "Template", card: wrap(entry.val, "template") }
+    case "scope":
+      return { _tag: "Scope", card: createScopeCard(entry.val) }
+  }
+}
 
 const toWitGrant = (grant: PatternGrant): TypesHost.PatternGrant => ({
   class_: grant.class,
@@ -501,8 +555,9 @@ export const parents = (
   })
 
 /**
- * The card's expiry, if it has a bounded lifespan. The host traps when the handle is unknown or
- * revoked.
+ * The card's expiry, if it has a bounded lifespan. For a scope card, the earliest expiry of the
+ * root cards of this scope card, or none when no root card expires. The scope card stops
+ * authorizing then. The host traps when the handle is unknown or revoked.
  *
  * @since 1.6.0
  * @category accessors
@@ -551,13 +606,14 @@ export const inspect = (
 /**
  * Derive a narrower child card from `card`, which stays usable. The positive bounds name the
  * parent grants to retain; the negative bounds name the denials to add. A template parent is
- * resolved against the caller. Requires `card:derive` authority.
+ * resolved against the caller, so the result is always a concrete {@link PermissionCard}.
+ * Requires `card:derive` authority.
  *
  * @since 1.6.0
  * @category constructors
  */
 export const derive = (
-  card: PermissionCard,
+  card: PersistentCard,
   bounds: Bounds,
   lifespan?: Lifespan,
 ): Effect.Effect<PermissionCard, PermissionError | PermissionsHostError, PermissionsClient> =>
@@ -574,6 +630,7 @@ export const derive = (
             toWitGrants(bounds.upperNegative),
             toWitLifespan(lifespan),
           ),
+          "concrete",
         ),
       catch: failure("derive"),
     })
@@ -602,6 +659,7 @@ export const deriveFromWallet = (
             toWitGrants(bounds.upperNegative),
             toWitLifespan(lifespan),
           ),
+          "concrete",
         ),
       catch: failure("deriveFromWallet"),
     })
@@ -645,7 +703,7 @@ export const deriveScope = (
  * @category consuming
  */
 export const revoke = (
-  card: PermissionCard,
+  card: PersistentCard,
 ): Effect.Effect<number, PermissionError | PermissionsHostError, PermissionsClient> =>
   Effect.gen(function* () {
     const host = yield* PermissionsClient
@@ -664,7 +722,7 @@ export const revoke = (
  * @category consuming
  */
 export const install = (
-  card: PermissionCard,
+  card: PersistentCard,
   target: Holder,
 ): Effect.Effect<void, PermissionError | PermissionsHostError, PermissionsClient> =>
   Effect.gen(function* () {
@@ -704,24 +762,26 @@ export const release = (
   })
 
 /**
- * Every card installed in the caller's wallet, as owned handles. Release cards that are not
- * kept with {@link release}, or use {@link walletScoped}.
+ * Every card installed in the caller's wallet, as owned handles labelled with their kind: a
+ * `Concrete` {@link PermissionCard}, a `Template` {@link PolymorphicPermissionCard}, or a `Scope`
+ * {@link ScopeCard}. Release cards that are not kept with {@link release}, or use
+ * {@link walletScoped}.
  *
  * While an invocation runs with a scope card lent by its caller, the list also contains that
- * scope card, typed as a `PermissionCard`, if the agent holds `card:inspect`. The host refuses to derive from, revoke, install, or
- * send it, and it is retired when the invocation ends.
+ * scope card as a `Scope` entry if the agent holds `card:inspect`. It is retired when the
+ * invocation ends.
  *
  * @since 1.6.0
  * @category wallet
  */
 export const wallet: Effect.Effect<
-  ReadonlyArray<PermissionCard>,
+  ReadonlyArray<WalletCard>,
   PermissionsHostError,
   PermissionsClient
 > = Effect.gen(function* () {
   const host = yield* PermissionsClient
   return yield* Effect.try({
-    try: () => host.wallet().map(wrap),
+    try: () => host.wallet().map(wrapWalletCard),
     catch: hostFailure("wallet"),
   })
 })
@@ -734,11 +794,11 @@ export const wallet: Effect.Effect<
  * @category wallet
  */
 export const walletScoped: Effect.Effect<
-  ReadonlyArray<PermissionCard>,
+  ReadonlyArray<WalletCard>,
   PermissionsHostError,
   PermissionsClient | Scope.Scope
 > = Effect.acquireRelease(wallet, (cards) =>
-  Effect.forEach(cards, (card) => Effect.ignore(release(card)), { discard: true }),
+  Effect.forEach(cards, (entry) => Effect.ignore(release(entry.card)), { discard: true }),
 )
 
 /**

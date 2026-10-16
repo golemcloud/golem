@@ -37,7 +37,7 @@ export interface PermissionsClientShape {
     upperNegative: Grants,
   ) => PermissionCard
   readonly revoke: (card: PermissionCard) => number
-  readonly wallet: () => PermissionCard[]
+  readonly wallet: () => TypesHost.WalletCard[]
   readonly walletVersion: () => TypesHost.WalletVersionToken
   readonly install: (card: PermissionCard, target: TypesHost.Holder) => void
   readonly listModules: () => KernelHost.KernelModule[]

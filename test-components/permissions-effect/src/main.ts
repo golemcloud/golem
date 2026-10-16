@@ -7,8 +7,9 @@ import {
 } from "@golemcloud/effect-golem";
 
 const Probe = Schema.Struct({
-  walletSize: Schema.Number,
+  walletKinds: Schema.Array(Schema.String),
   inspectAllowed: Schema.Boolean,
+  scopeExpiresAt: Schema.NullOr(Schema.String),
 });
 type Probe = typeof Probe.Type;
 
@@ -29,6 +30,12 @@ const CalleeClient = defineAgentClient({
   methods: calleeMethods,
 });
 
+const timestampText = (expiry: Option.Option<Permissions.Timestamp>): string | null =>
+  Option.match(expiry, {
+    onNone: () => null,
+    onSome: ({ seconds, nanoseconds }) => `${seconds}.${nanoseconds}`,
+  });
+
 const errorTag = <A, R>(
   effect: Effect.Effect<A, Permissions.PermissionError | Permissions.PermissionsHostError, R>,
 ) =>
@@ -48,11 +55,20 @@ Callee.implement({
         Effect.gen(function* () {
           const cards = yield* Permissions.walletScoped;
           let inspectAllowed = false;
-          for (const card of cards) {
-            const view = yield* Effect.option(Permissions.inspect(card));
+          let scopeExpiresAt: string | null = null;
+          for (const entry of cards) {
+            const view = yield* Effect.option(Permissions.inspect(entry.card));
             if (Option.isSome(view)) inspectAllowed = true;
+            if (entry._tag === "Scope") {
+              scopeExpiresAt = timestampText(yield* Permissions.expiresAt(entry.card));
+            }
           }
-          return { walletSize: cards.length, inspectAllowed } satisfies Probe;
+          return {
+            // The wallet order is not part of the contract.
+            walletKinds: cards.map((entry) => entry._tag).sort(),
+            inspectAllowed,
+            scopeExpiresAt,
+          } satisfies Probe;
         }),
       ).pipe(Effect.orDie),
     deriveWithoutAuthority: () =>
@@ -107,15 +123,17 @@ defineAgent({
           const result: Record<string, unknown> = {};
 
           const wallet = yield* Permissions.walletScoped;
-          let walletCard: Permissions.PermissionCard | undefined;
+          result.walletKinds = wallet.map((entry) => entry._tag).sort();
+          let walletCard: Permissions.PersistentCard | undefined;
           let grant: Permissions.PatternGrant | undefined;
-          for (const card of wallet) {
-            const view = yield* Effect.option(Permissions.inspect(card));
+          for (const entry of wallet) {
+            if (entry._tag === "Scope") continue;
+            const view = yield* Effect.option(Permissions.inspect(entry.card));
             const found = Option.isSome(view)
               ? view.value.lowerPositive.find(isInspectGrant)
               : undefined;
             if (found !== undefined && walletCard === undefined) {
-              walletCard = card;
+              walletCard = entry.card;
               grant = found;
             }
           }
@@ -163,6 +181,8 @@ defineAgent({
           result.calleeAfterScope = yield* callee.probe({});
           result.scopeCardStillUsable =
             (yield* errorTag(Permissions.inspect(scope))) === "ok";
+          result.scopeExpiresAt = timestampText(yield* Permissions.expiresAt(scope));
+
           keptScope = yield* Permissions.deriveScope([scope], bounds);
 
           // 5. Install a card on another agent.

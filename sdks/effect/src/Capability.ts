@@ -14,4 +14,4 @@ export type { GuestSecretHandle as Secret } from "./internal/schema-model/secret
 /** @since 1.6.0 @category capabilities */
 export type { GuestQuotaTokenHandle as QuotaToken } from "./internal/schema-model/quotaTokenHandle.js"
 /** @since 1.6.0 @category capabilities */
-export type { GuestPermissionCardHandle as PermissionCard } from "./internal/schema-model/permissionCardHandle.js"
+export type { PermissionCard, PolymorphicPermissionCard } from "./Permissions.js"

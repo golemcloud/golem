@@ -50,7 +50,7 @@ const Reader = defineAgent({
   id: { name: Schema.String },
   methods: {
     give: method({
-      input: { card: WitTypes.PermissionCard({ polymorphic: false }) },
+      input: { card: WitTypes.PermissionCard },
       success: Schema.Void,
     }),
   },

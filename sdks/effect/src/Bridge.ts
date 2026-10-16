@@ -16,9 +16,13 @@ import { awaitInvocation, scheduleCancelableInvocation, wrapHostThrow } from "./
 import { withCapabilityAdoptionTransaction } from "./internal/schema-model/capabilityTransaction.js"
 import type { GuestScopeCard } from "./internal/scopeCard.js"
 import {
+  assignGuestPermissionCardHandleKind,
   type GuestPermissionCardHandle,
   isGuestPermissionCardHandle,
+  isGuestPermissionCardHandleOfKind,
+  type PermissionCardKind,
 } from "./internal/schema-model/permissionCardHandle.js"
+import { PERMISSION_CARD_INTERNAL } from "./internal/schema-model/permissionCardInternal.js"
 import type { GuestSecretHandle } from "./internal/schema-model/secretHandle.js"
 import type { SchemaGraph, SchemaValue, TypedSchemaValue } from "./internal/schema-model/model.js"
 import {
@@ -51,8 +55,20 @@ export interface SchemaCodec<T = any> {
 export type JsonResult<A, E> = { readonly ok: A } | { readonly err: E }
 /** Secret capability used in generated schemas. @since 1.6.0 @category capabilities */
 export type SecretHandle = GuestSecretHandle
-/** Permission-card capability used in generated schemas. @since 1.6.0 @category capabilities */
-export type PermissionCard = GuestPermissionCardHandle
+/**
+ * Concrete permission-card capability used in generated schemas (`polymorphic: false`).
+ *
+ * @since 1.6.0
+ * @category capabilities
+ */
+export type PermissionCard = GuestPermissionCardHandle<"concrete">
+/**
+ * Template permission-card capability used in generated schemas (`polymorphic: true`).
+ *
+ * @since 1.6.0
+ * @category capabilities
+ */
+export type PolymorphicPermissionCard = GuestPermissionCardHandle<"template">
 /**
  * Invocation-local scope card attached to awaited generated calls. It is not a schema value.
  *
@@ -258,26 +274,63 @@ export const secretHandleFromSchemaValue = (value: SchemaValue): SecretHandle =>
   if (value.tag !== "secret") throw new Error(`Expected secret, received ${value.tag}`)
   return value.handle
 }
-/** Encode a permission card as a schema capability. @since 1.6.0 @category conversions */
-export const permissionCardToSchemaValue = (card: PermissionCard): SchemaValue => ({
-  tag: "permission-card",
-  handle: card,
-})
-/**
- * Decode a permission card from a schema capability. The value must carry a card that the SDK
- * lifted from a host value; any other object is rejected. The result is the same card object, not
- * a copy.
- *
- * @since 1.6.0
- * @category conversions
- */
-export const permissionCardFromSchemaValue = (value: SchemaValue): PermissionCard => {
+const cardToSchemaValue = (card: unknown, kind: PermissionCardKind): SchemaValue => {
+  if (!isGuestPermissionCardHandleOfKind(card, kind))
+    throw new Error(
+      kind === "concrete"
+        ? "Expected a concrete permission card"
+        : "Expected a polymorphic permission card",
+    )
+  return { tag: "permission-card", handle: card }
+}
+const cardFromSchemaValue = <K extends PermissionCardKind>(
+  value: SchemaValue,
+  kind: K,
+): GuestPermissionCardHandle<K> => {
   if (value.tag !== "permission-card")
     throw new Error(`Expected permission-card, received ${value.tag}`)
   if (!isGuestPermissionCardHandle(value.handle))
     throw new Error("permission-card value does not carry a permission card")
-  return value.handle
+  return assignGuestPermissionCardHandleKind(PERMISSION_CARD_INTERNAL, value.handle, kind)
 }
+/**
+ * Encode a concrete permission card as a schema capability. A template card is rejected.
+ *
+ * @since 1.6.0
+ * @category conversions
+ */
+export const permissionCardToSchemaValue = (card: PermissionCard): SchemaValue =>
+  cardToSchemaValue(card, "concrete")
+/**
+ * Decode a concrete permission card from a schema capability. The value must carry a card that
+ * the SDK lifted from a host value; any other object is rejected. A received card becomes a
+ * concrete card; a template card is rejected. The result is the same card object, not a copy.
+ *
+ * @since 1.6.0
+ * @category conversions
+ */
+export const permissionCardFromSchemaValue = (value: SchemaValue): PermissionCard =>
+  cardFromSchemaValue(value, "concrete")
+/**
+ * Encode a template permission card as a schema capability. A concrete card is rejected.
+ *
+ * @since 1.6.0
+ * @category conversions
+ */
+export const polymorphicPermissionCardToSchemaValue = (
+  card: PolymorphicPermissionCard,
+): SchemaValue => cardToSchemaValue(card, "template")
+/**
+ * Decode a template permission card from a schema capability. The value must carry a card that
+ * the SDK lifted from a host value; any other object is rejected. A received card becomes a
+ * template card; a concrete card is rejected. The result is the same card object, not a copy.
+ *
+ * @since 1.6.0
+ * @category conversions
+ */
+export const polymorphicPermissionCardFromSchemaValue = (
+  value: SchemaValue,
+): PolymorphicPermissionCard => cardFromSchemaValue(value, "template")
 
 /** Config override shape consumed by generated constructors. @since 1.6.0 @category models */
 export interface AgentConfigEntry {

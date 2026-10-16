@@ -9,7 +9,7 @@ import { SchemaValueStream } from "golem:core/types@2.0.0"
 const cases = [
   { tag: "secret-value", schema: ToolSchema.Secret(Schema.String) },
   { tag: "quota-token-handle", schema: ToolSchema.QuotaToken() },
-  { tag: "permission-card-handle", schema: ToolSchema.PermissionCard({ polymorphic: false }) },
+  { tag: "permission-card-handle", schema: ToolSchema.PermissionCard },
 ] as const
 
 describe("tool client rejected payload ownership", () => {

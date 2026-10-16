@@ -16,9 +16,20 @@ import type { PermissionCard as RawPermissionCard } from "golem:core/types@2.0.0
 import { assertCapabilityReady, type CapabilityTransaction } from "./capabilityTransaction.js"
 import { PERMISSION_CARD_INTERNAL, type PermissionCardInternal } from "./permissionCardInternal.js"
 
+/**
+ * The kind of a persistent permission card: `concrete` grants name concrete owners and
+ * resources, and `template` grants may contain slot variables that resolve for each holder.
+ */
+export type PermissionCardKind = "concrete" | "template"
+
 interface PermissionCardHandleState {
   raw: RawPermissionCard | undefined
   readonly tracked: boolean
+  /**
+   * Set when the SDK learns the kind: from the host for derived and wallet cards, or from the
+   * declared schema when a card received on the wire is decoded. It never changes after that.
+   */
+  kind: PermissionCardKind | undefined
   /** Set by release, including while the resource is on the wire, so a restore cannot revive it. */
   released?: boolean
 }
@@ -52,15 +63,28 @@ const registry = (globals[registryKey] ??= {
 })
 const { states, owners, wireOrigins, transferredOwner } = registry
 
-/** Guest-side take-once carrier for an owned, opaque permission-card resource. */
-export class GuestPermissionCardHandle {
-  declare private readonly permissionCardBrand: never
+// Declaration files drop the type of a private member, so the kind brand is a property keyed
+// by a module-local unique symbol. The symbol has no runtime value.
+declare const permissionCardKind: unique symbol
 
-  constructor(key: PermissionCardInternal, raw: RawPermissionCard, tracked = true) {
+/**
+ * Guest-side take-once carrier for an owned, opaque permission-card resource. `K` is the card
+ * kind; a handle of one kind is not assignable to a handle of the other kind.
+ */
+export class GuestPermissionCardHandle<K extends PermissionCardKind = PermissionCardKind> {
+  declare private readonly permissionCardBrand: never
+  declare readonly [permissionCardKind]: K
+
+  constructor(
+    key: PermissionCardInternal,
+    raw: RawPermissionCard,
+    tracked = true,
+    kind?: PermissionCardKind,
+  ) {
     if (key !== PERMISSION_CARD_INTERNAL) {
       throw new Error("GuestPermissionCardHandle construction is an internal SDK operation")
     }
-    states.set(this, { raw, tracked })
+    states.set(this, { raw, tracked, kind })
   }
 
   toJSON(): never {
@@ -90,33 +114,73 @@ export function isGuestPermissionCardHandle(value: unknown): value is GuestPermi
   )
 }
 
-export function createGuestPermissionCardHandle(
+/** Whether `value` is a card of `kind`. A received card whose kind is not known yet is not. */
+export function isGuestPermissionCardHandleOfKind<K extends PermissionCardKind>(
+  value: unknown,
+  kind: K,
+): value is GuestPermissionCardHandle<K> {
+  return isGuestPermissionCardHandle(value) && states.get(value)!.kind === kind
+}
+
+/** The kind of the card, or `undefined` for a received card that no schema has typed yet. */
+export function guestPermissionCardHandleKind(
+  handle: GuestPermissionCardHandle,
+): PermissionCardKind | undefined {
+  return stateOf(handle).kind
+}
+
+/**
+ * Type a card as `kind`. A received card whose kind is not known yet takes `kind`; a card of the
+ * other kind is rejected, so no card changes its kind.
+ */
+export function assignGuestPermissionCardHandleKind<K extends PermissionCardKind>(
+  key: PermissionCardInternal,
+  handle: GuestPermissionCardHandle,
+  kind: K,
+): GuestPermissionCardHandle<K> {
+  requirePermissionCardInternal(key)
+  const state = stateOf(handle)
+  if (state.kind === undefined) state.kind = kind
+  else if (state.kind !== kind) {
+    throw new Error(
+      kind === "template"
+        ? "a concrete permission card is not a polymorphic permission card"
+        : "a polymorphic permission card is not a concrete permission card",
+    )
+  }
+  return handle as GuestPermissionCardHandle<K>
+}
+
+export function createGuestPermissionCardHandle<K extends PermissionCardKind>(
   key: PermissionCardInternal,
   raw: RawPermissionCard,
-): GuestPermissionCardHandle {
+  kind: K,
+): GuestPermissionCardHandle<K> {
   requirePermissionCardInternal(key)
   if (owners.has(raw)) {
     throw new Error("permission-card handle is already owned")
   }
-  const handle = new GuestPermissionCardHandle(key, raw)
+  const handle = new GuestPermissionCardHandle<K>(key, raw, true, kind)
   owners.set(raw, handle)
   return handle
 }
 
-export function createUntrackedGuestPermissionCardHandle(
+export function createUntrackedGuestPermissionCardHandle<K extends PermissionCardKind>(
   key: PermissionCardInternal,
   raw: RawPermissionCard,
-): GuestPermissionCardHandle {
+  kind: K,
+): GuestPermissionCardHandle<K> {
   requirePermissionCardInternal(key)
-  return new GuestPermissionCardHandle(key, raw, false)
+  return new GuestPermissionCardHandle<K>(key, raw, false, kind)
 }
 
-export function adoptGuestPermissionCardHandle(
+export function adoptGuestPermissionCardHandle<K extends PermissionCardKind>(
   key: PermissionCardInternal,
   raw: RawPermissionCard,
+  kind: K,
   transaction: CapabilityTransaction,
-): GuestPermissionCardHandle {
-  const handle = createGuestPermissionCardHandle(key, raw)
+): GuestPermissionCardHandle<K> {
+  const handle = createGuestPermissionCardHandle(key, raw, kind)
   transaction.register(() => releaseGuestPermissionCardHandle(key, handle))
   return handle
 }
@@ -209,6 +273,8 @@ export function liftGuestPermissionCardHandleFromWire(
   wireOwner: object,
 ): GuestPermissionCardHandle {
   assertGuestPermissionCardHandleCanLiftFromWire(key, raw, wireOwner)
+  // A lifted card has no kind; the schema that decodes it assigns the declared kind. The host
+  // keeps the real kind of the card, so a decoded kind gives no authority.
   const handle = new GuestPermissionCardHandle(key, raw)
   owners.set(raw, handle)
   return handle

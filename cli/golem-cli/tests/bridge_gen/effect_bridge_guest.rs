@@ -159,6 +159,63 @@ void program
     }
 }
 
+#[test]
+fn effect_guest_polymorphic_permission_cards_compile() {
+    let concrete = || SchemaType::permission_card(PermissionCardSpec { polymorphic: false });
+    let template = || SchemaType::permission_card(PermissionCardSpec { polymorphic: true });
+    let schema = agent(
+        "TemplateAgent",
+        "effect",
+        vec![field("name", SchemaType::string())],
+        vec![
+            method(
+                "giveTemplate",
+                vec![field("card", template())],
+                Some(template()),
+            ),
+            method(
+                "giveConcrete",
+                vec![field("card", concrete())],
+                Some(concrete()),
+            ),
+        ],
+        vec![],
+        AgentMode::Durable,
+    );
+    let source = generate_and_compile(
+        schema,
+        "template-agent-guest-client.ts",
+        r#"
+import { Effect } from "effect"
+import { Permissions } from "@golemcloud/effect-golem"
+import { TemplateAgent } from "./template-agent-guest-client.js"
+declare const card: Permissions.PermissionCard
+declare const template: Permissions.PolymorphicPermissionCard
+const program = Effect.gen(function* () {
+  const client = yield* TemplateAgent.get("a")
+  const returnedTemplate: Permissions.PolymorphicPermissionCard = yield* client.giveTemplate(template)
+  const returnedCard: Permissions.PermissionCard = yield* client.giveConcrete(card)
+  // @ts-expect-error a concrete card is not a polymorphic card
+  void client.giveTemplate(card)
+  // @ts-expect-error a polymorphic card is not a concrete card
+  void client.giveConcrete(template)
+  // @ts-expect-error a polymorphic result is not a concrete card
+  const wrong: Permissions.PermissionCard = yield* client.giveTemplate(template)
+  return [returnedTemplate, returnedCard, wrong]
+})
+void program
+"#,
+    );
+    for symbol in [
+        "base.polymorphicPermissionCardToSchemaValue(",
+        "base.polymorphicPermissionCardFromSchemaValue(",
+        "base.permissionCardToSchemaValue(",
+        "base.permissionCardFromSchemaValue(",
+    ] {
+        assert!(source.contains(symbol), "missing {symbol}:\n{source}");
+    }
+}
+
 fn generate_and_compile(
     schema: golem_common::schema::AgentTypeSchema,
     filename: &str,

@@ -34,7 +34,11 @@ QuickJS-backed WASI Preview 3 components.
   transactional encoding must leave them retryable when preparation fails. `Permissions` manages
   cards over all six `golem:permissions@0.1.0` interfaces, which the world imports. Borrowing
   operations peek the handle; `revoke`, `install`, and `release` take it before the host call.
-  New cards are wrapped only through `createGuestPermissionCardHandle` with the private key;
+  New cards are wrapped only through `createGuestPermissionCardHandle` with the private key and
+  a kind. `PermissionCard` and `PolymorphicPermissionCard` are `GuestPermissionCardHandle<K>` for
+  `concrete` and `template`; the kind lives in the shared handle state. A card received on the
+  wire has no kind until a schema or `Bridge` decode assigns the declared one (also after a local
+  encode; the host keeps the real kind), and the kind of a handle never changes. `wallet` maps the WIT `wallet-card` cases to the `WalletCard` union;
   `CardId` is opaque (module-local keys, redacted printing) and nothing converts data into a card.
   The card-handle registry is on `globalThis` because the main and middleware bundles both carry
   cards; the comment in `permissionCardHandle.ts` states the aliasing limit this implies.

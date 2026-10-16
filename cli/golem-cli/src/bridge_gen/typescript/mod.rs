@@ -3242,6 +3242,9 @@ impl TypeScriptBridgeGenerator {
             SchemaType::QuotaToken { .. } => {
                 format!("base.quotaTokenFromSchemaValue({value})")
             }
+            SchemaType::PermissionCard { spec, .. } if spec.polymorphic => {
+                format!("base.polymorphicPermissionCardFromSchemaValue({value})")
+            }
             SchemaType::PermissionCard { .. } => {
                 format!("base.permissionCardFromSchemaValue({value})")
             }
@@ -3669,6 +3672,9 @@ impl TypeScriptBridgeGenerator {
             }
             SchemaType::QuotaToken { .. } => {
                 format!("base.quotaTokenToSchemaValue({value})")
+            }
+            SchemaType::PermissionCard { spec, .. } if spec.polymorphic => {
+                format!("base.polymorphicPermissionCardToSchemaValue({value})")
             }
             SchemaType::PermissionCard { .. } => {
                 format!("base.permissionCardToSchemaValue({value})")
@@ -4515,6 +4521,11 @@ impl TypeScriptBridgeGenerator {
                     {
                         Ok("base.QuotaToken".to_string())
                     }
+                    SchemaType::PermissionCard { spec, .. }
+                        if self.mode == TypeScriptBridgeMode::GuestWasmRpc && spec.polymorphic =>
+                    {
+                        Ok("base.PolymorphicPermissionCard".to_string())
+                    }
                     SchemaType::PermissionCard { .. }
                         if self.mode == TypeScriptBridgeMode::GuestWasmRpc =>
                     {
@@ -4682,6 +4693,11 @@ impl TypeScriptBridgeGenerator {
             }
             SchemaType::QuotaToken { .. } if self.mode == TypeScriptBridgeMode::GuestWasmRpc => {
                 Ok("base.QuotaToken".to_string())
+            }
+            SchemaType::PermissionCard { spec, .. }
+                if self.mode == TypeScriptBridgeMode::GuestWasmRpc && spec.polymorphic =>
+            {
+                Ok("base.PolymorphicPermissionCard".to_string())
             }
             SchemaType::PermissionCard { .. }
                 if self.mode == TypeScriptBridgeMode::GuestWasmRpc =>

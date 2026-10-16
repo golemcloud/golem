@@ -440,8 +440,8 @@ fn permission(pattern: &str) -> PolymorphicPermissionPattern {
     parse_polymorphic_permission(pattern).expect("valid test permission")
 }
 
-fn probe(wallet_size: u64, inspect_allowed: bool) -> Value {
-    json!({ "walletSize": wallet_size, "inspectAllowed": inspect_allowed })
+fn probe(wallet_kinds: &[&str], inspect_allowed: bool) -> Value {
+    json!({ "walletKinds": wallet_kinds, "inspectAllowed": inspect_allowed, "scopeExpiresAt": null })
 }
 
 #[test]
@@ -538,14 +538,37 @@ async fn effect_sdk_manages_permission_cards_end_to_end(
     assert_eq!(result["isoChildExpires"], json!(true), "{result:#}");
     assert_eq!(result["cardExpires"], json!(false), "{result:#}");
     assert_eq!(result["templateDerive"], json!("ok"), "{result:#}");
+    assert_eq!(result["walletKinds"], json!(["Template"]), "{result:#}");
 
-    assert_eq!(result["calleeBefore"], probe(1, false), "{result:#}");
-    assert_eq!(result["calleePerCallScope"], probe(2, true), "{result:#}");
-    assert_eq!(result["calleeDefaultScope"], probe(2, true), "{result:#}");
-    assert_eq!(result["calleeAfterScope"], probe(1, false), "{result:#}");
+    assert_eq!(
+        result["calleeBefore"],
+        probe(&["Template"], false),
+        "{result:#}"
+    );
+    assert_eq!(
+        result["calleePerCallScope"],
+        probe(&["Scope", "Template"], true),
+        "{result:#}"
+    );
+    assert_eq!(
+        result["calleeDefaultScope"],
+        probe(&["Scope", "Template"], true),
+        "{result:#}"
+    );
+    assert_eq!(
+        result["calleeAfterScope"],
+        probe(&["Template"], false),
+        "{result:#}"
+    );
     assert_eq!(result["scopeCardStillUsable"], json!(true), "{result:#}");
 
-    assert_eq!(result["calleeAfterInstall"], probe(2, true), "{result:#}");
+    assert_eq!(result["scopeExpiresAt"], Value::Null, "{result:#}");
+
+    assert_eq!(
+        result["calleeAfterInstall"],
+        probe(&["Concrete", "Template"], true),
+        "{result:#}"
+    );
     assert_eq!(
         result["installedCardMoved"],
         json!("PermissionsHostError"),
@@ -558,7 +581,11 @@ async fn effect_sdk_manages_permission_cards_end_to_end(
         json!("PermissionsHostError"),
         "{result:#}"
     );
-    assert_eq!(result["calleeAfterRevoke"], probe(1, false), "{result:#}");
+    assert_eq!(
+        result["calleeAfterRevoke"],
+        probe(&["Template"], false),
+        "{result:#}"
+    );
 
     assert_eq!(
         result["releasedScopeCall"],

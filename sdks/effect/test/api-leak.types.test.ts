@@ -40,6 +40,7 @@ import { RpcClient } from "../src/host/RpcClient.js"
 import * as KeyValue from "../src/KeyValue.js"
 import * as Oplog from "../src/Oplog.js"
 import * as Permissions from "../src/Permissions.js"
+import * as WitTypes from "../src/WitTypes.js"
 import * as Capability from "../src/Capability.js"
 import { method } from "../src/Method.js"
 import * as Quota from "../src/Quota.js"
@@ -101,6 +102,7 @@ type AssertEqual<X, Y> =
 {
   type Failure = Permissions.PermissionError | Permissions.PermissionsHostError
   const card = undefined as unknown as Permissions.PermissionCard
+  const template = undefined as unknown as Permissions.PolymorphicPermissionCard
   const scope = undefined as unknown as Permissions.ScopeCard
   const bounds: Permissions.Bounds = {}
   const _id: Effect.Effect<
@@ -163,12 +165,12 @@ type AssertEqual<X, Y> =
     Permissions.Holder.app("00000000-0000-0000-0000-000000000000"),
   )
   const _wallet: Effect.Effect<
-    ReadonlyArray<Permissions.PermissionCard>,
+    ReadonlyArray<Permissions.WalletCard>,
     Permissions.PermissionsHostError,
     PermissionsClient
   > = Permissions.wallet
   const _walletScoped: Effect.Effect<
-    ReadonlyArray<Permissions.PermissionCard>,
+    ReadonlyArray<Permissions.WalletCard>,
     Permissions.PermissionsHostError,
     PermissionsClient | import("effect").Scope.Scope
   > = Permissions.walletScoped
@@ -185,6 +187,47 @@ type AssertEqual<X, Y> =
     resourceId: "*",
   })
   const _sameCard: AssertEqual<Permissions.PermissionCard, Capability.PermissionCard> = true
+  const _sameTemplate: AssertEqual<
+    Permissions.PolymorphicPermissionCard,
+    Capability.PolymorphicPermissionCard
+  > = true
+  const _bridgeTemplate: AssertEqual<
+    Permissions.PolymorphicPermissionCard,
+    Bridge.PolymorphicPermissionCard
+  > = true
+  const _templateDerive: Effect.Effect<Permissions.PermissionCard, Failure, PermissionsClient> =
+    Permissions.derive(template, bounds)
+  const _templateOps = [
+    Permissions.id(template),
+    Permissions.parents(template),
+    Permissions.expiresAt(template),
+    Permissions.inspect(template),
+    Permissions.revoke(template),
+    Permissions.install(template, Permissions.Holder.app("00000000-0000-0000-0000-000000000000")),
+    Permissions.release(template),
+    Permissions.deriveScope([template, card, scope], bounds),
+  ]
+  const _walletEntry = (entry: Permissions.WalletCard) => {
+    switch (entry._tag) {
+      case "Concrete": {
+        const _concrete: Permissions.PermissionCard = entry.card
+        return _concrete
+      }
+      case "Template": {
+        const _polymorphic: Permissions.PolymorphicPermissionCard = entry.card
+        return _polymorphic
+      }
+      case "Scope": {
+        const _scope: Permissions.ScopeCard = entry.card
+        return _scope
+      }
+    }
+  }
+  const _templateSchema: Schema.Codec<Permissions.PolymorphicPermissionCard> =
+    WitTypes.PolymorphicPermissionCard
+  const _cardSchema: Schema.Codec<Permissions.PermissionCard> = WitTypes.PermissionCard
+  void [_sameTemplate, _bridgeTemplate, _templateDerive, _templateOps, _walletEntry]
+  void [_templateSchema, _cardSchema]
   const _bridgeCard: AssertEqual<Permissions.PermissionCard, Bridge.PermissionCard> = true
   const _bridgeScope: AssertEqual<Permissions.ScopeCard, Bridge.ScopeCard> = true
   void [
@@ -237,6 +280,32 @@ type AssertEqual<X, Y> =
     // @ts-expect-error a scope card is not a persistent card
     const _scopeAsPersistent: Permissions.PermissionCard = scope
     void _scopeAsPersistent
+    // @ts-expect-error a template card is not a concrete card
+    const _templateAsConcrete: Permissions.PermissionCard = template
+    void _templateAsConcrete
+    // @ts-expect-error a concrete card is not a template card
+    const _concreteAsTemplate: Permissions.PolymorphicPermissionCard = card
+    void _concreteAsTemplate
+    // @ts-expect-error a scope card is not a template card
+    const _scopeAsTemplate: Permissions.PolymorphicPermissionCard = scope
+    void _scopeAsTemplate
+    // @ts-expect-error a template card is not a scope card
+    const _templateAsScope: Permissions.ScopeCard = template
+    void _templateAsScope
+    // @ts-expect-error a template card is not a concrete schema card
+    void Bridge.permissionCardToSchemaValue(template)
+    // @ts-expect-error a concrete card is not a polymorphic schema card
+    void Bridge.polymorphicPermissionCardToSchemaValue(card)
+    // @ts-expect-error a scope card is not a polymorphic schema card
+    void Bridge.polymorphicPermissionCardToSchemaValue(scope)
+    // @ts-expect-error the polymorphic card type is type-only and has no runtime constructor
+    void Capability.PolymorphicPermissionCard
+    // @ts-expect-error a concrete schema does not carry template cards
+    const _templateInConcreteSchema: Schema.Codec<Permissions.PolymorphicPermissionCard> =
+      WitTypes.PermissionCard
+    void _templateInConcreteSchema
+    // @ts-expect-error a template card cannot be a client's default scope card
+    void ClientProbe.client.get({}, { scopeCard: template })
   }
   void _negative
 

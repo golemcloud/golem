@@ -47,6 +47,9 @@ import {
   restoreEncodedCapabilitiesOnAbort,
   schemaValueToWitAsync,
 } from "../src/internal/schema-model/wit.js"
+import { schemaValueMatches } from "../src/internal/reflection/schemaValidation.js"
+import { t, v } from "../src/internal/schema-model/model.js"
+import { compile } from "../src/WitCodec.js"
 import * as WitTypes from "../src/WitTypes.js"
 
 interface FakeCard {
@@ -73,7 +76,9 @@ const cardId = (serial: number): TypesHost.CardId => ({
   uuid: { highBits: BigInt(serial), lowBits: 7n },
 })
 
-const makeHost = (walletSize = 2) => {
+type WalletKind = TypesHost.WalletCard["tag"]
+
+const makeHost = (walletKinds: ReadonlyArray<WalletKind> = ["concrete", "template"]) => {
   const events: string[] = []
   const failures = new Map<string, unknown>()
   let serial = 0
@@ -89,9 +94,7 @@ const makeHost = (walletSize = 2) => {
     const failure = failures.get(operation)
     if (failure !== undefined) throw failure
   }
-  const walletCards = Array.from({ length: walletSize }, () => serial + 1).map(() =>
-    fake(mint(emptyView())),
-  )
+  const walletCards = walletKinds.map((kind) => ({ kind, card: fake(mint(emptyView())) }))
   const shape: PermissionsClientShape = {
     id: (card) => cardId(fake(card).serial),
     parents: (card) => fake(card).parents.map(cardId),
@@ -125,7 +128,11 @@ const makeHost = (walletSize = 2) => {
       fail("revoke")
       return 3
     },
-    wallet: () => walletCards.map((card) => card as unknown as CoreTypes.PermissionCard),
+    wallet: () =>
+      walletCards.map(({ kind, card }) => ({
+        tag: kind,
+        val: card as unknown as CoreTypes.PermissionCard,
+      })),
     walletVersion: () => ({ walletIdHash: new Uint8Array([1, 2]), generation: 5n }),
     install: (card, target) => {
       events.push(`install:${fake(card).serial}:${target.tag}`)
@@ -147,6 +154,15 @@ const makeHost = (walletSize = 2) => {
     serialOf: (card: CoreTypes.PermissionCard | undefined) =>
       card === undefined ? undefined : fake(card).serial,
   }
+}
+
+// The card of a wallet entry of the expected kind.
+const cardOf = <T extends Permissions.WalletCard["_tag"]>(
+  entry: Permissions.WalletCard | undefined,
+  tag: T,
+): Extract<Permissions.WalletCard, { readonly _tag: T }>["card"] => {
+  if (entry?._tag !== tag) throw new Error(`expected a ${tag} wallet card, got ${entry?._tag}`)
+  return entry.card as never
 }
 
 const failureOf = <A, E>(exit: Exit.Exit<A, E>): E => {
@@ -201,7 +217,9 @@ describe("Permissions", () => {
   it.effect("derives a scope card from several parents without consuming them", () => {
     const host = makeHost()
     return Effect.gen(function* () {
-      const [first, second] = yield* Permissions.wallet
+      const [concrete, template] = yield* Permissions.wallet
+      const first = cardOf(concrete, "Concrete")
+      const second = cardOf(template, "Template")
       const scope = yield* Permissions.deriveScope([first!, second!], {
         lowerPositive: [grant("read")],
       })
@@ -228,8 +246,8 @@ describe("Permissions", () => {
   it.effect("keeps scope cards out of persistent operations and schemas", () => {
     const host = makeHost()
     return Effect.gen(function* () {
-      const [walletCard] = yield* Permissions.wallet
-      const scope = yield* Permissions.deriveScope([walletCard!], {})
+      const walletCard = cardOf((yield* Permissions.wallet)[0], "Concrete")
+      const scope = yield* Permissions.deriveScope([walletCard], {})
       const asCard = scope as unknown as Permissions.PermissionCard
       const target = Permissions.Holder.agent({
         componentId: { uuid: { highBits: 1n, lowBits: 2n } },
@@ -245,7 +263,7 @@ describe("Permissions", () => {
         )
       }
       expect(() => JSON.stringify(scope)).toThrow(/cannot be serialized/)
-      expect(Schema.is(WitTypes.PermissionCard({ polymorphic: false }))(scope)).toBe(false)
+      expect(Schema.is(WitTypes.PermissionCard)(scope)).toBe(false)
       expect(() =>
         Bridge.permissionCardFromSchemaValue({ tag: "permission-card", handle: asCard }),
       ).toThrow(/does not carry a permission card/)
@@ -382,14 +400,14 @@ describe("Permissions", () => {
   })
 
   it.effect("releases wallet cards that are not kept", () => {
-    const host = makeHost(3)
+    const host = makeHost(["concrete", "template", "scope"])
     return Effect.gen(function* () {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const [kept, revoked] = yield* Permissions.walletScoped
-          yield* Permissions.revoke(revoked!)
-          yield* Permissions.release(kept!)
-          yield* Permissions.release(kept!)
+          yield* Permissions.revoke(cardOf(revoked, "Template"))
+          yield* Permissions.release(cardOf(kept, "Concrete"))
+          yield* Permissions.release(cardOf(kept, "Concrete"))
         }),
       )
       expect(host.events).toEqual(["revoke:2", "drop:1", "drop:3"])
@@ -453,7 +471,7 @@ describe("Permissions non-forgeability", () => {
       expect(Object.getOwnPropertySymbols(id)).toEqual([])
       expect(() => new (Permissions.CardId as unknown as new () => unknown)()).toThrow(TypeError)
 
-      expect(Schema.is(WitTypes.PermissionCard({ polymorphic: false }))({ serial: 3 })).toBe(false)
+      expect(Schema.is(WitTypes.PermissionCard)({ serial: 3 })).toBe(false)
       const notACard = failureOf(
         yield* Effect.exit(
           Permissions.inspect({ serial: 3 } as unknown as Permissions.PermissionCard),
@@ -522,13 +540,234 @@ describe("Permissions non-forgeability", () => {
   })
 })
 
+describe("wallet card kinds and polymorphic cards", () => {
+  it.effect("labels every wallet card with its kind and type", () => {
+    const host = makeHost(["concrete", "template", "scope"])
+    return Effect.gen(function* () {
+      const [concrete, template, scope] = yield* Permissions.wallet
+      expect([concrete?._tag, template?._tag, scope?._tag]).toEqual([
+        "Concrete",
+        "Template",
+        "Scope",
+      ])
+      expect(Schema.is(WitTypes.PermissionCard)(concrete!.card)).toBe(true)
+      expect(Schema.is(WitTypes.PolymorphicPermissionCard)(concrete!.card)).toBe(false)
+      expect(Schema.is(WitTypes.PolymorphicPermissionCard)(template!.card)).toBe(true)
+      expect(Schema.is(WitTypes.PermissionCard)(template!.card)).toBe(false)
+      expect(Schema.is(WitTypes.PermissionCard)(scope!.card)).toBe(false)
+      expect(Schema.is(WitTypes.PolymorphicPermissionCard)(scope!.card)).toBe(false)
+      // The lent scope card is a scope card: it borrows, but cannot be revoked.
+      yield* Permissions.inspect(cardOf(scope, "Scope"))
+      expect(
+        failureOf(
+          yield* Effect.exit(
+            Permissions.revoke(cardOf(scope, "Scope") as unknown as Permissions.PermissionCard),
+          ),
+        ),
+      ).toBeInstanceOf(Permissions.PermissionsHostError)
+      expect(host.events.filter((event) => event.startsWith("revoke"))).toEqual([])
+    }).pipe(Effect.provide(host.layer))
+  })
+
+  it.effect("derives a concrete card from a template card and moves it on revoke", () => {
+    const host = makeHost(["template"])
+    return Effect.gen(function* () {
+      const template = cardOf((yield* Permissions.wallet)[0], "Template")
+      const child = yield* Permissions.derive(template, { lowerPositive: [grant("read")] })
+      expect(Schema.is(WitTypes.PermissionCard)(child)).toBe(true)
+      expect(Schema.is(WitTypes.PolymorphicPermissionCard)(child)).toBe(false)
+      expect(
+        Equal.equals((yield* Permissions.parents(child))[0], yield* Permissions.id(template)),
+      ).toBe(true)
+      host.failures.set("revoke", { tag: "not-permitted", val: "card:revoke is not permitted" })
+      expect(failureOf(yield* Effect.exit(Permissions.revoke(template)))).toMatchObject({
+        kind: "not-permitted",
+      })
+      expect(failureOf(yield* Effect.exit(Permissions.inspect(template)))).toBeInstanceOf(
+        Permissions.PermissionsHostError,
+      )
+      expect(failureOf(yield* Effect.exit(Permissions.revoke(template)))).toBeInstanceOf(
+        Permissions.PermissionsHostError,
+      )
+      expect(host.events).toEqual(["derive:1:-", "revoke:1"])
+    }).pipe(Effect.provide(host.layer))
+  })
+
+  it.effect("moves a template card on install, even when the host rejects it", () => {
+    const host = makeHost(["template"])
+    return Effect.gen(function* () {
+      const template = cardOf((yield* Permissions.wallet)[0], "Template")
+      host.failures.set("install", { tag: "install-recipient-mismatch", val: "wrong recipient" })
+      const target = Permissions.Holder.agent({
+        componentId: { uuid: { highBits: 1n, lowBits: 2n } },
+        agentId: "Target(1)",
+      })
+      expect(failureOf(yield* Effect.exit(Permissions.install(template, target)))).toMatchObject({
+        kind: "install-recipient-mismatch",
+      })
+      expect(failureOf(yield* Effect.exit(Permissions.install(template, target)))).toBeInstanceOf(
+        Permissions.PermissionsHostError,
+      )
+      expect(host.events).toEqual(["install:1:agent"])
+    }).pipe(Effect.provide(host.layer))
+  })
+
+  it.effect("keeps template cards unforgeable and separate from concrete cards", () => {
+    const host = makeHost(["template"])
+    return Effect.gen(function* () {
+      const template = cardOf((yield* Permissions.wallet)[0], "Template")
+      const concrete = yield* Permissions.deriveFromWallet({})
+      expect(() => JSON.stringify(template)).toThrow(/cannot be serialized/)
+      expect("PolymorphicPermissionCard" in Capability).toBe(false)
+      expect(Object.keys(Permissions)).not.toContain("PolymorphicPermissionCard")
+      expect(Schema.is(WitTypes.PolymorphicPermissionCard)({ serial: 1 })).toBe(false)
+      expect(
+        failureOf(
+          yield* Effect.exit(
+            Permissions.inspect({ serial: 1 } as unknown as Permissions.PolymorphicPermissionCard),
+          ),
+        ),
+      ).toBeInstanceOf(Permissions.PermissionsHostError)
+
+      const value = Bridge.polymorphicPermissionCardToSchemaValue(template)
+      expect(Bridge.polymorphicPermissionCardFromSchemaValue(value)).toBe(template)
+      expect(() => Bridge.permissionCardFromSchemaValue(value)).toThrow(
+        /polymorphic permission card is not a concrete/,
+      )
+      expect(() =>
+        Bridge.polymorphicPermissionCardFromSchemaValue(
+          Bridge.permissionCardToSchemaValue(concrete),
+        ),
+      ).toThrow(/concrete permission card is not a polymorphic/)
+      expect(() =>
+        Bridge.polymorphicPermissionCardToSchemaValue(
+          concrete as unknown as Permissions.PolymorphicPermissionCard,
+        ),
+      ).toThrow(/Expected a polymorphic permission card/)
+      expect(() =>
+        Bridge.permissionCardToSchemaValue(template as unknown as Permissions.PermissionCard),
+      ).toThrow(/Expected a concrete permission card/)
+      expect(() =>
+        Bridge.polymorphicPermissionCardFromSchemaValue({
+          tag: "permission-card",
+          handle: { serial: 1 } as unknown as Permissions.PolymorphicPermissionCard,
+        }),
+      ).toThrow(/does not carry a permission card/)
+
+      // Neither schema encodes a card of the other kind, and the card stays with its owner.
+      const concreteCodec = yield* Effect.orDie(compile(WitTypes.PermissionCard))
+      const templateCodec = yield* Effect.orDie(compile(WitTypes.PolymorphicPermissionCard))
+      expect(
+        Exit.isFailure(
+          yield* Effect.exit(
+            concreteCodec.encode(template as unknown as Permissions.PermissionCard),
+          ),
+        ),
+      ).toBe(true)
+      expect(
+        Exit.isFailure(
+          yield* Effect.exit(
+            templateCodec.encode(concrete as unknown as Permissions.PolymorphicPermissionCard),
+          ),
+        ),
+      ).toBe(true)
+      yield* Permissions.inspect(template)
+      yield* Permissions.inspect(concrete)
+    }).pipe(Effect.provide(host.layer))
+  })
+
+  it.effect("decodes a received card into the kind that the schema declares", () => {
+    const host = makeHost(["template"])
+    return Effect.gen(function* () {
+      const templateCodec = yield* Effect.orDie(compile(WitTypes.PolymorphicPermissionCard))
+      const concreteCodec = yield* Effect.orDie(compile(WitTypes.PermissionCard))
+      const template = cardOf((yield* Permissions.wallet)[0], "Template")
+
+      const sent = yield* Effect.orDie(templateCodec.encode(template))
+      expect(failureOf(yield* Effect.exit(Permissions.inspect(template)))).toBeInstanceOf(
+        Permissions.PermissionsHostError,
+      )
+      const received = yield* Effect.orDie(templateCodec.decode(sent))
+      expect(received).not.toBe(template)
+      expect(Schema.is(WitTypes.PolymorphicPermissionCard)(received)).toBe(true)
+      yield* Permissions.inspect(received)
+
+      // A decoded card takes the kind that the decoding schema declares, also after a local
+      // encode. The host keeps the real kind, so this gives no authority.
+      const resent = yield* Effect.orDie(templateCodec.encode(received))
+      const relabelled = yield* Effect.orDie(concreteCodec.decode(resent))
+      expect(Schema.is(WitTypes.PermissionCard)(relabelled)).toBe(true)
+      expect(Schema.is(WitTypes.PolymorphicPermissionCard)(relabelled)).toBe(false)
+
+      // The host does not label a transferred card either.
+      const fromHost = (serial: number): CoreTypes.SchemaValueTree => ({
+        root: 0,
+        valueNodes: [
+          {
+            tag: "permission-card-handle",
+            val: { serial, parents: [], view: emptyView() } as unknown as CoreTypes.PermissionCard,
+          },
+        ],
+      })
+      const asConcrete = yield* Effect.orDie(concreteCodec.decode(fromHost(90)))
+      expect(Schema.is(WitTypes.PermissionCard)(asConcrete)).toBe(true)
+      expect(Schema.is(WitTypes.PolymorphicPermissionCard)(asConcrete)).toBe(false)
+      const asTemplate = yield* Effect.orDie(templateCodec.decode(fromHost(91)))
+      expect(Schema.is(WitTypes.PolymorphicPermissionCard)(asTemplate)).toBe(true)
+      expect(templateCodec.graph.root.body).toEqual({
+        tag: "permission-card",
+        spec: { polymorphic: true },
+      })
+      expect(concreteCodec.graph.root.body).toEqual({
+        tag: "permission-card",
+        spec: { polymorphic: false },
+      })
+    }).pipe(Effect.provide(host.layer))
+  })
+
+  it.effect("matches tool output cards against the declared kind", () => {
+    const host = makeHost(["template"])
+    return Effect.gen(function* () {
+      const template = cardOf((yield* Permissions.wallet)[0], "Template")
+      const concrete = yield* Permissions.deriveFromWallet({})
+      const graph = (polymorphic: boolean) => ({
+        root: t.permissionCard({ polymorphic }),
+        defs: new Map(),
+      })
+      const matches = (polymorphic: boolean, card: GuestPermissionCardHandle) =>
+        schemaValueMatches(graph(polymorphic), graph(polymorphic).root, v.permissionCard(card))
+      expect(matches(true, template)).toBe(true)
+      expect(matches(false, template)).toBe(false)
+      expect(matches(false, concrete)).toBe(true)
+      expect(matches(true, concrete)).toBe(false)
+    }).pipe(Effect.provide(host.layer))
+  })
+
+  it.effect("shares the kind of a card with another copy of the SDK", () => {
+    const host = makeHost(["template"])
+    return Effect.gen(function* () {
+      const template = cardOf((yield* Permissions.wallet)[0], "Template")
+      vi.resetModules()
+      const copy = yield* Effect.promise(
+        () => import("../src/internal/schema-model/permissionCardHandle.js"),
+      )
+      expect(copy.isGuestPermissionCardHandleOfKind(template, "template")).toBe(true)
+      expect(copy.isGuestPermissionCardHandleOfKind(template, "concrete")).toBe(false)
+    }).pipe(Effect.provide(host.layer))
+  })
+})
+
 const Reader = defineAgent({
   name: "PermissionReader",
   id: { name: Schema.String },
   methods: {
     read: method({ input: {}, success: Schema.Void }),
     give: method({
-      input: { card: WitTypes.PermissionCard({ polymorphic: false }) },
+      input: { card: WitTypes.PermissionCard },
+      success: Schema.Void,
+    }),
+    giveTemplate: method({
+      input: { card: WitTypes.PolymorphicPermissionCard },
       success: Schema.Void,
     }),
   },
@@ -596,9 +835,9 @@ describe("scope cards on awaited calls", () => {
     const host = makeHost()
     const calls: Array<RecordedCall> = []
     return Effect.gen(function* () {
-      const [walletCard] = yield* Permissions.wallet
-      const defaultCard = yield* Permissions.deriveScope([walletCard!], {})
-      const perCall = yield* Permissions.deriveScope([walletCard!], {})
+      const walletCard = cardOf((yield* Permissions.wallet)[0], "Concrete")
+      const defaultCard = yield* Permissions.deriveScope([walletCard], {})
+      const perCall = yield* Permissions.deriveScope([walletCard], {})
       const plain = yield* Reader.client.get({ name: "a" })
       yield* plain.read({})
       const reader = yield* Reader.client.get({ name: "a" }, { scopeCard: defaultCard })
@@ -628,8 +867,8 @@ describe("scope cards on awaited calls", () => {
     const host = makeHost()
     const calls: Array<RecordedCall> = []
     return Effect.gen(function* () {
-      const [walletCard] = yield* Permissions.wallet
-      const scope = yield* Permissions.deriveScope([walletCard!], {})
+      const walletCard = cardOf((yield* Permissions.wallet)[0], "Concrete")
+      const scope = yield* Permissions.deriveScope([walletCard], {})
       yield* Permissions.release(scope)
       const card = yield* Permissions.deriveFromWallet({})
       const reader = yield* Reader.client.get({ name: "a" })
@@ -667,8 +906,8 @@ describe("scope cards on awaited calls", () => {
     const host = makeHost()
     const calls: Array<RecordedCall> = []
     return Effect.gen(function* () {
-      const [walletCard] = yield* Permissions.wallet
-      const scope = yield* Permissions.deriveScope([walletCard!], {})
+      const walletCard = cardOf((yield* Permissions.wallet)[0], "Concrete")
+      const scope = yield* Permissions.deriveScope([walletCard], {})
       const card = yield* Permissions.deriveFromWallet({})
       const connection = yield* (yield* RpcClient).connect(
         "PermissionReader",
@@ -686,12 +925,69 @@ describe("scope cards on awaited calls", () => {
     }).pipe(Effect.scoped, Effect.provide(Layer.merge(host.layer, rpcLayer(calls))))
   })
 
+  it.effect("move a template card on send and give it back when the call fails", () => {
+    const host = makeHost(["concrete", "template"])
+    const calls: Array<RecordedCall> = []
+    return Effect.gen(function* () {
+      const [concrete, templateEntry] = yield* Permissions.wallet
+      const template = cardOf(templateEntry, "Template")
+      const scope = yield* Permissions.deriveScope([cardOf(concrete, "Concrete")], {})
+      const connection = yield* (yield* RpcClient).connect(
+        "PermissionReader",
+        {} as never,
+        undefined,
+        [],
+      )
+      const encodeThenRelease = Effect.promise(() =>
+        schemaValueToWitAsync({
+          tag: "record",
+          fields: [Bridge.polymorphicPermissionCardToSchemaValue(template)],
+        }),
+      ).pipe(Effect.tap(() => Effect.orDie(Permissions.release(scope))))
+      const exit = yield* Effect.exit(
+        awaitInvocation(connection, "giveTemplate", encodeThenRelease, scope),
+      )
+      expect(failureOf(exit)).toMatchObject({ _tag: "ScopeCardUnavailableError" })
+      expect(calls).toEqual([])
+      expect(Schema.is(WitTypes.PolymorphicPermissionCard)(template)).toBe(true)
+      yield* Permissions.inspect(template)
+
+      const reader = yield* Reader.client.get({ name: "a" })
+      yield* reader.giveTemplate({ card: template })
+      expect(calls.map((call) => call.cards.map((raw) => host.serialOf(raw as never)))).toEqual([
+        [2],
+      ])
+      expect(failureOf(yield* Effect.exit(Permissions.inspect(template)))).toBeInstanceOf(
+        Permissions.PermissionsHostError,
+      )
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(host.layer, rpcLayer(calls))))
+  })
+
+  it.effect("do not give a template card back once the host call has started", () => {
+    const host = makeHost(["template"])
+    const calls: Array<RecordedCall> = []
+    return Effect.gen(function* () {
+      const template = cardOf((yield* Permissions.wallet)[0], "Template")
+      const reader = yield* Reader.client.get({ name: "a" })
+      expect(failureOf(yield* Effect.exit(reader.giveTemplate({ card: template })))).toMatchObject({
+        _tag: "RpcCallError",
+      })
+      expect(calls.length).toBe(1)
+      expect(failureOf(yield* Effect.exit(Permissions.inspect(template)))).toBeInstanceOf(
+        Permissions.PermissionsHostError,
+      )
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.merge(host.layer, rpcLayer(calls, { throwOnAwait: true }))),
+    )
+  })
+
   it.effect("attach per-call scope cards to bridge and dynamic awaited calls", () => {
     const host = makeHost()
     const calls: Array<RecordedCall> = []
     return Effect.gen(function* () {
-      const [walletCard] = yield* Permissions.wallet
-      const scope = yield* Permissions.deriveScope([walletCard!], {})
+      const walletCard = cardOf((yield* Permissions.wallet)[0], "Concrete")
+      const scope = yield* Permissions.deriveScope([walletCard], {})
       const handle = yield* Bridge.resolveRemoteAgent(
         "PermissionReader",
         emptyRecord,
@@ -722,8 +1018,8 @@ describe("scope cards on awaited calls", () => {
     const host = makeHost()
     const calls: Array<RecordedCall> = []
     return Effect.gen(function* () {
-      const [walletCard] = yield* Permissions.wallet
-      const scope = yield* Permissions.deriveScope([walletCard!], {})
+      const walletCard = cardOf((yield* Permissions.wallet)[0], "Concrete")
+      const scope = yield* Permissions.deriveScope([walletCard], {})
       const card = yield* Permissions.deriveFromWallet({})
       const connection = yield* (yield* RpcClient).connect(
         "PermissionReader",
@@ -848,8 +1144,8 @@ describe("scope cards on awaited calls", () => {
     const host = makeHost()
     const calls: Array<RecordedCall> = []
     return Effect.gen(function* () {
-      const [walletCard] = yield* Permissions.wallet
-      const scope = yield* Permissions.deriveScope([walletCard!], {})
+      const walletCard = cardOf((yield* Permissions.wallet)[0], "Concrete")
+      const scope = yield* Permissions.deriveScope([walletCard], {})
       const card = yield* Permissions.deriveFromWallet({})
       const tree = yield* Effect.promise(() => schemaValueToWitAsync(cardRecord(card)))
       const cardNode = tree.valueNodes.find((node) => node.tag === "permission-card-handle")!
@@ -863,7 +1159,7 @@ describe("scope cards on awaited calls", () => {
       expect(cardNode.val).toBe(raw)
 
       // The same holds when the scope card is released after the tree was accepted.
-      const later = yield* Permissions.deriveScope([walletCard!], {})
+      const later = yield* Permissions.deriveScope([walletCard], {})
       const connection = yield* (yield* RpcClient).connect(
         "PermissionReader",
         {} as never,

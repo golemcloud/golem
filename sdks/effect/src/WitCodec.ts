@@ -72,6 +72,7 @@ import { agentStreamFromHandle, agentStreamToHandle } from "./internal/agentStre
 import { GuestSecretHandle, peekGuestSecretHandle } from "./internal/schema-model/secretHandle.js"
 import { SECRET_INTERNAL } from "./internal/schema-model/secretInternal.js"
 import {
+  assignGuestPermissionCardHandleKind,
   GuestPermissionCardHandle,
   peekGuestPermissionCardHandle,
 } from "./internal/schema-model/permissionCardHandle.js"
@@ -1280,6 +1281,7 @@ const walk = (
                 type: t.permissionCard(native.spec),
                 pair: {
                   toValue: (handle: GuestPermissionCardHandle) => v.permissionCard(handle),
+                  // A received card takes the kind that the schema declares.
                   fromValue: (x) => {
                     const handle = (x as Extract<SchemaValue, { tag: "permission-card" }>).handle
                     if (
@@ -1287,7 +1289,11 @@ const walk = (
                     ) {
                       throw new Error("permission-card handle was already consumed")
                     }
-                    return handle
+                    return assignGuestPermissionCardHandleKind(
+                      PERMISSION_CARD_INTERNAL,
+                      handle,
+                      native.spec.polymorphic ? "template" : "concrete",
+                    )
                   },
                 },
               }

@@ -14,7 +14,7 @@ import {
 import { PERMISSION_CARD_INTERNAL } from "../src/internal/schema-model/permissionCardInternal.js"
 import { invokeRegistered } from "../src/internal/tool/runtime.js"
 
-const Card = ToolSchema.PermissionCard({ polymorphic: false })
+const Card = ToolSchema.PermissionCard
 const Payload = Schema.Struct({
   card: Card,
   outcome: Schema.Result(
@@ -27,8 +27,8 @@ type Payload = typeof Payload.Type
 
 const rawCard = (): RawPermissionCard => Object.freeze({}) as RawPermissionCard
 const handle = (raw: RawPermissionCard) =>
-  createGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, raw)
-const success = (card: GuestPermissionCardHandle): Payload => ({
+  createGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, raw, "concrete")
+const success = (card: GuestPermissionCardHandle<"concrete">): Payload => ({
   card,
   outcome: Result.succeed({ marker: "canonical" }),
 })
@@ -105,7 +105,7 @@ describe("permission-card ownership across tool boundaries", () => {
     vi.resetModules()
     const foreignTypes = await import("../src/WitTypes.js")
     const foreignCodecModule = await import("../src/WitCodec.js")
-    const foreignCard = foreignTypes.PermissionCard({ polymorphic: false })
+    const foreignCard = foreignTypes.PermissionCard
     const foreignCodec = Effect.runSync(
       foreignCodecModule.compile(Schema.Struct({ card: foreignCard })),
     )
@@ -130,7 +130,7 @@ describe("permission-card ownership across tool boundaries", () => {
   })
 
   it("rolls guest input and output ownership back when an asymmetric sibling is invalid", async () => {
-    const captured: GuestPermissionCardHandle[] = []
+    const captured: GuestPermissionCardHandle<"concrete">[] = []
     let invalidOutput = true
     toolDefinition("card-guest")
       .body((body) => body.positional("payload", Payload).returns(Payload))
