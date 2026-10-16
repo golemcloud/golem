@@ -1057,6 +1057,38 @@ fn nested_option_behind_a_named_type_round_trips() {
 }
 
 #[test]
+fn ts_nested_option_behind_an_alias_chain_round_trips() {
+    let alias_id = TypeId::new("maybe-count-alias");
+    let inner_id = TypeId::new("maybe-count");
+    let graph = SchemaGraph {
+        defs: vec![
+            SchemaTypeDef {
+                id: alias_id.clone(),
+                name: Some("maybe-count-alias".into()),
+                body: SchemaType::ref_to(inner_id.clone()),
+            },
+            SchemaTypeDef {
+                id: inner_id,
+                name: Some("maybe-count".into()),
+                body: SchemaType::option(SchemaType::u32()),
+            },
+        ],
+        root: SchemaType::option(SchemaType::ref_to(alias_id)),
+    };
+    for (value, expected) in [
+        (some(some(SchemaValue::U32(5))), "{ some: 5 }"),
+        (some(none()), "{ some: undefined }"),
+        (none(), "undefined"),
+    ] {
+        let lang = SourceLanguage::TypeScript;
+        let rendered = render_schema_value(&graph, &graph.root, &value, &lang);
+        assert_eq!(rendered, expected);
+        let parsed = parse_value_for_language(&rendered, &graph, &graph.root, &lang).unwrap();
+        assert_eq!(parsed, value);
+    }
+}
+
+#[test]
 fn go_results_use_ok_and_err() {
     let ty = SchemaType::result(ResultSpec {
         ok: Some(Box::new(SchemaType::u32())),

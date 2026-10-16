@@ -18,7 +18,6 @@ use super::parse_common::{
     parse_quantity_constructor, parse_rich_constructor_body, parse_uint, perr,
     quantity_value_from_text,
 };
-use super::resolve_named_ref;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::{NamedFieldType, ResultSpec, SchemaType, VariantCaseType};
 use golem_common::schema::schema_value::{ResultValuePayload, SchemaValue, VariantValuePayload};
@@ -148,7 +147,9 @@ impl Dialect for TsDialect {
         graph: &SchemaGraph,
         inner: &SchemaType,
     ) -> Result<SchemaValue, ParseError> {
-        let (inner_resolved, _) = resolve_named_ref(graph, inner);
+        let inner_resolved = graph
+            .resolve_ref(inner)
+            .map_err(|err| perr(lexer.position(), &err.to_string()))?;
         let is_nested = matches!(inner_resolved, SchemaType::Option { .. });
         match lexer.peek()? {
             Token::Null | Token::Undefined => {
