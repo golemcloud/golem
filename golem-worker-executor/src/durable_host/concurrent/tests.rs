@@ -674,6 +674,80 @@ async fn completion_delivery_armed_drop_records_marker_via_drain() {
 }
 
 #[test]
+async fn completion_delivery_cancelled_terminal_wait_preserves_append_ownership() {
+    for (teardown, terminal_fails) in [(false, false), (true, false), (false, true)] {
+        let oplog = Arc::new(InMemoryOplog::new());
+        let counter = Arc::new(AtomicUsize::new(0));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let mut token = live_delivery_token_with_teardown(
+            oplog.clone(),
+            counter.clone(),
+            tx,
+            TeardownProbe::new(shutdown.clone(), Arc::new(|| false)),
+        )
+        .await;
+        let (release, gate) = tokio::sync::oneshot::channel();
+        let terminal_oplog = oplog.clone();
+        let terminal = tokio::spawn(async move {
+            gate.await.unwrap();
+            if terminal_fails {
+                return Err(WorkerExecutorError::runtime("terminal refused"));
+            }
+            terminal_oplog
+                .add(OplogEntry::End {
+                    timestamp: Timestamp::now_utc(),
+                    start_index: idx(1),
+                    response: None,
+                    forced_commit: false,
+                    span_finished: None,
+                    span_attributes: None,
+                })
+                .await?;
+            Ok(())
+        });
+        let mut finishing = Box::pin(token.wait_terminal(terminal));
+        assert!(futures::poll!(finishing.as_mut()).is_pending());
+        drop(finishing);
+        if teardown {
+            shutdown.cancel();
+        }
+        drop(token);
+        assert_eq!(counter.load(Ordering::Acquire), 1);
+        let DropEvent::AwaitCompletionMarker {
+            mut receipt,
+            live_call_permit,
+            ..
+        } = rx.try_recv().expect("settlement must retain the terminal")
+        else {
+            panic!("expected terminal settlement receipt");
+        };
+        let mut settlement = Box::pin(await_marker_receipt(receipt.as_mut().unwrap()));
+        assert!(futures::poll!(settlement.as_mut()).is_pending());
+        assert!(oplog.entries.lock().await.is_empty());
+        release.send(()).unwrap();
+        let result = settlement.await;
+        assert_eq!(result.is_err(), terminal_fails);
+        let entries = oplog.entries.lock().await;
+        if terminal_fails {
+            assert!(
+                entries.is_empty(),
+                "a failed End must not leave a discard marker"
+            );
+        } else if teardown {
+            assert!(matches!(entries.as_slice(), [OplogEntry::End { .. }]));
+        } else {
+            assert!(matches!(entries.as_slice(), [
+                OplogEntry::End { .. },
+                OplogEntry::CompletionDiscarded { start_index, .. }
+            ] if *start_index == idx(1)));
+        }
+        drop(live_call_permit);
+        assert_eq!(counter.load(Ordering::Acquire), 0);
+    }
+}
+
+#[test]
 async fn completion_delivery_armed_drop_during_teardown_leaves_end_markerless() {
     // A Store unload (simulated crash, interrupt, eviction) or an executor shutdown tears the
     // delivering future with the token still armed. The guest never observed the completion,

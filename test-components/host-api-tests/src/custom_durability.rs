@@ -1,4 +1,4 @@
-use futures_concurrency::future::Join;
+use futures_concurrency::future::{Join, Race};
 use golem_rust::durability::{Durability, DurableFunctionType};
 use golem_rust::{
     FromSchema, IntoSchema, agent_definition, agent_implementation, get_self_metadata,
@@ -61,6 +61,8 @@ pub trait CustomDurability {
     async fn concurrent_nested(&self) -> Vec<String>;
 
     async fn scope_lifecycle(&self) -> Vec<String>;
+
+    async fn cancel_pending_result(&self, fallible: bool);
 
     fn context_probe(&mut self, mode: String);
 }
@@ -157,6 +159,7 @@ impl CustomDurability for CustomDurabilityImpl {
         .run_infallible_async(|| prepared_future)
         .await;
 
+        let body_started = std::cell::Cell::new(false);
         let mut abandoned = Box::pin(
             Durability::<String, UnusedError>::new(
                 "golem-it",
@@ -173,6 +176,7 @@ impl CustomDurability for CustomDurabilityImpl {
                 )
                 .run_infallible_async(|| async {
                     let _on_drop = DropRequest("cancel-drop");
+                    body_started.set(true);
                     std::future::pending::<String>().await
                 })
                 .await
@@ -180,7 +184,11 @@ impl CustomDurability for CustomDurabilityImpl {
         );
         std::future::poll_fn(|cx| {
             assert!(abandoned.as_mut().poll(cx).is_pending());
-            std::task::Poll::Ready(())
+            if body_started.get() {
+                std::task::Poll::Ready(())
+            } else {
+                std::task::Poll::Pending
+            }
         })
         .await;
         let sibling = Durability::<String, UnusedError>::new(
@@ -211,6 +219,33 @@ impl CustomDurability for CustomDurabilityImpl {
         .await;
         let after = durable_no_input_generator("fresh").await;
         vec![prepared_result, sibling, completed, after]
+    }
+
+    async fn cancel_pending_result(&self, fallible: bool) {
+        let operation = async {
+            let durability = Durability::<bool, String>::new(
+                "golem-it",
+                "cancel-result",
+                DurableFunctionType::WriteRemote,
+                &(),
+            );
+            if fallible {
+                let _ = durability
+                    .run_async(|| async { Ok::<_, String>(DropResult(true)) })
+                    .await;
+            } else {
+                let _ = durability
+                    .run_infallible_async(|| async { DropResult(true) })
+                    .await;
+            }
+            panic!("finish should remain pending until cancellation");
+        };
+        let cancel = async {
+            let response = crate::raw_wasi_http::send_http_request("/cancel").await;
+            crate::raw_wasi_http::read_body(response).await;
+        };
+        (operation, cancel).race().await;
+        perform_callback("after-cancel".to_string());
     }
 
     fn context_probe(&mut self, mode: String) {
@@ -310,6 +345,35 @@ struct DropRequest(&'static str);
 impl Drop for DropRequest {
     fn drop(&mut self) {
         perform_callback(self.0.to_string());
+    }
+}
+
+struct DropResult(bool);
+
+impl Clone for DropResult {
+    fn clone(&self) -> Self {
+        Self(false)
+    }
+}
+
+impl From<DropResult> for bool {
+    fn from(_: DropResult) -> Self {
+        true
+    }
+}
+
+impl From<bool> for DropResult {
+    fn from(_: bool) -> Self {
+        Self(false)
+    }
+}
+
+impl Drop for DropResult {
+    fn drop(&mut self) {
+        if self.0 {
+            log::info!("dropping undelivered custom result");
+            perform_callback("result-drop".to_string());
+        }
     }
 }
 

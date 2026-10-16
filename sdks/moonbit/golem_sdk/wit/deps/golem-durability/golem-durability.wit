@@ -22,17 +22,29 @@ interface durability {
     /// A live custom durable invocation.
     ///
     /// Attribution follows the guest-installed execution scope, not the resource's lifetime.
-    /// Begin installs the scope on the current task; exchange switches the installed context.
+    /// Synchronous begin and enter install the scope on the current task; exchange switches it.
     /// Host effects initiated in that scope are replay-inert observational entries owned by
     /// the invocation. Detached work and concurrent SDK continuations do not acquire the scope
     /// automatically; the guest runtime must install it around execution and destruction.
     /// Nested operations must finish or be dropped before their parent finishes.
-    /// Finishing consumes the resource and persists the response. Dropping it without finishing
-    /// leaves the invocation incomplete so normal recovery re-executes it.
+    /// Synchronous finish consumes the resource; asynchronous finish borrows it while persisting
+    /// the response. Dropping it without finishing leaves the invocation incomplete so normal
+    /// recovery re-executes it.
     resource live-custom-durable-invocation {
+        /// Installs a live invocation returned by asynchronous admission on the current task.
+        enter: func();
+
         /// Completes the invocation with its schema-carrying response.
         finish: static func(
             this: live-custom-durable-invocation,
+            response: typed-schema-value,
+            forced-commit: bool,
+        );
+
+        /// Completes an asynchronous invocation at a recorded guest result-delivery boundary.
+        /// The caller retains the resource until completion or cancellation, then drops it.
+        finish-async: static async func(
+            this: borrow<live-custom-durable-invocation>,
             response: typed-schema-value,
             forced-commit: bool,
         );
@@ -77,6 +89,14 @@ interface durability {
     /// or incomplete invocation returns an owned `live-custom-durable-invocation`. A completed
     /// invocation returns `replayed` with its recorded response.
     begin-custom-durable-invocation: func(
+        function-name: string,
+        request: typed-schema-value,
+        function-type: durable-function-type,
+    ) -> custom-durable-invocation;
+
+    /// Admits an asynchronous operation without blocking sibling guest futures. Live admission
+    /// requires enter before executing the body. Completed replay waits for recorded delivery.
+    begin-custom-durable-invocation-async: async func(
         function-name: string,
         request: typed-schema-value,
         function-type: durable-function-type,

@@ -138,13 +138,13 @@ pub(super) struct CompletionMarkerRecord {
 /// the re-executed guest — instead of recording `CompletionDiscarded`, which would withhold the
 /// completion from a guest that never saw it.
 #[derive(Clone)]
-pub(super) struct TeardownProbe {
+pub(in crate::durable_host) struct TeardownProbe {
     executor_shutdown: tokio_util::sync::CancellationToken,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
 }
 
 impl TeardownProbe {
-    pub(super) fn new(
+    pub(in crate::durable_host) fn new(
         executor_shutdown: tokio_util::sync::CancellationToken,
         runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
     ) -> Self {
@@ -349,7 +349,7 @@ impl ReplayDelivery {
 /// otherwise: a direct call's guest task is synchronously blocked inside the host call, so its
 /// delivery coincides with the host return and has no pre-delivery divergence window.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum ReplayDeliveryDisposition {
+pub(in crate::durable_host) enum ReplayDeliveryDisposition {
     /// A cancelled call's recorded partial result: guest-initiated, never marker-bearing.
     Immediate,
     /// A completed `End` with its recorded `CompletionDelivered` marker.
@@ -375,6 +375,55 @@ pub(super) struct LiveDelivery {
 }
 
 impl CompletionDelivery {
+    /// Owns an accepted terminal until persistence completes. Cancellation leaves the receipt
+    /// with this token so discard and teardown settlement cannot overtake the terminal.
+    pub(in crate::durable_host) async fn wait_terminal(
+        &mut self,
+        terminal: tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
+    ) -> Result<(), WorkerExecutorError> {
+        let CompletionDeliveryState::Live(live) = &mut self.state else {
+            panic!("only a live completion can own a pending terminal");
+        };
+        live.pending_append = Some(OrderedAppend::Task(terminal));
+        let Some(OrderedAppend::Task(terminal)) = &mut live.pending_append else {
+            unreachable!();
+        };
+        let result = terminal
+            .await
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!("ordered oplog append task failed: {err}"))
+            })
+            .and_then(|result| result);
+        live.pending_append = None;
+        if result.is_err() {
+            self.settle();
+        }
+        result
+    }
+
+    pub(in crate::durable_host) fn live(
+        start_index: OplogIndex,
+        recorder: CompletionMarkerRecorder,
+        trap_context: DurableCallTrapContext,
+        cleanup_sink: UnboundedSender<DropEvent>,
+        live_call_permit: LiveCallPermit,
+        teardown: TeardownProbe,
+    ) -> Self {
+        Self {
+            state: CompletionDeliveryState::Live(Box::new(LiveDelivery {
+                marker: CompletionMarkerRecord {
+                    start_idx: start_index,
+                    recorder,
+                },
+                trap_context,
+                live_call_permit: Some(live_call_permit),
+                cleanup_sink: Some(cleanup_sink),
+                pending_append: None,
+                teardown,
+            })),
+        }
+    }
+
     pub(super) fn unarmed() -> Self {
         Self {
             state: CompletionDeliveryState::Unarmed,
@@ -387,7 +436,7 @@ impl CompletionDelivery {
     /// live-armed once the replay tail exhausts (see [`Self::prepare_delivery`]);
     /// `live_call_permit` stays `None` — a marker lost after a suspension just tail-gates the
     /// `End` again.
-    pub(super) fn replay_delivered(
+    pub(in crate::durable_host) fn replay_delivered(
         disposition: ReplayDeliveryDisposition,
         start_index: OplogIndex,
         recorder: CompletionMarkerRecorder,

@@ -17,7 +17,8 @@ use crate::bindings::golem::durability::durability::{
     CustomDurableInvocation, CustomInvocationContext,
     DurableFunctionType as RawDurableFunctionType, LiveCustomDurableInvocation,
     OplogEntryVersion as RawOplogEntryVersion, PersistedDurableFunctionInvocation,
-    begin_custom_durable_invocation, exchange_custom_invocation_context, observe_function_call,
+    begin_custom_durable_invocation, begin_custom_durable_invocation_async,
+    exchange_custom_invocation_context, observe_function_call,
 };
 use crate::schema::{FromSchema, IntoSchema, IntoTypedSchemaValue};
 use std::fmt::Display;
@@ -98,15 +99,17 @@ impl<F> Drop for ScopedDurableFuture<F> {
     }
 }
 
-struct LiveDurableBody<F> {
+struct LiveDurableBody<F: Future> {
     future: Option<Pin<Box<F>>>,
+    result: Option<F::Output>,
     invocation: Option<LiveCustomDurableInvocation>,
 }
 
-impl<F> Drop for LiveDurableBody<F> {
+impl<F: Future> Drop for LiveDurableBody<F> {
     fn drop(&mut self) {
-        // Descendants and body resources must be destroyed before their enclosing scope.
+        // Undelivered results and descendants must be destroyed before their enclosing scope.
         drop(self.future.take());
+        drop(self.result.take());
         drop(self.invocation.take());
     }
 }
@@ -241,34 +244,41 @@ impl<SOk, SErr> Durability<SOk, SErr> {
         SOk: FromSchema + From<Ok>,
         Result<SOk, SErr>: IntoSchema,
     {
-        ScopedDurableFuture::new(async move {
-            match self.begin() {
-                CustomDurableInvocation::Live(invocation) => {
+        match self.begin_async().await {
+            CustomDurableInvocation::Live(invocation) => {
+                ScopedDurableFuture::new(async move {
+                    invocation.enter();
                     let mut live = LiveDurableBody {
                         future: None,
+                        result: None,
                         invocation: Some(invocation),
                     };
                     live.future = Some(Box::pin(body()));
-                    let result = live.future.as_mut().unwrap().as_mut().await;
+                    live.result = Some(live.future.as_mut().unwrap().as_mut().await);
                     drop(live.future.take());
-                    let serializable_result = result
+                    let serializable_result = live
+                        .result
+                        .as_ref()
+                        .unwrap()
                         .as_ref()
                         .map(|result| result.clone().into())
                         .map_err(|err| err.into());
-                    Self::finish(
-                        live.invocation.take().unwrap(),
-                        serializable_result,
+                    let response = Self::encode_response(serializable_result);
+                    LiveCustomDurableInvocation::finish_async(
+                        live.invocation.as_ref().unwrap(),
+                        response,
                         self.forced_commit,
-                    );
-                    result
-                }
-                CustomDurableInvocation::Replayed(ref invocation) => self
-                    .replay_serializable(invocation)
-                    .map(Into::into)
-                    .map_err(Into::into),
+                    )
+                    .await;
+                    live.result.take().unwrap()
+                })
+                .await
             }
-        })
-        .await
+            CustomDurableInvocation::Replayed(ref invocation) => self
+                .replay_serializable(invocation)
+                .map(Into::into)
+                .map_err(Into::into),
+        }
     }
 
     pub fn run_infallible<Ok, F>(mut self, body: F) -> Ok
@@ -308,37 +318,41 @@ impl<SOk, SErr> Durability<SOk, SErr> {
         SErr: FromSchema + Display,
         Result<SOk, SErr>: IntoSchema,
     {
-        ScopedDurableFuture::new(async move {
-            match self.begin() {
-                CustomDurableInvocation::Live(invocation) => {
+        match self.begin_async().await {
+            CustomDurableInvocation::Live(invocation) => {
+                ScopedDurableFuture::new(async move {
+                    invocation.enter();
                     let mut live = LiveDurableBody {
                         future: None,
+                        result: None,
                         invocation: Some(invocation),
                     };
                     live.future = Some(Box::pin(body()));
-                    let result = live.future.as_mut().unwrap().as_mut().await;
+                    live.result = Some(live.future.as_mut().unwrap().as_mut().await);
                     drop(live.future.take());
-                    let serializable_result = Ok(result.clone().into());
-                    Self::finish(
-                        live.invocation.take().unwrap(),
-                        serializable_result,
+                    let response =
+                        Self::encode_response(Ok(live.result.as_ref().unwrap().clone().into()));
+                    LiveCustomDurableInvocation::finish_async(
+                        live.invocation.as_ref().unwrap(),
+                        response,
                         self.forced_commit,
-                    );
-                    result
-                }
-                CustomDurableInvocation::Replayed(ref invocation) => {
-                    match self.replay_serializable(invocation) {
-                        Ok(result) => result.into(),
-                        Err(err) => panic!(
-                            "Function {} previously failed with {}",
-                            self.function_name(),
-                            err
-                        ),
-                    }
+                    )
+                    .await;
+                    live.result.take().unwrap()
+                })
+                .await
+            }
+            CustomDurableInvocation::Replayed(ref invocation) => {
+                match self.replay_serializable(invocation) {
+                    Ok(result) => result.into(),
+                    Err(err) => panic!(
+                        "Function {} previously failed with {}",
+                        self.function_name(),
+                        err
+                    ),
                 }
             }
-        })
-        .await
+        }
     }
 
     fn begin(&mut self) -> CustomDurableInvocation {
@@ -350,6 +364,27 @@ impl<SOk, SErr> Durability<SOk, SErr> {
         )
     }
 
+    async fn begin_async(&mut self) -> CustomDurableInvocation {
+        observe_function_call(self.interface, self.function);
+        begin_custom_durable_invocation_async(
+            self.function_name(),
+            self.request.take().unwrap(),
+            self.function_type,
+        )
+        .await
+    }
+
+    fn encode_response(result: Result<SOk, SErr>) -> crate::schema::wit::wire::TypedSchemaValue
+    where
+        Result<SOk, SErr>: IntoSchema,
+    {
+        let response = result
+            .into_typed_schema_value()
+            .unwrap_or_else(|err| panic!("Failed serializing durable function result: {err}"));
+        crate::encode_typed_schema_value(&response)
+            .unwrap_or_else(|err| panic!("Failed encoding durable function result: {err}"))
+    }
+
     fn finish(
         invocation: LiveCustomDurableInvocation,
         result: Result<SOk, SErr>,
@@ -357,11 +392,7 @@ impl<SOk, SErr> Durability<SOk, SErr> {
     ) where
         Result<SOk, SErr>: IntoSchema,
     {
-        let response = result
-            .into_typed_schema_value()
-            .unwrap_or_else(|err| panic!("Failed serializing durable function result: {err}"));
-        let response = crate::encode_typed_schema_value(&response)
-            .unwrap_or_else(|err| panic!("Failed encoding durable function result: {err}"));
+        let response = Self::encode_response(result);
         LiveCustomDurableInvocation::finish(invocation, response, forced_commit);
     }
 

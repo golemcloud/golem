@@ -641,6 +641,20 @@ custom invocation of an entity body records the entity invocation `Start` as its
 can tell it from a top-level call of the primary; the custom tree itself (invocation ids, child
 initiation) keeps using the custom parent.
 
+**Asynchronous custom completion uses the ordinary delivery protocol.** Rust async combinators
+await `begin-custom-durable-invocation-async`, which reserves the identity before yielding but
+does not install a live execution scope. The borrowing guest wrapper installs that scope around
+each body and finish poll, response conversion, and destruction. Once the body completes, `finish-async`
+borrows the live resource and persists `End` through an owned append/commit task. Its
+`CompletionDelivery` retains the terminal receipt across cancellation: guest cancellation records
+`CompletionDiscarded` only after a successful `End`; Store teardown leaves it markerless and
+drains accepted persistence. The SDK retains the resource and scope until finish completes or is
+cancelled, destroying any undelivered result before dropping that resource.
+Completed replay returns the recorded bytes through `AtMarker` or `AtReplayTail` without running
+the body. This reproduces outward completion order, not the skipped body's polls or internal
+entries. A completed sibling therefore cannot return early and change a later root call's ordinal
+while another sibling remains incomplete. Sync combinators retain the direct begin/finish path.
+
 **Non-Rust SDK limitation:** TypeScript, Effect, Scala, MoonBit, and Go custom combinators support
 sequential and properly nested execution only. Their scope remains installed across suspension.
 An async/blocking body may wait for host calls when no unrelated guest work runs during the wait.

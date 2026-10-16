@@ -20,13 +20,27 @@ declare module 'golem:durability/durability@1.6.0' {
    * invocation returns `replayed` with its recorded response.
    */
   export function beginCustomDurableInvocation(functionName: string, request: TypedSchemaValue, functionType: DurableFunctionType): CustomDurableInvocation;
+  /**
+   * Admits an asynchronous operation without blocking sibling guest futures. Live admission
+   * requires enter before executing the body. Completed replay waits for recorded delivery.
+   */
+  export function beginCustomDurableInvocationAsync(functionName: string, request: TypedSchemaValue, functionType: DurableFunctionType): Promise<CustomDurableInvocation>;
   export class CustomInvocationContext {
   }
   export class LiveCustomDurableInvocation {
     /**
+     * Installs a live invocation returned by asynchronous admission on the current task.
+     */
+    enter(): void;
+    /**
      * Completes the invocation with its schema-carrying response.
      */
     static finish(this_: LiveCustomDurableInvocation, response: TypedSchemaValue, forcedCommit: boolean): void;
+    /**
+     * Completes an asynchronous invocation at a recorded guest result-delivery boundary.
+     * The caller retains the resource until completion or cancellation, then drops it.
+     */
+    static finishAsync(this_: LiveCustomDurableInvocation, response: TypedSchemaValue, forcedCommit: boolean): Promise<void>;
   }
   export type WrappedFunctionType = golemApi150Oplog.WrappedFunctionType;
   export type Datetime = wasiClocks030SystemClock.Instant;
