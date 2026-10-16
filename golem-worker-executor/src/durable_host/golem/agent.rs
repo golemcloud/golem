@@ -155,9 +155,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     async fn config_value_denied(
         &mut self,
         path: &[String],
-        is_secret_config: bool,
         check_wallet: bool,
     ) -> anyhow::Result<bool> {
+        let is_secret_config = self.is_secret_config(path);
         Ok(
             match self.config_permission_targets(path, is_secret_config, check_wallet) {
                 Ok(targets) if targets.is_empty() => false,
@@ -918,7 +918,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             anyhow!("Expected config type for path {path_str} is not a valid schema graph: {e}")
         })?;
 
-        let is_secret_config = self.is_secret_config(&path);
+        self.process_pending_replay_events().await?;
         let begun = DurableCallSession::<GolemAgentGetConfigValue, NotCancellable>::begin(
             self,
             DurableFunctionType::ReadRemote,
@@ -928,7 +928,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             ResolvedCall::Replay(handle) => (handle, None),
             ResolvedCall::Live(begun) => {
                 let denied = self
-                    .config_value_denied(&path, is_secret_config, self.state.is_live())
+                    .config_value_denied(&path, self.state.is_live())
                     .await?;
                 let handle = begun
                     .start_live(
@@ -943,15 +943,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
         };
 
-        let uses_resolver = is_secret_config;
         let response = handle
-            .run::<_, _, anyhow::Error>(self, async move |ctx| {
+            .run::<_, _, anyhow::Error>(self, async |ctx| {
                 let denied = match denied {
                     Some(denied) => denied,
-                    None => {
-                        ctx.config_value_denied(&path, is_secret_config, true)
-                            .await?
-                    }
+                    None => ctx.config_value_denied(&path, true).await?,
                 };
                 if denied {
                     return Ok(HostResponseGolemAgentGetConfigValue {
@@ -959,7 +955,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     });
                 }
 
-                let schema_value = ctx.resolve_config_value(path, expected_graph).await?;
+                let schema_value = ctx
+                    .resolve_config_value(path.clone(), expected_graph)
+                    .await?;
 
                 Ok(HostResponseGolemAgentGetConfigValue {
                     result: Ok(schema_value),
@@ -976,7 +974,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         // Secret-backed config is the only capability-minting source here. Local config uses the
         // pure encoder so a quota token remains a schema/config error.
-        let encoded = if uses_resolver {
+        let encoded = if self.is_secret_config(&path) {
             encode_value_with(&schema_value, self)
         } else {
             encode_value(&schema_value)
@@ -990,11 +988,11 @@ impl<Ctx: WorkerCtx> SharedDurableContext<Ctx> {
     async fn config_value_denied(
         &self,
         path: &[String],
-        is_secret: bool,
         check_wallet: bool,
     ) -> Result<bool, golem_service_base::error::worker_executor::WorkerExecutorError> {
-        let targets =
-            self.with_ctx(|ctx| ctx.config_permission_targets(path, is_secret, check_wallet));
+        let targets = self.with_ctx(|ctx| {
+            ctx.config_permission_targets(path, ctx.is_secret_config(path), check_wallet)
+        });
         Ok(match targets {
             Ok(targets) if targets.is_empty() => false,
             Ok(targets) => authorize_live_permissions_at_serialized_access(
@@ -1019,14 +1017,13 @@ impl<Ctx: WorkerCtx> SharedDurableContext<Ctx> {
                 path.join(".")
             )
         })?;
-        let is_secret = self.with_ctx(|ctx| ctx.is_secret_config(&path));
         let store = self.clone();
         let mut denied = None;
         let mut call = DurableCallSession::<GolemAgentGetConfigValue, NotCancellable>::start_context_with_options(
             self, |ctx| ctx.durable_ctx_mut(), DurableFunctionType::ReadRemote, AccessClaimOptions::default(),
             async |start| {
                 if start.is_live {
-                    denied = Some(store.config_value_denied(&path, is_secret, store.with_ctx(|ctx| ctx.state.is_live())).await?);
+                    denied = Some(store.config_value_denied(&path, store.with_ctx(|ctx| ctx.state.is_live())).await?);
                 }
                 Ok(HostRequestGolemAgentGetConfigValue { path: path.clone(), expected_type: expected_graph.clone() })
             },
@@ -1041,7 +1038,7 @@ impl<Ctx: WorkerCtx> SharedDurableContext<Ctx> {
             let result = async {
                 let denied = match denied {
                     Some(denied) => denied,
-                    None => self.config_value_denied(&path, is_secret, true).await?,
+                    None => self.config_value_denied(&path, true).await?,
                 };
                 if denied {
                     Ok(HostResponseGolemAgentGetConfigValue {
@@ -1049,7 +1046,7 @@ impl<Ctx: WorkerCtx> SharedDurableContext<Ctx> {
                     })
                 } else {
                     let value = self
-                        .with_ctx(|ctx| ctx.resolve_config_value(path, expected_graph))
+                        .with_ctx(|ctx| ctx.resolve_config_value(path.clone(), expected_graph))
                         .await?;
                     Ok::<_, anyhow::Error>(HostResponseGolemAgentGetConfigValue {
                         result: Ok(value),
@@ -1067,7 +1064,7 @@ impl<Ctx: WorkerCtx> SharedDurableContext<Ctx> {
             Ok(value) => value,
             Err(_) => return Ok(Err(ConfigValueError::PermissionDenied)),
         };
-        let encoded = if is_secret {
+        let encoded = if self.with_ctx(|ctx| ctx.is_secret_config(&path)) {
             self.with_ctx(|ctx| encode_value_with(&value, ctx))
         } else {
             encode_value(&value)

@@ -588,6 +588,13 @@ mod hosted_descriptor_tests {
     }
 }
 
+type PrimaryContextProbe = Box<
+    dyn for<'a> FnOnce(
+            &'a mut DurableWorkerCtx<TestWorkerCtx>,
+        ) -> futures::future::BoxFuture<'a, Result<(), WorkerExecutorError>>
+        + Send,
+>;
+
 #[derive(Clone)]
 pub struct TestWorkerExecutor {
     _join_set: Arc<JoinSet<anyhow::Result<()>>>,
@@ -1082,6 +1089,40 @@ impl TestWorkerExecutor {
         self.additional_test_deps.instance_load_count(agent_id)
     }
 
+    /// Runs once after the next primary durable context is constructed, before its guest instance.
+    pub fn probe_next_primary_context(
+        &self,
+        agent_id: &AgentId,
+        probe: impl for<'a> FnOnce(
+            &'a mut DurableWorkerCtx<TestWorkerCtx>,
+        )
+            -> futures::future::BoxFuture<'a, Result<(), WorkerExecutorError>>
+        + Send
+        + 'static,
+    ) -> tokio::sync::oneshot::Receiver<Result<(), WorkerExecutorError>> {
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let mut probes = self
+            .additional_test_deps
+            .primary_context_probes
+            .lock()
+            .unwrap();
+        assert!(
+            !probes.contains_key(agent_id),
+            "primary context probe already armed"
+        );
+        probes.insert(
+            agent_id.clone(),
+            Box::new(move |ctx| {
+                Box::pin(async move {
+                    let result = probe(ctx).await;
+                    let _ = send.send(result.clone());
+                    result
+                })
+            }),
+        );
+        receive
+    }
+
     pub fn probe_runtime_disposal(
         &self,
         agent_id: &AgentId,
@@ -1329,6 +1370,63 @@ impl TestWorkerExecutor {
         (entered_rx, release_tx)
     }
 
+    /// Pauses a runtime-card audit lookup only in the task that claimed its real Start.
+    pub fn gate_next_runtime_card_audit_lookup(
+        &self,
+        agent_id: &AgentId,
+        start: OplogIndex,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let previous = self
+            .additional_test_deps
+            .runtime_card_audit_gates
+            .lock()
+            .unwrap()
+            .insert(
+                (agent_id.clone(), start),
+                RuntimeCardAuditGate {
+                    pause: OplogReadGate {
+                        entered_tx,
+                        release_rx,
+                    },
+                    issuing_task: None,
+                },
+            );
+        assert!(
+            previous.is_none(),
+            "runtime-card audit gate is already armed"
+        );
+        (entered_rx, release_tx)
+    }
+
+    /// Pauses after a card install commits to storage, before the status owner can publish it.
+    pub fn gate_next_wallet_install_commit(
+        &self,
+        agent_id: &AgentId,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        self.additional_test_deps
+            .wallet_install_commit_gates
+            .lock()
+            .unwrap()
+            .insert(
+                agent_id.clone(),
+                OplogReadGate {
+                    entered_tx,
+                    release_rx,
+                },
+            );
+        (entered_rx, release_tx)
+    }
+
     /// Appends a buffered lifecycle hint after the next source commit has flushed.
     pub fn append_after_next_oplog_commit(&self, agent_id: &AgentId) {
         self.additional_test_deps
@@ -1441,6 +1539,15 @@ impl TestWorkerExecutor {
             ))
             .await?;
         Ok(())
+    }
+
+    /// Returns the real interest-routing service for executor instance-layer tests.
+    pub fn active_agents(&self) -> Arc<ActiveAgents<TestWorkerCtx>> {
+        self.additional_test_deps
+            .active_agents
+            .get()
+            .unwrap()
+            .clone()
     }
 
     /// Returns the owner-keyed active-agent group for executor instance-layer tests.
@@ -1831,6 +1938,20 @@ impl TestWorkerExecutor {
     ) -> IndexedExecutionGateHandle {
         self.additional_test_deps
             .gate_next_entity_reconstruction_claim(agent_id.clone())
+    }
+
+    /// Leaves earlier claims alone and pauses reconstruction of the exact recorded entity Start.
+    pub fn gate_entity_reconstruction_claim_at(
+        &self,
+        agent_id: &AgentId,
+        start: OplogIndex,
+    ) -> IndexedExecutionGateHandle {
+        let handle = self.gate_next_entity_reconstruction_claim(agent_id);
+        handle
+            .gate
+            .expected_index
+            .store(u64::from(start), Ordering::Release);
+        handle
     }
 
     /// Pauses the given agent's next replayed accessor-call admission whose function name ends
@@ -3292,6 +3413,7 @@ impl WorkerCtx for TestWorkerCtx {
         // exercise pool saturation for any worker on this executor.
         extra_deps.set_websocket_connection_pool(websocket_connection_pool.clone());
         let worker_agent_id = owned_agent_id.agent_id.clone();
+        let primary = matches!(runtime, OwnerRuntime::Agent);
         let runtime_generation = entity_execution_mode
             .is_none()
             .then(|| extra_deps.record_instance_load(&worker_agent_id));
@@ -3306,7 +3428,7 @@ impl WorkerCtx for TestWorkerCtx {
         }
         let account_resource_limits = owner_resources.resource_limits();
 
-        let durable_ctx = DurableWorkerCtx::create(
+        let mut durable_ctx = DurableWorkerCtx::create(
             owned_agent_id,
             owner_context,
             promise_service,
@@ -3355,6 +3477,16 @@ impl WorkerCtx for TestWorkerCtx {
             entity_activation,
         )
         .await?;
+        if primary {
+            let probe = extra_deps
+                .primary_context_probes
+                .lock()
+                .unwrap()
+                .remove(&worker_agent_id);
+            if let Some(probe) = probe {
+                probe(&mut durable_ctx).await?;
+            }
+        }
         let runtime_disposal = RuntimeDisposalReceipt(runtime_generation.and_then(|generation| {
             extra_deps
                 .runtime_disposal_probes
@@ -5656,6 +5788,22 @@ impl Oplog for TestOplog {
         self.additional_test_deps
             .record_oplog_call(&self.owned_agent_id, "commit");
         let committed = self.oplog.commit(level).await;
+        if committed.as_ref().is_ok_and(|entries| {
+            entries
+                .values()
+                .any(|entry| matches!(entry, OplogEntry::CardInstalled { .. }))
+        }) {
+            let gate = self
+                .additional_test_deps
+                .wallet_install_commit_gates
+                .lock()
+                .unwrap()
+                .remove(&self.owned_agent_id.agent_id);
+            if let Some(gate) = gate {
+                let _ = gate.entered_tx.send(());
+                let _ = gate.release_rx.await;
+            }
+        }
         if committed.as_ref().is_ok_and(|committed| {
             committed.values().any(|entry| {
                 matches!(
@@ -5715,12 +5863,11 @@ impl Oplog for TestOplog {
     }
 
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-        let gate = self
-            .additional_test_deps
-            .oplog_read_gates
-            .lock()
-            .unwrap()
-            .remove(&(self.owned_agent_id.agent_id.clone(), oplog_index));
+        let gate = {
+            let mut gates = self.additional_test_deps.oplog_read_gates.lock().unwrap();
+            let key = (self.owned_agent_id.agent_id.clone(), oplog_index);
+            gates.remove(&key)
+        };
         if let Some(gate) = gate {
             let _ = gate.entered_tx.send(());
             let _ = gate.release_rx.await;
@@ -5777,12 +5924,11 @@ impl Oplog for TestOplog {
         oplog_index: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        let gate = self
-            .additional_test_deps
-            .oplog_read_gates
-            .lock()
-            .unwrap()
-            .remove(&(self.owned_agent_id.agent_id.clone(), oplog_index));
+        let gate = {
+            let mut gates = self.additional_test_deps.oplog_read_gates.lock().unwrap();
+            let key = (self.owned_agent_id.agent_id.clone(), oplog_index);
+            gates.remove(&key)
+        };
         if let Some(gate) = gate {
             let _ = gate.entered_tx.send(());
             let _ = gate.release_rx.await;
@@ -6227,12 +6373,18 @@ struct OplogReadGate {
     release_rx: tokio::sync::oneshot::Receiver<()>,
 }
 
+struct RuntimeCardAuditGate {
+    pause: OplogReadGate,
+    issuing_task: Option<tokio::task::Id>,
+}
+
 type OplogEndGates = HashMap<AgentId, (HostFunctionName, Option<OplogIndex>, bool, OplogReadGate)>;
 type EntitySettlementAccess =
     HashMap<(AgentId, Option<OplogIndex>), (bool, tokio::sync::oneshot::Sender<()>)>;
 
 #[derive(Clone)]
 pub struct AdditionalTestDeps {
+    primary_context_probes: Arc<std::sync::Mutex<HashMap<AgentId, PrimaryContextProbe>>>,
     rpc_memory_failures: Arc<std::sync::Mutex<HashMap<AgentId, RpcMemoryFailure>>>,
     native_test_effects: Arc<AtomicUsize>,
     native_test_helper_effects: Arc<AtomicUsize>,
@@ -6255,6 +6407,9 @@ pub struct AdditionalTestDeps {
     empty_snapshot_payloads: Arc<std::sync::Mutex<HashSet<(AgentId, OplogIndex)>>>,
     no_op_oplog_reads: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), usize>>>,
     oplog_read_gates: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), OplogReadGate>>>,
+    runtime_card_audit_gates:
+        Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), RuntimeCardAuditGate>>>,
+    wallet_install_commit_gates: Arc<std::sync::Mutex<HashMap<AgentId, OplogReadGate>>>,
     append_after_commit: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     rdbms_tx_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
     /// One-shot gates pausing the first consume-body chunk `End` append of an
@@ -6316,6 +6471,7 @@ impl AdditionalTestDeps {
         let oplog_failures = Arc::new(scc::HashMap::new());
         let rdbms_tx_failures = Arc::new(scc::HashMap::new());
         Self {
+            primary_context_probes: Arc::new(std::sync::Mutex::new(HashMap::new())),
             native_test_effects: Arc::new(AtomicUsize::new(0)),
             native_test_helper_effects: Arc::new(AtomicUsize::new(0)),
             oplog_failures,
@@ -6336,6 +6492,8 @@ impl AdditionalTestDeps {
             empty_snapshot_payloads: Arc::new(std::sync::Mutex::new(HashSet::new())),
             no_op_oplog_reads: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_read_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            runtime_card_audit_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            wallet_install_commit_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             append_after_commit: Arc::new(std::sync::Mutex::new(HashSet::new())),
             rdbms_tx_failures,
             consume_body_chunk_end_gates: Arc::new(scc::HashMap::new()),
@@ -6579,6 +6737,7 @@ impl AdditionalTestDeps {
             agent_id,
             gates: self.replay_admission_gates.clone(),
             signals: self.direct_replay_wait_signals.clone(),
+            card_audits: self.runtime_card_audit_gates.clone(),
         })
             as Arc<
                 dyn golem_worker_executor::workerctx::ReplayAdmissionHook,
@@ -7165,6 +7324,7 @@ struct AgentInvocationSuccessGate {
 struct IndexedExecutionGate {
     entered_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<OplogIndex>>>,
     release: tokio::sync::Semaphore,
+    expected_index: AtomicU64,
 }
 
 /// One-shot execution gates, keyed by the agent whose next indexed boundary they hold.
@@ -7176,6 +7336,7 @@ impl IndexedExecutionGate {
         let gate = Arc::new(Self {
             entered_tx: std::sync::Mutex::new(Some(entered_tx)),
             release: tokio::sync::Semaphore::new(0),
+            expected_index: AtomicU64::new(0),
         });
         gates.lock().unwrap().insert(agent_id, gate.clone());
         IndexedExecutionGateHandle { entered_rx, gate }
@@ -7188,7 +7349,14 @@ impl IndexedExecutionGate {
         agent_id: &AgentId,
         start_index: OplogIndex,
     ) {
-        let gate = gates.lock().unwrap().remove(agent_id);
+        let gate = {
+            let mut gates = gates.lock().unwrap();
+            let matches = gates.get(agent_id).is_some_and(|gate| {
+                let expected = gate.expected_index.load(Ordering::Acquire);
+                expected == 0 || expected == u64::from(start_index)
+            });
+            matches.then(|| gates.remove(agent_id)).flatten()
+        };
         if let Some(gate) = gate {
             if let Some(entered_tx) = gate.entered_tx.lock().unwrap().take() {
                 let _ = entered_tx.send(start_index);
@@ -7338,6 +7506,7 @@ struct TestReplayAdmissionHook {
     agent_id: AgentId,
     gates: Arc<std::sync::Mutex<HashMap<AgentId, Vec<Arc<ReplayAdmissionGate>>>>>,
     signals: Arc<std::sync::Mutex<HashMap<AgentId, Arc<DirectReplayWaitSignal>>>>,
+    card_audits: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), RuntimeCardAuditGate>>>,
 }
 
 #[async_trait]
@@ -7376,7 +7545,35 @@ impl golem_worker_executor::workerctx::ReplayAdmissionHook for TestReplayAdmissi
     }
 
     fn before_direct_replay_wait(&self, function: &'static str, start_index: OplogIndex) {
+        if let Some(gate) = self
+            .card_audits
+            .lock()
+            .unwrap()
+            .get_mut(&(self.agent_id.clone(), start_index))
+            && function == "golem::permissions::derive::persist-derived-card"
+        {
+            assert!(
+                gate.issuing_task.is_none(),
+                "direct audit Start was claimed twice"
+            );
+            gate.issuing_task = Some(tokio::task::id());
+        }
         self.fire_direct_replay_wait(function, start_index);
+    }
+
+    async fn before_runtime_card_audit_lookup(&self, start_index: OplogIndex) {
+        let gate = {
+            let mut gates = self.card_audits.lock().unwrap();
+            let key = (self.agent_id.clone(), start_index);
+            let matches = gates.get(&key).is_some_and(|gate| {
+                gate.issuing_task.is_some() && gate.issuing_task == tokio::task::try_id()
+            });
+            matches.then(|| gates.remove(&key)).flatten()
+        };
+        if let Some(gate) = gate {
+            let _ = gate.pause.entered_tx.send(());
+            let _ = gate.pause.release_rx.await;
+        }
     }
 
     fn before_positional_replay_read(&self, expected: &str) {
@@ -7437,6 +7634,7 @@ mod replay_admission_gate_tests {
             agent_id,
             gates,
             signals,
+            card_audits: Default::default(),
         };
 
         tokio::join!(
