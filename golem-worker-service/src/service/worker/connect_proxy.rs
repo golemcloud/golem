@@ -166,7 +166,7 @@ where
     }
 }
 
-mod keep_alive {
+pub(crate) mod keep_alive {
     use std::{
         pin::Pin,
         task::{Context, Poll},

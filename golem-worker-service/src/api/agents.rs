@@ -80,6 +80,7 @@ pub struct AgentsApi {
     worker_service: Arc<WorkerService>,
     auth_service: Arc<dyn AuthService>,
     invocation_session_token_keyring: Arc<InvocationSessionTokenKeyring>,
+    invocation_session_config: crate::config::InvocationSessionConfig,
 }
 
 #[OpenApi(prefix_path = "/v1/agents", tag = ApiTags::Agent)]
@@ -88,11 +89,13 @@ impl AgentsApi {
         worker_service: Arc<WorkerService>,
         auth_service: Arc<dyn AuthService>,
         invocation_session_token_keyring: Arc<InvocationSessionTokenKeyring>,
+        invocation_session_config: crate::config::InvocationSessionConfig,
     ) -> Self {
         Self {
             worker_service,
             auth_service,
             invocation_session_token_keyring,
+            invocation_session_config,
         }
     }
 
@@ -220,6 +223,7 @@ impl AgentsApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
         let worker_service = self.worker_service.clone();
         let keyring = self.invocation_session_token_keyring.clone();
+        let config = self.invocation_session_config.clone();
 
         Ok(websocket
             .protocols([INVOCATION_SESSION_SUBPROTOCOL])
@@ -230,6 +234,7 @@ impl AgentsApi {
                     worker_service,
                     keyring,
                     auth,
+                    config,
                 ))
             })))
     }

@@ -76,6 +76,7 @@ pub fn make_mcp_endpoint(services: &Services) -> BoxEndpoint<'static> {
         services.worker_service.clone(),
         services.identity_provider.clone(),
         services.session_store.clone(),
+        &services.mcp_config,
     )
 }
 
@@ -84,6 +85,7 @@ pub(crate) fn mcp_endpoint(
     worker_service: Arc<WorkerService>,
     identity_provider: Arc<dyn IdentityProvider>,
     session_store: Arc<dyn SessionStore>,
+    config: &crate::config::McpConfig,
 ) -> BoxEndpoint<'static> {
     let service = StreamableHttpService::new(
         move || {
@@ -93,7 +95,7 @@ pub(crate) fn mcp_endpoint(
             ))
         },
         LocalSessionManager::default().into(),
-        mcp_http_transport_config(),
+        mcp_http_transport_config(config),
     );
 
     let oauth_routes = oauth_proxy_routes(identity_provider.clone(), session_store);
@@ -119,10 +121,13 @@ pub(crate) fn mcp_endpoint(
         .boxed()
 }
 
-pub(crate) fn mcp_http_transport_config() -> StreamableHttpServerConfig {
+pub(crate) fn mcp_http_transport_config(
+    config: &crate::config::McpConfig,
+) -> StreamableHttpServerConfig {
     // Export hosts are deployment domains, not a static loopback allowlist.
     // Export request limits are independent of the bounded outbound import client.
     StreamableHttpServerConfig::default()
+        .with_sse_keep_alive(Some(config.sse_keep_alive_interval))
         .disable_allowed_hosts()
         .with_max_request_body_bytes(usize::MAX)
 }

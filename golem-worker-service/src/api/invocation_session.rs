@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::config::InvocationSessionConfig;
 use crate::invocation_session_token::{
     CursorTokenPayload, InvocationSessionTokenBindings, InvocationSessionTokenKeyring,
     InvocationSessionTokenKind, InvocationSessionTokenPayload, SessionAgentIdentity,
@@ -19,6 +20,7 @@ use crate::invocation_session_token::{
     decode_session_agent_identity, encode_session_agent_identity,
 };
 use crate::service::auth::AuthServiceError;
+use crate::service::worker::connect_proxy::keep_alive::{KeepAliveError, WebSocketKeepAlive};
 use crate::service::worker::{
     PublicAgentSessionResume, PublicAgentSessionStart, PublicAgentSessionStartError,
     PublicToolSessionStart, StartedPublicAgentSession, WorkerService, WorkerServiceError,
@@ -81,9 +83,17 @@ const INPUT_UNACKNOWLEDGED_BYTE_BUDGET: usize = 16 * 1024 * 1024;
 const STREAM_BYTE_BUDGET: usize = 16 * 1024 * 1024;
 const STREAM_ITEM_BUDGET: usize = 256;
 
+#[cfg(test)]
+mod keep_alive_tests;
+
 struct AdmittedRequest {
     request: InvocationRequest,
     _session: OwnedSemaphorePermit,
+}
+
+struct AdmittedMessage {
+    message: Message,
+    session: OwnedSemaphorePermit,
 }
 
 struct PendingInputAdmission {
@@ -816,9 +826,19 @@ pub async fn serve_public_invocation_session(
     worker_service: Arc<WorkerService>,
     keyring: Arc<InvocationSessionTokenKeyring>,
     auth: AuthCtx,
+    config: InvocationSessionConfig,
 ) {
-    let (mut websocket_sink, mut websocket_stream) = socket.split();
+    let (mut websocket_sink, websocket_stream) =
+        invocation_session_websocket(socket, config).split();
     let budgets = SessionBudgets::new();
+    let (incoming_tx, incoming_rx) = mpsc::channel(CHANNEL_CAPACITY);
+    // Keep reading control frames while session setup waits for the executor.
+    let _reader = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(read_websocket(
+        websocket_stream,
+        incoming_tx,
+        budgets.session.clone(),
+    )));
+    let mut websocket_stream = tokio_stream::wrappers::ReceiverStream::new(incoming_rx);
     let (outbound_tx, mut outbound_rx) = mpsc::channel::<QueuedMessage>(CHANNEL_CAPACITY);
     let outbound = Outbound {
         sender: outbound_tx,
@@ -855,14 +875,7 @@ pub async fn serve_public_invocation_session(
         let _ = tokio::time::timeout(WRITE_PROGRESS_TIMEOUT, websocket_sink.close()).await;
     });
     let bindings = token_bindings(&auth);
-    let initial = match receive_initial(
-        &mut websocket_stream,
-        &outbound,
-        &keyring,
-        &bindings,
-        &budgets,
-    )
-    .await
+    let initial = match receive_initial(&mut websocket_stream, &outbound, &keyring, &bindings).await
     {
         Ok(Some(initial)) => initial,
         Ok(None) | Err(()) => {
@@ -1031,21 +1044,85 @@ pub async fn serve_public_invocation_session(
     let _ = writer.await;
 }
 
+fn invocation_session_websocket(
+    socket: WebSocketStream,
+    config: InvocationSessionConfig,
+) -> impl futures::Stream<Item = std::io::Result<Message>>
++ futures::Sink<Message, Error = std::io::Error>
++ Unpin {
+    let (sink, stream) = socket.split();
+    WebSocketKeepAlive::from_sink_and_stream(
+        stream,
+        sink,
+        config.keep_alive_interval,
+        config.max_pong_timeout,
+    )
+    .map(|result| {
+        result.map_err(|error| match error {
+            KeepAliveError::Sink(error) | KeepAliveError::Stream(error) => error,
+            KeepAliveError::Timeout => std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "invocation session Ping confirmation timed out",
+            ),
+        })
+    })
+}
+
+async fn read_websocket(
+    mut websocket: impl futures::Stream<Item = std::io::Result<Message>> + Unpin,
+    incoming: mpsc::Sender<std::io::Result<AdmittedMessage>>,
+    session: Arc<Semaphore>,
+) {
+    loop {
+        let message = tokio::select! {
+            _ = incoming.closed() => return,
+            message = websocket.next() => message,
+        };
+        match message {
+            // Tungstenite queues the Pong and flushes it on the next read.
+            Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
+            Some(message) => {
+                let terminal = message.is_err() || matches!(message, Ok(Message::Close(_)));
+                let message = match message {
+                    Ok(message) => {
+                        let Ok(permit) =
+                            acquire_bytes(&session, message_size(&message).max(1)).await
+                        else {
+                            return;
+                        };
+                        Ok(AdmittedMessage {
+                            message,
+                            session: permit,
+                        })
+                    }
+                    Err(error) => Err(error),
+                };
+                if incoming.send(message).await.is_err() || terminal {
+                    return;
+                }
+            }
+            None => return,
+        }
+    }
+}
+
 async fn receive_initial<S>(
     websocket: &mut S,
     outbound: &Outbound,
     keyring: &InvocationSessionTokenKeyring,
     bindings: &InvocationSessionTokenBindings,
-    budgets: &SessionBudgets,
 ) -> Result<Option<InitialMessage>, ()>
 where
-    S: futures::Stream<Item = std::io::Result<Message>> + Unpin,
+    S: futures::Stream<Item = std::io::Result<AdmittedMessage>> + Unpin,
 {
     loop {
         let Some(message) = websocket.next().await else {
             return Ok(None);
         };
-        let message = match message {
+        let AdmittedMessage {
+            message,
+            session: admission,
+        } = match message {
             Ok(message) => message,
             Err(_) => return Ok(None),
         };
@@ -1070,8 +1147,6 @@ where
                     close_too_large(outbound).await;
                     return Err(());
                 }
-                let admission =
-                    acquire_bytes(&budgets.session, message_size(&message).max(1)).await?;
                 let Message::Text(text) = message else {
                     unreachable!()
                 };
@@ -1266,10 +1341,10 @@ async fn handle_client_messages<S>(
     budgets: SessionBudgets,
     attempt_id: Uuid,
 ) where
-    S: futures::Stream<Item = std::io::Result<Message>> + Unpin,
+    S: futures::Stream<Item = std::io::Result<AdmittedMessage>> + Unpin,
 {
     while let Some(message) = websocket.next().await {
-        let message = match message {
+        let AdmittedMessage { message, session } = match message {
             Ok(message) => message,
             Err(_) => return,
         };
@@ -1287,23 +1362,6 @@ async fn handle_client_messages<S>(
                     close_too_large(&outbound).await;
                     return;
                 }
-                let session = match acquire_bytes(&budgets.session, message_size(&message).max(1))
-                    .await
-                {
-                    Ok(permit) => permit,
-                    Err(()) => {
-                        let message = safe_rejection_message(PublicErrorCode::ResourceExhausted);
-                        send_rejection(
-                            &outbound,
-                            Some(attempt_id),
-                            PublicErrorCode::ResourceExhausted,
-                            message.clone(),
-                        )
-                        .await;
-                        close_protocol(&outbound, &message).await;
-                        return;
-                    }
-                };
                 let Message::Text(text) = message else {
                     unreachable!()
                 };
@@ -1318,23 +1376,6 @@ async fn handle_client_messages<S>(
                     close_too_large(&outbound).await;
                     return;
                 }
-                let session = match acquire_bytes(&budgets.session, message_size(&message).max(1))
-                    .await
-                {
-                    Ok(permit) => permit,
-                    Err(()) => {
-                        let message = safe_rejection_message(PublicErrorCode::ResourceExhausted);
-                        send_rejection(
-                            &outbound,
-                            Some(attempt_id),
-                            PublicErrorCode::ResourceExhausted,
-                            message.clone(),
-                        )
-                        .await;
-                        close_protocol(&outbound, &message).await;
-                        return;
-                    }
-                };
                 let Message::Binary(bytes) = message else {
                     unreachable!()
                 };
@@ -4364,16 +4405,19 @@ mod tests {
             session_token,
             version: 1,
         };
-        let websocket =
-            futures::stream::iter(vec![Ok(Message::text(encode_text(&message).unwrap()))]);
-        futures::pin_mut!(websocket);
         let budgets = SessionBudgets::new();
+        let message = Message::text(encode_text(&message).unwrap());
+        let session = acquire_bytes(&budgets.session, message_size(&message))
+            .await
+            .unwrap();
+        let websocket = futures::stream::iter(vec![Ok(AdmittedMessage { message, session })]);
+        futures::pin_mut!(websocket);
         let (sender, _receiver) = mpsc::channel(1);
         let outbound = Outbound {
             sender,
             budgets: budgets.clone(),
         };
-        let initial = receive_initial(&mut websocket, &outbound, &keyring, &bindings, &budgets)
+        let initial = receive_initial(&mut websocket, &outbound, &keyring, &bindings)
             .await
             .unwrap()
             .unwrap();
@@ -4446,16 +4490,19 @@ mod tests {
             session_token,
             version: 1,
         };
-        let websocket =
-            futures::stream::iter(vec![Ok(Message::text(encode_text(&message).unwrap()))]);
-        futures::pin_mut!(websocket);
         let budgets = SessionBudgets::new();
+        let message = Message::text(encode_text(&message).unwrap());
+        let session = acquire_bytes(&budgets.session, message_size(&message))
+            .await
+            .unwrap();
+        let websocket = futures::stream::iter(vec![Ok(AdmittedMessage { message, session })]);
+        futures::pin_mut!(websocket);
         let (sender, mut receiver) = mpsc::channel(1);
         let outbound = Outbound {
             sender,
             budgets: budgets.clone(),
         };
-        match receive_initial(&mut websocket, &outbound, &keyring, &bindings, &budgets).await {
+        match receive_initial(&mut websocket, &outbound, &keyring, &bindings).await {
             Ok(Some(InitialMessage::Resume { resume, .. })) => Ok(resume),
             Ok(_) => panic!("resume message was not decoded as a resume"),
             Err(()) => {
