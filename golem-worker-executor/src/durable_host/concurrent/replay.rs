@@ -41,10 +41,6 @@ pub enum Resolution {
         /// Host-side replay continues after `End`, but the result may not cross to the guest until
         /// the matching token positionally consumes this marker.
         delivery_marker: Option<OplogIndex>,
-        #[expect(
-            dead_code,
-            reason = "preserved for the concurrent-durability replay model"
-        )]
         forced_commit: bool,
     },
     /// The call was cancelled (dropped before completion) via a `Cancelled` entry.
@@ -179,7 +175,7 @@ pub(crate) struct ReconstructionClaimState {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct HistoricalReconstruction {
+pub struct HistoricalReconstruction {
     inner: Arc<HistoricalReconstructionInner>,
 }
 
