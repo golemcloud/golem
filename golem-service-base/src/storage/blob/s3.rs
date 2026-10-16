@@ -1860,13 +1860,14 @@ impl BlobStorageBackend for S3BlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
-    ) -> Result<bool, Error> {
+    ) -> Result<Option<u64>, Error> {
         let bucket = self.bucket_of(&namespace);
         let key = self.key_of(&namespace, path)?;
 
-        let to_delete = self
+        let listed = self
             .list_objects(target_label, op_label, bucket, &key)
-            .await?
+            .await?;
+        let to_delete = listed
             .iter()
             .flat_map(|obj| {
                 obj.key
@@ -1874,12 +1875,21 @@ impl BlobStorageBackend for S3BlobStorage {
                     .map(|k| ObjectIdentifier::builder().key(k).build())
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let has_entries = !to_delete.is_empty();
+        if to_delete.is_empty() {
+            return Ok(None);
+        }
+        // The listing gives the size of each object, so the sum costs no request. A marker of a
+        // directory is an empty object.
+        let bytes = listed
+            .iter()
+            .filter_map(|obj| obj.size)
+            .map(u64::try_from)
+            .sum::<Result<u64, _>>()?;
 
         self.delete_keys(target_label, op_label, bucket, &to_delete)
             .await?;
 
-        Ok(has_entries)
+        Ok(Some(bytes))
     }
 
     async fn exists_at(

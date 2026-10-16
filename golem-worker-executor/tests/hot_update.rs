@@ -6023,7 +6023,7 @@ impl BlobStorageBackend for FlakyInitialFileStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<Option<u64>> {
         self.inner
             .delete_dir(target_label, op_label, namespace, path)
             .await
