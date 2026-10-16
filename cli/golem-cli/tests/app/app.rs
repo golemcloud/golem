@@ -520,6 +520,77 @@ async fn app_new_with_many_components_and_then_help_in_app_folder(_tracing: &Tra
 }
 
 #[test]
+async fn app_new_with_failing_template_plan_leaves_single_component_app_unchanged(
+    _tracing: &Tracing,
+) {
+    let app_name = "test-app-failing-plan";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "scala"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // A customized component sbt file cannot be merged with the template's, so the
+    // template plan for a second component fails after the layout upgrade is planned.
+    let component_sbt = std::fs::read_dir(ctx.cwd_path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.extension().is_some_and(|ext| ext == "sbt")
+                && path.file_name().is_some_and(|name| name != "build.sbt")
+        })
+        .expect("component sbt file");
+    let customized = format!(
+        "{}\n// customized\n",
+        fs::read_to_string(&component_sbt).unwrap()
+    );
+    fs::write_str(&component_sbt, customized).unwrap();
+
+    let before = snapshot_dir(ctx.cwd_path());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "scala",
+            flag::COMPONENT_NAME,
+            &format!("{app_name}:scala-second"),
+        ])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stdout_contains("Already existing non-mergeable files"));
+
+    assert_eq!(snapshot_dir(ctx.cwd_path()), before);
+}
+
+fn snapshot_dir(root: &Path) -> std::collections::BTreeMap<String, Option<Vec<u8>>> {
+    walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|entry| entry.file_name() != "golem-temp")
+        .map(|entry| {
+            let entry = entry.unwrap();
+            let rel_path = entry
+                .path()
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            let contents = entry
+                .file_type()
+                .is_file()
+                .then(|| std::fs::read(entry.path()).unwrap());
+            (rel_path, contents)
+        })
+        .collect()
+}
+
+#[test]
 async fn custom_rust_component_build_waits_for_guest_bridge_sdks(_tracing: &Tracing) {
     let ctx = TestContext::new();
     let producer_wasm = placeholder_component_wasm(&ctx);

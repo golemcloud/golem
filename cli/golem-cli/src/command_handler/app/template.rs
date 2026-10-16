@@ -96,6 +96,7 @@ struct NewTemplateInputs {
     pub component_templates: BTreeMap<ComponentName, AppTemplateComponent>,
     pub agent_templates: BTreeMap<AppTemplateName, AppTemplateAgent>,
     pub all_component_directories: BTreeMap<ComponentName, PathBuf>,
+    pub layout_upgrade_plans: BTreeMap<ComponentName, MultiComponentLayoutUpgradePlan>,
 }
 
 pub struct TemplateHandler {
@@ -161,6 +162,20 @@ impl TemplateHandler {
         let (safe_template_plan, unsafe_template_plan) = template_plan.partition();
 
         self.validate_new_template_plan(&unsafe_template_plan)?;
+
+        for (component_name, upgrade_plan) in &template_inputs.layout_upgrade_plans {
+            self.log_multi_component_layout_upgrade_plan(component_name, upgrade_plan);
+
+            if !upgrade_plan.is_empty()
+                && !self
+                    .ctx
+                    .interactive_handler()
+                    .confirm_multi_component_layout_upgrade(component_name)?
+            {
+                bail!(NonSuccessfulExit);
+            }
+        }
+
         self.log_new_template_plan(&safe_template_plan);
 
         if !safe_template_plan.is_empty()
@@ -172,6 +187,9 @@ impl TemplateHandler {
             bail!(NonSuccessfulExit);
         }
 
+        for upgrade_plan in template_inputs.layout_upgrade_plans.values() {
+            self.apply_multi_component_layout_upgrade_plan(upgrade_plan)?;
+        }
         self.apply_new_template_plan(&safe_template_plan)?;
 
         match claude_skills_ctx.mode {
@@ -498,6 +516,7 @@ impl TemplateHandler {
         let mut common_templates = BTreeMap::new();
         let mut component_templates = BTreeMap::new();
         let mut agent_templates = BTreeMap::new();
+        let mut layout_upgrade_plans = BTreeMap::new();
 
         for template_name in template_names {
             let component_name = template_to_component.get(template_name).ok_or_else(|| {
@@ -648,19 +667,7 @@ impl TemplateHandler {
 
                         self.validate_multi_component_layout_upgrade_plan(&upgrade_plan)?;
 
-                        self.log_multi_component_layout_upgrade_plan(component_name, &upgrade_plan);
-
-                        if !upgrade_plan.is_empty()
-                            && !self
-                                .ctx
-                                .interactive_handler()
-                                .confirm_multi_component_layout_upgrade(component_name)?
-                        {
-                            bail!(NonSuccessfulExit);
-                        }
-
-                        self.apply_multi_component_layout_upgrade_plan(&upgrade_plan)?;
-
+                        layout_upgrade_plans.insert(component_name.clone(), upgrade_plan);
                         all_component_directories.insert(component_name.clone(), new_component_dir);
                     }
                     None => {
@@ -693,6 +700,7 @@ impl TemplateHandler {
             component_templates,
             agent_templates,
             all_component_directories,
+            layout_upgrade_plans,
         })
     }
 
@@ -704,7 +712,11 @@ impl TemplateHandler {
         template_inputs: &NewTemplateInputs,
         claude_skills_ctx: &ClaudeSkillsContext,
     ) -> anyhow::Result<TemplatePlan> {
-        let mut template_plan_builder = TemplatePlanBuilder::new();
+        let mut layout_upgrade = MultiComponentLayoutUpgradePlan::new();
+        for upgrade_plan in template_inputs.layout_upgrade_plans.values() {
+            layout_upgrade.extend(upgrade_plan.clone());
+        }
+        let mut template_plan_builder = TemplatePlanBuilder::with_layout_upgrade(layout_upgrade);
 
         for (common_template_name, common_template) in &template_inputs.common_templates {
             template_plan_builder.add(
