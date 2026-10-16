@@ -52,6 +52,10 @@ pub async fn launch_golem_services(
 ) -> anyhow::Result<(JoinSet<anyhow::Result<()>>, StartupPorts, Shutdown)> {
     check_exposure(config)?;
 
+    // Services build rustls configurations from the process-level provider. A host that embeds
+    // this launcher may not install one, and the `golem` binary has already installed it.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let exporter = opentelemetry_prometheus_text_exporter::ExporterBuilder::default()
         .without_counter_suffixes()
         .without_units()
