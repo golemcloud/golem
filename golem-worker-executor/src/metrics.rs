@@ -91,6 +91,18 @@ const SCHEDULER_TICK_DURATION_BUCKETS: &[f64; 24] = &[
 const OPLOG_SWEEP_TICK_BUCKETS: &[f64; 9] =
     &[0.01, 0.1, 1.0, 5.0, 15.0, 60.0, 300.0, 900.0, 3600.0];
 
+/// Buckets for the deletes and the prunes of filesystem snapshots. A prune that repacks a large
+/// repository takes minutes, past the shared set's one minute.
+const SNAPSHOT_STORE_BUCKETS: &[f64; 14] = &[
+    0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0, 3600.0,
+];
+
+/// Buckets for the age of a restored filesystem snapshot: from one minute to 30 days.
+const SNAPSHOT_AGE_BUCKETS: &[f64; 13] = &[
+    60.0, 300.0, 900.0, 1800.0, 3600.0, 7200.0, 21600.0, 43200.0, 86400.0, 259200.0, 604800.0,
+    1209600.0, 2592000.0,
+];
+
 /// Buckets for the size of a single `memory.grow` allocation. Deliberately
 /// fine-grained in the 1-32 MiB band where typical guest grows cluster, so
 /// that p90/p99 quantiles are not pinned to a coarse 4-16 MiB bucket edge.
@@ -1818,6 +1830,7 @@ pub mod storage {
 }
 
 pub mod filesystem_snapshots {
+    use super::{SNAPSHOT_AGE_BUCKETS, SNAPSHOT_STORE_BUCKETS};
     use lazy_static::lazy_static;
     use prometheus::*;
     use std::time::Duration;
@@ -1880,11 +1893,253 @@ pub mod filesystem_snapshots {
             golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
         )
         .unwrap();
-        static ref FAILED_SPACE_RECLAIMS: Counter = register_counter!(
-            "filesystem_snapshot_failed_space_reclaims_total",
-            "Deletes of filesystem snapshots whose release of unused storage failed; the next delete tries again"
+        static ref STORED_BYTES: IntCounterVec = register_int_counter_vec!(
+            "filesystem_snapshot_stored_bytes_total",
+            "Bytes of the repository files that the filesystem snapshot store wrote to blob storage, by source",
+            &["source"]
         )
         .unwrap();
+        static ref REMOVED_BYTES: IntCounterVec = register_int_counter_vec!(
+            "filesystem_snapshot_removed_bytes_total",
+            "Bytes that the filesystem snapshot store deleted from blob storage, by source",
+            &["source"]
+        )
+        .unwrap();
+        static ref RELEASED_BYTES: IntCounter = register_int_counter!(
+            "filesystem_snapshot_released_bytes_total",
+            "Packed bytes of the deleted filesystem snapshots, which a later prune can remove when no other snapshot uses them"
+        )
+        .unwrap();
+        static ref RESTORED_AGE_SECONDS: Histogram = register_histogram!(
+            "filesystem_snapshot_restored_age_seconds",
+            "Time from the save of a filesystem snapshot to its successful restore",
+            SNAPSHOT_AGE_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref SKIPPED: IntCounterVec = register_int_counter_vec!(
+            "filesystem_snapshot_skipped_total",
+            "Filesystem snapshots that the admission skipped, by kind and reason",
+            &["kind", "reason"]
+        )
+        .unwrap();
+        static ref DELETE_SECONDS: HistogramVec = register_histogram_vec!(
+            "filesystem_snapshot_delete_seconds",
+            "Time of a delete of filesystem snapshots, with its prune, by operation and outcome",
+            &["operation", "outcome"],
+            SNAPSHOT_STORE_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref PRUNE_SECONDS: HistogramVec = register_histogram_vec!(
+            "filesystem_snapshot_prune_seconds",
+            "Time of a prune of a filesystem snapshot repository after a delete, with its check, by outcome",
+            &["outcome"],
+            SNAPSHOT_STORE_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref PRUNE_SKIPPED: IntCounterVec = register_int_counter_vec!(
+            "filesystem_snapshot_prune_skipped_total",
+            "Deletes of filesystem snapshots after which no prune ran, by reason",
+            &["reason"]
+        )
+        .unwrap();
+        static ref RETENTION_RUNS: IntCounterVec = register_int_counter_vec!(
+            "filesystem_snapshot_retention_runs_total",
+            "Retention runs after a confirmed or committed filesystem snapshot, by outcome",
+            &["outcome"]
+        )
+        .unwrap();
+    }
+
+    /// Declares the enum of the values of a metric label, with the value of each variant and the
+    /// list of all variants.
+    macro_rules! label_values {
+        ($(#[$meta:meta])* $name:ident { $($(#[$variant_meta:meta])* $variant:ident => $label:literal,)+ }) => {
+            $(#[$meta])*
+            #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+            pub enum $name {
+                $($(#[$variant_meta])* $variant,)+
+            }
+
+            impl $name {
+                const ALL: &'static [Self] = &[$(Self::$variant,)+];
+
+                fn label(self) -> &'static str {
+                    match self {
+                        $(Self::$variant => $label,)+
+                    }
+                }
+            }
+        };
+    }
+
+    label_values! {
+        /// The work that wrote repository files, as the `source` label.
+        StoredSource {
+            /// A save of a snapshot: its packs, its index files and the config of a new repository.
+            Save => "save",
+            /// A prune: the packs that it repacks and the index files that it writes again.
+            Prune => "prune",
+            /// A copy of the repository of a fork source, on the side of the storage.
+            Copy => "copy",
+        }
+    }
+
+    label_values! {
+        /// The work that deleted bytes, as the `source` label.
+        RemovedSource {
+            /// A prune: the packs whose time to stay after their mark is over.
+            Prune => "prune",
+            /// A delete of all snapshots of an agent: the whole repository.
+            DeleteAll => "delete_all",
+        }
+    }
+
+    label_values! {
+        /// Why an admission skipped a snapshot, as the `reason` label.
+        SkipReason {
+            /// An upload of the agent runs now.
+            UploadInFlight => "upload_in_flight",
+            /// The volume of the agent filesystems has less free space than the pressure target.
+            VolumeUnderPressure => "volume_under_pressure",
+            /// A delete of all snapshots of the agent is queued or runs.
+            DeletingAllSnapshots => "deleting_all_snapshots",
+        }
+    }
+
+    label_values! {
+        /// The kind of a delete, as the `operation` label.
+        DeleteOperation {
+            /// A delete of named snapshots: a retention, a superseded snapshot or a queued clean-up.
+            Delete => "delete",
+            /// A delete of all snapshots of an agent.
+            DeleteAll => "delete_all",
+        }
+    }
+
+    label_values! {
+        /// How a delete ended, as the `outcome` label.
+        DeleteOutcome {
+            /// The store deleted the snapshots.
+            Deleted => "deleted",
+            /// A stop or the shutdown ended the wait for the delete.
+            Stopped => "stopped",
+            /// The delete failed, and the snapshots stay in blob storage.
+            Leaked => "leaked",
+        }
+    }
+
+    label_values! {
+        /// How a prune that a delete started ended, as the `outcome` label.
+        PruneOutcome {
+            /// The prune ran and wrote its ledger.
+            Pruned => "pruned",
+            /// The check or the prune failed. The next delete prunes again.
+            Failed => "failed",
+        }
+    }
+
+    label_values! {
+        /// Why a delete ran no prune, as the `reason` label.
+        PruneSkip {
+            /// The repository holds too few freed bytes, or the last prune is too recent.
+            NotDue => "not_due",
+            /// Another delete holds the claim of the prune, or pruned since the check.
+            ClaimedElsewhere => "claimed_elsewhere",
+        }
+    }
+
+    label_values! {
+        /// How a retention run ended, as the `outcome` label.
+        RetentionOutcome {
+            /// The listing of the snapshots failed.
+            ListFailed => "list_failed",
+            /// No snapshot was old enough to delete.
+            NothingToDelete => "nothing_to_delete",
+            /// The store deleted the old snapshots.
+            Deleted => "deleted",
+            /// A stop ended the retention.
+            Stopped => "stopped",
+            /// The delete failed, and the old snapshots stay until the next retention.
+            Leaked => "leaked",
+        }
+    }
+
+    /// Exports each label value of the metrics of the store at zero, so that a dashboard or an
+    /// alert reads 0 instead of no data before the first event. `kinds` are the labels of the
+    /// snapshot kinds. Called when the executor starts a service that keeps filesystem
+    /// snapshots, so an executor without them exports none of these metrics.
+    pub fn record_filesystem_snapshots_started(kinds: &[&'static str]) {
+        for source in StoredSource::ALL {
+            STORED_BYTES.with_label_values(&[source.label()]);
+        }
+        for source in RemovedSource::ALL {
+            REMOVED_BYTES.with_label_values(&[source.label()]);
+        }
+        lazy_static::initialize(&RELEASED_BYTES);
+        lazy_static::initialize(&RESTORED_AGE_SECONDS);
+        for kind in kinds {
+            for reason in SkipReason::ALL {
+                SKIPPED.with_label_values(&[kind, reason.label()]);
+            }
+        }
+        for operation in DeleteOperation::ALL {
+            for outcome in DeleteOutcome::ALL {
+                DELETE_SECONDS.with_label_values(&[operation.label(), outcome.label()]);
+            }
+        }
+        for outcome in PruneOutcome::ALL {
+            PRUNE_SECONDS.with_label_values(&[outcome.label()]);
+        }
+        for reason in PruneSkip::ALL {
+            PRUNE_SKIPPED.with_label_values(&[reason.label()]);
+        }
+        for outcome in RetentionOutcome::ALL {
+            RETENTION_RUNS.with_label_values(&[outcome.label()]);
+        }
+    }
+
+    pub fn record_stored_bytes(source: StoredSource, bytes: u64) {
+        STORED_BYTES
+            .with_label_values(&[source.label()])
+            .inc_by(bytes);
+    }
+
+    pub fn record_removed_bytes(source: RemovedSource, bytes: u64) {
+        REMOVED_BYTES
+            .with_label_values(&[source.label()])
+            .inc_by(bytes);
+    }
+
+    pub fn record_released_bytes(bytes: u64) {
+        RELEASED_BYTES.inc_by(bytes);
+    }
+
+    pub fn record_restored_age(age: Duration) {
+        RESTORED_AGE_SECONDS.observe(age.as_secs_f64());
+    }
+
+    pub fn record_skipped(kind: &'static str, reason: SkipReason) {
+        SKIPPED.with_label_values(&[kind, reason.label()]).inc();
+    }
+
+    pub fn record_delete(operation: DeleteOperation, outcome: DeleteOutcome, elapsed: Duration) {
+        DELETE_SECONDS
+            .with_label_values(&[operation.label(), outcome.label()])
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_prune(outcome: PruneOutcome, elapsed: Duration) {
+        PRUNE_SECONDS
+            .with_label_values(&[outcome.label()])
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_prune_skipped(reason: PruneSkip) {
+        PRUNE_SKIPPED.with_label_values(&[reason.label()]).inc();
+    }
+
+    pub fn record_retention_run(outcome: RetentionOutcome) {
+        RETENTION_RUNS.with_label_values(&[outcome.label()]).inc();
     }
 
     pub fn set_cleanups_pending(agents: usize) {
@@ -1895,10 +2150,6 @@ pub mod filesystem_snapshots {
         COPY_SECONDS
             .with_label_values(&[outcome])
             .observe(elapsed.as_secs_f64());
-    }
-
-    pub fn record_failed_space_reclaim() {
-        FAILED_SPACE_RECLAIMS.inc();
     }
 
     pub fn record_capture(outcome: &'static str, elapsed: Duration) {

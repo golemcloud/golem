@@ -889,7 +889,8 @@ async fn create_delete_exists_dir(
             path,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .is_some();
     let result3 = storage
         .exists(
             "create_delete_exists_dir",
@@ -907,7 +908,8 @@ async fn create_delete_exists_dir(
             path,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .is_some();
 
     assert_eq!(result1, ExistsResult::DoesNotExist);
     assert_eq!(result2, ExistsResult::Directory);
@@ -1056,6 +1058,7 @@ async fn in_memory_prefix_sibling_does_not_hide_descendants(
             )
             .await
             .unwrap()
+            .is_some()
     );
     assert_eq!(
         storage
@@ -2314,7 +2317,8 @@ async fn delete_dir_does_not_delete_file_with_same_path(
             file_path,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .is_some();
 
     assert!(!deleted);
 
@@ -2447,7 +2451,8 @@ async fn delete_dir_root_path_is_safe_noop(
                 Path::new(root_path),
             )
             .await
-            .unwrap();
+            .unwrap()
+            .is_some();
 
         assert!(!deleted, "delete_dir({root_path:?}) deleted a directory");
 
@@ -2500,7 +2505,8 @@ async fn delete_dir_deletes_a_directory_that_only_holds_blobs(
             Path::new("only"),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .is_some();
 
     assert!(deleted);
 
@@ -2632,7 +2638,8 @@ async fn delete_dir_deletes_nested_descendants(
             Path::new("nested"),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .is_some();
 
     assert!(deleted);
     assert_eq!(get("get-direct", "nested/direct").await.unwrap(), None);
@@ -2688,7 +2695,8 @@ async fn delete_dir_keeps_blobs_of_other_namespaces(
             directory,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .is_some();
 
     let kept = storage
         .get_raw(
@@ -3226,7 +3234,8 @@ async fn delete_dir_deletes_more_than_1000_blobs(
             Path::new("bulk"),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .is_some();
 
     assert_eq!(
         (
@@ -4128,6 +4137,7 @@ async fn a_directory_of_blobs_goes_when_its_last_blob_goes(
             .delete_dir(label, "delete-only", namespace.clone(), Path::new("only"))
             .await
             .unwrap()
+            .is_some()
     );
 
     // A directory that create_dir made stays after its last blob goes.
@@ -4170,6 +4180,7 @@ async fn a_directory_of_blobs_goes_when_its_last_blob_goes(
             .delete_dir(label, "delete-kept", namespace.clone(), Path::new("kept"))
             .await
             .unwrap()
+            .is_some()
     );
 }
 
@@ -4200,6 +4211,7 @@ async fn delete_dir_deletes_a_directory_further_up_that_only_holds_blobs(
             .delete_dir(label, "delete-dir", namespace.clone(), Path::new("a"))
             .await
             .unwrap()
+            .is_some()
     );
 
     assert_eq!(

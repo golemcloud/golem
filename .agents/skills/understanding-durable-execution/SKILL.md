@@ -1319,8 +1319,8 @@ run at the same time: a save call starts a run only while it holds the save mark
 save call whose periodic job an admission replaced while the call only waited for its late writes
 runs on as a tail that starts no run and no write, and the next save of the agent runs beside
 it. The metrics are
-`filesystem_snapshot_cleanups_pending`, `filesystem_snapshot_copy_seconds` and
-`filesystem_snapshot_failed_space_reclaims_total`. `upload_now` answers `Stopped` after a lost
+`filesystem_snapshot_cleanups_pending`, `filesystem_snapshot_copy_seconds`,
+`filesystem_snapshot_delete_seconds` and `filesystem_snapshot_prune_seconds`. `upload_now` answers `Stopped` after a lost
 shard, a shutdown or `delete_all_snapshots`, unless the save had already finished; ephemeral
 agents make no store call.
 
