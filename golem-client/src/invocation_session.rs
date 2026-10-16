@@ -1365,7 +1365,7 @@ pub struct InvocationSessionTransport {
 }
 
 impl InvocationSessionTransport {
-    /// Connects to an invocation session. Without a connector, the connection uses
+    /// Connects to an invocation session. Without a connector, a `wss://` connection uses
     /// [`crate::tls::platform_verifier_connector`], so it does not depend on a process-level
     /// rustls `CryptoProvider`.
     pub async fn connect(
@@ -1389,17 +1389,13 @@ impl InvocationSessionTransport {
                 .parse()
                 .expect("static subprotocol is a valid header"),
         );
-        let connector = match connector {
-            Some(connector) => connector,
-            None => {
-                crate::tls::platform_verifier_connector().map_err(SessionTransportError::Tls)?
-            }
-        };
+        let connector = crate::tls::connector_for(request.uri(), connector)
+            .map_err(SessionTransportError::Tls)?;
         let config = tungstenite::protocol::WebSocketConfig::default()
             .max_message_size(Some(MAX_WEBSOCKET_MESSAGE_SIZE))
             .max_frame_size(Some(MAX_WEBSOCKET_MESSAGE_SIZE));
         let (socket, response) =
-            connect_async_tls_with_config(request, Some(config), false, Some(connector))
+            connect_async_tls_with_config(request, Some(config), false, connector)
                 .await
                 .map_err(|error| match error {
                     tungstenite::Error::Protocol(

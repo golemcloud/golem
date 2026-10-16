@@ -248,12 +248,13 @@ impl AgentConnection {
         }
 
         let connector = if allow_insecure {
-            insecure_connector()?
+            Some(insecure_connector()?)
         } else {
-            golem_client::tls::platform_verifier_connector()?
+            None
         };
+        let connector = golem_client::tls::connector_for(request.uri(), connector)?;
 
-        Ok((request, Some(connector)))
+        Ok((request, connector))
     }
 
     async fn ping_loop(
