@@ -95,6 +95,7 @@ const REQUEST_BODY_RESEND_CACHE_BYTES: usize = 256 * 1024;
 pub(super) struct DurableRequestBody {
     oplog: Arc<dyn Oplog>,
     pub(super) recovery: RequestBodyRecovery,
+    recorded_prefix: Option<Arc<RecordedRequestBodyScan>>,
     parent_start_index: OplogIndex,
     recording_enabled: bool,
     state: Arc<Mutex<DurableRequestBodyState>>,
@@ -200,6 +201,7 @@ impl DurableRequestBody {
         Self {
             oplog,
             recovery: RequestBodyRecovery::default(),
+            recorded_prefix: None,
             parent_start_index,
             recording_enabled,
             recording_tasks,
@@ -220,6 +222,38 @@ impl DurableRequestBody {
         }
     }
 
+    pub(super) fn from_recording(
+        continuation: UnsyncBoxBody<Bytes, ErrorCode>,
+        oplog: Arc<dyn Oplog>,
+        parent_start_index: OplogIndex,
+        recording_tasks: Arc<crate::worker::tasks::RuntimeAppendTasks>,
+        scan: RecordedRequestBodyScan,
+        recovery: RequestBodyRecovery,
+    ) -> Self {
+        let mut body = Self::new(
+            continuation,
+            oplog,
+            parent_start_index,
+            true,
+            recording_tasks,
+        );
+        {
+            let mut state = body.lock_state();
+            state.next_offset = scan.covered_len;
+            state.pulled_frames = scan.data_frames.len();
+            state.terminal = match &scan.terminal {
+                Some(RecordedRequestBodyTerminal::End) => Some(RequestBodyTerminal::End),
+                Some(RecordedRequestBodyTerminal::Error(error)) => Some(
+                    RequestBodyTerminal::Error(deserialize_error_code(error.clone())),
+                ),
+                None => None,
+            };
+        }
+        body.recorded_prefix = Some(Arc::new(scan));
+        body.recovery = recovery;
+        body
+    }
+
     /// A body for one send attempt: serves the already-recorded frames from
     /// the oplog first, then claims the live guest body and continues pulling
     /// (recording as it goes). At most one view may be live at a time.
@@ -227,6 +261,9 @@ impl DurableRequestBody {
         let epoch = self.lock_state().revoke_epoch;
         DurableRequestBodyView {
             shared: self.clone(),
+            prefix: self.recorded_prefix.as_ref().map(|scan| {
+                recorded_request_body_replay(self.oplog.clone(), scan, self.recovery.clone())
+            }),
             pos: 0,
             live_claimed: false,
             pending_load: None,
@@ -583,7 +620,7 @@ pub(super) enum RecordedRequestBodyTerminal {
     Error(SerializableHttpErrorCode),
 }
 
-/// Facts observed while fully draining the deterministically reproduced guest request body.
+/// Facts observed while reproducing the guest request body up to EOF or a live handoff.
 /// Recovery compares them with the healed recording before physically re-issuing the request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ReplayedRequestBodyRecordingProof {
@@ -598,6 +635,50 @@ impl RecordedRequestBodyScan {
 
     pub(super) fn terminal_recorded(&self) -> bool {
         self.terminal.is_some()
+    }
+
+    pub(super) fn validate_reproduction(
+        &self,
+        reproduced: Option<ReplayedRequestBodyRecordingProof>,
+        has_live_continuation: bool,
+    ) -> Result<(), RecordedFrameError> {
+        match &self.terminal {
+            Some(RecordedRequestBodyTerminal::End) => {}
+            Some(RecordedRequestBodyTerminal::Error(error)) => {
+                return Err(format!(
+                    "the recorded request body ended with a guest body error: {error:?}"
+                )
+                .into());
+            }
+            None if has_live_continuation => {}
+            None => {
+                return Err(
+                    "the recorded request body is incomplete (no terminal frame was recorded)"
+                        .to_string()
+                        .into(),
+                );
+            }
+        }
+        if let Some(reproduced) = reproduced {
+            if self.covered_len != reproduced.final_length
+                || self
+                    .data_frames
+                    .iter()
+                    .any(|frame| frame.offset.saturating_add(frame.len) > reproduced.final_length)
+            {
+                return Err(format!(
+                    "the request-body recording does not cover the reproduced {} bytes",
+                    reproduced.final_length
+                )
+                .into());
+            }
+            if self.trailers_recorded() != reproduced.trailers_present {
+                return Err("the request-body recording's trailers do not match replay"
+                    .to_string()
+                    .into());
+            }
+        }
+        Ok(())
     }
 }
 
@@ -871,6 +952,7 @@ type PendingFrameLoad =
 /// frame prefix from the oplog, then continues with the live guest body.
 pub(super) struct DurableRequestBodyView {
     shared: DurableRequestBody,
+    prefix: Option<UnsyncBoxBody<Bytes, ErrorCode>>,
     pos: usize,
     live_claimed: bool,
     pending_load: Option<PendingFrameLoad>,
@@ -903,6 +985,12 @@ impl HttpBody for DurableRequestBodyView {
             return Poll::Ready(Some(Err(ErrorCode::InternalError(Some(
                 "request body attempt abandoned for retry".to_string(),
             )))));
+        }
+        if let Some(prefix) = &mut this.prefix {
+            match std::task::ready!(Pin::new(prefix).poll_frame(cx)) {
+                Some(frame) => return Poll::Ready(Some(frame)),
+                None => this.prefix = None,
+            }
         }
         loop {
             if let Some(load) = this.pending_load.as_mut() {
@@ -1002,7 +1090,7 @@ impl HttpBody for DurableRequestBodyView {
     }
 
     fn is_end_stream(&self) -> bool {
-        if self.pending_load.is_some() {
+        if self.prefix.is_some() || self.pending_load.is_some() {
             return false;
         }
         let state = self.shared.lock_state();
@@ -1014,6 +1102,9 @@ impl HttpBody for DurableRequestBodyView {
     }
 
     fn size_hint(&self) -> SizeHint {
+        if self.prefix.is_some() {
+            return SizeHint::default();
+        }
         let state = self.shared.lock_state();
         let start = self.pos.min(state.slots.len());
         let prefix_len: u64 = state.slots[start..].iter().map(|slot| slot.data_len).sum();
@@ -2284,6 +2375,57 @@ mod tests {
         assert!(
             corrupt.error().is_none(),
             "corrupt history must remain a refusal"
+        );
+    }
+
+    #[test]
+    async fn restored_body_lazy_payload_outage_is_not_recorded_as_a_guest_error() {
+        let oplog = FrameTestOplog::new();
+        let index = record_frame_entry(
+            oplog.clone(),
+            OplogIndex::NONE,
+            SerializableP3HttpRequestBodyFrame::Data {
+                offset: 0,
+                bytes: b"prefix".to_vec(),
+            },
+        )
+        .await
+        .unwrap();
+        record_frame_entry(
+            oplog.clone(),
+            OplogIndex::NONE,
+            SerializableP3HttpRequestBodyFrame::End,
+        )
+        .await
+        .unwrap();
+        let scan = scan_recorded_request_body_frames(oplog.clone(), OplogIndex::NONE)
+            .await
+            .unwrap();
+        let recovery = RequestBodyRecovery::default();
+        let durable = DurableRequestBody::from_recording(
+            frame_body(Vec::new(), None),
+            oplog.clone(),
+            OplogIndex::NONE,
+            Default::default(),
+            scan,
+            recovery.clone(),
+        );
+        let mut view = durable.replayer();
+        assert!(!view.is_end_stream());
+        assert_ne!(view.size_hint().upper(), Some(0));
+        oplog.make_frame_payload_unavailable(index);
+        assert!(view.frame().await.unwrap().is_err());
+        assert!(matches!(
+            recovery.error(),
+            Some(
+                golem_service_base::error::worker_executor::WorkerExecutorError::RecoveryRequired { .. }
+            )
+        ));
+        wait_for_recordings(&durable).await;
+        assert_eq!(
+            oplog.entry_count(),
+            2,
+            "a storage failure must not append a guest Error frame or terminal"
         );
     }
 

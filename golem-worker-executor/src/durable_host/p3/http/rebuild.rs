@@ -113,6 +113,7 @@ pub(super) fn recorded_request_body_replayability<Ctx: WorkerCtx, U: 'static>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     rebuild: &mut P3HttpSendRebuild,
     recovery: RequestBodyRecovery,
+    has_live_continuation: bool,
 ) -> impl std::future::Future<Output = Result<(), WorkerExecutorError>> + Send + 'static {
     let durable_body_present = rebuild.durable_body.is_some();
     let replayed_request_body_drain = rebuild.replayed_request_body_drain.take();
@@ -157,42 +158,8 @@ pub(super) fn recorded_request_body_replayability<Ctx: WorkerCtx, U: 'static>(
                 recovery.transport_error(error);
                 cause
             })?;
-        match &scan.terminal {
-            Some(RecordedRequestBodyTerminal::End) => {}
-            Some(RecordedRequestBodyTerminal::Error(error)) => Err(WorkerExecutorError::runtime(
-                format!("the recorded request body ended with a guest body error: {error:?}"),
-            ))?,
-            None => {
-                return Err(WorkerExecutorError::runtime(
-                    "the recorded request body is incomplete (no terminal frame was recorded)",
-                ));
-            }
-        }
-        if let Some(reproduced) = reproduced {
-            if scan.covered_len != reproduced.final_length {
-                return Err(WorkerExecutorError::runtime(format!(
-                    "the healed request-body recording covers {} bytes, but replay reproduced {} bytes",
-                    scan.covered_len, reproduced.final_length
-                )));
-            }
-            if scan
-                .data_frames
-                .iter()
-                .any(|frame| frame.offset.saturating_add(frame.len) > reproduced.final_length)
-            {
-                return Err(WorkerExecutorError::runtime(
-                    "the request-body recording contains data beyond the length reproduced during replay",
-                ));
-            }
-            if scan.trailers_recorded() != reproduced.trailers_present {
-                return Err(WorkerExecutorError::runtime(format!(
-                    "the healed request-body recording's trailer presence does not match replay (recorded: {}, reproduced: {})",
-                    scan.trailers_recorded(),
-                    reproduced.trailers_present
-                )));
-            }
-        }
-        Ok(())
+        scan.validate_reproduction(reproduced, has_live_continuation)
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
     }
 }
 

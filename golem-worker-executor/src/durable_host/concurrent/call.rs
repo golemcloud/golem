@@ -422,14 +422,7 @@ where
     if live_call_permit.is_none() {
         *live_call_permit = Some(LiveCallPermit::new(counter));
     }
-    let readiness = if recovery.allows_new_call() {
-        recovery.await_readiness().await
-    } else {
-        Err(WorkerExecutorError::runtime(format!(
-            "{} protocol owner forbids recovery without a recorded Start",
-            Pair::FQFN
-        )))
-    };
+    let readiness = recovery.await_new_call_readiness::<Pair>().await;
     if let Err(error) = readiness {
         replay_state.abandon_replay_for_failure().await?;
         store.with(|mut access| {
@@ -721,16 +714,25 @@ enum AccessResultDestination {
     Host,
 }
 
-type ScopeReplayReadiness = Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send>>;
+type ScopeReplayReadiness = futures::future::Shared<
+    Pin<Box<dyn Future<Output = Result<ScopeReplayDecision, WorkerExecutorError>> + Send>>,
+>;
 
-#[derive(Default)]
+#[derive(Clone, Copy)]
+pub(crate) enum ScopeReplayDecision {
+    Reexecute,
+    CompleteWithLoss,
+}
+
+#[derive(Clone, Default)]
 pub(crate) enum ScopeReplayRecovery {
     #[default]
     Default,
     /// The owner completes the original call with typed protocol loss, without a new effect.
     CompleteWithLoss,
     Reexecute {
-        readiness: Option<ScopeReplayReadiness>,
+        readiness: ScopeReplayReadiness,
+        loss_may_start_child: bool,
     },
 }
 
@@ -738,8 +740,29 @@ impl ScopeReplayRecovery {
     pub(crate) fn reexecute_when(
         readiness: impl Future<Output = Result<(), WorkerExecutorError>> + Send + 'static,
     ) -> Self {
+        Self::decide_when(async move { readiness.await.map(|()| ScopeReplayDecision::Reexecute) })
+    }
+
+    pub(crate) fn decide_when(
+        readiness: impl Future<Output = Result<ScopeReplayDecision, WorkerExecutorError>>
+        + Send
+        + 'static,
+    ) -> Self {
         Self::Reexecute {
-            readiness: Some(Box::pin(readiness)),
+            readiness: futures::FutureExt::shared(futures::FutureExt::boxed(readiness)),
+            loss_may_start_child: false,
+        }
+    }
+
+    pub(super) fn for_child(&self) -> Self {
+        match self {
+            // The existing parent authorizes a new terminal child, not a new parent effect.
+            Self::CompleteWithLoss => Self::reexecute_when(async { Ok(()) }),
+            Self::Reexecute { readiness, .. } => Self::Reexecute {
+                readiness: readiness.clone(),
+                loss_may_start_child: true,
+            },
+            recovery => recovery.clone(),
         }
     }
 
@@ -748,17 +771,37 @@ impl ScopeReplayRecovery {
             Self::Default => true,
             Self::CompleteWithLoss => false,
             // Readiness is checked before a live Start or repair of an incomplete call.
-            Self::Reexecute { .. } => true,
+            Self::Reexecute {
+                readiness,
+                loss_may_start_child,
+            } => {
+                *loss_may_start_child
+                    || !matches!(
+                        readiness.peek(),
+                        Some(Ok(ScopeReplayDecision::CompleteWithLoss))
+                    )
+            }
         }
     }
 
     async fn await_readiness(&mut self) -> Result<(), WorkerExecutorError> {
         match self {
-            Self::Reexecute { readiness } => match readiness.take() {
-                Some(readiness) => readiness.await,
-                None => Ok(()),
-            },
+            Self::Reexecute { readiness, .. } => readiness.clone().await.map(|_| ()),
             Self::Default | Self::CompleteWithLoss => Ok(()),
+        }
+    }
+
+    async fn await_new_call_readiness<Pair: HostPayloadPair>(
+        &mut self,
+    ) -> Result<(), WorkerExecutorError> {
+        self.await_readiness().await?;
+        if self.allows_new_call() {
+            Ok(())
+        } else {
+            Err(WorkerExecutorError::runtime(format!(
+                "{} protocol owner forbids recovery without a recorded Start",
+                Pair::FQFN
+            )))
         }
     }
 }
@@ -900,6 +943,71 @@ mod scope_replay_recovery_tests {
         assert!(!call.is_live());
         assert!(call.finished);
         assert_eq!(counter.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    async fn demand_children_share_the_parent_readiness_decision() {
+        use super::*;
+        use golem_common::model::oplog::host_functions::MonotonicClockNow;
+        for unavailable in [false, true] {
+            let (ready, readiness) = tokio::sync::oneshot::channel();
+            let mut parent = replaying_call(
+                ScopeReplayRecovery::reexecute_when(async { readiness.await.unwrap() }),
+                None,
+            );
+            let mut child = replaying_call(parent.child_replay_recovery(), Some(true));
+            let mut new_child = parent.child_replay_recovery();
+            let counter = Arc::new(AtomicUsize::new(0));
+            let mut repair = Box::pin(child.prepare_incomplete_live_repair(|| counter.clone()));
+            let mut begin = Box::pin(new_child.await_new_call_readiness::<MonotonicClockNow>());
+            assert!(futures::poll!(&mut repair).is_pending());
+            assert!(futures::poll!(&mut begin).is_pending());
+            assert!(!parent.is_live());
+            ready
+                .send(if unavailable {
+                    Err(WorkerExecutorError::recovery_required(
+                        "payload unavailable",
+                    ))
+                } else {
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(repair.await.is_err(), unavailable);
+            assert_eq!(begin.await.is_err(), unavailable);
+            assert_eq!(child.is_live(), !unavailable);
+            assert_eq!(
+                parent
+                    .prepare_incomplete_live_repair(|| counter.clone())
+                    .await
+                    .is_err(),
+                unavailable
+            );
+            assert_eq!(parent.is_live(), !unavailable);
+            parent.abandon_for_trap();
+            child.abandon_for_trap();
+        }
+    }
+
+    #[test]
+    async fn deferred_typed_loss_allows_only_the_existing_parent_and_its_children() {
+        use super::*;
+        use golem_common::model::oplog::host_functions::MonotonicClockNow;
+        let mut recovery =
+            ScopeReplayRecovery::decide_when(async { Ok(ScopeReplayDecision::CompleteWithLoss) });
+        let mut child = recovery.for_child();
+        child
+            .await_new_call_readiness::<MonotonicClockNow>()
+            .await
+            .unwrap();
+        recovery.await_readiness().await.unwrap();
+        assert!(
+            recovery
+                .await_new_call_readiness::<MonotonicClockNow>()
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("without a recorded Start")
+        );
     }
 
     #[test]
@@ -1234,7 +1342,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         {
             ResolvedCall::Live(begun) => {
                 if !begun.retry.durable_execution_state().snapshotting_mode {
-                    options.scope_replay_recovery.await_readiness().await?;
+                    options
+                        .scope_replay_recovery
+                        .await_new_call_readiness::<Pair>()
+                        .await?;
                 }
                 let mut session = begun.start_live(ctx, request).await?;
                 session.scope_replay_recovery = options.scope_replay_recovery.into();
@@ -2400,7 +2511,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             prepared
                 .claim_options
                 .scope_replay_recovery
-                .await_readiness()
+                .await_new_call_readiness::<Pair>()
                 .await?;
         }
 
@@ -2863,6 +2974,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     ) {
         *self.scope_replay_recovery.get_mut().unwrap() =
             ScopeReplayRecovery::reexecute_when(readiness);
+    }
+
+    pub(super) fn child_replay_recovery(&self) -> ScopeReplayRecovery {
+        self.scope_replay_recovery.lock().unwrap().for_child()
     }
 
     pub fn agent_auth_ctx(&self) -> &AuthCtx {
@@ -5864,14 +5979,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                 | ReplayStartClaimOutcome::DeletedRegion
                 | ReplayStartClaimOutcome::StoreAlreadyLive) => {
                     let _readiness_permit = LiveCallPermit::new(ctx.state.live_host_call_counter());
-                    let readiness = if recovery.allows_new_call() {
-                        recovery.await_readiness().await
-                    } else {
-                        Err(WorkerExecutorError::runtime(format!(
-                            "{} protocol owner forbids recovery without a recorded Start",
-                            Pair::FQFN
-                        )))
-                    };
+                    let readiness = recovery.await_new_call_readiness::<Pair>().await;
                     if let Err(error) = readiness {
                         ctx.state.replay_state.abandon_replay_for_failure().await?;
                         ctx.state.authoritative_replay_failure = true;

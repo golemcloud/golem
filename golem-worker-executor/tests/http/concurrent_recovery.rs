@@ -69,6 +69,9 @@ enum InferenceMode {
     /// The first POST streams a prefix and holds; a POST carrying a `Range` header ignores it
     /// and sends a different body.
     MidBodyThenFullChanged,
+    /// The durable request-body payload is unavailable as corrupt history after the crash.
+    MidBodyWithCorruptRecording,
+    BeforeFirstChunkWithCorruptRecording,
 }
 
 impl InferenceMode {
@@ -85,6 +88,7 @@ struct InferenceServer {
     mode: InferenceMode,
     post_count: AtomicUsize,
     get_count: AtomicUsize,
+    read_permission_count: AtomicUsize,
     post_bodies: Mutex<Vec<Vec<u8>>>,
     post_range_headers: Mutex<Vec<Option<String>>>,
     first_post_arrived: watch::Sender<bool>,
@@ -158,6 +162,13 @@ impl InferenceServer {
         }
     }
 
+    async fn allow_body_read(State(server): State<Arc<InferenceServer>>) -> impl IntoResponse {
+        if server.read_permission_count.fetch_add(1, Ordering::SeqCst) == 0 {
+            std::future::pending::<()>().await;
+        }
+        "read-now"
+    }
+
     async fn sibling(State(server): State<Arc<InferenceServer>>) -> impl IntoResponse {
         let mut arrived = server.first_post_arrived.subscribe();
         arrived
@@ -178,6 +189,7 @@ async fn spawn_inference_server(
         mode,
         post_count: AtomicUsize::new(0),
         get_count: AtomicUsize::new(0),
+        read_permission_count: AtomicUsize::new(0),
         post_bodies: Mutex::new(Vec::new()),
         post_range_headers: Mutex::new(Vec::new()),
         first_post_arrived: watch::Sender::new(false),
@@ -185,6 +197,7 @@ async fn spawn_inference_server(
     let router = Router::new()
         .route("/inference", post(InferenceServer::inference))
         .route("/sibling", get(InferenceServer::sibling))
+        .route("/allow-body-read", get(InferenceServer::allow_body_read))
         .with_state(server.clone());
     let handle = spawn(
         async move {
@@ -269,6 +282,9 @@ async fn recover_concurrent_post(
     inject_payload_outage: bool,
 ) -> anyhow::Result<RecoveredRun> {
     let context = TestContext::new(last_unique_id);
+    let before_first_chunk = mode == InferenceMode::BeforeFirstChunkWithCorruptRecording;
+    let corrupt_recording =
+        mode == InferenceMode::MidBodyWithCorruptRecording || before_first_chunk;
     let overrides = || golem_worker_executor_test_utils::TestExecutorOverrides {
         configure: inject_payload_outage.then(|| {
             Arc::new(
@@ -289,6 +305,9 @@ async fn recover_concurrent_post(
         .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
+    if before_first_chunk {
+        env.insert("WAIT_BEFORE_RESPONSE_READ".to_string(), "true".to_string());
+    }
     let agent_id = agent_id!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
@@ -326,7 +345,11 @@ async fn recover_concurrent_post(
             }) {
                 return false;
             }
-            if mode.holds_mid_body() {
+            if before_first_chunk {
+                sends.counts() == (0, 2, 1) && bodies.counts() == (0, 1, 1)
+                    && !oplog.iter().any(|entry| matches!(&entry.entry,
+                        PublicOplogEntry::Start(start) if start.parent_start_index == bodies.incomplete.first().copied()))
+            } else if mode.holds_mid_body() {
                 sends.counts() == (0, 2, 0)
                     && bodies.counts() == (0, 1, 1)
                     && oplog.iter().any(|entry| {
@@ -352,6 +375,23 @@ async fn recover_concurrent_post(
     assert_eq!(server.post_count.load(Ordering::SeqCst), 1);
     assert_eq!(server.get_count.load(Ordering::SeqCst), 1);
     assert_eq!(jump_count(&before_crash), 0);
+
+    if corrupt_recording && !before_first_chunk {
+        timeout(Duration::from_secs(20), async {
+            loop {
+                executor.commit_oplog(&worker_id).await?;
+                let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+                if !partition_starts(&entries, "http::types::response::consume-body-chunk")
+                    .incomplete
+                    .is_empty()
+                {
+                    break anyhow::Ok(());
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await??;
+    }
 
     let outage_payload =
         if inject_payload_outage {
@@ -393,7 +433,11 @@ async fn recover_concurrent_post(
     let executor =
         golem_worker_executor_test_utils::start_with_overrides(deps, &context, overrides()).await?;
     if let Some(payload) = outage_payload {
-        executor.set_oplog_download_outage_for_payload(&worker_id, payload);
+        if corrupt_recording {
+            executor.set_oplog_download_corruption(&worker_id, payload);
+        } else {
+            executor.set_oplog_download_outage_for_payload(&worker_id, payload);
+        }
     }
     let result = {
         let invocation = executor.invoke_and_await_agent_with_key(
@@ -404,7 +448,7 @@ async fn recover_concurrent_post(
             data_value!(),
         );
         tokio::pin!(invocation);
-        if inject_payload_outage {
+        if inject_payload_outage && !corrupt_recording {
             let hit = async {
                 while executor.oplog_download_outage_hits(&worker_id).is_empty() {
                     tokio::time::sleep(Duration::from_millis(20)).await;
@@ -429,6 +473,12 @@ async fn recover_concurrent_post(
                     .into_typed::<String>()
                     .map_err(|error| error.to_string())
             })
+    };
+    let executor = if corrupt_recording {
+        drop(executor);
+        start(deps, &context).await?
+    } else {
+        executor
     };
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     if inject_payload_outage {
@@ -716,5 +766,183 @@ async fn post_crash_body_payload_outage_uses_infrastructure_recovery(
     assert_call_local_recovery(&run);
     assert_eq!(run.result_after_replay, Ok(full_success()));
     assert_eq!((run.after_replay.gets, run.after_replay.posts), (2, 3));
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn post_crash_corrupt_recording_completes_original_scope_with_typed_loss(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let run = recover_concurrent_post(
+        last_unique_id,
+        deps,
+        http_tests,
+        InferenceMode::MidBodyWithCorruptRecording,
+        "post_with_concurrent_get",
+        true,
+        true,
+    )
+    .await?;
+    assert_eq!(
+        run.result,
+        Ok(format!(
+            "post=200 {} incomplete(ErrorCode::HttpResponseIncomplete) | get=200 {SIBLING_BODY}",
+            &INFERENCE_BODY[..DELIVERED_BEFORE_CRASH]
+        ))
+    );
+    assert_eq!(
+        (run.recovered.posts, run.recovered.gets),
+        (1, 1),
+        "owner loss must not repeat either effect"
+    );
+    assert_eq!(
+        partition_starts(&run.oplog, "http::client::send").counts(),
+        (0, 2, 0)
+    );
+    assert_eq!(
+        partition_starts(&run.oplog, "http::types::response::consume-body").counts(),
+        (0, 2, 0)
+    );
+    assert!(
+        partition_starts(&run.oplog, "http::types::response::consume-body-chunk")
+            .incomplete
+            .is_empty()
+    );
+    assert_eq!(jump_count(&run.oplog), 0);
+    assert_eq!(run.result_after_replay, Ok(full_success()));
+    assert_eq!((run.after_replay.posts, run.after_replay.gets), (2, 2));
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn post_crash_corrupt_recording_delivers_loss_through_a_new_first_child(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let run = recover_concurrent_post(
+        last_unique_id,
+        deps,
+        http_tests,
+        InferenceMode::BeforeFirstChunkWithCorruptRecording,
+        "post_with_concurrent_get",
+        true,
+        true,
+    )
+    .await?;
+    assert_eq!(
+        run.result,
+        Ok(format!(
+            "post=200  incomplete(ErrorCode::HttpResponseIncomplete) | get=200 {SIBLING_BODY}"
+        ))
+    );
+    assert_eq!((run.recovered.posts, run.recovered.gets), (1, 1));
+    assert_eq!(
+        partition_starts(&run.oplog, "http::client::send").counts(),
+        (0, 3, 0)
+    );
+    assert!(
+        partition_starts(&run.oplog, "http::types::response::consume-body")
+            .incomplete
+            .is_empty()
+    );
+    assert_eq!(jump_count(&run.oplog), 0);
+    assert_eq!(run.result_after_replay, Ok(full_success()));
+    assert_eq!((run.after_replay.posts, run.after_replay.gets), (2, 2));
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn incomplete_send_resumes_a_body_kept_open_until_response_read(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let requests = Arc::new(AtomicUsize::new(0));
+    let (arrived, mut received) = watch::channel(false);
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let server = tokio::spawn({
+        let requests = requests.clone();
+        async move {
+            let route = Router::new().route(
+                "/early-response",
+                axum::routing::put(move |request: axum::extract::Request| {
+                    let requests = requests.clone();
+                    let arrived = arrived.clone();
+                    async move {
+                        let mut body = request.into_body();
+                        let frame = http_body_util::BodyExt::frame(&mut body)
+                            .await
+                            .unwrap()
+                            .unwrap();
+                        assert_eq!(frame.into_data().unwrap(), Bytes::from_static(b"hello"));
+                        if requests.fetch_add(1, Ordering::SeqCst) == 0 {
+                            arrived.send_replace(true);
+                            std::future::pending::<()>().await;
+                        }
+                        "early-body"
+                    }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+    });
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), port.to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    let key = IdempotencyKey::fresh();
+    let method = "put_with_p3_body_open_until_response_read";
+    executor
+        .invoke_agent_with_key(&component, &agent_id, &key, method, data_value!())
+        .await?;
+    timeout(
+        Duration::from_secs(20),
+        received.wait_for(|arrived| *arrived),
+    )
+    .await??;
+    executor.simulated_crash(&worker_id).await?;
+    let result = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &key,
+            method,
+            data_value!(),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(result, "200 early-body transmit=Ok(())");
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        partition_starts(&oplog, "http::client::send").counts(),
+        (0, 1, 0)
+    );
+    assert_eq!(jump_count(&oplog), 0);
+    drop(executor);
+    server.abort();
     Ok(())
 }

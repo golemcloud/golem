@@ -1070,6 +1070,13 @@ async fn do_post_inference_streamed(port: &str, get_after_write: bool) -> String
     let status = response.get_status_code();
     let (response_done_tx, response_done_rx) = wit_future::new(|| Ok(()));
     let (mut body, trailers) = types::Response::consume_body(response, response_done_rx);
+    if std::env::var_os("WAIT_BEFORE_RESPONSE_READ").is_some() {
+        wasi_fetch::Client::new()
+            .get(&format!("http://localhost:{port}/allow-body-read"))
+            .send()
+            .await
+            .expect("body-read permission failed");
+    }
     let mut body_bytes = Vec::new();
     let mut buffer = Vec::with_capacity(1024);
     loop {

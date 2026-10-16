@@ -190,6 +190,7 @@ where
                 parent_start_index: Some(self.parent.start_index()),
                 observational_owner: self.observational_owner,
                 incomplete_repair_authorized_by_scope: self.children_repair_incomplete,
+                scope_replay_recovery: self.parent.child_replay_recovery(),
                 ..Default::default()
             },
             async move |_| Ok(request),

@@ -308,6 +308,8 @@ where
         .map_err(HttpError::trap)?;
     handle.close_span_on_cancellation(span.span_id.clone());
 
+    let mut restored_body = None;
+    let mut restored_transmission = None;
     if !handle.is_live() {
         // Intake cannot wait for send resolution: the guest writer can issue another durable
         // call after its last write, whose retained completion must advance the replay cursor
@@ -456,6 +458,9 @@ where
             }
             DeferredCallReplayOutcome::Incomplete(live_handle) => {
                 handle = live_handle;
+                let continuation = replayed_request_body_drain
+                    .as_ref()
+                    .and_then(|drain| drain.progress.take_continuation());
                 let mut rebuild = P3HttpSendRebuild {
                     request: serialized_request.clone(),
                     injected_headers: Vec::new(),
@@ -465,9 +470,14 @@ where
                     replayed_request_body_drain,
                 };
                 let recovery = RequestBodyRecovery::default();
-                if recorded_request_body_replayability(store, &mut rebuild, recovery.clone())
-                    .await
-                    .is_err()
+                if recorded_request_body_replayability(
+                    store,
+                    &mut rebuild,
+                    recovery.clone(),
+                    continuation.is_some(),
+                )
+                .await
+                .is_err()
                 {
                     if let Some(error) = recovery.error() {
                         return Err(HttpError::trap(wasmtime::Error::from_anyhow(
@@ -522,8 +532,35 @@ where
                             .unwrap_or_else(|| WorkerExecutorError::runtime(error.to_string()));
                         HttpError::trap(wasmtime::Error::from_anyhow(handle.trap(error)))
                     })?;
-                let body = recorded_request_body_replay(oplog, &scan, recovery);
-                let request = build_rebuilt_request(&rebuild, &[], body).map_err(|error| {
+                let recording_tasks = store.with(|mut access| {
+                    durable_worker_ctx::<Ctx, U>(access.data_mut())
+                        .public_state
+                        .worker()
+                        .runtime_append_tasks()
+                });
+                let continuation = match continuation {
+                    Some(continuation) => {
+                        restored_transmission = continuation.transmission;
+                        continuation.body
+                    }
+                    None => http_body_util::Empty::new()
+                        .map_err(|never| match never {})
+                        .boxed_unsync(),
+                };
+                restored_body = Some(DurableRequestBody::from_recording(
+                    continuation,
+                    oplog,
+                    send_start_index,
+                    recording_tasks,
+                    scan,
+                    recovery,
+                ));
+                let request = build_rebuilt_request(
+                    &rebuild,
+                    &[],
+                    restored_body.as_ref().unwrap().replayer().boxed_unsync(),
+                )
+                .map_err(|error| {
                     HttpError::trap(wasmtime::Error::from_anyhow(
                         handle.trap(WorkerExecutorError::runtime(error)),
                     ))
@@ -621,6 +658,8 @@ where
         req,
         handle.start_index(),
         recording_enabled,
+        restored_body,
+        restored_transmission,
     )
     .await
     {
@@ -721,8 +760,9 @@ where
         };
 
         if let Some(error) = physical.body.recovery.error() {
-            handle.abandon_for_trap();
-            return Err(HttpError::trap(error));
+            return Err(HttpError::trap(wasmtime::Error::from_anyhow(
+                handle.trap(error),
+            )));
         }
         match attempt_result {
             Ok((response, io, pooled_connection)) => {
@@ -1191,12 +1231,15 @@ pub(super) async fn convert_physical_send_request<Ctx, U>(
     req: Resource<Request>,
     send_start_index: OplogIndex,
     recording_enabled: bool,
+    restored_body: Option<DurableRequestBody>,
+    restored_transmission: Option<oneshot::Sender<Result<(), ErrorCode>>>,
 ) -> Result<PhysicalSend<Ctx>, PhysicalSendConversionError>
 where
     Ctx: WorkerCtx,
     U: Send + 'static,
 {
     let (final_transmission_tx, final_transmission_rx) = oneshot::channel();
+    let final_transmission_tx = restored_transmission.unwrap_or(final_transmission_tx);
     let (pool, oplog) = store.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
         (
@@ -1252,13 +1295,15 @@ where
         uri: parts.uri,
         version: parts.version,
         headers: parts.headers,
-        body: DurableRequestBody::new(
-            body,
-            oplog,
-            send_start_index,
-            recording_enabled,
-            structural_append_tasks,
-        ),
+        body: restored_body.unwrap_or_else(|| {
+            DurableRequestBody::new(
+                body,
+                oplog,
+                send_start_index,
+                recording_enabled,
+                structural_append_tasks,
+            )
+        }),
         options,
         final_transmission_tx,
         _phantom: PhantomData,

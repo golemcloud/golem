@@ -67,16 +67,38 @@ pub(super) struct ReplayedRequestBodyDrainProgress {
     changed: Notify,
     recording: std::sync::Mutex<Option<Result<(), WorkerExecutorError>>>,
     recording_finished: Notify,
+    handoff_requested: AtomicBool,
+    handoff_changed: Notify,
+    continuation: std::sync::Mutex<Option<ReplayedRequestBodyContinuation>>,
+}
+
+pub(super) struct ReplayedRequestBodyContinuation {
+    pub(super) body: UnsyncBoxBody<Bytes, ErrorCode>,
+    pub(super) transmission: Option<oneshot::Sender<Result<(), ErrorCode>>>,
 }
 
 impl ReplayedRequestBodyDrainProgress {
     pub(super) async fn recording_ready(&self) -> Result<(), WorkerExecutorError> {
+        // Only an incomplete send requests the live continuation. Completed sends keep draining
+        // off-path so their recorded result can be delivered without waiting for guest EOF.
+        self.handoff_requested.store(true, Ordering::Release);
+        self.handoff_changed.notify_one();
         loop {
             let finished = self.recording_finished.notified();
             if let Some(result) = self.recording.lock().unwrap().clone() {
                 return result;
             }
             finished.await;
+        }
+    }
+
+    pub(super) fn take_continuation(&self) -> Option<ReplayedRequestBodyContinuation> {
+        self.continuation.lock().unwrap().take()
+    }
+
+    async fn handoff_requested(&self) {
+        while !self.handoff_requested.load(Ordering::Acquire) {
+            self.handoff_changed.notified().await;
         }
     }
 
@@ -317,7 +339,10 @@ where
             _phantom,
         } = self;
         let trap_context = recorded_body.as_ref().map(|recorded| recorded.trap_context);
-        let (result, recording_result) = match recorded_body
+        let send_start_index = recorded_body
+            .as_ref()
+            .map(|recorded| recorded.send_start_index);
+        let (result, mut recording_result) = match recorded_body
             .filter(|recorded| !recorded.recording_complete_at_end)
         {
             None => (activity.park(drain_request_body(body)).await, None),
@@ -327,14 +352,39 @@ where
                     (ctx.state.oplog.clone(), !ctx.state.snapshotting_mode)
                 });
                 if recording_enabled {
-                    let outcome = drain_replayed_request_body_completing_recording_with_progress(
-                        body,
-                        oplog,
+                    let scan = scan_recorded_request_body_frames(
+                        oplog.clone(),
                         recorded_body.send_start_index,
-                        &activity,
-                        &progress,
                     )
                     .await;
+                    let outcome = match scan {
+                        Ok(scan) => {
+                            drain_past_recorded_prefix(
+                                body,
+                                oplog,
+                                recorded_body.send_start_index,
+                                scan,
+                                &activity,
+                                &progress,
+                            )
+                            .await
+                        }
+                        Err(error @ super::request_body::RecordedFrameError::Corrupt(_)) => {
+                            *progress.continuation.lock().unwrap() =
+                                Some(ReplayedRequestBodyContinuation {
+                                    body,
+                                    transmission: None,
+                                });
+                            ReplayRequestBodyDrainOutcome {
+                                transmission: Ok(()),
+                                recording: Err(error),
+                            }
+                        }
+                        Err(error) => ReplayRequestBodyDrainOutcome {
+                            transmission: Ok(()),
+                            recording: Err(error),
+                        },
+                    };
                     (outcome.transmission, Some(outcome.recording))
                 } else {
                     (
@@ -349,6 +399,41 @@ where
                 }
             }
         };
+        if let Some(Ok(proof)) = &recording_result {
+            let proof = *proof;
+            let oplog = accessor.with(|mut access| {
+                durable_worker_ctx::<Ctx, U>(access.data_mut())
+                    .state
+                    .oplog
+                    .clone()
+            });
+            let scan = scan_recorded_request_body_frames(oplog, send_start_index.unwrap()).await;
+            let has_live_continuation = progress.continuation.lock().unwrap().is_some();
+            recording_result = Some(scan.and_then(|scan| {
+                scan.validate_reproduction(Some(proof), has_live_continuation)?;
+                Ok(proof)
+            }));
+        }
+        if matches!(
+            &recording_result,
+            Some(Err(super::request_body::RecordedFrameError::Corrupt(_)))
+        ) {
+            let continuation = progress.take_continuation();
+            if let Some(continuation) = continuation {
+                // Loss is already known. Report it before draining: the guest may close its
+                // writer only after observing the response loss. This body cannot be resent.
+                *progress.recording.lock().unwrap() = Some(Ok(()));
+                progress.recording_finished.notify_waiters();
+                let _ = recording_finished_tx.send(recording_result.unwrap());
+                let result = activity.park(drain_request_body(continuation.body)).await;
+                let _ = result_tx.send(result);
+                return Ok(());
+            }
+        }
+        let mut result_tx = Some(result_tx);
+        if let Some(continuation) = progress.continuation.lock().unwrap().as_mut() {
+            continuation.transmission = result_tx.take();
+        }
         if let Some(recording_result) = recording_result {
             // Infrastructure loss blocks authority publication. An unreconstructable guest body
             // is instead completed by the HTTP owner with typed protocol loss.
@@ -378,7 +463,9 @@ where
             }
             let _ = recording_finished_tx.send(recording_result);
         }
-        let _ = result_tx.send(result);
+        if let Some(result_tx) = result_tx {
+            let _ = result_tx.send(result);
+        }
         Ok(())
     }
 }
@@ -417,6 +504,7 @@ pub(super) async fn drain_replayed_request_body_completing_recording(
     .await
 }
 
+#[cfg(test)]
 async fn drain_replayed_request_body_completing_recording_with_progress(
     body: UnsyncBoxBody<Bytes, ErrorCode>,
     oplog: Arc<dyn Oplog>,
@@ -426,27 +514,10 @@ async fn drain_replayed_request_body_completing_recording_with_progress(
 ) -> ReplayRequestBodyDrainOutcome {
     let scan = match scan_recorded_request_body_frames(oplog.clone(), send_start_index).await {
         Ok(scan) => scan,
-        Err(error @ super::request_body::RecordedFrameError::Infrastructure(_)) => {
+        Err(error) => {
             return ReplayRequestBodyDrainOutcome {
                 transmission: Ok(()),
                 recording: Err(error),
-            };
-        }
-        Err(error) => {
-            warn!(
-                send_start_index = %send_start_index,
-                error = %error,
-                "Failed to scan the recorded p3 HTTP request-body frames; draining the replayed request body without completing its recording"
-            );
-            // Safe park: the fallback drain appends nothing (guest-driven only).
-            return ReplayRequestBodyDrainOutcome {
-                transmission: activity
-                    .park(drain_request_body_with_progress(body, progress))
-                    .await,
-                recording: Err(format!(
-                    "the recorded request-body frames could not be scanned: {error}"
-                )
-                .into()),
             };
         }
     };
@@ -498,12 +569,37 @@ async fn drain_past_recorded_prefix(
     let terminal_recorded = scan.terminal_recorded();
     let mut reproduced_trailers = false;
     let mut pos: u64 = 0;
+    let recorded_end = scan
+        .data_frames
+        .iter()
+        .map(|frame| frame.offset.saturating_add(frame.len))
+        .max()
+        .unwrap_or(0);
     // Safe park: each frame is guest-(re)produced body data; the appends
     // between frames stay active.
-    while let Some(frame) = activity
-        .park(next_replayed_request_body_frame(&mut body, progress))
-        .await
-    {
+    loop {
+        let may_handoff = recording.is_ok()
+            && !terminal_recorded
+            && pos >= recorded_end
+            && (!scan.trailers_recorded() || reproduced_trailers);
+        let frame = tokio::select! {
+            biased;
+            () = progress.handoff_requested(), if may_handoff => {
+                *progress.continuation.lock().unwrap() = Some(ReplayedRequestBodyContinuation {
+                    body,
+                    transmission: None,
+                });
+                return ReplayRequestBodyDrainOutcome {
+                    transmission: Ok(()),
+                    recording: Ok(ReplayedRequestBodyRecordingProof {
+                        final_length: pos,
+                        trailers_present: reproduced_trailers,
+                    }),
+                };
+            }
+            frame = activity.park(next_replayed_request_body_frame(&mut body, progress)) => frame,
+        };
+        let Some(frame) = frame else { break };
         match frame {
             Ok(frame) => match frame.into_data().map_err(http_body::Frame::into_trailers) {
                 Ok(data) => {
@@ -556,6 +652,12 @@ async fn drain_past_recorded_prefix(
                     )),
                 };
             }
+        }
+        if let Err(error) = recording {
+            return ReplayRequestBodyDrainOutcome {
+                transmission: Ok(()),
+                recording: Err(error),
+            };
         }
     }
     if recording.is_ok() && !terminal_recorded {
@@ -1165,7 +1267,7 @@ mod tests {
 
     #[test]
     #[timeout("10s")]
-    async fn replay_drain_preserves_upload_failure_while_draining_to_guest_error() {
+    async fn replay_drain_stops_on_upload_failure_before_a_guest_error() {
         let oplog = FrameTestOplog::new();
         oplog.fail_uploads();
         let outcome = drain_replayed_request_body_completing_recording(
@@ -1178,10 +1280,7 @@ mod tests {
             &test_activity(),
         )
         .await;
-        assert!(matches!(
-            outcome.transmission,
-            Err(ErrorCode::HttpProtocolError)
-        ));
+        assert!(matches!(outcome.transmission, Ok(())));
         let error = outcome.recording.expect_err("upload must fail");
         assert!(matches!(
             error,

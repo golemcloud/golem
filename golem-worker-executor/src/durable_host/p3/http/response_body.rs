@@ -22,8 +22,8 @@ use super::serialization::{deserialize_headers, serialize_headers};
 use super::*;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CompletionDelivery, DemandDelivery, DemandDeliveryMode, DurableDemandItem,
-    DurableDemandStream, InvocationIdSource, ScopeReplayRecovery, demand_channel,
-    reserve_import_invocation_id,
+    DurableDemandStream, InvocationIdSource, ScopeReplayDecision, ScopeReplayRecovery,
+    demand_channel, reserve_import_invocation_id,
 };
 use crate::durable_host::durability::CustomInvocationContext;
 use crate::durable_host::durability::{
@@ -1183,6 +1183,7 @@ where
         } = self;
 
         let recording_recovery = RequestBodyRecovery::default();
+        let unreconstructable = Arc::new(AtomicBool::new(false));
         let scope_replay_recovery = match response_state.as_mut() {
             Some(state) if state.body_is_placeholder => match state.resend.as_mut() {
                 Some(rebuild) => {
@@ -1190,15 +1191,28 @@ where
                         .replayed_request_body_drain
                         .as_ref()
                         .map(|drain| drain.progress.clone());
-                    ScopeReplayRecovery::reexecute_when(require_recording_before_response_demand(
+                    let readiness = require_recording_before_response_demand(
                         recorded_request_body_replayability(
                             accessor,
                             rebuild,
                             recording_recovery.clone(),
+                            false,
                         ),
                         demand_signal.clone(),
                         request_body_progress,
-                    ))
+                    );
+                    let recovery = recording_recovery.clone();
+                    let unreconstructable = unreconstructable.clone();
+                    ScopeReplayRecovery::decide_when(async move {
+                        match readiness.await {
+                            Ok(()) => Ok(ScopeReplayDecision::Reexecute),
+                            Err(_) if recovery.error().is_some() => Err(recovery.error().unwrap()),
+                            Err(_) => {
+                                unreconstructable.store(true, Ordering::Release);
+                                Ok(ScopeReplayDecision::CompleteWithLoss)
+                            }
+                        }
+                    })
                 }
                 // The owner cannot re-issue this response, but still owns completion of its
                 // original scope and chunk calls with HttpResponseIncomplete.
@@ -1412,7 +1426,10 @@ where
                             // must continue them (`resume_recorded_response`) or the stream
                             // ends with an explicit incomplete-response error.
                             pending_reissue = false;
-                            match resend.as_ref() {
+                            match resend
+                                .as_ref()
+                                .filter(|_| !unreconstructable.load(Ordering::Acquire))
+                            {
                                 Some(resend) if delivered_bytes > 0 => {
                                     match resume_recorded_response::<Ctx, U>(
                                         accessor,
