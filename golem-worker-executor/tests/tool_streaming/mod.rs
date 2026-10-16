@@ -10137,6 +10137,7 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
+        expires_at: None,
     };
     let input = b"retained-before-store".to_vec();
     let (_, value) = data_value!(input.clone()).into_parts();

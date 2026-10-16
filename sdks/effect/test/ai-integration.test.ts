@@ -40,7 +40,9 @@ describe("Effect AI language model integration", () => {
     const definition = toolDefinition("schema-parity").body((body) =>
       body
         .positional("required-value", Schema.String)
+        .positional("defaulted-value", Schema.String, { default: "sh" })
         .option("optional-value", Schema.Number)
+        .option("timeout", Schema.Number, { default: 600 })
         .flag("verbose"),
     )
     const transport: ToolTransportService = {
@@ -63,6 +65,9 @@ describe("Effect AI language model integration", () => {
       readonly jsonSchema: unknown
     }
     expect(discoveredSchema.jsonSchema).toEqual(typedSchema.jsonSchema)
+    expect((typedSchema.jsonSchema as { readonly required: unknown }).required).toEqual([
+      "required-value",
+    ])
   })
 
   it("evaluates typed approval against normalized command defaults", async () => {

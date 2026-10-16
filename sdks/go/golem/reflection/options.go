@@ -15,11 +15,13 @@
 package reflection
 
 import (
+	"fmt"
 	"slices"
 
 	core "github.com/golemcloud/golem/sdks/go/core/schema"
 	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
@@ -61,6 +63,41 @@ func WithConfigValue(path []string, value core.SchemaValue) ClientOpt {
 	return func(o *clientOpts) {
 		o.overrides = append(o.overrides, configOverride{path: slices.Clone(path), value: value, native: true})
 	}
+}
+
+// CallOpt configures one awaited call of a reflected or dynamic client.
+type CallOpt func(*callOpts)
+
+type callOpts struct {
+	scopeCard any // a golem.ScopeCard, or nil
+}
+
+// CallScopeCard attaches card to this awaited call as its scope card, in place
+// of the client's default from WithScopeCard. The card is lent, not moved, and
+// is valid only in the invocation that derived it. It panics on the zero
+// ScopeCard.
+func CallScopeCard(card golem.ScopeCard) CallOpt {
+	card = mustScopeCard("CallScopeCard", card)
+	return func(o *callOpts) { o.scopeCard = card }
+}
+
+// mustScopeCard panics on the zero ScopeCard, which no attachment accepts.
+func mustScopeCard(where string, card golem.ScopeCard) golem.ScopeCard {
+	if link.ScopeCardHandle(card).IsNone() {
+		panic(fmt.Errorf("golem: %s: WithScopeCard: a zero ScopeCard; derive one with golem.DeriveScope", where))
+	}
+	return card
+}
+
+// scopeCardOf borrows the handle of a call's scope card: the one opts attach,
+// or else def. A call resolves it before it packs its input, so a released
+// card panics with [golem.ErrPermissionCardMoved] before anything is sent.
+func scopeCardOf(def any, opts []CallOpt) witTypes.Option[*types.PermissionCard] {
+	o := callOpts{scopeCard: def}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return link.ScopeCardHandle(o.scopeCard)
 }
 
 // configOverride is one untyped configuration entry: canonical JSON, or a

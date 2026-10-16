@@ -15,9 +15,9 @@ import golem.FutureInterop
 import golem.host.ToolWireInterop
 import golem.host.js.tool.JsInvocationResult
 import golem.schema._
-import golem.schema.SchemaTypeBody.{ListType, RecordType, RefType, S32Type, StringType}
+import golem.schema.SchemaTypeBody.{BoolType, ListType, OptionType, RecordType, RefType, S32Type, StringType, U32Type}
 import golem.schema.SchemaValue._
-import golem.schema.wire.SchemaWire
+import golem.schema.wire.{GraphEncoder, SchemaWire}
 import golem.tool._
 import golem.tool.wire._
 import zio.ZIO
@@ -86,7 +86,236 @@ object ToolReflectionSpec extends ZIOSpecDefault {
     )
   }
 
+  /**
+   * A bash-shaped command: a required `script` positional, `cwd` and `timeout`
+   * options with declared defaults, a `shell` option whose type is already an
+   * option and declares a default, an optional `env-file` option without a
+   * default, a `login` bool flag and a `verbose` count flag. With
+   * `collections`, it also declares a required `target` positional with a
+   * default, an `args` tail and an `include` repeatable option with a default.
+   */
+  private def bash(collections: Boolean = false): ToolType = {
+    val doc                                                                                       = Doc("", "", Nil)
+    val encoder                                                                                   = new GraphEncoder(ListMap.empty)
+    val string                                                                                    = encoder.encodeType(SchemaType(StringType))
+    val u32                                                                                       = encoder.encodeType(SchemaType(U32Type(None)))
+    val optional                                                                                  = encoder.encodeType(SchemaType(OptionType(SchemaType(StringType))))
+    val schema                                                                                    = encoder.finish()
+    def option(name: String, index: Int, default: Option[SchemaValue], required: Boolean = false) =
+      WitOptionSpec(
+        name,
+        None,
+        Nil,
+        doc,
+        None,
+        WitOptionShape.Scalar(index),
+        default.map(SchemaWire.schemaValueToWit),
+        required,
+        None
+      )
+    def positional(name: String, default: Option[SchemaValue]) =
+      WitPositional(
+        name,
+        doc,
+        None,
+        string,
+        default.map(SchemaWire.schemaValueToWit),
+        required = true,
+        acceptsStdio = false
+      )
+    val include = WitOptionSpec(
+      "include",
+      None,
+      Nil,
+      doc,
+      None,
+      WitOptionShape.RepeatableList(WitRepeatableListShape(Repetition.Repeated, string)),
+      Some(SchemaWire.schemaValueToWit(ListValue(List(StringValue("default.sh"))))),
+      required = false,
+      None
+    )
+    val body = WitCommandBody(
+      WitPositionals(
+        positional("script", None) :: (if (collections) List(positional("target", Some(StringValue("all")))) else Nil),
+        if (collections) Some(WitTailPositional("args", doc, None, string, 0, None, None, verbatim = false, false))
+        else None
+      ),
+      List(
+        option("cwd", string, Some(StringValue(""))),
+        option("timeout", u32, Some(U32Value(600))),
+        option("shell", optional, Some(OptionValue(Some(StringValue("sh"))))),
+        option("env-file", string, None)
+      ) ++ (if (collections) List(include) else Nil),
+      List(
+        FlagSpec("login", None, Nil, doc, FlagShape.BoolFlag(BoolFlagShape(default = false, negatable = true)), None),
+        FlagSpec("verbose", None, Nil, doc, FlagShape.CountFlag(None), None)
+      ),
+      Nil,
+      None,
+      None,
+      None,
+      None,
+      Nil,
+      None
+    )
+    new ToolType(
+      "bash",
+      WitTool(
+        "1",
+        requiresFilesystem = false,
+        WitCommandTree(Vector(WitCommandNode("bash", Nil, doc, WitGlobals(Nil, Nil), Nil, Some(body)))),
+        schema
+      ),
+      ComponentId(Uuid(0, 0))
+    )
+  }
+
+  private def bashValue(
+    timeout: Long = 600,
+    cwd: String = "",
+    shell: Option[String] = Some("sh"),
+    envFile: Option[String] = None,
+    login: Boolean = false,
+    verbose: Long = 0
+  ): SchemaValue =
+    RecordValue(
+      List(
+        StringValue("echo ok"),
+        StringValue(cwd),
+        U32Value(timeout),
+        OptionValue(shell.map(StringValue(_))),
+        OptionValue(envFile.map(StringValue(_))),
+        BoolValue(login),
+        U32Value(verbose)
+      )
+    )
+
+  private def jsonFields(json: Json): ListMap[String, Json] = json match {
+    case Json.Object(values) => ListMap(values.toList: _*)
+    case other               => throw new AssertionError(s"expected a JSON object, found $other")
+  }
+
   def spec = suite("ToolReflectionSpec")(
+    test("JSON packing fills omitted declared and flag defaults") {
+      val command = bash().command(Nil).toOption.get
+      val input   = Json.Object("script" -> Json.String("echo ok"))
+      assertTrue(
+        command.packJson(input) == Right(bashValue()),
+        command.inputSchema.validateJson(input) == Right(bashValue()),
+        command.inputSchema.packJson(input) == Right(bashValue())
+      )
+    },
+    test("JSON packing keeps explicit values, including null for option-typed arguments") {
+      val command  = bash().command(Nil).toOption.get
+      val explicit = Json.Object(
+        "script"   -> Json.String("echo ok"),
+        "cwd"      -> Json.String("/tmp"),
+        "timeout"  -> Json.Number(BigDecimal(30)),
+        "shell"    -> Json.Null,
+        "env-file" -> Json.String(".env"),
+        "login"    -> Json.Boolean(true),
+        "verbose"  -> Json.Number(BigDecimal(2))
+      )
+      val large = Json.Object("script" -> Json.String("echo ok"), "timeout" -> Json.Number(BigDecimal(120000)))
+      assertTrue(
+        command.packJson(explicit) ==
+          Right(bashValue(timeout = 30, cwd = "/tmp", shell = None, envFile = Some(".env"), login = true, verbose = 2)),
+        command.packJson(large) == Right(bashValue(timeout = 120000)),
+        command.packJson(Json.Object("script" -> Json.String("echo ok"), "env-file" -> Json.Null)) == Right(bashValue())
+      )
+    },
+    test("JSON packing names a missing required argument and rejects unknown arguments") {
+      val command = bash().command(Nil).toOption.get
+      val missing = Json.Object("timeout" -> Json.Number(BigDecimal(30)))
+      val unknown = Json.Object("script" -> Json.String("echo ok"), "bogus" -> Json.Boolean(true))
+      assertTrue(
+        command.packJson(missing) == Left(ToolError.InvalidInput("missing field 'script'")),
+        command.inputSchema.validateJson(missing) == Left(List(SchemaIssue("missing field 'script'", List("script")))),
+        command.packJson(unknown) == Left(ToolError.InvalidInput("unknown field 'bogus'")),
+        command.inputSchema.validateJson(unknown) == Left(List(SchemaIssue("unknown field 'bogus'", List("bogus")))),
+        command.inputSchema
+          .validateJson(Json.Object("script" -> Json.String("echo ok"), "timeout" -> Json.Number(BigDecimal(-1))))
+          .left
+          .toOption
+          .exists(_.map(_.path) == List(List("timeout")))
+      )
+    },
+    test("input JSON Schema omits defaulted arguments from required and declares their defaults") {
+      val command    = bash().command(Nil).toOption.get
+      val rendered   = jsonFields(command.inputSchema.toJsonSchema())
+      val plain      = jsonFields(SchemaRef(command.inputSchema.graph, command.inputSchema.root).toJsonSchema())
+      val properties = jsonFields(rendered("properties"))
+      val original   = jsonFields(plain("properties"))
+      val defaults   = ListMap(
+        "cwd"     -> Json.String(""),
+        "timeout" -> Json.Number(BigDecimal(600)),
+        "shell"   -> Json.String("sh"),
+        "login"   -> Json.Boolean(false),
+        "verbose" -> Json.Number(BigDecimal(0))
+      )
+      assertTrue(
+        rendered("required") == Json.Array(Json.String("script")),
+        rendered.keys.toList == plain.keys.toList,
+        rendered.removed("required").removed("properties") == plain.removed("required").removed("properties"),
+        properties.keys.toList == List("script", "cwd", "timeout", "shell", "env-file", "login", "verbose"),
+        properties.forall { case (name, property) =>
+          defaults.get(name) match {
+            case Some(default) => jsonFields(property) == jsonFields(original(name)).updated("default", default)
+            case None          => property == original(name)
+          }
+        }
+      )
+    },
+    test("JSON defaults leave the canonical wire record and the value surface unchanged") {
+      val command = bash().command(Nil).toOption.get
+      val root    = SchemaType(
+        RecordType(
+          List(
+            NamedFieldType("script", SchemaType(StringType)),
+            NamedFieldType("cwd", SchemaType(StringType)),
+            NamedFieldType("timeout", SchemaType(U32Type(None))),
+            NamedFieldType("shell", SchemaType(OptionType(SchemaType(StringType)))),
+            NamedFieldType("env-file", SchemaType(OptionType(SchemaType(StringType)))),
+            NamedFieldType("login", SchemaType(BoolType)),
+            NamedFieldType("verbose", SchemaType(U32Type(None)))
+          )
+        )
+      )
+      assertTrue(
+        command.inputSchema.root == root,
+        command.inputSchema.graph == SchemaGraph(ListMap.empty, root),
+        command.inputSchema.validateValue(bashValue()).isRight,
+        command.inputSchema.validateValue(RecordValue(List(StringValue("echo ok")))).isLeft,
+        command.startValue(RecordValue(List(StringValue("echo ok")))).left.toOption.exists {
+          case ToolError.InvalidInput(_) => true
+          case _                         => false
+        }
+      )
+    },
+    test("tails and repeatable options are not filled, while a required positional default is") {
+      val command = bash(collections = true).command(Nil).toOption.get
+      val schema  = jsonFields(command.inputSchema.toJsonSchema())
+      val include = jsonFields(jsonFields(schema("properties"))("include"))
+      val target  = jsonFields(jsonFields(schema("properties"))("target"))
+      assertTrue(
+        command.packJson(Json.Object("script" -> Json.String("echo ok"))) ==
+          Left(ToolError.InvalidInput("missing field 'args'")),
+        command.packJson(Json.Object("script" -> Json.String("echo ok"), "args" -> Json.Array())) ==
+          Left(ToolError.InvalidInput("missing field 'include'")),
+        command
+          .packJson(Json.Object("script" -> Json.String("echo ok"), "args" -> Json.Array(), "include" -> Json.Array()))
+          .toOption
+          .exists {
+            case RecordValue(fields) =>
+              fields.take(3) == List(StringValue("echo ok"), StringValue("all"), ListValue(Nil)) &&
+              fields(7) == ListValue(Nil)
+            case _ => false
+          },
+        schema("required") == Json.Array(Json.String("script"), Json.String("args"), Json.String("include")),
+        !include.contains("default"),
+        target.get("default").contains(Json.String("all"))
+      )
+    },
     test("reflected value, JSON, and dynamic clients preserve explicit detach failure") {
       ZIO.fromFuture { implicit ec =>
         val global        = js.Dynamic.global.globalThis

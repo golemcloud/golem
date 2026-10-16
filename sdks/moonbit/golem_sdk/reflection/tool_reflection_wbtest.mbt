@@ -473,3 +473,388 @@ test "tool constraint references use flag defaults and nested values" {
   values[3] = @model.SchemaValue::Bool(true)
   assert_false(command.constraint_ref_matches(Present("enabled"), values))
 }
+
+///|
+fn bash_tool(repeatables? : Bool = false) -> ToolType raise {
+  let doc : @toolCommon.Doc = { summary: "", description: "", examples: [], }
+  let encoder = @model.GraphEncoder::new([])
+  let string = encoder.encode_type(@model.schema_type(String))
+  let u32 = encoder.encode_type(@model.schema_type(U32(None)))
+  let optional_string = encoder.encode_type(
+    @model.schema_type(Option(@model.schema_type(String))),
+  )
+  let graph = encoder.finish()
+  let option_spec = fn(
+    long : String,
+    shape : @toolCommon.OptionShape,
+    default : @model.SchemaValue?,
+  ) -> @toolCommon.OptionSpec raise {
+    {
+      long,
+      short: None,
+      aliases: [],
+      doc,
+      value_name: None,
+      shape,
+      default: match default {
+        Some(value) => Some(@model.schema_value_to_wit(value))
+        None => None
+      },
+      required: false,
+      env_var: None,
+    }
+  }
+  let options = [
+    option_spec("cwd", Scalar(string), Some(@model.SchemaValue::String(""))),
+    option_spec("timeout", Scalar(u32), Some(@model.SchemaValue::U32(600U))),
+    option_spec("label", Scalar(string), None),
+    option_spec(
+      "shell",
+      Scalar(optional_string),
+      Some(@model.SchemaValue::Option(Some(@model.SchemaValue::String("bash")))),
+    ),
+  ]
+  if repeatables {
+    options.push(
+      option_spec(
+        "env",
+        RepeatableList({ repetition: Repeated, item_type: string, }),
+        Some(@model.SchemaValue::List([@model.SchemaValue::String("A=1")])),
+      ),
+    )
+  }
+  let body : @toolCommon.CommandBody = {
+    positionals: {
+      fixed: [
+        {
+          name: "script",
+          doc,
+          value_name: None,
+          type_: string,
+          default: None,
+          required: true,
+          accepts_stdio: false,
+        },
+      ],
+      tail: if repeatables {
+        Some({
+          name: "args",
+          doc,
+          value_name: None,
+          item_type: string,
+          min: 0U,
+          max: None,
+          separator: None,
+          verbatim: false,
+          accepts_stdio: false,
+        })
+      } else {
+        None
+      },
+    },
+    options,
+    flags: [
+      {
+        long: "login",
+        short: None,
+        aliases: [],
+        doc,
+        shape: BoolFlag({ default: false, negatable: false, }),
+        env_var: None,
+      },
+      {
+        long: "verbose",
+        short: None,
+        aliases: [],
+        doc,
+        shape: CountFlag(None),
+        env_var: None,
+      },
+    ],
+    constraints: [],
+    stdin: None,
+    stdout: None,
+    stderr: None,
+    result: None,
+    errors: [],
+    annotations: None,
+  }
+  let definition : @toolCommon.Tool = {
+    version: "1",
+    requires_filesystem: false,
+    commands: {
+      nodes: [
+        {
+          name: "bash",
+          aliases: [],
+          doc,
+          globals: { options: [], flags: [], },
+          subcommands: [],
+          body: Some(body),
+        },
+      ],
+    },
+    schema: graph,
+  }
+  {
+    lookup_name: "bash",
+    definition,
+    implemented_by: { uuid: { high_bits: 0UL, low_bits: 0UL, }, },
+    decoded: @model.schema_graph_roots_from_wit(graph),
+  }
+}
+
+///|
+fn bash_input(
+  script? : String = "echo ok",
+  cwd? : String = "",
+  timeout? : UInt = 600U,
+  label? : String? = None,
+  shell? : String? = Some("bash"),
+  login? : Bool = false,
+  verbose? : UInt = 0U,
+) -> @model.SchemaValue {
+  Record([
+    String(script),
+    String(cwd),
+    U32(timeout),
+    Option(label.map(value => @model.SchemaValue::String(value))),
+    Option(shell.map(value => @model.SchemaValue::String(value))),
+    Bool(login),
+    U32(verbose),
+  ])
+}
+
+///|
+fn expect_packed_json(
+  command : ToolCommand,
+  input : Json,
+) -> @model.SchemaValue raise {
+  match command.pack_json(input) {
+    Ok(value) => value
+    Err(
+      @tool.ToolError::RemoteTool(@tool.RemoteToolError::InvalidInput(message))
+    ) => fail("unexpected tool input rejection: " + message)
+    Err(_) => fail("unexpected tool input failure")
+  }
+}
+
+///|
+test "reflected tool JSON fills omitted declared defaults" {
+  let command = bash_tool().command([])
+  assert_eq(command.arguments.map(argument => argument.name), [
+    "script", "cwd", "timeout", "label", "shell", "login", "verbose",
+  ])
+  assert_eq(expect_packed_json(command, { "script": "echo ok" }), bash_input())
+  assert_eq(
+    command.input_schema.pack_json({ "script": "echo ok" }),
+    bash_input(),
+  )
+}
+
+///|
+test "reflected tool JSON keeps explicit values over declared defaults" {
+  let command = bash_tool().command([])
+  assert_eq(
+    expect_packed_json(command, {
+      "script": "ls",
+      "cwd": "/tmp",
+      "timeout": 30,
+      "label": "listing",
+      "shell": null,
+      "login": true,
+      "verbose": 2,
+    }),
+    bash_input(
+      script="ls",
+      cwd="/tmp",
+      timeout=30U,
+      label=Some("listing"),
+      shell=None,
+      login=true,
+      verbose=2U,
+    ),
+  )
+  assert_eq(
+    expect_packed_json(command, { "script": "sleep 1", "timeout": 120000 }),
+    bash_input(script="sleep 1", timeout=120000U),
+  )
+}
+
+///|
+test "reflected tool JSON names a missing required argument and its path" {
+  let command = bash_tool().command([])
+  match command.pack_json({ "timeout": 30 }) {
+    Err(
+      @tool.ToolError::RemoteTool(@tool.RemoteToolError::InvalidInput(message))
+    ) => assert_true(message.contains("missing field 'script'"))
+    _ => fail("expected the missing script to be rejected")
+  }
+  try command.input_schema.pack_json({ "timeout": 30 }) catch {
+    Json(message, path~) => {
+      assert_eq(message, "missing field 'script'")
+      assert_eq(path, ["script"])
+    }
+    error => fail("unexpected error: \{repr(error)}")
+  } noraise {
+    _ => fail("expected the missing script to be rejected")
+  }
+  try
+    command.input_schema.pack_json({ "script": "ls", "timeout": "30" })
+  catch {
+    Json(_, path~) => assert_eq(path, ["timeout"])
+    error => fail("unexpected error: \{repr(error)}")
+  } noraise {
+    _ => fail("expected a string timeout to be rejected")
+  }
+  try
+    command.input_schema.pack_json({ "script": "ls", "timeout": null })
+  catch {
+    Json(_, path~) => assert_eq(path, ["timeout"])
+    error => fail("unexpected error: \{repr(error)}")
+  } noraise {
+    _ => fail("expected a null timeout to be rejected")
+  }
+  try command.input_schema.pack_json({ "script": "ls", "unknown": 1 }) catch {
+    Json(message, path~) => {
+      assert_eq(message, "unknown field 'unknown'")
+      assert_eq(path, ["unknown"])
+    }
+    error => fail("unexpected error: \{repr(error)}")
+  } noraise {
+    _ => fail("expected an unknown argument to be rejected")
+  }
+}
+
+///|
+test "reflected tool JSON schema marks declared defaults" {
+  let command = bash_tool().command([])
+  let rendered = command.input_schema.to_json_schema(include_draft_marker=false)
+  let plain = SchemaRef::new(command.wire_input).to_json_schema(
+    include_draft_marker=false,
+  )
+  guard rendered is Object(fields) && plain is Object(plain_fields) else {
+    fail("expected object schemas")
+  }
+  assert_eq(fields.get("required"), Some(Json::array([Json::string("script")])))
+  guard fields.get("properties") is Some(Object(properties)) &&
+    plain_fields.get("properties") is Some(Object(plain_properties)) else {
+    fail("expected schema properties")
+  }
+  let defaults : Map[String, Json] = Map([])
+  for name, property in properties {
+    guard property is Object(property_fields) else {
+      fail("expected an object property schema")
+    }
+    let without_default = property_fields.copy()
+    match without_default.get("default") {
+      Some(value) => defaults[name] = value
+      None => ()
+    }
+    without_default.remove("default")
+    assert_eq(Some(Json::object(without_default)), plain_properties.get(name))
+  }
+  json_inspect(defaults, content={
+    "cwd": "",
+    "timeout": 600,
+    "shell": "bash",
+    "login": false,
+    "verbose": 0,
+  })
+  fields.remove("required")
+  fields["properties"] = Json::object(plain_properties)
+  plain_fields.remove("required")
+  assert_eq(Json::object(fields), Json::object(plain_fields))
+}
+
+///|
+test "reflected tool defaults leave the canonical wire input unchanged" {
+  let command = bash_tool().command([])
+  assert_eq(command.input_schema.graph, command.wire_input)
+  assert_eq(
+    command.input_schema.graph(),
+    SchemaRef::new(command.wire_input).graph(),
+  )
+  guard command.wire_input.root.body is Record(fields) else {
+    fail("expected a record input")
+  }
+  assert_eq(fields.map(field => field.name), [
+    "script", "cwd", "timeout", "label", "shell", "login", "verbose",
+  ])
+  assert_eq(fields.map(field => field.body), [
+    @model.schema_type(String),
+    @model.schema_type(String),
+    @model.schema_type(U32(None)),
+    @model.schema_type(Option(@model.schema_type(String))),
+    @model.schema_type(Option(@model.schema_type(String))),
+    @model.schema_type(Bool),
+    @model.schema_type(U32(None)),
+  ])
+  match command.checked_input(bash_input()) {
+    Ok(typed) => assert_eq(typed.graph, command.wire_input)
+    Err(_) => fail("expected the packed wire record to validate")
+  }
+  try
+    command.input_schema.validate_value(
+      @model.SchemaValue::Record([@model.SchemaValue::String("echo ok")]),
+    )
+  catch {
+    Schema(_) => ()
+    error => fail("unexpected error: \{repr(error)}")
+  } noraise {
+    _ => fail("expected the value surface to require every wire field")
+  }
+}
+
+///|
+test "reflected tool JSON does not fill repeatable options or tails" {
+  let command = bash_tool(repeatables=true).command([])
+  try command.input_schema.pack_json({ "script": "ls", "env": [] }) catch {
+    Json(message, path~) => {
+      assert_eq(message, "missing field 'args'")
+      assert_eq(path, ["args"])
+    }
+    error => fail("unexpected error: \{repr(error)}")
+  } noraise {
+    _ => fail("expected an omitted tail to be rejected")
+  }
+  try command.input_schema.pack_json({ "script": "ls", "args": [] }) catch {
+    Json(message, path~) => {
+      assert_eq(message, "missing field 'env'")
+      assert_eq(path, ["env"])
+    }
+    error => fail("unexpected error: \{repr(error)}")
+  } noraise {
+    _ => fail("expected an omitted repeatable option to be rejected")
+  }
+  assert_eq(
+    expect_packed_json(command, { "script": "ls", "args": [], "env": [] }),
+    @model.SchemaValue::Record([
+      String("ls"),
+      List([]),
+      String(""),
+      U32(600U),
+      Option(None),
+      Option(Some(String("bash"))),
+      List([]),
+      Bool(false),
+      U32(0U),
+    ]),
+  )
+  guard command.input_schema.to_json_schema() is Object(fields) &&
+    fields.get("properties") is Some(Object(properties)) &&
+    properties.get("env") is Some(Object(env)) else {
+    fail("expected an object schema")
+  }
+  assert_eq(
+    fields.get("required"),
+    Some(
+      Json::array([
+        Json::string("script"),
+        Json::string("args"),
+        Json::string("env"),
+      ]),
+    ),
+  )
+  assert_false(env.contains("default"))
+}

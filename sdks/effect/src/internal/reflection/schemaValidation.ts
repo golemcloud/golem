@@ -12,6 +12,10 @@ import {
   isQuantityValueRepresentable,
   quantityLessOrEqual,
 } from "../schema-model/validation.js"
+import {
+  guestPermissionCardHandleKind,
+  isGuestPermissionCardHandle,
+} from "../schema-model/permissionCardHandle.js"
 import { assertSchemaValueRepresentable } from "../schema-model/wit.js"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 
@@ -316,8 +320,14 @@ export function schemaValueMatches(
     case "secret":
     case "quota-token":
       return value.tag === resolvedBody.tag
-    case "permission-card":
-      return value.tag === "permission-card"
+    case "permission-card": {
+      if (value.tag !== "permission-card") return false
+      // A received card whose kind is not known yet matches either flag.
+      const kind = isGuestPermissionCardHandle(value.handle)
+        ? guestPermissionCardHandleKind(value.handle)
+        : undefined
+      return kind === undefined || (kind === "template") === resolvedBody.spec.polymorphic
+    }
     case "text": {
       if (value.tag !== "text") return false
       if (

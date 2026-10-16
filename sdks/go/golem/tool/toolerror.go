@@ -117,7 +117,7 @@ func (c *ErrorCase[P, T]) Match(err error) (P, bool) {
 	if c.info.payload == nil {
 		return zero, true
 	}
-	p, derr := golem.DecodeTypedValue[P](call.payload)
+	p, derr := decodePayload[P](call)
 	if derr != nil {
 		return zero, false
 	}
