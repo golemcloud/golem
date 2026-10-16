@@ -113,6 +113,30 @@ pub fn write(
     }
 }
 
+/// True for the schema types that get a declaration of their own. Any other
+/// named definition — a named tuple, list, option, scalar or stream — is a Go
+/// alias of its structure, written by [`write_alias`].
+pub fn declares(typ: &SchemaType) -> bool {
+    matches!(
+        typ,
+        SchemaType::Record { .. }
+            | SchemaType::Enum { .. }
+            | SchemaType::Flags { .. }
+            | SchemaType::Variant { .. }
+            | SchemaType::Union { .. }
+    )
+}
+
+/// Writes a named definition that is not a declaration of its own as an
+/// alias. An alias, not a defined type: the SDK recognises a tuple, an option
+/// or a quantity by the methods of its value type, and a defined type would
+/// not have them.
+pub fn write_alias(name: &str, rendered: &str, metadata: &MetadataEnvelope, writer: &mut GoWriter) {
+    write_doc(name, metadata, writer);
+    writer.line(format!("type {name} = {rendered}"));
+    writer.blank();
+}
+
 fn write_record(
     name: &str,
     fields: &[NamedFieldType],

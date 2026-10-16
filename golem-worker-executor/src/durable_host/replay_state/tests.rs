@@ -195,12 +195,15 @@ async fn test_replay_state(
     skipped_regions: DeletedRegions,
     initial_snapshot_skip_end: Option<OplogIndex>,
 ) -> Result<ReplayState, WorkerExecutorError> {
+    let horizon = oplog.current_oplog_index().await;
     ReplayState::new_for_owner(
         owned_agent_id,
         oplog,
         skipped_regions,
         initial_snapshot_skip_end,
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        horizon,
+        None,
     )
     .await
 }
@@ -1247,6 +1250,9 @@ async fn growing_replay_target_revokes_an_active_settling_transition() {
         "a revoked settling waiter must not switch linear memory to live"
     );
 
+    let (index, entry) = replay.get_oplog_entry(None).await.unwrap();
+    assert_eq!(index, new_target);
+    assert!(matches!(entry, OplogEntry::NoOp { .. }));
     assert!(matches!(
         replay
             .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
@@ -1294,10 +1300,39 @@ async fn replay_finished_is_withheld_while_reconstruction_settles() {
         transition.await.unwrap().unwrap(),
         ReplayToLiveOutcome::Live { .. }
     ));
+    assert!(
+        replay.take_new_replay_events_for(false).is_empty(),
+        "an entity must leave the owner's finalization marker for the primary Store"
+    );
     assert_eq!(
         replay.take_new_replay_events(),
         vec![ReplayEvent::ReplayFinished]
     );
+}
+
+#[test]
+async fn historical_revision_updates_remain_for_root_after_entity_drain() {
+    let replay = replay_state_over(vec![noop(), noop()]).await;
+    assert!(replay.is_replay());
+    assert!(!replay.is_live_published());
+    let update = ReplayEvent::UpdateReplayed {
+        new_revision: golem_common::model::component::ComponentRevision::new(2).unwrap(),
+    };
+    let fork = ReplayEvent::ForkReplayed {
+        new_phantom_id: uuid::Uuid::new_v4(),
+    };
+    replay
+        .cursor
+        .pending_replay_events
+        .lock()
+        .unwrap()
+        .extend([update.clone(), fork.clone()]);
+
+    assert_eq!(replay.take_new_replay_events_for(false), vec![fork]);
+    assert!(replay.take_new_replay_events_for(false).is_empty());
+    assert_eq!(replay.take_new_replay_events_for(true), vec![update]);
+    assert!(replay.take_new_replay_events_for(true).is_empty());
+    assert!(replay.is_replay());
 }
 
 #[test]
@@ -1514,12 +1549,15 @@ async fn owner_failure_wins_when_reconstruction_barrier_is_already_empty() {
     let oplog = Arc::new(InMemoryOplog::new());
     oplog.add(noop()).await.unwrap();
     let owner_operations = crate::durable_host::tool::operation::OwnerToolOperations::new();
+    let horizon = oplog.current_oplog_index().await;
     let replay = ReplayState::new_for_owner(
         test_agent_id(),
         oplog,
         DeletedRegions::default(),
         None,
         owner_operations.clone(),
+        horizon,
+        None,
     )
     .await
     .expect("failed to build replay state");
@@ -1543,12 +1581,15 @@ async fn owner_lifecycle_change_during_reconstruction_remains_an_interrupt() {
     let oplog = Arc::new(InMemoryOplog::new());
     oplog.add(noop()).await.unwrap();
     let owner_operations = crate::durable_host::tool::operation::OwnerToolOperations::new();
+    let horizon = oplog.current_oplog_index().await;
     let replay = ReplayState::new_for_owner(
         test_agent_id(),
         oplog,
         DeletedRegions::default(),
         None,
         owner_operations.clone(),
+        horizon,
+        None,
     )
     .await
     .expect("failed to build replay state");
@@ -1570,6 +1611,213 @@ async fn owner_lifecycle_change_during_reconstruction_remains_an_interrupt() {
             kind: InterruptKind::Restart
         }
     );
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn owner_restart_interrupts_claim_and_delivery_behind_an_unconsumed_marker() {
+    use crate::durable_host::tool::operation::{OwnerFailureWinner, OwnerToolOperations};
+
+    for already_failed in [false, true] {
+        let oplog = Arc::new(InMemoryOplog::new());
+        *oplog.entries.lock().unwrap() = vec![
+            noop(),
+            start_now(),
+            start_now(),
+            end_for(2, 42),
+            end_for(3, 43),
+            delivered_for(2),
+            delivered_for(3),
+            start_now(),
+            end_for(8, 44),
+        ];
+        let owner = OwnerToolOperations::new();
+        let horizon = oplog.current_oplog_index().await;
+        let replay = ReplayState::new_for_owner(
+            test_agent_id(),
+            oplog,
+            DeletedRegions::default(),
+            None,
+            owner.clone(),
+            horizon,
+            None,
+        )
+        .await
+        .unwrap();
+        for _ in 0..2 {
+            let call = replay
+                .claim_concurrent_start(
+                    &HostFunctionName::MonotonicClockNow,
+                    &DurableFunctionType::ReadLocal,
+                )
+                .await
+                .unwrap();
+            replay.await_resolution(call).await.unwrap();
+        }
+        if already_failed {
+            owner
+                .select_owner_failure(OwnerFailureWinner::Lifecycle(InterruptKind::Restart))
+                .await;
+        }
+        let mut claim = Box::pin(replay.claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        ));
+        let mut delivery = Box::pin(
+            replay.await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(7)),
+        );
+        if !already_failed {
+            assert_pending(&mut claim, "claim beyond another call's delivery marker").await;
+            assert!(
+                tokio::time::timeout(Duration::from_millis(50), delivery.as_mut())
+                    .await
+                    .is_err(),
+                "delivery must wait for the earlier call's marker"
+            );
+            owner
+                .select_owner_failure(OwnerFailureWinner::Lifecycle(InterruptKind::Restart))
+                .await;
+        }
+        assert!(matches!(
+            claim.await,
+            Err(WorkerExecutorError::Interrupted {
+                kind: InterruptKind::Restart
+            })
+        ));
+        assert!(matches!(
+            delivery.await,
+            Err(WorkerExecutorError::Interrupted {
+                kind: InterruptKind::Restart
+            })
+        ));
+        assert_eq!(replay.last_replayed_index(), OplogIndex::from_u64(5));
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn owner_lifecycle_interrupts_scope_resolution_without_crossing_delivery() {
+    use crate::durable_host::tool::operation::{OwnerFailureWinner, OwnerToolOperations};
+
+    for kind in [
+        InterruptKind::Restart,
+        InterruptKind::Jump,
+        InterruptKind::ShardLost,
+    ] {
+        for hold_gate in [false, true] {
+            let oplog = Arc::new(InMemoryOplog::new());
+            *oplog.entries.lock().unwrap() = vec![
+                noop(),
+                batched_scope_start(),
+                start_now(),
+                end_for(3, 43),
+                delivered_for(3),
+                batched_scope_end(2),
+            ];
+            let owner = OwnerToolOperations::new();
+            let horizon = oplog.current_oplog_index().await;
+            let replay = ReplayState::new_for_owner(
+                test_agent_id(),
+                oplog,
+                DeletedRegions::default(),
+                None,
+                owner.clone(),
+                horizon,
+                None,
+            )
+            .await
+            .unwrap();
+            let (_, scope) = replay
+                .claim_scope_start(
+                    &HostFunctionName::Custom("<scope:batched-write>".to_string()),
+                    &DurableFunctionType::WriteRemoteBatched(None),
+                    None,
+                )
+                .await
+                .unwrap();
+            let sibling = replay
+                .claim_concurrent_start(
+                    &HostFunctionName::MonotonicClockNow,
+                    &DurableFunctionType::ReadLocal,
+                )
+                .await
+                .unwrap();
+            replay.await_resolution(sibling).await.unwrap();
+            let gate = if hold_gate {
+                Some(replay.cursor.advance_gate.clone().lock_owned().await)
+            } else {
+                None
+            };
+            let mut resolution = Box::pin(replay.await_resolution_outcome(scope));
+            assert_pending(&mut resolution, "scope End behind another call's delivery").await;
+            owner
+                .select_owner_failure(OwnerFailureWinner::Lifecycle(kind))
+                .await;
+            assert_eq!(
+                resolution.await.unwrap_err(),
+                WorkerExecutorError::Interrupted { kind }
+            );
+            assert_eq!(replay.last_replayed_index(), OplogIndex::from_u64(4));
+            assert!(!replay.is_live());
+            drop(gate);
+        }
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn cancelled_owner_failure_unregister_keeps_historical_fence() {
+    use crate::durable_host::tool::operation::{OwnerFailureWinner, OwnerToolOperations};
+
+    let parent = OplogIndex::from_u64(1);
+    let start = rejected_tool_reconstruction_start(parent);
+    let oplog = Arc::new(InMemoryOplog::new());
+    *oplog.entries.lock().unwrap() = vec![noop(), start, noop(), end_for(2, 1), noop()];
+    let owner = OwnerToolOperations::new();
+    let horizon = oplog.current_oplog_index().await;
+    let replay = ReplayState::new_for_owner(
+        test_agent_id(),
+        oplog,
+        DeletedRegions::default(),
+        None,
+        owner.clone(),
+        horizon,
+        None,
+    )
+    .await
+    .unwrap();
+    let handle = claim_rejected_tool_reconstruction(&replay, parent).await;
+    let start_index = handle.start_idx();
+    let claims = replay.cursor.reconstruction_claims.clone();
+    let mut resolution = Box::pin(replay.await_resolution_outcome(handle));
+    assert_pending(
+        &mut resolution,
+        "historical resolution at positional blocker",
+    )
+    .await;
+    let state = replay.cursor.state.lock().await;
+    assert!(state.concurrent_resolver.is_awaited(start_index));
+    owner
+        .select_owner_failure(OwnerFailureWinner::Lifecycle(InterruptKind::Restart))
+        .await;
+    assert!(futures::poll!(resolution.as_mut()).is_pending());
+    drop(resolution);
+    assert_eq!(claims.active_bodies(), HashSet::from([start_index]));
+    assert_eq!(claims.active_fences(), HashSet::from([start_index]));
+    drop(state);
+    replay.fence_owned_cursor_ops().await.unwrap();
+    claims.wait_for_fences().await;
+    replay.ensure_reconstruction_claims_empty().unwrap();
+    assert!(
+        !replay
+            .cursor
+            .state
+            .lock()
+            .await
+            .concurrent_resolver
+            .is_pending(start_index)
+    );
+    assert_eq!(replay.last_replayed_index(), start_index);
 }
 
 #[test]
@@ -1667,13 +1915,68 @@ async fn permission_events_replay_after_invocation_wallet_pin() {
     assert_eq!(
         replay_state.take_new_replay_events(),
         vec![
-            ReplayEvent::InvocationWalletPinned { wallet_pin },
+            ReplayEvent::InvocationWalletPinned {
+                oplog_index: OplogIndex::from_u64(2),
+                wallet_pin,
+            },
             ReplayEvent::CardDerived {
                 card: derived_card,
                 wallet_generation: 0,
             },
         ]
     );
+}
+
+#[test]
+async fn selected_snapshot_leaves_only_post_snapshot_invocation_pin_for_root() {
+    let pin = InvocationWalletPin {
+        wallet_token: WalletVersionToken {
+            wallet_id_hash: [3; 32],
+            generation: 7,
+        },
+        pinned_card_ids: Vec::new(),
+        scope_card_id: None,
+    };
+    let oplog = Arc::new(InMemoryOplog::new());
+    for entry in [
+        noop(),
+        invocation_started(pin.clone()),
+        OplogEntry::Snapshot {
+            timestamp: Timestamp::now_utc(),
+            data: OplogPayload::Inline(Box::new(Vec::new())),
+            mime_type: "application/octet-stream".to_string(),
+            active_cards: Vec::new(),
+            wallet_generation: 7,
+            filesystem_snapshot: None,
+        },
+        invocation_started(pin.clone()),
+        start_now(),
+    ] {
+        oplog.add(entry).await.unwrap();
+    }
+    let replay = test_replay_state(
+        test_agent_id(),
+        oplog,
+        DeletedRegions::from_regions([OplogRegion::from_range(2..=3)]),
+        Some(OplogIndex::from_u64(3)),
+    )
+    .await
+    .unwrap();
+    let invocation = replay
+        .get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(invocation.wallet_pin, pin);
+    assert!(replay.take_new_replay_events_for(false).is_empty());
+    assert_eq!(
+        replay.take_new_replay_events_for(true),
+        vec![ReplayEvent::InvocationWalletPinned {
+            oplog_index: OplogIndex::from_u64(4),
+            wallet_pin: pin,
+        }]
+    );
+    assert!(replay.take_new_replay_events_for(true).is_empty());
 }
 
 #[test]
@@ -1821,6 +2124,116 @@ async fn snapshot_prefix_suppresses_replayed_permission_events() {
     .expect("failed to build replay state");
 
     assert!(replay_state.take_new_replay_events().is_empty());
+}
+
+#[test]
+async fn snapshot_start_scans_recovery_metadata_only_after_the_snapshot() {
+    // 1..=4: an attachment write and its observation, 5..=8: a delivered call and a guest
+    // stream observation, 9: the snapshot. 10..=13 repeat the call and the observation.
+    let mut entries = attachment_index_fixture(OplogPayload::Inline(Box::new(b"abc".to_vec())));
+    entries.extend([
+        start_now(),
+        end_for(5, 40),
+        delivered_for(5),
+        consumer_observation(0, true, false),
+        noop(),
+        start_now(),
+        end_for(10, 41),
+        delivered_for(10),
+        consumer_observation(1, true, false),
+    ]);
+    let snapshot = OplogIndex::from_u64(9);
+    let skipped_prefix =
+        |prefix_end: u64| DeletedRegions::from_regions([OplogRegion::from_range(2..=prefix_end)]);
+    let build = async |skipped: DeletedRegions, snapshot_end: Option<OplogIndex>| {
+        let oplog = Arc::new(InMemoryOplog::new());
+        *oplog.entries.lock().unwrap() = entries.clone();
+        let replay = test_replay_state(test_agent_id(), oplog.clone(), skipped, snapshot_end)
+            .await
+            .unwrap();
+        let reads = oplog.reads.lock().unwrap().clone();
+        (replay, reads)
+    };
+    let reads_prefix = |reads: &[OplogIndex]| {
+        reads
+            .iter()
+            .any(|index| (2..=snapshot.as_u64()).contains(&index.as_u64()))
+    };
+
+    let (from_snapshot, reads) = build(skipped_prefix(9), Some(snapshot)).await;
+    assert!(
+        !reads_prefix(&reads),
+        "a snapshot start read the replaced prefix: {reads:?}"
+    );
+    // Without a snapshot, and with a snapshot whose prefix is not fully skipped, the history
+    // before it is replayed, so its metadata is scanned.
+    let (without_snapshot, reads) = build(skipped_prefix(9), None).await;
+    assert!(reads_prefix(&reads));
+    let (uncovered, reads) = build(skipped_prefix(4), Some(snapshot)).await;
+    assert!(reads_prefix(&reads));
+    assert_eq!(
+        *uncovered.cursor.completion_markers.lock().unwrap(),
+        HashMap::from([
+            (
+                OplogIndex::from_u64(5),
+                CompletionMarker::Delivered(OplogIndex::from_u64(7))
+            ),
+            (
+                OplogIndex::from_u64(10),
+                CompletionMarker::Delivered(OplogIndex::from_u64(12))
+            ),
+        ])
+    );
+
+    for replay in [&from_snapshot, &without_snapshot] {
+        assert_eq!(
+            *replay.cursor.completion_markers.lock().unwrap(),
+            HashMap::from([(
+                OplogIndex::from_u64(10),
+                CompletionMarker::Delivered(OplogIndex::from_u64(12))
+            )])
+        );
+        assert_eq!(
+            *replay.cursor.stream_observations.lock().unwrap(),
+            HashMap::from([(OplogIndex::from_u64(13), None)])
+        );
+        let attachments = replay.cursor.tool_attachment_reconstruction.lock().unwrap();
+        assert!(attachments.accepted.is_empty());
+        assert!(attachments.logical_observations.is_empty());
+        assert!(attachments.pending_writes.is_empty());
+    }
+    {
+        let attachments = from_snapshot
+            .cursor
+            .tool_attachment_reconstruction
+            .lock()
+            .unwrap();
+        assert!(attachments.history.writes.is_empty());
+        assert!(attachments.history.observations.is_empty());
+        assert_eq!(
+            attachments.starts.keys().copied().collect::<Vec<_>>(),
+            vec![OplogIndex::from_u64(10)]
+        );
+    }
+
+    let call = from_snapshot
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    match from_snapshot.await_resolution(call).await.unwrap() {
+        Resolution::Completed {
+            end_idx,
+            delivery_marker,
+            ..
+        } => {
+            assert_eq!(end_idx, OplogIndex::from_u64(11));
+            assert_eq!(delivery_marker, Some(OplogIndex::from_u64(12)));
+        }
+        other => panic!("expected a completion delivered at its marker, got {other:?}"),
+    }
 }
 
 fn stdout_log(message: &str) -> OplogEntry {
@@ -3243,6 +3656,762 @@ fn consumer_observation(reader_slot: u32, guest: bool, terminal: bool) -> OplogE
     };
     let summary = golem_common::model::oplog::DurableStreamEventSummary::session(&record);
     OplogEntry::stream_session(None, OplogPayload::Inline(Box::new(record)), summary)
+}
+
+fn attachment_terminal_observation(guest: bool, parent: Option<OplogIndex>) -> OplogEntry {
+    use golem_common::model::durable_stream::StreamConsumerObservation;
+    use golem_common::model::oplog::attachment::{
+        ToolAttachmentId, ToolAttachmentReadObservation, ToolAttachmentReadOutcome,
+        ToolAttachmentSlot,
+    };
+    OplogEntry::ToolAttachmentRead {
+        timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: parent,
+        observation: Box::new(ToolAttachmentReadObservation {
+            attachment: ToolAttachmentId {
+                creation_start: OplogIndex::INITIAL,
+                slot: ToolAttachmentSlot::Stdout,
+            },
+            logical_invocation: IdempotencyKey::new("attachment-observation".into()),
+            observation: if guest {
+                StreamConsumerObservation::Guest {
+                    parent_start_index: parent,
+                }
+            } else {
+                StreamConsumerObservation::Host
+            },
+            ordinal: 0,
+            read_attempt_ordinal: 2,
+            outcome: ToolAttachmentReadOutcome::Eof {
+                terminal_index: OplogIndex::from_u64(3),
+            },
+            reobserves: None,
+        }),
+        payload: None,
+    }
+}
+
+fn attachment_index_fixture(payload: OplogPayload<Vec<u8>>) -> Vec<OplogEntry> {
+    use golem_common::model::oplog::attachment::{
+        AcceptedAttachmentWriteEnd, ToolAttachmentReadOutcome,
+    };
+    use golem_common::model::oplog::payload::tool_attachment::{
+        ToolAttachmentWriteOutcome, ToolAttachmentWriteRequest,
+    };
+    use golem_common::model::oplog::{
+        HostRequestToolAttachmentWrite, HostResponseToolAttachmentWrite,
+    };
+    let mut read = attachment_terminal_observation(true, None);
+    let OplogEntry::ToolAttachmentRead {
+        observation,
+        payload: body,
+        ..
+    } = &mut read
+    else {
+        unreachable!()
+    };
+    observation.outcome =
+        ToolAttachmentReadOutcome::TypedChunk(AcceptedAttachmentWriteEnd(OplogIndex::from_u64(3)));
+    *body = Some(payload);
+    let request = HostRequestToolAttachmentWrite {
+        request: ToolAttachmentWriteRequest::new(observation.attachment, 0, b"abc"),
+    };
+    let mut start = start_named(HostFunctionName::GolemToolOutputWrite);
+    let OplogEntry::Start {
+        request: recorded, ..
+    } = &mut start
+    else {
+        unreachable!()
+    };
+    *recorded = Some(OplogPayload::Inline(Box::new(request.into())));
+    let mut end = end_for(2, 0);
+    let OplogEntry::End { response, .. } = &mut end else {
+        unreachable!()
+    };
+    *response = Some(OplogPayload::Inline(Box::new(
+        HostResponseToolAttachmentWrite {
+            outcome: ToolAttachmentWriteOutcome::Accepted,
+        }
+        .into(),
+    )));
+    vec![start_now(), start, end, read]
+}
+
+#[test]
+async fn attachment_index_excludes_custom_owned_effects_but_preserves_ordinary_reconstruction() {
+    use golem_common::model::oplog::HostRequestToolAttachmentWrite;
+    use golem_common::model::oplog::attachment::{
+        AcceptedAttachmentWriteEnd, ToolAttachmentId, ToolAttachmentReadOutcome, ToolAttachmentSlot,
+    };
+    use golem_common::model::oplog::payload::tool_attachment::ToolAttachmentWriteRequest;
+
+    for completed_custom in [false, true] {
+        for nested_tool in [false, true] {
+            let fixture = attachment_index_fixture(OplogPayload::Inline(Box::new(b"abc".to_vec())));
+            let attachment = ToolAttachmentId {
+                creation_start: OplogIndex::INITIAL,
+                slot: ToolAttachmentSlot::Stdout,
+            };
+            let custom_request = ToolAttachmentWriteRequest::new(attachment, 0, b"abc");
+            let ordinary_request = ToolAttachmentWriteRequest::new(attachment, 1, b"abc");
+            let mut tool = start_now();
+            let OplogEntry::Start {
+                parent_start_index,
+                observational_owner,
+                ..
+            } = &mut tool
+            else {
+                unreachable!()
+            };
+            *parent_start_index = Some(OplogIndex::INITIAL);
+            *observational_owner = nested_tool.then(|| OplogIndex::from_u64(2));
+            let mut custom_write = fixture[1].clone();
+            let OplogEntry::Start {
+                parent_start_index,
+                observational_owner,
+                ..
+            } = &mut custom_write
+            else {
+                unreachable!()
+            };
+            *parent_start_index = Some(OplogIndex::from_u64(3));
+            *observational_owner = (!nested_tool).then(|| OplogIndex::from_u64(2));
+            let mut custom_accept = fixture[2].clone();
+            let OplogEntry::End { start_index, .. } = &mut custom_accept else {
+                unreachable!()
+            };
+            *start_index = OplogIndex::from_u64(4);
+            let mut read = fixture[3].clone();
+            let OplogEntry::ToolAttachmentRead { observation, .. } = &mut read else {
+                unreachable!()
+            };
+            observation.outcome = ToolAttachmentReadOutcome::TypedChunk(
+                AcceptedAttachmentWriteEnd(OplogIndex::from_u64(5)),
+            );
+            let mut ordinary_write = fixture[1].clone();
+            let OplogEntry::Start {
+                parent_start_index,
+                request,
+                ..
+            } = &mut ordinary_write
+            else {
+                unreachable!()
+            };
+            *parent_start_index = Some(OplogIndex::from_u64(8));
+            *request = Some(OplogPayload::Inline(Box::new(
+                HostRequestToolAttachmentWrite {
+                    request: ordinary_request.clone(),
+                }
+                .into(),
+            )));
+            let mut ordinary_accept = fixture[2].clone();
+            let OplogEntry::End { start_index, .. } = &mut ordinary_accept else {
+                unreachable!()
+            };
+            *start_index = OplogIndex::from_u64(9);
+            let replay = replay_state_over(vec![
+                noop(),
+                custom_start("custom", 0, Some(1), 1),
+                tool,
+                custom_write,
+                custom_accept,
+                read,
+                if completed_custom {
+                    custom_end(2, 0)
+                } else {
+                    noop()
+                },
+                custom_start_without_invocation_id(
+                    "ordinary-scope",
+                    HostRequest::NoInput(HostRequestNoInput {}),
+                    Some(1),
+                ),
+                ordinary_write,
+                ordinary_accept,
+            ])
+            .await;
+
+            // Rebuilding an extended target must preserve the same ownership classification.
+            replay
+                .set_replay_target(OplogIndex::from_u64(3))
+                .await
+                .unwrap();
+            replay
+                .set_replay_target(OplogIndex::from_u64(10))
+                .await
+                .unwrap();
+            assert!(
+                replay
+                    .historical_tool_attachment_write(&custom_request)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                replay
+                    .historical_tool_attachment_write(&ordinary_request)
+                    .unwrap()
+                    .unwrap()
+                    .start,
+                OplogIndex::from_u64(9)
+            );
+            assert_eq!(
+                replay
+                    .hydrate_tool_attachment_observation(OplogIndex::from_u64(6), 3)
+                    .await
+                    .unwrap()
+                    .2,
+                Some(b"abc".to_vec())
+            );
+            assert!(replay.has_open_tool_attachments());
+            let fence = replay.await_tool_attachment_reconstruction(OplogIndex::INITIAL);
+            tokio::pin!(fence);
+            assert!(futures::poll!(fence.as_mut()).is_pending());
+            replay
+                .complete_tool_attachment_reconstruction(OplogIndex::from_u64(9))
+                .unwrap();
+            assert!(matches!(
+                futures::poll!(fence.as_mut()),
+                std::task::Poll::Ready(Ok(()))
+            ));
+            assert!(!replay.has_open_tool_attachments());
+        }
+    }
+}
+
+fn attachment_terminal_prefix() -> Vec<OplogEntry> {
+    use golem_common::model::oplog::attachment::{
+        ByteStreamCloseCause, ToolAttachmentId, ToolAttachmentSlot, ToolAttachmentTerminal,
+    };
+    use golem_common::model::oplog::payload::tool_attachment::ToolAttachmentTerminalOutcome;
+    use golem_common::model::oplog::{
+        HostRequestToolAttachmentFinish, HostResponseToolAttachmentTerminalResult,
+    };
+    let mut start = start_named(HostFunctionName::GolemToolOutputFinish);
+    let OplogEntry::Start { request, .. } = &mut start else {
+        unreachable!()
+    };
+    *request = Some(OplogPayload::Inline(Box::new(
+        HostRequestToolAttachmentFinish {
+            attachment: ToolAttachmentId {
+                creation_start: OplogIndex::INITIAL,
+                slot: ToolAttachmentSlot::Stdout,
+            },
+            operation_ordinal: 1,
+        }
+        .into(),
+    )));
+    let mut end = end_for(2, 0);
+    let OplogEntry::End { response, .. } = &mut end else {
+        unreachable!()
+    };
+    *response = Some(OplogPayload::Inline(Box::new(
+        HostResponseToolAttachmentTerminalResult {
+            outcome: ToolAttachmentTerminalOutcome::Selected(ToolAttachmentTerminal::Application(
+                ByteStreamCloseCause::Finished,
+            )),
+        }
+        .into(),
+    )));
+    vec![noop(), start, end]
+}
+
+#[test]
+async fn attachment_index_hydrates_external_body_only_on_demand() {
+    use golem_common::model::oplog::attachment::{ToolAttachmentId, ToolAttachmentSlot};
+    use golem_common::model::oplog::payload::tool_attachment::ToolAttachmentWriteRequest;
+
+    let oplog = Arc::new(InMemoryOplog::new());
+    let id = PayloadId::new();
+    let hash = vec![1];
+    *oplog.entries.lock().unwrap() = attachment_index_fixture(OplogPayload::External {
+        payload_id: id.clone(),
+        md5_hash: hash.clone(),
+        cached: None,
+    });
+    // The body is deliberately unavailable during indexing.
+    let replay = test_replay_state(test_agent_id(), oplog.clone(), DeletedRegions::new(), None)
+        .await
+        .unwrap();
+    let request = ToolAttachmentWriteRequest::new(
+        ToolAttachmentId {
+            creation_start: OplogIndex::INITIAL,
+            slot: ToolAttachmentSlot::Stdout,
+        },
+        0,
+        b"abc",
+    );
+    let backing = replay
+        .historical_tool_attachment_write(&request)
+        .unwrap()
+        .unwrap();
+    assert_eq!(backing.start, OplogIndex::from_u64(2));
+    assert_eq!(backing.end.0, OplogIndex::from_u64(3));
+    assert_eq!(backing.original_typed_read, Some(OplogIndex::from_u64(4)));
+    assert!(replay.last_replayed_index() < backing.end.0);
+    assert!(
+        replay
+            .historical_tool_attachment_write(&ToolAttachmentWriteRequest::new(
+                request.attachment,
+                0,
+                b"abd"
+            ))
+            .is_err()
+    );
+    replay
+        .validate_tool_attachment_regenerated_bytes(
+            golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd(
+                OplogIndex::from_u64(3),
+            ),
+            b"abc",
+        )
+        .await
+        .expect("typed regeneration must not download a consumer payload");
+    assert!(
+        replay
+            .hydrate_tool_attachment_observation(OplogIndex::from_u64(4), 3)
+            .await
+            .is_err()
+    );
+    oplog.external_payloads.lock().await.push((
+        id.clone(),
+        hash.clone(),
+        golem_common::serialization::serialize(&b"abd".to_vec()).unwrap(),
+    ));
+    assert!(
+        replay
+            .hydrate_tool_attachment_observation(OplogIndex::from_u64(4), 3)
+            .await
+            .is_err(),
+        "same-length corrupted bytes must fail before consumer delivery"
+    );
+    oplog.external_payloads.lock().await.clear();
+    oplog.external_payloads.lock().await.push((
+        id,
+        hash,
+        golem_common::serialization::serialize(&b"abc".to_vec()).unwrap(),
+    ));
+    {
+        let _storage_blocked = oplog.external_payloads.lock().await;
+        let hydration = replay.hydrate_tool_attachment_observation(OplogIndex::from_u64(4), 2);
+        tokio::pin!(hydration);
+        assert!(
+            matches!(
+                futures::poll!(hydration.as_mut()),
+                std::task::Poll::Ready(Err(_))
+            ),
+            "oversized history must fail before waiting for payload storage"
+        );
+    }
+    let (source, read, bytes) = replay
+        .hydrate_tool_attachment_observation(OplogIndex::from_u64(4), 3)
+        .await
+        .unwrap();
+    assert_eq!(bytes.as_ref().unwrap().capacity(), 3);
+    assert_eq!(bytes, Some(b"abc".to_vec()));
+    assert_eq!(
+        replay.tool_attachment_observation(read.attachment, &read.logical_invocation, 0),
+        Some((source, Some((source, 2))))
+    );
+    replay
+        .register_replay_jump(vec![OplogRegion {
+            start: source,
+            end: source,
+        }])
+        .await
+        .unwrap();
+    assert_eq!(
+        replay.tool_attachment_observation(read.attachment, &read.logical_invocation, 0),
+        Some((source, None))
+    );
+    assert_eq!(
+        replay.historical_tool_attachment_write(&request).unwrap(),
+        Some(backing)
+    );
+    replay
+        .register_replay_jump(vec![OplogRegion::from_range(2..=4)])
+        .await
+        .unwrap();
+    assert_eq!(
+        replay.historical_tool_attachment_write(&request).unwrap(),
+        None
+    );
+    assert_eq!(
+        replay.tool_attachment_observation(read.attachment, &read.logical_invocation, 0),
+        None
+    );
+    let reconstructed = test_replay_state(
+        test_agent_id(),
+        oplog,
+        DeletedRegions::from_regions([OplogRegion::from_range(2..=4)]),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        reconstructed.tool_attachment_observation(read.attachment, &read.logical_invocation, 0),
+        None
+    );
+    replay
+        .set_replay_target(OplogIndex::from_u64(3))
+        .await
+        .unwrap();
+    assert_eq!(
+        replay.tool_attachment_observation(read.attachment, &read.logical_invocation, 0),
+        None
+    );
+}
+
+#[test]
+async fn attachment_index_validates_raw_slice_against_regenerated_argument() {
+    use golem_common::model::oplog::attachment::{
+        AcceptedAttachmentWriteEnd, ToolAttachmentReadOutcome,
+    };
+    let accepted = AcceptedAttachmentWriteEnd(OplogIndex::from_u64(3));
+    for (body, valid) in [(b"b", true), (b"x", false)] {
+        let oplog = Arc::new(InMemoryOplog::new());
+        let mut entries = attachment_index_fixture(OplogPayload::Inline(Box::new(body.to_vec())));
+        let OplogEntry::ToolAttachmentRead { observation, .. } = &mut entries[3] else {
+            unreachable!()
+        };
+        observation.outcome = ToolAttachmentReadOutcome::RawBytes {
+            end: accepted,
+            offset: 1,
+            length: 1,
+        };
+        *oplog.entries.lock().unwrap() = entries;
+        let replay = test_replay_state(test_agent_id(), oplog, DeletedRegions::new(), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            replay
+                .validate_tool_attachment_regenerated_bytes(accepted, b"abc")
+                .await
+                .is_ok(),
+            valid
+        );
+    }
+}
+
+#[test]
+async fn attachment_index_crossed_acceptance_does_not_wait_for_cursor() {
+    use golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd;
+
+    let oplog = Arc::new(InMemoryOplog::new());
+    *oplog.entries.lock().unwrap() =
+        attachment_index_fixture(OplogPayload::Inline(Box::new(b"abc".to_vec())));
+    let replay = test_replay_state(test_agent_id(), oplog, DeletedRegions::new(), None)
+        .await
+        .unwrap();
+    let start = OplogIndex::from_u64(2);
+    let end = AcceptedAttachmentWriteEnd(OplogIndex::from_u64(3));
+    assert!(replay.last_replayed_index() < end.0);
+    replay
+        .await_tool_attachment_acceptance(start)
+        .await
+        .unwrap();
+    let _gate = replay.cursor.advance_gate.clone().lock_owned().await;
+    let mut acceptance = Box::pin(replay.await_tool_attachment_acceptance(start));
+    assert!(matches!(
+        futures::poll!(acceptance.as_mut()),
+        std::task::Poll::Ready(Ok(actual)) if actual == end
+    ));
+}
+
+#[test]
+async fn attachment_index_retains_deleted_original_for_reobservation() {
+    let oplog = Arc::new(InMemoryOplog::new());
+    let mut entries = attachment_index_fixture(OplogPayload::Inline(Box::new(b"abc".to_vec())));
+    let mut reobservation = entries[3].clone();
+    let OplogEntry::ToolAttachmentRead {
+        observation,
+        payload,
+        ..
+    } = &mut reobservation
+    else {
+        unreachable!()
+    };
+    observation.reobserves = Some(OplogIndex::from_u64(4));
+    observation.read_attempt_ordinal = 5;
+    *payload = None;
+    entries.push(reobservation);
+    *oplog.entries.lock().unwrap() = entries;
+    let replay = test_replay_state(
+        test_agent_id(),
+        oplog.clone(),
+        DeletedRegions::from_regions([OplogRegion::from_range(4..=4)]),
+        None,
+    )
+    .await
+    .unwrap();
+    let (source, read, bytes) = replay
+        .hydrate_tool_attachment_observation(OplogIndex::from_u64(5), 3)
+        .await
+        .unwrap();
+    assert_eq!(source, OplogIndex::from_u64(4));
+    assert_eq!(bytes, Some(b"abc".to_vec()));
+    assert_eq!(read.read_attempt_ordinal, 5);
+    assert_eq!(read.reobserves, Some(source));
+    assert_eq!(
+        replay.tool_attachment_observation(read.attachment, &read.logical_invocation, 0),
+        Some((source, Some((OplogIndex::from_u64(5), 5))))
+    );
+    replay
+        .set_replay_target(OplogIndex::from_u64(3))
+        .await
+        .unwrap();
+    replay
+        .set_replay_target(OplogIndex::from_u64(5))
+        .await
+        .unwrap();
+    let accepted =
+        golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd(OplogIndex::from_u64(3));
+    replay
+        .validate_tool_attachment_regenerated_bytes(accepted, b"abc")
+        .await
+        .unwrap();
+    assert!(
+        replay
+            .validate_tool_attachment_regenerated_bytes(accepted, b"abd")
+            .await
+            .is_err(),
+        "growing the replay horizon must restore producer-request validation"
+    );
+    assert!(
+        replay
+            .hydrate_tool_attachment_observation(OplogIndex::from_u64(5), 3)
+            .await
+            .is_ok()
+    );
+    assert!(
+        replay
+            .register_replay_jump(vec![OplogRegion::from_range(3..=3)])
+            .await
+            .is_err()
+    );
+    assert!(
+        replay
+            .hydrate_tool_attachment_observation(OplogIndex::from_u64(5), 3)
+            .await
+            .is_err()
+    );
+    assert!(
+        test_replay_state(
+            test_agent_id(),
+            oplog,
+            DeletedRegions::from_regions([OplogRegion::from_range(3..=4)]),
+            None
+        )
+        .await
+        .is_err()
+    );
+}
+
+#[test]
+async fn attachment_terminal_index_preserves_source_across_target_changes() {
+    let oplog = Arc::new(InMemoryOplog::new());
+    let mut entries = attachment_terminal_prefix();
+    let original = attachment_terminal_observation(true, None);
+    let mut replacement = original.clone();
+    let OplogEntry::ToolAttachmentRead { observation, .. } = &mut replacement else {
+        unreachable!()
+    };
+    observation.reobserves = Some(OplogIndex::from_u64(4));
+    let read = *observation.clone();
+    entries.extend([original, replacement]);
+    *oplog.entries.lock().unwrap() = entries;
+    let replay = test_replay_state(
+        test_agent_id(),
+        oplog,
+        DeletedRegions::from_regions([OplogRegion::from_range(4..=4)]),
+        None,
+    )
+    .await
+    .unwrap();
+    for target in [5, 4, 5] {
+        replay
+            .set_replay_target(OplogIndex::from_u64(target))
+            .await
+            .unwrap();
+        assert_eq!(
+            replay.tool_attachment_observation(read.attachment, &read.logical_invocation, 0),
+            Some((
+                OplogIndex::from_u64(4),
+                (target == 5).then_some((OplogIndex::from_u64(5), 2))
+            )),
+        );
+    }
+    assert!(
+        replay
+            .register_replay_jump(vec![OplogRegion::from_range(2..=3)])
+            .await
+            .is_err()
+    );
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn attachment_terminal_restores_without_a_surviving_host_waiter() {
+    use crate::durable_host::tool::attachment::{
+        AttachmentMemory, AttachmentRead, attachment_pair,
+    };
+    use golem_common::model::oplog::attachment::{ToolAttachmentId, ToolAttachmentSlot};
+
+    let mut entries = attachment_terminal_prefix();
+    entries.push(noop());
+    let replay = replay_state_over(entries).await;
+    let identity = ToolAttachmentId {
+        creation_start: OplogIndex::INITIAL,
+        slot: ToolAttachmentSlot::Stdout,
+    };
+    let (producer, consumer, _) = attachment_pair(8, AttachmentMemory::inert());
+    producer.configure_live();
+    producer.writer().set_identity(identity);
+    replay
+        .register_tool_attachment(identity, &producer.controller())
+        .unwrap();
+    let read = consumer.read_next();
+    tokio::pin!(read);
+    assert!(futures::poll!(&mut read).is_pending());
+    // No host waiter claims the terminal call. Cursor crossing still restores its accepted End.
+    assert_eq!(
+        replay.get_oplog_entry(None).await.unwrap().0,
+        OplogIndex::from_u64(4)
+    );
+    assert!(matches!(read.await, AttachmentRead::End));
+}
+
+#[test]
+async fn attachment_index_rejects_invalid_acceptance_and_reobservation() {
+    for case in 0..5 {
+        let oplog = Arc::new(InMemoryOplog::new());
+        let mut entries = attachment_index_fixture(OplogPayload::Inline(Box::new(b"abc".to_vec())));
+        if case == 0 {
+            entries[2] = noop();
+        }
+        if case == 4 {
+            let OplogEntry::End { response, .. } = &mut entries[2] else {
+                unreachable!()
+            };
+            *response = Some(OplogPayload::Inline(Box::new(golem_common::model::oplog::HostResponseToolAttachmentWrite {
+                outcome: golem_common::model::oplog::payload::tool_attachment::ToolAttachmentWriteOutcome::Empty,
+            }.into())));
+        }
+        let OplogEntry::ToolAttachmentRead {
+            observation,
+            payload,
+            ..
+        } = &mut entries[3]
+        else {
+            unreachable!()
+        };
+        match case {
+            1 => {
+                observation.attachment.slot =
+                    golem_common::model::oplog::attachment::ToolAttachmentSlot::Stderr
+            }
+            2 => {
+                observation.reobserves = Some(OplogIndex::from_u64(2));
+                *payload = None;
+            }
+            3 => {
+                *payload = None;
+            }
+            _ => {}
+        }
+        *oplog.entries.lock().unwrap() = entries;
+        assert!(
+            test_replay_state(test_agent_id(), oplog, DeletedRegions::new(), None)
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn completed_entity_body_detects_unconsumed_attachment_read() {
+    for guest in [false, true] {
+        let parent = OplogIndex::from_u64(4);
+        let mut entries = attachment_terminal_prefix();
+        entries.extend([
+            start_now(),
+            attachment_terminal_observation(guest, Some(parent)),
+            end_for(4, 42),
+        ]);
+        let rs = replay_state_over(entries).await;
+        let terminal = rs
+            .claim_concurrent_start(
+                &HostFunctionName::GolemToolOutputFinish,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        rs.await_resolution(terminal).await.unwrap();
+        let handle = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            rs.unconsumed_scope_head(parent, HashSet::new())
+                .await
+                .unwrap(),
+            Some(OplogIndex::from_u64(5)),
+        );
+        let mut resolution = Box::pin(rs.await_resolution(handle));
+        assert!(futures::poll!(resolution.as_mut()).is_pending());
+        let barrier = rs
+            .await_stream_observation(OplogIndex::from_u64(5))
+            .await
+            .unwrap();
+        assert!(futures::poll!(resolution.as_mut()).is_pending());
+        barrier.acknowledge();
+        assert!(matches!(
+            resolution.await.unwrap(),
+            Resolution::Completed { .. }
+        ));
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn custom_subtree_attachment_observation_does_not_block_resolution() {
+    let mut entries = attachment_terminal_prefix();
+    entries.extend([
+        custom_start("outer", 1, None, 1),
+        attachment_terminal_observation(true, Some(OplogIndex::from_u64(4))),
+        custom_end(4, 10),
+    ]);
+    let rs = replay_state_over(entries).await;
+    let terminal = rs
+        .claim_concurrent_start(
+            &HostFunctionName::GolemToolOutputFinish,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(terminal).await.unwrap();
+    let claimed = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("outer".into()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        test_invocation_id(1),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        rs.unconsumed_scope_head(OplogIndex::from_u64(4), HashSet::new())
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(matches!(
+        rs.await_resolution_outcome(claimed.handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { .. })
+    ));
 }
 
 #[test]
@@ -6903,6 +8072,45 @@ fn log_entry() -> OplogEntry {
     }
 }
 
+/// Sequential positional replay reads each oplog entry from the oplog once. Committing an entry
+/// peeks at the entry behind it to skip trailing hints; the peeked non-hint entry must stay in
+/// the prefetch buffer, otherwise every commit discards the prefetched chunk and reads it again.
+#[test]
+async fn sequential_replay_reads_each_oplog_entry_once() {
+    // The first entry is consumed when the replay state is built; the rest alternate hint and
+    // non-hint entries so that every commit skips forward over a trailing hint.
+    let mut entries = vec![noop()];
+    for _ in 0..8 {
+        entries.push(noop());
+        entries.push(log_entry());
+        entries.push(noop());
+    }
+    let expected: Vec<OplogIndex> = entries
+        .iter()
+        .enumerate()
+        .skip(1)
+        .filter(|(_, entry)| !entry.is_hint())
+        .map(|(position, _)| OplogIndex::from_u64(position as u64 + 1))
+        .collect();
+    let (rs, oplog) = replay_state_and_oplog_over(entries).await;
+    // Building the replay state prefetched every remaining entry in one chunk.
+    oplog.reads.lock().unwrap().clear();
+
+    let mut read_indices = Vec::new();
+    while rs.is_replay() {
+        let (idx, entry) = rs.get_oplog_entry(None).await.unwrap();
+        assert!(matches!(entry, OplogEntry::NoOp { .. }));
+        read_indices.push(idx);
+    }
+    assert_eq!(read_indices, expected);
+
+    let reads = oplog.reads.lock().unwrap().clone();
+    assert!(
+        reads.is_empty(),
+        "replay re-read already prefetched entries: {reads:?}"
+    );
+}
+
 /// When replay reaches the target via a skipped-region jump (`get_out_of_skipped_region` jumps
 /// the cursor to the region end, which is the target) rather than by consuming the target entry,
 /// the transition to live must still synthesize `ReplayFinished`.
@@ -8088,7 +9296,7 @@ async fn missing_scope_recovery_settles_then_switches_live_over_benign_suffix() 
         panic!("missing scope did not enter replay settlement");
     };
     assert!(rs.test_is_settling());
-    assert!(!rs.is_live());
+    assert!(!rs.is_live_published());
     assert!(matches!(
         rs.finish_settling_to_live(
             &replay_linear_memory(),
@@ -8101,6 +9309,397 @@ async fn missing_scope_recovery_settles_then_switches_live_over_benign_suffix() 
     ));
     assert!(rs.is_live());
     assert!(rs.is_live_published());
+}
+
+async fn wallet_replay_fixture(
+    entries: Vec<OplogEntry>,
+    target: u64,
+    boundary: Arc<tokio::sync::Mutex<()>>,
+) -> (
+    ReplayState,
+    Arc<crate::worker::owner_wallet::OwnerWallet>,
+    Arc<InMemoryOplog>,
+    Arc<crate::services::card_interest::CardInterestIndex>,
+) {
+    use crate::worker::owner_wallet::{OwnerWallet, WalletBaseline};
+    use crate::worker::tasks::{RuntimeAppendTasks, WorkerTasks};
+    use golem_common::model::agent::ResolvedOwnerContext;
+
+    let metadata = wallet_test_component(ComponentId::new(), EnvironmentId::new());
+    let owner_id = OwnedAgentId::new(
+        metadata.environment_id,
+        &AgentId {
+            component_id: metadata.id,
+            agent_id: "wallet-replay-contract".to_string(),
+        },
+    );
+    let oplog = Arc::new(InMemoryOplog::new());
+    for entry in entries {
+        oplog.add(entry).await.unwrap();
+    }
+    let baseline = WalletBaseline::new(
+        owner_id.clone(),
+        ResolvedOwnerContext::ComponentWorker,
+        Arc::new(WalletComponentService {
+            metadata: metadata.clone(),
+            revisions: Default::default(),
+        }),
+        &metadata,
+        oplog.as_ref(),
+        None,
+        Vec::new(),
+    )
+    .await
+    .unwrap();
+    let interest_index = Arc::new(crate::services::card_interest::CardInterestIndex::new());
+    let wallet = OwnerWallet::new(
+        baseline,
+        Arc::new(RuntimeAppendTasks::default()),
+        WorkerTasks::default(),
+        boundary,
+        interest_index.clone(),
+    )
+    .await
+    .unwrap();
+    wallet.activate_interest().await;
+    let replay = ReplayState::new_for_owner(
+        owner_id,
+        oplog.clone(),
+        DeletedRegions::default(),
+        None,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        OplogIndex::from_u64(target),
+        Some(wallet.clone()),
+    )
+    .await
+    .unwrap();
+    (replay, wallet, oplog, interest_index)
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn entity_wallet_prefix_is_bound_to_consumption_not_store_construction() {
+    for (claim_early, body_before_start) in [(true, false), (false, false), (true, true)] {
+        let parent = OplogIndex::INITIAL;
+        let start = OplogIndex::from_u64(4);
+        let first = stored_test_card(CardId::new());
+        let second = stored_test_card(CardId::new());
+        let (rs, wallet, _oplog, _interest) = wallet_replay_fixture(
+            vec![
+                noop(),
+                if body_before_start {
+                    anchored_noop(4)
+                } else {
+                    noop()
+                },
+                OplogEntry::card_installed(None, None, Box::new(first), 1),
+                rejected_tool_reconstruction_start(parent),
+                OplogEntry::card_installed(None, None, Box::new(second), 2),
+                end_for(4, 1),
+                noop(),
+            ],
+            7,
+            Arc::new(tokio::sync::Mutex::new(())),
+        )
+        .await;
+        let mut handle = if claim_early {
+            Some(claim_rejected_tool_reconstruction(&rs, parent).await)
+        } else {
+            None
+        };
+        if claim_early {
+            // A pre-Start body can observe its claim prefix without waiting for its own NoOp.
+            assert_eq!(
+                wallet
+                    .entity_replay_wallet(start)
+                    .unwrap()
+                    .receipt()
+                    .result
+                    .await
+                    .unwrap()
+                    .wallet
+                    .generation,
+                0
+            );
+        }
+        let (index, _) = rs
+            .get_oplog_entry(body_before_start.then_some(start))
+            .await
+            .unwrap();
+        assert_eq!(index, OplogIndex::from_u64(2));
+        // Ordinary draining passes the entity Start and its later wallet mutation. A late claim
+        // and delayed Store construction must still use the earlier entity prefix.
+        let mut tx = rs.cursor.tx().await.unwrap();
+        tx.try_get_oplog_entry(|_| false).await.unwrap();
+        rs.cursor.finish_tx(tx);
+        if handle.is_none() {
+            handle = Some(claim_rejected_tool_reconstruction(&rs, parent).await);
+        }
+        let mut handle = handle.unwrap();
+        let mut reconstruction = handle.take_historical_reconstruction().unwrap();
+        let entity = wallet.entity_replay_wallet(start).unwrap();
+        assert_eq!(
+            entity.receipt().result.await.unwrap().wallet.generation,
+            if body_before_start { 0 } else { 1 }
+        );
+        assert_eq!(
+            wallet
+                .latest_replay_receipt()
+                .result
+                .await
+                .unwrap()
+                .wallet
+                .generation,
+            2
+        );
+        rs.await_resolution(handle).await.unwrap();
+        reconstruction.body_settled();
+        drop(reconstruction);
+        assert!(wallet.entity_replay_wallet(start).is_err());
+        // A retained Store can keep its frozen evidence after the reconstruction guard releases.
+        assert_eq!(
+            entity.receipt().result.await.unwrap().wallet.generation,
+            if body_before_start { 0 } else { 1 }
+        );
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn entity_wallet_prefix_retains_preclaim_hints_and_prunes_future_starts() {
+    let start = OplogIndex::from_u64(4);
+    for prune in [false, true] {
+        let (rs, wallet, _oplog, _interest) = wallet_replay_fixture(
+            vec![
+                noop(),
+                OplogEntry::card_installed(
+                    Some(start),
+                    None,
+                    Box::new(stored_test_card(CardId::new())),
+                    1,
+                ),
+                OplogEntry::card_installed(
+                    None,
+                    None,
+                    Box::new(stored_test_card(CardId::new())),
+                    2,
+                ),
+                rejected_tool_reconstruction_start(OplogIndex::INITIAL),
+                end_for(4, 1),
+                noop(),
+            ],
+            6,
+            Arc::new(tokio::sync::Mutex::new(())),
+        )
+        .await;
+        // Construction skips the hints before any entity claim exists.
+        assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(3));
+        let entity = wallet.entity_replay_wallet(start).unwrap();
+        assert_eq!(entity.receipt().result.await.unwrap().wallet.generation, 0);
+        assert_eq!(
+            wallet
+                .latest_replay_receipt()
+                .result
+                .await
+                .unwrap()
+                .wallet
+                .generation,
+            2
+        );
+        if prune {
+            rs.set_replay_target(OplogIndex::from_u64(3)).await.unwrap();
+        } else {
+            let mut handle = claim_rejected_tool_reconstruction(&rs, OplogIndex::INITIAL).await;
+            let mut reconstruction = handle.take_historical_reconstruction().unwrap();
+            assert!(Arc::ptr_eq(
+                &entity,
+                &wallet.entity_replay_wallet(start).unwrap()
+            ));
+            rs.await_resolution(handle).await.unwrap();
+            assert_eq!(entity.receipt().result.await.unwrap().wallet.generation, 0);
+            reconstruction.body_settled();
+            drop(reconstruction);
+        }
+        assert!(wallet.entity_replay_wallet(start).is_err());
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn missing_scope_benign_card_suffix_reconstructs_before_wallet_boundary() {
+    let card = stored_test_card(CardId::new());
+    let (rs, wallet, oplog, _interest_index) = wallet_replay_fixture(
+        vec![
+            noop(),
+            OplogEntry::card_installed(None, None, Box::new(card.clone()), 1),
+            noop(),
+        ],
+        3,
+        Arc::new(tokio::sync::Mutex::new(())),
+    )
+    .await;
+    let canonical = wallet.snapshot();
+    let outcome = rs
+        .claim_scope_start_or_recover_missing(
+            &HostFunctionName::Custom("<scope:batched-write>".to_string()),
+            &DurableFunctionType::WriteRemoteBatched(None),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let ScopeStartClaimOutcome::MissingSettling { replay_target } = outcome else {
+        panic!("missing scope did not enter replay settlement");
+    };
+    assert!(!rs.is_live_published());
+    assert!(matches!(
+        rs.finish_settling_to_live(
+            &replay_linear_memory(),
+            ReplayToLiveRole::PrimaryAgent,
+            replay_target,
+        )
+        .await
+        .unwrap(),
+        ReplayToLiveOutcome::Live { .. }
+    ));
+    let reads = oplog.reads.lock().unwrap().clone();
+    let receipt = wallet.latest_replay_receipt().result.await.unwrap();
+    assert_eq!(receipt.wallet.cards[&card.card_id()], card);
+    assert!(Arc::ptr_eq(&canonical, &wallet.snapshot()));
+    drop(wallet.lock_boundary().await.unwrap());
+    assert_eq!(wallet.snapshot().cards[&card.card_id()], card);
+    assert_eq!(wallet.snapshot().generation, 1);
+    assert_eq!(*oplog.reads.lock().unwrap(), reads);
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn wallet_boundary_rechecks_grown_target_and_refuses_growth_after_live_commit() {
+    use crate::worker::owner_wallet::WalletCommit;
+
+    let historical = stored_test_card(CardId::new());
+    let live = stored_test_card(CardId::new());
+    let boundary = Arc::new(tokio::sync::Mutex::new(()));
+    let contention = boundary.clone().lock_owned().await;
+    let (rs, wallet, oplog, _interest_index) = wallet_replay_fixture(
+        vec![
+            noop(),
+            start_now(),
+            OplogEntry::card_installed(None, None, Box::new(historical.clone()), 1),
+        ],
+        2,
+        boundary,
+    )
+    .await;
+    let canonical = wallet.snapshot();
+    let acquisition = wallet.lock_boundary();
+    tokio::pin!(acquisition);
+    assert!(futures::poll!(acquisition.as_mut()).is_pending());
+    rs.try_get_oplog_entry(|_| true).await.unwrap().unwrap();
+    assert!(rs.is_live());
+    assert!(futures::poll!(acquisition.as_mut()).is_pending());
+    rs.set_replay_target(OplogIndex::from_u64(3)).await.unwrap();
+    drop(contention);
+    assert!(futures::poll!(acquisition.as_mut()).is_pending());
+    assert!(Arc::ptr_eq(&canonical, &wallet.snapshot()));
+    assert!(
+        rs.get_oplog_entry_agent_invocation_started()
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let acquired = acquisition.await.unwrap();
+    assert_eq!(wallet.snapshot().cards[&historical.card_id()], historical);
+    let reads = oplog.reads.lock().unwrap().clone();
+    let commit = WalletCommit::prepare(
+        acquired,
+        OplogEntry::card_installed(None, None, Box::new(live.clone()), 0),
+    )
+    .await
+    .unwrap();
+    commit.validate_before_append().unwrap();
+    let index = oplog.add(commit.entry()).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    commit.publish().unwrap();
+    drop(commit);
+    let published = wallet.snapshot();
+    assert_eq!(published.cards[&live.card_id()], live);
+    assert_eq!(published.cards[&historical.card_id()], historical);
+    assert_eq!(published.generation, 2);
+    assert_eq!(*oplog.reads.lock().unwrap(), reads);
+    assert!(rs.set_replay_target(index).await.is_err());
+    assert!(wallet.validate_current().is_err());
+    assert!(wallet.lock_boundary().await.is_err());
+    assert!(Arc::ptr_eq(&published, &wallet.snapshot()));
+    assert_eq!(*oplog.reads.lock().unwrap(), reads);
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn card_audit_wait_drains_unclaimed_same_store_accessor_without_rescan() {
+    let card = stored_test_card(CardId::new());
+    let (rs, wallet, oplog, _interest_index) = wallet_replay_fixture(
+        vec![
+            noop(),
+            start_now(),
+            end_for(2, 42),
+            start_now(),
+            end_for(4, 43),
+            OplogEntry::CardDerived {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                card: Box::new(card.clone()),
+                wallet_generation: 0,
+            },
+            noop(),
+        ],
+        7,
+        Arc::new(tokio::sync::Mutex::new(())),
+    )
+    .await;
+    let first = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert!(!wallet.has_recorded_derivation(card.card_id()));
+    assert!(!rs.has_unclaimed_retained_starts());
+    rs.await_card_derivation(card.card_id(), None)
+        .await
+        .unwrap();
+    assert!(rs.has_unclaimed_retained_starts());
+    assert!(wallet.has_recorded_derivation(card.card_id()));
+    assert!(matches!(
+        rs.await_resolution(first).await.unwrap(),
+        Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(3)
+    ));
+    let reads = oplog.reads.lock().unwrap().clone();
+    rs.await_card_derivation(card.card_id(), None)
+        .await
+        .unwrap();
+    assert!(
+        wallet
+            .recorded_derivation(OplogIndex::from_u64(4), None, &card)
+            .await
+            .unwrap()
+    );
+    wallet.latest_replay_receipt().result.await.unwrap();
+    assert_eq!(*oplog.reads.lock().unwrap(), reads);
+    let retained = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(retained.start_idx(), OplogIndex::from_u64(4));
+    assert!(matches!(
+        rs.await_resolution(retained).await.unwrap(),
+        Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(5)
+    ));
+    assert!(!rs.has_unclaimed_retained_starts());
 }
 
 #[test]
@@ -9352,6 +10951,449 @@ async fn missing_start_claim_is_divergence_at_a_top_level_custom_root() {
     reconstruction.body_settled();
 }
 
+#[test]
+async fn admission_refusal_probe_preserves_repeated_calls_across_delivery() {
+    let numbered_start = || {
+        let mut entry = start_with_parent(2);
+        let OplogEntry::Start { invocation_id, .. } = &mut entry else {
+            unreachable!()
+        };
+        *invocation_id = Some(test_invocation_id(7));
+        entry
+    };
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        numbered_start(),
+        end_for(3, 41),
+        delivered_for(3),
+        numbered_start(),
+        end_for(6, 42),
+        delivered_for(6),
+        end_for(2, 43),
+    ])
+    .await;
+    let root = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    let claim = StartClaim::owned(
+        &HostFunctionName::MonotonicClockNow,
+        &DurableFunctionType::ReadLocal,
+        OplogIndex::from_u64(2),
+    )
+    .with_invocation_id(Some(test_invocation_id(7)));
+    let ReplayStartClaimOutcome::Claimed { handle: first, .. } = rs
+        .claim_start_for_store(claim.clone(), false)
+        .await
+        .unwrap()
+    else {
+        panic!("first recorded occurrence must be claimed");
+    };
+    rs.await_resolution(first).await.unwrap();
+    let barrier = rs
+        .await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(5))
+        .await
+        .unwrap();
+    let position = rs.last_replayed_index();
+    assert!(
+        !rs.has_unclaimed_start_before(
+            claim
+                .clone()
+                .with_invocation_id(Some(test_invocation_id(8))),
+            OplogIndex::from_u64(9),
+        )
+        .await
+        .unwrap()
+    );
+    assert!(
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            rs.has_unclaimed_start_before(claim.clone(), OplogIndex::from_u64(9),)
+        )
+        .await
+        .expect("visibility must not wait on the delivery gate")
+        .unwrap()
+    );
+    assert!(
+        !rs.has_unclaimed_start_before(claim.clone(), OplogIndex::from_u64(6))
+            .await
+            .unwrap()
+    );
+    assert_eq!(rs.last_replayed_index(), position);
+    barrier.acknowledge();
+    let ReplayStartClaimOutcome::Claimed { handle: second, .. } = rs
+        .claim_start_for_store(claim.clone(), false)
+        .await
+        .unwrap()
+    else {
+        panic!("second recorded occurrence must be claimed");
+    };
+    assert_eq!(second.start_idx(), OplogIndex::from_u64(6));
+    assert!(
+        !rs.has_unclaimed_start_before(claim, OplogIndex::from_u64(9))
+            .await
+            .unwrap()
+    );
+    rs.await_resolution(second).await.unwrap();
+    rs.await_completion_delivery(OplogIndex::from_u64(6), OplogIndex::from_u64(8))
+        .await
+        .unwrap()
+        .acknowledge();
+    rs.await_resolution(root).await.unwrap();
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn positional_admission_refusal_preserves_records_and_delivery_gates() {
+    use golem_common::model::oplog::payload::types::{
+        SerializableToolAdmissionRefusal, SerializableToolPositionalRequest,
+    };
+    let owner = OplogIndex::from_u64(2);
+    for records in [
+        vec![],
+        vec![OplogEntry::begin_atomic_region(Some(owner))],
+        vec![
+            OplogEntry::no_op(Some(owner)),
+            OplogEntry::no_op(Some(owner)),
+        ],
+        vec![
+            start_with_parent(2),
+            OplogEntry::begin_remote_transaction(
+                golem_common::model::TransactionId::new("recorded".to_string()),
+                None,
+            ),
+        ],
+    ] {
+        let mut entries = vec![
+            noop(),
+            start_now(),
+            start_with_parent(2),
+            end_for(3, 41),
+            delivered_for(3),
+        ];
+        entries.extend(records.clone());
+        let terminal = OplogIndex::from_u64(entries.len() as u64 + 1);
+        entries.push(end_for(2, 43));
+        let positional_records = records
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| !matches!(entry, OplogEntry::Start { .. }))
+            .collect::<Vec<_>>();
+        let rs = replay_state_over(entries).await;
+        let root = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        let child = rs
+            .claim_owned_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+                owner,
+            )
+            .await
+            .unwrap();
+        rs.await_resolution(child).await.unwrap();
+        let barrier = rs
+            .await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(5))
+            .await
+            .unwrap();
+        let position = rs.last_replayed_index();
+        let operation = crate::durable_host::tool::operation::tests::replay_operation(2);
+        let refusal = SerializableToolAdmissionRefusal::BeforePositional {
+            request: SerializableToolPositionalRequest::NoOp,
+        };
+        operation.install_recorded_admission_refusal(refusal.clone(), terminal);
+        if records.is_empty() {
+            let error = tokio::time::timeout(
+                Duration::from_secs(1),
+                rs.get_oplog_entry_or_replay_end_with_admission(
+                    Some(owner),
+                    Some((operation.clone(), SerializableToolPositionalRequest::NoOp)),
+                ),
+            )
+            .await
+            .expect("refusal must not wait for the delivery held by its caller")
+            .unwrap_err();
+            assert!(crate::durable_host::is_tool_attachment_live_admission_rejection(&error));
+            assert_eq!(rs.last_replayed_index(), position);
+            barrier.acknowledge();
+        } else {
+            let replay = rs.clone();
+            let pending_operation = operation.clone();
+            let mut pending = tokio::spawn(async move {
+                replay
+                    .get_oplog_entry_or_replay_end_with_admission(
+                        Some(owner),
+                        Some((pending_operation, SerializableToolPositionalRequest::NoOp)),
+                    )
+                    .await
+            });
+            assert!(
+                tokio::time::timeout(Duration::from_millis(25), &mut pending)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(operation.observed_admission_refusal(), None);
+            barrier.acknowledge();
+            let crate::durable_host::PositionalRead::Entry(index, entry) =
+                pending.await.unwrap().unwrap()
+            else {
+                panic!("recorded positional event must win");
+            };
+            assert_eq!(
+                index,
+                OplogIndex::from_u64(6 + positional_records[0].0 as u64)
+            );
+            assert_eq!(&entry, positional_records[0].1);
+            for (ordinal, expected) in positional_records.iter().skip(1) {
+                let crate::durable_host::PositionalRead::Entry(index, entry) = rs
+                    .get_oplog_entry_or_replay_end_with_admission(
+                        Some(owner),
+                        Some((operation.clone(), SerializableToolPositionalRequest::NoOp)),
+                    )
+                    .await
+                    .unwrap()
+                else {
+                    panic!("repeated positional event must win");
+                };
+                assert_eq!(index, OplogIndex::from_u64(6 + *ordinal as u64));
+                assert_eq!(&entry, *expected);
+            }
+            // A mismatched recorded Begin is returned unchanged for the caller's normal
+            // divergence check; only a later, absent demand can reproduce the refusal.
+            assert_eq!(operation.observed_admission_refusal(), None);
+            let error = rs
+                .get_oplog_entry_or_replay_end_with_admission(
+                    Some(owner),
+                    Some((operation.clone(), SerializableToolPositionalRequest::NoOp)),
+                )
+                .await
+                .unwrap_err();
+            assert!(crate::durable_host::is_tool_attachment_live_admission_rejection(&error));
+        }
+        assert_eq!(operation.observed_admission_refusal(), Some(refusal));
+        rs.await_resolution(root).await.unwrap();
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn admission_refusal_rechecks_competing_claims_behind_delivery() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        end_for(3, 41),
+        delivered_for(3),
+        start_with_parent(2),
+        end_for(6, 42),
+        delivered_for(6),
+        end_for(2, 43),
+    ])
+    .await;
+    let root = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    let first = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(first).await.unwrap();
+    let barrier = rs
+        .await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(5))
+        .await
+        .unwrap();
+    let claim = StartClaim::owned(
+        &HostFunctionName::MonotonicClockNow,
+        &DurableFunctionType::ReadLocal,
+        OplogIndex::from_u64(2),
+    );
+    let refusal =
+        golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal::BeforeStart {
+            initiating_function: "clock".to_string(),
+            claim: desert_rust::serialize(&claim, Vec::new()).unwrap(),
+        };
+    let operation = crate::durable_host::tool::operation::tests::replay_operation(2);
+    operation.install_recorded_admission_refusal(refusal.clone(), OplogIndex::from_u64(9));
+    assert_eq!(operation.observed_admission_refusal(), None);
+    let mut contenders = Vec::new();
+    for _ in 0..2 {
+        let (missed, miss) = oneshot::channel();
+        *rs.cursor.retained_claim_miss.lock().unwrap() = Some(missed);
+        let replay = rs.clone();
+        let operation = operation.clone();
+        let claim = claim.clone();
+        contenders.push(tokio::spawn(async move {
+            replay
+                .claim_start_for_store_with_admission(
+                    claim,
+                    false,
+                    |_, _| {},
+                    Some((operation, "clock".to_string())),
+                )
+                .await
+        }));
+        miss.await.unwrap();
+    }
+    barrier.acknowledge();
+    let mut claimed = None;
+    let mut refused = 0;
+    for contender in contenders {
+        match contender.await.unwrap() {
+            Ok(ReplayStartClaimOutcome::Claimed { handle, .. }) => {
+                assert_eq!(handle.start_idx(), OplogIndex::from_u64(6));
+                assert!(claimed.replace(handle).is_none());
+            }
+            Err(error) => {
+                assert!(
+                    crate::durable_host::is_tool_attachment_live_admission_rejection(&error),
+                    "{error}"
+                );
+                refused += 1;
+            }
+            _ => panic!("recorded call or refusal expected"),
+        }
+    }
+    assert_eq!(refused, 1);
+    assert_eq!(operation.observed_admission_refusal(), Some(refusal));
+    rs.await_resolution(claimed.unwrap()).await.unwrap();
+    rs.await_completion_delivery(OplogIndex::from_u64(6), OplogIndex::from_u64(8))
+        .await
+        .unwrap()
+        .acknowledge();
+    rs.await_resolution(root).await.unwrap();
+}
+
+#[test]
+async fn admission_refusal_retires_only_terminal_less_claims() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        start_with_parent(2),
+        end_for(4, 42),
+        end_for(2, 43),
+    ])
+    .await;
+    let root = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    let unfinished = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    let finished = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    assert!(
+        !rs.retire_incomplete_admission_claim(finished.start_idx())
+            .await
+            .unwrap()
+    );
+    assert!(
+        rs.retire_incomplete_admission_claim(unfinished.start_idx())
+            .await
+            .unwrap()
+    );
+    assert!(
+        !rs.cursor
+            .state
+            .lock()
+            .await
+            .concurrent_resolver
+            .has_claim(unfinished.start_idx())
+    );
+    assert!(
+        rs.retire_incomplete_admission_claim(OplogIndex::from_u64(99))
+            .await
+            .is_err()
+    );
+    rs.await_resolution(finished).await.unwrap();
+    rs.await_resolution(root).await.unwrap();
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn admission_refusal_reproduces_incomplete_scope_without_hiding_completed_scope() {
+    use golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal;
+    for completed in [false, true] {
+        let mut entries = vec![noop(), start_now(), nested_batched_scope_start(2)];
+        if completed {
+            entries.push(batched_scope_end(3));
+        }
+        entries.push(end_for(2, 43));
+        let terminal = OplogIndex::from_u64(entries.len() as u64);
+        let rs = replay_state_over(entries).await;
+        let root = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        let claim = StartClaim::scope(
+            &HostFunctionName::Custom("<scope:batched-write>".into()),
+            &DurableFunctionType::WriteRemoteBatched(None),
+            Some(OplogIndex::from_u64(2)),
+        );
+        let ReplayStartClaimOutcome::Claimed { handle, .. } =
+            rs.claim_start_for_store(claim, false).await.unwrap()
+        else {
+            panic!("scope must be claimed");
+        };
+        let operation = crate::durable_host::tool::operation::tests::replay_operation(2);
+        let refusal = SerializableToolAdmissionRefusal::AtRecordedOplogEntry { index: 3 };
+        operation.install_recorded_admission_refusal(refusal.clone(), terminal);
+        let result = crate::durable_host::concurrent::reproduce_incomplete_start_refusal(
+            Some(&operation),
+            &rs,
+            handle.start_idx(),
+        )
+        .await;
+        if completed {
+            result.unwrap();
+            assert_eq!(operation.observed_admission_refusal(), None);
+            rs.await_resolution(handle).await.unwrap();
+        } else {
+            assert!(
+                crate::durable_host::is_tool_attachment_live_admission_rejection(
+                    &result.unwrap_err()
+                )
+            );
+            assert_eq!(operation.observed_admission_refusal(), Some(refusal));
+        }
+        rs.await_resolution(root).await.unwrap();
+    }
+}
+
 fn wait_for_start(duration_in_nanos: u64, invocation_id: Option<u64>) -> OplogEntry {
     OplogEntry::Start {
         timestamp: Timestamp::now_utc(),
@@ -9458,4 +11500,743 @@ fn scope_claim_requires_the_recorded_invocation_id() {
     assert!(!claim(Some(1)).matches_start_identity(&scope_start(Some(2))));
     assert!(!claim(Some(1)).matches_start_identity(&scope_start(None)));
     assert!(!claim(None).matches_start_identity(&scope_start(Some(1))));
+}
+
+struct WalletComponentService {
+    metadata: golem_service_base::model::component::Component,
+    revisions: std::sync::Mutex<Vec<golem_common::model::component::ComponentRevision>>,
+}
+
+#[async_trait]
+impl crate::services::component::ComponentService for WalletComponentService {
+    async fn get(
+        &self,
+        _engine: &wasmtime::Engine,
+        _component_id: ComponentId,
+        _component_revision: golem_common::model::component::ComponentRevision,
+    ) -> Result<
+        (
+            wasmtime::component::Component,
+            golem_service_base::model::component::Component,
+        ),
+        WorkerExecutorError,
+    > {
+        unreachable!("wallet folding loads metadata, not a guest component")
+    }
+
+    async fn get_metadata(
+        &self,
+        component_id: ComponentId,
+        forced_revision: Option<golem_common::model::component::ComponentRevision>,
+    ) -> Result<golem_service_base::model::component::Component, WorkerExecutorError> {
+        assert_eq!(component_id, self.metadata.id);
+        let revision = forced_revision.expect("wallet folding must load the exact revision");
+        self.revisions.lock().unwrap().push(revision);
+        let mut metadata = self.metadata.clone();
+        metadata.revision = revision;
+        Ok(metadata)
+    }
+
+    async fn resolve_component(
+        &self,
+        _component_reference: String,
+        _resolving_environment: EnvironmentId,
+        _resolving_application: golem_common::model::application::ApplicationId,
+        _resolving_account: golem_common::model::account::AccountId,
+    ) -> Result<Option<ComponentId>, WorkerExecutorError> {
+        unreachable!("wallet folding does not resolve a component name")
+    }
+
+    async fn all_cached_metadata(&self) -> Vec<golem_service_base::model::component::Component> {
+        Vec::new()
+    }
+
+    async fn invalidate_all_metadata_for_environment(&self, _environment_id: EnvironmentId) {}
+}
+
+fn wallet_test_component(
+    component_id: ComponentId,
+    environment_id: EnvironmentId,
+) -> golem_service_base::model::component::Component {
+    golem_service_base::model::component::Component {
+        id: component_id,
+        revision: golem_common::model::component::ComponentRevision::INITIAL,
+        environment_id,
+        component_name: golem_common::model::component::ComponentName(
+            "wallet-prefixes".to_string(),
+        ),
+        hash: golem_common::model::diff::Hash::empty(),
+        application_id: golem_common::model::application::ApplicationId::new(),
+        account_id: golem_common::model::account::AccountId::new(),
+        account_email: golem_common::model::account::AccountEmail::new("test@golem"),
+        application_name: golem_common::model::application::ApplicationName::try_from(
+            "test-app".to_string(),
+        )
+        .unwrap(),
+        environment_name: golem_common::model::environment::EnvironmentName::try_from("test-env")
+            .unwrap(),
+        component_size: 1,
+        metadata: golem_common::model::component_metadata::ComponentMetadata::default(),
+        created_at: chrono::Utc::now(),
+        wasm_hash: golem_common::model::diff::Hash::empty(),
+        object_store_key: "wallet-prefixes".to_string(),
+    }
+}
+
+#[test]
+async fn owner_wallet_reconstructs_physical_prefixes_without_rewinding_live_state() {
+    use crate::worker::owner_wallet::{OwnerWallet, WalletBaseline};
+    use crate::worker::tasks::RuntimeAppendTasks;
+    use golem_common::model::agent::ResolvedOwnerContext;
+    use golem_common::model::component::ComponentRevision;
+
+    let component_id = ComponentId::new();
+    let environment_id = EnvironmentId::new();
+    let owner = OwnedAgentId::new(
+        environment_id,
+        &AgentId {
+            component_id,
+            agent_id: "wallet-prefixes".to_string(),
+        },
+    );
+    let metadata = wallet_test_component(component_id, environment_id);
+    let components = Arc::new(WalletComponentService {
+        metadata: metadata.clone(),
+        revisions: std::sync::Mutex::new(Vec::new()),
+    });
+    let oplog = Arc::new(InMemoryOplog::new());
+    let installed = stored_test_card(CardId::new());
+    let derived = stored_test_card(CardId::new());
+    let later = stored_test_card(CardId::new());
+    for entry in [
+        noop(),
+        OplogEntry::card_installed(None, None, Box::new(installed.clone()), 1),
+        start_now(),
+        OplogEntry::card_expired(None, installed.card_id(), 2),
+        OplogEntry::CardDerived {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            card: Box::new(derived.clone()),
+            wallet_generation: 2,
+        },
+        OplogEntry::successful_update(
+            ComponentRevision::new(1).unwrap(),
+            1,
+            None,
+            Default::default(),
+            None,
+        ),
+        OplogEntry::successful_update(
+            ComponentRevision::new(2).unwrap(),
+            1,
+            None,
+            Default::default(),
+            None,
+        ),
+        start_now(),
+        OplogEntry::card_installed(None, None, Box::new(later.clone()), 3),
+    ] {
+        oplog.add(entry).await.unwrap();
+    }
+    let baseline = WalletBaseline::new(
+        owner.clone(),
+        ResolvedOwnerContext::ComponentWorker,
+        components.clone(),
+        &metadata,
+        oplog.as_ref(),
+        None,
+        Vec::new(),
+    )
+    .await
+    .unwrap();
+    let interest_index = Arc::new(crate::services::card_interest::CardInterestIndex::new());
+    let wallet = OwnerWallet::new(
+        baseline,
+        Arc::new(RuntimeAppendTasks::default()),
+        crate::worker::tasks::WorkerTasks::default(),
+        Arc::new(tokio::sync::Mutex::new(())),
+        interest_index.clone(),
+    )
+    .await
+    .unwrap();
+    wallet.activate_interest().await;
+    assert!(oplog.reads.lock().unwrap().is_empty());
+    let canonical = wallet.snapshot();
+    let replay = ReplayState::new_for_owner(
+        owner,
+        oplog.clone(),
+        DeletedRegions::from_regions([OplogRegion::from_range(4..=6)]),
+        None,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        OplogIndex::from_u64(8),
+        Some(wallet.clone()),
+    )
+    .await
+    .unwrap();
+    let constructor_reads = oplog.reads.lock().unwrap().clone();
+    let initial = wallet.latest_replay_receipt().result.await.unwrap();
+    assert_eq!(initial.wallet.generation, 1);
+    assert_eq!(*oplog.reads.lock().unwrap(), constructor_reads);
+    let mut tx = replay.cursor.tx().await.unwrap();
+    assert!(
+        tx.try_get_oplog_entry_leaving_unclaimed_starts(|_| false)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    replay.cursor.finish_tx(tx);
+    assert_eq!(
+        wallet
+            .latest_replay_receipt()
+            .result
+            .await
+            .unwrap()
+            .wallet
+            .generation,
+        1
+    );
+    let earlier_prefix = initial;
+    assert_eq!(
+        replay
+            .try_get_oplog_entry(|_| true)
+            .await
+            .unwrap()
+            .unwrap()
+            .0,
+        OplogIndex::from_u64(3)
+    );
+    let reads = oplog.reads.lock().unwrap().clone();
+    let later_prefix = wallet.latest_replay_receipt().result.await.unwrap();
+    assert_eq!(later_prefix.wallet.generation, 2);
+    assert!(!later_prefix.wallet.cards.contains_key(&installed.card_id()));
+    assert!(!later_prefix.wallet.cards.contains_key(&derived.card_id()));
+    assert!(!later_prefix.wallet.cards.contains_key(&later.card_id()));
+    assert_eq!(
+        later_prefix.wallet.metadata.revision,
+        ComponentRevision::new(2).unwrap()
+    );
+    assert_eq!(
+        *components.revisions.lock().unwrap(),
+        [ComponentRevision::new(2).unwrap()]
+    );
+    assert_eq!(earlier_prefix.wallet.generation, 1);
+    assert_eq!(earlier_prefix.wallet.cards[&installed.card_id()], installed);
+    assert_eq!(
+        earlier_prefix.wallet.metadata.revision,
+        ComponentRevision::INITIAL
+    );
+    assert!(Arc::ptr_eq(&canonical, &wallet.snapshot()));
+    assert_eq!(*oplog.reads.lock().unwrap(), reads);
+    assert!(!reads.contains(&OplogIndex::from_u64(9)));
+    let events = replay.take_new_replay_events();
+    let projected = events
+        .iter()
+        .filter_map(|event| match event {
+            ReplayEvent::Projected { receipt, .. } => Some(receipt.index),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(projected, [2, 4, 5, 7].map(OplogIndex::from_u64));
+}
+
+#[test]
+async fn owner_wallet_selected_snapshot_excludes_earlier_effects_and_preserves_exact_derivation() {
+    use crate::worker::owner_wallet::{OwnerWallet, WalletBaseline};
+    use crate::worker::tasks::{RuntimeAppendTasks, WorkerTasks};
+    use golem_common::model::agent::ResolvedOwnerContext;
+
+    let metadata = wallet_test_component(ComponentId::new(), EnvironmentId::new());
+    let owner_id = OwnedAgentId::new(
+        metadata.environment_id,
+        &AgentId {
+            component_id: metadata.id,
+            agent_id: "snapshot-wallet".to_string(),
+        },
+    );
+    let before = stored_test_card(CardId::new());
+    let selected = stored_test_card(CardId::new());
+    let audit = stored_test_card(CardId::new());
+    let oplog = Arc::new(InMemoryOplog::new());
+    for entry in [
+        noop(),
+        OplogEntry::card_installed(None, None, Box::new(before.clone()), 1),
+        OplogEntry::Snapshot {
+            timestamp: Timestamp::now_utc(),
+            data: OplogPayload::Inline(Box::new(Vec::new())),
+            mime_type: "application/octet-stream".to_string(),
+            active_cards: vec![selected.clone()],
+            wallet_generation: 7,
+            filesystem_snapshot: None,
+        },
+        start_now(),
+        OplogEntry::CardDerived {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            card: Box::new(audit.clone()),
+            wallet_generation: 7,
+        },
+        noop(),
+    ] {
+        oplog.add(entry).await.unwrap();
+    }
+    let baseline = WalletBaseline::new(
+        owner_id.clone(),
+        ResolvedOwnerContext::ComponentWorker,
+        Arc::new(WalletComponentService {
+            metadata: metadata.clone(),
+            revisions: Default::default(),
+        }),
+        &metadata,
+        oplog.as_ref(),
+        Some(OplogIndex::from_u64(3)),
+        Vec::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(*oplog.reads.lock().unwrap(), [OplogIndex::from_u64(3)]);
+    let interest_index = Arc::new(crate::services::card_interest::CardInterestIndex::new());
+    let wallet = OwnerWallet::new(
+        baseline,
+        Arc::new(RuntimeAppendTasks::default()),
+        WorkerTasks::default(),
+        Arc::new(tokio::sync::Mutex::new(())),
+        interest_index.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(*oplog.reads.lock().unwrap(), [OplogIndex::from_u64(3)]);
+    wallet.activate_interest().await;
+    let replay = ReplayState::new_for_owner(
+        owner_id,
+        oplog.clone(),
+        DeletedRegions::from_regions([OplogRegion::from_range(2..=3)]),
+        Some(OplogIndex::from_u64(3)),
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        OplogIndex::from_u64(6),
+        Some(wallet.clone()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        replay
+            .try_get_oplog_entry(|_| true)
+            .await
+            .unwrap()
+            .unwrap()
+            .0,
+        OplogIndex::from_u64(4)
+    );
+    let projection = wallet.latest_replay_receipt().result.await.unwrap();
+    assert_eq!(projection.wallet.generation, 7);
+    assert_eq!(projection.wallet.cards.len(), 1);
+    assert_eq!(projection.wallet.cards[&selected.card_id()], selected);
+    assert!(!projection.wallet.cards.contains_key(&before.card_id()));
+    replay.take_new_replay_events();
+    let reads = oplog.reads.lock().unwrap().clone();
+    assert!(
+        wallet
+            .recorded_derivation(OplogIndex::from_u64(4), None, &audit)
+            .await
+            .unwrap()
+    );
+    assert_eq!(*oplog.reads.lock().unwrap(), reads);
+}
+
+#[test]
+async fn runtime_card_audits_use_physical_predecessors_independent_of_lookup_order_and_event_drain()
+{
+    use crate::worker::owner_wallet::{OwnerWallet, WalletBaseline};
+    use crate::worker::tasks::RuntimeAppendTasks;
+    use golem_common::model::agent::ResolvedOwnerContext;
+
+    for conflict in -3..5 {
+        let metadata = wallet_test_component(ComponentId::new(), EnvironmentId::new());
+        let owner_id = OwnedAgentId::new(
+            metadata.environment_id,
+            &AgentId {
+                component_id: metadata.id,
+                agent_id: "audit-prefixes".to_string(),
+            },
+        );
+        let installed = stored_test_card(CardId::new());
+        let first = stored_test_card(CardId::new());
+        let second = stored_test_card(CardId::new());
+        let parent = (conflict == -3).then_some(OplogIndex::from_u64(3));
+        let audit = |card: &StoredCard| OplogEntry::CardDerived {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: parent,
+            card: Box::new(card.clone()),
+            wallet_generation: 1,
+        };
+        let mut entries = vec![noop(); 23];
+        entries[10] = start_now();
+        entries[11] = OplogEntry::card_installed(None, None, Box::new(installed.clone()), 1);
+        entries[12] = end_for(11, 42);
+        entries[13] = audit(&first);
+        entries[16] = start_now();
+        entries[18] = end_for(17, 43);
+        entries[19] = audit(&second);
+        entries[20] = OplogEntry::card_expired(None, installed.card_id(), 2);
+        entries[22] = invocation_finished();
+        match conflict {
+            0 => entries[14] = entries[13].clone(),
+            1 => {
+                if let OplogEntry::CardDerived {
+                    entity_parent_start_index,
+                    ..
+                } = &mut entries[13]
+                {
+                    *entity_parent_start_index = Some(OplogIndex::from_u64(3));
+                }
+            }
+            2 => {
+                if let OplogEntry::CardDerived { card, .. } = &mut entries[13]
+                    && let StoredCard::Concrete(card) = card.as_mut()
+                {
+                    card.expires_at = Some(chrono::DateTime::UNIX_EPOCH);
+                }
+            }
+            3 => {
+                if let OplogEntry::CardDerived {
+                    wallet_generation, ..
+                } = &mut entries[13]
+                {
+                    *wallet_generation = 0;
+                }
+            }
+            _ => {}
+        }
+        let oplog = Arc::new(InMemoryOplog::new());
+        for entry in entries {
+            oplog.add(entry).await.unwrap();
+        }
+        let baseline = WalletBaseline::new(
+            owner_id.clone(),
+            ResolvedOwnerContext::ComponentWorker,
+            Arc::new(WalletComponentService {
+                metadata: metadata.clone(),
+                revisions: Default::default(),
+            }),
+            &metadata,
+            oplog.as_ref(),
+            None,
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+        let interest_index = Arc::new(crate::services::card_interest::CardInterestIndex::new());
+        let wallet = OwnerWallet::new(
+            baseline,
+            Arc::new(RuntimeAppendTasks::default()),
+            crate::worker::tasks::WorkerTasks::default(),
+            Arc::new(tokio::sync::Mutex::new(())),
+            interest_index.clone(),
+        )
+        .await
+        .unwrap();
+        wallet.activate_interest().await;
+        let canonical = wallet.snapshot();
+        let replay = ReplayState::new_for_owner(
+            owner_id,
+            oplog.clone(),
+            DeletedRegions::default(),
+            None,
+            crate::durable_host::tool::operation::OwnerToolOperations::new(),
+            OplogIndex::from_u64(23),
+            Some(wallet.clone()),
+        )
+        .await
+        .unwrap();
+        let mut consumption_error = None;
+        let mut reconstruction = parent.map(|parent| {
+            ConcurrentReplayResolver::default()
+                .register_reconstruction(parent, Some(Arc::downgrade(&wallet)))
+        });
+        let reconstruction_hold = reconstruction.clone();
+        while replay.last_replayed_index() < OplogIndex::from_u64(22) {
+            let mut tx = replay.cursor.tx().await.unwrap();
+            let (index, entry) = tx.raw_read_next_oplog_entry().await.unwrap();
+            let result = tx.commit_consumed_entry(index, &entry).await;
+            replay.cursor.finish_tx(tx);
+            if let Err(error) = result {
+                consumption_error = Some(error);
+                break;
+            }
+        }
+        replay.take_new_replay_events_for(false);
+        replay.take_new_replay_events_for(true);
+        let reads = oplog.reads.lock().unwrap().clone();
+        if conflict >= 0 {
+            assert!(
+                consumption_error.is_some()
+                    || wallet
+                        .recorded_derivation(
+                            OplogIndex::from_u64(if conflict == 4 { 14 } else { 11 }),
+                            None,
+                            &first
+                        )
+                        .await
+                        .is_err(),
+                "conflict {conflict} was accepted"
+            );
+            assert_eq!(*oplog.reads.lock().unwrap(), reads);
+            continue;
+        }
+        assert!(consumption_error.is_none());
+        assert_eq!(
+            wallet
+                .latest_replay_receipt()
+                .result
+                .await
+                .unwrap()
+                .wallet
+                .generation,
+            2
+        );
+        for (start, card) in [(17, &second), (11, &first)] {
+            if conflict <= -2 && start == 17 {
+                continue;
+            }
+            assert!(
+                wallet
+                    .recorded_derivation(OplogIndex::from_u64(start), parent, card)
+                    .await
+                    .unwrap()
+            );
+            assert!(
+                wallet
+                    .recorded_derivation(OplogIndex::from_u64(start), parent, card)
+                    .await
+                    .is_err()
+            );
+            assert!(Arc::ptr_eq(&canonical, &wallet.snapshot()));
+        }
+        assert_eq!(*oplog.reads.lock().unwrap(), reads);
+        let mut tx = replay.cursor.tx().await.unwrap();
+        let (index, entry) = tx.raw_read_next_oplog_entry().await.unwrap();
+        assert!(matches!(entry, OplogEntry::AgentInvocationFinished { .. }));
+        tx.commit_consumed_entry(index, &entry).await.unwrap();
+        replay.cursor.finish_tx(tx);
+        if let Some(reconstruction) = &mut reconstruction {
+            reconstruction.body_settled();
+            assert!(wallet.has_recorded_derivation(first.card_id()));
+            assert!(wallet.has_recorded_derivation(second.card_id()));
+        }
+        drop(reconstruction);
+        if parent.is_some() {
+            assert!(wallet.has_recorded_derivation(first.card_id()));
+            assert!(wallet.has_recorded_derivation(second.card_id()));
+        }
+        drop(reconstruction_hold);
+        assert!(
+            !wallet
+                .recorded_derivation(OplogIndex::from_u64(11), None, &first)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !wallet
+                .recorded_derivation(OplogIndex::from_u64(17), None, &second)
+                .await
+                .unwrap()
+        );
+    }
+}
+
+#[test]
+async fn failed_wallet_publication_poison_is_local_and_rebuild_retains_the_entry() {
+    use crate::worker::owner_wallet::{
+        OwnerWallet, WalletBaseline, WalletCommit, WalletPublicationFailure,
+    };
+    use crate::worker::tasks::RuntimeAppendTasks;
+    use golem_common::model::agent::ResolvedOwnerContext;
+
+    for retire in [false, true] {
+        let metadata = wallet_test_component(ComponentId::new(), EnvironmentId::new());
+        let owner_id = OwnedAgentId::new(
+            metadata.environment_id,
+            &AgentId {
+                component_id: metadata.id,
+                agent_id: "wallet-publication".to_string(),
+            },
+        );
+        let oplog = Arc::new(InMemoryOplog::new());
+        oplog.add(noop()).await.unwrap();
+        let baseline = WalletBaseline::new(
+            owner_id.clone(),
+            ResolvedOwnerContext::ComponentWorker,
+            Arc::new(WalletComponentService {
+                metadata: metadata.clone(),
+                revisions: Default::default(),
+            }),
+            &metadata,
+            oplog.as_ref(),
+            None,
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+        let interest_index = Arc::new(crate::services::card_interest::CardInterestIndex::new());
+        let owner = OwnerWallet::new(
+            baseline.clone(),
+            Arc::new(RuntimeAppendTasks::default()),
+            crate::worker::tasks::WorkerTasks::default(),
+            Arc::new(tokio::sync::Mutex::new(())),
+            interest_index.clone(),
+        )
+        .await
+        .unwrap();
+        owner.activate_interest().await;
+        let card = stored_test_card(CardId::new());
+        owner.finish_replay_prefix();
+        let dropped = WalletCommit::prepare(
+            owner.lock_boundary().await.unwrap(),
+            OplogEntry::card_installed(None, None, Box::new(card.clone()), 0),
+        )
+        .await
+        .unwrap();
+        let before_drop = owner.snapshot();
+        assert!(!before_drop.cards.contains_key(&card.card_id()));
+        dropped.validate_before_append().unwrap();
+        drop(dropped);
+        assert!(Arc::ptr_eq(&before_drop, &owner.snapshot()));
+        assert_eq!(oplog.current_oplog_index().await, OplogIndex::INITIAL);
+        let commit = WalletCommit::prepare(
+            owner.lock_boundary().await.unwrap(),
+            OplogEntry::card_installed(None, None, Box::new(card.clone()), 0),
+        )
+        .await
+        .unwrap();
+        commit.validate_before_append().unwrap();
+        let index = oplog.add(commit.entry()).await.unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
+
+        let before_fault = owner.snapshot();
+        if retire {
+            owner.retire();
+        } else {
+            owner
+                .publish(&before_fault, Arc::new(before_fault.as_ref().clone()))
+                .unwrap();
+        }
+        let preserved = owner.snapshot();
+        assert_eq!(
+            commit.publish(),
+            Err(if retire {
+                WalletPublicationFailure::RetiredGeneration
+            } else {
+                WalletPublicationFailure::PredecessorChanged
+            })
+        );
+        assert!(owner.validate_current().is_err());
+        assert!(Arc::ptr_eq(&preserved, &owner.snapshot()));
+        assert!(!owner.snapshot().cards.contains_key(&card.card_id()));
+        drop(commit);
+
+        let replacement = OwnerWallet::new(
+            baseline,
+            Arc::new(RuntimeAppendTasks::default()),
+            crate::worker::tasks::WorkerTasks::default(),
+            Arc::new(tokio::sync::Mutex::new(())),
+            interest_index.clone(),
+        )
+        .await
+        .unwrap();
+        replacement.activate_interest().await;
+        let replay = ReplayState::new_for_owner(
+            owner_id,
+            oplog.clone(),
+            DeletedRegions::default(),
+            None,
+            crate::durable_host::tool::operation::OwnerToolOperations::new(),
+            index,
+            Some(replacement.clone()),
+        )
+        .await
+        .unwrap();
+        assert!(replay.is_live());
+        drop(replacement.lock_boundary().await.unwrap());
+        replacement.validate_current().unwrap();
+        assert_eq!(replacement.snapshot().cards[&card.card_id()], card);
+        assert_eq!(replacement.snapshot().generation, 1);
+        assert_eq!(oplog.current_oplog_index().await, index);
+        assert!(owner.publish(&preserved, preserved.clone()).is_err());
+        replacement.validate_current().unwrap();
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn owner_boundary_admission_precedes_poll_and_drains_cancelled_acquisition() {
+    use crate::worker::owner_wallet::{OwnerWallet, WalletBaseline};
+    use crate::worker::tasks::RuntimeAppendTasks;
+    use golem_common::model::agent::ResolvedOwnerContext;
+
+    let metadata = wallet_test_component(ComponentId::new(), EnvironmentId::new());
+    let owner_id = OwnedAgentId::new(
+        metadata.environment_id,
+        &AgentId {
+            component_id: metadata.id,
+            agent_id: "wallet-boundary".to_string(),
+        },
+    );
+    let oplog = InMemoryOplog::new();
+    oplog.add(noop()).await.unwrap();
+    let baseline = WalletBaseline::new(
+        owner_id,
+        ResolvedOwnerContext::ComponentWorker,
+        Arc::new(WalletComponentService {
+            metadata: metadata.clone(),
+            revisions: Default::default(),
+        }),
+        &metadata,
+        &oplog,
+        None,
+        Vec::new(),
+    )
+    .await
+    .unwrap();
+    for phase in 0..3 {
+        let append_tasks = Arc::new(RuntimeAppendTasks::default());
+        let boundary_lock = Arc::new(tokio::sync::Mutex::new(()));
+        let interest_index = Arc::new(crate::services::card_interest::CardInterestIndex::new());
+        let owner = OwnerWallet::new(
+            baseline.clone(),
+            append_tasks.clone(),
+            crate::worker::tasks::WorkerTasks::default(),
+            boundary_lock.clone(),
+            interest_index.clone(),
+        )
+        .await
+        .unwrap();
+        owner.activate_interest().await;
+        owner.finish_replay_prefix();
+        let contention = if phase == 2 {
+            Some(boundary_lock.lock_owned().await)
+        } else {
+            None
+        };
+        let mut captured = Box::pin({
+            let transient = owner.clone();
+            transient.lock_boundary()
+        });
+        let mut drain = Box::pin(append_tasks.seal_and_wait());
+        assert!(futures::poll!(drain.as_mut()).is_pending());
+        assert!(owner.lock_boundary().await.is_err());
+        match phase {
+            0 => drop(captured),
+            1 => {
+                let boundary = captured.await.unwrap();
+                assert!(futures::poll!(drain.as_mut()).is_pending());
+                drop(boundary);
+            }
+            2 => {
+                assert!(futures::poll!(captured.as_mut()).is_pending());
+                drop(captured);
+            }
+            _ => unreachable!(),
+        }
+        drain.await;
+        drop(contention);
+    }
 }

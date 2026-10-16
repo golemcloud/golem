@@ -31,6 +31,8 @@ use std::io::{Read, Write};
 use streaming_tool_guest_client::{StreamSummary, StreamingClient, StreamingRunError};
 use typed_output_stream_tool_guest_client::TypedOutputStreamClient;
 
+mod wallet_recovery;
+
 #[allow(dead_code)]
 mod definition_owned_proxy {
     use golem_rust::agentic::{InputStream, OutputStream};
@@ -635,7 +637,7 @@ pub struct TypedInputEvidence {
     pub ordinal: u32,
 }
 
-#[agent_definition]
+#[agent_definition(snapshotting = "enabled")]
 pub trait ToolStreamingCaller {
     fn new(name: String, #[agent_config] config: Config<ToolStreamingCallerConfig>) -> Self;
 
@@ -709,7 +711,31 @@ pub trait ToolStreamingCaller {
     async fn native_veto_with_long_clock(&self, gate: golem_rust::PromiseId) -> Vec<String>;
     async fn native_effect_count(&self) -> String;
     async fn native_config(&self, key: String) -> String;
+    async fn native_replay_upgrade_rejection(&self) -> Vec<String>;
     async fn raw_handle_lifecycles(&self) -> Vec<String>;
+    async fn recover_accepted_unread_output(&self, cancel_write: bool) -> Vec<u8>;
+    async fn recover_piped_unread_output(&self, chunk_size: u32, cancel_read: bool) -> Vec<u8>;
+    async fn recover_direct_stdin(&self) -> Vec<u8>;
+    async fn drop_cancelled_fire_and_forget_stdin(&self);
+    async fn abandon_stdin_and_wait_closed(&self) -> String;
+    fn retain_stdin_closed(&self);
+    async fn wait_retained_stdin_closed(&self) -> String;
+    fn drop_retained_stdin_closed(&self);
+    async fn drop_direct_stdin_write_and_spin(&self);
+    async fn fail_direct_stdin_without_tool(&self);
+    async fn direct_stdin_wait_order(&self) -> Vec<String>;
+    async fn direct_stdin_write_order(&self) -> Vec<String>;
+    async fn identical_stdin_write_order(&self) -> Vec<String>;
+    async fn identical_stdin_wait_order(&self) -> Vec<String>;
+    async fn retain_tool_output(
+        &self,
+        cancel_read: bool,
+        cancel_ready: bool,
+        cancel_positive: bool,
+    ) -> Vec<u8>;
+    async fn retain_failed_tool_output(&self);
+    async fn consume_retained_tool_output(&self) -> Vec<u8>;
+    async fn pipe_retained_tool_output(&self, cancel_read: bool) -> Vec<u8>;
     async fn raw_observer_detach_and_fire_open(&self) -> Vec<String>;
     async fn stdout_drop_preserves_sibling(&self) -> Vec<String>;
     async fn hold_open_stdin(&self, calls: u32);
@@ -757,7 +783,10 @@ pub trait ToolStreamingCaller {
     async fn matrix_core_observation(&self) -> MatrixObservation;
 }
 
-struct ToolStreamingCallerImpl;
+struct ToolStreamingCallerImpl {
+    retained_output: std::cell::RefCell<Option<InputStream>>,
+    retained_stdin_closed: std::cell::RefCell<Option<tool_host::ToolStdinClosed>>,
+}
 
 #[agent_definition]
 pub trait RustResourceToolStreamingCaller {
@@ -769,6 +798,7 @@ pub trait RustResourceToolStreamingCaller {
     async fn matrix_secret_observation(&self) -> MatrixResourceObservation;
     async fn matrix_quota_observation(&self) -> MatrixResourceObservation;
     async fn matrix_permission_observation(&self) -> MatrixResourceObservation;
+    async fn matrix_parallel_permission_issuance(&self) -> bool;
     async fn matrix_typed_stream_observation(&self) -> MatrixResourceObservation;
     async fn matrix_resource_observation(&self) -> MatrixResourceObservation;
 }
@@ -1369,7 +1399,59 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             std::env::var_os("FORBID_AGENT_CONSTRUCTION").is_none(),
             "component-baseline owners must not construct an agent"
         );
-        Self
+        Self {
+            retained_output: std::cell::RefCell::new(None),
+            retained_stdin_closed: std::cell::RefCell::new(None),
+        }
+    }
+
+    async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+        match std::env::var("SNAPSHOT_ATTACHMENTS").as_deref() {
+            Ok("stdin") => {
+                for _ in 0..2 {
+                    let (writer, stdin, closed) = tool_host::create_stdin();
+                    writer.write(vec![19, 255, 0]).await.unwrap();
+                    writer.finish().await.unwrap();
+                    assert!(matches!(
+                        closed.wait().await,
+                        tool_host::ByteStreamCloseCause::Finished
+                    ));
+                    drop((writer, stdin, closed));
+                }
+            }
+            Ok("output") => {
+                for _ in 0..2 {
+                    let (target, mut output) = tool_host::create_output();
+                    drop(target);
+                    assert!(matches!(
+                        output.next().await,
+                        Some(Err(ByteStreamFailure::Abandoned))
+                    ));
+                    assert!(output.next().await.is_none());
+                }
+            }
+            _ => {}
+        }
+        Ok(Vec::new())
+    }
+
+    async fn load_snapshot(
+        _bytes: Vec<u8>,
+        _context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
+        let result = Self {
+            retained_output: std::cell::RefCell::new(None),
+            retained_stdin_closed: std::cell::RefCell::new(None),
+        };
+        if std::env::var("SNAPSHOT_ATTACHMENTS").as_deref() == Ok("retained") {
+            let (writer, stdin, closed) = tool_host::create_stdin();
+            writer.finish().await.unwrap();
+            drop((writer, stdin));
+            *result.retained_stdin_closed.borrow_mut() = Some(closed);
+        } else {
+            result.save_snapshot().await?;
+        }
+        Ok(result)
     }
 
     fn record_native_order(&self, marker: String) -> String {
@@ -1998,24 +2080,33 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             None,
         );
         assert_eq!(raw_chunk(&mut resumed_stdout).await, b"marker:");
-        let mut pending_read = Box::pin(resumed_stdout.read(Vec::with_capacity(1)));
-        poll_fn(|cx| match pending_read.as_mut().poll(cx) {
-            Poll::Pending => Poll::Ready(()),
-            Poll::Ready(result) => panic!("stdout read completed before cancellation: {result:?}"),
-        })
-        .await;
-        let (reader_cancelled, buffer) = pending_read.as_mut().cancel();
-        assert_eq!(format!("{reader_cancelled:?}"), "Cancelled");
-        assert!(buffer.is_empty());
-        drop(pending_read);
+        for _ in 0..2 {
+            let mut pending_read = Box::pin(resumed_stdout.read(Vec::with_capacity(1)));
+            poll_fn(|cx| match pending_read.as_mut().poll(cx) {
+                Poll::Pending => Poll::Ready(()),
+                Poll::Ready(result) => {
+                    panic!("stdout read completed before cancellation: {result:?}")
+                }
+            })
+            .await;
+            let (reader_cancelled, buffer) = pending_read.as_mut().cancel();
+            assert_eq!(format!("{reader_cancelled:?}"), "Cancelled");
+            assert!(buffer.is_empty());
+            drop(pending_read);
+        }
         assert!(
             resumed_source
-                .write_all(vec![Ok(b"resumed".to_vec())])
+                .write_all(vec![Ok(b"res".to_vec()), Ok(b"umed".to_vec())])
                 .await
                 .is_empty()
         );
         drop(resumed_source);
-        let cancelled_reader_resumed_bytes = read_all(resumed_stdout).await;
+        let mut cancelled_reader_resumed_bytes = raw_chunk(&mut resumed_stdout).await;
+        assert_eq!(cancelled_reader_resumed_bytes, b"res");
+        let second_chunk = raw_chunk(&mut resumed_stdout).await;
+        assert_eq!(second_chunk, b"umed");
+        cancelled_reader_resumed_bytes.extend(second_chunk);
+        assert!(read_all(resumed_stdout).await.is_empty());
         let cancelled_reader_result = raw_result(&resumed_result).await.is_ok();
 
         let (detached_target, detached_stdout) = tool_host::create_output();
@@ -3039,8 +3130,10 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 .unwrap_or_else(|| panic!("built-in CLI tool '{tool}' returned no result")),
         )
         .unwrap_or_else(|error| panic!("decode built-in CLI tool '{tool}' result: {error}"));
-        let exit_code = i32::from_value(value.value())
-            .unwrap_or_else(|error| panic!("convert built-in CLI tool '{tool}' result: {error}"));
+        let exit_code = golem_rust::tool::ProcessExitStatus::from_value(value.value())
+            .unwrap_or_else(|error| panic!("convert built-in CLI tool '{tool}' result: {error}"))
+            .exit_code
+            .into();
         CliToolEvidence {
             exit_code,
             stdout,
@@ -3478,6 +3571,479 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         .await
         .expect("invoke native config probe");
         String::from_utf8(read_all(stdout).await).unwrap()
+    }
+
+    async fn native_replay_upgrade_rejection(&self) -> Vec<String> {
+        let rpc = ToolRpc::create("native-streaming").expect("native tool RPC");
+        let (stdout_target, mut stdout) = tool_host::create_output();
+        let (stderr_target, mut stderr) = tool_host::create_output();
+        let result = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("upgrade-pressure"),
+            None,
+            Some(stdout_target),
+            Some(stderr_target),
+        );
+        assert!(matches!(
+            raw_result(&result).await,
+            Err(ToolRpcError::ResourceExhausted(_))
+        ));
+        for output in [&mut stdout, &mut stderr] {
+            assert!(matches!(
+                output.next().await,
+                Some(Err(ByteStreamFailure::ResourceExhausted))
+            ));
+            assert!(output.next().await.is_none());
+        }
+        vec![
+            "resource-exhausted".to_string(),
+            "stdout-resource-exhausted".to_string(),
+            "stderr-resource-exhausted".to_string(),
+        ]
+    }
+
+    async fn identical_stdin_wait_order(&self) -> Vec<String> {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let (writer, _stdin, closed) = tool_host::create_stdin();
+        let mut first = Box::pin(closed.wait());
+        poll_fn(|cx| {
+            assert!(first.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        let mut second = Box::pin(closed.wait());
+        poll_fn(|cx| {
+            assert!(second.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        wait_at_promise_checkpoint("same-watcher-started").await;
+        drop(first);
+        writer.finish().await.unwrap();
+        let second = second.await;
+        assert!(matches!(second, tool_host::ByteStreamCloseCause::Finished));
+        wait_at_promise_checkpoint("direct-stdin-waits-done").await;
+        vec![format!("{second:?}")]
+    }
+
+    async fn identical_stdin_write_order(&self) -> Vec<String> {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let (writer, _stdin, closed) = tool_host::create_stdin();
+        let mut first = Box::pin(writer.write(vec![0xa7; 7]));
+        poll_fn(|cx| {
+            assert!(first.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        wait_at_promise_checkpoint("first-stdin-write-accepted").await;
+        writer.write(vec![0xa7; 7]).await.unwrap();
+        drop(first);
+        wait_at_promise_checkpoint("direct-stdin-waits-done").await;
+        writer.finish().await.unwrap();
+        vec![format!("{:?}", closed.wait().await)]
+    }
+
+    async fn direct_stdin_write_order(&self) -> Vec<String> {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let (first_writer, _first_stdin, first_closed) = tool_host::create_stdin();
+        let (second_writer, _second_stdin, second_closed) = tool_host::create_stdin();
+        let mut first_write = Box::pin(first_writer.write(vec![0x13; 11]));
+        poll_fn(|cx| {
+            assert!(first_write.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        second_writer.write(vec![0xa7; 19]).await.unwrap();
+        second_writer
+            .fail(ByteStreamFailure::Failed("second".to_string()))
+            .await
+            .unwrap();
+        wait_at_promise_checkpoint("second-stdin-write-done").await;
+        first_write.await.unwrap();
+        first_writer.finish().await.unwrap();
+        let first = first_closed.wait().await;
+        let second = second_closed.wait().await;
+        wait_at_promise_checkpoint("direct-stdin-waits-done").await;
+        vec![format!("{first:?}"), format!("{second:?}")]
+    }
+
+    async fn direct_stdin_wait_order(&self) -> Vec<String> {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let (first_writer, _first_stdin, first_closed) = tool_host::create_stdin();
+        let (second_writer, _second_stdin, second_closed) = tool_host::create_stdin();
+        second_writer
+            .fail(ByteStreamFailure::Failed("second".to_string()))
+            .await
+            .unwrap();
+        let mut first = Box::pin(first_closed.wait());
+        poll_fn(|cx| {
+            assert!(first.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        let second = second_closed.wait().await;
+        assert!(
+            matches!(&second, tool_host::ByteStreamCloseCause::Failed(ByteStreamFailure::Failed(message)) if message == "stream producer failed")
+        );
+        first_writer.finish().await.unwrap();
+        let first = first.await;
+        assert!(matches!(first, tool_host::ByteStreamCloseCause::Finished));
+        wait_at_promise_checkpoint("direct-stdin-waits-done").await;
+        vec![format!("{first:?}"), format!("{second:?}")]
+    }
+
+    async fn fail_direct_stdin_without_tool(&self) {
+        let (writer, _stdin, _closed) = tool_host::create_stdin();
+        writer.write(vec![0x13, 0xa7, 0x42]).await.unwrap();
+    }
+
+    async fn drop_direct_stdin_write_and_spin(&self) {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (writer, stdin, _closed) = tool_host::create_stdin();
+        let (target, _stdout) = tool_host::create_output();
+        let _invocation = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("piped-unread-sink"),
+            Some(stdin),
+            Some(target),
+            None,
+        );
+        let mut write = Box::pin(writer.write(vec![0x13, 0xa7, 0x42]));
+        poll_fn(|cx| {
+            assert!(write.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        wait_at_promise_checkpoint("direct-stdin-before-drop").await;
+        drop(write);
+        golem_rust::bindings::wasi::logging::logging::log(
+            golem_rust::bindings::wasi::logging::logging::Level::Info,
+            "stdin-receipt",
+            "direct-stdin-write-dropped",
+        );
+        loop {
+            std::hint::spin_loop();
+        }
+    }
+
+    async fn recover_direct_stdin(&self) -> Vec<u8> {
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (writer, stdin, closed) = tool_host::create_stdin();
+        let (target, stdout) = tool_host::create_output();
+        let invocation = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("piped-unread-sink"),
+            Some(stdin),
+            Some(target),
+            None,
+        );
+        for (byte, length) in [(0x13, 11), (0xa7, 19), (0x42, 34)] {
+            writer.write(vec![byte; length]).await.expect("write stdin");
+        }
+        writer.finish().await.expect("finish stdin");
+        writer.finish().await.expect("repeated finish stdin");
+        assert!(matches!(
+            writer.fail(ByteStreamFailure::Cancelled).await,
+            Err(tool_host::StreamWriteError::Closed(
+                tool_host::ByteStreamCloseCause::Finished
+            ))
+        ));
+        assert!(matches!(
+            closed.wait().await,
+            tool_host::ByteStreamCloseCause::Finished
+        ));
+        wait_at_promise_checkpoint("direct-stdin-accepted").await;
+        let output = read_all(stdout).await;
+        raw_result(&invocation).await.expect("sink result");
+        output
+    }
+
+    async fn drop_cancelled_fire_and_forget_stdin(&self) {
+        let (writer, stdin, closed) = tool_host::create_stdin();
+        ToolRpc::create("streaming")
+            .expect("tool RPC creation failed")
+            .invoke(
+                &["run".to_string()],
+                raw_input("early-stdin-close"),
+                Some(stdin),
+            )
+            .expect("start fire-and-forget early stdin close");
+        assert!(matches!(
+            closed.wait().await,
+            tool_host::ByteStreamCloseCause::ConsumerCancelled
+        ));
+        drop(writer);
+    }
+
+    async fn abandon_stdin_and_wait_closed(&self) -> String {
+        let (writer, stdin, closed) = tool_host::create_stdin();
+        drop(writer);
+        drop(stdin);
+        format!("{:?}", closed.wait().await)
+    }
+
+    fn retain_stdin_closed(&self) {
+        let (writer, stdin, closed) = tool_host::create_stdin();
+        drop(writer);
+        drop(stdin);
+        *self.retained_stdin_closed.borrow_mut() = Some(closed);
+    }
+
+    async fn wait_retained_stdin_closed(&self) -> String {
+        let closed = self
+            .retained_stdin_closed
+            .borrow_mut()
+            .take()
+            .expect("retained closure watcher");
+        let cause = closed.wait().await;
+        *self.retained_stdin_closed.borrow_mut() = Some(closed);
+        format!("{cause:?}")
+    }
+
+    fn drop_retained_stdin_closed(&self) {
+        self.retained_stdin_closed.borrow_mut().take();
+    }
+
+    async fn recover_piped_unread_output(&self, chunk_size: u32, cancel_read: bool) -> Vec<u8> {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (source_target, mut source_stdout) = tool_host::create_output();
+        let source = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input(&format!("piped-unread-source:{chunk_size}")),
+            Some(closed_raw_stdin()),
+            Some(source_target),
+            None,
+        );
+        if cancel_read {
+            wait_at_promise_checkpoint("piped-before-cancel").await;
+            let mut pending = Box::pin(source_stdout.read(Vec::with_capacity(1)));
+            poll_fn(|cx| {
+                assert!(pending.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            let (status, bytes) = pending.as_mut().cancel();
+            assert_eq!(format!("{status:?}"), "Cancelled");
+            assert!(bytes.is_empty());
+        }
+        let (sink_target, sink_stdout) = tool_host::create_output();
+        let sink = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("piped-unread-sink"),
+            Some(pump_tool_stdin(source_stdout)),
+            Some(sink_target),
+            None,
+        );
+        let output = read_all(sink_stdout).await;
+        raw_result(&source).await.expect("source result");
+        raw_result(&sink).await.expect("sink result");
+        output
+    }
+
+    async fn recover_accepted_unread_output(&self, cancel_write: bool) -> Vec<u8> {
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (mut source, stdin) =
+            golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
+        let (target, mut stdout) = tool_host::create_output();
+        let invocation = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input(if cancel_write {
+                "cancel-pending-write"
+            } else {
+                "accepted-unread"
+            }),
+            Some(pump_tool_stdin(stdin)),
+            Some(target),
+            None,
+        );
+        wait_at_promise_checkpoint("unread-before-cancel").await;
+        if cancel_write {
+            assert!(
+                source
+                    .write_all(vec![Ok(b"cancel".to_vec())])
+                    .await
+                    .is_empty()
+            );
+            wait_at_promise_checkpoint("unread-after-write-drop").await;
+            panic!("failed output persistence must fail the owner");
+        }
+        invocation.cancel();
+        assert!(matches!(
+            raw_result(&invocation).await,
+            Err(ToolRpcError::Cancelled)
+        ));
+        wait_at_promise_checkpoint("unread-after-cancel").await;
+        let mut output = Vec::new();
+        loop {
+            match stdout.next().await {
+                Some(Ok(bytes)) => output.extend(bytes),
+                Some(Err(ByteStreamFailure::Cancelled)) => break,
+                other => panic!("expected accepted bytes followed by cancellation, got {other:?}"),
+            }
+        }
+        assert_eq!(output, b"marker:");
+        assert!(
+            stdout.next().await.is_none(),
+            "cancellation terminal must occur once"
+        );
+        drop(source);
+        output
+    }
+
+    async fn retain_tool_output(
+        &self,
+        cancel_read: bool,
+        cancel_ready: bool,
+        cancel_positive: bool,
+    ) -> Vec<u8> {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        assert!(self.retained_output.borrow().is_none());
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (mut source, stdin) =
+            golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
+        let (target, mut stdout) = tool_host::create_output();
+        let invocation = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("marker-echo"),
+            Some(pump_tool_stdin(stdin)),
+            Some(target),
+            None,
+        );
+        assert_eq!(raw_chunk(&mut stdout).await, b"marker:");
+        if cancel_read {
+            for _ in 0..2 {
+                let mut pending = Box::pin(stdout.read(Vec::with_capacity(1)));
+                poll_fn(|cx| {
+                    assert!(pending.as_mut().poll(cx).is_pending());
+                    Poll::Ready(())
+                })
+                .await;
+                let (status, bytes) = pending.as_mut().cancel();
+                assert_eq!(format!("{status:?}"), "Cancelled");
+                assert!(bytes.is_empty());
+            }
+        }
+        assert!(
+            source
+                .write_all(vec![Ok(vec![0, 255, 19]), Ok(b"retained-tail".to_vec())])
+                .await
+                .is_empty()
+        );
+        drop(source);
+        raw_result(&invocation)
+            .await
+            .expect("complete producer before retaining its output");
+        let mut consumed = Vec::new();
+        if cancel_ready || cancel_positive {
+            let mut pending = Box::pin(stdout.read(Vec::with_capacity(1)));
+            poll_fn(|cx| {
+                assert!(pending.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            if cancel_positive {
+                wait_at_promise_checkpoint("retained-output-before-positive-cancel").await;
+            }
+            let (status, bytes) = pending.as_mut().cancel();
+            if cancel_positive {
+                assert_eq!(format!("{status:?}"), "Complete(1)");
+                assert_eq!(bytes.len(), 1);
+                consumed = bytes.into_iter().next().unwrap().expect("data chunk");
+                assert_eq!(consumed, [0, 255, 19]);
+            } else {
+                assert_eq!(format!("{status:?}"), "Cancelled");
+                assert!(bytes.is_empty());
+            }
+            drop(pending);
+        }
+        *self.retained_output.borrow_mut() = Some(stdout);
+        consumed
+    }
+
+    async fn retain_failed_tool_output(&self) {
+        assert!(self.retained_output.borrow().is_none());
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (target, mut stdout) = tool_host::create_output();
+        let invocation = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("stream-failure-success"),
+            Some(raw_stdin(Vec::new())),
+            Some(target),
+            None,
+        );
+        let mut bytes = Vec::new();
+        loop {
+            match stdout.next().await {
+                Some(Ok(chunk)) => bytes.extend(chunk),
+                Some(Err(ByteStreamFailure::Failed(message))) => {
+                    assert_eq!(message, "stream producer failed");
+                    break;
+                }
+                other => panic!("expected provider failure, got {other:?}"),
+            }
+        }
+        assert_eq!(bytes, b"marker:");
+        raw_result(&invocation).await.expect("tool result succeeds");
+        *self.retained_output.borrow_mut() = Some(stdout);
+    }
+
+    async fn consume_retained_tool_output(&self) -> Vec<u8> {
+        let stdout = self
+            .retained_output
+            .borrow_mut()
+            .take()
+            .expect("output retained by an earlier invocation");
+        read_all(stdout).await
+    }
+
+    async fn pipe_retained_tool_output(&self, cancel_read: bool) -> Vec<u8> {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let mut source = self
+            .retained_output
+            .borrow_mut()
+            .take()
+            .expect("output retained by an earlier invocation");
+        if cancel_read {
+            let mut pending = Box::pin(source.read(Vec::with_capacity(1)));
+            poll_fn(|cx| {
+                assert!(pending.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            let (status, bytes) = pending.as_mut().cancel();
+            assert_eq!(format!("{status:?}"), "Cancelled");
+            assert!(bytes.is_empty());
+        }
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (target, stdout) = tool_host::create_output();
+        let invocation = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("echo"),
+            Some(pump_tool_stdin(source)),
+            Some(target),
+            None,
+        );
+        let bytes = read_all(stdout).await;
+        raw_result(&invocation).await.expect("piped tool succeeds");
+        bytes
     }
 
     async fn raw_handle_lifecycles(&self) -> Vec<String> {
@@ -4885,6 +5451,23 @@ impl RustResourceToolStreamingCaller for RustResourceToolStreamingCallerImpl {
             permission_owner_agent_id: exchange.owner_agent_id,
             ..empty_matrix_resource_observation()
         }
+    }
+
+    async fn matrix_parallel_permission_issuance(&self) -> bool {
+        let first = MatrixPermissionIssuerClient::default();
+        let second = MatrixPermissionIssuerClient::default();
+        let (first, second) = (first.issue(), second.issue()).join().await;
+        let first = first.expect("first concurrent permission issue succeeds");
+        let second = second.expect("second concurrent permission issue succeeds");
+        let first_id = first
+            .card
+            .with_handle(|card| CardId::from(permission_types::id(card)))
+            .expect("first concurrently derived card is usable");
+        let second_id = second
+            .card
+            .with_handle(|card| CardId::from(permission_types::id(card)))
+            .expect("second concurrently derived card is usable");
+        first_id != second_id
     }
 
     async fn matrix_typed_stream_observation(&self) -> MatrixResourceObservation {

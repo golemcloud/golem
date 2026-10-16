@@ -13,29 +13,13 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    - name: Mount packaged binaries
-      uses: useblacksmith/stickydisk@v1
+    - name: Restore native binary publication
+      uses: ./.github/actions/restore-binary-publication
       with:
-        key: ${{ inputs.disk-key }}
+        disk-key: ${{ inputs.disk-key }}
+        run-id: ${{ inputs.run-id }}
         path: tmp/native-binaries
-        commit: 'false'
-    - name: Validate binary publication
-      shell: bash
-      env:
-        DISK_KEY: ${{ inputs.disk-key }}
-        PUBLICATION_RUN_ID: ${{ inputs.run-id }}
-        SOURCE_SHA: ${{ github.sha }}
-      run: |
-        set -euo pipefail
-        mountpoint -q tmp/native-binaries || { echo 'Native binary sticky disk is not mounted' >&2; exit 1; }
-        cd tmp/native-binaries
-        [[ -n "$DISK_KEY" && "$PUBLICATION_RUN_ID" == "$GITHUB_RUN_ID" ]] || { echo 'Invalid native binary producer inputs' >&2; exit 1; }
-        for file in PUBLICATION SHA256SUMS golem-binaries.tar.zst; do
-          [[ -s "$file" && ! -L "$file" ]] || { echo "Missing native binary publication: $file (snapshot may be absent or publication denied)" >&2; exit 1; }
-        done
-        printf 'run-id=%s\nsource-sha=%s\ndisk-key=%s\n' "$PUBLICATION_RUN_ID" "$SOURCE_SHA" "$DISK_KEY" | cmp -s - PUBLICATION || { echo 'Native binary publication identity mismatch' >&2; exit 1; }
-        [[ $(wc -l < SHA256SUMS) -eq 1 ]] && grep -Eq '^[0-9a-f]{64}  golem-binaries\.tar\.zst$' SHA256SUMS || { echo 'Invalid native binary checksum manifest' >&2; exit 1; }
-        sha256sum --check --strict SHA256SUMS
+        file: golem-binaries.tar.zst
     - name: Install cargo-test-r
       shell: bash
       run: cargo binstall --force --locked cargo-test-r@2.2.5

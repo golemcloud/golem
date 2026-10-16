@@ -1751,3 +1751,266 @@ fn go_tool_client_refuses_a_default_it_cannot_carry_whole() {
         "unexpected error: {err:#}"
     );
 }
+
+/// Shapes that Go agents do not produce but agents in other languages do: a
+/// one-element tuple, named definitions that are not records or sum types, and
+/// a record that holds an option of itself. `Holder` gathers them so the
+/// external conversions can be reached through one named codec.
+fn edge_shapes_agent() -> AgentTypeSchema {
+    let node = SchemaType::record(vec![
+        named_field("value", SchemaType::u32()),
+        named_field("next", SchemaType::option(ref_to("shapes.Node"))),
+    ]);
+    let holder = SchemaType::record(vec![
+        named_field("single", SchemaType::tuple(vec![SchemaType::bool()])),
+        named_field("pair", ref_to("shapes.Pair")),
+        named_field("ids", ref_to("shapes.Ids")),
+        named_field("chain", ref_to("shapes.Node")),
+    ]);
+    agent(
+        "EdgeShapes",
+        "rust",
+        vec![field("name", SchemaType::string())],
+        vec![
+            method(
+                "single",
+                vec![field("flag", SchemaType::tuple(vec![SchemaType::string()]))],
+                Some(SchemaType::tuple(vec![SchemaType::bool()])),
+            ),
+            method(
+                "pair",
+                vec![field("ids", ref_to("shapes.Ids"))],
+                Some(ref_to("shapes.Pair")),
+            ),
+            method(
+                "chain",
+                vec![field("node", ref_to("shapes.Node"))],
+                Some(ref_to("shapes.Node")),
+            ),
+            method("hold", vec![field("holder", ref_to("shapes.Holder"))], None),
+        ],
+        vec![
+            def(
+                "shapes.Pair",
+                SchemaType::tuple(vec![SchemaType::string(), SchemaType::bool()]),
+            ),
+            def("shapes.Ids", SchemaType::list(SchemaType::string())),
+            def("shapes.Node", node),
+            def("shapes.Holder", holder),
+        ],
+        AgentMode::Durable,
+    )
+}
+
+#[test]
+fn go_guest_client_spells_the_edge_shapes(env: &GoEnv) {
+    let generated = GeneratedGo::guest(env, edge_shapes_agent());
+    let types = generated.read("types.go");
+    for expected in [
+        "type ShapesPair = values.Tuple2[string, bool]",
+        "type ShapesIds = []string",
+        "Next  *ShapesNode",
+        "Single values.Tuple1[bool]",
+    ] {
+        assert!(types.contains(expected), "missing {expected} in:\n{types}");
+    }
+    generated.assert_gofmt_clean(env);
+    generated.assert_vets_for_wasip1(env);
+    let package = generated.package();
+    generated.run_native_test(
+        env,
+        &format!(
+            r#"package {package}
+
+import (
+	"reflect"
+	"testing"
+
+	"github.com/golemcloud/golem/sdks/go/core/values"
+	"github.com/golemcloud/golem/sdks/go/golem"
+)
+
+func roundTrip[T any](t *testing.T, name string, in T) {{
+	t.Helper()
+	tv := golem.EncodeTypedValue(in)
+	out, err := golem.DecodeTypedValue[T](tv)
+	if err != nil {{
+		t.Fatalf("%s: decode: %v", name, err)
+	}}
+	if !reflect.DeepEqual(in, out) {{
+		t.Fatalf("%s: %#v round-tripped to %#v", name, in, out)
+	}}
+}}
+
+func TestEdgeShapesRoundTrip(t *testing.T) {{
+	if errs := golem.DefinitionErrors(); len(errs) > 0 {{
+		t.Fatalf("definition errors: %v", errs)
+	}}
+	roundTrip(t, "1-tuple", values.Tuple1[bool]{{A: true}})
+	roundTrip(t, "named tuple", ShapesPair{{A: "x", B: true}})
+	roundTrip(t, "named list", ShapesIds{{"a", "b"}})
+	roundTrip(t, "recursive option", ShapesNode{{Value: 1, Next: &ShapesNode{{Value: 2}}}})
+	roundTrip(t, "holder", ShapesHolder{{
+		Single: values.Tuple1[bool]{{A: true}},
+		Pair:   ShapesPair{{A: "p", B: false}},
+		Ids:    ShapesIds{{"i"}},
+		Chain:  ShapesNode{{Value: 3, Next: &ShapesNode{{Value: 4}}}},
+	}})
+}}
+"#
+        ),
+    );
+}
+
+#[test]
+fn go_external_client_converts_the_edge_shapes(env: &GoEnv) {
+    let generated = GeneratedGo::external(env, edge_shapes_agent());
+    generated.assert_gofmt_clean(env);
+    generated.assert_vets_natively(env);
+    let package = generated.package();
+    generated.run_native_test(
+        env,
+        &format!(
+            r##"package {package}
+
+import (
+	"reflect"
+	"testing"
+
+	"github.com/golemcloud/golem/sdks/go/core/schema"
+	"github.com/golemcloud/golem/sdks/go/core/values"
+)
+
+func TestEdgeShapesConvertThroughTheWire(t *testing.T) {{
+	in := ShapesHolder{{
+		Single: values.Tuple1[bool]{{A: true}},
+		Pair:   ShapesPair{{A: "p", B: true}},
+		Ids:    ShapesIds{{"a", "b"}},
+		Chain:  ShapesNode{{Value: 1, Next: &ShapesNode{{Value: 2}}}},
+	}}
+	sv := encodeShapesHolder(in)
+	fields := sv.(schema.RecordValue).Fields
+	// The host keeps a 1-tuple a tuple, and the recursive option an option.
+	if single, ok := fields[0].(schema.TupleValue); !ok || len(single.Elements) != 1 {{
+		t.Fatalf("the 1-tuple travelled as %#v", fields[0])
+	}}
+	next := fields[3].(schema.RecordValue).Fields[1]
+	if option, ok := next.(schema.OptionValue); !ok || option.Value == nil {{
+		t.Fatalf("the next node travelled as %#v", next)
+	}}
+	data, err := schema.MarshalWireValue(sv)
+	if err != nil {{
+		t.Fatalf("marshal: %v", err)
+	}}
+	back, err := schema.UnmarshalWireValue(data)
+	if err != nil {{
+		t.Fatalf("unmarshal: %v", err)
+	}}
+	out, err := decodeShapesHolder(back)
+	if err != nil {{
+		t.Fatalf("decode: %v", err)
+	}}
+	if !reflect.DeepEqual(in, out) {{
+		t.Fatalf("%#v round-tripped to %#v", in, out)
+	}}
+}}
+"##
+        ),
+    );
+}
+
+/// A definition that holds itself only through tuples, lists and options has
+/// no Go spelling, since a Go alias cannot refer to itself; generation says so.
+#[test]
+fn go_client_refuses_a_named_definition_that_holds_itself_without_a_record() {
+    let direct = vec![def(
+        "shapes.Tree",
+        SchemaType::tuple(vec![SchemaType::list(ref_to("shapes.Tree"))]),
+    )];
+    let through_another = vec![
+        def("shapes.Tree", SchemaType::list(ref_to("shapes.Forest"))),
+        def("shapes.Forest", SchemaType::list(ref_to("shapes.Tree"))),
+    ];
+    for defs in [direct, through_another] {
+        for mode in [GoBridgeMode::GuestWasmRpc, GoBridgeMode::ExternalRest] {
+            let looping = agent(
+                "Looping",
+                "rust",
+                vec![field("name", SchemaType::string())],
+                vec![method("tree", vec![], Some(ref_to("shapes.Tree")))],
+                defs.clone(),
+                AgentMode::Durable,
+            );
+            let dir = TempDir::new().unwrap();
+            let target = Utf8Path::from_path(dir.path()).unwrap();
+            let mut generator =
+                GoBridgeGenerator::new_with_mode(looping, target, mode).expect("a generator");
+            let err = generator
+                .generate()
+                .expect_err("a self-referring alias has no Go spelling");
+            assert!(
+                format!("{err:#}").contains("ShapesTree")
+                    || format!("{err:#}").contains("ShapesForest"),
+                "unexpected error: {err:#}"
+            );
+        }
+    }
+}
+
+/// A quantity default is spelled as a quantity literal with the option's unit
+/// marker.
+#[test]
+fn go_tool_client_spells_a_quantity_default(env: &GoEnv) {
+    let mut tool = go_grep_tool();
+    let get = tool.commands.nodes[3].body.as_mut().unwrap();
+    get.options.push(OptionSpec {
+        default: Some(SchemaValue::Quantity(
+            golem_common::schema::schema_type::QuantityValue {
+                mantissa: 15,
+                scale: 1,
+                unit: "kg".to_string(),
+            },
+        )),
+        ..option(
+            "limit",
+            OptionShape::Scalar(SchemaType::Quantity {
+                spec: QuantitySpec {
+                    base_unit: "kg".into(),
+                    allowed_suffixes: vec![],
+                    min: None,
+                    max: None,
+                },
+                metadata: Default::default(),
+            }),
+        )
+    });
+    let generated = GeneratedGo::tool(env, tool);
+    let client = generated.read("client.go");
+    assert!(
+        client.contains("s.Option(&a.Limit).Default(values.Quantity[")
+            && client.contains("]{Mantissa: 15, Scale: 1, Unit: \"kg\"})"),
+        "{client}"
+    );
+    generated.assert_gofmt_clean(env);
+    generated.assert_vets_for_wasip1(env);
+    let package = generated.package();
+    generated.run_native_test(
+        env,
+        &format!(
+            r#"package {package}
+
+import (
+	"testing"
+
+	"github.com/golemcloud/golem/sdks/go/golem"
+)
+
+func TestTheQuantityDefaultResolves(t *testing.T) {{
+	if errs := golem.DefinitionErrors(); len(errs) > 0 {{
+		t.Fatalf("definition errors: %v", errs)
+	}}
+}}
+"#
+        ),
+    );
+}

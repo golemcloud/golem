@@ -14,7 +14,7 @@
 
 //! The update of an instance to a new component revision at the update point: the metadata of the
 //! revision, the agent config and wallet cards of the new agent type, and the initial-file rule.
-//! The preparation reads and installs; the application to the worker context changes no file.
+//! Metadata preparation is separate from initial-file installation and context application.
 //! Both the p2 and the p3 replay paths use it.
 
 use super::{DurableWorkerCtx, agent_initial_card_from_component_metadata, replace_wallet_cards};
@@ -27,7 +27,7 @@ use crate::worker::agent_config::{effective_agent_config, validate_agent_config}
 use crate::workerctx::WorkerCtx;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::card::{CardId, StoredCard};
-use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component::{ComponentId, ComponentRevision, InitialAgentFile};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -76,10 +76,7 @@ impl Display for UpdateStateError {
 /// the revision.
 pub(crate) struct RevisionUpdateInputs {
     pub(crate) component_service: Arc<dyn ComponentService>,
-    pub(crate) file_loader: Arc<FileLoader>,
-    pub(crate) filesystem_generation_handle: FilesystemGenerationHandle,
     pub(crate) component_id: ComponentId,
-    pub(crate) environment_id: EnvironmentId,
 }
 
 impl RevisionUpdateInputs {
@@ -87,9 +84,23 @@ impl RevisionUpdateInputs {
     pub(crate) fn of<Ctx: WorkerCtx>(ctx: &DurableWorkerCtx<Ctx>) -> Self {
         Self {
             component_service: ctx.state.component_service.clone(),
+            component_id: ctx.owned_agent_id.component_id(),
+        }
+    }
+}
+
+/// The Root filesystem generation to which a delivered revision update applies.
+pub(crate) struct RevisionFileInputs {
+    file_loader: Arc<FileLoader>,
+    filesystem_generation_handle: FilesystemGenerationHandle,
+    environment_id: EnvironmentId,
+}
+
+impl RevisionFileInputs {
+    pub(crate) fn of<Ctx: WorkerCtx>(ctx: &DurableWorkerCtx<Ctx>) -> Self {
+        Self {
             file_loader: ctx.state.file_loader.clone(),
             filesystem_generation_handle: ctx.filesystem_generation_handle(),
-            component_id: ctx.owned_agent_id.component_id(),
             environment_id: ctx.owned_agent_id.environment_id,
         }
     }
@@ -117,15 +128,54 @@ type AgentState = (
     BTreeMap<CardId, StoredCard>,
 );
 
-/// A prepared update of an instance, which [`apply_revision_update`] applies.
+/// A prepared update whose wallet projection is validated before metadata installation.
 pub(crate) struct RevisionUpdate {
     metadata: Component,
     agent_state: Option<AgentState>,
+    initial_files: Vec<InitialAgentFile>,
 }
 
-/// Prepares the update of an instance to `new_revision`: it fetches the metadata, builds the agent
-/// config and wallet cards of the agent type, and applies the initial-file rule to the agent
-/// filesystem. It calls `agent` only after the metadata fetch has succeeded.
+impl RevisionUpdate {
+    pub(crate) async fn apply_initial_files(
+        &self,
+        inputs: RevisionFileInputs,
+    ) -> Result<(), UpdateStateError> {
+        update_initial_files(
+            &inputs.filesystem_generation_handle,
+            inputs.file_loader,
+            inputs.environment_id,
+            self.initial_files.clone(),
+        )
+        .map_err(UpdateStateError::InitialFiles)?
+        .await
+        .map_err(UpdateStateError::InitialFiles)
+    }
+
+    pub(crate) fn project_wallet(
+        &self,
+        wallet: &mut crate::worker::owner_wallet::WalletSnapshot,
+    ) -> Result<(), WorkerExecutorError> {
+        if let Some((_, cards)) = &self.agent_state {
+            replace_wallet_cards(&mut wallet.cards, &mut wallet.generation, cards.clone())?;
+        }
+        wallet.metadata = Arc::new(self.metadata.clone());
+        Ok(())
+    }
+
+    pub(crate) fn install_metadata<Ctx: WorkerCtx>(&self, ctx: &mut DurableWorkerCtx<Ctx>) {
+        assert_eq!(ctx.runtime, super::OwnerRuntime::Agent);
+        ctx.state.component_metadata = self.metadata.clone();
+        ctx.executable =
+            crate::workerctx::WorkerCtxExecutable::Component(Box::new(self.metadata.clone()));
+        if let Some((config, _)) = &self.agent_state {
+            ctx.state.agent_config = config.clone();
+            ctx.state.cached_agent_config_retry_policies = None;
+        }
+    }
+}
+
+/// Fetches the revision metadata and builds its agent config, wallet cards and file declarations.
+/// It calls `agent` only after the metadata fetch has succeeded. This does not change the filesystem.
 pub(crate) async fn prepare_revision_update(
     inputs: RevisionUpdateInputs,
     new_revision: ComponentRevision,
@@ -133,10 +183,7 @@ pub(crate) async fn prepare_revision_update(
 ) -> Result<RevisionUpdate, UpdateStateError> {
     let RevisionUpdateInputs {
         component_service,
-        file_loader,
-        filesystem_generation_handle,
         component_id,
-        environment_id,
     } = inputs;
     let metadata = component_service
         .get_metadata(component_id, Some(new_revision))
@@ -183,42 +230,12 @@ pub(crate) async fn prepare_revision_update(
         None => None,
     };
 
-    update_initial_files(
-        &filesystem_generation_handle,
-        file_loader,
-        environment_id,
-        provision_config
-            .as_ref()
-            .map(|config| config.files.clone())
-            .unwrap_or_default(),
-    )
-    .map_err(UpdateStateError::InitialFiles)?
-    .await
-    .map_err(UpdateStateError::InitialFiles)?;
-
     Ok(RevisionUpdate {
         metadata,
         agent_state,
+        initial_files: provision_config
+            .as_ref()
+            .map(|config| config.files.clone())
+            .unwrap_or_default(),
     })
-}
-
-/// Applies a prepared update to the worker context.
-pub(crate) fn apply_revision_update<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    update: RevisionUpdate,
-) -> Result<(), WorkerExecutorError> {
-    ctx.state.component_metadata = update.metadata.clone();
-    ctx.executable = crate::workerctx::WorkerCtxExecutable::Component(Box::new(update.metadata));
-
-    if let Some((agent_config, initial_wallet_cards)) = update.agent_state {
-        ctx.state.agent_config = agent_config;
-        ctx.state.cached_agent_config_retry_policies = None;
-        replace_wallet_cards(
-            &mut ctx.state.agent_wallet_cards,
-            &mut ctx.state.wallet_generation,
-            initial_wallet_cards,
-        )?;
-        ctx.rederive_agent_effective_surface_from_wallet();
-    }
-    Ok(())
 }

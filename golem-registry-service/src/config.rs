@@ -956,7 +956,8 @@ mod tests {
         let config = BuiltinArtifactsConfig::default();
         assert!(config.source_overrides.is_empty());
         let artifacts = config.resolved_artifacts().unwrap();
-        assert_eq!(artifacts.len(), 7);
+        assert_eq!(artifacts.len(), 8);
+        assert!(artifacts.contains_key("python"));
         for (artifact_id, source) in artifacts {
             assert!(
                 source
@@ -988,7 +989,7 @@ mod tests {
         };
 
         let artifacts = config.resolved_artifacts().unwrap();
-        assert_eq!(artifacts.len(), 7);
+        assert_eq!(artifacts.len(), 8);
         assert_eq!(artifacts["javascript_tools"].url, override_source.url);
         assert_eq!(artifacts["javascript_tools"].sha256, None);
         assert!(artifacts["git_tool"].sha256.is_some());
