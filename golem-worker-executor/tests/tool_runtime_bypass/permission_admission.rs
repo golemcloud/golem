@@ -85,23 +85,23 @@ const MIDDLEWARE_COMPONENT: &str = "golem-it:tool-runtime-bypass-middleware";
 /// Card registry for the owner. Registered cards are live with their registered payload, other
 /// cards are live as in [`TestCardService`], and revoked cards report `Revoked`.
 #[derive(Default)]
-struct PermissionCards {
+pub(crate) struct PermissionCards {
     registered: Mutex<HashMap<CardId, StoredCard>>,
     revoked: Mutex<HashSet<CardId>>,
 }
 
 impl PermissionCards {
-    fn register(&self, card: StoredCard) {
+    pub(crate) fn register(&self, card: StoredCard) {
         self.registered.lock().unwrap().insert(card.card_id(), card);
     }
 
-    fn revoke(&self, card_id: CardId) {
+    pub(crate) fn revoke(&self, card_id: CardId) {
         self.revoked.lock().unwrap().insert(card_id);
     }
 }
 
-struct PermissionCardService {
-    cards: Arc<PermissionCards>,
+pub(crate) struct PermissionCardService {
+    pub(crate) cards: Arc<PermissionCards>,
 }
 
 #[async_trait]
