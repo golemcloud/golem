@@ -156,11 +156,11 @@ test "generate_client_code exposes unstructured parameters and nested returns" {
   )
   for
     signature in [
-      "pubasyncfnDocumentAgentClient::summarize(self:DocumentAgentClient,input:@schema.UnstructuredText[@schema.AnyLanguage])->@schema.UnstructuredText[Languages]{",
-      "pubasyncfnDocumentAgentClient::store(self:DocumentAgentClient,input:@schema.UnstructuredBinary[ImageTypes])->Unit{",
-      "pubasyncfnDocumentAgentClient::find(self:DocumentAgentClient,key:String)->@schema.UnstructuredBinary[@schema.AnyMimeType]?{",
-      "pubasyncfnDocumentAgentClient::render(self:DocumentAgentClient)->Result[@schema.UnstructuredBinary[ImageTypes],String]{",
-      "pubasyncfnDocumentAgentClient::lookup(self:DocumentAgentClient,key:String)->Result[@schema.UnstructuredBinary[@schema.AnyMimeType]?,String]{",
+      "pubasyncfnDocumentAgentClient::summarize(self:DocumentAgentClient,input:@schema.UnstructuredText[@schema.AnyLanguage],scope_card?:@permissions.ScopeCard)->@schema.UnstructuredText[Languages]{",
+      "pubasyncfnDocumentAgentClient::store(self:DocumentAgentClient,input:@schema.UnstructuredBinary[ImageTypes],scope_card?:@permissions.ScopeCard)->Unit{",
+      "pubasyncfnDocumentAgentClient::find(self:DocumentAgentClient,key:String,scope_card?:@permissions.ScopeCard)->@schema.UnstructuredBinary[@schema.AnyMimeType]?{",
+      "pubasyncfnDocumentAgentClient::render(self:DocumentAgentClient,scope_card?:@permissions.ScopeCard)->Result[@schema.UnstructuredBinary[ImageTypes],String]{",
+      "pubasyncfnDocumentAgentClient::lookup(self:DocumentAgentClient,key:String,scope_card?:@permissions.ScopeCard)->Result[@schema.UnstructuredBinary[@schema.AnyMimeType]?,String]{",
     ] {
     assert_true(output.contains(signature), msg="missing client \{signature}")
   }

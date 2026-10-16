@@ -794,7 +794,7 @@ impl BlobStorageBackend for OverlapCountingStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<Option<u64>> {
         self.inner
             .delete_dir_at(target_label, op_label, namespace, path)
             .await

@@ -143,7 +143,15 @@ For configuration, recovery, and deletion diagnostics, see [Operating Durable St
 | `filesystem_snapshot_leaked_cleanups_total`       | counter   | `operation`       | Clean-ups of filesystem snapshots that left snapshots in blob storage            |
 | `filesystem_snapshot_cleanups_pending`            | gauge     |                   | Agents with clean-up work of filesystem snapshots that waits or runs             |
 | `filesystem_snapshot_copy_seconds`                | histogram | `outcome`         | Time of a copy of the filesystem snapshots of a fork source                      |
-| `filesystem_snapshot_failed_space_reclaims_total` | counter   |                   | Deletes of filesystem snapshots after which the release of unused storage failed |
+| `filesystem_snapshot_skipped_total`               | counter   | `kind`, `reason`  | Filesystem snapshots that the admission skipped                                  |
+| `filesystem_snapshot_restored_age_seconds`        | histogram |                   | Time from the save of a filesystem snapshot to its successful restore            |
+| `filesystem_snapshot_delete_seconds`              | histogram | `operation`, `outcome` | Time of a delete of filesystem snapshots, with its prune                    |
+| `filesystem_snapshot_prune_seconds`               | histogram | `outcome`         | Time of a prune of a filesystem snapshot repository after a delete               |
+| `filesystem_snapshot_prune_skipped_total`         | counter   | `reason`          | Deletes of filesystem snapshots after which no prune ran                         |
+| `filesystem_snapshot_retention_runs_total`        | counter   | `outcome`         | Retention runs after a filesystem snapshot                                       |
+| `filesystem_snapshot_stored_bytes_total`          | counter   | `source`          | Bytes of repository files that the executor wrote to blob storage                |
+| `filesystem_snapshot_removed_bytes_total`         | counter   | `source`          | Bytes that the executor deleted from the filesystem snapshot storage             |
+| `filesystem_snapshot_released_bytes_total`        | counter   |                   | Packed bytes of deleted filesystem snapshots that a later prune can remove       |
 
 For the label values and what to watch, see [Filesystem Snapshots](/next/operate/filesystem_snapshots#metrics).
 

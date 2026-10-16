@@ -234,8 +234,133 @@ describe("registered tool guest runtime", () => {
       expect(settled).toBe(false)
       releaseStderr()
       if (declaredError) await expect(invocation).rejects.toMatchObject({ tag: "custom-error" })
-      else await expect(invocation).rejects.toThrow("stdout finish failed")
+      else await expect(invocation).resolves.toEqual({ result: undefined })
       expect(settled).toBe(true)
+    },
+  )
+
+  it.each([false, true])(
+    "preserves the outcome when both finishes and one release fail (%s)",
+    async (declared) => {
+      toolDefinition("both-finishes")
+        .body((body) => body.output().stderr().error("rejected", Schema.String))
+        .implement({
+          bothFinishes: () => (declared ? Effect.fail(err("rejected", "no")) : Effect.void),
+        })
+      const outputs = [0, 1].map((index) => ({
+        write: vi.fn(),
+        finish: vi.fn(async () => {
+          throw new Error(`finish ${index}`)
+        }),
+        fail: vi.fn(),
+        [Symbol.dispose]: vi.fn(() => {
+          if (index === 0) throw new Error("release")
+        }),
+      }))
+      const invocation = invokeRegistered(
+        "both-finishes",
+        [],
+        input(),
+        undefined,
+        outputs[0] as never,
+        outputs[1] as never,
+        {},
+      )
+      if (declared) await expect(invocation).rejects.toMatchObject({ tag: "custom-error" })
+      else await expect(invocation).resolves.toEqual({ result: undefined })
+      for (const output of outputs) {
+        expect(output.finish).toHaveBeenCalledOnce()
+        expect(output.fail).not.toHaveBeenCalled()
+        expect(output[Symbol.dispose]).toHaveBeenCalledOnce()
+      }
+    },
+  )
+
+  it.each(["result", "error-payload", "undeclared", "exception", "defect", "cancel"])(
+    "distinguishes malformed %s from handler crashes",
+    async (kind) => {
+      toolDefinition("boundary")
+        .body((body) =>
+          body.output().stderr().returns(Schema.String).error("rejected", Schema.String),
+        )
+        .implement({
+          boundary: (() => {
+            switch (kind) {
+              case "result":
+                return Effect.succeed(42)
+              case "error-payload":
+                return Effect.succeed(err("rejected", 42))
+              case "undeclared":
+                return Effect.succeed(err("missing", "no"))
+              case "exception":
+                throw new Error("handler exception")
+              case "defect":
+                return Effect.die(new Error("handler defect"))
+              default:
+                return Effect.interrupt
+            }
+          }) as never,
+        })
+      const stdout = writer()
+      const stderr = writer()
+      const invocation = invokeRegistered(
+        "boundary",
+        [],
+        input(),
+        undefined,
+        stdout as never,
+        stderr as never,
+        {},
+      )
+      const malformed = ["result", "error-payload", "undeclared"].includes(kind)
+      if (malformed) await expect(invocation).rejects.toMatchObject({ tag: "invalid-result" })
+      else await expect(invocation).rejects.not.toMatchObject({ tag: "invalid-result" })
+      for (const output of [stdout, stderr]) {
+        expect(output.finish).toHaveBeenCalledTimes(malformed ? 1 : 0)
+        expect(output.fail).toHaveBeenCalledTimes(malformed ? 0 : 1)
+      }
+    },
+  )
+
+  it.each(["success", "declared"])(
+    "classifies %s encoder defects without catching handler defects",
+    async (kind) => {
+      for (const fault of ["throw", "die", "interrupt"] as const) {
+        const schema = Schema.String.pipe(
+          Schema.decodeTo(Schema.String, {
+            decode: SchemaGetter.transformEffect(Effect.succeed),
+            encode: SchemaGetter.transformEffect(() => {
+              if (fault === "throw") throw new Error("encoder threw")
+              return fault === "die" ? Effect.die(new Error("encoder defect")) : Effect.interrupt
+            }),
+          }),
+        )
+        resetTools()
+        toolDefinition("encoder")
+          .body((body) => body.output().stderr().returns(schema).error("rejected", schema))
+          .implement({
+            encoder: () =>
+              kind === "success" ? Effect.succeed("ok") : Effect.fail(err("rejected", "no")),
+          })
+        const stdout = writer()
+        const stderr = writer()
+        const invocation = invokeRegistered(
+          "encoder",
+          [],
+          input(),
+          undefined,
+          stdout as never,
+          stderr as never,
+          {},
+        )
+        if (fault === "interrupt")
+          await expect(invocation).rejects.not.toMatchObject({ tag: "invalid-result" })
+        else await expect(invocation).rejects.toMatchObject({ tag: "invalid-result" })
+        for (const output of [stdout, stderr]) {
+          expect(output.finish).toHaveBeenCalledTimes(fault === "interrupt" ? 0 : 1)
+          expect(output.fail).toHaveBeenCalledTimes(fault === "interrupt" ? 1 : 0)
+        }
+      }
     },
   )
 

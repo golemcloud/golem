@@ -58,6 +58,15 @@ final class GuestQuotaTokenHandle private (private var cell: Option[Any]) {
    * Restricted to the SDK for the same reason as [[take]].
    */
   private[golem] def withHandle[T](f: Any => T): Option[T] = cell.map(f)
+
+  /**
+   * Return a raw handle that was taken for a call the host never received.
+   * Restricted to the SDK; the holder must be empty.
+   */
+  private[golem] def giveBack(raw: Any): Unit = {
+    if (cell.isDefined) throw new IllegalStateException("cannot give back a handle to a holder that is not empty")
+    cell = Some(raw)
+  }
 }
 
 object GuestQuotaTokenHandle {

@@ -24,6 +24,7 @@ import { LoggingHost, LoggingHostLive } from "./LoggingHost.js"
 import { MysqlHostClient, MysqlHostLive } from "./MysqlHostClient.js"
 import { NodeSqliteClient, NodeSqliteLive } from "./NodeSqliteClient.js"
 import { OplogClient, OplogLive } from "./OplogClient.js"
+import { PermissionsClient, PermissionsLive } from "./PermissionsClient.js"
 import { PostgresHostClient, PostgresHostLive } from "./PostgresHostClient.js"
 import { PromiseClient, PromiseLive } from "./PromiseClient.js"
 import { QuotaClient, QuotaLive } from "./QuotaClient.js"
@@ -49,6 +50,7 @@ export {
   MysqlHostClient,
   NodeSqliteClient,
   OplogClient,
+  PermissionsClient,
   PostgresHostClient,
   PromiseClient,
   QuotaClient,
@@ -83,6 +85,7 @@ export type HostServices =
   | LoggingHost
   | TracingHost
   | QuotaClient
+  | PermissionsClient
   | RetryClient
   | NodeSqliteClient
   | SqliteHostExtClient
@@ -108,6 +111,7 @@ export const HostLive: Layer.Layer<HostServices> = Layer.mergeAll(
   LoggingHostLive,
   TracingHostLive,
   QuotaLive,
+  PermissionsLive,
   RetryLive,
   NodeSqliteLive,
   SqliteHostExtLive,

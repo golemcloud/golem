@@ -273,6 +273,7 @@ const KINDS = {
   CardRevokedCascade: ['CARD REVOKED CASCADE', 'card', 1], CardTransferConfirmed: ['CARD TRANSFER CONFIRMED', 'card', 1],
   StreamRegistered: ['STREAM REGISTERED', 'stream', 1], StreamItems: ['STREAM ITEMS', 'stream', 1],
   StreamEnd: ['STREAM END', 'stream', 1], StreamCancel: ['STREAM CANCEL', 'stream', 1], StreamSession: ['STREAM SESSION', 'stream', 1],
+  Omitted: ['OMITTED ENTRY', 'lifecycle'],
 };
 const CATEGORIES = ['invocation', 'host', 'error', 'log', 'region', 'lifecycle', 'update', 'snapshot', 'resource', 'plugin', 'retry', 'card', 'stream'];
 const LOG_LEVELS = ['Stdout', 'Stderr', 'Trace', 'Debug', 'Info', 'Warn', 'Error', 'Critical'];
@@ -291,6 +292,8 @@ const h = (tag, attrs, ...kids) => {
 };
 const kindInfo = t => KINDS[t] || [t.replace(/([a-z])([A-Z])/g, '$1 $2').toUpperCase(), 'lifecycle'];
 const isHint = t => !!(KINDS[t] || [])[2];
+// An omitted entry keeps the category and replay role of the entry kind it stands for.
+const classOf = e => e.type === 'Omitted' && e.entry.entryType ? e.entry.entryType : e.type;
 const catColor = c => `var(--c-${c})`;
 const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 const fmtBytes = n => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KiB' : n < 1073741824 ? (n / 1048576).toFixed(1) + ' MiB' : (n / 1073741824).toFixed(2) + ' GiB';
@@ -592,6 +595,7 @@ function summary(e) {
     case 'ActivatePlugin': case 'DeactivatePlugin': return [span('fn', p.plugin.pluginName), span('val', ` v${p.plugin.pluginVersion} · priority ${idxOf(p.plugin.pluginPriority)}`)];
     case 'OplogProcessorCheckpoint': return [span('fn', p.plugin.pluginName), span('val', ` · confirmed up to #${idxOf(p.confirmedUpTo)} · sending up to #${idxOf(p.sendingUpTo)}`)];
     case 'Snapshot': return [span('val', snapshotText(p.data)), p.filesystemSnapshot ? span('val', ' · fs ' + p.filesystemSnapshot) : null];
+    case 'Omitted': return [span('val', `${p.entryType} · ${fmtBytes(p.size || 0)} · omitted from the oplog page`)];
     case 'SnapshotConfirmed': return [span('val', 'fs snapshot ' + p.filesystemSnapshot)];
     case 'SetRetryPolicy': return [span('fn', p.policy.name), span('val', ` · priority ${p.policy.priority}`)];
     case 'RemoveRetryPolicy': return [span('fn', p.name)];
@@ -608,7 +612,7 @@ function summary(e) {
 function detailFields(e) {
   const p = e.entry; const rows = [];
   const add = (k, v) => rows.push([k, v]);
-  add('type', h('span', null, e.type, isHint(e.type) ? h('span', { class: 'tag hint', style: 'margin-left:6px' }, 'hint · skipped during replay') : null));
+  add('type', h('span', null, e.type, isHint(classOf(e)) ? h('span', { class: 'tag hint', style: 'margin-left:6px' }, 'hint · skipped during replay') : null));
   add('timestamp', h('span', { title: p.timestamp }, fmtDate(e.ts), ' ', h('span', { class: 'muted' }, p.timestamp)));
   if (e.attribution && e.attribution.type === 'Entity') {
     const chain = [...(e.attribution.ancestors || []), e.attribution.invocation];
@@ -697,10 +701,10 @@ function searchText(e) {
   return e._s;
 }
 function entryVisible(e) {
-  const [, cat] = kindInfo(e.type);
+  const [, cat] = kindInfo(classOf(e));
   if (!state.cats.has(cat)) return false;
   if (state.types && !state.types.has(e.type)) return false;
-  if (!state.hints && isHint(e.type) && e.type !== 'Error') return false;
+  if (!state.hints && isHint(classOf(e)) && classOf(e) !== 'Error') return false;
   if (e.type === 'Log' && LOG_LEVELS.indexOf(e.entry.level) < state.minLog) return false;
   if (state.from != null && e.index < state.from) return false;
   if (state.to != null && e.index > state.to) return false;
@@ -720,7 +724,7 @@ function rowTime(e, prevTs) {
   const d = prevTs != null && !isNaN(e.ts) ? e.ts - prevTs : null;
   return h('span', { class: 'time', title: e.entry.timestamp }, fmtTime(e.ts, state.rel), d != null && d > 0 ? h('span', { class: 'd' }, '+' + fmtDur(d)) : null);
 }
-function badge(t) { const [label, cat] = kindInfo(t); return h('span', { class: 'badge', style: `--c:${catColor(cat)}` }, label); }
+function badge(t, c) { const [label, cat] = kindInfo(t); return h('span', { class: 'badge', style: `--c:${catColor(c || cat)}` }, label); }
 function attrTag(e) {
   if (e.attribution && e.attribution.type === 'Entity') { const inv = e.attribution.invocation; return h('span', { class: 'tag attr', title: 'executed by ' + inv.entity.kind + ' ' + inv.entity.name }, inv.entity.name); }
   return null;
@@ -764,8 +768,8 @@ function renderNodeEl(n, prev) {
   const isGroup = n.kind !== 'entry';
   const e = n.e;
   const el = h('div', { class: 'node ' + (isGroup ? 'group ' + n.kind : 'entry'), 'data-key': nodeKey(n) });
-  if (e) { el.dataset.index = e.index; if (e.dropped) { el.classList.add('dropped'); el.title = 'ignored during replay (dropped by #' + e.dropped + ')'; } if (isHint(e.type)) el.classList.add('hint'); if (e.type === 'Log') { if (['Error', 'Critical', 'Stderr'].includes(e.entry.level)) el.classList.add('err-level'); else if (e.entry.level === 'Warn') el.classList.add('warn-level'); } }
-  el.style.setProperty('--c', catColor(e ? kindInfo(e.type)[1] : 'plugin'));
+  if (e) { el.dataset.index = e.index; if (e.dropped) { el.classList.add('dropped'); el.title = 'ignored during replay (dropped by #' + e.dropped + ')'; } if (isHint(classOf(e))) el.classList.add('hint'); if (e.type === 'Log') { if (['Error', 'Critical', 'Stderr'].includes(e.entry.level)) el.classList.add('err-level'); else if (e.entry.level === 'Warn') el.classList.add('warn-level'); } }
+  el.style.setProperty('--c', catColor(e ? kindInfo(classOf(e))[1] : 'plugin'));
   if (e && e.revision != null && e.type === 'SuccessfulUpdate') el.append(h('div', { class: 'divider' }, `component revision ${e.revision} from here`));
   const row = h('div', { class: 'row' });
   const caret = h('span', { class: 'caret' }, isGroup ? '▶' : '');
@@ -777,7 +781,7 @@ function renderNodeEl(n, prev) {
     if (e.type === 'Error') right.push(h('span', { class: 'tag warn' }, 'attempt ' + e.attempt));
     const a = attrTag(e); if (a) right.push(a);
     if (state.live && state.live.serverQuery) right.push(h('span', { class: 'tag ctx', title: 'load the oplog around this entry', onclick: ev => { ev.stopPropagation(); showContext(e.index); } }, 'context'));
-    row.append(h('span', { class: 'kind' }, badge(e.type)), h('span', { class: 'sum' }, ...summary(e)), h('span', { class: 'right' }, ...right));
+    row.append(h('span', { class: 'kind' }, badge(e.type, kindInfo(classOf(e))[1])), h('span', { class: 'sum' }, ...summary(e)), h('span', { class: 'right' }, ...right));
   }
   el.append(row);
   if (e) prev.ts = e.ts;
@@ -882,7 +886,7 @@ function setAllOpen(open) { state.forceOpen = open; state.openKeys.clear(); rend
 // Toolbar, chips, minimap, sidebar.
 // ---------------------------------------------------------------------------
 function renderChips() {
-  const counts = {}; for (const e of state.entries) { const c = kindInfo(e.type)[1]; counts[c] = (counts[c] || 0) + 1; }
+  const counts = {}; for (const e of state.entries) { const c = kindInfo(classOf(e))[1]; counts[c] = (counts[c] || 0) + 1; }
   const el = $('#chips'); el.replaceChildren();
   for (const c of CATEGORIES) {
     if (!counts[c]) continue;
@@ -906,7 +910,7 @@ function drawMinimap() {
   if (LIVE && state.live.meta && state.live.meta.lastOplogIndex) { const last = state.live.meta.lastOplogIndex; ctx.fillStyle = colors.lifecycle; ctx.globalAlpha = .25; ctx.fillRect(0, H - 4, W, 4); ctx.globalAlpha = 1; ctx.fillStyle = cs.getPropertyValue('--accent').trim(); const x0 = ((state.live.lo - 1) / last) * W; const x1 = (state.live.hi / last) * W; ctx.fillRect(x0, H - 4, Math.max(2, x1 - x0), 4); }
   // Draw invocations as a background band, entries as ticks.
   for (let i = 0; i < n; i++) {
-    const e = state.entries[i]; const [, cat] = kindInfo(e.type);
+    const e = state.entries[i]; const [, cat] = kindInfo(classOf(e));
     const x = (i / n) * W;
     if (e.type === 'AgentInvocationStarted') { ctx.fillStyle = colors.invocation; ctx.globalAlpha = .18; let j = i + 1; while (j < n && state.entries[j].type !== 'AgentInvocationFinished') j++; ctx.fillRect(x, 0, Math.max(1, ((j - i + 1) / n) * W), H2); ctx.globalAlpha = 1; }
     const tall = cat === 'error' || cat === 'update' || cat === 'invocation';

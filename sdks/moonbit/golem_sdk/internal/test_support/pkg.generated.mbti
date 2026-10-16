@@ -1,0 +1,30 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/internal/test_support"
+
+import {
+  "golemcloud/golem_sdk/internal/permission_card",
+  "golemcloud/golem_sdk/schema_model",
+}
+
+// Values
+pub const PERMISSION_CARD_DROPS : Int = 2
+
+pub const QUOTA_TOKEN_DROPS : Int = 1
+
+pub const SECRET_DROPS : Int = 0
+
+pub fn failing_card_input(@permission_card.GuestPermissionCardHandle, Int) -> Array[@schema_model.SchemaValue]
+
+pub fn reset_resource_drop_counts() -> Unit
+
+pub fn resource_drop_count(Int) -> Int
+
+pub fn run_async(async () -> Unit) -> Unit raise
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits

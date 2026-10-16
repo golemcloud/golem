@@ -100,6 +100,20 @@ Module._load = function (request) {
     return {
       getConfigValue: missingHostImport("getConfigValue"),
       parseAgentId: missingHostImport("parseAgentId"),
+      WasmRpc: class {
+        constructor(...args) {
+          this.args = args;
+        }
+        static create(...args) {
+          return new this(...args);
+        }
+        invokeAndAwait(...args) {
+          return missingHostImport("wasmRpcInvokeAndAwait")(...args);
+        }
+        asyncInvokeAndAwait(...args) {
+          return missingHostImport("wasmRpcAsyncInvokeAndAwait")(...args);
+        }
+      },
     };
   }
   if (request === "golem:tool/host@0.1.0") {
@@ -132,6 +146,39 @@ Module._load = function (request) {
   }
   if (request === "golem:secrets/reveal@0.1.0") {
     return { reveal: missingHostImport("reveal") };
+  }
+  if (request === "golem:permissions/types@0.1.0") {
+    return {
+      id: missingHostImport("id"),
+      parents: missingHostImport("parents"),
+      expiresAt: missingHostImport("expiresAt"),
+    };
+  }
+  if (request === "golem:permissions/inspect@0.1.0") {
+    return { inspectCard: missingHostImport("inspectCard") };
+  }
+  if (request === "golem:permissions/derive@0.1.0") {
+    return {
+      derive: missingHostImport("derive"),
+      deriveFromWallet: missingHostImport("deriveFromWallet"),
+      deriveScope: missingHostImport("deriveScope"),
+    };
+  }
+  if (request === "golem:permissions/revoke@0.1.0") {
+    return { revokeCard: missingHostImport("revokeCard") };
+  }
+  if (request === "golem:permissions/wallet@0.1.0") {
+    return {
+      selfWallet: missingHostImport("selfWallet"),
+      selfVersion: missingHostImport("selfVersion"),
+      installCard: missingHostImport("installCard"),
+    };
+  }
+  if (request === "golem:permissions/kernel-introspection@0.1.0") {
+    return {
+      listModules: missingHostImport("listModules"),
+      validateGrant: missingHostImport("validateGrant"),
+    };
   }
   return load.apply(this, arguments);
 };

@@ -237,6 +237,116 @@ describe('native tool reflection', () => {
     expect(start).toHaveBeenCalledTimes(3);
   });
 
+  it('fills omitted declared defaults when packing canonical JSON', async () => {
+    const definition = toolDefinition('bash-like').body((body) =>
+      body
+        .positional('script', z.string())
+        .positional('mode', z.string(), { default: 'run' })
+        .option('cwd', z.string(), { default: '' })
+        .option('timeout', s.u32(), { default: 600 })
+        .option('shell', z.string())
+        .option('env', z.string(), { repeatable: 'repeated', default: ['A=1'] })
+        .flag('login')
+        .flag('verbose', { kind: 'count-flag' })
+        .returns(z.string()),
+    );
+    const output = compileSchema(z.string());
+    const start = vi.fn((_path, _input) => ({
+      settledResult: Promise.resolve({
+        status: 'fulfilled' as const,
+        value: { result: { graph: output.graph, value: output.toValue('ok') } },
+      }),
+      cancel: vi.fn(),
+    }));
+    const command = new ToolType(
+      {
+        lookupName: 'bash-like',
+        definition: encodeTool(getExtendedToolDefinition(definition)),
+        implementedBy: { uuid: { highBits: 0n, lowBits: 1n } },
+      },
+      { start } as unknown as ToolClientRuntime,
+    ).client.command([]);
+    const names = command.arguments.map((argument) => argument.name);
+    const fields = (value: ReturnType<typeof command.packJson>) => {
+      if (value.tag !== 'record') throw new Error('expected a record');
+      return Object.fromEntries(names.map((name, index) => [name, value.fields[index]]));
+    };
+
+    expect(fields(command.packJson({ script: 'echo ok', env: [] }))).toEqual({
+      script: v.string('echo ok'),
+      mode: v.string('run'),
+      cwd: v.string(''),
+      timeout: v.u32(600),
+      shell: { tag: 'option' },
+      env: v.list([]),
+      login: v.bool(false),
+      verbose: v.u32(0),
+    });
+    expect(
+      fields(
+        command.packJson({
+          script: 'echo ok',
+          mode: 'check',
+          cwd: '/tmp',
+          timeout: 120000,
+          shell: 'zsh',
+          env: ['B=2'],
+          login: true,
+          verbose: 2,
+        }),
+      ),
+    ).toEqual({
+      script: v.string('echo ok'),
+      mode: v.string('check'),
+      cwd: v.string('/tmp'),
+      timeout: v.u32(120000),
+      shell: { tag: 'option', value: v.string('zsh') },
+      env: v.list([v.string('B=2')]),
+      login: v.bool(true),
+      verbose: v.u32(2),
+    });
+    expect(command.inputSchema!.packJson({ script: 'echo ok', env: [] })).toEqual(
+      command.packJson({ script: 'echo ok', env: [] }),
+    );
+
+    expect(command.validateJson({ env: [] })).toEqual({
+      success: false,
+      issues: [{ path: ['script'], message: "missing field 'script'" }],
+    });
+    expect(() => command.packJson({ env: [] })).toThrow("missing field 'script'");
+    expect(command.validateJson({ script: 'echo ok' })).toEqual({
+      success: false,
+      issues: [{ path: ['env'], message: "missing field 'env'" }],
+    });
+
+    expect(command.inputSchema!.toJsonSchema({ includeDraftMarker: false })).toMatchObject({
+      required: ['script', 'env'],
+      properties: {
+        mode: { type: 'string', default: 'run' },
+        cwd: { type: 'string', default: '' },
+        timeout: { default: 600 },
+        login: { type: 'boolean', default: false },
+        verbose: { default: 0 },
+      },
+    });
+    const rendered = command.inputSchema!.toJsonSchema() as {
+      properties: Record<string, Record<string, unknown>>;
+    };
+    expect(rendered.properties.shell).not.toHaveProperty('default');
+    expect(rendered.properties.env).not.toHaveProperty('default');
+
+    const root = command.inputSchema!.root;
+    if (root.body.tag !== 'record') throw new Error('expected a record input');
+    expect(
+      Object.fromEntries(root.body.fields.map((field) => [field.name, field.body.body.tag])),
+    ).toMatchObject({ mode: 'string', cwd: 'string', timeout: 'u32', login: 'bool' });
+
+    await expect(command.invokeJson({ script: 'echo ok', env: [] })).resolves.toBe('ok');
+    const sent = start.mock.calls.at(-1)![1];
+    expect(schemaShapesMatch(command.inputSchema!.graph, sent.graph)).toBe(true);
+    expect(fields(sent.value).timeout).toEqual(v.u32(600));
+  });
+
   it('rejects a missing declared remote result', async () => {
     const { tool } = fixture({ malformed: true });
     await expect(

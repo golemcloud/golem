@@ -47,7 +47,11 @@ import './schema/effect';
 export { Uuid } from './uuid';
 export { ComponentId, AccountId, EnvironmentId } from './ids';
 export { ParsedAgentId } from './agentId';
-export type { ParsedAgentIdCreateOptions, ParsedAgentIdParts } from './agentId';
+export type {
+  AgentClientBindOptions,
+  ParsedAgentIdCreateOptions,
+  ParsedAgentIdParts,
+} from './agentId';
 export * from './agentClassName';
 export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';
@@ -63,7 +67,8 @@ export * as oplog from './host/oplog';
 export * from './host/guard';
 export { acquireQuotaToken, QuotaToken, Reservation, withReservation } from './host/quota';
 export type { FailedReservation } from './host/quota';
-export type { GuestPermissionCardHandle as PermissionCard } from './internal/schema-model/permissionCardHandle';
+export * as permissions from './permissions';
+export { PermissionCard, PolymorphicPermissionCard, ScopeCard } from './host/permissions';
 export * from './host/retry';
 export * from './host/result';
 export * from './host/saga';
@@ -205,6 +210,7 @@ export type {
   RemoteAgentError,
   RemoteCallErrorCause,
   RemoteCallOptions,
+  RemoteClientOptions,
   RemoteClient,
   RemoteClientFactory,
 } from './client';
@@ -353,6 +359,7 @@ async function invokeTool(
   let stdoutAdapter: ToolOutputStreamAdapter | undefined;
   let stderrAdapter: ToolOutputStreamAdapter | undefined;
   let inputCleanup: Promise<void> | undefined;
+  let outputFinishes: (Promise<void> | undefined)[] = [];
   const disposeInput = async (reason?: unknown): Promise<void> => {
     if (!inputCleanup) {
       inputCleanup = inputAdapter ? inputAdapter.dispose(reason) : closeAsyncIterable(stdin);
@@ -406,7 +413,8 @@ async function invokeTool(
     }
 
     const outcome = await prepared.invoke(context);
-    await Promise.all([stdoutAdapter?.finish(), stderrAdapter?.finish()]);
+    outputFinishes = [stdoutAdapter?.finish(), stderrAdapter?.finish()];
+    await Promise.all(outputFinishes);
     const result = await projectToolOutcome(body, outcome);
     await disposeInput();
     return result;
@@ -416,7 +424,16 @@ async function invokeTool(
       stderrAdapter?.abort(error),
       disposeInput(error),
     ]);
+    await Promise.allSettled(outputFinishes);
     throw error;
+  } finally {
+    for (const writer of [stdout, stderr]) {
+      try {
+        (writer as { [Symbol.dispose]?: () => void } | undefined)?.[Symbol.dispose]?.();
+      } catch {
+        // Disposal must not replace the selected invocation or attachment terminal.
+      }
+    }
   }
 }
 

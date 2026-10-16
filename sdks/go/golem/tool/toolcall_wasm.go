@@ -53,8 +53,6 @@ func startToolCallHost(
 		stderr: stderr,
 		wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
 			res := future.Get()
-			future.Drop()
-			rpc.Drop()
 			if res.Tag() == witTypes.ResultErr {
 				e := res.Err()
 				return witTypes.None[types.TypedSchemaValue](), &e
@@ -62,6 +60,7 @@ func startToolCallHost(
 			return res.Ok().Result, nil
 		},
 		cancel: future.Cancel,
+		drop:   func() { defer rpc.Drop(); future.Drop() },
 	}), nil
 }
 

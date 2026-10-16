@@ -50,7 +50,7 @@ cd sdks/scala
 sbt golemPublishLocal
 ```
 
-For the repository's complete local prerequisite flow (WIT sync, all three guest runtimes, all cross-published modules, and marker caching), use:
+For the repository's complete local prerequisite flow (WIT sync, the guest runtime, all cross-published modules, and marker caching), use:
 
 ```bash
 # Repository root
@@ -66,11 +66,11 @@ The Scala.js core exposes the current schema-based host surface. Useful authorit
 - `HostApi.scala` for typed agent IDs, registry/metadata, oplog, update/fork/revert, promises, and related `golem:api/host@1.5.0` facades;
 - `host/DurabilityApi.scala` for schema-typed synchronous and asynchronous custom durable calls;
 - `runtime/rpc/` and `RpcCodegen.scala` for invocation and mode-aware client signatures;
-- `wit/main.wit` for three Preview 3 guest worlds and current versioned dependencies.
+- `wit/main.wit` for the Preview 3 guest world and current versioned dependencies.
 
 Durable generated clients return plain values/`Unit` plus cancellation tokens where applicable. Ephemeral invocations return metadata-bearing `InvocationResult`, `InvocationReceipt`, `CancelableAsyncInvocation`, and `CancelableInvocationReceipt` values. Do not describe the old wasm-rpc resource API without checking these files.
 
-After WIT or guest-role changes, sync and regenerate as described by `golem-scala-base-image`. The script uses `wasm-rquickjs` 0.4.11, Preview 3, and `wasm32-wasip2`; generated WASMs are ignored while ordinary-role d.ts files are tracked.
+After WIT or guest-role changes, sync and regenerate as described by `golem-scala-base-image`. The script uses `wasm-rquickjs` 0.4.12, Preview 3, and `wasm32-wasip2`; generated WASMs are ignored while ordinary-role d.ts files are tracked.
 
 ## Example and end-to-end work
 

@@ -286,11 +286,17 @@ pub async fn invoke_with_output(
       raise error
     }
   }
-  let reason = match result {
-    Ok(_) | Err(@types.ToolError::CustomError(_)) => None
-    Err(_) => Some(ToolStreamError::Failed("tool invocation failed"))
-  }
-  @async-core.protect_from_cancel(() => output.complete(reason)) catch {
+  @async-core.protect_from_cancel(() => {
+    let failure = match result {
+      Err(@types.ToolError::InvalidInput(message)) =>
+        Some(ToolStreamError::Failed(message))
+      _ => None
+    }
+    output.complete(failure) catch {
+      @async-core.Cancelled::Cancelled as error => raise error
+      _ => ()
+    }
+  }) catch {
     error =>
       match result {
         Ok(value) if error is @async-core.Cancelled::Cancelled => {
@@ -299,6 +305,10 @@ pub async fn invoke_with_output(
             None => ()
           }
           match value.stdout {
+            Some(stream) => stream.drop_sync()
+            None => ()
+          }
+          match value.stderr {
             Some(stream) => stream.drop_sync()
             None => ()
           }

@@ -4,6 +4,7 @@ package "golemcloud/golem_sdk/schema"
 import {
   "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/internal/permission_card",
   "golemcloud/golem_sdk/schema_model",
   "moonbitlang/core/debug",
 }
@@ -35,6 +36,8 @@ pub fn[T : IntoWire] into_wire(T) -> @types.SchemaValueTree raise WireError
 
 pub async fn[T : IntoWire] into_wire_async(T) -> @types.SchemaValueTree
 
+pub async fn into_wire_payload_record_async(Array[&IntoWire]) -> @types.SchemaValueTree
+
 pub fn into_wire_record(Array[&IntoWire]) -> @types.SchemaValueTree raise WireError
 
 pub async fn into_wire_record_async(Array[&IntoWire]) -> @types.SchemaValueTree
@@ -45,7 +48,7 @@ pub fn[T : IntoSchema] register_in_with(@schema_model.SchemaBuilder, TypeTag[T])
 
 pub fn[T : IntoWire] release_wire(T) -> Unit
 
-pub fn release_wire_fields(Array[&IntoWire]) -> Unit
+pub fn rollback_wire_fields(Array[&IntoWire]) -> Unit
 
 pub fn[T : IntoSchema] schema_graph_of_tag(TypeTag[T]) -> @schema_model.SchemaGraph raise
 
@@ -243,6 +246,7 @@ pub fn WireReader::new(@types.SchemaValueTree, drop_resource? : (@types.SchemaVa
 pub struct WireReleaser {
   resources : Array[@types.SchemaValueNode]
   native_streams : Array[@async-core.Stream[@types.SchemaValueTree]]
+  keeps_permission_cards : Bool
 }
 
 pub(all) struct WireTypeEncoder {
@@ -318,7 +322,7 @@ pub impl[T : FromWire, E : FromWire] FromWire for Result[T, E]
 pub impl FromWire for Bytes
 pub impl FromWire for @types.Datetime
 pub impl FromWire for @types.Uuid
-pub impl FromWire for @schema_model.GuestPermissionCardHandle
+pub impl FromWire for @permission_card.GuestPermissionCardHandle
 pub impl FromWire for @schema_model.GuestQuotaTokenHandle
 pub impl FromWire for @schema_model.GuestSchemaValueStreamHandle
 pub impl FromWire for @schema_model.GuestSecretHandle
@@ -386,7 +390,7 @@ pub impl[T : IntoWire, E : IntoWire] IntoWire for Result[T, E]
 pub impl IntoWire for Bytes
 pub impl IntoWire for @types.Datetime
 pub impl IntoWire for @types.Uuid
-pub impl IntoWire for @schema_model.GuestPermissionCardHandle
+pub impl IntoWire for @permission_card.GuestPermissionCardHandle
 pub impl IntoWire for @schema_model.GuestQuotaTokenHandle
 pub impl IntoWire for @schema_model.GuestSchemaValueStreamHandle
 pub impl IntoWire for @schema_model.GuestSecretHandle

@@ -92,7 +92,16 @@ object SchemaPayload {
 
   private[autowire] def encodePreparedValueAsync(value: => SchemaValue)(
     prepare: SchemaValue => Future[SchemaValue]
-  ): Future[JsSchemaValueTree] = {
+  ): Future[JsSchemaValueTree] =
+    encodePreparedValueWithWireAsync(value)(prepare).map(_._2)
+
+  /** Like [[encodeValueAsync]], and also returns the wire tree. */
+  private[golem] def encodeValueWithWireAsync(value: => SchemaValue): Future[(WitSchemaValueTree, JsSchemaValueTree)] =
+    encodePreparedValueWithWireAsync(value)(Future.successful)
+
+  private def encodePreparedValueWithWireAsync(value: => SchemaValue)(
+    prepare: SchemaValue => Future[SchemaValue]
+  ): Future[(WitSchemaValueTree, JsSchemaValueTree)] = {
     val transaction = new AgentStreamOutputTransaction
     val result      =
       try {
@@ -103,7 +112,7 @@ object SchemaPayload {
           val wire = AgentStreamOutputTransaction.capture(transaction) {
             SchemaWire.schemaValueToWit(value)
           }
-          SchemaWireInterop.valueTreeToJsAsync(wire)
+          SchemaWireInterop.valueTreeToJsAsync(wire).map(lowered => (wire, lowered))
         }
       } catch {
         case NonFatal(error) => Future.failed(error)
