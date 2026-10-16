@@ -280,6 +280,9 @@ impl RetainedClaims<'_> {
                 retained.terminal.map(|(terminal_idx, _)| terminal_idx),
             );
             self.publish_deferred_events(retained.deferred_events);
+            if let Some(wallet) = &self.cursor.wallet {
+                wallet.finish_replayed_entity(idx);
+            }
         }
         self.publish_retained_count();
         self.st.custom_subtrees.insert(root, members);
@@ -299,6 +302,17 @@ impl CursorTx<'_> {
     }
 
     fn retain_start(&mut self, idx: OplogIndex, entry: OplogEntry) {
+        if matches!(
+            &entry,
+            OplogEntry::Start {
+                function_name: HostFunctionName::GolemEntityInvoke
+                    | HostFunctionName::GolemToolInvocationRejected,
+                ..
+            }
+        ) && let Some(wallet) = &self.cursor.wallet
+        {
+            wallet.register_replayed_entity(idx);
+        }
         self.st.retained_starts.insert(
             idx,
             RetainedStart {
@@ -367,6 +381,9 @@ impl CursorTx<'_> {
                 unreachable!("only Start entries are retained");
             };
             abandoned.record_start(idx, function_name.clone(), *parent_start_index);
+            if let Some(wallet) = &self.cursor.wallet {
+                wallet.finish_replayed_entity(idx);
+            }
             if let Some((terminal_idx, terminal)) = &retained.terminal {
                 abandoned.record_terminal(idx, *terminal_idx, terminal_kind(terminal))?;
             }
@@ -448,10 +465,10 @@ impl RetainedClaims<'_> {
             .await?;
         Ok(result.map(|(mut handle, entry)| {
             if claim.is_reconstruction_claim() {
-                let reconstruction = self
-                    .st
-                    .concurrent_resolver
-                    .register_reconstruction(handle.start_idx());
+                let reconstruction = self.st.concurrent_resolver.register_reconstruction(
+                    handle.start_idx(),
+                    self.cursor.wallet.as_ref().map(Arc::downgrade),
+                );
                 handle.attach_historical_reconstruction(reconstruction);
             }
             if claim.is_custom_invocation() {
@@ -533,7 +550,19 @@ impl CursorTx<'_> {
     /// Drops retained `Start`s (and detaches retained terminals and deferred replay events) that
     /// `deleted` now hides.
     fn prune_retained_starts(&mut self, mut deleted: impl FnMut(OplogIndex) -> bool) {
-        self.st.retained_starts.retain(|idx, _| !deleted(*idx));
+        if let Some(wallet) = &self.cursor.wallet {
+            wallet.prune_entity_prefixes(&mut deleted);
+        }
+        self.st.retained_starts.retain(|idx, _| {
+            if deleted(*idx) {
+                if let Some(wallet) = &self.cursor.wallet {
+                    wallet.finish_replayed_entity(*idx);
+                }
+                false
+            } else {
+                true
+            }
+        });
         for retained in self.st.retained_starts.values_mut() {
             if retained
                 .terminal
@@ -830,6 +859,9 @@ impl CursorTx<'_> {
                 // calls are observational records only: consume their Starts without registering
                 // resolver awaiters or waiting for terminals.
                 self.commit_consumed_entry(read_idx, &entry).await?;
+                if let Some(wallet) = &self.cursor.wallet {
+                    wallet.finish_replayed_entity(read_idx);
+                }
                 self.st
                     .custom_subtrees
                     .get_mut(&root)
@@ -848,6 +880,9 @@ impl CursorTx<'_> {
                 // Nested calls, scopes, and custom invocations therefore belong to the same replay-
                 // inert tree through their ordinary parent identity, irrespective of interleaving.
                 self.commit_consumed_entry(read_idx, &entry).await?;
+                if let Some(wallet) = &self.cursor.wallet {
+                    wallet.finish_replayed_entity(read_idx);
+                }
                 self.st
                     .custom_subtrees
                     .get_mut(&root)
@@ -1277,6 +1312,32 @@ impl CursorTx<'_> {
         read_idx: OplogIndex,
         oplog_entry: &OplogEntry,
     ) -> Result<(), WorkerExecutorError> {
+        if let Some(wallet) = &self.cursor.wallet {
+            if let Some(parent) = oplog_entry.entity_parent_start_index() {
+                // Hints can precede even the claim of their future entity Start. Validate the
+                // exact reference before retaining its prefix; a released claim cannot recreate it.
+                if wallet.entity_replay_wallet(parent).is_err()
+                    && !self.st.claimed_starts.contains(&parent)
+                    && self.custom_subtree_root(parent).is_none()
+                    && self
+                        .future_entity_start_can_be_claimed(read_idx, parent)
+                        .await
+                {
+                    wallet.register_replayed_entity(parent);
+                }
+                wallet.capture_entity_prefix(parent);
+            }
+            if matches!(
+                oplog_entry,
+                OplogEntry::Start {
+                    function_name: HostFunctionName::GolemEntityInvoke
+                        | HostFunctionName::GolemToolInvocationRejected,
+                    ..
+                }
+            ) {
+                wallet.capture_entity_prefix(read_idx);
+            }
+        }
         {
             let mut attachments = self.cursor.tool_attachment_reconstruction.lock().unwrap();
             if let Some(control) = attachments.history.controls.get(&read_idx) {
@@ -1290,9 +1351,12 @@ impl CursorTx<'_> {
             target_revision, ..
         } = oplog_entry
         {
-            self.record_replay_event(ReplayEvent::UpdateReplayed {
-                new_revision: *target_revision,
-            });
+            self.record_wallet_replay_event(
+                read_idx,
+                ReplayEvent::UpdateReplayed {
+                    new_revision: *target_revision,
+                },
+            );
         }
         // The sequential adapter persists GolemApiFork as a matched
         // `Start { function_name: GolemApiFork, .. }` + `End { response: Some(..), .. }`
@@ -1301,29 +1365,48 @@ impl CursorTx<'_> {
         // if necessary.
         match oplog_entry {
             OplogEntry::AgentInvocationStarted { wallet_pin, .. } => {
-                self.record_replay_event(ReplayEvent::InvocationWalletPinned {
-                    wallet_pin: wallet_pin.as_ref().clone(),
-                });
+                self.record_wallet_replay_event(
+                    read_idx,
+                    ReplayEvent::InvocationWalletPinned {
+                        oplog_index: read_idx,
+                        wallet_pin: wallet_pin.as_ref().clone(),
+                    },
+                );
             }
             OplogEntry::CardInstalled {
                 card,
                 wallet_generation,
                 ..
             } => {
-                self.record_replay_event(ReplayEvent::CardInstalled {
-                    card: card.as_ref().clone(),
-                    wallet_generation: *wallet_generation,
-                });
+                self.record_wallet_replay_event(
+                    read_idx,
+                    ReplayEvent::CardInstalled {
+                        card: card.as_ref().clone(),
+                        wallet_generation: *wallet_generation,
+                    },
+                );
             }
             OplogEntry::CardDerived {
                 card,
                 wallet_generation,
+                entity_parent_start_index,
                 ..
             } => {
-                self.record_replay_event(ReplayEvent::CardDerived {
-                    card: card.as_ref().clone(),
-                    wallet_generation: *wallet_generation,
-                });
+                self.record_wallet_replay_event(
+                    read_idx,
+                    ReplayEvent::CardDerived {
+                        card: card.as_ref().clone(),
+                        wallet_generation: *wallet_generation,
+                    },
+                );
+                if let Some(wallet) = &self.cursor.wallet {
+                    wallet.record_derivation(*entity_parent_start_index, card.as_ref().clone())?;
+                }
+            }
+            OplogEntry::AgentInvocationFinished { .. } => {
+                if let Some(wallet) = &self.cursor.wallet {
+                    wallet.finish_replayed_invocation();
+                }
             }
             OplogEntry::CardTransferStarted {
                 transfer_id,
@@ -1333,13 +1416,16 @@ impl CursorTx<'_> {
                 source_wallet_generation,
                 ..
             } => {
-                self.record_replay_event(ReplayEvent::CardTransferStarted {
-                    transfer_id: *transfer_id,
-                    card_id: *card_id,
-                    source_holder: source_holder.clone(),
-                    target_holder: target_holder.clone(),
-                    source_wallet_generation: *source_wallet_generation,
-                });
+                self.record_wallet_replay_event(
+                    read_idx,
+                    ReplayEvent::CardTransferStarted {
+                        transfer_id: *transfer_id,
+                        card_id: *card_id,
+                        source_holder: source_holder.clone(),
+                        target_holder: target_holder.clone(),
+                        source_wallet_generation: *source_wallet_generation,
+                    },
+                );
             }
             OplogEntry::CardTransferred {
                 transfer_id,
@@ -1350,14 +1436,17 @@ impl CursorTx<'_> {
                 target_wallet_generation,
                 ..
             } => {
-                self.record_replay_event(ReplayEvent::CardTransferred {
-                    transfer_id: *transfer_id,
-                    source_card_id: *source_card_id,
-                    installed_card_id: *installed_card_id,
-                    target_holder: target_holder.clone(),
-                    card: card.as_ref().clone(),
-                    target_wallet_generation: *target_wallet_generation,
-                });
+                self.record_wallet_replay_event(
+                    read_idx,
+                    ReplayEvent::CardTransferred {
+                        transfer_id: *transfer_id,
+                        source_card_id: *source_card_id,
+                        installed_card_id: *installed_card_id,
+                        target_holder: target_holder.clone(),
+                        card: card.as_ref().clone(),
+                        target_wallet_generation: *target_wallet_generation,
+                    },
+                );
             }
             OplogEntry::CardTransferConfirmed {
                 transfer_id,
@@ -1366,42 +1455,54 @@ impl CursorTx<'_> {
                 target_holder,
                 ..
             } => {
-                self.record_replay_event(ReplayEvent::CardTransferConfirmed {
-                    transfer_id: *transfer_id,
-                    source_card_id: *source_card_id,
-                    installed_card_id: *installed_card_id,
-                    target_holder: target_holder.clone(),
-                });
+                self.record_wallet_replay_event(
+                    read_idx,
+                    ReplayEvent::CardTransferConfirmed {
+                        transfer_id: *transfer_id,
+                        source_card_id: *source_card_id,
+                        installed_card_id: *installed_card_id,
+                        target_holder: target_holder.clone(),
+                    },
+                );
             }
             OplogEntry::CardRevokedCascade {
                 revoked_card_ids,
                 local_wallet_generation,
                 ..
             } => {
-                self.record_replay_event(ReplayEvent::CardRevokedCascade {
-                    card_ids: revoked_card_ids.clone(),
-                    local_wallet_generation: *local_wallet_generation,
-                });
+                self.record_wallet_replay_event(
+                    read_idx,
+                    ReplayEvent::CardRevokedCascade {
+                        card_ids: revoked_card_ids.clone(),
+                        local_wallet_generation: *local_wallet_generation,
+                    },
+                );
             }
             OplogEntry::CardRevoked {
                 card_id,
                 wallet_generation,
                 ..
             } => {
-                self.record_replay_event(ReplayEvent::CardRevoked {
-                    card_id: *card_id,
-                    wallet_generation: *wallet_generation,
-                });
+                self.record_wallet_replay_event(
+                    read_idx,
+                    ReplayEvent::CardRevoked {
+                        card_id: *card_id,
+                        wallet_generation: *wallet_generation,
+                    },
+                );
             }
             OplogEntry::CardExpired {
                 card_id,
                 wallet_generation,
                 ..
             } => {
-                self.record_replay_event(ReplayEvent::CardExpired {
-                    card_id: *card_id,
-                    wallet_generation: *wallet_generation,
-                });
+                self.record_wallet_replay_event(
+                    read_idx,
+                    ReplayEvent::CardExpired {
+                        card_id: *card_id,
+                        wallet_generation: *wallet_generation,
+                    },
+                );
             }
             OplogEntry::Start { function_name, .. }
                 if function_name == &HostFunctionName::GolemApiFork =>
@@ -1469,6 +1570,11 @@ impl CursorTx<'_> {
         let was_replay = self.cursor.is_replay();
         self.cursor.position.last_replayed_index.set(new_idx);
         self.get_out_of_skipped_region().await;
+        if self.cursor.is_live()
+            && let Some(wallet) = &self.cursor.wallet
+        {
+            wallet.finish_replay_prefix();
+        }
         if was_replay && self.cursor.is_live() {
             self.record_replay_event(ReplayEvent::ReplayFinished);
         }
@@ -1530,24 +1636,30 @@ impl CursorTx<'_> {
                 .read_exact(next, CHUNK_SIZE.min(remaining))
                 .await;
             let last_read = *entries.last_key_value().unwrap().0;
-            for entry in entries.into_values() {
+            for (index, entry) in entries {
                 match entry {
                     OplogEntry::CardInstalled {
                         card,
                         wallet_generation,
                         ..
-                    } => self.record_replay_event(ReplayEvent::CardInstalled {
-                        card: *card,
-                        wallet_generation,
-                    }),
+                    } => self.record_wallet_replay_event(
+                        index,
+                        ReplayEvent::CardInstalled {
+                            card: *card,
+                            wallet_generation,
+                        },
+                    ),
                     OplogEntry::CardDerived {
                         card,
                         wallet_generation,
                         ..
-                    } => self.record_replay_event(ReplayEvent::CardDerived {
-                        card: *card,
-                        wallet_generation,
-                    }),
+                    } => self.record_wallet_replay_event(
+                        index,
+                        ReplayEvent::CardDerived {
+                            card: *card,
+                            wallet_generation,
+                        },
+                    ),
                     OplogEntry::CardTransferStarted {
                         transfer_id,
                         card_id,
@@ -1555,13 +1667,16 @@ impl CursorTx<'_> {
                         target_holder,
                         source_wallet_generation,
                         ..
-                    } => self.record_replay_event(ReplayEvent::CardTransferStarted {
-                        transfer_id,
-                        card_id,
-                        source_holder,
-                        target_holder,
-                        source_wallet_generation,
-                    }),
+                    } => self.record_wallet_replay_event(
+                        index,
+                        ReplayEvent::CardTransferStarted {
+                            transfer_id,
+                            card_id,
+                            source_holder,
+                            target_holder,
+                            source_wallet_generation,
+                        },
+                    ),
                     OplogEntry::CardTransferred {
                         transfer_id,
                         source_card_id,
@@ -1570,50 +1685,65 @@ impl CursorTx<'_> {
                         card,
                         target_wallet_generation,
                         ..
-                    } => self.record_replay_event(ReplayEvent::CardTransferred {
-                        transfer_id,
-                        source_card_id,
-                        installed_card_id,
-                        target_holder,
-                        card: *card,
-                        target_wallet_generation,
-                    }),
+                    } => self.record_wallet_replay_event(
+                        index,
+                        ReplayEvent::CardTransferred {
+                            transfer_id,
+                            source_card_id,
+                            installed_card_id,
+                            target_holder,
+                            card: *card,
+                            target_wallet_generation,
+                        },
+                    ),
                     OplogEntry::CardTransferConfirmed {
                         transfer_id,
                         source_card_id,
                         installed_card_id,
                         target_holder,
                         ..
-                    } => self.record_replay_event(ReplayEvent::CardTransferConfirmed {
-                        transfer_id,
-                        source_card_id,
-                        installed_card_id,
-                        target_holder,
-                    }),
+                    } => self.record_wallet_replay_event(
+                        index,
+                        ReplayEvent::CardTransferConfirmed {
+                            transfer_id,
+                            source_card_id,
+                            installed_card_id,
+                            target_holder,
+                        },
+                    ),
                     OplogEntry::CardRevokedCascade {
                         revoked_card_ids,
                         local_wallet_generation,
                         ..
-                    } => self.record_replay_event(ReplayEvent::CardRevokedCascade {
-                        card_ids: revoked_card_ids,
-                        local_wallet_generation,
-                    }),
+                    } => self.record_wallet_replay_event(
+                        index,
+                        ReplayEvent::CardRevokedCascade {
+                            card_ids: revoked_card_ids,
+                            local_wallet_generation,
+                        },
+                    ),
                     OplogEntry::CardRevoked {
                         card_id,
                         wallet_generation,
                         ..
-                    } => self.record_replay_event(ReplayEvent::CardRevoked {
-                        card_id,
-                        wallet_generation,
-                    }),
+                    } => self.record_wallet_replay_event(
+                        index,
+                        ReplayEvent::CardRevoked {
+                            card_id,
+                            wallet_generation,
+                        },
+                    ),
                     OplogEntry::CardExpired {
                         card_id,
                         wallet_generation,
                         ..
-                    } => self.record_replay_event(ReplayEvent::CardExpired {
-                        card_id,
-                        wallet_generation,
-                    }),
+                    } => self.record_wallet_replay_event(
+                        index,
+                        ReplayEvent::CardExpired {
+                            card_id,
+                            wallet_generation,
+                        },
+                    ),
                     _ => {}
                 }
             }
@@ -1695,6 +1825,17 @@ impl CursorTx<'_> {
     /// retained `Start` is being committed past on its owner's behalf, the event is deferred to
     /// that `Start` instead (see [`RetainedStart::deferred_events`]); `ReplayFinished` describes
     /// the cursor rather than an entry and is never deferred.
+    fn record_wallet_replay_event(&mut self, index: OplogIndex, event: ReplayEvent) {
+        let event = match &self.cursor.wallet {
+            Some(owner) => ReplayEvent::Projected {
+                receipt: owner.reserve_replay_event(index, &event),
+                event: Box::new(event),
+            },
+            None => event,
+        };
+        self.record_replay_event(event);
+    }
+
     pub(super) fn record_replay_event(&mut self, event: ReplayEvent) {
         if let Some((start_idx, entry_idx)) = self.retaining_for
             && !matches!(event, ReplayEvent::ReplayFinished)
@@ -2066,10 +2207,10 @@ impl CursorTx<'_> {
             other => return Ok(other),
         };
         if claim.is_reconstruction_claim() {
-            let reconstruction = self
-                .st
-                .concurrent_resolver
-                .register_reconstruction(handle.start_idx());
+            let reconstruction = self.st.concurrent_resolver.register_reconstruction(
+                handle.start_idx(),
+                self.cursor.wallet.as_ref().map(Arc::downgrade),
+            );
             handle.attach_historical_reconstruction(reconstruction);
         }
         if claim.is_custom_invocation() {
@@ -2195,6 +2336,9 @@ impl CursorTx<'_> {
             ));
         }
 
+        // The permitted suffix still contains committed wallet hints. Consume it through the
+        // normal cursor so reconstruction observes them before the missing scope becomes live.
+        while self.try_get_oplog_entry(|_| true).await?.is_some() {}
         self.cursor.begin_settling();
         Ok(StartClaimAttempt::MissingSettling { replay_target })
     }
@@ -2867,9 +3011,10 @@ impl ReplayState {
         skipped_regions: DeletedRegions,
         initial_snapshot_skip_end: Option<OplogIndex>,
         owner_tool_operations: Arc<crate::durable_host::tool::operation::OwnerToolOperations>,
+        last_oplog_index: OplogIndex,
+        wallet: Option<Arc<crate::worker::owner_wallet::OwnerWallet>>,
     ) -> Result<Self, WorkerExecutorError> {
         let next_skipped_region = skipped_regions.find_next_deleted_region(OplogIndex::NONE);
-        let last_oplog_index = oplog.current_oplog_index().await;
         let mut tool_attachment_reconstruction = ToolAttachmentReconstruction::default();
         let metadata_floor = recovery_metadata_floor(&skipped_regions, initial_snapshot_skip_end);
         let (completion_markers, stream_observations) = Self::scan_completion_markers(
@@ -2893,6 +3038,7 @@ impl ReplayState {
         let cursor = ReplayCursor {
             owned_agent_id,
             oplog,
+            wallet,
             owner_tool_operations,
             advance_gate: Arc::new(tokio::sync::Mutex::new(())),
             delivery_failure: std::sync::Mutex::new(None),
@@ -3519,6 +3665,24 @@ impl ReplayState {
             .await
     }
 
+    /// Ends a failed replay without publishing its incomplete authority state for live use.
+    pub(in crate::durable_host) async fn abandon_replay_for_failure(
+        &self,
+    ) -> Result<(), WorkerExecutorError> {
+        self.run_owned_cursor_op(|state| async move {
+            state
+                .with_tx(async |tx| {
+                    if let Some(wallet) = &tx.cursor.wallet {
+                        wallet.retire();
+                    }
+                    tx.switch_to_live();
+                    Ok(())
+                })
+                .await
+        })
+        .await
+    }
+
     pub(super) async fn switch_cursor_to_live(&self) -> Result<OplogIndex, WorkerExecutorError> {
         self.run_owned_cursor_op(|state| async move {
             let replay_target = state
@@ -3584,6 +3748,21 @@ impl ReplayState {
         linear_memory: &crate::services::linear_memory::LinearMemoryTracker,
         role: ReplayToLiveRole,
     ) -> Result<ReplayToLiveOutcome, WorkerExecutorError> {
+        self.run_owned_cursor_op(|state| async move {
+            state
+                .with_tx(async |tx| {
+                    tx.try_get_oplog_entry(|_| false).await?;
+                    if tx.cursor.is_replay() {
+                        return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            "consumed replay prefix before live authority publication",
+                            "unconsumed positional entry or delivery boundary",
+                        ));
+                    }
+                    Ok(())
+                })
+                .await
+        })
+        .await?;
         if role == ReplayToLiveRole::PrimaryAgent {
             let replay_target = self.begin_primary_settling().await?;
             self.finish_settling_to_live(linear_memory, role, replay_target)
@@ -4112,6 +4291,11 @@ impl ReplayState {
         let cursor = &*self.cursor;
         self.with_tx(async |tx| {
             let old_target = cursor.replay_target();
+            if new_target != old_target
+                && let Some(wallet) = &cursor.wallet
+            {
+                wallet.reopen_replay_prefix()?;
+            }
             match new_target.cmp(&old_target) {
                 std::cmp::Ordering::Equal => {}
                 std::cmp::Ordering::Less => {
@@ -4179,6 +4363,11 @@ impl ReplayState {
                     .retain(|event| !matches!(event, ReplayEvent::ReplayFinished));
             }
             cursor.replay_target.set(new_target);
+            if cursor.is_live()
+                && let Some(wallet) = &cursor.wallet
+            {
+                wallet.finish_replay_prefix();
+            }
             if new_target != old_target {
                 tx.notify_progress = true;
             }
@@ -4332,6 +4521,11 @@ impl ReplayState {
             if released.is_empty() {
                 return Ok(());
             }
+            if let Some(wallet) = &state.cursor.wallet {
+                for index in released.keys() {
+                    wallet.finish_replayed_entity(*index);
+                }
+            }
             {
                 let mut pending = state.cursor.pending_replay_events.lock().unwrap();
                 for retained in released.values() {
@@ -4379,15 +4573,36 @@ impl ReplayState {
         self.cursor.is_replay()
     }
 
+    #[cfg(test)]
     pub fn take_new_replay_events(&self) -> Vec<ReplayEvent> {
+        self.take_new_replay_events_for(true)
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) fn test_stage_replay_events(&self, events: Vec<ReplayEvent>) {
+        self.cursor
+            .pending_replay_events
+            .lock()
+            .unwrap()
+            .extend(events);
+    }
+
+    pub(crate) fn take_new_replay_events_for(&self, root: bool) -> Vec<ReplayEvent> {
         let mut pending = self.cursor.pending_replay_events.lock().unwrap();
-        if self.is_live_published() {
+        if root && self.is_live_published() {
             std::mem::take(&mut *pending)
         } else {
             let events = std::mem::take(&mut *pending);
             let mut ready = Vec::with_capacity(events.len());
             for event in events {
-                if matches!(event, ReplayEvent::ReplayFinished) {
+                if matches!(event.kind(), ReplayEvent::ReplayFinished)
+                    || (!root
+                        && matches!(
+                            event.kind(),
+                            ReplayEvent::UpdateReplayed { .. }
+                                | ReplayEvent::InvocationWalletPinned { .. }
+                        ))
+                {
                     pending.push(event);
                 } else {
                     ready.push(event);
@@ -4404,7 +4619,7 @@ impl ReplayState {
             .unwrap()
             .iter()
             .rev()
-            .find_map(|event| match event {
+            .find_map(|event| match event.kind() {
                 ReplayEvent::CardDerived {
                     card,
                     wallet_generation,

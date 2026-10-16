@@ -421,10 +421,12 @@ async fn marker_record_over(oplog: Arc<InMemoryOplog>) -> CompletionMarkerRecord
                 agent_id: "completion-delivery-test".to_string(),
             },
         },
-        seed_oplog_dyn,
+        seed_oplog_dyn.clone(),
         golem_common::model::regions::DeletedRegions::default(),
         None,
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        seed_oplog_dyn.current_oplog_index().await,
+        None,
     )
     .await
     .expect("failed to build replay state");
@@ -545,10 +547,12 @@ async fn a_fenced_completion_marker_is_reported_rather_than_panicked() {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
             agent_id,
         },
-        seed_oplog_dyn,
+        seed_oplog_dyn.clone(),
         golem_common::model::regions::DeletedRegions::default(),
         None,
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        seed_oplog_dyn.current_oplog_index().await,
+        None,
     )
     .await
     .expect("failed to build replay state");
@@ -590,10 +594,12 @@ async fn completion_delivery_markers_preserve_handoff_order() {
                 agent_id: "completion-marker-order-test".to_string(),
             },
         },
-        seed_oplog_dyn,
+        seed_oplog_dyn.clone(),
         golem_common::model::regions::DeletedRegions::default(),
         None,
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        seed_oplog_dyn.current_oplog_index().await,
+        None,
     )
     .await
     .expect("failed to build replay state");
@@ -953,6 +959,8 @@ async fn tail_gated_token_over_crash_tail(
         golem_common::model::regions::DeletedRegions::default(),
         None,
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        oplog_dyn.current_oplog_index().await,
+        None,
     )
     .await
     .expect("failed to build replay state");
@@ -1591,6 +1599,8 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
         golem_common::model::regions::DeletedRegions::default(),
         None,
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        persist_oplog.current_oplog_index().await,
+        None,
     )
     .await
     .expect("failed to build replay state");

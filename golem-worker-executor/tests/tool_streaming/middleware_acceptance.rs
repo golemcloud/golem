@@ -2101,11 +2101,63 @@ async fn filesystem_capable_incapable_capable_chain_serializes_fanout_lanes(
         result,
         "fanout[leaf(fs-inner(fanout-left(fs-outer(seed-29))))|leaf(fs-inner(fanout-right(fs-outer(seed-29))))]"
     );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let mut inner_starts = entity_starts(
+        &oplog,
+        PublicAgentEntityKind::ToolMiddleware,
+        "streaming-filesystem-inner",
+    )
+    .into_iter()
+    .map(|start| {
+        let PublicOplogEntry::Start(parameters) = &start.entry else {
+            unreachable!("entity_starts only returns Start entries");
+        };
+        let request = parameters
+            .request
+            .as_ref()
+            .expect("the inner middleware invocation has a request");
+        let SchemaValue::Record { fields } = request.value() else {
+            panic!("expected an inner middleware string input, got {request:?}");
+        };
+        let [SchemaValue::String(input)] = fields.as_slice() else {
+            panic!("expected an inner middleware string input, got {request:?}");
+        };
+        let marker = if input.starts_with("fanout-left(") {
+            b'L'
+        } else if input.starts_with("fanout-right(") {
+            b'R'
+        } else {
+            panic!("unexpected inner middleware input: {input}");
+        };
+        let PublicOplogEntryAttribution::Entity(context) = &start.attribution else {
+            unreachable!("entity start has entity attribution");
+        };
+        let parent = context
+            .ancestors
+            .last()
+            .expect("the inner middleware invocation has a fanout parent");
+        assert_eq!(parent.entity.kind, PublicAgentEntityKind::ToolMiddleware);
+        assert_eq!(parent.entity.name, "streaming-incapable-fanout");
+        assert_eq!(
+            parent.call_mode,
+            golem_common::model::oplog::PublicEntityCallMode::Asynchronous
+        );
+        (start.oplog_index, marker)
+    })
+    .collect::<Vec<_>>();
+    assert_eq!(
+        inner_starts.len(),
+        2,
+        "one inner invocation per fanout branch"
+    );
+    inner_starts.sort_by_key(|(index, _)| *index);
+    assert_ne!(inner_starts[0].1, inner_starts[1].1);
+    let expected_lane_log = [b'O', inner_starts[0].1, inner_starts[1].1];
     assert_eq!(
         executor
             .get_file_contents(&worker_id, "/middleware-lanes.log")
             .await?,
-        b"OLR".as_slice()
+        expected_lane_log.as_slice()
     );
     Ok(())
 }

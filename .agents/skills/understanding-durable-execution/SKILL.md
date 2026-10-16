@@ -1681,7 +1681,13 @@ cursor (`OwnerExecution`, `worker/instance.rs`).
   context before the body runs; keep this reconstruction boundary covered.
 - Every live admission, ambient or underlying, authorizes the command and arguments its layer
   receives, after replay claims and boundary projection; entity Stores authorize with the owner's
-  wallet and the caller's inherited invocation scope. The root `Start` records the pinned
+  generation-bound canonical live wallet and the caller's inherited invocation scope. Stores retain
+  scopes and derived surfaces, not independent live membership. Accepted wallet commits publish
+  through the status actor even if their producer is cancelled; owner-wide interest is the union
+  of wallet, scope and admission-candidate contributions. Historical bodies retain recorded wallets
+  and pins until their own live transition, never borrowing the latest live snapshot. Adjacent
+  unrecorded wallet observations still lack an exact historical association; this ownership model
+  does not change observation recording. The root `Start` records the pinned
   chain plan; descendants record root plus position, and every occurrence retains the original
   calling principal and typed static installation parameters. Component and host leaves use the
   same dispatch path.
