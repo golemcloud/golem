@@ -96,6 +96,12 @@ object PermissionsApiSpec extends ZIOSpecDefault {
   private def card(raw: js.Dynamic): PermissionCard =
     PermissionCard.fromRaw(raw.asInstanceOf[JsPermissionCardResource])
 
+  private def template(raw: js.Dynamic): PolymorphicPermissionCard =
+    PolymorphicPermissionCard.fromRaw(raw.asInstanceOf[JsPermissionCardResource])
+
+  private def walletEntry(tag: String, raw: js.Dynamic): js.Dynamic =
+    js.Dynamic.literal(tag = tag, `val` = raw)
+
   private def grantNames(value: js.Any): List[String] =
     value.asInstanceOf[js.Array[js.Dynamic]].toList.map(g => s"${g.class_}:${g.verb}:${g.resourceId}")
 
@@ -127,26 +133,39 @@ object PermissionsApiSpec extends ZIOSpecDefault {
         decoded.contains(PermissionError.NotPermitted("m-not-permitted"))
       )
     },
-    test("wallet wraps owned handles and card ids compare by identity of the host id") {
+    test("wallet labels each owned handle with its card type and card ids compare by the host id") {
       val host   = new FakeHost
       val root   = host.rawCard("root")
       val child  = host.rawCard("child")
+      val lent   = host.rawCard("lent")
       val ids    = Map("root" -> cardIdJs(1, 2), "child" -> cardIdJs(3, 4), "alias" -> cardIdJs(1, 2))
       val parent = Map("root" -> js.Array[js.Any](), "child" -> js.Array[js.Any](cardIdJs(1, 2)))
       host
-        .on("selfWallet")(_ => js.Array[js.Any](root, child))
+        .on("selfWallet")(_ =>
+          js.Array[js.Any](walletEntry("template", root), walletEntry("concrete", child), walletEntry("scope", lent))
+        )
         .on("id")(args => ids(args(0).asInstanceOf[js.Dynamic].name.asInstanceOf[String]))
         .on("parents")(args => parent(args(0).asInstanceOf[js.Dynamic].name.asInstanceOf[String]))
         .on("expiresAt")(args =>
-          if (args(0).asInstanceOf[js.Dynamic].name.asInstanceOf[String] == "child")
-            js.Dynamic.literal(seconds = js.BigInt("1900000000"), nanoseconds = 5)
-          else js.undefined
+          args(0).asInstanceOf[js.Dynamic].name.asInstanceOf[String] match {
+            case "child" => js.Dynamic.literal(seconds = js.BigInt("1900000000"), nanoseconds = 5)
+            case "lent"  => js.Dynamic.literal(seconds = js.BigInt("1800000000"), nanoseconds = 0)
+            case _       => js.undefined
+          }
         )
         .install()
-      val cards                        = PermissionsApi.wallet()
-      val rootCard :: childCard :: Nil = cards: @unchecked
+      val entries                         = PermissionsApi.wallet()
+      val (rootCard, childCard, lentCard) = entries match {
+        case List(WalletCard.Template(r), WalletCard.Concrete(c), WalletCard.Scope(s)) => (r, c, s)
+        case other                                                                     => throw new AssertionError(other.toString)
+      }
       assertTrue(
-        cards.forall(_.isPresent),
+        entries.forall(_.card.isPresent),
+        rootCard.borrowRaw(_ eq root),
+        childCard.borrowRaw(_ eq child),
+        lentCard.borrowRaw(_ eq lent),
+        lentCard.expiresAt.contains(Timestamp(1800000000L, 0)),
+        rootCard.toString == "PolymorphicPermissionCard(<opaque>)",
         childCard.parents == List(rootCard.id),
         rootCard.id != childCard.id,
         rootCard.id == card(host.rawCard("alias")).id,
@@ -154,6 +173,62 @@ object PermissionsApiSpec extends ZIOSpecDefault {
         rootCard.expiresAt.isEmpty,
         childCard.expiresAt.contains(Timestamp(1900000000L, 5)),
         rootCard.id.toString == "CardId(<opaque>)"
+      )
+    },
+    test("wallet drops every handle and fails on a wallet-card case that it does not know") {
+      val host = new FakeHost
+      host
+        .on("selfWallet")(_ =>
+          js.Array[js.Any](walletEntry("concrete", host.rawCard("first")), walletEntry("borrowed", host.rawCard("odd")))
+        )
+        .install()
+      val result = Try(PermissionsApi.wallet())
+      assertTrue(
+        result.failed.toOption.exists(_.getMessage.contains("unknown wallet-card case: borrowed")),
+        host.disposed.toList == List("first", "odd")
+      )
+    },
+    test("a template card derives a concrete card, and revoke, install and release move it") {
+      val host = new FakeHost
+      host
+        .on("derive")(_ => host.rawCard("derived"))
+        .on("revokeCard")(_ => throwJs(error("card-revoked", "already revoked")))
+        .on("installCard")(args =>
+          if (args(0).asInstanceOf[js.Dynamic].name.asInstanceOf[String] == "install-denied")
+            throwJs(error("not-permitted", "card:install missing"))
+          else js.undefined
+        )
+        .install()
+      def concrete(card: Either[PermissionError, PermissionCard]): Option[PermissionCard] = card.toOption
+      val parentRaw                                                                       = host.rawCard("template")
+      val parent                                                                          = template(parentRaw)
+      val derived                                                                         = concrete(parent.derive(Bounds(lowerPositive = List(inspectGrant)), Some(Lifespan(1.minute))))
+      val args                                                                            = host.args("derive")
+      val revoking                                                                        = template(host.rawCard("revoking"))
+      val revoked                                                                         = revoking.revoke()
+      val installed                                                                       = template(host.rawCard("installed"))
+      val result                                                                          = installed.install(Holder.App(golem.Uuid(BigInt(1), BigInt(2))))
+      val denied                                                                          = template(host.rawCard("install-denied"))
+      val refused                                                                         = denied.install(Holder.App(golem.Uuid(BigInt(1), BigInt(2))))
+      val released                                                                        = template(host.rawCard("released"))
+      released.release()
+      released.release()
+      assertTrue(
+        derived.exists(_.isPresent),
+        derived.exists(_.toString == "PermissionCard(<opaque>)"),
+        args(0) eq parentRaw,
+        args(5).asInstanceOf[js.Dynamic].iso8601.asInstanceOf[String] == "PT60S",
+        parent.isPresent,
+        revoked == Left(PermissionError.CardRevoked("already revoked")),
+        !revoking.isPresent,
+        Try(revoking.revoke()).failed.toOption.exists(_.isInstanceOf[IllegalStateException]),
+        result == Right(()),
+        !installed.isPresent,
+        Try(installed.inspect()).failed.toOption.exists(_.isInstanceOf[IllegalStateException]),
+        refused == Left(PermissionError.NotPermitted("card:install missing")),
+        !denied.isPresent,
+        !released.isPresent,
+        host.disposed.toList == List("released")
       )
     },
     test("derive sends retained and added grants in WIT order with the lifespan and keeps the parent") {
@@ -371,6 +446,93 @@ object PermissionsApiSpec extends ZIOSpecDefault {
         back.fromValue(SchemaValue.StringValue("card-id")).isLeft,
         codec.graph.typeNodes(codec.graph.root).body ==
           WitSchemaTypeBody.PermissionCardType(PermissionCardSpec(polymorphic = false))
+      )
+    },
+    test("the template card codecs declare a polymorphic card and keep the non-forgeability rules") {
+      val host       = new FakeHost
+      val raw        = host.rawCard("template-sent")
+      val sent       = template(raw)
+      val into       = implicitly[IntoSchema[PolymorphicPermissionCard]]
+      val back       = implicitly[FromSchema[PolymorphicPermissionCard]]
+      val codec      = implicitly[ConcreteCodec[PolymorphicPermissionCard]]
+      val aliased    = back.fromValue(into.toValue(sent))
+      val asConcrete = implicitly[FromSchema[PermissionCard]].fromValue(
+        SchemaValue.PermissionCardHandle(GuestPermissionCardHandle.fromRaw(raw))
+      )
+      val concreteRaw = host.rawCard("concrete-held")
+      val concrete    = card(concreteRaw)
+      val asTemplate  = Try(
+        codec.decode(
+          SchemaWireInterop.valueTreeFromJs(
+            golem.host.js.schema.JsSchemaValueTree(
+              js.Array(golem.host.js.schema.JsSchemaValueNode.permissionCardHandle(concreteRaw)),
+              0
+            )
+          )
+        )
+      )
+      val fresh = back.fromValue(
+        SchemaValue.PermissionCardHandle(GuestPermissionCardHandle.fromRaw(host.rawCard("template-fresh")))
+      )
+      val wit     = codec.encodeValue(sent)
+      val lowered = SchemaWireInterop.valueTreeToJs(wit)
+      val node    = lowered.valueNodes(lowered.root).asInstanceOf[js.Dynamic]
+      val moved   = !sent.isPresent
+      val carried = node.`val`.asInstanceOf[js.Any] eq raw
+      SchemaWireInterop.returnCapabilityHandles(wit, lowered)
+      val inFlight = template(host.rawCard("template-in-flight"))
+      val wit2     = codec.encodeValue(inFlight)
+      val lowered2 = SchemaWireInterop.valueTreeToJs(wit2)
+      inFlight.release()
+      SchemaWireInterop.returnCapabilityHandles(wit2, lowered2)
+      assertTrue(
+        into.graph.root.body == SchemaTypeBody.PermissionCardType(PermissionCardSpec(polymorphic = true)),
+        codec.graph.typeNodes(codec.graph.root).body ==
+          WitSchemaTypeBody.PermissionCardType(PermissionCardSpec(polymorphic = true)),
+        aliased.left.exists(_.toString.contains("resource is held by another card object")),
+        asConcrete.left.exists(_.toString.contains("resource is held by another card object")),
+        asTemplate.failed.toOption.exists(_.isInstanceOf[golem.schema.SchemaDecodeError]),
+        concrete.isPresent && concrete.borrowRaw(_ eq concreteRaw),
+        fresh.exists(_.isPresent),
+        back.fromValue(SchemaValue.StringValue("card-id")).isLeft,
+        moved,
+        carried,
+        sent.isPresent && sent.borrowRaw(_ eq raw),
+        !inFlight.isPresent,
+        host.disposed.toList == List("template-in-flight")
+      )
+    },
+    test("a template card holder never backs a second card, and a claimed in-flight handle stays with its claimant") {
+      val host    = new FakeHost
+      val codec   = implicitly[ConcreteCodec[PolymorphicPermissionCard]]
+      val exposed = template(host.rawCard("template-exposed"))
+      val value   = implicitly[IntoSchema[PolymorphicPermissionCard]].toValue(exposed)
+      val wit     = codec.encodeValue(exposed)
+      val lowered = SchemaWireInterop.valueTreeToJs(wit)
+      val second  = implicitly[FromSchema[PolymorphicPermissionCard]].fromValue(value)
+      val asOther = implicitly[FromSchema[PermissionCard]].fromValue(value)
+      SchemaWireInterop.returnCapabilityHandles(wit, lowered)
+      val flightRaw = host.rawCard("template-claimed-in-flight")
+      val inFlight  = template(flightRaw)
+      val wit2      = codec.encodeValue(inFlight)
+      val lowered2  = SchemaWireInterop.valueTreeToJs(wit2)
+      val claimant  = codec.decode(
+        SchemaWireInterop.valueTreeFromJs(
+          golem.host.js.schema.JsSchemaValueTree(
+            js.Array(golem.host.js.schema.JsSchemaValueNode.permissionCardHandle(flightRaw)),
+            0
+          )
+        )
+      )
+      SchemaWireInterop.returnCapabilityHandles(wit2, lowered2)
+      assertTrue(
+        second.left.exists(_.toString.contains("holder already belongs to another card object")),
+        asOther.left.exists(_.toString.contains("holder already belongs to another card object")),
+        exposed.isPresent,
+        !inFlight.isPresent,
+        claimant.isPresent,
+        claimant.borrowRaw(_ eq flightRaw),
+        host.disposed.isEmpty
       )
     },
     test("lowering a card through SchemaWireInterop moves it, and the handle can be given back") {

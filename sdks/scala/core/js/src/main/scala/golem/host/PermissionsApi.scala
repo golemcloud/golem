@@ -24,6 +24,7 @@ import golem.schema.{
   FromSchemaError,
   GuestPermissionCardHandle,
   IntoSchema,
+  PermissionCardSpec,
   SchemaGraph,
   SchemaType,
   SchemaTypeBody,
@@ -40,21 +41,25 @@ import scala.scalajs.js.annotation.JSImport
 /**
  * Typed Scala.js API for `golem:permissions@0.1.0`.
  *
- * A [[PermissionCard]] wraps the opaque, unforgeable `permission-card` resource
- * from `golem:core/types@2.0.0`. Guest code obtains cards only from the host:
- * from [[wallet]], from a derivation, or as a value received through an agent
- * or tool invocation. No API turns a [[CardId]], a UUID, a string or other data
- * into a card.
+ * Three card types wrap the opaque, unforgeable `permission-card` resource from
+ * `golem:core/types@2.0.0`: a concrete [[PermissionCard]], a template
+ * [[PolymorphicPermissionCard]] and an invocation-local [[ScopeCard]]. The SDK
+ * offers no conversion between them. A card that a schema codec decodes takes
+ * the type that the decoder declares; the host keeps the real kind of the card,
+ * so the declared type gives no authority. Guest code obtains cards only from
+ * the host: from [[wallet]], from a derivation, or as a value received through
+ * an agent or tool invocation. No API turns a [[CardId]], a UUID, a string or
+ * other data into a card.
  *
  * Expected failures are returned as `Left(PermissionError)`. Host traps are not
  * converted: the card accessors [[Card.id]], [[Card.parents]] and
  * [[Card.expiresAt]] trap when the host does not know the handle.
  *
- * A card is affine. [[PermissionCard.revoke]], [[PermissionCard.install]],
- * [[Card.release]] and sending the card as an RPC argument or result move it;
- * every later use throws `IllegalStateException`. [[deriveScope]] returns a
- * separate [[ScopeCard]] type; only a scope card can be attached to an awaited
- * RPC call, and attaching borrows it.
+ * A card is affine. `revoke`, `install`, [[Card.release]] and sending the card
+ * as an RPC argument or result move it; every later use throws
+ * `IllegalStateException`. [[deriveScope]] returns a separate [[ScopeCard]]
+ * type; only a scope card can be attached to an awaited RPC call, and attaching
+ * borrows it.
  */
 object PermissionsApi {
 
@@ -180,11 +185,11 @@ object PermissionsApi {
   /**
    * The requested lattice of a derivation.
    *
-   * For [[PermissionCard.derive]] the positive lists are the parent grants to
-   * retain and the negative lists are the denials to add. For
-   * [[deriveFromWallet]] and [[deriveScope]] the four lists are the complete
-   * requested lattice. The host validates every request against the parent
-   * cards; nothing in a `Bounds` value carries authority.
+   * For `derive` on a card the positive lists are the parent grants to retain
+   * and the negative lists are the denials to add. For [[deriveFromWallet]] and
+   * [[deriveScope]] the four lists are the complete requested lattice. The host
+   * validates every request against the parent cards; nothing in a `Bounds`
+   * value carries authority.
    */
   final case class Bounds(
     lowerPositive: List[PatternGrant] = Nil,
@@ -213,9 +218,9 @@ object PermissionsApi {
   // --- WIT: holder ---
 
   /**
-   * The target of [[PermissionCard.install]]. The host currently accepts only
-   * agent targets and returns [[PermissionError.NotPermitted]] for account and
-   * app targets.
+   * The target of `install` on a card. The host currently accepts only agent
+   * targets and returns [[PermissionError.NotPermitted]] for account and app
+   * targets.
    */
   sealed trait Holder extends Product with Serializable
 
@@ -299,9 +304,10 @@ object PermissionsApi {
   // --- WIT: permission-card resource ---
 
   /**
-   * A card this agent holds: a persistent [[PermissionCard]] or an
-   * invocation-local [[ScopeCard]]. Both wrap the opaque host resource and
-   * offer the borrowing operations; both can be parents in [[deriveScope]].
+   * A card this agent holds: a concrete [[PermissionCard]], a template
+   * [[PolymorphicPermissionCard]] or an invocation-local [[ScopeCard]]. Each
+   * wraps the opaque host resource and offers the borrowing operations; each
+   * can be a parent in [[deriveScope]].
    */
   sealed trait Card {
     private[golem] def handle: GuestPermissionCardHandle
@@ -323,7 +329,8 @@ object PermissionsApi {
       borrow(raw => TypesModule.parents(raw).toList.map(CardId.fromJs))
 
     /**
-     * The expiry of the card, if it has a bounded lifespan. Traps if the host
+     * The expiry of the card, if it has a bounded lifespan. For a
+     * [[ScopeCard]], the earliest expiry of its root cards. Traps if the host
      * does not know the handle.
      */
     final def expiresAt: Option[Timestamp] =
@@ -407,17 +414,15 @@ object PermissionsApi {
   }
 
   /**
-   * An unforgeable persistent permission card held by this agent.
+   * An unforgeable concrete permission card held by this agent: every grant
+   * names concrete owners and resources.
    *
    * The card wraps an owned host resource. It has no public constructor and no
    * data codec; the only schema codec moves the handle into an RPC value tree,
-   * so a card can be sent exactly once. A raw host resource wraps into at most
-   * one card object while that card holds it, and a schema holder into at most
-   * one card object ever.
-   *
-   * [[wallet]] can also return the scope card of the running invocation as a
-   * `PermissionCard` when the agent holds `card:inspect`; the host rejects
-   * persistent operations on it.
+   * so a card can be sent exactly once. Its schema is
+   * `permission-card { polymorphic: false }`. A raw host resource wraps into at
+   * most one card object while that card holds it, and a schema holder into at
+   * most one card object ever.
    */
   final class PermissionCard private[golem] (handle0: GuestPermissionCardHandle) extends Card {
     private[golem] val handle: GuestPermissionCardHandle = claimed(this, handle0)
@@ -428,68 +433,39 @@ object PermissionsApi {
      * the denials to add. Requires `card:derive`. This card stays usable.
      */
     def derive(bounds: Bounds, lifespan: Option[Lifespan] = None): Either[PermissionError, PermissionCard] =
-      borrow(raw =>
-        hostCall(
-          PermissionCard.fromRaw(
-            DeriveModule.derive(
-              raw,
-              PatternGrantJs.toJsArray(bounds.lowerPositive),
-              PatternGrantJs.toJsArray(bounds.lowerNegative),
-              PatternGrantJs.toJsArray(bounds.upperPositive),
-              PatternGrantJs.toJsArray(bounds.upperNegative),
-              lifespanToJs(lifespan)
-            )
-          )
-        )
-      )
+      borrow(deriveChild(_, bounds, lifespan))
 
     /**
      * Revoke this card and every card derived from it. Returns the number of
      * revoked cards. Requires `card:revoke`. Moves the card, also when the host
      * returns an error.
      */
-    def revoke(): Either[PermissionError, Long] = {
-      val raw = take()
-      hostCall(RevokeModule.revokeCard(raw).toLong)
-    }
+    def revoke(): Either[PermissionError, Long] = revokeCard(handle)
 
     /**
      * Install this card into the wallet of `target`. Requires `card:install`.
      * Moves the card, also when the host returns an error.
      */
-    def install(target: Holder): Either[PermissionError, Unit] = {
-      val jsTarget = Holder.toJs(target)
-      val raw      = take()
-      hostCall(WalletModule.installCard(raw, jsTarget))
-    }
+    def install(target: Holder): Either[PermissionError, Unit] = installCard(handle, target)
 
     override def toString: String = "PermissionCard(<opaque>)"
-
-    private def take(): JsPermissionCardResource =
-      handle.take() match {
-        case Some(raw) => raw.asInstanceOf[JsPermissionCardResource]
-        case None      => throw new IllegalStateException(CARD_MOVED)
-      }
   }
 
   object PermissionCard {
     private[golem] def fromRaw(raw: JsPermissionCardResource): PermissionCard =
       new PermissionCard(GuestPermissionCardHandle.fromRaw(raw))
 
-    private val spec = GuestPermissionCardHandle.nonPolymorphicSpec
+    private val codecs = new CardCodecs[PermissionCard](
+      "PermissionCard",
+      GuestPermissionCardHandle.nonPolymorphicSpec,
+      new PermissionCard(_)
+    )
 
     /**
      * Schema codec for agent and tool signatures. Encoding moves the handle
      * into the value tree, so a card can be sent exactly once.
      */
-    implicit val intoSchema: IntoSchema[PermissionCard] =
-      new IntoSchema[PermissionCard] {
-        override lazy val graph: SchemaGraph =
-          SchemaGraph(ListMap.empty, SchemaType(SchemaTypeBody.PermissionCardType(spec)))
-
-        override def toValue(card: PermissionCard): SchemaValue =
-          SchemaValue.PermissionCardHandle(card.handle)
-      }
+    implicit val intoSchema: IntoSchema[PermissionCard] = codecs.intoSchema
 
     /**
      * Wraps a decoded handle. A raw resource that another present card object
@@ -500,37 +476,165 @@ object PermissionsApi {
      * wrapper around a resource that user code imported through its own raw JS
      * bindings, never new authority.
      */
-    implicit val fromSchema: FromSchema[PermissionCard] =
-      new FromSchema[PermissionCard] {
-        override def fromValue(value: SchemaValue): Either[FromSchemaError, PermissionCard] =
-          value match {
-            case SchemaValue.PermissionCardHandle(h) =>
-              try Right(new PermissionCard(h))
-              catch { case error: IllegalArgumentException => Left(FromSchemaError(error.getMessage)) }
-            case other =>
-              Left(FromSchemaError(s"expected permission-card handle for PermissionCard, got $other"))
-          }
-      }
+    implicit val fromSchema: FromSchema[PermissionCard] = codecs.fromSchema
 
-    implicit val concreteCodec: ConcreteCodec[PermissionCard] =
-      GuestPermissionCardHandle.concreteCodec(spec).xmap(decodedCard, _.handle)
-
-    private def decodedCard(handle: GuestPermissionCardHandle): PermissionCard =
-      try new PermissionCard(handle)
-      catch { case error: IllegalArgumentException => throw SchemaDecodeError(error.getMessage) }
+    implicit val concreteCodec: ConcreteCodec[PermissionCard] = codecs.concreteCodec
   }
 
   /**
-   * An invocation-local scope card, derived with [[deriveScope]].
+   * An unforgeable template permission card held by this agent: its grants may
+   * contain slot variables such as `?agent` and `?env`, which the host resolves
+   * for each holder.
+   *
+   * It offers the same operations as a [[PermissionCard]];
+   * [[PolymorphicPermissionCard.derive]] returns a concrete [[PermissionCard]],
+   * because the host resolves the template parent for the holder. Its schema is
+   * `permission-card { polymorphic: true }`. The non-forgeability rules of
+   * [[PermissionCard]] apply unchanged. The SDK offers no conversion between
+   * the two types; a decoded card takes the type that the decoder declares.
+   */
+  final class PolymorphicPermissionCard private[golem] (handle0: GuestPermissionCardHandle) extends Card {
+    private[golem] val handle: GuestPermissionCardHandle = claimed(this, handle0)
+
+    /**
+     * Derive a concrete child card with a narrower lattice. The positive lists
+     * of `bounds` are the grants of this card to retain, the negative lists are
+     * the denials to add. The host resolves the slot variables of this card for
+     * the holder. Requires `card:derive`. This card stays usable.
+     */
+    def derive(bounds: Bounds, lifespan: Option[Lifespan] = None): Either[PermissionError, PermissionCard] =
+      borrow(deriveChild(_, bounds, lifespan))
+
+    /**
+     * Revoke this card and every card derived from it. Returns the number of
+     * revoked cards. Requires `card:revoke`. Moves the card, also when the host
+     * returns an error.
+     */
+    def revoke(): Either[PermissionError, Long] = revokeCard(handle)
+
+    /**
+     * Install this card into the wallet of `target`. Requires `card:install`.
+     * Moves the card, also when the host returns an error.
+     */
+    def install(target: Holder): Either[PermissionError, Unit] = installCard(handle, target)
+
+    override def toString: String = "PolymorphicPermissionCard(<opaque>)"
+  }
+
+  object PolymorphicPermissionCard {
+    private[golem] def fromRaw(raw: JsPermissionCardResource): PolymorphicPermissionCard =
+      new PolymorphicPermissionCard(GuestPermissionCardHandle.fromRaw(raw))
+
+    private val codecs = new CardCodecs[PolymorphicPermissionCard](
+      "PolymorphicPermissionCard",
+      PermissionCardSpec(polymorphic = true),
+      new PolymorphicPermissionCard(_)
+    )
+
+    /**
+     * Schema codec for agent and tool signatures. Encoding moves the handle
+     * into the value tree, so a card can be sent exactly once.
+     */
+    implicit val intoSchema: IntoSchema[PolymorphicPermissionCard] = codecs.intoSchema
+
+    /**
+     * Wraps a decoded handle with the rules of [[PermissionCard.fromSchema]].
+     * The host does not check the kind of a received card; the declared type
+     * chooses the wrapper.
+     */
+    implicit val fromSchema: FromSchema[PolymorphicPermissionCard] = codecs.fromSchema
+
+    implicit val concreteCodec: ConcreteCodec[PolymorphicPermissionCard] = codecs.concreteCodec
+  }
+
+  /**
+   * The schema codecs of a sendable card type with one permission-card spec.
+   */
+  private final class CardCodecs[C <: Card](
+    name: String,
+    spec: PermissionCardSpec,
+    wrap: GuestPermissionCardHandle => C
+  ) {
+    val intoSchema: IntoSchema[C] =
+      new IntoSchema[C] {
+        override lazy val graph: SchemaGraph =
+          SchemaGraph(ListMap.empty, SchemaType(SchemaTypeBody.PermissionCardType(spec)))
+
+        override def toValue(card: C): SchemaValue =
+          SchemaValue.PermissionCardHandle(card.handle)
+      }
+
+    val fromSchema: FromSchema[C] =
+      new FromSchema[C] {
+        override def fromValue(value: SchemaValue): Either[FromSchemaError, C] =
+          value match {
+            case SchemaValue.PermissionCardHandle(h) =>
+              try Right(wrap(h))
+              catch { case error: IllegalArgumentException => Left(FromSchemaError(error.getMessage)) }
+            case other =>
+              Left(FromSchemaError(s"expected permission-card handle for $name, got $other"))
+          }
+      }
+
+    val concreteCodec: ConcreteCodec[C] =
+      GuestPermissionCardHandle.concreteCodec(spec).xmap(decoded, _.handle)
+
+    private def decoded(handle: GuestPermissionCardHandle): C =
+      try wrap(handle)
+      catch { case error: IllegalArgumentException => throw SchemaDecodeError(error.getMessage) }
+  }
+
+  private def deriveChild(
+    raw: JsPermissionCardResource,
+    bounds: Bounds,
+    lifespan: Option[Lifespan]
+  ): Either[PermissionError, PermissionCard] =
+    hostCall(
+      PermissionCard.fromRaw(
+        DeriveModule.derive(
+          raw,
+          PatternGrantJs.toJsArray(bounds.lowerPositive),
+          PatternGrantJs.toJsArray(bounds.lowerNegative),
+          PatternGrantJs.toJsArray(bounds.upperPositive),
+          PatternGrantJs.toJsArray(bounds.upperNegative),
+          lifespanToJs(lifespan)
+        )
+      )
+    )
+
+  private def revokeCard(handle: GuestPermissionCardHandle): Either[PermissionError, Long] = {
+    val raw = take(handle)
+    hostCall(RevokeModule.revokeCard(raw).toLong)
+  }
+
+  private def installCard(handle: GuestPermissionCardHandle, target: Holder): Either[PermissionError, Unit] = {
+    val jsTarget = Holder.toJs(target)
+    val raw      = take(handle)
+    hostCall(WalletModule.installCard(raw, jsTarget))
+  }
+
+  private def take(handle: GuestPermissionCardHandle): JsPermissionCardResource =
+    handle.take() match {
+      case Some(raw) => raw.asInstanceOf[JsPermissionCardResource]
+      case None      => throw new IllegalStateException(CARD_MOVED)
+    }
+
+  /**
+   * An invocation-local scope card: derived with [[deriveScope]], or lent to
+   * the current invocation and listed by [[wallet]] as a [[WalletCard.Scope]].
    *
    * Attach it to an awaited RPC call with the generated client's
    * `withScopeCard` or `withDefaultScopeCard`; attaching borrows the card. A
-   * scope card is valid only during the invocation that derived it. After that
-   * invocation the handle stays safe to hold and to [[Card.release]], but
-   * attaching it (also as a client default) makes awaited calls fail with
-   * `denied`, and using it as a [[deriveScope]] parent returns
+   * scope card is valid only during the invocation that derived it or that it
+   * was lent to. After that invocation the handle stays safe to hold and to
+   * [[Card.release]], but attaching it (also as a client default) makes awaited
+   * calls fail with `denied`, and using it as a [[deriveScope]] parent returns
    * [[PermissionError.NotPermitted]]. It cannot be revoked, installed, derived
    * from persistently or sent as an RPC argument, and it has no codec.
+   *
+   * [[Card.expiresAt]] is the earliest expiry of the root cards of this scope
+   * card, or none when no root card expires. The scope card stops authorizing
+   * then.
    */
   final class ScopeCard private[golem] (handle0: GuestPermissionCardHandle) extends Card {
     private[golem] val handle: GuestPermissionCardHandle = claimed(this, handle0)
@@ -538,14 +642,66 @@ object PermissionsApi {
     override def toString: String = "ScopeCard(<opaque>)"
   }
 
+  // --- WIT: wallet-card ---
+
+  /**
+   * A card in the caller's wallet, labelled with its kind by the host. Each
+   * case carries the card type of its kind.
+   */
+  sealed trait WalletCard extends Product with Serializable {
+
+    /** The card of this entry. */
+    def card: Card
+  }
+
+  object WalletCard {
+
+    /** A concrete card: every grant names concrete owners and resources. */
+    final case class Concrete(card: PermissionCard) extends WalletCard
+
+    /**
+     * A template card: its grants may contain slot variables (`?agent`, `?env`,
+     * ...), which resolve for each holder.
+     */
+    final case class Template(card: PolymorphicPermissionCard) extends WalletCard
+
+    /**
+     * The scope card lent to the current invocation. The host lists it only
+     * when the caller holds `card:inspect`, and retires it at the end of the
+     * invocation.
+     */
+    final case class Scope(card: ScopeCard) extends WalletCard
+
+    private[PermissionsApi] val witTags: Set[String] = Set("concrete", "template", "scope")
+
+    private[PermissionsApi] def fromJs(raw: JsWalletCard): WalletCard = {
+      val handle = GuestPermissionCardHandle.fromRaw(raw.card)
+      raw.tag match {
+        case "concrete" => Concrete(new PermissionCard(handle))
+        case "template" => Template(new PolymorphicPermissionCard(handle))
+        case "scope"    => Scope(new ScopeCard(handle))
+        case other      => throw new IllegalStateException(s"unknown wallet-card case: $other")
+      }
+    }
+  }
+
   // --- Module-level operations ---
 
   /**
-   * All cards in the caller's wallet. Each card is an owned handle; call
-   * [[Card.release]] on the cards that the caller does not keep.
+   * All cards in the caller's wallet, each labelled with its kind. During an
+   * invocation that received a scope card, the list also contains that card as
+   * a [[WalletCard.Scope]] when the caller holds `card:inspect`. Each card is
+   * an owned handle; call [[Card.release]] on the cards that the caller does
+   * not keep.
    */
-  def wallet(): List[PermissionCard] =
-    WalletModule.selfWallet().toList.map(PermissionCard.fromRaw)
+  def wallet(): List[WalletCard] = {
+    val entries = WalletModule.selfWallet().toList
+    entries.find(entry => !WalletCard.witTags.contains(entry.tag)).foreach { unknown =>
+      entries.foreach(entry => dispose(entry.card))
+      throw new IllegalStateException(s"unknown wallet-card case: ${unknown.tag}")
+    }
+    entries.map(WalletCard.fromJs)
+  }
 
   /** The current version of the caller's wallet. */
   def walletVersion(): WalletVersionToken = {
@@ -682,7 +838,7 @@ object PermissionsApi {
   @js.native
   @JSImport("golem:permissions/wallet@0.1.0", JSImport.Namespace)
   private object WalletModule extends js.Object {
-    def selfWallet(): js.Array[JsPermissionCardResource]                    = js.native
+    def selfWallet(): js.Array[JsWalletCard]                                = js.native
     def selfVersion(): JsWalletVersionToken                                 = js.native
     def installCard(card: JsPermissionCardResource, target: JsHolder): Unit = js.native
   }

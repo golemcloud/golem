@@ -37,7 +37,8 @@ use golem_common::schema::tool::{
     ResultSpec as ToolResultSpec, StreamSpec, TailPositional, Tool,
 };
 use golem_common::schema::{
-    AgentTypeSchema, MetadataEnvelope, NamedFieldType, ResultSpec, SchemaType, TypeId,
+    AgentTypeSchema, MetadataEnvelope, NamedFieldType, PermissionCardSpec, ResultSpec, SchemaType,
+    TypeId,
 };
 use tempfile::TempDir;
 use test_r::{test, test_dep};
@@ -1554,6 +1555,96 @@ fn guest_generation_compiles_nested_named_and_multimodal_host_managed_capabiliti
     );
     assert!(source.contains("final case class CapabilityEnvelope("));
     assert!(source.contains("sealed trait Multimodal0"));
+
+    compile_guest_if_enabled(dir.as_path());
+}
+
+#[test]
+fn guest_generation_maps_polymorphic_permission_cards_to_template_cards() {
+    let template = SchemaType::permission_card(PermissionCardSpec { polymorphic: true });
+    let concrete = SchemaType::permission_card(PermissionCardSpec { polymorphic: false });
+    let pkg = GeneratedPackage::new_with_mode(
+        agent(
+            "CardKindAgent",
+            "scala",
+            vec![],
+            vec![
+                method(
+                    "keepTemplateList",
+                    vec![field("cards", SchemaType::list(template.clone()))],
+                    Some(SchemaType::list(template.clone())),
+                ),
+                method(
+                    "keepTemplate",
+                    vec![field("card", template.clone())],
+                    Some(template),
+                ),
+                method(
+                    "keepConcrete",
+                    vec![field("card", concrete.clone())],
+                    Some(concrete),
+                ),
+            ],
+            vec![],
+            AgentMode::Durable,
+        ),
+        ScalaBridgeMode::GuestWasmRpc,
+    );
+    let dir = pkg.package_dir();
+    let source = std::fs::read_to_string(
+        dir.join("src/main/scala/golem/bridge/client/card_kind_agent/CardKindAgentClient.scala"),
+    )
+    .unwrap();
+
+    let template_card = "_root_.golem.host.PermissionsApi.PolymorphicPermissionCard";
+    let concrete_card = "_root_.golem.host.PermissionsApi.PermissionCard";
+    let template_start = source
+        .find("final class KeepTemplateRemoteMethod")
+        .unwrap_or_else(|| panic!("missing KeepTemplateRemoteMethod in:\n{source}"));
+    let concrete_start = source
+        .find("final class KeepConcreteRemoteMethod")
+        .unwrap_or_else(|| panic!("missing KeepConcreteRemoteMethod in:\n{source}"));
+    assert!(template_start < concrete_start, "{source}");
+    let template_method = &source[template_start..concrete_start];
+    let concrete_method = &source[concrete_start..];
+
+    assert!(
+        template_method.contains(&format!(
+            "def apply(card: {template_card}): _root_.scala.concurrent.Future[{template_card}]"
+        )),
+        "{template_method}"
+    );
+    assert!(template_method.contains(&format!("{template_card}.intoSchema.toValue(card)")));
+    assert!(template_method.contains(&format!("{template_card}.fromSchema.fromValue(")));
+    assert!(
+        !template_method.contains(concrete_card),
+        "{template_method}"
+    );
+
+    assert!(
+        concrete_method.contains(&format!(
+            "def apply(card: {concrete_card}): _root_.scala.concurrent.Future[{concrete_card}]"
+        )),
+        "{concrete_method}"
+    );
+    assert!(concrete_method.contains(&format!("{concrete_card}.intoSchema.toValue(card)")));
+    assert!(concrete_method.contains(&format!("{concrete_card}.fromSchema.fromValue(")));
+    assert!(
+        !concrete_method.contains(template_card),
+        "{concrete_method}"
+    );
+
+    let list_start = source
+        .find("final class KeepTemplateListRemoteMethod")
+        .unwrap_or_else(|| panic!("missing KeepTemplateListRemoteMethod in:\n{source}"));
+    let list_method = &source[list_start..template_start];
+    assert!(
+        list_method.contains(&format!("[{template_card}]")),
+        "{list_method}"
+    );
+    assert!(list_method.contains(&format!("{template_card}.intoSchema.toValue(")));
+    assert!(list_method.contains(&format!("{template_card}.fromSchema.fromValue(")));
+    assert!(!list_method.contains(concrete_card), "{list_method}");
 
     compile_guest_if_enabled(dir.as_path());
 }

@@ -33,7 +33,7 @@ use golem_common::model::worker::{AgentConfigEntryDto, ResolvedRevert, RevertWor
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocationOutput, IdempotencyKey, OwnedAgentId, PromiseId,
 };
-use golem_common::schema::SchemaValue;
+use golem_common::schema::{SchemaType, SchemaValue};
 use golem_common::{agent_id, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
@@ -527,6 +527,29 @@ async fn scala_sdk_runs_the_shared_permission_card_scenario(
         .store()
         .await?;
 
+    // The SDK declares a template card parameter as
+    // `permission-card { polymorphic: true }` and a concrete card parameter as
+    // `polymorphic: false`.
+    let target_type = component
+        .metadata
+        .agent_types()
+        .iter()
+        .find(|agent_type| agent_type.type_name.0 == "ScalaPermissionCardTarget")
+        .ok_or_else(|| anyhow::anyhow!("missing ScalaPermissionCardTarget agent type"))?;
+    let card_parameter_polymorphism = |method_name: &str| {
+        target_type
+            .methods
+            .iter()
+            .find(|method| method.name == method_name)
+            .and_then(|method| method.input_schema.fields().first())
+            .and_then(|field| match &field.schema {
+                SchemaType::PermissionCard { spec, .. } => Some(spec.polymorphic),
+                _ => None,
+            })
+    };
+    assert_eq!(card_parameter_polymorphism("receiveTemplate"), Some(true));
+    assert_eq!(card_parameter_polymorphism("receiveConcrete"), Some(false));
+
     let caller = agent_id!("ScalaPermissionCardAgent", "scenario");
     let root = component
         .metadata
@@ -544,9 +567,19 @@ async fn scala_sdk_runs_the_shared_permission_card_scenario(
     assert_eq!(
         observations,
         vec![
+            // The initial card of the agent type is a template card.
+            "root-kind=template",
             "derived-inspect=true",
             "child-parent=true",
             "child-expiry=true",
+            // Deriving from the template card returns concrete children of it,
+            // which the wallet lists as concrete cards once installed.
+            "template-derive=true",
+            "template-children=concrete,concrete",
+            // A scope card expires with its earliest root card; a scope card
+            // of a root card without expiry does not expire.
+            "scope-expiry=true",
+            "root-scope-expiry=None",
             // The target agent type has no card permissions of its own; a scope
             // card grants card:inspect only while the awaited call runs.
             "before=false",
@@ -556,11 +589,19 @@ async fn scala_sdk_runs_the_shared_permission_card_scenario(
             "after=false",
             "scope-usable=true",
             "denied-derive=NotPermitted",
+            // The target's wallet is empty; during a call with a scope card it
+            // lists that card as a scope entry, with the expiry of the
+            // caller's scope card.
+            "kinds-plain=",
+            "kinds-lent=scope",
+            "lent-expiry=true",
+            "lent-no-expiry=None",
             "installed=true",
             "target-expiring=1",
             "target-inspect=true",
             "self-installed=true",
             "held-before=true",
+            "self-held-kind=Some(concrete)",
             // The revoked card and the grandchild derived from it; the holder
             // loses the revoked card.
             "revoked=Some(Right(2))",
@@ -574,6 +615,7 @@ async fn scala_sdk_runs_the_shared_permission_card_scenario(
             "target-expiring-after-revoke=0",
             "moved-child=true",
             "mismatch=Left(InstallRecipientMismatch)",
+            "children-revoked=List(Right(1), Right(1))",
         ]
     );
 
@@ -589,6 +631,29 @@ async fn scala_sdk_runs_the_shared_permission_card_scenario(
             "attach-failed=true",
             "stale-parent=Left(NotPermitted)",
             "released=true"
+        ]
+    );
+
+    // Sending the template card moves the caller's handle, and the callee
+    // decodes it as the declared template card type. An argument carries the
+    // card but does not install it: the callee's wallet stays empty, and
+    // without card:inspect of its own the callee cannot inspect the card.
+    let sent = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "sendTemplate",
+            data_value!("template-target"),
+        )
+        .await?
+        .into_typed::<Vec<String>>()?;
+    assert_eq!(
+        sent,
+        vec![
+            "received-parents=0",
+            "received-inspect=false",
+            "sent-moved=true",
+            "receiver-kinds=",
         ]
     );
     Ok(())

@@ -166,6 +166,8 @@ const GUEST_GOLEM_SERVER: &str = "_root_.golem.runtime.rpc.RemoteAgentClient";
 const GUEST_DATETIME: &str = "_root_.golem.Datetime";
 const GUEST_UUID: &str = "_root_.golem.Uuid";
 const GUEST_PERMISSION_CARD: &str = "_root_.golem.host.PermissionsApi.PermissionCard";
+const GUEST_POLYMORPHIC_PERMISSION_CARD: &str =
+    "_root_.golem.host.PermissionsApi.PolymorphicPermissionCard";
 const GUEST_SCOPE_CARD: &str = "_root_.golem.host.PermissionsApi.ScopeCard";
 const GUEST_AGENT_CLIENT_RUNTIME: &str = "_root_.golem.runtime.rpc.AgentClientRuntime";
 /// The nested class of every generated method class whose awaited calls borrow
@@ -181,6 +183,16 @@ const FUTURE: &str = "_root_.scala.concurrent.Future";
 const EXECUTION_CONTEXT: &str = "_root_.scala.concurrent.ExecutionContext";
 const STRING: &str = "_root_.scala.Predef.String";
 const UNIT: &str = "_root_.scala.Unit";
+
+/// The Scala guest card type of a `permission-card` schema: a template card
+/// for `polymorphic: true`, a concrete card otherwise.
+fn guest_permission_card_type(polymorphic: bool) -> &'static str {
+    if polymorphic {
+        GUEST_POLYMORPHIC_PERMISSION_CARD
+    } else {
+        GUEST_PERMISSION_CARD
+    }
+}
 
 /// The two `AgentInvocationMode` wire strings (server OpenAPI enum).
 const MODE_AWAIT: &str = "await";
@@ -3159,8 +3171,11 @@ impl ScalaBridgeGenerator {
             SchemaType::QuotaToken { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
                 format!("{GUEST_SV}.QuotaTokenHandle({val_expr}.handle)")
             }
-            SchemaType::PermissionCard { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
-                format!("{GUEST_PERMISSION_CARD}.intoSchema.toValue({val_expr})")
+            SchemaType::PermissionCard { spec, .. }
+                if self.mode == ScalaBridgeMode::GuestWasmRpc =>
+            {
+                let card = guest_permission_card_type(spec.polymorphic);
+                format!("{card}.intoSchema.toValue({val_expr})")
             }
             SchemaType::Record { .. }
             | SchemaType::Variant { .. }
@@ -3342,9 +3357,12 @@ impl ScalaBridgeGenerator {
             SchemaType::QuotaToken { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => format!(
                 "{val_expr} match {{ case {GUEST_SV}.QuotaTokenHandle(handle) => new _root_.golem.host.QuotaApi.QuotaToken(handle); case other => throw {GUEST_CLIENT_ERROR}(s\"Expected quota-token handle, got $other\") }}"
             ),
-            SchemaType::PermissionCard { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
+            SchemaType::PermissionCard { spec, .. }
+                if self.mode == ScalaBridgeMode::GuestWasmRpc =>
+            {
+                let card = guest_permission_card_type(spec.polymorphic);
                 format!(
-                    "{GUEST_PERMISSION_CARD}.fromSchema.fromValue({val_expr}) match {{ case _root_.scala.Right(card) => card; case _root_.scala.Left(error) => throw {GUEST_CLIENT_ERROR}(s\"Expected permission-card handle: $error\") }}"
+                    "{card}.fromSchema.fromValue({val_expr}) match {{ case _root_.scala.Right(card) => card; case _root_.scala.Left(error) => throw {GUEST_CLIENT_ERROR}(s\"Expected permission-card handle: $error\") }}"
                 )
             }
             SchemaType::Record { .. }
@@ -3581,8 +3599,10 @@ impl ScalaBridgeGenerator {
             SchemaType::QuotaToken { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
                 Ok("_root_.golem.host.QuotaApi.QuotaToken".to_string())
             }
-            SchemaType::PermissionCard { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
-                Ok(GUEST_PERMISSION_CARD.to_string())
+            SchemaType::PermissionCard { spec, .. }
+                if self.mode == ScalaBridgeMode::GuestWasmRpc =>
+            {
+                Ok(guest_permission_card_type(spec.polymorphic).to_string())
             }
             // Named composites should already have been resolved to their name
             // above; reaching here means the walker did not register one.

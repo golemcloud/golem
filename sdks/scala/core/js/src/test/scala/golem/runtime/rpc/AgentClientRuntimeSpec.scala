@@ -16,7 +16,7 @@
 
 package golem.runtime.rpc
 
-import golem.host.PermissionsApi.{PermissionCard, ScopeCard}
+import golem.host.PermissionsApi.{PermissionCard, PolymorphicPermissionCard, ScopeCard}
 import golem.host.js.JsPermissionCardResource
 import golem.host.js.schema.JsSchemaValueTree
 import golem.runtime.annotations.{DurabilityMode, agentDefinition}
@@ -113,6 +113,21 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
           invoker.scopeCardsSeen.isEmpty
         )
       }
+    },
+    test("agent metadata declares a template card as polymorphic and a concrete card as not") {
+      val metadata                              = rpcWireType.metadata
+      def body(index: Int)                      = metadata.schema.typeNodes(index).body
+      def cardSpec(index: Int): Option[Boolean] = body(index) match {
+        case golem.schema.wire.WitSchemaTypeBody.PermissionCardType(spec) => Some(spec.polymorphic)
+        case _                                                            => None
+      }
+      val sendCard     = metadata.methods.find(_.name == "sendCard").get
+      val sendTemplate = metadata.methods.find(_.name == "sendTemplate").get
+      assertTrue(
+        sendCard.parameters.map(p => cardSpec(p.schema)) == List(Some(false)),
+        sendTemplate.parameters.map(p => cardSpec(p.schema)) == List(Some(true)),
+        sendTemplate.output.flatMap(cardSpec).contains(true)
+      )
     },
     test("a scope card moved before the call fails it without consuming an argument card") {
       val invoker = new RecordingRpcInvoker
@@ -379,6 +394,8 @@ private object AgentClientRuntimeSpecFixtures {
     def fireAndForget(event: String): Unit
 
     def sendCard(card: PermissionCard): Future[Boolean]
+
+    def sendTemplate(card: PolymorphicPermissionCard): Future[PolymorphicPermissionCard]
   }
 
   final case class RpcCtor(token: String)

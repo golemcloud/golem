@@ -16,9 +16,20 @@
 
 package permissionsforgery
 
+import golem.runtime.annotations.toolDefinition
+import golem.runtime.macros.WireToolMacro
+import golem.schema.wire.{WitSchemaGraph, WitSchemaTypeBody}
 import zio.test._
 
 import scala.compiletime.testing.{Error, typeCheckErrors}
+
+@toolDefinition(name = "permission-card-kinds-probe", version = "1.0.0")
+trait PermissionCardKindsProbe {
+  def exchange(card: golem.host.PermissionsApi.PermissionCard): golem.host.PermissionsApi.PermissionCard
+  def exchangeTemplate(
+    card: golem.host.PermissionsApi.PolymorphicPermissionCard
+  ): golem.host.PermissionsApi.PolymorphicPermissionCard
+}
 
 /**
  * User code outside the `golem` package cannot create, re-wrap or serialize a
@@ -161,6 +172,76 @@ object PermissionCardForgerySpec extends ZIOSpecDefault {
           .mkString("; ")
       )
     },
+    test("a template card cannot be built or serialized, and is not typed as another card type") {
+      val construct: List[Error] = typeCheckErrors("""
+        import golem.host.PermissionsApi.PolymorphicPermissionCard
+        new PolymorphicPermissionCard(null)
+      """)
+      val fromRaw: List[Error] = typeCheckErrors("""
+        import golem.host.PermissionsApi.PolymorphicPermissionCard
+        PolymorphicPermissionCard.fromRaw(null)
+      """)
+      val rawHandle: List[Error] = typeCheckErrors("""
+        import golem.host.PermissionsApi.PolymorphicPermissionCard
+        def leak(card: PolymorphicPermissionCard) = card.handle.take()
+      """)
+      val borrowRaw: List[Error] = typeCheckErrors("""
+        import golem.host.PermissionsApi.PolymorphicPermissionCard
+        def leak(card: PolymorphicPermissionCard) = card.borrowRaw(identity)
+      """)
+      val dataCodec: List[Error] = typeCheckErrors("""
+        import golem.host.PermissionsApi.PolymorphicPermissionCard
+        summon[zio.blocks.schema.Schema[PolymorphicPermissionCard]]
+      """)
+      val capabilityCodec: List[Error] = typeCheckErrors("""
+        import golem.host.PermissionsApi.PolymorphicPermissionCard
+        summon[golem.schema.IntoSchema[PolymorphicPermissionCard]]
+        summon[golem.schema.FromSchema[PolymorphicPermissionCard]]
+        summon[golem.schema.wire.ConcreteCodec[PolymorphicPermissionCard]]
+      """)
+      val templateAsConcrete: List[Error] = typeCheckErrors("""
+        import golem.host.PermissionsApi.{PermissionCard, PolymorphicPermissionCard}
+        def widen(card: PolymorphicPermissionCard): PermissionCard = card
+      """)
+      val concreteAsTemplate: List[Error] = typeCheckErrors("""
+        import golem.host.PermissionsApi.{PermissionCard, PolymorphicPermissionCard}
+        def widen(card: PermissionCard): PolymorphicPermissionCard = card
+      """)
+      val scopeAsTemplate: List[Error] = typeCheckErrors("""
+        import golem.host.PermissionsApi.{PolymorphicPermissionCard, ScopeCard}
+        def widen(card: ScopeCard): PolymorphicPermissionCard = card
+      """)
+      val templateAsScope: List[Error] = typeCheckErrors("""
+        import golem.host.PermissionsApi.PolymorphicPermissionCard
+        import golem.runtime.rpc.AgentClientRuntime.WireResolvedAgent
+        def attach(agent: WireResolvedAgent[Any], card: PolymorphicPermissionCard) = agent.withScopeCard(card)
+      """)
+      val mislabelled: List[Error] = typeCheckErrors("""
+        import golem.host.PermissionsApi.{PermissionCard, WalletCard}
+        def label(card: PermissionCard) = WalletCard.Template(card)
+      """)
+      val derivesConcrete: List[Error] = typeCheckErrors("""
+        import golem.host.PermissionsApi.{Bounds, PermissionCard, PermissionError, PolymorphicPermissionCard}
+        def child(card: PolymorphicPermissionCard): Either[PermissionError, PermissionCard] = card.derive(Bounds.empty)
+      """)
+      assertTrue(
+        inaccessible(construct),
+        inaccessible(fromRaw),
+        inaccessible(rawHandle),
+        inaccessible(borrowRaw),
+        noInstance(dataCodec),
+        capabilityCodec.isEmpty,
+        templateAsConcrete.exists(_.message.contains("Found:")),
+        concreteAsTemplate.exists(_.message.contains("Found:")),
+        scopeAsTemplate.exists(_.message.contains("Found:")),
+        templateAsScope.exists(_.message.contains("Found:")),
+        mislabelled.exists(_.message.contains("Found:")),
+        derivesConcrete.isEmpty
+      ).label(
+        (capabilityCodec ++ templateAsConcrete ++ concreteAsTemplate ++ scopeAsTemplate ++ templateAsScope ++
+          mislabelled ++ derivesConcrete).map(_.message).mkString("; ")
+      )
+    },
     test("an agent signature can carry a permission card but not a scope card") {
       val card: List[Error] = typeCheckErrors("""
         import golem.BaseAgent
@@ -172,6 +253,7 @@ object PermissionCardForgerySpec extends ZIOSpecDefault {
         trait PermissionCardReceiver extends BaseAgent {
           class Id(val name: String)
           def accept(card: PermissionCard): Future[PermissionCard]
+          def acceptTemplate(card: golem.host.PermissionsApi.PolymorphicPermissionCard): Future[Boolean]
         }
 
         golem.runtime.macros.AgentClientMacro.wireType[PermissionCardReceiver]
@@ -192,6 +274,16 @@ object PermissionCardForgerySpec extends ZIOSpecDefault {
       """)
       assertTrue(card.isEmpty, scope.nonEmpty).label((card ++ scope).map(_.message).mkString("; "))
     },
+    test("tool metadata declares a template card as polymorphic and a concrete card as not") {
+      def cardSpecs(graph: WitSchemaGraph): List[Boolean] =
+        graph.typeNodes.toList.map(_.body).collect { case WitSchemaTypeBody.PermissionCardType(spec) =>
+          spec.polymorphic
+        }
+      assertTrue(
+        cardSpecs(WireToolMacro.inputGraph[PermissionCardKindsProbe](List("exchange"))) == List(false),
+        cardSpecs(WireToolMacro.inputGraph[PermissionCardKindsProbe](List("exchange-template"))) == List(true)
+      )
+    },
     test("generated agent and tool clients accept a card in signatures") {
       val errors: List[Error] = typeCheckErrors("""
         import golem.host.PermissionsApi.PermissionCard
@@ -202,10 +294,15 @@ object PermissionCardForgerySpec extends ZIOSpecDefault {
         @toolDefinition(name = "permission-card-probe", version = "1.0.0")
         trait PermissionCardProbe {
           def exchange(card: PermissionCard): PermissionCard
+          def exchangeTemplate(
+            card: golem.host.PermissionsApi.PolymorphicPermissionCard
+          ): golem.host.PermissionsApi.PolymorphicPermissionCard
         }
 
         WireToolMacro.inputGraph[PermissionCardProbe](List("exchange"))
+        WireToolMacro.inputGraph[PermissionCardProbe](List("exchange-template"))
         ConcreteCodec.derived[PermissionCard]
+        ConcreteCodec.derived[golem.host.PermissionsApi.PolymorphicPermissionCard]
       """)
       assertTrue(errors.isEmpty).label(errors.map(_.message).mkString("; "))
     }

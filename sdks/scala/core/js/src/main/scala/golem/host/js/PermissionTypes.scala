@@ -83,6 +83,14 @@ private[golem] sealed trait JsKernelModule extends js.Object {
   def verbs: js.Array[String] = js.native
 }
 
+// --- wallet-card variant: { tag: "concrete" | "template" | "scope", val } ---
+
+@js.native
+private[golem] sealed trait JsWalletCard extends js.Object {
+  def tag: String                                   = js.native
+  @JSName("val") def card: JsPermissionCardResource = js.native
+}
+
 // --- holder variant: { tag: "account" | "app" | "agent", val } ---
 
 @js.native

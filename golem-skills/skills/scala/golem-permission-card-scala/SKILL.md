@@ -5,10 +5,17 @@ description: "Managing permission cards in a Scala Golem agent with golem.host.P
 
 # Permission cards in Scala
 
-`golem.host.PermissionsApi` is the typed API for `golem:permissions@0.1.0`. Two card types wrap
-the opaque, unforgeable host resource: a persistent `PermissionCard` and an invocation-local
-`ScopeCard`. Both extend the sealed trait `Card`. The host checks every operation against the card
-verbs `card:derive`, `card:inspect`, `card:revoke` and `card:install`.
+`golem.host.PermissionsApi` is the typed API for `golem:permissions@0.1.0`. Three card types wrap
+the opaque, unforgeable host resource:
+
+- `PermissionCard`: a concrete card. Every grant names concrete owners and resources.
+- `PolymorphicPermissionCard`: a template card. Its grants may contain slot variables (`?agent`,
+  `?env`, ...), which the host resolves for each holder.
+- `ScopeCard`: an invocation-local card for awaited RPC calls.
+
+All three extend the sealed trait `Card`. The SDK offers no conversion between them. The host
+checks every operation against the card verbs `card:derive`, `card:inspect`, `card:revoke` and
+`card:install`.
 
 ```scala
 import golem.host.PermissionsApi._
@@ -30,12 +37,15 @@ import golem.host.PermissionsApi._
 - `CardId`: opaque. It supports only equality and hashing, to compare `card.id` with
   `other.parents`. It has no constructor, accessor or codec, and it prints as `CardId(<opaque>)`.
 - `PermissionError`: one case per WIT `permission-error` case, each with a `message`.
+- `WalletCard`: one entry of `wallet()`, a sealed trait with the cases
+  `WalletCard.Concrete(card: PermissionCard)`, `WalletCard.Template(card: PolymorphicPermissionCard)`
+  and `WalletCard.Scope(card: ScopeCard)`. `entry.card` is the `Card` of any entry.
 
 ## Operations
 
 ```scala
 // Module level
-val cards: List[PermissionCard]                     = wallet()
+val entries: List[WalletCard]                        = wallet()
 val version: WalletVersionToken                      = walletVersion()
 val fromWallet: Either[PermissionError, PermissionCard] =
   deriveFromWallet(Bounds(lowerPositive = List(grant)), Some(Lifespan(1.hour)))
@@ -43,24 +53,34 @@ val scope: Either[PermissionError, ScopeCard]        = deriveScope(List(parent),
 val modules: List[KernelModule]                      = listModules()
 val valid: Either[PermissionError, Unit]             = validateGrant(grant)
 
-// Borrow any Card (PermissionCard or ScopeCard): it stays usable
+// Borrow any Card: it stays usable
 card.id; card.parents; card.expiresAt
 card.inspect()                                  // Either[PermissionError, CardView]
 
-// PermissionCard only
-card.derive(Bounds(...), Some(Lifespan(10.minutes)))
+// PermissionCard and PolymorphicPermissionCard
+card.derive(Bounds(...), Some(Lifespan(10.minutes)))  // Either[PermissionError, PermissionCard]
 card.revoke()                                   // moves the card; Either[PermissionError, Long]: revoked card count
 card.install(Holder.agent(componentId, "Target(\"b\")"))  // moves the card
 
 card.release()                                  // any Card: drop a handle that you do not keep
 ```
 
+```scala
+wallet().foreach {
+  case WalletCard.Concrete(card) => card.release()
+  case WalletCard.Template(card) => card.release()   // for example the agent's initial card
+  case WalletCard.Scope(card)    => card.release()   // the scope card lent to this invocation
+}
+```
+
 - For `card.derive`, the positive lists of `Bounds` are the grants of the parent to retain and the
   negative lists are the denials to add. For `deriveFromWallet` and `deriveScope`, the four lists
   are the complete requested lattice.
+- `derive` on a `PolymorphicPermissionCard` returns a concrete `PermissionCard`: the host resolves
+  the template parent for the holder.
 - Requested grants must be concrete. A grant with a slot variable such as `?agent` or `?env`, for
-  example one that `inspect()` returned from a template card, is rejected with `InvalidPattern`;
-  deriving a template card is not supported yet.
+  example one that `inspect()` returned from a template card, is rejected with `InvalidPattern`.
+  Deriving a new template card, with slot variables in its grants, is not supported yet.
 - An expected failure is a `Left(PermissionError)`. A host trap is not converted: `id`, `parents`
   and `expiresAt` trap when the host does not know the handle.
 - Revocation removes authority: a revoked card and the cards derived from it leave the holders'
@@ -70,9 +90,10 @@ card.release()                                  // any Card: drop a handle that 
   `IllegalStateException`.
 - `revoke` and `install` move the card before they call the host, also when the host returns an
   error, because the host drops the handle in both cases.
-- `wallet()` returns owned handles. Call `release()` on the cards that you do not keep. During an
-  invocation that received a scope card, `wallet()` also returns it as a `PermissionCard` if the
-  agent holds `card:inspect`; the host rejects persistent operations on it.
+- `wallet()` returns owned handles, each labelled with its kind. Call `release()` on the cards that
+  you do not keep. During an invocation that received a scope card, `wallet()` also lists it as a
+  `WalletCard.Scope` if the agent holds `card:inspect`. Without `card:inspect` the scope card is
+  sealed: it still authorizes the invocation but is not listed.
 
 ## Scope cards on RPC calls
 
@@ -94,7 +115,10 @@ scoped.withoutDefaultScopeCard
 ```
 
 `ScopeCard` has no `revoke`, `install` or `derive` and no codec, so it cannot be sent as an
-argument or result. It is valid only during the invocation that derived it. Keeping it is safe and
+argument or result. Its `expiresAt` is the earliest expiry of its root cards, or `None` when no root
+card expires; the scope card stops authorizing then. A callee that lists its lent scope card sees
+the same expiry. A scope card is valid only during the invocation that derived it or that it was
+lent to. Keeping it is safe and
 `release()` on it is always safe, but in a later invocation attaching it (also as a client default)
 makes awaited calls fail with `denied`, and using it as a `deriveScope` parent returns
 `PermissionError.NotPermitted`. Derive a new scope card in each invocation. An
@@ -106,8 +130,10 @@ dropped), and stream arguments are closed. The reflection clients report this ca
 Only the awaited calls (`apply` and `cancelable`) carry a scope card. `trigger`, `scheduleAt` and
 `scheduleCancelableAt` never carry one. The reflection clients take an optional `scopeCard` on
 their awaited `invoke`, `invokeJson` and `invokeValue`. Bridge clients that `golem` generates for
-Scala guests offer the same `withScopeCard` and `withDefaultScopeCard` members and take
-`PermissionCard` parameters and results. Tool clients have no scope-card option.
+Scala guests offer the same `withScopeCard` and `withDefaultScopeCard` members. They map a
+`permission-card { polymorphic: true }` parameter or result to `PolymorphicPermissionCard` and a
+`permission-card { polymorphic: false }` one to `PermissionCard`. Tool clients have no scope-card
+option.
 The clients that the sbt and Mill plugins generate use the names `withDefaultScopeCard`,
 `withoutDefaultScopeCard` and `GolemScopeCardCall`: code generation fails for an agent method with
 one of the first two names, or for a signature that uses a bare type named `GolemScopeCardCall`
@@ -116,16 +142,27 @@ method instead, for example to `withDefaultScopeCard_2`.
 
 ## Sending a card
 
-`PermissionCard` has schema codecs, so it can be a parameter or result of an agent method or a tool
-command:
+`PermissionCard` and `PolymorphicPermissionCard` have schema codecs, so each can be a parameter or
+result of an agent method or a tool command. The schema of a `PermissionCard` is
+`permission-card { polymorphic: false }`, and the schema of a `PolymorphicPermissionCard` is
+`permission-card { polymorphic: true }`:
 
 ```scala
 trait Receiver extends BaseAgent {
-  def accept(card: PermissionCard): Future[Boolean]
+  def accept(card: golem.host.PermissionsApi.PermissionCard): Future[Boolean]
+  def acceptTemplate(card: golem.host.PermissionsApi.PolymorphicPermissionCard): Future[Boolean]
 }
 ```
 
-Sending a card moves it: the sender can no longer use it. To keep authority and also send it,
+Generated RPC clients copy method signatures but not the imports of the agent trait's file, so
+write the fully qualified card type names in an agent trait.
+
+A received card is decoded into the type that the parameter or result declares, and so is any card
+that goes through a schema codec. The host does not check the kind; the schema flag is metadata.
+The host keeps the real kind of the card, so the declared type gives no authority.
+
+The rules below apply to `PermissionCard` and `PolymorphicPermissionCard` in the same way. Sending
+a card moves it: the sender can no longer use it. To keep authority and also send it,
 derive a child card and send the child. A card has no data codec: it cannot be serialized,
 persisted or rebuilt from a `CardId`, a UUID or a string. A raw host resource wraps into at most one
 card object while that card holds it, and a decoded schema holder into at most one card object

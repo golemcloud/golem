@@ -23,12 +23,12 @@ import scala.collection.immutable.ListMap
 /**
  * Opaque, affine holder for an owned `permission-card` resource handle.
  *
- * This is the schema-level carrier. Application code uses
- * `golem.host.PermissionsApi.PermissionCard`, which wraps one holder. Guest
- * code cannot build a holder from data: holders come only from values the host
- * supplies. `intoSchema(spec)` chooses the schema metadata declared for the
- * value; it never creates or widens authority, because the host checks every
- * use of the handle.
+ * This is the schema-level carrier. Application code uses the card types of
+ * `golem.host.PermissionsApi`, such as `PermissionCard`; each wraps one holder.
+ * Guest code cannot build a holder from data: holders come only from values the
+ * host supplies. `intoSchema(spec)` chooses the schema metadata declared for
+ * the value; it never creates or widens authority, because the host checks
+ * every use of the handle.
  */
 final class GuestPermissionCardHandle private (private var cell: Option[Any]) {
 
