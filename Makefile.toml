@@ -2163,7 +2163,7 @@ elif equals ${component} javascript-tools
     build_task = set build-javascript-tools
     wasm = set builtin-tools/javascript-tools.wasm
     artifact_id = set javascript_tools
-    exports_json = set "{\"tools\":[\"node@0.1.8\",\"npm@10.9.9+golem.8\",\"npx@10.9.9+golem.8\"]}"
+    exports_json = set "{\"tools\":[\"node@0.1.9\",\"npm@10.9.9+golem.8\",\"npx@10.9.9+golem.8\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/npm
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/npm/sbom.spdx.json
@@ -2203,7 +2203,7 @@ elif equals ${component} python
     build_task = set build-python-tool
     wasm = set builtin-tools/python.wasm
     artifact_id = set python
-    exports_json = set "{\"tools\":[\"python@0.1.0\"]}"
+    exports_json = set "{\"tools\":[\"python@0.1.1\"]}"
     licenses = set builtin-tools/python/licenses
     source_notice = set builtin-tools/python/SOURCE.md
     sbom = set ""

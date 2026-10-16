@@ -77,6 +77,8 @@ enum SnapshotKind {
 }
 
 impl SnapshotKind {
+    const ALL: [Self; 2] = [Self::Periodic, Self::Update];
+
     fn label(self) -> &'static str {
         match self {
             Self::Periodic => "periodic",
@@ -94,6 +96,21 @@ pub(crate) enum SnapshotSkip {
     VolumeUnderPressure,
     /// A delete of all snapshots of the agent is queued or runs. The loop skips the snapshot.
     DeletingAllSnapshots,
+}
+
+impl SnapshotSkip {
+    /// Counts the skip of a snapshot of `kind` in the metric.
+    fn record(self, kind: SnapshotKind) {
+        use crate::metrics::filesystem_snapshots::{SkipReason, record_skipped};
+        record_skipped(
+            kind.label(),
+            match self {
+                Self::UploadInFlight => SkipReason::UploadInFlight,
+                Self::VolumeUnderPressure => SkipReason::VolumeUnderPressure,
+                Self::DeletingAllSnapshots => SkipReason::DeletingAllSnapshots,
+            },
+        );
+    }
 }
 
 impl std::fmt::Display for SnapshotSkip {
@@ -545,6 +562,9 @@ impl AgentFilesystemSnapshots {
         room: VolumeRoom,
         shutdown: CancellationToken,
     ) -> Self {
+        crate::metrics::filesystem_snapshots::record_filesystem_snapshots_started(
+            &SnapshotKind::ALL.map(SnapshotKind::label),
+        );
         let jobs = TaskTracker::new();
         let registry = Arc::new(Registry::new(transitions::Limits::new(
             settings.max_pending_deletes_per_agent(),
@@ -627,7 +647,10 @@ impl AgentFilesystemSnapshots {
         };
         match Core::admit(core, agent, SnapshotKind::Periodic, None).await {
             Ok(admission) => Admitted::Upload(admission),
-            Err(refusal) => Admitted::Skip(refusal.skip),
+            Err(refusal) => {
+                refusal.skip.record(SnapshotKind::Periodic);
+                Admitted::Skip(refusal.skip)
+            }
         }
     }
 
@@ -693,12 +716,15 @@ impl AgentFilesystemSnapshots {
                 Some((None, Some(Some(running.id))))
             }
         });
-        futures::StreamExt::next(&mut std::pin::pin!(futures::StreamExt::filter_map(
-            asks,
-            |answer| async move { answer }
-        )))
+        let admitted = futures::StreamExt::next(&mut std::pin::pin!(
+            futures::StreamExt::filter_map(asks, |answer| async move { answer })
+        ))
         .await
-        .unwrap_or(UpdateAdmitted::Skip(SnapshotSkip::UploadInFlight))
+        .unwrap_or(UpdateAdmitted::Skip(SnapshotSkip::UploadInFlight));
+        if let UpdateAdmitted::Skip(skip) = admitted {
+            skip.record(SnapshotKind::Update);
+        }
+        admitted
     }
 
     /// The core of an enabled service, for an agent in `mode` that keeps files.

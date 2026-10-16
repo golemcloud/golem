@@ -101,7 +101,9 @@ use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::ToolOwnerPattern;
 use golem_common::model::card::{ToolArgPattern, ToolIdentifier, ToolInvocationValue};
 use golem_common::model::component::ComponentName;
-use golem_common::model::durable_stream::{DurableStreamHandle, SessionStreamRole};
+use golem_common::model::durable_stream::{
+    DurableStreamHandle, SessionStreamRole, StreamCancelReason,
+};
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationPlanReference,
     InvocationExecutionMode, NamedToolErrorSchema, ToolInputDecodeFailure,
@@ -146,9 +148,9 @@ use golem_service_base::error::worker_executor::{
 };
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::task::{Context as TaskContext, Poll};
 use tokio::sync::{Notify, mpsc, oneshot};
 use wasmtime::component::{
@@ -437,6 +439,8 @@ impl<D> StreamConsumer<D> for UnderlyingToolStdinStreamConsumer {
 struct ToolStdinStreamPumpTask<Ctx> {
     producer: AttachmentProducer,
     items: mpsc::UnboundedReceiver<ToolStdinStreamItem>,
+    /// The reason of a cancel by the producer of a client's stdin, set before the source ends.
+    source_cancel: Option<Arc<OnceLock<StreamCancelReason>>>,
     _ctx: std::marker::PhantomData<fn() -> Ctx>,
 }
 
@@ -462,7 +466,17 @@ impl<Ctx: WorkerCtx, U: Send + 'static> AccessorTask<U, HasSelf<DurableWorkerCtx
                 return Ok(());
             }
         }
-        let _ = self.producer.finish();
+        // A tool's stdin has a failure item, so a client's cancel reaches the tool as
+        // `cancelled`. Every other end of the source is a clean end.
+        let cancelled = matches!(
+            self.source_cancel.as_ref().and_then(|reason| reason.get()),
+            Some(StreamCancelReason::Cancelled)
+        );
+        let _ = if cancelled {
+            self.producer.fail(ByteStreamFailure::Cancelled)
+        } else {
+            self.producer.finish()
+        };
         Ok(())
     }
 }
@@ -5145,20 +5159,23 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
             let endpoint = stdin
                 .take_host_endpoint::<DurableInputEndpoint>()
                 .map_err(wasmtime::Error::msg)?;
+            let source_cancel = Arc::new(OnceLock::new());
             let reader = accessor.with(|mut access| {
                 let ctx = access.get();
                 let producer = DurableByteInputProducer(
-                    DurableInputProducer::new(endpoint).with_drop_cleanup(
-                        ctx.state
-                            .dropped_call_event_sender()
-                            .expect("dropped-call event sender is always available"),
-                        ctx.stream_runtime_teardown_probe(),
-                    ),
+                    DurableInputProducer::new(endpoint)
+                        .with_drop_cleanup(
+                            ctx.state
+                                .dropped_call_event_sender()
+                                .expect("dropped-call event sender is always available"),
+                            ctx.stream_runtime_teardown_probe(),
+                        )
+                        .with_producer_cancel_observer(source_cancel.clone()),
                 );
                 StreamReader::new(&mut access, producer)
             })?;
             Some(
-                create_native_underlying_stdin(accessor, reader)
+                create_native_underlying_stdin(accessor, reader, source_cancel)
                     .map_err(wasmtime::Error::from_anyhow)?,
             )
         } else {
@@ -5622,6 +5639,7 @@ where
         access.spawn(ToolStdinStreamPumpTask::<Ctx> {
             producer,
             items: received,
+            source_cancel: None,
             _ctx: std::marker::PhantomData,
         });
         Ok(stdin)
@@ -5631,6 +5649,7 @@ where
 fn create_native_underlying_stdin<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     source: StreamReader<u8>,
+    source_cancel: Arc<OnceLock<StreamCancelReason>>,
 ) -> anyhow::Result<Resource<ToolStdinEntry>>
 where
     U: Send + 'static,
@@ -5663,6 +5682,7 @@ where
         access.spawn(ToolStdinStreamPumpTask::<Ctx> {
             producer,
             items: received,
+            source_cancel: Some(source_cancel),
             _ctx: std::marker::PhantomData,
         });
         Ok(stdin)
@@ -6523,6 +6543,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
             access.spawn(ToolStdinStreamPumpTask::<Ctx> {
                 producer,
                 items: received,
+                source_cancel: None,
                 _ctx: std::marker::PhantomData,
             });
             Ok(stdin)

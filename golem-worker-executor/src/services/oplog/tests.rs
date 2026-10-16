@@ -1552,7 +1552,7 @@ impl<B: BlobStorageBackend> BlobStorageBackend for ReadCountingBlobStorage<B> {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
-    ) -> Result<bool, anyhow::Error> {
+    ) -> Result<Option<u64>, anyhow::Error> {
         if self.fail_delete_dir_once.swap(false, Ordering::Relaxed) {
             return Err(anyhow::anyhow!("injected blob directory delete failure"));
         }

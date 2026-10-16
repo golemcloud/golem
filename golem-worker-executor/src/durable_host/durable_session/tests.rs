@@ -4165,6 +4165,72 @@ async fn local_cancellation_intent_recovers_without_retry_and_preserves_terminal
     }
 }
 
+/// Closes an input after one item with a cancel of `role` and `reason`, or with a clean end, and
+/// reads it to its end through a producer that observes producer cancels. Returns what the
+/// observer holds after the end was read.
+async fn producer_cancel_observed_at_the_end_of_input(
+    cancel: Option<(StreamCancelRole, StreamCancelReason)>,
+) -> Option<StreamCancelReason> {
+    let (producer, streams, reader, handle) = backpressured_session_input().await;
+    drop(reader);
+    match cancel {
+        Some((role, reason)) => producer
+            .cancel_open(None, handle.stream_id, role, reason, None)
+            .await
+            .unwrap(),
+        None => {
+            producer
+                .end(None, handle.stream_id, 1, StreamEndResult::Ok)
+                .await
+                .unwrap();
+        }
+    }
+    let observed = Arc::new(OnceLock::new());
+    let mut consumer = DurableInputProducer::new(
+        streams
+            .endpoint(handle, 0, SessionStreamRole::Input)
+            .await
+            .unwrap(),
+    )
+    .with_producer_cancel_observer(observed.clone());
+    assert!(matches!(
+        consumer.receive_value(None).await.unwrap(),
+        Some(DurableInputEvent::Item(SchemaValue::U8(1)))
+    ));
+    assert_eq!(observed.get(), None);
+    // A producer cancel still ends the input for every reader.
+    assert!(matches!(
+        consumer.receive_value(None).await.unwrap(),
+        Some(DurableInputEvent::End)
+    ));
+    observed.get().copied()
+}
+
+#[test]
+#[test_r::timeout("15s")]
+async fn a_producer_cancel_ends_the_input_and_reports_its_reason() {
+    assert_eq!(
+        producer_cancel_observed_at_the_end_of_input(Some((
+            StreamCancelRole::InputProducer,
+            StreamCancelReason::Cancelled,
+        )))
+        .await,
+        Some(StreamCancelReason::Cancelled)
+    );
+    assert_eq!(
+        producer_cancel_observed_at_the_end_of_input(Some((
+            StreamCancelRole::InputProducer,
+            StreamCancelReason::SourceUnavailable,
+        )))
+        .await,
+        Some(StreamCancelReason::SourceUnavailable)
+    );
+    assert_eq!(
+        producer_cancel_observed_at_the_end_of_input(None).await,
+        None
+    );
+}
+
 #[test]
 #[test_r::timeout("15s")]
 async fn session_cancellation_retains_history_and_is_idempotent_under_backpressure() {
