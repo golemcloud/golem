@@ -132,6 +132,9 @@ pub(crate) fn mcp_http_transport_config(
         .with_max_request_body_bytes(usize::MAX)
 }
 
+#[cfg(test)]
+mod transport_tests;
+
 /// Serves only MCP deployments: resolves the request's MCP deployment and passes the request
 /// to the MCP endpoint. Requests for any other host get a 404.
 pub struct McpOnlyEndpoint {
