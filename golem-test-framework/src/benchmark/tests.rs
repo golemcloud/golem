@@ -145,3 +145,32 @@ async fn benchmark_context_failure_is_a_result_and_deadlines_are_failures() {
     assert!(value.is_none());
     assert_eq!(recorder.failures()[&ResultKey::primary("cleanup")].len(), 1);
 }
+
+fn suite(file: &str) -> super::config::BenchmarkSuite {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../integration-tests/benchmark_suites")
+        .join(file);
+    serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
+}
+
+#[test]
+fn rust_only_cloud_perf_suite_is_cloud_perf_without_ts_agents() {
+    let full = suite("cloud-perf.yaml");
+    let rust = suite("cloud-perf-rust.yaml");
+    assert!(!full.skip_ts_agents);
+    assert!(rust.skip_ts_agents);
+
+    // The same benchmarks and run configs, except the two that use only the TS agent.
+    let without_ts_only: Vec<String> = full
+        .benchmarks
+        .iter()
+        .filter(|b| !b.name.ends_with("-medium"))
+        .map(|b| serde_yaml::to_string(b).unwrap())
+        .collect();
+    let rust_items: Vec<String> = rust
+        .benchmarks
+        .iter()
+        .map(|b| serde_yaml::to_string(b).unwrap())
+        .collect();
+    assert_eq!(rust_items, without_ts_only);
+}

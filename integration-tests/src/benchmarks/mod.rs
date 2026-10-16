@@ -26,6 +26,7 @@ use reqwest::header::{HeaderName, HeaderValue};
 use reqwest::{Client, Request};
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 use tracing::{Instrument, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -46,6 +47,17 @@ pub mod throughput_effect;
 
 // Re-export cleanup helpers so callers can use the flat `benchmarks::*` path.
 pub use cleanup::{cleanup_account, cleanup_env_and_app, cleanup_user_state};
+
+static SKIP_TS_AGENTS: AtomicBool = AtomicBool::new(false);
+
+/// Set from the `skipTsAgents` field of the suite before its benchmarks run.
+pub fn set_skip_ts_agents(skip: bool) {
+    SKIP_TS_AGENTS.store(skip, Ordering::Relaxed);
+}
+
+pub fn skip_ts_agents() -> bool {
+    SKIP_TS_AGENTS.load(Ordering::Relaxed)
+}
 
 /// Injects the current tracing span's OpenTelemetry trace context
 /// (traceparent/tracestate) into a reqwest Request's headers so that
