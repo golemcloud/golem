@@ -148,6 +148,11 @@ impl std::error::Error for BenchmarkError {}
 
 pub type BenchmarkResultValue<T = ()> = Result<T, BenchmarkError>;
 
+/// The deadline of one measured iteration. It only stops a hang. A cloud throughput
+/// iteration at size 250 and length 10000 makes 25000 calls for each of six implementations.
+/// At the rates of cloud-perf on golem-dev, that takes about 760s on Golem 1.5, and more on 1.6.
+const RUN_DEADLINE: Duration = Duration::from_secs(1800);
+
 async fn phase<T>(
     recorder: &BenchmarkRecorder,
     name: &str,
@@ -321,7 +326,7 @@ async fn run_benchmark<B: Benchmark>(
                 phase(
                     &recorder,
                     "run",
-                    Duration::from_secs(600),
+                    RUN_DEADLINE,
                     benchmark.run(benchmark_context, &context, recorder.clone()),
                 )
                 .await;
