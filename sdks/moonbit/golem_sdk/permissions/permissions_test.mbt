@@ -22,6 +22,9 @@ extern "wasm" fn reset_permission_host() = "golem:test" "reset-permission-host"
 extern "wasm" fn lend_permission_scope_card() = "golem:test" "lend-permission-scope-card"
 
 ///|
+extern "wasm" fn set_permission_card_expiry(handle : Int, seconds : Int) = "golem:test" "set-permission-card-expiry"
+
+///|
 extern "wasm" fn push_permission_host_buffer(ptr : Int, size : Int) = "golem:test" "push-permission-host-buffer"
 
 ///|
@@ -586,24 +589,37 @@ test "wallet labels each card with its kind" {
 }
 
 ///|
-test "a scope card reports the expiry of its roots" {
+test "a scope card reports the earliest expiry of its roots" {
   fresh_host()
-  let (first, _) = wallet_cards()
-  let expiring = first.derive_child(
-    @permissions.Bounds::new(),
-    lifespan=@permissions.Lifespan::iso8601("PT1H"),
-  )
+  let (first, second) = wallet_cards()
   let open_ended = @permissions.derive_scope(
     [first],
     @permissions.Bounds::new(),
+    template_parents=[second],
   )
   debug_inspect(open_ended.expires_at(), content="None")
-  let bounded = @permissions.derive_scope(
-    [first, expiring],
-    @permissions.Bounds::new(),
+  // The concrete card expires later than the template card.
+  set_permission_card_expiry(11, 1_800_000_000)
+  set_permission_card_expiry(12, 1_750_000_000)
+  let later = @permissions.derive_scope([first], @permissions.Bounds::new())
+  debug_inspect(
+    later.expires_at(),
+    content="Some({ seconds: 1800000000, nanoseconds: 5 })",
   )
-  assert_true(bounded.expires_at() == expiring.expires_at())
-  assert_true(bounded.expires_at() is Some(_))
+  let earliest = @permissions.derive_scope(
+    [first],
+    @permissions.Bounds::new(),
+    template_parents=[second],
+  )
+  debug_inspect(
+    earliest.expires_at(),
+    content="Some({ seconds: 1750000000, nanoseconds: 5 })",
+  )
+  // A scope-card parent contributes the expiry of its own roots.
+  let nested = @permissions.derive_scope([first], @permissions.Bounds::new(), scope_parents=[
+    earliest,
+  ])
+  assert_true(nested.expires_at() == earliest.expires_at())
 }
 
 ///|
@@ -651,19 +667,13 @@ test "a template card lowered into an agent value moves exactly once" {
 test "decoding never turns a card into the other kind or aliases it" {
   fresh_host()
   let (first, second) = wallet_cards()
-  // The raw handle of a held template card does not decode into either kind.
+  // The raw handle of a held template card does not decode: it is held.
   let wire_template : @permissions.PolymorphicPermissionCard? = Some(
     @schema.from_wire(forged_tree(12)),
   ) catch {
     _ => None
   }
   assert_true(wire_template is None)
-  let wire_concrete : @permissions.PolymorphicPermissionCard? = Some(
-    @schema.from_wire(forged_tree(11)),
-  ) catch {
-    _ => None
-  }
-  assert_true(wire_concrete is None)
   // A schema value shares the card's holder, and decodes only into the card's
   // own kind.
   let as_template : @permissions.PolymorphicPermissionCard? = Some(
@@ -716,4 +726,28 @@ test "a card decoded from a wire tree keeps the kind that decoded it" {
   assert_true(as_template is None)
   assert_false(template_card.is_moved())
   assert_false(concrete_card.is_moved())
+}
+
+///|
+test "the wire schema of each card type carries its polymorphic flag" {
+  let template_stream = @schema.wire_schema(
+    (
+      @schema.type_tag() :
+      @schema.TypeTag[
+        @schema.AgentStream[@permissions.PolymorphicPermissionCard],
+      ]),
+  )
+  debug_inspect(
+    template_stream.type_nodes.map(fn(node) { node.body }),
+    content="[PermissionCardType({ polymorphic: true }), StreamType(Some(0))]",
+  )
+  let concrete_stream = @schema.wire_schema(
+    (
+      @schema.type_tag() :
+      @schema.TypeTag[@schema.AgentStream[@permissions.PermissionCard]]),
+  )
+  debug_inspect(
+    concrete_stream.type_nodes.map(fn(node) { node.body }),
+    content="[PermissionCardType({ polymorphic: false }), StreamType(Some(0))]",
+  )
 }

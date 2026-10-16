@@ -39,7 +39,8 @@ const permissionHost = {
   nextHandle: 100,
   parents: new Map(),
   scopeRoots: new Map(),
-  expiring: new Set(),
+  // Expiry seconds by handle; a card without an entry does not expire.
+  expiries: new Map(),
   revokeCalls: 0,
   lastRevoked: -1,
   installCalls: 0,
@@ -55,7 +56,7 @@ function resetPermissionHost() {
   permissionHost.nextHandle = 100
   permissionHost.parents = new Map()
   permissionHost.scopeRoots = new Map()
-  permissionHost.expiring = new Set()
+  permissionHost.expiries = new Map()
   permissionHost.revokeCalls = 0
   permissionHost.lastRevoked = -1
   permissionHost.installCalls = 0
@@ -124,10 +125,12 @@ function permissionHostWriteCardId(memory, at, handle) {
   memory.setBigUint64(at + 8, 7n, true)
 }
 
-function permissionHostNewCard(parents, expiring) {
+const PERMISSION_HOST_DERIVED_EXPIRY = 1700000000n
+
+function permissionHostNewCard(parents, expiresAt) {
   const handle = permissionHost.nextHandle++
   permissionHost.parents.set(handle, parents)
-  if (expiring) permissionHost.expiring.add(handle)
+  if (expiresAt !== undefined) permissionHost.expiries.set(handle, expiresAt)
   return handle
 }
 
@@ -173,9 +176,10 @@ const permissionHostImports = {
     },
     "expires-at"(handle, retPtr) {
       const memory = new DataView(instance.exports.memory.buffer)
-      if (permissionHost.expiring.has(handle)) {
+      const expiresAt = permissionHost.expiries.get(handle)
+      if (expiresAt !== undefined) {
         memory.setUint8(retPtr, 1)
-        memory.setBigInt64(retPtr + 8, 1700000000n, true)
+        memory.setBigInt64(retPtr + 8, expiresAt, true)
         memory.setUint32(retPtr + 16, 5, true)
       } else {
         memory.setUint8(retPtr, 0)
@@ -208,7 +212,10 @@ const permissionHostImports = {
       permissionHost.lastLifespan = hasLifespan
         ? permissionHostReadString(lifespanPtr, lifespanLen)
         : null
-      permissionHostOkCard(retPtr, permissionHostNewCard([parent], hasLifespan !== 0))
+      permissionHostOkCard(retPtr, permissionHostNewCard(
+          [parent],
+          hasLifespan !== 0 ? PERMISSION_HOST_DERIVED_EXPIRY : undefined,
+        ))
     },
     "derive-from-wallet"(lp, lpn, ln, lnn, up, upn, un, unn, hasLifespan, lifespanPtr, lifespanLen, retPtr) {
       permissionHost.lastLifespan = hasLifespan
@@ -218,7 +225,10 @@ const permissionHostImports = {
         permissionHostErr(retPtr, "not-permitted", "card:derive is not permitted")
         return
       }
-      permissionHostOkCard(retPtr, permissionHostNewCard([11], hasLifespan !== 0))
+      permissionHostOkCard(retPtr, permissionHostNewCard(
+          [11],
+          hasLifespan !== 0 ? PERMISSION_HOST_DERIVED_EXPIRY : undefined,
+        ))
     },
     "derive-scope"(parentsPtr, parentsLen, lp, lpn, ln, lnn, up, upn, un, unn, retPtr) {
       const memory = new DataView(instance.exports.memory.buffer)
@@ -232,11 +242,15 @@ const permissionHostImports = {
       const roots = [
         ...new Set(parents.flatMap(parent => permissionHost.scopeRoots.get(parent) ?? [parent])),
       ].sort((left, right) => left - right)
-      // A scope card expires when one of its roots expires. The fake host
-      // returns one fixed timestamp for every expiring card.
+      // Like the real host, a scope card expires with its earliest root.
+      const rootExpiries = roots
+        .map(root => permissionHost.expiries.get(root))
+        .filter(expiresAt => expiresAt !== undefined)
       const handle = permissionHostNewCard(
         roots,
-        roots.some(root => permissionHost.expiring.has(root)),
+        rootExpiries.length === 0
+          ? undefined
+          : rootExpiries.reduce((left, right) => (left < right ? left : right)),
       )
       permissionHost.scopeRoots.set(handle, roots)
       permissionHostOkCard(retPtr, handle)
@@ -437,8 +451,11 @@ const importObject = {
       permissionHost.lentScope = true
       permissionHost.parents.set(13, [12])
       permissionHost.scopeRoots.set(13, [12])
-      permissionHost.expiring.add(12)
-      permissionHost.expiring.add(13)
+      permissionHost.expiries.set(12, PERMISSION_HOST_DERIVED_EXPIRY)
+      permissionHost.expiries.set(13, PERMISSION_HOST_DERIVED_EXPIRY)
+    },
+    "set-permission-card-expiry"(handle, seconds) {
+      permissionHost.expiries.set(handle, BigInt(seconds))
     },
     "push-permission-host-buffer"(ptr, size) {
       permissionHost.buffers.push({ ptr, size })
