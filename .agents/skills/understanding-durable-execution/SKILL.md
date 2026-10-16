@@ -211,7 +211,12 @@ each recorded invocation in `InvocationMode::Replay`, and when there is no furth
 `AgentInitialization`, and only when their resolved owner is a typed agent. Component-baseline
 tool owners instantiate the deployed component but never queue or replay an agent constructor.
 Replay starts from the chosen snapshot baseline
-(see Snapshots and updates), not necessarily from `OplogIndex::INITIAL`. Interruption kinds
+(see Snapshots and updates), not necessarily from `OplogIndex::INITIAL`. A new replay generation
+scans the replayed range for recovery metadata (delivery markers, guest stream observations and
+tool attachment indexes) before it resolves any call. A snapshot start scans only the entries
+after the snapshot (`replay_state/cursor.rs::recovery_metadata_floor`): no durable construct
+spans a snapshot, so nothing after it refers to metadata before it. A start without a snapshot
+replays the whole history and scans it. Interruption kinds
 (`Worker::set_interrupting`): `Interrupt` stays interrupted, `Restart` is a simulated crash with
 automatic recovery, `Suspend` unloads and resumes on demand — each of these three reconstructs on
 this same executor. `ShardLost` does not: it means this executor lost the agent's shard (a
@@ -1676,7 +1681,13 @@ cursor (`OwnerExecution`, `worker/instance.rs`).
   context before the body runs; keep this reconstruction boundary covered.
 - Every live admission, ambient or underlying, authorizes the command and arguments its layer
   receives, after replay claims and boundary projection; entity Stores authorize with the owner's
-  wallet and the caller's inherited invocation scope. The root `Start` records the pinned
+  generation-bound canonical live wallet and the caller's inherited invocation scope. Stores retain
+  scopes and derived surfaces, not independent live membership. Accepted wallet commits publish
+  through the status actor even if their producer is cancelled; owner-wide interest is the union
+  of wallet, scope and admission-candidate contributions. Historical bodies retain recorded wallets
+  and pins until their own live transition, never borrowing the latest live snapshot. Adjacent
+  unrecorded wallet observations still lack an exact historical association; this ownership model
+  does not change observation recording. The root `Start` records the pinned
   chain plan; descendants record root plus position, and every occurrence retains the original
   calling principal and typed static installation parameters. Component and host leaves use the
   same dispatch path.
