@@ -11,6 +11,8 @@ The currently available labels are:
 | --------- | -------------------------- |
 | `version` | The version of the service |
 
+The shard lease metrics take their label values from a fixed set and never from an agent, project or environment identifier. A label value is exported at 0 before its first event, so a query reads 0 instead of no data. To find a single agent, use the logs at the site of the refusal.
+
 ## Service-specific metrics
 
 ### Component Service
@@ -23,7 +25,7 @@ Component service exposes the following Prometheus metrics:
 | `poem_errors_count`        | counter   | `http.request.method`, `url.full`, `[http.path_pattern]`, `http.response.status_code`, `exception.message` | Counts failed requests on the HTTP interface                                    |
 | `poem_request_duration_ms` | histogram | `http.request.method`, `url.full`, `[http.path_pattern]`, `http.response.status_code`, `exception.message` | Measures the duration of handling requests on the HTTP interface                |
 | `api_success_seconds`      | histogram | `api`, `api_type`                                                                                          | Measures the duration of successfully serving API requests (both HTTP and gRPC) |
-| `api_failure_seconds`      | histogram | `api`, `api_type`                                                                                          | Measures the duration of failed API requests (both HTTP and gRPC)               |
+| `api_failure_seconds`      | histogram | `api`, `api_type`, `error`                                                                                 | Measures the duration of failed API requests (both HTTP and gRPC)               |
 | `grpc_api_active_streams`  | gauge     |                                                                                                            | Number of open incoming gRPC streams                                            |
 
 ### Component Compilation Service
@@ -46,7 +48,7 @@ Shard manager exposes the following Prometheus metrics:
 | Metric                              | Type      | Labels              | Description                                                                     |
 | ----------------------------------- | --------- | ------------------- | ------------------------------------------------------------------------------- |
 | `api_success_seconds`               | histogram | `api`, `api_type`   | Measures the duration of successfully serving API requests (both HTTP and gRPC) |
-| `api_failure_seconds`               | histogram | `api`, `api_type`   | Measures the duration of failed API requests (both HTTP and gRPC)               |
+| `api_failure_seconds`               | histogram | `api`, `api_type`, `error` | Measures the duration of failed API requests (both HTTP and gRPC)               |
 | `grpc_api_active_streams`           | gauge     |                     | Number of open incoming gRPC streams                                            |
 | `external_call_success_seconds`     | histogram | `target`, `op`      | Duration of successful outgoing calls                                          |
 | `external_call_response_size_bytes` | histogram | `target`, `op`      | Size of the response of outgoing calls                                          |
@@ -59,6 +61,7 @@ Shard manager exposes the following Prometheus metrics:
 | `shard_manager_is_leader`           | gauge     |                     | 1 while this replica holds the etcd leadership lease, 0 while it stands by (distributed mode only) |
 | `shard_manager_leader_since_epoch`  | gauge     |                     | Unix seconds at which this replica was elected, 0 while it stands by (distributed mode only) |
 | `shard_manager_campaign_attempt_failures_total` | counter |            | Attempts to reach etcd on the way to leadership that failed retriably and were retried (distributed mode only) |
+| `shard_manager_executor_lease_expired_total` | counter |              | Executor leases that lapsed without a renewal and had their shards released. Only the leader counts, so sum it over all replicas. This counter also sees an executor that no longer answers a scrape |
 
 ### Worker Executor
 
@@ -67,7 +70,7 @@ Worker executors expose the following Prometheus metrics:
 | Metric                              | Type      | Labels              | Description                                                                     |
 | ----------------------------------- | --------- | ------------------- | ------------------------------------------------------------------------------- |
 | `api_success_seconds`               | histogram | `api`, `api_type`   | Measures the duration of successfully serving API requests (both HTTP and gRPC) |
-| `api_failure_seconds`               | histogram | `api`, `api_type`   | Measures the duration of failed API requests (both HTTP and gRPC)               |
+| `api_failure_seconds`               | histogram | `api`, `api_type`, `error` | Measures the duration of failed API requests (both HTTP and gRPC)               |
 | `grpc_api_active_streams`           | gauge     |                     | Number of open incoming gRPC streams                                            |
 | `external_call_success_seconds`     | histogram | `target`, `op`      | Duration of successful outgoing calls                                          |
 | `external_call_response_size_bytes` | histogram | `target`, `op`      | Size of the response of outgoing calls                                          |
@@ -89,6 +92,9 @@ Worker executors expose the following Prometheus metrics:
 | `promises_scheduled_complete_total` | counter   |                     | Number of scheduled promise completions                                         |
 | `assigned_shard_count`              | gauge     |                     | Number of assigned shards                                                       |
 | `stale_shard_delivery_total`        | counter   | `delivery`          | Shard deliveries dropped for naming a revision older than the last one applied; `delivery` is `register`, `assign`, `revoke` or `renewal`. One is normal when a push and a renewal cross; a sustained rate is not |
+| `shard_lease_expiry_timestamp_seconds` | gauge |                   | Unix time at which the shard lease of this executor lapses unless it is renewed. Absent on a single-shard executor, which has no lease, and before the executor registers. `shard_lease_expiry_timestamp_seconds - time()` is the remaining lease time, and it keeps counting down when the renewal loop stops |
+| `shard_lease_renewals_total`        | counter   | `outcome`           | Shard lease renewal attempts; `outcome` is `granted`, `not_registered`, `timeout`, `lease_not_found` or `failed`. On `lease_not_found` the executor drops its shards and registers again |
+| `shard_admission_refusals_total`    | counter   | `reason`            | Agent admissions refused by the shard assignment; `reason` is `not_registered`, `lease_lapsed` (the executor fenced itself) or `not_owned` (the agent is on another executor's shard, which is normal during a rebalance) |
 | `create_worker_seconds`             | histogram |                     | Time to create a new worker                                                     |
 | `create_worker_failure_total`       | counter   | `error`             | Number of failed worker creations                                               |
 | `invocation_total`                  | counter   | `mode`, `outcome`   | Number of invocations                                                           |
@@ -145,7 +151,15 @@ These metrics are for the XFS volume of the agent filesystems. An executor expor
 | `filesystem_snapshot_leaked_cleanups_total`       | counter   | `operation`       | Clean-ups of filesystem snapshots that left snapshots in blob storage            |
 | `filesystem_snapshot_cleanups_pending`            | gauge     |                   | Agents with clean-up work of filesystem snapshots that waits or runs             |
 | `filesystem_snapshot_copy_seconds`                | histogram | `outcome`         | Time of a copy of the filesystem snapshots of a fork source                      |
-| `filesystem_snapshot_failed_space_reclaims_total` | counter   |                   | Deletes of filesystem snapshots after which the release of unused storage failed |
+| `filesystem_snapshot_skipped_total`               | counter   | `kind`, `reason`  | Filesystem snapshots that the admission skipped                                  |
+| `filesystem_snapshot_restored_age_seconds`        | histogram |                   | Time from the save of a filesystem snapshot to its successful restore            |
+| `filesystem_snapshot_delete_seconds`              | histogram | `operation`, `outcome` | Time of a delete of filesystem snapshots, with its prune                    |
+| `filesystem_snapshot_prune_seconds`               | histogram | `outcome`         | Time of a prune of a filesystem snapshot repository after a delete               |
+| `filesystem_snapshot_prune_skipped_total`         | counter   | `reason`          | Deletes of filesystem snapshots after which no prune ran                         |
+| `filesystem_snapshot_retention_runs_total`        | counter   | `outcome`         | Retention runs after a filesystem snapshot                                       |
+| `filesystem_snapshot_stored_bytes_total`          | counter   | `source`          | Bytes of repository files that the executor wrote to blob storage                |
+| `filesystem_snapshot_removed_bytes_total`         | counter   | `source`          | Bytes that the executor deleted from the filesystem snapshot storage             |
+| `filesystem_snapshot_released_bytes_total`        | counter   |                   | Packed bytes of deleted filesystem snapshots that a later prune can remove       |
 
 For the label values and what to watch, see [Filesystem Snapshots](/next/operate/filesystem_snapshots#metrics).
 
@@ -159,7 +173,7 @@ Worker service exposes the following Prometheus metrics:
 | `poem_errors_count`                 | counter   | `http.request.method`, `url.full`, `[http.path_pattern]`, `http.response.status_code`, `exception.message` | Counts failed requests on the HTTP interface                                    |
 | `poem_request_duration_ms`          | histogram | `http.request.method`, `url.full`, `[http.path_pattern]`, `http.response.status_code`, `exception.message` | Measures the duration of handling requests on the HTTP interface                |
 | `api_success_seconds`               | histogram | `api`, `api_type`                                                                                          | Measures the duration of successfully serving API requests (both HTTP and gRPC) |
-| `api_failure_seconds`               | histogram | `api`, `api_type`                                                                                          | Measures the duration of failed API requests (both HTTP and gRPC)               |
+| `api_failure_seconds`               | histogram | `api`, `api_type`, `error`                                                                                 | Measures the duration of failed API requests (both HTTP and gRPC)               |
 | `grpc_api_active_streams`           | gauge     |                                                                                                            | Number of open incoming gRPC streams                                            |
 | `external_call_success_seconds`     | histogram | `target`, `op`                                                                                             | Duration of successful outgoing calls                                          |
 | `external_call_response_size_bytes` | histogram | `target`, `op`                                                                                             | Size of the response of outgoing calls                                          |
@@ -169,5 +183,16 @@ Worker service exposes the following Prometheus metrics:
 | `cache_hit_total`                   | counter   | `cache`                                                                                                    | Number of cache hits                                                            |
 | `cache_miss_total`                  | counter   | `cache`                                                                                                    | Number of cache misses                                                          |
 | `cache_eviction_total`              | counter   | `cache`, `trigger`                                                                                         | Number of cache evictions                                                       |
+| `http_session_reattach_attempts_total` | counter |                                                                                                          | HTTP session reattach attempts                                                  |
+| `http_session_reattach_seconds`     | histogram | `outcome`                                                                                                  | Duration of an HTTP session reattach                                            |
+| `http_session_stale_fencing_total`  | counter   |                                                                                                            | Stale HTTP sessions that a newer attachment fenced                              |
+| `http_session_explicit_cancellations_total` | counter |                                                                                                        | HTTP sessions that ended by cancellation                                        |
+| `http_session_terminal_total`       | counter   | `cause`                                                                                                    | HTTP sessions that ended without a completed exchange, by cause                 |
+| `http_session_cleanup_seconds`      | histogram | `outcome`                                                                                                  | Duration of the cleanup of an HTTP session that did not complete                |
+| `durable_stream_append_total`       | counter   | `outcome`                                                                                                  | Durable stream append requests by outcome                                       |
+| `durable_stream_load_rejection_total` | counter | `reason`                                                                                                   | Durable stream requests that load limiting rejected                             |
+| `ephemeral_phantom_invocation_rejection_total` | counter | `reason`                                                                                          | Ephemeral invocation requests rejected for an invalid phantom ID                |
+| `openapi_cache_total`               | counter   | `outcome`                                                                                                  | OpenAPI cache lookups and stale fencing                                         |
+| `openapi_generation_seconds`        | histogram | `outcome`                                                                                                  | Duration of an OpenAPI generation                                               |
 
 For application-level observability with traces, logs, and metrics exported via OpenTelemetry, see the [Observability](/next/develop/observability) page.

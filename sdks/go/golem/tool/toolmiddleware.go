@@ -38,7 +38,7 @@ import (
 //
 //	var _ = Policy.Handle(inventory.Adjust, func(ctx *tool.MiddlewareContext[PolicyParams], a inventory.AdjustArgs) (int32, error) {
 //	    if a.By > ctx.Parameters().MaxAdjust {
-//	        return 0, errors.New("adjustment too large")
+//	        return 0, tool.ConstraintViolation("adjustment too large")
 //	    }
 //	    return Policy.Underlying(ctx, inventory.Adjust).Forward(a)
 //	})
@@ -199,7 +199,7 @@ type MiddlewareContext[P any] struct {
 func newMiddlewareContext[P any](inv *middlewareInvocation) (*MiddlewareContext[P], error) {
 	params, err := golem.DecodeTypedValue[P](inv.parameters)
 	if err != nil {
-		return nil, fmt.Errorf("middleware %s: parameters: %w", inv.entry.name, err)
+		return nil, &CallError{Kind: CallInvalidResult, Message: fmt.Sprintf("middleware %s: parameters: %v", inv.entry.name, err)}
 	}
 	return &MiddlewareContext[P]{inv: inv, params: params}, nil
 }
@@ -339,7 +339,7 @@ func (m *UniversalMiddleware[P]) Handle(h func(*UniversalMiddlewareContext[P]) (
 	m.e.universal = func(inv *middlewareInvocation) (golem.Option[golem.TypedValue], error) {
 		params, err := golem.DecodeTypedValue[P](inv.parameters)
 		if err != nil {
-			return golem.None[golem.TypedValue](), fmt.Errorf("middleware %s: parameters: %w", inv.entry.name, err)
+			return golem.None[golem.TypedValue](), &CallError{Kind: CallInvalidResult, Message: fmt.Sprintf("middleware %s: parameters: %v", inv.entry.name, err)}
 		}
 		return h(&UniversalMiddlewareContext[P]{inv: inv, params: params})
 	}
@@ -559,7 +559,7 @@ func (e *toolEntry) commands() []*commandEntry {
 // invokeMiddleware runs one middleware layer.
 func (d *definitions) invokeMiddleware(name string, inv *middlewareInvocation) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 	fail := witTypes.Err[toolCommon.InvocationResult, types.ToolError]
-	defer inv.stdin.close()
+	defer inv.stdin.closeAfterHandler()
 	e, known := toolDefs.getMiddleware(name)
 	if !known {
 		return fail(types.MakeToolErrorInvalidToolName(name))
@@ -613,7 +613,7 @@ func (d *definitions) runMiddleware(e *middlewareEntry, inv *middlewareInvocatio
 	if err != nil {
 		return fail(d.handlerError(ce, err))
 	}
-	return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](d.encodeResult(ce, out))
+	return d.encodeResult(ce, out)
 }
 
 // passThrough hands a command a transparent middleware does not handle

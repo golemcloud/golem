@@ -37,7 +37,7 @@ fn main() -> anyhow::Result<()> {
         let tracer = init_tracing_with_default_env_filter(&config.tracing);
         info!("Using configuration:\n{}", config.to_safe_string_indented());
 
-        let prometheus_registry = prometheus::Registry::new();
+        let prometheus_registry = golem_worker_service::metrics::register_all();
 
         let exporter = opentelemetry_prometheus_text_exporter::ExporterBuilder::default()
             .without_counter_suffixes()

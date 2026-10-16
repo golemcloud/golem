@@ -19,12 +19,17 @@ import {
   type TypedSchemaValue,
 } from '../internal/schema-model';
 import { relinquishSchemaValueCapabilities } from '../schema/codec';
+import { withWireValueOwnership } from '../tool';
 import {
+  decodedToolError,
+  deferredToolResult,
   mapSettledToolResult,
+  ownToolResult,
   settleToolResult,
   toolStreamFailureFromError,
   type SettledToolResult,
   type ToolInputStream,
+  type ToolResultObserver,
 } from '../internal/tool/startedToolInvocation';
 
 export type { CollectedToolInvocation } from '../internal/tool/startedToolInvocation';
@@ -82,12 +87,97 @@ export function createToolClientTransport(
         stderrEndpoints?.[0],
       );
       if (inputEndpoints) void pumpToolStdin(stdin!, inputEndpoints[0], inputEndpoints[2]);
-      const settledResult = settleToolResult(future.get());
+      let detached = false;
+      let delivered = false;
+      let disposed = false;
+      let unclaimed: Parameters<typeof withWireValueOwnership>[0] | undefined;
+      let resolveDetachment!: () => void;
+      const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        try {
+          (future as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
+        } catch {
+          // Preserve the result terminal while releasing its observer.
+        }
+      };
+      const releaseTerminal = () => {
+        if (delivered) return;
+        const value = unclaimed;
+        unclaimed = undefined;
+        if (value !== undefined) {
+          // The wire ownership seam closes streams and disposes every capability,
+          // including endpoints a typed decoder has not reached.
+          void Promise.resolve()
+            .then(() =>
+              withWireValueOwnership(value, () => {
+                throw new Error('tool result observer is detached');
+              }),
+            )
+            .catch(() => {});
+        }
+      };
+      const observer: ToolResultObserver = {
+        get detached() {
+          return detached;
+        },
+        detachment: new Promise<void>((resolve) => {
+          resolveDetachment = resolve;
+        }),
+        delivered() {
+          delivered = true;
+          unclaimed = undefined;
+        },
+        discard: releaseTerminal,
+        detach() {
+          if (detached) return;
+          detached = true;
+          resolveDetachment();
+          releaseTerminal();
+        },
+      };
+      let result: Promise<Awaited<ReturnType<FutureInvokeResult['get']>>>;
+      try {
+        result = future.get();
+      } catch (reason) {
+        result = Promise.reject(reason);
+      }
+      const settledResult = ownToolResult(
+        settleToolResult(result).then((outcome) => {
+          const error =
+            outcome.status === 'rejected'
+              ? (outcome.reason as ToolRpcError | undefined)
+              : undefined;
+          const value =
+            outcome.status === 'fulfilled'
+              ? outcome.value.result
+              : error?.tag === 'remote-tool-error' && error.val?.tag === 'custom-error'
+                ? error.val.val?.payload
+                : undefined;
+          if (value !== undefined) {
+            // Lifting clears owned wire nodes. Retain endpoint identities until
+            // the public result is delivered, not merely until a mapper lifts it.
+            unclaimed = {
+              ...value,
+              value: {
+                ...value.value,
+                valueNodes: value.value.valueNodes.map((node) => ({ ...node })),
+              },
+            };
+          }
+          if (detached) releaseTerminal();
+          dispose();
+          return outcome;
+        }),
+        observer,
+      );
       return {
         stdout: stdoutEndpoints?.[1],
         stderr: stderrEndpoints?.[1],
         settledResult,
-        cancel: () => future.cancel(),
+        cancel: () => {
+          if (!disposed) future.cancel();
+        },
       };
     },
   };
@@ -222,7 +312,7 @@ function deferredInvocation(
   return {
     stdout: hasStdout ? deferredOutput(invocation, 'stdout') : undefined,
     stderr: hasStderr ? deferredOutput(invocation, 'stderr') : undefined,
-    settledResult: invocation.then((started) => started.settledResult),
+    settledResult: deferredToolResult(invocation),
     cancel() {
       if (started) started.cancel();
       else cancelled = true;
@@ -318,8 +408,8 @@ export function splitToolRpcError<Declared>(
 ): ToolRuntimeError<Declared> {
   if (error.tag !== 'remote-tool-error' || error.val.tag !== 'custom-error')
     return { tag: 'rpc', error };
-  return {
+  return decodedToolError({
     tag: 'tool',
     error: decodeCustomError(error.val.val.name, typedSchemaValueFromWit(error.val.val.payload)),
-  };
+  });
 }

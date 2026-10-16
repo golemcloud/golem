@@ -10,6 +10,8 @@ import {
   type ToolRuntimeError,
 } from "./BridgeTool.js"
 import { ToolClient } from "./host/ToolClient.js"
+import { discardRejectedPayload } from "./internal/tool/discardRejectedPayload.js"
+import { wholeToolCall } from "./internal/tool/resultObserver.js"
 import {
   cloneSchemaValue,
   field,
@@ -66,6 +68,8 @@ export interface StartedToolInvocation<A, E = never> {
   readonly stderr?: Stream.Stream<Uint8Array, ToolRuntimeError<never>>
   readonly result: Effect.Effect<A, ToolRuntimeError<E> | ToolReflectionError>
   readonly cancel: Effect.Effect<void>
+  /** Stop result delivery without cancelling the invocation or outputs. */
+  readonly detach: Effect.Effect<void>
   readonly collect: Effect.Effect<
     CollectedToolInvocation<A, ToolRuntimeError<E> | ToolReflectionError, ToolRuntimeError<never>>
   >
@@ -73,10 +77,19 @@ export interface StartedToolInvocation<A, E = never> {
 
 const resultFromCollected = <A, ResultError, OutputError>(
   collected: CollectedToolInvocation<A, ResultError, OutputError>,
+  payload: (value: A) => Common.TypedSchemaValue | undefined,
 ): Effect.Effect<A, ResultError | OutputError> => {
   if (Result.isFailure(collected.result)) return Effect.fail(collected.result.failure)
-  if (Result.isFailure(collected.stdout)) return Effect.fail(collected.stdout.failure)
-  if (Result.isFailure(collected.stderr)) return Effect.fail(collected.stderr.failure)
+  if (Result.isFailure(collected.stdout))
+    return discardRejectedPayload(
+      payload(collected.result.success),
+      Effect.fail(collected.stdout.failure),
+    )
+  if (Result.isFailure(collected.stderr))
+    return discardRejectedPayload(
+      payload(collected.result.success),
+      Effect.fail(collected.stderr.failure),
+    )
   return Effect.succeed(collected.result.success)
 }
 
@@ -330,35 +343,52 @@ export class ToolCommand {
       const stdout = started.stdout
       const stderr = started.stderr
       const result = started.result.pipe(
-        Effect.mapError((error) => command.mapFailure(error)),
+        Effect.catch((error) => {
+          const mapped = command.mapFailure(error)
+          const payload =
+            error.tag === "rpc" &&
+            error.error.tag === "remote-tool-error" &&
+            error.error.val.tag === "custom-error"
+              ? error.error.val.val.payload
+              : undefined
+          return discardRejectedPayload(
+            mapped instanceof ToolReflectionError ? payload : undefined,
+            Effect.fail(mapped),
+          )
+        }),
         Effect.flatMap((terminal) => {
-          if (!command.result) {
-            return terminal.result === undefined
-              ? Effect.succeed(undefined)
-              : Effect.fail(new ToolReflectionError("output", "unexpected remote result"))
-          }
-          if (!terminal.result)
-            return Effect.fail(
-              new ToolReflectionError("output", "missing or malformed remote result"),
-            )
-          return Effect.try({
-            try: () =>
-              schemaShapesMatch(
-                command.result!.graph,
-                schemaGraphFromWit(terminal.result!.graph),
-              ) && command.result!.validateValue(terminal.result!.value).success,
-            catch: (cause) => new ToolReflectionError("output", cause),
-          }).pipe(
-            Effect.flatMap((valid) =>
-              valid
-                ? Effect.succeed(terminal.result!.value)
-                : Effect.fail(new ToolReflectionError("output", "malformed remote result")),
-            ),
+          return discardRejectedPayload(
+            terminal.result,
+            Effect.suspend(() => {
+              if (!command.result) {
+                return terminal.result === undefined
+                  ? Effect.succeed(undefined)
+                  : Effect.fail(new ToolReflectionError("output", "unexpected remote result"))
+              }
+              if (!terminal.result)
+                return Effect.fail(
+                  new ToolReflectionError("output", "missing or malformed remote result"),
+                )
+              return Effect.try({
+                try: () =>
+                  schemaShapesMatch(
+                    command.result!.graph,
+                    schemaGraphFromWit(terminal.result!.graph),
+                  ) && command.result!.validateValue(terminal.result!.value).success,
+                catch: (cause) => new ToolReflectionError("output", cause),
+              }).pipe(
+                Effect.flatMap((valid) =>
+                  valid
+                    ? Effect.succeed(terminal.result!.value)
+                    : Effect.fail(new ToolReflectionError("output", "malformed remote result")),
+                ),
+              )
+            }),
           )
         }),
       )
       const collect = collectToolInvocation(result, stdout, stderr)
-      return { stdout, stderr, result, cancel: started.cancel, collect }
+      return { stdout, stderr, result, cancel: started.cancel, detach: started.detach, collect }
     })
   }
 
@@ -381,10 +411,13 @@ export class ToolCommand {
           Effect.flatMap((value) =>
             value === undefined
               ? Effect.succeed(undefined)
-              : Effect.try({
-                  try: () => this.result!.unpackJson(value),
-                  catch: (cause) => new ToolReflectionError("output", cause),
-                }),
+              : discardRejectedPayload(
+                  { graph: schemaGraphToWit(this.result!.graph), value },
+                  Effect.try({
+                    try: () => this.result!.unpackJson(value),
+                    catch: (cause) => new ToolReflectionError("output", cause),
+                  }),
+                ),
           ),
         )
         const collect = collectToolInvocation(result, started.stdout, started.stderr)
@@ -393,6 +426,7 @@ export class ToolCommand {
           stderr: started.stderr,
           result,
           cancel: started.cancel,
+          detach: started.detach,
           collect,
         }
       }),
@@ -406,9 +440,14 @@ export class ToolCommand {
         new ToolReflectionError("input", "command requires caller-readable output"),
       )
     return Effect.scoped(
-      this.startValue(input, stdin).pipe(
-        Effect.flatMap((started) => started.collect),
-        Effect.flatMap(resultFromCollected),
+      wholeToolCall(this.startValue(input, stdin), (started) => started.collect).pipe(
+        Effect.flatMap((collected) =>
+          resultFromCollected(collected, (value) =>
+            value === undefined
+              ? undefined
+              : { graph: schemaGraphToWit(this.result!.graph), value },
+          ),
+        ),
       ),
     )
   }
@@ -423,10 +462,13 @@ export class ToolCommand {
       Effect.flatMap((value) =>
         value === undefined
           ? Effect.succeed(undefined)
-          : Effect.try({
-              try: () => this.result!.unpackJson(value),
-              catch: (cause) => new ToolReflectionError("output", cause),
-            }),
+          : discardRejectedPayload(
+              { graph: schemaGraphToWit(this.result!.graph), value },
+              Effect.try({
+                try: () => this.result!.unpackJson(value),
+                catch: (cause) => new ToolReflectionError("output", cause),
+              }),
+            ),
       ),
     )
   }
@@ -517,11 +559,10 @@ export class ToolCommand {
     if (!declared) return error
     try {
       if (!declared.payload) {
-        const value = schemaValueFromWit(custom.payload.value)
         if (
           !schemaShapesMatch(EMPTY_TUPLE_GRAPH, schemaGraphFromWit(custom.payload.graph)) ||
-          value.tag !== "tuple" ||
-          value.elements.length !== 0
+          !new SchemaRef(schemaGraphToWit(EMPTY_TUPLE_GRAPH)).validateValue(custom.payload.value)
+            .success
         )
           return new ToolReflectionError("output", "custom error has an unexpected payload")
         return { tag: "tool", error: { name: custom.name } }
@@ -670,7 +711,7 @@ export class DynamicToolClient {
       const stderr = started.stderr
       const result = started.result.pipe(Effect.map((terminal) => terminal.result))
       const collect = collectToolInvocation(result, stdout, stderr)
-      return { stdout, stderr, result, cancel: started.cancel, collect }
+      return { stdout, stderr, result, cancel: started.cancel, detach: started.detach, collect }
     })
   }
 
@@ -681,9 +722,8 @@ export class DynamicToolClient {
     stdin?: Stream.Stream<Uint8Array>,
   ) {
     return Effect.scoped(
-      this.start(path, input, stdin).pipe(
-        Effect.flatMap((started) => started.collect),
-        Effect.flatMap(resultFromCollected),
+      wholeToolCall(this.start(path, input, stdin), (started) => started.collect).pipe(
+        Effect.flatMap((collected) => resultFromCollected(collected, (value) => value)),
       ),
     )
   }

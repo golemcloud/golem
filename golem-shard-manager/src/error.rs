@@ -15,7 +15,7 @@
 use crate::quota::QuotaError;
 use crate::sharding::error::ShardManagerError;
 use golem_api_grpc::proto::golem;
-use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_error;
+use golem_api_grpc::proto::golem::shardmanager::v1::{shard_lease_error, shard_manager_error};
 use golem_common::base_model::api;
 use golem_common::metrics::api::ApiErrorDetails;
 use std::fmt::Debug;
@@ -241,6 +241,37 @@ impl ApiErrorDetails for ShardManagerTraceErrorKind<'_> {
                 shard_manager_error::Error::Unknown(_) => false,
             },
         }
+    }
+
+    fn take_cause(&mut self) -> Option<anyhow::Error> {
+        None
+    }
+}
+
+pub struct ShardLeaseTraceErrorKind<'a>(pub &'a golem::shardmanager::v1::ShardLeaseError);
+
+impl Debug for ShardLeaseTraceErrorKind<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl ApiErrorDetails for ShardLeaseTraceErrorKind<'_> {
+    fn trace_error_kind(&self) -> &'static str {
+        match &self.0.error {
+            None => "None",
+            Some(shard_lease_error::Error::LeaseNotFound(_)) => "LeaseNotFound",
+            Some(shard_lease_error::Error::Internal(_)) => "Internal",
+        }
+    }
+
+    /// A lease the manager no longer holds is the normal answer to an executor that lost its
+    /// shards; only an internal failure is unexpected.
+    fn is_expected(&self) -> bool {
+        matches!(
+            &self.0.error,
+            Some(shard_lease_error::Error::LeaseNotFound(_))
+        )
     }
 
     fn take_cause(&mut self) -> Option<anyhow::Error> {

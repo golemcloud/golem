@@ -57,12 +57,14 @@ func (f *fakeSource) WriterDropped() bool { return f.at >= len(f.items) }
 
 // fakeSink records what a handler wrote and which terminal it selected.
 type fakeSink struct {
-	written   []byte
-	finished  bool
-	failed    *OutputFailure
-	writeErr  *streams.StreamWriteError
-	finishErr *streams.StreamWriteError
-	dropped   bool
+	written     []byte
+	finished    bool
+	failed      *OutputFailure
+	writeErr    *streams.StreamWriteError
+	finishErr   *streams.StreamWriteError
+	finishPanic any
+	failPanic   any
+	dropped     bool
 }
 
 func (f *fakeSink) Write(b []uint8) witTypes.Result[witTypes.Unit, streams.StreamWriteError] {
@@ -74,6 +76,9 @@ func (f *fakeSink) Write(b []uint8) witTypes.Result[witTypes.Unit, streams.Strea
 }
 
 func (f *fakeSink) Finish() witTypes.Result[witTypes.Unit, streams.StreamWriteError] {
+	if f.finishPanic != nil {
+		panic(f.finishPanic)
+	}
 	if f.finishErr != nil {
 		return witTypes.Err[witTypes.Unit](*f.finishErr)
 	}
@@ -82,6 +87,9 @@ func (f *fakeSink) Finish() witTypes.Result[witTypes.Unit, streams.StreamWriteEr
 }
 
 func (f *fakeSink) Fail(reason streams.ByteStreamFailure) witTypes.Result[witTypes.Unit, streams.StreamWriteError] {
+	if f.failPanic != nil {
+		panic(f.failPanic)
+	}
 	f.failed = &OutputFailure{reason}
 	return witTypes.Ok[witTypes.Unit, streams.StreamWriteError](witTypes.Unit{})
 }
@@ -341,7 +349,11 @@ func TestCommandStreamsFailOnPanic(t *testing.T) {
 	sink := &fakeSink{}
 
 	func() {
-		defer func() { _ = recover() }()
+		defer func() {
+			if got := recover(); got != "handler gave up" {
+				t.Errorf("panic = %v", got)
+			}
+		}()
 		invokeWithStreams(t, d, e, input, nil, sink)
 	}()
 
@@ -365,6 +377,7 @@ type GateArgs struct{ Mode string }
 func declareGate(r *toolRegistry, d *definitions) {
 	def := defineToolInto[Gate](r, d, "gate", Spec{Version: "0.1.0"}, false)
 	rejected := DefineToolError[golem.Unit](def, "rejected", ErrorSpec{Kind: UsageError})
+	unknown := DefineToolError[golem.Unit](def, "unknown", ErrorSpec{Kind: UsageError})
 	cmd := def.OutputBody[GateArgs, string](func(a *GateArgs, s *CommandSpec) {
 		s.Positional(&a.Mode)
 		s.Stdout()
@@ -373,6 +386,18 @@ func declareGate(r *toolRegistry, d *definitions) {
 	})
 	_ = cmd.Handle(func(ctx *OutputContext, in GateArgs) (string, error) {
 		_, _ = io.WriteString(ctx.Stdout(), "partial")
+		if in.Mode == "panic-declared" {
+			panic(rejected.New(golem.Unit{}))
+		}
+		if in.Mode == "panic-unknown" {
+			panic(unknown.New(golem.Unit{}))
+		}
+		if in.Mode == "unknown" {
+			return "", unknown.New(golem.Unit{})
+		}
+		if in.Mode == "panic" {
+			panic("original")
+		}
 		if in.Mode == "reject" {
 			return "", rejected.New(golem.Unit{})
 		}
@@ -426,6 +451,44 @@ func TestEveryOutputGetsATerminal(t *testing.T) {
 	if !stderr.finished {
 		t.Error("stderr was left without a terminal")
 	}
+	for _, mode := range []string{"pass", "reject", "unknown", "panic-declared", "panic-unknown"} {
+		stdout, stderr = &fakeSink{finishErr: &closed}, &fakeSink{finishErr: &closed}
+		res = invokeGate(t, mode, stdout, stderr)
+		if string(stdout.written) != "partial" || len(stderr.written) != 0 {
+			t.Fatal("bytes changed")
+		}
+		if !stdout.dropped || !stderr.dropped {
+			t.Fatal("both writers must release")
+		}
+		if mode == "pass" {
+			if !res.IsOk() {
+				t.Fatal(res.Err())
+			}
+		} else if mode == "reject" || mode == "panic-declared" {
+			if !res.IsErr() || res.Err().Tag() != types.ToolErrorCustomError {
+				t.Fatal("declared outcome changed")
+			}
+		} else if !res.IsErr() || res.Err().Tag() != types.ToolErrorInvalidResult {
+			t.Fatal("unknown outcome changed")
+		}
+	}
+	stdout, stderr = &fakeSink{finishPanic: "cleanup"}, &fakeSink{}
+	res = invokeGate(t, "pass", stdout, stderr)
+	if !res.IsOk() || !stdout.dropped || !stderr.finished || !stderr.dropped {
+		t.Fatal("cleanup panic skipped sibling or changed outcome")
+	}
+	stdout, stderr = &fakeSink{failPanic: "cleanup"}, &fakeSink{}
+	func() {
+		defer func() {
+			if recover() != "original" {
+				t.Error("cleanup masked original panic")
+			}
+		}()
+		invokeGate(t, "panic", stdout, stderr)
+	}()
+	if !stdout.dropped || !stderr.dropped || stderr.failed == nil {
+		t.Fatal("panic cleanup skipped sibling")
+	}
 }
 
 // TestEmptyStdinChunkIsInvalidInput — an empty chunk breaks the stream
@@ -438,8 +501,8 @@ func TestEmptyStdinChunkIsInvalidInput(t *testing.T) {
 	if res.IsOk() || res.Err().Tag() != types.ToolErrorInvalidInput || res.Err().InvalidInput() != "stdin yielded an empty chunk" {
 		t.Fatalf("result %+v, want invalid-input", res)
 	}
-	if sink.finished || sink.failed == nil {
-		t.Errorf("stdout finished=%v failed=%v, want failed", sink.finished, sink.failed)
+	if !sink.finished || sink.failed != nil {
+		t.Errorf("stdout finished=%v failed=%v, want finished", sink.finished, sink.failed)
 	}
 }
 

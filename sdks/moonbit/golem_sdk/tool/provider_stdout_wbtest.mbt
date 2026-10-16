@@ -502,7 +502,9 @@ test "completion drains every chunk of an already started write all" {
 ///|
 test "real task cancellation during invocation and completion releases stdout and discarded result" {
   run_provider_async(() => {
-    for during_finish in [false, true] {
+    for mode in [0, 1, 2] {
+      let during_finish = mode != 0
+      let finish_error = mode == 2
       let (started, start) = @async-core.Future::new()
       let (release, unblock) = @async-core.Future::new()
       let (fail_started, start_failure) = @async-core.Future::new()
@@ -516,7 +518,15 @@ test "real task cancellation during invocation and completion releases stdout an
           ignore(start.complete(()))
           release.get()
           terminals.push("finish")
-          Ok(())
+          if finish_error {
+            Err(
+              @toolStreams.StreamWriteError::Closed(
+                @toolStreams.ByteStreamCloseCause::ConsumerCancelled,
+              ),
+            )
+          } else {
+            Ok(())
+          }
         },
         reason => {
           assert_true(reason is @toolStreams.ByteStreamFailure::Cancelled)
@@ -527,19 +537,44 @@ test "real task cancellation during invocation and completion releases stdout an
         },
         () => drops.val += 1,
       )
+      let sibling_terminals : Array[String] = []
+      let stderr = provider_output_from_callbacks(
+        _ => Ok(()),
+        () => {
+          sibling_terminals.push("finish")
+          Ok(())
+        },
+        reason => {
+          assert_true(reason is @toolStreams.ByteStreamFailure::Cancelled)
+          sibling_terminals.push("cancelled")
+          Ok(())
+        },
+        () => sibling_terminals.push("drop"),
+      )
       @async-core.with_task_group(group => {
         let task = group.spawn(() => {
-          invoke_with_output(stdout, () => {
-            if !during_finish {
-              ignore(start.complete(()))
-              release.get()
-            }
-            let result_stream = @async-core.Stream::from_source(
-              _ => None,
-              () => (),
-              () => result_drops.val += 1,
-            )
-            Ok({ result: None, stdout: Some(result_stream), stderr: None, })
+          invoke_with_output(stderr, () => {
+            invoke_with_output(stdout, () => {
+              if !during_finish {
+                ignore(start.complete(()))
+                release.get()
+              }
+              let result_stream = @async-core.Stream::from_source(
+                _ => None,
+                () => (),
+                () => result_drops.val += 1,
+              )
+              let result_stderr = @async-core.Stream::from_source(
+                _ => None,
+                () => (),
+                () => result_drops.val += 1,
+              )
+              Ok({
+                result: None,
+                stdout: Some(result_stream),
+                stderr: Some(result_stderr),
+              })
+            })
           })
         })
         started.get()
@@ -567,7 +602,8 @@ test "real task cancellation during invocation and completion releases stdout an
         }
       })
       assert_eq(drops.val, 1)
-      assert_eq(result_drops.val, if during_finish { 1 } else { 0 })
+      assert_eq(sibling_terminals, ["cancelled", "drop"])
+      assert_eq(result_drops.val, if during_finish { 2 } else { 0 })
       assert_eq(
         terminals,
         if during_finish {
@@ -576,6 +612,94 @@ test "real task cancellation during invocation and completion releases stdout an
           ["cancelled"]
         },
       )
+    }
+  })
+}
+
+///|
+test "both output terminals and bytes are independent of returned outcomes" {
+  run_provider_async(() => {
+    for
+      outcome in ["success", "declared", "invalid", "raised", "explicit-error"] {
+      for broken in [0, 1, 2, 3] {
+        let bytes : Array[Array[Byte]] = [[], []]
+        let finishes = [0, 0]
+        let failures : Array[Array[@toolStreams.ByteStreamFailure]] = [[], []]
+        let drops = [0, 0]
+        let outputs = Array::makei(2, channel => {
+          provider_output_from_callbacks(
+            chunk => {
+              for byte in chunk {
+                bytes[channel].push(byte)
+              }
+              Ok(())
+            },
+            () => {
+              finishes[channel] += 1
+              if (broken & (1 << channel)) != 0 {
+                Err(@toolStreams.StreamWriteError::ConcurrentOperation)
+              } else {
+                Ok(())
+              }
+            },
+            reason => {
+              failures[channel].push(reason)
+              Ok(())
+            },
+            () => drops[channel] += 1,
+          )
+        })
+        let result = Ok(
+          invoke_with_output(outputs[0], () => {
+            invoke_with_output(outputs[1], () => {
+              assert_true(outputs[0].write_all_bytes(b"out"))
+              assert_true(outputs[1].write_all_bytes(b"err!"))
+              match outcome {
+                "declared" => Err(declared_tool_error())
+                "invalid" => Err(@types.InvalidResult("malformed return"))
+                "raised" => raise ToolStreamError::Failed("handler raised")
+                "explicit-error" => {
+                  outputs[0].finish()
+                  Ok(invocation_result_empty())
+                }
+                _ => Ok(invocation_result_empty())
+              }
+            })
+          }),
+        ) catch {
+          error => Err(error)
+        }
+        assert_eq(bytes, [[111, 117, 116], [101, 114, 114, 33]])
+        assert_eq(drops, [1, 1])
+        if outcome == "raised" ||
+          (outcome == "explicit-error" && (broken & 1) != 0) {
+          if outcome == "raised" {
+            assert_true(
+              result is Err(ToolStreamError::Failed("handler raised")),
+            )
+            assert_eq(finishes[0], 0)
+          } else {
+            assert_true(
+              result is Err(@toolStreams.StreamWriteError::ConcurrentOperation),
+            )
+            assert_eq(finishes[0], 1)
+          }
+          assert_eq(failures[0].length(), 1)
+          assert_eq(failures[1], failures[0])
+          assert_eq(finishes[1], 0)
+        } else {
+          match outcome {
+            "declared" => assert_true(result is Ok(Err(@types.CustomError(_))))
+            "invalid" =>
+              assert_true(
+                result is Ok(Err(@types.InvalidResult("malformed return"))),
+              )
+            _ => assert_true(result is Ok(Ok(_)))
+          }
+          assert_eq(finishes, [1, 1])
+          assert_eq(failures, [[], []])
+        }
+      }
     }
   })
 }

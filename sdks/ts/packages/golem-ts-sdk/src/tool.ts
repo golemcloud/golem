@@ -2334,6 +2334,11 @@ function decodeWireValue(
   });
 }
 
+// A decoder and its enclosing observer can reject the same endpoints. Both
+// boundaries must attempt cleanup, but each endpoint closes and disposes once.
+const closedWireStreams = new WeakSet<object>();
+const disposedWireCapabilities = new WeakSet<object>();
+
 /** @internal Own wire endpoints until synchronous validation and conversion succeed. */
 export function withWireValueOwnership<T>(
   wire: WireTypedSchemaValue,
@@ -2364,6 +2369,8 @@ export function withWireValueOwnership<T>(
     const dispose = (): never => {
       for (const [raw, nodes] of resources) {
         for (const node of nodes) node.val = undefined;
+        if (disposedWireCapabilities.has(raw)) continue;
+        disposedWireCapabilities.add(raw);
         try {
           (raw as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
         } catch {
@@ -2377,6 +2384,8 @@ export function withWireValueOwnership<T>(
       // Start every cancellation before joining shared producer finalizers.
       await Promise.all(
         [...streams].map(async (stream) => {
+          if (closedWireStreams.has(stream)) return;
+          closedWireStreams.add(stream);
           try {
             const source = await SchemaValueStream.unwrap(stream);
             await source[Symbol.asyncIterator]().return?.();
