@@ -2188,7 +2188,7 @@ elif equals ${component} web-fetch
     build_task = set build-web-fetch
     wasm = set builtin-tools/web-fetch.wasm
     artifact_id = set web_fetch
-    exports_json = set "{\"tools\":[\"web-fetch@0.1.1\"]}"
+    exports_json = set "{\"tools\":[\"web-fetch@0.1.2\"]}"
     licenses = set builtin-tools/web-fetch/licenses/THIRD_PARTY_LICENSES.html
     source_notice = set LICENSE
     sbom = set ""
