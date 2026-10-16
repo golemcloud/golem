@@ -2643,6 +2643,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 )
             })?;
 
+        if is_live
+            && !prepared.unpersisted
+            && let Some(hook) =
+                store.with(|mut access| get_ctx(access.data_mut()).replay_admission_hook())
+        {
+            hook.before_replay_access_start(Pair::FQFN, ReplayAdmissionStage::BeforeLiveStart)
+                .await;
+        }
+
         if is_live {
             if prepared.unpersisted {
                 let start_idx = prepared.oplog.current_oplog_index().await;
@@ -7120,7 +7129,7 @@ mod tests {
 
     #[test]
     #[test_r::timeout("10s")]
-    async fn direct_claim_rejects_wrong_invocation_id_without_consuming_start() {
+    async fn direct_claim_with_a_wrong_invocation_id_does_not_consume_the_start() {
         use super::super::tests::InMemoryOplog;
         use golem_common::model::oplog::HostRequestGolemRpcResource;
         use golem_common::model::oplog::host_functions::GolemRpcWasmRpcDrop;
@@ -7204,14 +7213,18 @@ mod tests {
                 cleanup_sink: None,
                 _phantom: PhantomData,
             };
-            assert!(
-                replay_state
-                    .claim_start_or_replay_end(
-                        begun(DurableInvocationId::new(OplogIndex::from_u64(1), 8)).replay_claim()
-                    )
-                    .await
-                    .is_err()
-            );
+            let wrong = replay_state
+                .claim_start_or_replay_end(
+                    begun(DurableInvocationId::new(OplogIndex::from_u64(1), 8)).replay_claim(),
+                )
+                .await;
+            // A top-level Start with another invocation id belongs to a concurrent sibling call,
+            // so the claim retains it and goes live; under an unknown parent it is divergence.
+            if parent_start_index.is_none() {
+                assert!(matches!(wrong, Ok(ReplayStartClaimOutcome::ReplayEnded)));
+            } else {
+                assert!(wrong.is_err());
+            }
             let claimed = replay_state
                 .claim_start_or_replay_end(begun(recorded_invocation_id).replay_claim())
                 .await

@@ -27,7 +27,8 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
    order — but replay reproduces the guest-visible completion order from the recorded
    `CompletionDelivered` markers, so the guest sees the same inputs in the same order.
    Owner: `durable_host/replay_state/claims.rs` (a missing `Start` match while replay is active
-   is a strict divergence error, except for entries deleted by a `Jump`). The axiom is about
+   is a strict divergence error, except for entries deleted by a `Jump` and for a crash prefix
+   whose remaining history belongs to other owners; see "Entry ownership"). The axiom is about
    replaying the *same* execution contract; replaying old history against a changed component
    during an `Automatic` update may legitimately diverge, and that is reported as `FailedUpdate`,
    not tolerated.
@@ -782,9 +783,26 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   the head's body still waits, because that entity is another Store.
   A waiting claim is `Blocked(BlockedOn::ActiveBody)` and runs again on cursor progress or a
   change of the active-body set. The rule applies to ordinary, request-matching, scope and custom
-  invocation claims. A body that settles without consuming the head, a top-level sibling `Start`
-  at the head, and a claim issued by the body that encloses the head stay strict divergence at
-  once. The path where a claim finds its `Start` does not change.
+  invocation claims. A body that settles without consuming the head and a claim issued by the
+  body that encloses the head stay strict divergence at once. The path where a claim finds its
+  `Start` does not change.
+- An ordinary claim that still finds no match (`CursorTx::decide_missing_start`) is a reader
+  that must make progress. A crash prefix can hold the `Start` of one concurrent guest call and
+  not the `Start` of its sibling, because ids are reserved in guest call order but `Start`s are
+  appended in host scheduling order, so the sibling's unclaimed `Start` at the head is not
+  divergence. The claim treats each record at the head as its owner would once it claimed its
+  own records (`sibling_record_at_head`), so the verdict does not depend on how far the sibling
+  got: it retains a top-level `Start` with an invocation id, a `Start` under a retained or
+  claimed `Start` with the same invocation id (the call of a scope, the child of a host call, a
+  tool invocation of the dispatching import), and a record in the subtree of a retained custom
+  invocation (adopted when that invocation is claimed). It waits at a record of the body of a retained
+  entity invocation, as at an active body's entry or a delivery boundary. It then decides
+  against the entry the cursor stops at: the replay target is `ReplayEnded`, and anything else
+  (including the call of a settled body, or a foreign id under an ordinary call) is
+  divergence. An unclaimed `Start` with the claim's own invocation id was recorded by the
+  claiming guest call itself and is divergence before the cursor moves. Tests:
+  `replay_state/tests.rs::missing_start_claim_*`,
+  `tests/websocket.rs::websocket_report_loss_recovers_a_crash_prefix_with_one_sibling_start`.
 - Retained `Start`s that survive to the invocation boundary fold into the abandoned-record
   tolerance (`AbandonedStarts`); only `can_drain` kinds are retained at all. When a live primary
   invocation finishes, retained `Start`s that are closed by a recorded `End`/`Cancelled` are
