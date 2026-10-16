@@ -66,6 +66,8 @@ MCP uses the RMCP transport's SSE comment keep-alive on open GET and POST stream
 
 Environment variable equivalents are `GOLEM__INVOCATION_SESSION__KEEP_ALIVE_INTERVAL`, `GOLEM__INVOCATION_SESSION__MAX_PONG_TIMEOUT`, `GOLEM__MCP__SSE_KEEP_ALIVE_INTERVAL`, and `GOLEM__DURABLE_STREAMS__LONG_POLL_TIMEOUT`.
 
+For `golem server run`, nest these sections under `worker_service`, for example `[worker_service.invocation_session]`. Add `WORKER_SERVICE` to the environment variable path, for example `GOLEM__WORKER_SERVICE__MCP__SSE_KEEP_ALIVE_INTERVAL`.
+
 ### Worker Executor
 
 [golem-worker-executor](https://github.com/golemcloud/golem/tree/main/golem-worker-executor) is responsible for running the [agents](/next/concepts/agents) that belong to assigned shards. The service keeps each agent's oplog in **indexed storage** - PostgreSQL, SQLite or Redis - and uses key-value and blob storage alongside it.
