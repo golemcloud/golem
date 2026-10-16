@@ -1592,13 +1592,12 @@ fn open_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
                 resource_rep: resource.rep(),
             },
         );
-        if install {
-            if let Err(err) = access.as_context_mut().set_guest_task_context(next) {
+        if install
+            && let Err(err) = access.as_context_mut().set_guest_task_context(next) {
                 let _ = access.get().table().delete(resource);
                 access.get().state.custom_invocation_scopes.remove(&scope_id);
                 return Err(err.into());
             }
-        }
         record_custom_invocation_scope_open();
         Ok(resource)
     })
