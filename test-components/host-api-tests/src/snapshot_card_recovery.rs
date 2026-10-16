@@ -188,13 +188,10 @@ fn derive_persistent_card_from_wallet() -> PermissionCard {
         .expect("wallet card derivation failed")
 }
 
-fn wallet_card(card_id: &permissions::CardId) -> Option<PermissionCard> {
+fn wallet_card(card_id: &permissions::CardId) -> Option<WalletCard> {
     permissions::wallet()
         .into_iter()
-        .find_map(|card| match card {
-            WalletCard::Concrete(card) if &card.id() == card_id => Some(card),
-            _ => None,
-        })
+        .find(|card| &card.id() == card_id)
 }
 
 fn agent_holder(component_id: ComponentId, agent_id: String) -> Holder {
@@ -390,13 +387,15 @@ pub trait ScopeCardAgent {
     /// [`labelled_wallet`] during that call.
     async fn lend_scope_to_wallet_lister(&self, target: String) -> LabelledWallet;
 
-    /// Derives a scope card from every expiring concrete card of the wallet
-    /// and from the initial card, and lends it to the `ScopeCardAgent`
-    /// `target`. Returns the earliest expiry of the expiring cards, the
-    /// expiry of the scope card, and the target's [`lent_scope_expiry`].
+    /// Derives a scope card and lends it to the `ScopeCardAgent` `target`.
+    /// The parents are, in this order, the concrete wallet cards that expire
+    /// at `parent_expiries`, then the initial card. Returns the earliest of
+    /// `parent_expiries`, the expiry of the scope card, and the target's
+    /// [`lent_scope_expiry`].
     async fn expiring_scope_expiries(
         &self,
         target: String,
+        parent_expiries: Vec<Expiry>,
     ) -> (Option<Expiry>, Option<Expiry>, (bool, Option<Expiry>));
 
     /// Whether the typed wallet lists a scope card lent to this invocation,
@@ -847,9 +846,10 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         );
         card.install(&agent_holder(component_id.clone(), caller_agent_id))
             .expect("self install failed");
-        let revoked = wallet_card(&card_id)
-            .expect("installed card is missing from the wallet")
-            .revoke();
+        let Some(WalletCard::Concrete(installed)) = wallet_card(&card_id) else {
+            panic!("the installed card is missing from the wallet or is not concrete");
+        };
+        let revoked = installed.revoke();
         check("revoke cuts the card and its child", revoked == Ok(2));
         check(
             "the target loses the revoked child",
@@ -1053,20 +1053,28 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
     async fn expiring_scope_expiries(
         &self,
         target: String,
+        parent_expiries: Vec<Expiry>,
     ) -> (Option<Expiry>, Option<Expiry>, (bool, Option<Expiry>)) {
         let template = parent_card();
         let grant = retained_inspect_grant(&template);
-        let expiring = permissions::wallet()
+        let mut concrete = permissions::wallet()
             .into_iter()
             .filter_map(|card| match card {
-                WalletCard::Concrete(card) if card.expires_at().is_some() => Some(card),
+                WalletCard::Concrete(card) => Some(card),
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let earliest = expiring
+        let expiring = parent_expiries
             .iter()
-            .filter_map(|card| card.expires_at().map(expiry))
-            .min();
+            .map(|wanted| {
+                let position = concrete
+                    .iter()
+                    .position(|card| card.expires_at().map(expiry) == Some(*wanted))
+                    .expect("no concrete wallet card expires at a requested parent expiry");
+                concrete.swap_remove(position)
+            })
+            .collect::<Vec<_>>();
+        let earliest = parent_expiries.iter().copied().min();
         let mut parents = expiring.iter().map(Into::into).collect::<Vec<_>>();
         parents.push((&template).into());
         let scope_card = permissions::derive_scope(&parents, &lower_positive(grant))

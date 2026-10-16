@@ -831,17 +831,28 @@ async fn scope_card_reports_the_earliest_root_expiry_to_its_deriver_and_callee(
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
     executor.start_agent(&component.id, target.clone()).await?;
 
-    // Two concrete parents expire after two hours and after one hour; the
-    // initial card does not expire.
+    // The scope-card parents are, in this order, concrete cards that expire
+    // after two hours, one hour and three hours, then the initial card, which
+    // does not expire. Only the minimum gives one hour: the first, the last
+    // and the latest expiring parent all differ from it.
     // Whole seconds, so the expiry survives any timestamp encoding unchanged.
     let now = chrono::DateTime::from_timestamp(Utc::now().timestamp(), 0)
         .expect("the current time is a valid timestamp");
     let earliest_expiry = now + chrono::Duration::hours(1);
-    for expires_at in [now + chrono::Duration::hours(2), earliest_expiry] {
+    let parent_expiries = [
+        now + chrono::Duration::hours(2),
+        earliest_expiry,
+        now + chrono::Duration::hours(3),
+    ];
+    for expires_at in parent_expiries {
         let card = concrete_inspect_card(root_card, Some(expires_at));
         authority.add_card(card.clone());
         executor.queue_card_install(&caller_worker, card).await?;
     }
+    let parent_expiries = parent_expiries
+        .iter()
+        .map(|expires_at| (expires_at.timestamp(), expires_at.timestamp_subsec_nanos()))
+        .collect::<Vec<_>>();
     let expected = Some((
         earliest_expiry.timestamp(),
         earliest_expiry.timestamp_subsec_nanos(),
@@ -852,7 +863,7 @@ async fn scope_card_reports_the_earliest_root_expiry_to_its_deriver_and_callee(
             &component,
             &caller,
             "expiring_scope_expiries",
-            data_value!(target_name),
+            data_value!(target_name, parent_expiries),
         )
         .await?
         .into_typed::<(
