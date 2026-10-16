@@ -11,6 +11,8 @@ The currently available labels are:
 | --------- | -------------------------- |
 | `version` | The version of the service |
 
+The shard lease metrics take their label values from a fixed set and never from an agent, project or environment identifier. A label value is exported at 0 before its first event, so a query reads 0 instead of no data. To find a single agent, use the logs at the site of the refusal.
+
 ## Service-specific metrics
 
 ### Component Service
@@ -61,6 +63,7 @@ Shard manager exposes the following Prometheus metrics:
 | `shard_manager_is_leader`           | gauge     |                     | 1 while this replica holds the etcd leadership lease, 0 while it stands by (distributed mode only) |
 | `shard_manager_leader_since_epoch`  | gauge     |                     | Unix seconds at which this replica was elected, 0 while it stands by (distributed mode only) |
 | `shard_manager_campaign_attempt_failures_total` | counter |            | Attempts to reach etcd on the way to leadership that failed retriably and were retried (distributed mode only) |
+| `shard_manager_executor_lease_expired_total` | counter |              | Executor leases that lapsed without a renewal and had their shards released. Only the leader counts, so sum it over all replicas. This counter also sees an executor that no longer answers a scrape |
 
 ### Worker Executor
 
@@ -92,6 +95,9 @@ Worker executors expose the following Prometheus metrics:
 | `promises_scheduled_complete_total` | counter   |                     | Number of scheduled promise completions                                         |
 | `assigned_shard_count`              | gauge     |                     | Number of assigned shards                                                       |
 | `stale_shard_delivery_total`        | counter   | `delivery`          | Shard deliveries dropped for naming a revision older than the last one applied; `delivery` is `register`, `assign`, `revoke` or `renewal`. One is normal when a push and a renewal cross; a sustained rate is not |
+| `shard_lease_expiry_timestamp_seconds` | gauge |                   | Unix time at which the shard lease of this executor lapses unless it is renewed. Absent on a single-shard executor, which has no lease, and before the executor registers. `shard_lease_expiry_timestamp_seconds - time()` is the remaining lease time, and it keeps counting down when the renewal loop stops |
+| `shard_lease_renewals_total`        | counter   | `outcome`           | Shard lease renewal attempts; `outcome` is `granted`, `not_registered`, `timeout`, `lease_not_found` or `failed`. On `lease_not_found` the executor drops its shards and registers again |
+| `shard_admission_refusals_total`    | counter   | `reason`            | Agent admissions refused by the shard assignment; `reason` is `not_registered`, `lease_lapsed` (the executor fenced itself) or `not_owned` (the agent is on another executor's shard, which is normal during a rebalance) |
 | `create_worker_seconds`             | histogram |                     | Time to create a new worker                                                     |
 | `create_worker_failure_total`       | counter   | `error`             | Number of failed worker creations                                               |
 | `invocation_total`                  | counter   | `mode`, `outcome`   | Number of invocations                                                           |
