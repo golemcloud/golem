@@ -857,7 +857,7 @@ use crate::model::oplog::types::{
 };
 use crate::model::oplog::{
     HostPayloadPair, HostRequest, HostRequestCliEnvironmentGetEnvironment,
-    HostRequestEntityInvocation, HostRequestFileSystemPath, HostRequestFileSystemPermissionDenial,
+    HostRequestEntityInvocation, HostRequestFileSystemPath, HostRequestFileSystemPermissionCheck,
     HostRequestGolemAgentGetAgentTypeByAgentId, HostRequestGolemApiOplogEnrich,
     HostRequestGolemApiOplogRead, HostRequestGolemRpcActivate, HostRequestGolemToolGetTool,
     HostRequestGolemToolInvocationRejected, HostRequestGolemToolInvoke,
@@ -866,7 +866,7 @@ use crate::model::oplog::{
     HostRequestMonotonicClockDuration, HostRequestMonotonicClockTimestamp, HostRequestNoInput,
     HostRequestP3HttpClientRequestBodyFrame, HostRequestP3HttpClientSend,
     HostRequestP3SocketsConnect, HostRequestP3SocketsUdpSend, HostRequestRandomBytes,
-    HostRequestSocketsTcpConnectPermissionDenial, HostResponse,
+    HostRequestSocketsTcpConnectPermissionCheck, HostResponse,
     HostResponseCliEnvironmentGetEnvironment, HostResponseEntityInvocation,
     HostResponseGolemAgentAgentType, HostResponseGolemApiOplogChunk,
     HostResponseGolemApiOplogEntries, HostResponseGolemApiUnit, HostResponseGolemRpcActivate,
@@ -881,7 +881,7 @@ use crate::model::oplog::{
     HostResponseP3KeyvalueIncomingValueStream, HostResponseP3MonotonicClockUnit,
     HostResponseP3SocketsConnect, HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
     HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend,
-    HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponsePermissionDenied,
+    HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponsePermissionCheck,
     HostResponseRandomBytes, HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock,
     host_functions,
 };
@@ -1885,20 +1885,22 @@ fn p3_filesystem_host_payload_pairs_roundtrip() {
             )),
         },
     );
-    assert_host_payload_pair_roundtrip::<host_functions::FilesystemPermissionDenied>(
-        HostRequestFileSystemPermissionDenial {
+    assert_host_payload_pair_roundtrip::<host_functions::FilesystemPermissionCheck>(
+        HostRequestFileSystemPermissionCheck {
             requests: vec![
                 ("delete".to_string(), "/source.txt".to_string()),
                 ("write".to_string(), "/target.txt".to_string()),
             ],
         },
-        HostResponsePermissionDenied {},
+        HostResponsePermissionCheck {
+            result: Err("The permission target is not allowed".to_string()),
+        },
     );
-    assert_host_payload_pair_roundtrip::<host_functions::SocketsTcpPermissionDenied>(
-        HostRequestSocketsTcpConnectPermissionDenial {
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsTcpConnectPermissionCheck>(
+        HostRequestSocketsTcpConnectPermissionCheck {
             address: "127.0.0.1:9".to_string(),
         },
-        HostResponsePermissionDenied {},
+        HostResponsePermissionCheck { result: Ok(()) },
     );
 }
 

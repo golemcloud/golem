@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use crate::durable_host::authorization::targets::{
     CanonicalGuestPath, TargetError, agent_owner, filesystem_target,
 };
-use crate::durable_host::{DurableWorkerCtx, RecordedDenialAdmission};
+use crate::durable_host::{DurableWorkerCtx, LiveAuthorizationPermit};
 use crate::services::agent_filesystem::{
     self as agent_filesystem, AccessMode, AttributeChanges, Error as AgentFilesystemError,
     File as AgentFile, FileDisposition, FilesystemCall, FilesystemGenerationHandle, FlushLevel,
@@ -28,9 +28,9 @@ use crate::services::agent_filesystem::{
 };
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
+use golem_common::SafeDisplay;
 use golem_common::model::card::{FilesystemVerb, PermissionTarget};
-use golem_common::model::oplog::DurableInvocationId;
-use golem_common::model::oplog::HostRequestFileSystemPermissionDenial;
+use golem_common::model::oplog::HostRequestFileSystemPermissionCheck;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use metrohash::MetroHash128;
 use wasmtime::component::{Resource, ResourceTableError};
@@ -111,36 +111,29 @@ fn canonical_guest_path_from_descriptor_path(
     CanonicalGuestPath::new(&absolute)?.resolve(relative)
 }
 
-/// How a protected filesystem import decides its permission check (see
-/// [`RecordedDenialAdmission`]).
-pub(crate) enum FilesystemAdmission {
-    /// The history records a denial of this import.
-    RecordedDenial,
-    /// The Store is live: check the targets now and record a denial.
-    Check(Vec<PermissionTarget>),
-    /// The Store is not live and the history records no denial of this import.
-    ReplayedAllowed,
+/// The decision of a filesystem permission check that runs as the live action of a durable call.
+/// `Err` holds the reason of a denial. The repair of an incomplete check during replay cannot
+/// authorize, so it completes as allowed.
+pub(crate) async fn live_permission_decision<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    requests: &[(FilesystemVerb, CanonicalGuestPath)],
+) -> Result<Result<Option<LiveAuthorizationPermit>, String>, WorkerExecutorError> {
+    if !ctx.is_live() {
+        return Ok(Ok(None));
+    }
+    let targets = filesystem_permission_targets(ctx, requests);
+    Ok(ctx
+        .authorize_live_permissions(&targets)
+        .await?
+        .map(Some)
+        .map_err(|error| error.to_safe_string()))
 }
 
-pub(crate) fn filesystem_admission<Ctx: WorkerCtx>(
-    ctx: &DurableWorkerCtx<Ctx>,
-    invocation_id: Option<DurableInvocationId>,
+/// The request of the durable call that records a filesystem permission check.
+pub(crate) fn permission_check_request(
     requests: &[(FilesystemVerb, CanonicalGuestPath)],
-) -> Result<FilesystemAdmission, WorkerExecutorError> {
-    Ok(match ctx.recorded_denial_admission(invocation_id)? {
-        RecordedDenialAdmission::RecordedDenial => FilesystemAdmission::RecordedDenial,
-        RecordedDenialAdmission::Check => {
-            FilesystemAdmission::Check(filesystem_permission_targets(ctx, requests))
-        }
-        RecordedDenialAdmission::ReplayedAllowed => FilesystemAdmission::ReplayedAllowed,
-    })
-}
-
-/// The request of the durable call that records a filesystem permission denial.
-pub(crate) fn permission_denial_request(
-    requests: &[(FilesystemVerb, CanonicalGuestPath)],
-) -> HostRequestFileSystemPermissionDenial {
-    HostRequestFileSystemPermissionDenial {
+) -> HostRequestFileSystemPermissionCheck {
+    HostRequestFileSystemPermissionCheck {
         requests: requests
             .iter()
             .map(|(verb, path)| {

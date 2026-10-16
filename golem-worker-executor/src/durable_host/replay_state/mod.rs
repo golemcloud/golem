@@ -250,7 +250,6 @@ enum ReplayTransitionPhase {
 
 type CompletionMarkers = HashMap<OplogIndex, CompletionMarker>;
 type StreamObservationPositions = HashMap<OplogIndex, Option<OplogIndex>>;
-type PermissionDenials = HashMap<golem_common::model::oplog::DurableInvocationId, OplogIndex>;
 
 /// Storage coordinates only; neither a Start claim nor permission to publish an effect.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -520,13 +519,6 @@ struct ReplayCursor {
     /// Guest-consumed journal positions, with their durable scope owner. Host projections are
     /// ordinary hints; guest records reserve the cursor until the native read observer fires.
     stream_observations: std::sync::Mutex<StreamObservationPositions>,
-    /// Recorded permission denials (filesystem imports and P2 TCP connects) of the visible
-    /// replayed range, keyed by the invocation id of the denied guest import, with the index of
-    /// their `Start`. A live check
-    /// records a denial and nothing for an allowed import, so a replayed import must know whether
-    /// its id is here before it claims anything. Built by the same scan as `completion_markers`
-    /// and maintained with it when the replay target or the deleted regions change.
-    permission_denials: std::sync::Mutex<PermissionDenials>,
     /// Published physical and claimed positions. Lock-free reads; writes hold `state`.
     position: PublishedPosition,
     /// The oplog index replay runs up to. Read lock-free everywhere; set at phase boundaries via

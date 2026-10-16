@@ -430,12 +430,12 @@ oplog_payload! {
         ToolAttachmentEndpoint { attachment: ToolAttachmentId, operation_ordinal: u64 },
         ToolAttachmentFail { attachment: ToolAttachmentId, operation_ordinal: u64, reason: ByteStreamFailure },
         ToolAttachmentFinish { attachment: ToolAttachmentId, operation_ordinal: u64 },
-        FileSystemPermissionDenial {
-            /// The `(verb, guest path)` pairs that the denied check covered.
+        FileSystemPermissionCheck {
+            /// The `(verb, guest path)` pairs that the check covers.
             requests: Vec<(String, String)>
         },
-        SocketsTcpConnectPermissionDenial {
-            /// The remote socket address of the denied connect.
+        SocketsTcpConnectPermissionCheck {
+            /// The remote socket address of the connect.
             address: String
         },
     }
@@ -783,7 +783,10 @@ oplog_payload! {
         ToolAttachmentWrite { outcome: ToolAttachmentWriteOutcome },
         ToolAttachmentTerminalResult { outcome: ToolAttachmentTerminalOutcome },
         ToolAttachmentClosed { cause: ByteStreamCloseCause },
-        PermissionDenied {},
+        PermissionCheck {
+            /// `Err` holds the reason of a denial.
+            result: Result<(), String>
+        },
     }
 }
 
@@ -1049,8 +1052,8 @@ pub mod host_functions {
         (GolemToolOutputWrite => "golem::tool::streams::tool-output-writer", "write", ToolAttachmentWrite, ToolAttachmentWrite),
         (GolemToolOutputFinish => "golem::tool::streams::tool-output-writer", "finish", ToolAttachmentFinish, ToolAttachmentTerminalResult),
         (GolemToolOutputFail => "golem::tool::streams::tool-output-writer", "fail", ToolAttachmentFail, ToolAttachmentTerminalResult),
-        (FilesystemPermissionDenied => "filesystem::permissions", "denied", FileSystemPermissionDenial, PermissionDenied),
-        (SocketsTcpPermissionDenied => "sockets::tcp::permissions", "denied", SocketsTcpConnectPermissionDenial, PermissionDenied)
+        (FilesystemPermissionCheck => "filesystem::permissions", "check", FileSystemPermissionCheck, PermissionCheck),
+        (SocketsTcpConnectPermissionCheck => "sockets::tcp::permissions", "check-connect", SocketsTcpConnectPermissionCheck, PermissionCheck)
     }
 }
 

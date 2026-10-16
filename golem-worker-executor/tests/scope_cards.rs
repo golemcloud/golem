@@ -29,8 +29,10 @@ use golem_common::model::card::{
 use golem_common::model::component::ComponentId;
 use golem_common::model::oplog::types::{SerializableP3SocketErrorCode, SerializableRpcError};
 use golem_common::model::oplog::{
-    HostRequestGolemRpcActivate, HostResponse, HostResponseGolemRpcActivate,
-    HostResponseP3SocketsConnect, OplogIndex, PublicOplogEntry, PublicQueuedCardEvent,
+    HostRequestGolemRpcActivate, HostResponse, HostResponseFileSystemStat,
+    HostResponseGolemRpcActivate, HostResponseP3FileSystemStat,
+    HostResponseP3FileSystemWriteAdmission, HostResponseP3SocketsConnect,
+    HostResponsePermissionCheck, OplogIndex, PublicOplogEntry, PublicQueuedCardEvent,
 };
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, PendingCardEventRef, PromiseId};
@@ -1949,23 +1951,31 @@ async fn p2_tcp_connect_denial_is_recorded_and_does_not_reach_the_backend_on_rep
     let oplog = executor
         .get_oplog(&caller_worker, OplogIndex::INITIAL)
         .await?;
-    let denial_start = oplog
+    let check_start = oplog
         .iter()
         .find_map(|entry| match &entry.entry {
             PublicOplogEntry::Start(params)
-                if params.function_name == "sockets::tcp::permissions::denied" =>
+                if params.function_name == "sockets::tcp::permissions::check-connect" =>
             {
                 Some(entry.oplog_index)
             }
             _ => None,
         })
-        .expect("the denied connect must record a denial");
+        .expect("the denied connect must record its permission check");
+    let check_response = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(params) if params.start_index == check_start => {
+                params.response.clone()
+            }
+            _ => None,
+        })
+        .expect("the permission check recorded at {check_start} must be complete");
     assert!(
-        oplog.iter().any(|entry| matches!(
-            &entry.entry,
-            PublicOplogEntry::End(params) if params.start_index == denial_start
-        )),
-        "the denial recorded at {denial_start} must be complete"
+        HostResponsePermissionCheck::from_value(check_response.value())?
+            .result
+            .is_err(),
+        "the permission check must record the denial"
     );
 
     drop(executor);
@@ -2752,38 +2762,38 @@ async fn denied_filesystem_imports_are_recorded_and_replayed_after_restart(
         );
     }
 
-    // P3 write-via-stream and append-via-stream record their stream admission in their own call.
-    let decision_functions = [
-        "filesystem::permissions::denied",
-        "filesystem::types::descriptor::write-via-stream",
-        "filesystem::types::descriptor::append-via-stream",
-    ];
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let denial_starts = oplog
-        .iter()
-        .filter_map(|entry| match &entry.entry {
-            PublicOplogEntry::Start(params)
-                if decision_functions.contains(&params.function_name.as_str()) =>
-            {
-                Some(entry.oplog_index)
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        denial_starts.len(),
-        probes.len(),
-        "every denied import must record exactly one decision"
-    );
-    for start in &denial_starts {
-        assert!(
-            oplog.iter().any(|entry| matches!(
-                &entry.entry,
-                PublicOplogEntry::End(params) if params.start_index == *start
-            )),
-            "the denial recorded at {start} must be complete"
-        );
+    let mut denials = Vec::new();
+    for entry in &oplog {
+        let PublicOplogEntry::Start(start) = &entry.entry else {
+            continue;
+        };
+        let Some(denied) = recorded_filesystem_denial(&start.function_name) else {
+            continue;
+        };
+        let response = oplog
+            .iter()
+            .find_map(|end| match &end.entry {
+                PublicOplogEntry::End(params) if params.start_index == entry.oplog_index => {
+                    params.response.clone()
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "the {} call recorded at {} must be complete",
+                    start.function_name, entry.oplog_index
+                )
+            });
+        if denied(response.value())? {
+            denials.push(start.function_name.clone());
+        }
     }
+    assert_eq!(
+        denials.len(),
+        probes.len(),
+        "every denied import must record exactly one denial, recorded: {denials:?}"
+    );
 
     let root_before_restart = root_names(&executor, &worker_id).await?;
 
@@ -2823,6 +2833,46 @@ async fn denied_filesystem_imports_are_recorded_and_replayed_after_restart(
         "the replay must not apply a denied mutation of the root directory"
     );
     Ok(())
+}
+
+type RecordedDenial = fn(&SchemaValue) -> anyhow::Result<bool>;
+
+/// Whether the response of a durable call that can record a filesystem permission decision
+/// holds a denial. Stat imports and P3 stream writes record a denial as their own `NotPermitted`
+/// result.
+fn recorded_filesystem_denial(function_name: &str) -> Option<RecordedDenial> {
+    match function_name {
+        "filesystem::permissions::check" => Some(|value| {
+            Ok(HostResponsePermissionCheck::from_value(value)?
+                .result
+                .is_err())
+        }),
+        "filesystem::types::descriptor::stat" | "filesystem::types::descriptor::stat_at" => {
+            Some(|value| {
+                Ok(is_not_permitted_error(
+                    HostResponseFileSystemStat::from_value(value)?.result,
+                ))
+            })
+        }
+        "filesystem::types::descriptor::stat-async" | "filesystem::types::descriptor::stat-at" => {
+            Some(|value| {
+                Ok(is_not_permitted_error(
+                    HostResponseP3FileSystemStat::from_value(value)?.result,
+                ))
+            })
+        }
+        "filesystem::types::descriptor::write-via-stream"
+        | "filesystem::types::descriptor::append-via-stream" => Some(|value| {
+            Ok(is_not_permitted_error(
+                HostResponseP3FileSystemWriteAdmission::from_value(value)?.result,
+            ))
+        }),
+        _ => None,
+    }
+}
+
+fn is_not_permitted_error<T, E: std::fmt::Debug>(result: Result<T, E>) -> bool {
+    result.is_err_and(|error| normalized_error_contains(&format!("{error:?}"), "notpermitted"))
 }
 
 async fn root_names(

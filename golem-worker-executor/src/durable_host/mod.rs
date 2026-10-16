@@ -239,7 +239,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 pub(crate) use concurrent::{
-    CallReplayOutcome, Cancellable, DurableCallSession, NotCancellable,
+    CallReplayOutcome, DurableCallSession, NotCancellable,
     authorize_live_permissions_at_serialized_access,
 };
 pub use durability::*;
@@ -939,39 +939,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub(crate) fn is_live(&self) -> bool {
         self.state.is_live()
-    }
-
-    /// See [`WorkerState::durable_call_is_live`].
-    pub(crate) fn durable_call_is_live(&self) -> bool {
-        self.state.durable_call_is_live()
-    }
-
-    /// Decides how a guest import whose permission denial has its own record continues (see
-    /// [`RecordedDenialAdmission`]). Fails when the history records a denial for an import that
-    /// can no longer replay it: a durable call admitted live would record a second denial under
-    /// the same invocation id.
-    pub(crate) fn recorded_denial_admission(
-        &self,
-        invocation_id: Option<golem_common::model::oplog::DurableInvocationId>,
-    ) -> Result<RecordedDenialAdmission, WorkerExecutorError> {
-        match invocation_id {
-            Some(invocation_id)
-                if self
-                    .state
-                    .replay_state
-                    .has_recorded_permission_denial(invocation_id) =>
-            {
-                if self.durable_call_is_live() {
-                    Err(WorkerExecutorError::runtime(format!(
-                        "the permission denial of invocation id {invocation_id} is recorded, but the import runs after replay"
-                    )))
-                } else {
-                    Ok(RecordedDenialAdmission::RecordedDenial)
-                }
-            }
-            _ if self.is_live() => Ok(RecordedDenialAdmission::Check),
-            _ => Ok(RecordedDenialAdmission::ReplayedAllowed),
-        }
     }
 
     pub(crate) fn filesystem_generation_handle(&self) -> FilesystemGenerationHandle {
@@ -7311,21 +7278,6 @@ fn store_is_live(
         }
         None => shared_live_published,
     }
-}
-
-/// How a guest import that is not a durable call decides its permission check.
-///
-/// A live check that denies the import records the denial as a separate durable call under the
-/// invocation id of the import, and an allowed check records nothing. Replay never checks
-/// permissions: an import whose id has a recorded denial replays the denial, and any other import
-/// that runs before the Store is live continues as allowed.
-pub(crate) enum RecordedDenialAdmission {
-    /// The history records a denial of this import.
-    RecordedDenial,
-    /// The Store is live: check the permission now and record a denial.
-    Check,
-    /// The Store is not live and the history records no denial of this import.
-    ReplayedAllowed,
 }
 
 pub(crate) enum BeginReplayToLive {

@@ -3227,15 +3227,14 @@ impl ReplayState {
         let next_skipped_region = skipped_regions.find_next_deleted_region(OplogIndex::NONE);
         let mut tool_attachment_reconstruction = ToolAttachmentReconstruction::default();
         let metadata_floor = recovery_metadata_floor(&skipped_regions, initial_snapshot_skip_end);
-        let (completion_markers, stream_observations, permission_denials) =
-            Self::scan_completion_markers(
-                &oplog,
-                metadata_floor,
-                last_oplog_index,
-                &skipped_regions,
-                &mut tool_attachment_reconstruction,
-            )
-            .await?;
+        let (completion_markers, stream_observations) = Self::scan_completion_markers(
+            &oplog,
+            metadata_floor,
+            last_oplog_index,
+            &skipped_regions,
+            &mut tool_attachment_reconstruction,
+        )
+        .await?;
         crate::metrics::workers::record_replay_metadata_scan(
             if metadata_floor == OplogIndex::INITIAL {
                 "initial"
@@ -3254,7 +3253,6 @@ impl ReplayState {
             advance_gate: Arc::new(tokio::sync::Mutex::new(())),
             delivery_failure: std::sync::Mutex::new(None),
             stream_observations: std::sync::Mutex::new(stream_observations),
-            permission_denials: std::sync::Mutex::new(permission_denials),
             position: PublishedPosition {
                 last_replayed_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
                 last_replayed_non_hint_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
@@ -3304,29 +3302,19 @@ impl ReplayState {
         })
     }
 
-    /// Scans the non-deleted entries of `[from, to]` for successful-completion delivery markers
-    /// and recorded permission denials.
+    /// Scans the non-deleted entries of `[from, to]` for successful-completion delivery markers.
     /// Exactly one visible `CompletionDelivered` or `CompletionDiscarded` may reference a
-    /// `Start`, and exactly one visible permission denial may carry an invocation id; duplicates
-    /// or a conflicting pair are oplog corruption.
+    /// `Start`; duplicates or a conflicting pair are oplog corruption.
     pub(super) async fn scan_completion_markers(
         oplog: &Arc<dyn Oplog>,
         from: OplogIndex,
         to: OplogIndex,
         skipped_regions: &DeletedRegions,
         attachments: &mut ToolAttachmentReconstruction,
-    ) -> Result<
-        (
-            CompletionMarkers,
-            StreamObservationPositions,
-            PermissionDenials,
-        ),
-        WorkerExecutorError,
-    > {
+    ) -> Result<(CompletionMarkers, StreamObservationPositions), WorkerExecutorError> {
         const CHUNK_SIZE: u64 = 1024;
         let mut markers = HashMap::new();
         let mut stream_observations = HashMap::new();
-        let mut permission_denials = HashMap::new();
         let mut next = from;
         while next <= to {
             let available = u64::from(to) - u64::from(next) + 1;
@@ -3373,19 +3361,6 @@ impl ReplayState {
                         request,
                         ..
                     } => {
-                        if matches!(
-                            function_name,
-                            HostFunctionName::FilesystemPermissionDenied
-                                | HostFunctionName::SocketsTcpPermissionDenied
-                        ) && !skipped_regions.is_in_deleted_region(marker_idx)
-                            && let Some(invocation_id) = invocation_id
-                            && let Some(previous) =
-                                permission_denials.insert(invocation_id, marker_idx)
-                        {
-                            return Err(WorkerExecutorError::runtime(format!(
-                                "corrupt oplog: the permission denials at {previous} and {marker_idx} have the same invocation id {invocation_id}"
-                            )));
-                        }
                         let attachment_write = matches!(
                             function_name,
                             HostFunctionName::GolemToolOutputWrite
@@ -3644,7 +3619,7 @@ impl ReplayState {
                 WorkerExecutorError::runtime(format!("invalid attachment history: {error:?}"))
             })?;
         attachments.index_logical_observations();
-        Ok((markers, stream_observations, permission_denials))
+        Ok((markers, stream_observations))
     }
 
     /// Records a live-appended successful-completion delivery marker in the same map populated by
@@ -4200,11 +4175,6 @@ impl ReplayState {
                         .lock()
                         .unwrap()
                         .retain(|index, _| !skipped_regions.is_in_deleted_region(*index));
-                    tx.cursor
-                        .permission_denials
-                        .lock()
-                        .unwrap()
-                        .retain(|_, start| !skipped_regions.is_in_deleted_region(*start));
                     tx.prune_retained_starts(|idx| skipped_regions.is_in_deleted_region(idx));
                     let head = tx.cursor.last_replayed_index().next();
                     tx.st.next_skipped_region = tx
@@ -4547,18 +4517,12 @@ impl ReplayState {
                         .unwrap()
                         .retain(|_, marker| marker.index() <= new_target);
                     cursor.stream_observations.lock().unwrap().retain(|index, _| *index <= new_target);
-                    cursor
-                        .permission_denials
-                        .lock()
-                        .unwrap()
-                        .retain(|_, start| *start <= new_target);
                     cursor.tool_attachment_reconstruction.lock().unwrap()
                         .truncate(new_target);
                 }
                 std::cmp::Ordering::Greater => {
                     let mut attachments = cursor.tool_attachment_reconstruction.lock().unwrap().clone();
-                    let (additions, stream_observations, permission_denials) =
-                        Self::scan_completion_markers(
+                    let (additions, stream_observations) = Self::scan_completion_markers(
                         &cursor.oplog,
                         old_target.next(),
                         new_target,
@@ -4566,18 +4530,6 @@ impl ReplayState {
                         &mut attachments,
                     )
                     .await?;
-                    {
-                        let denials = cursor.permission_denials.lock().unwrap();
-                        for (invocation_id, start) in &permission_denials {
-                            if let Some(previous) = denials.get(invocation_id)
-                                && previous != start
-                            {
-                                return Err(WorkerExecutorError::runtime(format!(
-                                    "corrupt oplog: the permission denials at {previous} and {start} have the same invocation id {invocation_id}"
-                                )));
-                            }
-                        }
-                    }
                     if !additions.is_empty() {
                         let mut markers = cursor.completion_markers.lock().unwrap();
                         for (start_index, marker) in &additions {
@@ -4600,7 +4552,6 @@ impl ReplayState {
                         markers.extend(additions);
                     }
                     cursor.stream_observations.lock().unwrap().extend(stream_observations);
-                    cursor.permission_denials.lock().unwrap().extend(permission_denials);
                     let mut current = cursor.tool_attachment_reconstruction.lock().unwrap();
                     current.starts.extend(attachments.starts);
                     current.accepted.extend(attachments.accepted);
@@ -4667,19 +4618,6 @@ impl ReplayState {
     /// settlement. Cursor exhaustion alone is intentionally not sufficient.
     pub(crate) fn is_live_published(&self) -> bool {
         self.cursor.is_live_published()
-    }
-
-    /// Whether the replayed history records a permission denial for the guest import
-    /// with `invocation_id`. Does not take the cursor lock.
-    pub(crate) fn has_recorded_permission_denial(
-        &self,
-        invocation_id: golem_common::model::oplog::DurableInvocationId,
-    ) -> bool {
-        self.cursor
-            .permission_denials
-            .lock()
-            .unwrap()
-            .contains_key(&invocation_id)
     }
 
     /// Whether the cursor has committed past durable-call `Start`s nobody has claimed yet (see
