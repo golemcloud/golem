@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::ShardLeaseState;
-use crate::error::ShardManagerTraceErrorKind;
+use crate::error::{ShardLeaseTraceErrorKind, ShardManagerTraceErrorKind};
 use crate::quota::QuotaService;
 use crate::sharding::error::ShardManagerError;
 use crate::sharding::shard_management::ShardManagement;
@@ -81,7 +81,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
             .instrument(record.span.clone())
             .await;
 
-        Ok(Response::new(
+        Ok(record.succeed(Response::new(
             golem::shardmanager::v1::GetRoutingTableResponse {
                 result: Some(
                     golem::shardmanager::v1::get_routing_table_response::Result::Success(
@@ -89,7 +89,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
                     ),
                 ),
             },
-        ))
+        )))
     }
 
     async fn register(
@@ -153,21 +153,34 @@ impl ShardManagerService for ShardManagerServiceImpl {
         let executor_id = parse_executor_id(&request.executor_id)?;
         let claimed = parse_shard_epochs(request.shard_epochs)?;
 
-        let result = match self
+        let record =
+            recorded_grpc_api_request!("renew_shard_lease", executor_id = executor_id.to_string(),);
+
+        let response = self
             .shard_management
             .renew_shard_lease(executor_id, claimed)
-            .await
-        {
-            Ok(grant) => golem::shardmanager::v1::renew_shard_lease_response::Result::Success(
-                golem::shardmanager::v1::ShardLease {
-                    shard_epochs: shard_epoch_entries(&grant.shard_epochs),
-                    lease_ttl: Some(lease_ttl_to_proto(grant.expires_at, Utc::now())),
-                    revision: grant.revision.0,
-                    incarnation_id: crate::sharding::incarnation_id(),
-                },
+            .instrument(record.span.clone())
+            .await;
+
+        let result = match response {
+            Ok(grant) => record.succeed(
+                golem::shardmanager::v1::renew_shard_lease_response::Result::Success(
+                    golem::shardmanager::v1::ShardLease {
+                        shard_epochs: shard_epoch_entries(&grant.shard_epochs),
+                        lease_ttl: Some(lease_ttl_to_proto(grant.expires_at, Utc::now())),
+                        revision: grant.revision.0,
+                        incarnation_id: crate::sharding::incarnation_id(),
+                    },
+                ),
             ),
             Err(error) => {
-                golem::shardmanager::v1::renew_shard_lease_response::Result::Failure(error.into())
+                let error: golem::shardmanager::v1::ShardLeaseError = error.into();
+                record.fail(
+                    golem::shardmanager::v1::renew_shard_lease_response::Result::Failure(
+                        error.clone(),
+                    ),
+                    &mut ShardLeaseTraceErrorKind(&error),
+                )
             }
         };
 
@@ -187,16 +200,27 @@ impl ShardManagerService for ShardManagerServiceImpl {
         let executor_id = parse_executor_id(&request.executor_id)?;
         let claimed = parse_shard_epochs(request.shard_epochs)?;
 
-        let result = match self
+        let record =
+            recorded_grpc_api_request!("deregister", executor_id = executor_id.to_string(),);
+
+        let response = self
             .shard_management
             .deregister_executor(executor_id, claimed)
-            .await
-        {
-            Ok(()) => golem::shardmanager::v1::deregister_response::Result::Success(
-                golem_schema::proto::golem::common::Empty {},
+            .instrument(record.span.clone())
+            .await;
+
+        let result = match response {
+            Ok(()) => record.succeed(
+                golem::shardmanager::v1::deregister_response::Result::Success(
+                    golem_schema::proto::golem::common::Empty {},
+                ),
             ),
             Err(error) => {
-                golem::shardmanager::v1::deregister_response::Result::Failure(error.into())
+                let error: golem::shardmanager::v1::ShardLeaseError = error.into();
+                record.fail(
+                    golem::shardmanager::v1::deregister_response::Result::Failure(error.clone()),
+                    &mut ShardLeaseTraceErrorKind(&error),
+                )
             }
         };
 

@@ -1041,6 +1041,7 @@ pub mod scheduler {
 pub mod sharding {
     use lazy_static::lazy_static;
     use prometheus::*;
+    use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
     lazy_static! {
         static ref ASSIGNED_SHARD_COUNT: Gauge =
@@ -1051,10 +1052,124 @@ pub mod sharding {
             &["delivery"]
         )
         .unwrap();
+        static ref SHARD_LEASE_EXPIRY_TIMESTAMP_SECONDS: Gauge = register_gauge!(
+            "shard_lease_expiry_timestamp_seconds",
+            "Unix time at which the shard lease of this executor lapses unless it is renewed"
+        )
+        .unwrap();
+        static ref SHARD_LEASE_RENEWALS_TOTAL: IntCounterVec = register_int_counter_vec!(
+            "shard_lease_renewals_total",
+            "Number of shard lease renewal attempts, by outcome",
+            &["outcome"]
+        )
+        .unwrap();
+        static ref SHARD_ADMISSION_REFUSALS_TOTAL: IntCounterVec = register_int_counter_vec!(
+            "shard_admission_refusals_total",
+            "Number of agent admissions refused by the shard assignment, by reason",
+            &["reason"]
+        )
+        .unwrap();
     }
 
     pub fn record_assigned_shard_count(size: usize) {
         ASSIGNED_SHARD_COUNT.set(size as f64);
+    }
+
+    /// The outcome of one shard lease renewal attempt, as the `outcome` label.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum ShardLeaseRenewalOutcome {
+        /// The shard manager granted a new lease.
+        Granted,
+        /// No assignment is installed yet, so there is no lease to renew.
+        NotRegistered,
+        /// The shard manager did not answer within the RPC deadline.
+        Timeout,
+        /// The shard manager no longer knows this executor, which then re-registers.
+        LeaseNotFound,
+        /// Any other failure of the RPC.
+        Failed,
+    }
+
+    impl ShardLeaseRenewalOutcome {
+        const ALL: [Self; 5] = [
+            Self::Granted,
+            Self::NotRegistered,
+            Self::Timeout,
+            Self::LeaseNotFound,
+            Self::Failed,
+        ];
+
+        fn label(self) -> &'static str {
+            match self {
+                Self::Granted => "granted",
+                Self::NotRegistered => "not_registered",
+                Self::Timeout => "timeout",
+                Self::LeaseNotFound => "lease_not_found",
+                Self::Failed => "failed",
+            }
+        }
+    }
+
+    /// Why the shard assignment refused to admit an agent, as the `reason` label.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum ShardAdmissionRefusal {
+        /// No assignment is installed yet.
+        NotRegistered,
+        /// The shard lease has lapsed: the self-fence.
+        LeaseLapsed,
+        /// The agent is on a shard this executor does not hold, which is normal during a
+        /// rebalance.
+        NotOwned,
+    }
+
+    impl ShardAdmissionRefusal {
+        const ALL: [Self; 3] = [Self::NotRegistered, Self::LeaseLapsed, Self::NotOwned];
+
+        fn label(self) -> &'static str {
+            match self {
+                Self::NotRegistered => "not_registered",
+                Self::LeaseLapsed => "lease_lapsed",
+                Self::NotOwned => "not_owned",
+            }
+        }
+    }
+
+    /// Exports every renewal outcome and admission refusal at zero, so that a dashboard or an
+    /// alert reads 0 instead of no data before the first one happens.
+    ///
+    /// Called when the executor registers with a shard manager, so that a single-shard executor,
+    /// which has no lease, exports none of the lease metrics.
+    pub fn record_shard_lease_metrics_started() {
+        for outcome in ShardLeaseRenewalOutcome::ALL {
+            SHARD_LEASE_RENEWALS_TOTAL.with_label_values(&[outcome.label()]);
+        }
+        for refusal in ShardAdmissionRefusal::ALL {
+            SHARD_ADMISSION_REFUSALS_TOTAL.with_label_values(&[refusal.label()]);
+        }
+    }
+
+    /// Records the expiry of the held lease as wall-clock time.
+    ///
+    /// Wall-clock time and not the remaining seconds, so that `expiry - time()` keeps counting
+    /// down in Prometheus when the renewal loop stops while the metrics endpoint still answers.
+    pub fn record_shard_lease_expiry(expires_at: Instant) {
+        let remaining = expires_at.saturating_duration_since(Instant::now());
+        let expires_at = (SystemTime::now() + remaining)
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        SHARD_LEASE_EXPIRY_TIMESTAMP_SECONDS.set(expires_at.as_secs_f64());
+    }
+
+    pub fn record_shard_lease_renewal(outcome: ShardLeaseRenewalOutcome) {
+        SHARD_LEASE_RENEWALS_TOTAL
+            .with_label_values(&[outcome.label()])
+            .inc();
+    }
+
+    pub fn record_shard_admission_refusal(refusal: ShardAdmissionRefusal) {
+        SHARD_ADMISSION_REFUSALS_TOTAL
+            .with_label_values(&[refusal.label()])
+            .inc();
     }
 
     /// Which of the four shard deliveries a measurement is about, as the `delivery` label.
