@@ -25,6 +25,9 @@ import (
 type Ref struct {
 	graph SchemaGraph
 	typ   SchemaType
+	// fieldDefaults are the values of root record fields that canonical JSON
+	// may omit; see [Ref.WithFieldDefaults].
+	fieldDefaults map[string]SchemaValue
 }
 
 // NewRef points at a graph's root.
@@ -39,8 +42,37 @@ func (r Ref) Graph() SchemaGraph { return r.graph }
 // Type returns the type without following references.
 func (r Ref) Type() SchemaType { return r.typ }
 
-// At points at another type in the same graph.
+// At points at another type in the same graph. The result carries no field
+// defaults.
 func (r Ref) At(t SchemaType) Ref { return Ref{graph: r.graph, typ: t} }
+
+// WithFieldDefaults returns the reference with values for fields of its root
+// record that canonical JSON may leave out. It changes only the JSON surface:
+// [Ref.PackJSON] fills an absent field with its default, and
+// [Ref.ToJSONSchema] does not require such a field and states its default.
+// [Ref.Validate], [Ref.UnpackJSON] and the type itself are unchanged, so the
+// values the reference describes are the same. The defaults apply only when
+// the type is an inline record; a name that is not one of its fields is
+// ignored.
+func (r Ref) WithFieldDefaults(defaults map[string]SchemaValue) Ref {
+	out := Ref{graph: r.graph, typ: r.typ}
+	if len(defaults) > 0 {
+		out.fieldDefaults = make(map[string]SchemaValue, len(defaults))
+		for name, v := range defaults {
+			out.fieldDefaults[name] = v
+		}
+	}
+	return out
+}
+
+// rootFieldDefaults returns the field defaults that apply to the root record,
+// which is none unless the type is an inline record.
+func (r Ref) rootFieldDefaults() map[string]SchemaValue {
+	if _, isRecord := r.typ.Body.(RecordType); !isRecord {
+		return nil
+	}
+	return r.fieldDefaults
+}
 
 // maxRefChain bounds reference following. A graph whose references form a cycle
 // with no type in between is malformed; without a bound it would hang here
