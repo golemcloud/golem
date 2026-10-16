@@ -61,12 +61,20 @@ agents remain fail-stop.
 ## Guest workflows and handle loss
 
 SDK sagas compensate successful steps in reverse order and loop in guest code for another
-attempt. New calls append to the oplog; earlier attempts and compensations remain. This is
-independent of host retry policy. A permanent domain failure can loop forever, and compensation
-failure must not be reported as complete rollback.
+attempt. New calls append to the oplog; earlier attempts and compensations remain. After complete
+rollback, infallible helpers resolve verb `saga`, noun the agent URN, with `attempt`/`error-kind`.
+`next-retry-delay` uses the existing evaluator with an opaque binary continuation, durable clocks
+and durable timers. When no rule matches, use the agent default. Unbounded policies return a typed error;
+count/time/never exhaustion and selector/evaluator errors retain the original failure.
+Compensation failure stops retries and must not be reported as complete rollback. Caught failures
+in TS, Effect, Scala and Go compensate in reverse order; fallible helpers propagate the original
+exception/panic only after complete rollback. Effect external cancellation stops retries while
+retaining original and compensation evidence in Cause; self-interruption can be policy-retried.
+Rust WASM panic aborts without compensation; Result failures, including infallible-helper
+exhaustion and partial rollback, stay typed. MoonBit exposes the retry API without a saga helper.
 
 A nonresumable handle reports typed loss after reconstruction. RDBMS result streams and
-transactions return `ConnectionFailure` with a reconstruction-loss message, not a reopened
+transactions return `ResourceLost`, not a reopened
 query or transaction. Application code explicitly opens
 and initializes another session and decides what pending traffic is safe to resend. Typed loss is
 not evidence that an earlier write was undelivered.

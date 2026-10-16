@@ -19,13 +19,36 @@ below for what that leaves behind.
 |---|---|---|---|
 | Before `Start` is appended | nothing | Guest replays to this point and issues the call live for the first time | Guest determinism reaches the same call |
 | After `Start`, before the live effect | `Start` only | `ReadLocal`/`ReadRemote`/`WriteLocal`/`WriteRemote` repair the existing `Start`. Explicit protocol children require owner authorization for repair or typed loss; nonresumable resources return typed loss | `DurableFunctionType` and owning protocol |
-| P3 HTTP response body partly delivered | send `Start`/`End`, consume-body parent `Start`, delivered chunk children | The parent is retained, delivered chunks replay, the live tail re-sends with `Range: bytes=<delivered>-`; a `206` at that offset or a byte-identical full response continues the stream, anything else ends it with `HttpResponseIncomplete` after the delivered prefix | `resume_recorded_response`, the delivered-bytes digest |
+| P3 HTTP response body partly delivered | send `Start`/`End`, consume-body parent `Start`, delivered chunk children | The parent is retained and delivered chunks replay. Without a reconstructable resend, complete with `HttpResponseIncomplete`. Otherwise, after owner readiness the live tail re-sends with `Range: bytes=<delivered>-`; a `206` at that offset or a byte-identical full response continues the stream, anything else ends it with `HttpResponseIncomplete` after the delivered prefix | Owner recovery decision, `resume_recorded_response`, the delivered-bytes digest |
 | After the effect, before `End` | `Start` only | Same as above. For external peers this is the ambiguous window: the effect may have happened; the peer must be idempotent | Peer-side idempotency, not Golem |
 | After `End`, before guest observation (including a Store unload or executor shutdown that tears the armed delivery token or terminal guard) | `Start`, `End` | `Delivered`/`AtReplayTail`: result withheld until the cursor drains, then delivered live-armed; no re-execution. The tear must not record `CompletionDiscarded` (`TeardownProbe`) | `End` payload |
 | After `CompletionDelivered` | `Start`, `End`, marker | `Delivered`: result released at the recorded boundary | Marker position |
 | Guest dropped the future before completion | `Start`, `Cancelled { partial }` | `partial: Some` → `Delivered`/`Immediate`; `partial: None` → `Undelivered` (parked for the guest's deterministic drop) | `Cancelled` entry |
 | Guest dropped the completion after `End` without reading it | `Start`, `End`, `CompletionDiscarded` | `Undelivered`: parked, the guest drops at the same point | Marker |
 | Guest trapped mid-call | `Start` only | Same as "after Start" — trap is never `Cancelled` | `abandon_for_trap` |
+
+Repair never rewinds or discards sibling history. Resolve explicit-child authorization and
+protocol readiness before publishing live; terminal refusal abandons replay for failure through
+`authoritative_replay_failure`, rather than publishing over sibling history. Typed loss records
+an `End` for the original `Start`: HTTP without resend uses `http-response-incomplete`, RDBMS
+uses `resource-lost`, and TCP uses `connection-broken`. UDP `ReadRemote` instead re-executes
+receive after rebind. Ambient entity lineage grants no protocol-child ownership.
+
+All P3 HTTP methods use `Cancellable` for guest drops: record `Cancelled`, never resend.
+Crash-only incomplete sends repair in place while body intake continues during replay resolution,
+so a streamed writer cannot deadlock before its next durable call. P2 HTTP is removed.
+Guest panic and deterministic traps permanently fail the invocation; generic infrastructure
+retry handling is unchanged.
+
+Saga attempts append history rather than rewinding it. After complete compensation, resolve
+the semantic `saga` policy with the agent URN, attempt number and error kind. The shared host
+evaluator advances the opaque continuation, and durable clocks/timers preserve backoff across
+reconstruction. When no rule matches, use the agent default; reject unbounded saga policies.
+Count/time/never exhaustion and policy errors return typed failures retaining the original
+failure. Partial compensation stops retries and retains both failures. TS, Effect, Scala and Go
+compensate catchable failures in reverse order; Rust WASM panic aborts without compensation.
+The finite policy bound limits the history that attempts and compensations append. See
+`retries.md` for cancellation and SDK details.
 
 Native guest stream reads append one existing `ConsumerItemValue` or `ConsumerTerminal` record
 when Wasmtime's per-read observer confirms consumption. The observer reserves its oplog position

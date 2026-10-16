@@ -1017,6 +1017,56 @@ async fn replay_state_over(entries: Vec<OplogEntry>) -> ReplayState {
     replay_state_and_oplog_over(entries).await.0
 }
 
+#[test]
+async fn refused_repair_abandons_authority_but_keeps_a_completed_write_sibling() {
+    let owner_name = HostFunctionName::Custom("test:owner".to_string());
+    let sibling_name = HostFunctionName::Custom("test:sibling-write".to_string());
+    let write_start = |name| {
+        let mut start = start_named(name);
+        if let OplogEntry::Start {
+            durable_function_type,
+            ..
+        } = &mut start
+        {
+            *durable_function_type = DurableFunctionType::WriteRemote;
+        }
+        start
+    };
+    let (replay, oplog) = replay_state_and_oplog_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        write_start(owner_name.clone()),
+        write_start(sibling_name.clone()),
+        end_for(3, 42),
+    ])
+    .await;
+    let before = oplog.entries.lock().unwrap().clone();
+    let owner = replay
+        .claim_concurrent_start(&owner_name, &DurableFunctionType::WriteRemote)
+        .await
+        .unwrap();
+    assert!(matches!(
+        replay.await_resolution_outcome(owner).await.unwrap(),
+        ResolutionOutcome::Incomplete
+    ));
+    replay.abandon_replay_for_failure().await.unwrap();
+    assert!(!replay.is_live_published());
+    let sibling = replay
+        .claim_concurrent_start(&sibling_name, &DurableFunctionType::WriteRemote)
+        .await
+        .unwrap();
+    assert_eq!(sibling.start_idx(), OplogIndex::from_u64(3));
+    assert!(
+        matches!(replay.await_resolution(sibling).await.unwrap(), Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(4))
+    );
+    assert_eq!(
+        *oplog.entries.lock().unwrap(),
+        before,
+        "refusal must not append or remove the sibling's effect"
+    );
+}
+
 async fn replay_state_and_oplog_over(
     entries: Vec<OplogEntry>,
 ) -> (ReplayState, Arc<InMemoryOplog>) {

@@ -152,7 +152,7 @@ Retryable failures in the following operations are handled transparently:
 - **RPC calls** between agents
 - **Database / storage calls** — `golem:rdbms/postgres`, `golem:rdbms/mysql`, `golem:rdbms/ignite2`, `wasi:blobstore`, `wasi:keyvalue`
 
-A panic is a deterministic guest trap and fails the invocation without retry. Recovery replays completed outcomes and repairs only an eligible incomplete call at its own `Start`. Use sagas for domain compensation; new attempts append fresh calls without rewinding history. Infallible saga loops have no built-in attempt bound or backoff guarantee.
+A Rust WASM panic aborts without compensation and permanently fails the invocation. Recovery replays completed outcomes and repairs only an eligible incomplete call at its own `Start`. Use sagas for domain compensation; new attempts append calls without rewinding history. After complete rollback, infallible sagas use the bounded host policy and durable backoff. Handle the Result for compensation failure, exhaustion and policy errors; each failure retains the original error.
 
 Only customize when the *strategy* needs to change (different backoff, give-up conditions, per-status-code policies). For that, see the `golem-retry-policies-rust` skill.
 
@@ -341,7 +341,7 @@ The SDK is schema-driven: method inputs and return values are described with [St
 
 Golem **automatically retries** retryable host-operation failures using durable execution and the applicable retry policy. **Do not add manual retry loops, `while` retry patterns, or backoff utilities around host operations** — let Golem apply the retry policy. The default retry policy applies when no user-defined policy matches.
 
-Retryable failures in outgoing HTTP requests (`fetch`), RPC calls between agents, and database / storage calls (`golem:rdbms/*`, keyvalue, blobstore) are handled transparently. An uncaught thrown error or rejected promise is a deterministic guest trap and fails the invocation without retry. Recovery replays completed outcomes and repairs only an eligible incomplete call at its own `Start`. Use sagas for domain compensation; new attempts append fresh calls without rewinding history. Infallible saga loops have no built-in attempt bound or backoff guarantee.
+Retryable failures in outgoing HTTP requests (`fetch`), RPC calls between agents, and database / storage calls (`golem:rdbms/*`, keyvalue, blobstore) are handled transparently. An uncaught thrown error or rejected promise is a deterministic guest trap and fails the invocation without retry. Sagas compensate caught failures in reverse order; partial rollback retains both failures. Recovery repairs eligible incomplete calls at their original `Start`. New saga attempts append history without rewinding; after complete rollback, infallible sagas use the bounded host policy and durable backoff. Exhaustion and policy errors retain the original failure.
 
 Only customize when the *strategy* needs to change — see `golem-retry-policies-ts`.
 

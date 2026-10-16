@@ -9,6 +9,10 @@ export default defineConfig({
   },
   resolve: {
     alias: {
+      'wasi:clocks/system-clock@0.3.0': path.resolve(
+        __dirname,
+        'types/wasi_clocks_0_3_0_system_clock.d.ts',
+      ),
       'golem:core/types@1.5.0': path.resolve(__dirname, 'types/golem_core_1_5_0_types.d.ts'),
       'golem:api/host@1.5.0': path.resolve(__dirname, 'types/golem_api_1_5_0_host.d.ts'),
       'golem:api/oplog@1.5.0': path.resolve(__dirname, 'types/golem_api_1_5_0_oplog.d.ts'),

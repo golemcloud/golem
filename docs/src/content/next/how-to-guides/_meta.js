@@ -1,23 +1,23 @@
 export default {
-  common: {
-    title: "General",
+  "common": {
+    "title": "General"
   },
-  rust: {
-    title: "Rust",
+  "rust": {
+    "title": "Rust"
   },
-  ts: {
-    title: "TypeScript",
+  "ts": {
+    "title": "TypeScript"
   },
-  effect: {
-    title: "Effect",
+  "effect": {
+    "title": "Effect"
   },
-  scala: {
-    title: "Scala",
+  "scala": {
+    "title": "Scala"
   },
-  moonbit: {
-    title: "MoonBit",
+  "moonbit": {
+    "title": "MoonBit"
   },
-  go: {
-    title: "Go",
-  },
-}
+  "go": {
+    "title": "Go"
+  }
+};

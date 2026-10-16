@@ -130,6 +130,10 @@ pub type TransactionResult<Out, Err> = Result<Out, TransactionFailure<Err>>;
 /// The result of a transaction execution that failed.
 #[derive(Debug)]
 pub enum TransactionFailure<Err> {
+    /// The host policy exhausted its retry budget after complete compensation.
+    RetryExhausted(Err),
+    /// The host rejected the policy or continuation after complete compensation.
+    RetryPolicyError { failure: Err, message: String },
     /// One of the operations failed with an error, and the transaction was fully rolled back.
     FailedAndRolledBackCompletely(Err),
     /// One of the operations failed with an error, and the transaction was partially rolled back
@@ -143,6 +147,13 @@ pub enum TransactionFailure<Err> {
 impl<Err: Display> Display for TransactionFailure<Err> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            TransactionFailure::RetryExhausted(err) => {
+                write!(f, "Transaction retry policy exhausted: {err}")
+            }
+            TransactionFailure::RetryPolicyError { failure, message } => write!(
+                f,
+                "Transaction failed with {failure}; retry policy error: {message}"
+            ),
             TransactionFailure::FailedAndRolledBackCompletely(err) => {
                 write!(
                     f,
@@ -179,26 +190,147 @@ where
 /// Runs new attempts until the body succeeds. Return operation errors with `?`.
 /// Each failed attempt compensates successful operations in reverse order before
 /// starting a new attempt. Attempts append durable history; they never rewind it.
-/// A compensation failure panics instead of starting another attempt.
-/// Use only for operations expected to eventually succeed: permanent domain
-/// failures retry forever. Panics do not trigger compensation.
-pub async fn infallible_transaction<Out, Err: Debug + Clone + 'static>(
+/// The host resolves the `saga` policy after each completely compensated failure.
+/// Exhaustion, policy errors and partial compensation return typed failures.
+/// Rust WASM panics abort as programming errors without compensation.
+pub async fn infallible_transaction<Out, Err: Clone + 'static>(
     mut f: impl for<'a> FnMut(&'a mut FallibleTransaction<Err>) -> LocalBoxFuture<'a, Result<Out, Err>>,
-) -> Out {
+) -> TransactionResult<Out, Err> {
+    let started = saga_host::now();
+    let mut state = Vec::new();
+    let mut attempt = 0_i64;
     loop {
         let mut transaction = FallibleTransaction::new();
         match f(&mut transaction).await {
-            Ok(output) => return output,
+            Ok(output) => return Ok(output),
             Err(error) => {
-                if let TransactionFailure::FailedAndRolledBackPartially {
-                    compensation_failure,
-                    ..
-                } = transaction.on_fail(error).await
-                {
-                    panic!("Compensation action failed: {compensation_failure:?}");
+                let failure = transaction.on_fail(error).await;
+                let TransactionFailure::FailedAndRolledBackCompletely(error) = failure else {
+                    return Err(failure);
+                };
+                attempt = attempt.saturating_add(1);
+                match saga_next(&state, saga_host::now().saturating_sub(started), attempt) {
+                    Ok(decision) => {
+                        state = decision.state;
+                        match decision.delay {
+                            Some(delay) => saga_host::wait(delay).await,
+                            None => return Err(TransactionFailure::RetryExhausted(error)),
+                        }
+                    }
+                    Err(message) => {
+                        return Err(TransactionFailure::RetryPolicyError {
+                            failure: error,
+                            message,
+                        });
+                    }
                 }
             }
         }
+    }
+}
+
+fn saga_next(
+    state: &[u8],
+    elapsed: u64,
+    attempt: i64,
+) -> Result<crate::bindings::golem::api::retry::RetryDecision, String> {
+    use crate::bindings::golem::api::retry::PredicateValue;
+    let noun = saga_host::noun()?;
+    let properties = vec![
+        ("attempt".to_string(), PredicateValue::Integer(attempt)),
+        (
+            "error-kind".to_string(),
+            PredicateValue::Text("operation-error".to_string()),
+        ),
+    ];
+    let policy = saga_host::resolve("saga", &noun, &properties)?;
+    saga_host::next(policy.as_ref(), state, elapsed, "saga", &noun, &properties)
+}
+
+#[cfg(test)]
+mod saga_host {
+    use crate::bindings::golem::api::retry::{PredicateValue, RetryDecision, RetryPolicy};
+    use std::cell::Cell;
+    thread_local! {
+        pub static CLOCK: Cell<u64> = const { Cell::new(0) };
+        pub static ELAPSED: Cell<u64> = const { Cell::new(0) };
+        pub static POLICY_ERROR: Cell<bool> = const { Cell::new(false) };
+        pub static RESOLVE_ERROR: Cell<bool> = const { Cell::new(false) };
+    }
+    pub fn now() -> u64 {
+        CLOCK.get()
+    }
+    pub async fn wait(delay: u64) {
+        CLOCK.set(CLOCK.get() + delay);
+    }
+    pub fn noun() -> Result<String, String> {
+        Ok("urn:worker:component/agent".into())
+    }
+    pub fn resolve(
+        verb: &str,
+        noun: &str,
+        properties: &[(String, PredicateValue)],
+    ) -> Result<Option<RetryPolicy>, String> {
+        assert_eq!(verb, "saga");
+        assert_eq!(noun, "urn:worker:component/agent");
+        assert_eq!(properties[1].0, "error-kind");
+        assert!(
+            matches!(&properties[1].1, PredicateValue::Text(value) if value == "operation-error")
+        );
+        if RESOLVE_ERROR.replace(false) {
+            return Err("invalid resolver predicate".into());
+        }
+        Ok(None)
+    }
+    pub fn next(
+        policy: Option<&RetryPolicy>,
+        state: &[u8],
+        elapsed: u64,
+        verb: &str,
+        noun: &str,
+        properties: &[(String, PredicateValue)],
+    ) -> Result<RetryDecision, String> {
+        assert!(policy.is_none());
+        ELAPSED.set(elapsed);
+        resolve(verb, noun, properties)?;
+        assert_eq!(properties[0].0, "attempt");
+        let PredicateValue::Integer(attempt) = properties[0].1 else {
+            panic!("missing attempt")
+        };
+        if POLICY_ERROR.replace(false) {
+            return Err("invalid policy".into());
+        }
+        let expected = if attempt == 1 {
+            vec![]
+        } else {
+            vec![attempt as u8 - 1]
+        };
+        assert_eq!(state, expected);
+        assert!(elapsed >= (attempt as u64 - 1) * 10);
+        Ok(RetryDecision {
+            state: vec![attempt as u8],
+            delay: (attempt < 3).then_some(10),
+        })
+    }
+}
+
+#[cfg(not(test))]
+mod saga_host {
+    pub use crate::bindings::golem::api::retry::next_retry_delay as next;
+    pub use crate::retry::resolve_retry_policy as resolve;
+    pub fn now() -> u64 {
+        crate::wasip3::clocks::monotonic_clock::now()
+    }
+    pub async fn wait(delay: u64) {
+        crate::wasip3::clocks::monotonic_clock::wait_for(delay).await;
+    }
+    pub fn noun() -> Result<String, String> {
+        let metadata = crate::get_self_metadata().map_err(|e| format!("{e:?}"))?;
+        let id = metadata.agent_id;
+        Ok(format!(
+            "urn:worker:{}/{}",
+            id.component_id.uuid, id.agent_id
+        ))
     }
 }
 
@@ -323,6 +455,74 @@ mod tests {
     use crate::{boxed, fallible_transaction, infallible_transaction, sync_operation};
 
     #[test]
+    async fn bounded_retries_wait_and_exhaust() {
+        super::saga_host::CLOCK.set(0);
+        let op = sync_operation(
+            |()| {
+                super::saga_host::CLOCK.set(super::saga_host::CLOCK.get() + 2);
+                Ok::<_, &str>(())
+            },
+            |(), ()| {
+                super::saga_host::CLOCK.set(super::saga_host::CLOCK.get() + 3);
+                Ok(())
+            },
+        );
+        let mut attempts = 0;
+        let result = infallible_transaction(|tx| {
+            attempts += 1;
+            let op = op.clone();
+            boxed(async move {
+                tx.execute(op, ()).await?;
+                Err::<(), _>("operation")
+            })
+        })
+        .await;
+        assert!(matches!(
+            result,
+            Err(crate::TransactionFailure::RetryExhausted("operation"))
+        ));
+        assert_eq!(attempts, 3);
+        assert_eq!(super::saga_host::CLOCK.get(), 35);
+        assert_eq!(super::saga_host::ELAPSED.get(), 35);
+    }
+
+    #[test]
+    async fn resolver_error_preserves_original_failure() {
+        super::saga_host::RESOLVE_ERROR.set(true);
+        let mut attempts = 0;
+        let result = infallible_transaction(|_| {
+            attempts += 1;
+            boxed(async { Err::<(), _>("original") })
+        })
+        .await;
+        assert!(matches!(
+            result,
+            Err(crate::TransactionFailure::RetryPolicyError { failure: "original", message })
+                if message == "invalid resolver predicate"
+        ));
+        assert_eq!(attempts, 1);
+    }
+
+    #[test]
+    async fn invalid_policy_never_retries() {
+        super::saga_host::POLICY_ERROR.set(true);
+        let mut attempts = 0;
+        let result = infallible_transaction(|_| {
+            attempts += 1;
+            boxed(async { Err::<(), _>("operation") })
+        })
+        .await;
+        assert!(matches!(
+            result,
+            Err(crate::TransactionFailure::RetryPolicyError {
+                failure: "operation",
+                ..
+            })
+        ));
+        assert_eq!(attempts, 1);
+    }
+
+    #[test]
     async fn compensation_order_and_partial_failure() {
         let log = Rc::new(RefCell::new(Vec::new()));
         let compensation_log = log.clone();
@@ -358,11 +558,10 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Compensation action failed")]
     async fn infallible_stops_on_compensation_failure() {
         let op = sync_operation(|()| Ok::<_, &str>(()), |(), ()| Err("compensation"));
         let mut attempts = 0;
-        infallible_transaction(|tx| {
+        let result = infallible_transaction(|tx| {
             attempts += 1;
             assert_eq!(attempts, 1);
             let op = op.clone();
@@ -372,6 +571,13 @@ mod tests {
             })
         })
         .await;
+        assert!(matches!(
+            result,
+            Err(crate::TransactionFailure::FailedAndRolledBackPartially {
+                failure: "body",
+                compensation_failure: "compensation"
+            })
+        ));
     }
 
     #[test]
@@ -484,7 +690,7 @@ mod tests {
         })
         .await;
 
-        assert_eq!(result, 11);
+        assert_eq!(result.unwrap(), 11);
         assert_eq!(attempts.get(), 3);
         assert_eq!(
             *log.borrow(),

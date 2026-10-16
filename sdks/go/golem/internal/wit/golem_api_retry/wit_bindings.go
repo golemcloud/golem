@@ -479,6 +479,13 @@ type NamedRetryPolicy struct {
 	Policy    RetryPolicy
 }
 
+type RetryDecision struct {
+	// Opaque continuation for this retry sequence. Pass it unchanged to the next decision.
+	State []uint8
+	// None means exhausted. A zero delay still permits another attempt.
+	Delay witTypes.Option[uint64]
+}
+
 //go:wasmimport golem:api/retry@1.5.0 get-retry-policies
 func wasm_import_get_retry_policies(arg0 uintptr)
 
@@ -1552,11 +1559,11 @@ func GetRetryPolicyByName(name string) witTypes.Option[NamedRetryPolicy] {
 //go:wasmimport golem:api/retry@1.5.0 resolve-retry-policy
 func wasm_import_resolve_retry_policy(arg0 uintptr, arg1 uint32, arg2 uintptr, arg3 uint32, arg4 uintptr, arg5 uint32, arg6 uintptr)
 
-func ResolveRetryPolicy(verb string, nounUri string, properties []witTypes.Tuple2[string, PredicateValue]) witTypes.Option[RetryPolicy] {
+func ResolveRetryPolicy(verb string, nounUri string, properties []witTypes.Tuple2[string, PredicateValue]) witTypes.Result[witTypes.Option[RetryPolicy], string] {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
-	returnArea := uintptr(witRuntime.Allocate(pinner, (3 * 4), 4))
+	returnArea := uintptr(witRuntime.Allocate(pinner, (4 * 4), 4))
 	utf8 := unsafe.Pointer(unsafe.StringData(verb))
 	pinner.Pin(utf8)
 	utf80 := unsafe.Pointer(unsafe.StringData(nounUri))
@@ -1603,307 +1610,866 @@ func ResolveRetryPolicy(verb string, nounUri string, properties []witTypes.Tuple
 	}
 
 	wasm_import_resolve_retry_policy(uintptr(utf8), uint32(len(verb)), uintptr(utf80), uint32(len(nounUri)), uintptr(result3), length, returnArea)
-	var option witTypes.Option[RetryPolicy]
+	var result36 witTypes.Result[witTypes.Option[RetryPolicy], string]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
+		var option witTypes.Option[RetryPolicy]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
+		case 0:
 
-		option = witTypes.None[RetryPolicy]()
-	case 1:
-		result34 := make([]PolicyNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))
-		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))), index*32)
-			var variant33 PolicyNode
-			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
-			case 0:
+			option = witTypes.None[RetryPolicy]()
+		case 1:
+			result34 := make([]PolicyNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))); index++ {
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))), index*32)
+				var variant33 PolicyNode
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
+				case 0:
 
-				variant33 = MakePolicyNodePeriodic(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))))
+					variant33 = MakePolicyNodePeriodic(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))))
 
-			case 1:
+				case 1:
 
-				variant33 = MakePolicyNodeExponential(ExponentialConfig{BaseDelay: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), Factor: *(*float64)(unsafe.Add(unsafe.Pointer(base), 16))})
+					variant33 = MakePolicyNodeExponential(ExponentialConfig{BaseDelay: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), Factor: *(*float64)(unsafe.Add(unsafe.Pointer(base), 16))})
 
-			case 2:
+				case 2:
 
-				variant33 = MakePolicyNodeFibonacci(FibonacciConfig{First: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), Second: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
+					variant33 = MakePolicyNodeFibonacci(FibonacciConfig{First: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), Second: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
-			case 3:
+				case 3:
 
-				variant33 = MakePolicyNodeImmediate()
+					variant33 = MakePolicyNodeImmediate()
 
-			case 4:
+				case 4:
 
-				variant33 = MakePolicyNodeNever()
+					variant33 = MakePolicyNodeNever()
 
-			case 5:
+				case 5:
 
-				variant33 = MakePolicyNodeCountBox(CountBoxConfig{MaxRetries: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))), Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 12))})
+					variant33 = MakePolicyNodeCountBox(CountBoxConfig{MaxRetries: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))), Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 12))})
 
-			case 6:
+				case 6:
 
-				variant33 = MakePolicyNodeTimeBox(TimeBoxConfig{Limit: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16))})
+					variant33 = MakePolicyNodeTimeBox(TimeBoxConfig{Limit: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16))})
 
-			case 7:
+				case 7:
 
-				variant33 = MakePolicyNodeClampDelay(ClampConfig{MinDelay: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), MaxDelay: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16))), Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 24))})
+					variant33 = MakePolicyNodeClampDelay(ClampConfig{MinDelay: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), MaxDelay: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16))), Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 24))})
 
-			case 8:
+				case 8:
 
-				variant33 = MakePolicyNodeAddDelay(AddDelayConfig{Delay: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16))})
+					variant33 = MakePolicyNodeAddDelay(AddDelayConfig{Delay: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16))})
 
-			case 9:
+				case 9:
 
-				variant33 = MakePolicyNodeJitter(JitterConfig{Factor: *(*float64)(unsafe.Add(unsafe.Pointer(base), 8)), Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16))})
+					variant33 = MakePolicyNodeJitter(JitterConfig{Factor: *(*float64)(unsafe.Add(unsafe.Pointer(base), 8)), Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16))})
 
-			case 10:
-				result32 := make([]PredicateNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
-					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(16+4*4))
-					var variant31 PredicateNode
-					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
-					case 0:
-						value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-						var variant PredicateValue
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
+				case 10:
+					result32 := make([]PredicateNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(16+4*4))
+						var variant31 PredicateNode
+						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
 						case 0:
-							value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4))))
-
-							variant = MakePredicateValueText(value4)
-
-						case 1:
-
-							variant = MakePredicateValueInteger(*(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
-
-						case 2:
-
-							variant = MakePredicateValueBoolean((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))) != 0))
-
-						default:
-							panic("unreachable")
-						}
-
-						variant31 = MakePredicateNodePropEq(PropertyComparison{PropertyName: value, Value: variant})
-
-					case 1:
-						value5 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-						var variant7 PredicateValue
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
-						case 0:
-							value6 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4))))
-
-							variant7 = MakePredicateValueText(value6)
-
-						case 1:
-
-							variant7 = MakePredicateValueInteger(*(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
-
-						case 2:
-
-							variant7 = MakePredicateValueBoolean((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))) != 0))
-
-						default:
-							panic("unreachable")
-						}
-
-						variant31 = MakePredicateNodePropNeq(PropertyComparison{PropertyName: value5, Value: variant7})
-
-					case 2:
-						value8 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-						var variant10 PredicateValue
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
-						case 0:
-							value9 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4))))
-
-							variant10 = MakePredicateValueText(value9)
-
-						case 1:
-
-							variant10 = MakePredicateValueInteger(*(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
-
-						case 2:
-
-							variant10 = MakePredicateValueBoolean((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))) != 0))
-
-						default:
-							panic("unreachable")
-						}
-
-						variant31 = MakePredicateNodePropGt(PropertyComparison{PropertyName: value8, Value: variant10})
-
-					case 3:
-						value11 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-						var variant13 PredicateValue
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
-						case 0:
-							value12 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4))))
-
-							variant13 = MakePredicateValueText(value12)
-
-						case 1:
-
-							variant13 = MakePredicateValueInteger(*(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
-
-						case 2:
-
-							variant13 = MakePredicateValueBoolean((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))) != 0))
-
-						default:
-							panic("unreachable")
-						}
-
-						variant31 = MakePredicateNodePropGte(PropertyComparison{PropertyName: value11, Value: variant13})
-
-					case 4:
-						value14 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-						var variant16 PredicateValue
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
-						case 0:
-							value15 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4))))
-
-							variant16 = MakePredicateValueText(value15)
-
-						case 1:
-
-							variant16 = MakePredicateValueInteger(*(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
-
-						case 2:
-
-							variant16 = MakePredicateValueBoolean((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))) != 0))
-
-						default:
-							panic("unreachable")
-						}
-
-						variant31 = MakePredicateNodePropLt(PropertyComparison{PropertyName: value14, Value: variant16})
-
-					case 5:
-						value17 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-						var variant19 PredicateValue
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
-						case 0:
-							value18 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4))))
-
-							variant19 = MakePredicateValueText(value18)
-
-						case 1:
-
-							variant19 = MakePredicateValueInteger(*(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
-
-						case 2:
-
-							variant19 = MakePredicateValueBoolean((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))) != 0))
-
-						default:
-							panic("unreachable")
-						}
-
-						variant31 = MakePredicateNodePropLte(PropertyComparison{PropertyName: value17, Value: variant19})
-
-					case 6:
-						value20 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-						variant31 = MakePredicateNodePropExists(value20)
-
-					case 7:
-						value21 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-						result24 := make([]PredicateValue, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
-						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
-							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))), index*(8+2*4))
-							var variant23 PredicateValue
-							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
+							value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							var variant PredicateValue
+							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
 							case 0:
-								value22 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+								value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4))))
 
-								variant23 = MakePredicateValueText(value22)
+								variant = MakePredicateValueText(value4)
 
 							case 1:
 
-								variant23 = MakePredicateValueInteger(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)))
+								variant = MakePredicateValueInteger(*(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 							case 2:
 
-								variant23 = MakePredicateValueBoolean((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0))
+								variant = MakePredicateValueBoolean((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))) != 0))
 
 							default:
 								panic("unreachable")
 							}
 
-							result24 = append(result24, variant23)
+							variant31 = MakePredicateNodePropEq(PropertyComparison{PropertyName: value, Value: variant})
+
+						case 1:
+							value5 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							var variant7 PredicateValue
+							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
+							case 0:
+								value6 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4))))
+
+								variant7 = MakePredicateValueText(value6)
+
+							case 1:
+
+								variant7 = MakePredicateValueInteger(*(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
+
+							case 2:
+
+								variant7 = MakePredicateValueBoolean((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))) != 0))
+
+							default:
+								panic("unreachable")
+							}
+
+							variant31 = MakePredicateNodePropNeq(PropertyComparison{PropertyName: value5, Value: variant7})
+
+						case 2:
+							value8 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							var variant10 PredicateValue
+							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
+							case 0:
+								value9 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4))))
+
+								variant10 = MakePredicateValueText(value9)
+
+							case 1:
+
+								variant10 = MakePredicateValueInteger(*(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
+
+							case 2:
+
+								variant10 = MakePredicateValueBoolean((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))) != 0))
+
+							default:
+								panic("unreachable")
+							}
+
+							variant31 = MakePredicateNodePropGt(PropertyComparison{PropertyName: value8, Value: variant10})
+
+						case 3:
+							value11 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							var variant13 PredicateValue
+							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
+							case 0:
+								value12 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4))))
+
+								variant13 = MakePredicateValueText(value12)
+
+							case 1:
+
+								variant13 = MakePredicateValueInteger(*(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
+
+							case 2:
+
+								variant13 = MakePredicateValueBoolean((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))) != 0))
+
+							default:
+								panic("unreachable")
+							}
+
+							variant31 = MakePredicateNodePropGte(PropertyComparison{PropertyName: value11, Value: variant13})
+
+						case 4:
+							value14 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							var variant16 PredicateValue
+							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
+							case 0:
+								value15 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4))))
+
+								variant16 = MakePredicateValueText(value15)
+
+							case 1:
+
+								variant16 = MakePredicateValueInteger(*(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
+
+							case 2:
+
+								variant16 = MakePredicateValueBoolean((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))) != 0))
+
+							default:
+								panic("unreachable")
+							}
+
+							variant31 = MakePredicateNodePropLt(PropertyComparison{PropertyName: value14, Value: variant16})
+
+						case 5:
+							value17 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							var variant19 PredicateValue
+							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
+							case 0:
+								value18 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4))))
+
+								variant19 = MakePredicateValueText(value18)
+
+							case 1:
+
+								variant19 = MakePredicateValueInteger(*(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
+
+							case 2:
+
+								variant19 = MakePredicateValueBoolean((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4)))) != 0))
+
+							default:
+								panic("unreachable")
+							}
+
+							variant31 = MakePredicateNodePropLte(PropertyComparison{PropertyName: value17, Value: variant19})
+
+						case 6:
+							value20 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+
+							variant31 = MakePredicateNodePropExists(value20)
+
+						case 7:
+							value21 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							result24 := make([]PredicateValue, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
+							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
+								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))), index*(8+2*4))
+								var variant23 PredicateValue
+								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
+								case 0:
+									value22 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+
+									variant23 = MakePredicateValueText(value22)
+
+								case 1:
+
+									variant23 = MakePredicateValueInteger(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)))
+
+								case 2:
+
+									variant23 = MakePredicateValueBoolean((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0))
+
+								default:
+									panic("unreachable")
+								}
+
+								result24 = append(result24, variant23)
+							}
+
+							variant31 = MakePredicateNodePropIn(PropertySetCheck{PropertyName: value21, Values: result24})
+
+						case 8:
+							value25 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							value26 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
+
+							variant31 = MakePredicateNodePropMatches(PropertyPattern{PropertyName: value25, Pattern: value26})
+
+						case 9:
+							value27 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							value28 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
+
+							variant31 = MakePredicateNodePropStartsWith(PropertyPattern{PropertyName: value27, Pattern: value28})
+
+						case 10:
+							value29 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							value30 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
+
+							variant31 = MakePredicateNodePropContains(PropertyPattern{PropertyName: value29, Pattern: value30})
+
+						case 11:
+
+							variant31 = MakePredicateNodePredAnd(witTypes.Tuple2[int32, int32]{F0: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), F1: *(*int32)(unsafe.Add(unsafe.Pointer(base), 12))})
+
+						case 12:
+
+							variant31 = MakePredicateNodePredOr(witTypes.Tuple2[int32, int32]{F0: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), F1: *(*int32)(unsafe.Add(unsafe.Pointer(base), 12))})
+
+						case 13:
+
+							variant31 = MakePredicateNodePredNot(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
+
+						case 14:
+
+							variant31 = MakePredicateNodePredTrue()
+
+						case 15:
+
+							variant31 = MakePredicateNodePredFalse()
+
+						default:
+							panic("unreachable")
 						}
 
-						variant31 = MakePredicateNodePropIn(PropertySetCheck{PropertyName: value21, Values: result24})
+						result32 = append(result32, variant31)
+					}
 
-					case 8:
-						value25 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-						value26 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
+					variant33 = MakePolicyNodeFilteredOn(FilteredConfig{Predicate: RetryPredicate{Nodes: result32}, Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-						variant31 = MakePredicateNodePropMatches(PropertyPattern{PropertyName: value25, Pattern: value26})
+				case 11:
 
-					case 9:
-						value27 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-						value28 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
+					variant33 = MakePolicyNodeAndThen(witTypes.Tuple2[int32, int32]{F0: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), F1: *(*int32)(unsafe.Add(unsafe.Pointer(base), 12))})
 
-						variant31 = MakePredicateNodePropStartsWith(PropertyPattern{PropertyName: value27, Pattern: value28})
+				case 12:
 
-					case 10:
-						value29 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-						value30 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
+					variant33 = MakePolicyNodePolicyUnion(witTypes.Tuple2[int32, int32]{F0: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), F1: *(*int32)(unsafe.Add(unsafe.Pointer(base), 12))})
 
-						variant31 = MakePredicateNodePropContains(PropertyPattern{PropertyName: value29, Pattern: value30})
+				case 13:
 
-					case 11:
+					variant33 = MakePolicyNodePolicyIntersect(witTypes.Tuple2[int32, int32]{F0: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), F1: *(*int32)(unsafe.Add(unsafe.Pointer(base), 12))})
 
-						variant31 = MakePredicateNodePredAnd(witTypes.Tuple2[int32, int32]{F0: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), F1: *(*int32)(unsafe.Add(unsafe.Pointer(base), 12))})
+				default:
+					panic("unreachable")
+				}
 
-					case 12:
+				result34 = append(result34, variant33)
+			}
 
-						variant31 = MakePredicateNodePredOr(witTypes.Tuple2[int32, int32]{F0: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), F1: *(*int32)(unsafe.Add(unsafe.Pointer(base), 12))})
+			option = witTypes.Some[RetryPolicy](RetryPolicy{Nodes: result34})
+		default:
+			panic("unreachable")
+		}
 
-					case 13:
+		result36 = witTypes.Ok[witTypes.Option[RetryPolicy], string](option)
+	case 1:
+		value35 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))
 
-						variant31 = MakePredicateNodePredNot(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
+		result36 = witTypes.Err[witTypes.Option[RetryPolicy], string](value35)
+	default:
+		panic("unreachable")
+	}
+	result37 := result36
+	return result37
 
-					case 14:
+}
 
-						variant31 = MakePredicateNodePredTrue()
+//go:wasmimport golem:api/retry@1.5.0 next-retry-delay
+func wasm_import_next_retry_delay(arg0 int32, arg1 uintptr, arg2 uint32, arg3 uintptr, arg4 uint32, arg5 int64, arg6 uintptr, arg7 uint32, arg8 uintptr, arg9 uint32, arg10 uintptr, arg11 uint32, arg12 uintptr)
 
-					case 15:
+func NextRetryDelay(policy witTypes.Option[RetryPolicy], state []uint8, elapsed uint64, verb string, nounUri string, properties []witTypes.Tuple2[string, PredicateValue]) witTypes.Result[RetryDecision, string] {
+	pinner := &runtime.Pinner{}
+	defer pinner.Unpin()
 
-						variant31 = MakePredicateNodePredFalse()
+	returnArea := uintptr(witRuntime.Allocate(pinner, (24 + 2*4), 8))
+	var option int32
+	var option33 uintptr
+	var option34 uint32
+	switch policy.Tag() {
+	case witTypes.OptionNone:
+
+		option = int32(0)
+		option33 = 0
+		option34 = 0
+	case witTypes.OptionSome:
+		payload := policy.Some()
+		slice30 := (payload).Nodes
+		length32 := uint32(len(slice30))
+		result31 := witRuntime.Allocate(pinner, uintptr(length32*32), 8)
+		for index, element := range slice30 {
+			base := unsafe.Add(result31, index*32)
+
+			switch element.Tag() {
+			case PolicyNodePeriodic:
+				payload := element.Periodic()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(0))
+				*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64(payload)
+
+			case PolicyNodeExponential:
+				payload := element.Exponential()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(1))
+				*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64((payload).BaseDelay)
+				*(*float64)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Factor
+
+			case PolicyNodeFibonacci:
+				payload := element.Fibonacci()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(2))
+				*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64((payload).First)
+				*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = int64((payload).Second)
+
+			case PolicyNodeImmediate:
+
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
+
+			case PolicyNodeNever:
+
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(4))
+
+			case PolicyNodeCountBox:
+				payload := element.CountBox()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(5))
+				*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = int32((payload).MaxRetries)
+				*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)) = (payload).Inner
+
+			case PolicyNodeTimeBox:
+				payload := element.TimeBox()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(6))
+				*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64((payload).Limit)
+				*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Inner
+
+			case PolicyNodeClampDelay:
+				payload := element.ClampDelay()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(7))
+				*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64((payload).MinDelay)
+				*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = int64((payload).MaxDelay)
+				*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = (payload).Inner
+
+			case PolicyNodeAddDelay:
+				payload := element.AddDelay()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(8))
+				*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64((payload).Delay)
+				*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Inner
+
+			case PolicyNodeJitter:
+				payload := element.Jitter()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(9))
+				*(*float64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Factor
+				*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Inner
+
+			case PolicyNodeFilteredOn:
+				payload := element.FilteredOn()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(10))
+				slice27 := ((payload).Predicate).Nodes
+				length29 := uint32(len(slice27))
+				result28 := witRuntime.Allocate(pinner, uintptr(length29*(16+4*4)), 8)
+				for index, element := range slice27 {
+					base := unsafe.Add(result28, index*(16+4*4))
+
+					switch element.Tag() {
+					case PredicateNodePropEq:
+						payload := element.PropEq()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(0))
+						utf8 := unsafe.Pointer(unsafe.StringData((payload).PropertyName))
+						pinner.Pin(utf8)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).PropertyName)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8)))
+
+						switch (payload).Value.Tag() {
+						case PredicateValueText:
+							payload := (payload).Value.Text()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(0))
+							utf80 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf80)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4))) = uint32(uint32(len(payload)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))) = uint32(uintptr(uintptr(utf80)))
+
+						case PredicateValueInteger:
+							payload := (payload).Value.Integer()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
+							*(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))) = payload
+
+						case PredicateValueBoolean:
+							payload := (payload).Value.Boolean()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(2))
+							var result int32
+							if payload {
+								result = 1
+							} else {
+								result = 0
+							}
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))) = int8(result)
+
+						default:
+							panic("unreachable")
+						}
+
+					case PredicateNodePropNeq:
+						payload := element.PropNeq()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(1))
+						utf81 := unsafe.Pointer(unsafe.StringData((payload).PropertyName))
+						pinner.Pin(utf81)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).PropertyName)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf81)))
+
+						switch (payload).Value.Tag() {
+						case PredicateValueText:
+							payload := (payload).Value.Text()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(0))
+							utf82 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf82)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4))) = uint32(uint32(len(payload)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))) = uint32(uintptr(uintptr(utf82)))
+
+						case PredicateValueInteger:
+							payload := (payload).Value.Integer()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
+							*(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))) = payload
+
+						case PredicateValueBoolean:
+							payload := (payload).Value.Boolean()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(2))
+							var result3 int32
+							if payload {
+								result3 = 1
+							} else {
+								result3 = 0
+							}
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))) = int8(result3)
+
+						default:
+							panic("unreachable")
+						}
+
+					case PredicateNodePropGt:
+						payload := element.PropGt()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(2))
+						utf84 := unsafe.Pointer(unsafe.StringData((payload).PropertyName))
+						pinner.Pin(utf84)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).PropertyName)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf84)))
+
+						switch (payload).Value.Tag() {
+						case PredicateValueText:
+							payload := (payload).Value.Text()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(0))
+							utf85 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf85)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4))) = uint32(uint32(len(payload)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))) = uint32(uintptr(uintptr(utf85)))
+
+						case PredicateValueInteger:
+							payload := (payload).Value.Integer()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
+							*(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))) = payload
+
+						case PredicateValueBoolean:
+							payload := (payload).Value.Boolean()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(2))
+							var result6 int32
+							if payload {
+								result6 = 1
+							} else {
+								result6 = 0
+							}
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))) = int8(result6)
+
+						default:
+							panic("unreachable")
+						}
+
+					case PredicateNodePropGte:
+						payload := element.PropGte()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
+						utf87 := unsafe.Pointer(unsafe.StringData((payload).PropertyName))
+						pinner.Pin(utf87)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).PropertyName)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf87)))
+
+						switch (payload).Value.Tag() {
+						case PredicateValueText:
+							payload := (payload).Value.Text()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(0))
+							utf88 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf88)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4))) = uint32(uint32(len(payload)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))) = uint32(uintptr(uintptr(utf88)))
+
+						case PredicateValueInteger:
+							payload := (payload).Value.Integer()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
+							*(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))) = payload
+
+						case PredicateValueBoolean:
+							payload := (payload).Value.Boolean()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(2))
+							var result9 int32
+							if payload {
+								result9 = 1
+							} else {
+								result9 = 0
+							}
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))) = int8(result9)
+
+						default:
+							panic("unreachable")
+						}
+
+					case PredicateNodePropLt:
+						payload := element.PropLt()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(4))
+						utf810 := unsafe.Pointer(unsafe.StringData((payload).PropertyName))
+						pinner.Pin(utf810)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).PropertyName)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf810)))
+
+						switch (payload).Value.Tag() {
+						case PredicateValueText:
+							payload := (payload).Value.Text()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(0))
+							utf811 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf811)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4))) = uint32(uint32(len(payload)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))) = uint32(uintptr(uintptr(utf811)))
+
+						case PredicateValueInteger:
+							payload := (payload).Value.Integer()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
+							*(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))) = payload
+
+						case PredicateValueBoolean:
+							payload := (payload).Value.Boolean()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(2))
+							var result12 int32
+							if payload {
+								result12 = 1
+							} else {
+								result12 = 0
+							}
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))) = int8(result12)
+
+						default:
+							panic("unreachable")
+						}
+
+					case PredicateNodePropLte:
+						payload := element.PropLte()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(5))
+						utf813 := unsafe.Pointer(unsafe.StringData((payload).PropertyName))
+						pinner.Pin(utf813)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).PropertyName)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf813)))
+
+						switch (payload).Value.Tag() {
+						case PredicateValueText:
+							payload := (payload).Value.Text()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(0))
+							utf814 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf814)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4))) = uint32(uint32(len(payload)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))) = uint32(uintptr(uintptr(utf814)))
+
+						case PredicateValueInteger:
+							payload := (payload).Value.Integer()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
+							*(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))) = payload
+
+						case PredicateValueBoolean:
+							payload := (payload).Value.Boolean()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(2))
+							var result15 int32
+							if payload {
+								result15 = 1
+							} else {
+								result15 = 0
+							}
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))) = int8(result15)
+
+						default:
+							panic("unreachable")
+						}
+
+					case PredicateNodePropExists:
+						payload := element.PropExists()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(6))
+						utf816 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf816)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf816)))
+
+					case PredicateNodePropIn:
+						payload := element.PropIn()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(7))
+						utf817 := unsafe.Pointer(unsafe.StringData((payload).PropertyName))
+						pinner.Pin(utf817)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).PropertyName)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf817)))
+						slice := (payload).Values
+						length := uint32(len(slice))
+						result20 := witRuntime.Allocate(pinner, uintptr(length*(8+2*4)), 8)
+						for index, element := range slice {
+							base := unsafe.Add(result20, index*(8+2*4))
+
+							switch element.Tag() {
+							case PredicateValueText:
+								payload := element.Text()
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(0))
+								utf818 := unsafe.Pointer(unsafe.StringData(payload))
+								pinner.Pin(utf818)
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf818)))
+
+							case PredicateValueInteger:
+								payload := element.Integer()
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(1))
+								*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
+
+							case PredicateValueBoolean:
+								payload := element.Boolean()
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(2))
+								var result19 int32
+								if payload {
+									result19 = 1
+								} else {
+									result19 = 0
+								}
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(result19)
+
+							default:
+								panic("unreachable")
+							}
+
+						}
+
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(length)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uintptr(uintptr(result20)))
+
+					case PredicateNodePropMatches:
+						payload := element.PropMatches()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(8))
+						utf821 := unsafe.Pointer(unsafe.StringData((payload).PropertyName))
+						pinner.Pin(utf821)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).PropertyName)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf821)))
+						utf822 := unsafe.Pointer(unsafe.StringData((payload).Pattern))
+						pinner.Pin(utf822)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uint32(len((payload).Pattern)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uintptr(uintptr(utf822)))
+
+					case PredicateNodePropStartsWith:
+						payload := element.PropStartsWith()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(9))
+						utf823 := unsafe.Pointer(unsafe.StringData((payload).PropertyName))
+						pinner.Pin(utf823)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).PropertyName)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf823)))
+						utf824 := unsafe.Pointer(unsafe.StringData((payload).Pattern))
+						pinner.Pin(utf824)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uint32(len((payload).Pattern)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uintptr(uintptr(utf824)))
+
+					case PredicateNodePropContains:
+						payload := element.PropContains()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(10))
+						utf825 := unsafe.Pointer(unsafe.StringData((payload).PropertyName))
+						pinner.Pin(utf825)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).PropertyName)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf825)))
+						utf826 := unsafe.Pointer(unsafe.StringData((payload).Pattern))
+						pinner.Pin(utf826)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uint32(len((payload).Pattern)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uintptr(uintptr(utf826)))
+
+					case PredicateNodePredAnd:
+						payload := element.PredAnd()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(11))
+						*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).F0
+						*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)) = (payload).F1
+
+					case PredicateNodePredOr:
+						payload := element.PredOr()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(12))
+						*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).F0
+						*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)) = (payload).F1
+
+					case PredicateNodePredNot:
+						payload := element.PredNot()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(13))
+						*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = payload
+
+					case PredicateNodePredTrue:
+
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(14))
+
+					case PredicateNodePredFalse:
+
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(15))
 
 					default:
 						panic("unreachable")
 					}
 
-					result32 = append(result32, variant31)
 				}
 
-				variant33 = MakePolicyNodeFilteredOn(FilteredConfig{Predicate: RetryPredicate{Nodes: result32}, Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length29)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result28)))
+				*(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = (payload).Inner
 
-			case 11:
+			case PolicyNodeAndThen:
+				payload := element.AndThen()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(11))
+				*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).F0
+				*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)) = (payload).F1
 
-				variant33 = MakePolicyNodeAndThen(witTypes.Tuple2[int32, int32]{F0: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), F1: *(*int32)(unsafe.Add(unsafe.Pointer(base), 12))})
+			case PolicyNodePolicyUnion:
+				payload := element.PolicyUnion()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(12))
+				*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).F0
+				*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)) = (payload).F1
 
-			case 12:
-
-				variant33 = MakePolicyNodePolicyUnion(witTypes.Tuple2[int32, int32]{F0: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), F1: *(*int32)(unsafe.Add(unsafe.Pointer(base), 12))})
-
-			case 13:
-
-				variant33 = MakePolicyNodePolicyIntersect(witTypes.Tuple2[int32, int32]{F0: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), F1: *(*int32)(unsafe.Add(unsafe.Pointer(base), 12))})
+			case PolicyNodePolicyIntersect:
+				payload := element.PolicyIntersect()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(13))
+				*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).F0
+				*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)) = (payload).F1
 
 			default:
 				panic("unreachable")
 			}
 
-			result34 = append(result34, variant33)
 		}
 
-		option = witTypes.Some[RetryPolicy](RetryPolicy{Nodes: result34})
+		option = int32(1)
+		option33 = uintptr(result31)
+		option34 = length32
 	default:
 		panic("unreachable")
 	}
-	result35 := option
-	return result35
+	data := unsafe.Pointer(unsafe.SliceData(state))
+	pinner.Pin(data)
+	utf835 := unsafe.Pointer(unsafe.StringData(verb))
+	pinner.Pin(utf835)
+	utf836 := unsafe.Pointer(unsafe.StringData(nounUri))
+	pinner.Pin(utf836)
+	slice40 := properties
+	length42 := uint32(len(slice40))
+	result41 := witRuntime.Allocate(pinner, uintptr(length42*(8+4*4)), 8)
+	for index, element := range slice40 {
+		base := unsafe.Add(result41, index*(8+4*4))
+		utf837 := unsafe.Pointer(unsafe.StringData((element).F0))
+		pinner.Pin(utf837)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).F0)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf837)))
+
+		switch (element).F1.Tag() {
+		case PredicateValueText:
+			payload := (element).F1.Text()
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = int8(int32(0))
+			utf838 := unsafe.Pointer(unsafe.StringData(payload))
+			pinner.Pin(utf838)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uint32(len(payload)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uintptr(uintptr(utf838)))
+
+		case PredicateValueInteger:
+			payload := (element).F1.Integer()
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = int8(int32(1))
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = payload
+
+		case PredicateValueBoolean:
+			payload := (element).F1.Boolean()
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = int8(int32(2))
+			var result39 int32
+			if payload {
+				result39 = 1
+			} else {
+				result39 = 0
+			}
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(result39)
+
+		default:
+			panic("unreachable")
+		}
+
+	}
+
+	wasm_import_next_retry_delay(option, option33, option34, uintptr(data), uint32(len(state)), int64(elapsed), uintptr(utf835), uint32(len(verb)), uintptr(utf836), uint32(len(nounUri)), uintptr(result41), length42, returnArea)
+	var result45 witTypes.Result[RetryDecision, string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
+	case 0:
+		value := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4))))
+		var option43 witTypes.Option[uint64]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4)))) {
+		case 0:
+
+			option43 = witTypes.None[uint64]()
+		case 1:
+
+			option43 = witTypes.Some[uint64](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 2*4)))))
+		default:
+			panic("unreachable")
+		}
+
+		result45 = witTypes.Ok[RetryDecision, string](RetryDecision{State: value, Delay: option43})
+	case 1:
+		value44 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4))))
+
+		result45 = witTypes.Err[RetryDecision, string](value44)
+	default:
+		panic("unreachable")
+	}
+	result46 := result45
+	return result46
 
 }
 

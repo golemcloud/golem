@@ -1336,10 +1336,6 @@ where
         ctx.table().get_mut(entry)?.set_closed();
         return Ok(result.map_err(|e| RdbmsError::from(e).into()));
     }
-    if !ctx.is_live() {
-        use crate::durable_host::concurrent::DurableContext;
-        ctx.publish_direct_replay_tail(begin).await?;
-    }
     let result = match tx.state {
         RdbmsTransactionState::Reconstructed(_) if confirmed => Ok(()),
         RdbmsTransactionState::Reconstructed(ref id) if pre => {
@@ -1455,12 +1451,30 @@ async fn retry_transaction_resolution<Ctx: WorkerCtx, R>(
     // even if policy gives up, so another recovery can still discover a committed transaction.
     ctx.state.current_retry_point = begin;
     let properties = rdbms_retry_properties(ctx, "transaction-status", pool_key);
-    ctx.try_trigger_retry(anyhow!(error.clone()), properties)
-        .await?;
-    Err(anyhow!(ClassifiedHostError {
-        kind: HostFailureKind::Permanent,
-        message: format!("transaction status resolution exhausted at Start {begin}: {error}"),
-    }))
+    match ctx
+        .try_trigger_retry(anyhow!(error.clone()), properties)
+        .await
+    {
+        Err(retry) => {
+            if !ctx.is_live() {
+                use crate::durable_host::concurrent::DurableContext;
+                ctx.publish_direct_replay_tail(begin).await?;
+            }
+            Err(retry)
+        }
+        Ok(()) => {
+            if !ctx.is_live() {
+                ctx.state.replay_state.abandon_replay_for_failure().await?;
+                ctx.state.authoritative_replay_failure = true;
+            }
+            Err(anyhow!(ClassifiedHostError {
+                kind: HostFailureKind::Permanent,
+                message: format!(
+                    "transaction status resolution exhausted at Start {begin}: {error}"
+                ),
+            }))
+        }
+    }
 }
 
 async fn db_transaction_drop<Ctx, T>(

@@ -125,6 +125,12 @@ Module._load = function (request) {
       trap: (reason) => { throw new Error(reason); },
     };
   }
+  if (request === "golem:api/retry@1.5.0") {
+    return {
+      resolveRetryPolicy: missingHostImport("resolveRetryPolicy"),
+      nextRetryDelay: missingHostImport("nextRetryDelay"),
+    };
+  }
   if (request === "wasi:clocks/monotonic-clock@0.3.0") {
     return {
       now: missingHostImport("now"),

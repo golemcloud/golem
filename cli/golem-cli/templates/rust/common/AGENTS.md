@@ -104,7 +104,7 @@ Retryable failures in the following operations are handled transparently:
 - **RPC calls** between agents
 - **Database / storage calls** — `golem:rdbms/postgres`, `golem:rdbms/mysql`, `golem:rdbms/ignite2`, `wasi:blobstore`, `wasi:keyvalue`
 
-A panic is a deterministic guest trap and fails the invocation without retry. Recovery replays completed outcomes and repairs only an eligible incomplete call at its own `Start`. Use sagas for domain compensation; new attempts append fresh calls without rewinding history. Infallible saga loops have no built-in attempt bound or backoff guarantee.
+A Rust WASM panic aborts without compensation and permanently fails the invocation. Recovery replays completed outcomes and repairs only an eligible incomplete call at its own `Start`. Use sagas for domain compensation; new attempts append calls without rewinding history. After complete rollback, infallible sagas use the bounded host policy and durable backoff. Handle the Result for compensation failure, exhaustion and policy errors; each failure retains the original error.
 
 Only customize when the *strategy* needs to change (different backoff, give-up conditions, per-status-code policies). For that, see the `golem-retry-policies-rust` skill.
 

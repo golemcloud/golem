@@ -633,3 +633,21 @@ Pass a baseline full-SDK template WASM as the first argument to compare the old 
 build. The recorded timing is median end-to-end QuickJS preinitialization time (three runs),
 including Wasmtime compilation; it is not deployed invocation latency. The harness requires
 `wasm-rquickjs` and `wasm-tools` on PATH and is separate from the process-free unit suite.
+
+## Sagas
+
+`infallibleSaga` returns `Result<Out, SagaRetryFailure>`. It compensates returned step failures
+and caught exceptions in reverse order, then resolves the `saga` retry policy for the agent URI.
+The host receives the same `attempt` and `error-kind` context for selection and evaluation.
+It owns the opaque continuation, jitter and finite retry bounds; the SDK does not interpret
+the policy tree. No selected policy uses `config.retry`. Policy changes are errors, not a new
+retry budget. Exhaustion and policy errors return a typed failure rather than trapping.
+
+Elapsed time includes work, compensation and durable timer waits from before the first attempt.
+Attempts append fresh calls; they do not rewind local state. Compensate local changes explicitly
+and do not reuse a compensated external operation's idempotency key.
+
+Partial compensation returns a failure with the original error and compensation failure, without
+retrying. `fallibleSaga` returns complete or partial rollback metadata for returned failures.
+Caught exceptions run compensation and are rethrown unchanged after complete rollback.
+Uncatchable guest traps cannot run guest compensation.

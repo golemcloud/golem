@@ -1200,7 +1200,9 @@ where
                         request_body_progress,
                     ))
                 }
-                None => ScopeReplayRecovery::Forbidden,
+                // The owner cannot re-issue this response, but still owns completion of its
+                // original scope and chunk calls with HttpResponseIncomplete.
+                None => ScopeReplayRecovery::CompleteWithLoss,
             },
             _ => ScopeReplayRecovery::Default,
         };

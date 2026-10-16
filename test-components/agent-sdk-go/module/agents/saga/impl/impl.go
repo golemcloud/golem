@@ -7,6 +7,7 @@ package impl
 
 import (
 	"agent-sdk-go/agents/saga"
+	"time"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/transaction"
@@ -64,5 +65,36 @@ func init() {
 	})
 	agent.Handle(saga.Log, func(ctx *golem.Context[state], _ golem.Unit) []string {
 		return ctx.State.log
+	})
+	agent.Handle(saga.ExhaustRetries, func(ctx *golem.Context[state], _ golem.Unit) saga.RetryOutcome {
+		var outcome saga.RetryOutcome
+		step := transaction.NewOperation(
+			func(_ golem.Unit) golem.Result[golem.Unit, string] {
+				ctx.State.log = append(ctx.State.log, "attempt")
+				outcome.Attempts++
+				return golem.Ok[golem.Unit, string](golem.Unit{})
+			},
+			func(golem.Unit, golem.Unit) golem.Result[golem.Unit, string] {
+				ctx.State.log = append(ctx.State.log, "compensate")
+				outcome.Compensations++
+				return golem.Ok[golem.Unit, string](golem.Unit{})
+			},
+		)
+		start := time.Now()
+		result := transaction.Infallible(func(tx *transaction.Tx[string]) golem.Result[golem.Unit, string] {
+			if r := tx.Step(step, golem.Unit{}); r.IsErr() {
+				return r
+			}
+			return golem.Err[golem.Unit, string]("retryable saga failure")
+		})
+		outcome.ElapsedNanos = uint64(time.Since(start).Nanoseconds())
+		if result.IsErr() {
+			failure := result.Err()
+			outcome.Exhausted = failure.Exhausted
+			outcome.RolledBackFully = failure.RolledBackFully()
+			outcome.PolicyError = failure.PolicyError != nil
+			outcome.Error = failure.Error
+		}
+		return outcome
 	})
 }

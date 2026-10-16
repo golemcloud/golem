@@ -4988,7 +4988,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 self.public_state.event_service().emit_invocation_finished(
                     full_function_name,
                     &idempotency_key,
-                    self.is_live(),
+                    self.is_live() || self.state.authoritative_replay_failure,
                 );
             }
         }
@@ -5666,7 +5666,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     Some(trap_type)
                                         if store.as_context().data().durable_ctx().state.snapshot_replay_purpose
                                             != SnapshotReplayPurpose::None
-                                            && !store.as_context().data().durable_ctx().is_live() =>
+                                            && !store.as_context().data().durable_ctx().is_live()
+                                            && !store.as_context().data().durable_ctx().state.authoritative_replay_failure =>
                                     {
                                         // Speculative reconstruction failures, after a snapshot or
                                         // in the replay for a pending automatic update, must not
@@ -5717,7 +5718,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                             if uses_streams
                                                 && !shard_lost
                                                 && (matches!(trap_type, TrapType::Interrupt(_))
-                                                    || store.as_context().data().durable_ctx().is_live())
+                                                    || store.as_context().data().durable_ctx().is_live()
+                                                    || store.as_context().data().durable_ctx().state.authoritative_replay_failure)
                                             {
                                                 // A refused write means the shard has moved:
                                                 // record it before the startup result is published.
@@ -9724,6 +9726,9 @@ struct PrivateDurableWorkerState {
     /// table decides, and records no application failure.
     snapshot_replay_purpose: SnapshotReplayPurpose,
 
+    /// A protocol refusal ended replay without granting live authority.
+    authoritative_replay_failure: bool,
+
     /// Number of outgoing HTTP calls made in the current invocation (live only, not replayed).
     /// Reset to 0 at the start of each exported function invocation.
     http_call_count: u64,
@@ -10028,6 +10033,7 @@ impl PrivateDurableWorkerState {
             last_snapshot_index,
             baseline_role,
             snapshot_replay_purpose,
+            authoritative_replay_failure: false,
             resource_limit_entry,
         })
     }

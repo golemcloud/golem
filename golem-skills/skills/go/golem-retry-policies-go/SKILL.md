@@ -249,8 +249,11 @@ if np, found := retry.ByName("http-transient"); found {
 
 // What policy the runtime would pick for a hypothetical operation; a property
 // value is a string, an integer type or a bool:
-pol, matched := retry.Resolve("GET", "https://api.example.com/x",
+pol, matched, err := retry.Resolve("GET", "https://api.example.com/x",
 	map[string]any{"status-code": 503})
+if err != nil {
+	return err // Invalid selector; do not treat it as no matching policy.
+}
 _ = pol
 _ = matched
 ```

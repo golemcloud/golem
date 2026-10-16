@@ -685,8 +685,8 @@ must not read those fields; do not treat self-view as a harmless bootstrap permi
 `Agents.getSelfMetadata` returns an `AgentsHostError` in the Effect error channel and retains
 the host failure as its cause. `SelfAgentId.SelfAgentId` preserves its defect-based failure
 contract, including during restoration with an explicit snapshot strategy. Neither path changes
-the card or retries with broader permissions. Saga traps preserve typed error
-messages as well as native error stacks, regardless of which host operation failed.
+the card or retries with broader permissions. Sagas retain original failures when
+compensation fails.
 
 ## Tool middleware
 
@@ -739,12 +739,17 @@ The host records nesting in `Start.parent_start_index`, not in a function-type p
 Other durability controls remain under `Durability`: oplog commits and `FunctionType` constructors.
 `Saga` provides fallible/infallible compensating transactions; compensations run in reverse order.
 
-`Saga.infallibleTransaction` compensates typed failures and runs another attempt. Attempts append
+`Saga.infallibleTransaction` compensates typed failures, caught defects and interruption, then asks
+the host for a bounded retry decision. Attempts append
 new durable calls without deleting prior calls or restoring JavaScript state. Compensate local
 state explicitly. Do not reuse a compensated external operation's idempotency key for a new
-attempt: the remote peer can suppress that operation. Defects trap without compensation or
-automatic retry. Cancellation compensates and propagates. `Saga.fallibleTransaction` reports
-complete or partial compensation instead of retrying. `Agents.revertAgent` remains an external
+attempt: the remote peer can suppress that operation. The host resolves the `saga` policy for the
+agent URI after each compensated failure, using `attempt` and `error-kind` properties. No selected
+policy uses `config.retry`. The host rejects policy changes and unbounded policies. Exhaustion,
+policy errors and incomplete compensation return `SagaRetryFailure` in the typed error channel.
+Compensation runs under an interruption mask. `Saga.fallibleTransaction` reports complete or
+partial compensation instead of retrying, and preserves defects and interruption after complete
+rollback. Uncatchable guest traps cannot run guest compensation. `Agents.revertAgent` remains an external
 management operation; management self-revert is unsupported.
 
 ## Existing Effect integrations

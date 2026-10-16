@@ -318,6 +318,14 @@ async fn recover_concurrent_post(
             let sends = partition_starts(oplog, "http::client::send");
             let bodies = partition_starts(oplog, "http::types::response::consume-body");
             let chunks = partition_starts(oplog, "http::types::response::consume-body-chunk");
+            if !sends.ended.iter().all(|start| {
+                oplog.iter().any(|entry| {
+                    matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(delivered)
+                        if delivered.start_index == *start)
+                })
+            }) {
+                return false;
+            }
             if mode.holds_mid_body() {
                 sends.counts() == (0, 2, 0)
                     && bodies.counts() == (0, 1, 1)
@@ -501,6 +509,56 @@ fn assert_call_local_recovery(run: &RecoveredRun) {
         vec![expected_request_body(), expected_request_body()],
         "the re-issued POST carries the request body byte-identically"
     );
+}
+
+#[test]
+#[tracing::instrument]
+async fn post_writer_get_crash_before_headers_drains_before_send_resolution(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let run = recover_concurrent_post(
+        last_unique_id,
+        deps,
+        http_tests,
+        InferenceMode::BeforeHeaders,
+        "post_with_writer_get",
+        true,
+        false,
+    )
+    .await?;
+    assert_eq!(run.result, Ok(full_success()));
+    assert_call_local_recovery(&run);
+    assert_eq!(run.result_after_replay, Ok(full_success()));
+    assert_eq!((run.after_replay.gets, run.after_replay.posts), (2, 3));
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn post_writer_get_crash_mid_body_reuses_the_drained_request(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let run = recover_concurrent_post(
+        last_unique_id,
+        deps,
+        http_tests,
+        InferenceMode::MidBodyThenRange,
+        "post_with_writer_get",
+        true,
+        false,
+    )
+    .await?;
+    assert_eq!(run.result, Ok(full_success()));
+    assert_call_local_recovery(&run);
+    assert_eq!(run.result_after_replay, Ok(full_success()));
+    assert_eq!((run.after_replay.gets, run.after_replay.posts), (2, 3));
+    Ok(())
 }
 
 #[test]

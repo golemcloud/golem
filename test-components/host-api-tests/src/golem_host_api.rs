@@ -356,6 +356,12 @@ impl GolemHostApi for GolemHostApiImpl {
             })
         })
         .await
+        .unwrap_or_else(|failure| match failure {
+            golem_rust::TransactionFailure::RetryExhausted(_) => 0,
+            golem_rust::TransactionFailure::RetryPolicyError { .. } => 1,
+            golem_rust::TransactionFailure::FailedAndRolledBackPartially { .. } => 2,
+            golem_rust::TransactionFailure::FailedAndRolledBackCompletely(_) => 3,
+        })
     }
 
     fn fork_test(&self, input: String) -> String {

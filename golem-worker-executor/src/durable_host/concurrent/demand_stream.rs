@@ -105,7 +105,7 @@ where
         let observational_owner = claim_options.observational_owner;
         let children_repair_incomplete = matches!(
             claim_options.scope_replay_recovery,
-            ScopeReplayRecovery::Reexecute { .. }
+            ScopeReplayRecovery::Reexecute { .. } | ScopeReplayRecovery::CompleteWithLoss
         );
         // The parent's own `Start` is completed in place as well: when every recorded child
         // replayed but the crash preceded the parent's terminal, the stream finishes live under

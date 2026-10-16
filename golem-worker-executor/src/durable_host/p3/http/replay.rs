@@ -25,6 +25,7 @@ use golem_common::model::oplog::payload::types::{
     SerializableP3HttpClientSendResult, SerializableP3HttpRequestBodyFrame,
     SerializableResponseHeaders,
 };
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use http::{HeaderMap, HeaderName, HeaderValue};
 use http_body::Body as _;
 use http_body_util::BodyExt as _;
@@ -46,6 +47,7 @@ use wasmtime_wasi_http::p3::bindings::http::types::{ErrorCode, Request, Response
 pub(super) struct ReplayedRequestBodyRecording {
     /// The send's `Start` index — the `parent_start_index` key of its frames.
     pub(super) send_start_index: OplogIndex,
+    pub(super) trap_context: crate::durable_host::durability::DurableCallTrapContext,
     /// Whether the recording had already reached its terminal frame when the
     /// send result was recorded. If true the recording is complete and the
     /// drain never needs to append anything.
@@ -63,9 +65,21 @@ pub(super) struct ReplayedRequestBodyDrainReadiness {
 pub(super) struct ReplayedRequestBodyDrainProgress {
     waiting_for_guest_body: AtomicBool,
     changed: Notify,
+    recording: std::sync::Mutex<Option<Result<(), WorkerExecutorError>>>,
+    recording_finished: Notify,
 }
 
 impl ReplayedRequestBodyDrainProgress {
+    pub(super) async fn recording_ready(&self) -> Result<(), WorkerExecutorError> {
+        loop {
+            let finished = self.recording_finished.notified();
+            if let Some(result) = self.recording.lock().unwrap().clone() {
+                return result;
+            }
+            finished.await;
+        }
+    }
+
     pub(super) fn set_waiting_for_guest_body(&self, waiting: bool) {
         if self.waiting_for_guest_body.swap(waiting, Ordering::AcqRel) != waiting {
             self.changed.notify_one();
@@ -302,6 +316,7 @@ where
             activity,
             _phantom,
         } = self;
+        let trap_context = recorded_body.as_ref().map(|recorded| recorded.trap_context);
         let (result, recording_result) = match recorded_body
             .filter(|recorded| !recorded.recording_complete_at_end)
         {
@@ -335,13 +350,31 @@ where
             }
         };
         if let Some(recording_result) = recording_result {
+            // Infrastructure loss blocks authority publication. An unreconstructable guest body
+            // is instead completed by the HTTP owner with typed protocol loss.
+            *progress.recording.lock().unwrap() = Some(
+                match recording_result
+                    .as_ref()
+                    .err()
+                    .and_then(|error| error.recovery_error())
+                {
+                    Some(error) => Err(error),
+                    None => Ok(()),
+                },
+            );
+            progress.recording_finished.notify_waiters();
             if let Some(error) = recording_result
                 .as_ref()
                 .err()
                 .and_then(|error| error.recovery_error())
             {
                 let _ = recording_finished_tx.send(recording_result);
-                return Err(error.into());
+                return Err(wasmtime::Error::from_anyhow(
+                    crate::durable_host::durability::mark_durable_call_trap_context(
+                        error.into(),
+                        trap_context.expect("recording failures belong to a recorded send"),
+                    ),
+                ));
             }
             let _ = recording_finished_tx.send(recording_result);
         }

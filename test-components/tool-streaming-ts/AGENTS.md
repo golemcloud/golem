@@ -118,7 +118,7 @@ The SDK is schema-driven: method inputs and return values are described with [St
 
 Golem **automatically retries** retryable host-operation failures using durable execution and the applicable retry policy. **Do not add manual retry loops, `while` retry patterns, or backoff utilities around host operations** — let Golem apply the retry policy. The default retry policy applies when no user-defined policy matches.
 
-Retryable failures in outgoing HTTP requests (`fetch`), RPC calls between agents, and database / storage calls (`golem:rdbms/*`, keyvalue, blobstore) are handled transparently. An uncaught thrown error or rejected promise is a deterministic guest trap and fails the invocation without retry. Recovery replays completed outcomes and repairs only an eligible incomplete call at its own `Start`. Use sagas for domain compensation; new attempts append fresh calls without rewinding history. Infallible saga loops have no built-in attempt bound or backoff guarantee.
+Retryable failures in outgoing HTTP requests (`fetch`), RPC calls between agents, and database / storage calls (`golem:rdbms/*`, keyvalue, blobstore) are handled transparently. An uncaught thrown error or rejected promise is a deterministic guest trap and fails the invocation without retry. Sagas compensate caught failures in reverse order; partial rollback retains both failures. Recovery repairs eligible incomplete calls at their original `Start`. New saga attempts append history without rewinding; after complete rollback, infallible sagas use the bounded host policy and durable backoff. Exhaustion and policy errors retain the original failure.
 
 Only customize when the *strategy* needs to change — see `golem-retry-policies-ts`.
 

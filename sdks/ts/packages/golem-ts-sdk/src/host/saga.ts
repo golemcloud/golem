@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { trap } from './hostapi';
+import { getSelfMetadata } from './hostapi';
+import { nextRetryDelay, resolveRetryPolicy, type PredicateValue } from 'golem:api/retry@1.5.0';
+import { now } from 'wasi:clocks/system-clock@0.3.0';
 import { Result } from './result';
 
 /**
@@ -59,7 +61,31 @@ class CompensableImpl<In, Out, Err> implements Compensable<In, Out, Err> {
   ) {}
 }
 
-class RetrySaga extends Error {}
+class RetrySaga extends Error {
+  constructor(readonly original: unknown) {
+    super('Saga operation failed');
+  }
+}
+
+/** A saga stopped after compensation, exhaustion, or an invalid retry policy. */
+export type SagaRetryFailureReason =
+  | { type: 'exhausted' }
+  | { type: 'compensation-failure'; compensationFailure: unknown }
+  | { type: 'policy-error'; policyError: unknown };
+
+export class SagaRetryFailure extends Error {
+  constructor(
+    readonly error: unknown,
+    readonly reason: SagaRetryFailureReason,
+  ) {
+    super('Saga failed');
+  }
+}
+
+function clock(): bigint {
+  const instant = now();
+  return instant.seconds * 1_000_000_000n + BigInt(instant.nanoseconds);
+}
 
 class InfallibleSaga {
   private compensations: (() => Promise<void>)[] = [];
@@ -70,9 +96,19 @@ class InfallibleSaga {
   }
 
   failure(error: unknown): unknown {
-    return this.terminal && !(this.terminal.error instanceof RetrySaga)
-      ? this.terminal.error
-      : error;
+    return this.terminal ? this.terminal.error : error;
+  }
+
+  async compensate(error: unknown): Promise<void> {
+    const actions = this.compensations;
+    this.compensations = [];
+    for (let i = actions.length - 1; i >= 0; i--) {
+      try {
+        await actions[i]();
+      } catch (compensationFailure) {
+        throw new SagaRetryFailure(error, { type: 'compensation-failure', compensationFailure });
+      }
+    }
   }
 
   /**
@@ -85,23 +121,20 @@ class InfallibleSaga {
     this.checkActive();
     const result = await step.execute(input);
     if (result.isOk()) {
-      this.compensations.push(
-        // Compensations cannot fail in an infallible saga.
-        async () => {
-          const compensationResult = await step.compensate(input, result.val);
-          if (compensationResult.isErr()) {
-            throw new Error('Compensation action failed');
-          }
-        },
-      );
+      this.compensations.push(async () => {
+        const compensationResult = await step.compensate(input, result.val);
+        if (compensationResult.isErr()) {
+          throw compensationResult.val;
+        }
+      });
       return result.val;
     } else {
-      return this.retry();
+      return this.retry(result.val);
     }
   }
 
-  private async retry(): Promise<never> {
-    this.terminal = { error: new RetrySaga() };
+  private async retry(error: unknown): Promise<never> {
+    this.terminal = { error: new RetrySaga(error) };
     // Rollback all the compensations in reverse order
     const compensations = this.compensations;
     this.compensations = [];
@@ -110,7 +143,12 @@ class InfallibleSaga {
         await compensations[i]();
       }
     } catch (error) {
-      this.terminal = { error };
+      this.terminal = {
+        error: new SagaRetryFailure((this.terminal.error as RetrySaga).original, {
+          type: 'compensation-failure',
+          compensationFailure: error,
+        }),
+      };
     }
     throw this.terminal.error;
   }
@@ -147,7 +185,12 @@ class FallibleSaga<Err> {
    */
   async onFailure(error: Err): Promise<SagaFailure<Err>> {
     for (let i = this.compensations.length - 1; i >= 0; i--) {
-      const compensationResult = await this.compensations[i]();
+      let compensationResult: Result<void, Err>;
+      try {
+        compensationResult = await this.compensations[i]();
+      } catch (compensationFailure) {
+        return { type: 'FailedAndRolledBackPartially', error, compensationFailure };
+      }
       if (compensationResult.isErr()) {
         return {
           type: 'FailedAndRolledBackPartially',
@@ -172,8 +215,8 @@ export type SagaFailure<Err> =
     }
   | {
       type: 'FailedAndRolledBackPartially';
-      error: Err;
-      compensationFailure: Err;
+      error: unknown;
+      compensationFailure: unknown;
     };
 
 /**
@@ -186,24 +229,73 @@ export type SagaFailure<Err> =
  * In addition, **user level failures** (represented by the `Result::Err` value of a step)
  * lead to performing the compensation actions of each already performed step in reverse order.
  *
- * Unexpected thrown errors trap without compensation or automatic retry.
+ * Caught exceptions also run compensation before the host retry decision.
  *
  * @param f - The async function that defines the saga.
  * @returns A promise resolving to the result of the saga.
  */
-export async function infallibleSaga<Out>(f: (saga: InfallibleSaga) => Promise<Out>): Promise<Out> {
+export async function infallibleSaga<Out>(
+  f: (saga: InfallibleSaga) => Promise<Out>,
+): Promise<Result<Out, SagaRetryFailure>> {
+  const started = clock();
+  let state: Uint8Array = new Uint8Array();
+  let attempt = 0n;
   while (true) {
     const saga = new InfallibleSaga();
     try {
       const result = await f(saga);
       saga.checkActive();
-      return result;
+      return Result.ok(result);
     } catch (error) {
       // A caught compensation failure must not become a retry or a success.
       const e = saga.failure(error);
-      if (e instanceof RetrySaga) continue;
-      trap(`infallibleSaga failed: ${formatErrorForTrap(e)}`);
-      throw e;
+      const original = e instanceof RetrySaga ? e.original : e;
+      try {
+        await saga.compensate(original);
+      } catch (failure) {
+        return Result.err(failure as SagaRetryFailure);
+      }
+      if (e instanceof SagaRetryFailure) return Result.err(e);
+      try {
+        const id = getSelfMetadata().agentId;
+        const noun = `urn:worker:${id.componentId}/${id.agentId}`;
+        const properties: [string, PredicateValue][] = [
+          ['attempt', { tag: 'integer', val: ++attempt }],
+          [
+            'error-kind',
+            {
+              tag: 'text',
+              val:
+                e instanceof RetrySaga
+                  ? 'operation-error'
+                  : e instanceof Error && e.name === 'AbortError'
+                    ? 'interrupted'
+                    : 'exception',
+            },
+          ],
+        ];
+        const policy = resolveRetryPolicy('saga', noun, properties);
+        const elapsed = clock() - started;
+        const decision = nextRetryDelay(
+          policy,
+          state,
+          elapsed < 0n ? 0n : elapsed,
+          'saga',
+          noun,
+          properties,
+        );
+        state = decision.state;
+        if (decision.delay === undefined)
+          return Result.err(new SagaRetryFailure(original, { type: 'exhausted' }));
+        let milliseconds = (decision.delay + 999_999n) / 1_000_000n;
+        while (milliseconds > 0n) {
+          const chunk = Number(milliseconds > 2_147_483_647n ? 2_147_483_647n : milliseconds);
+          await new Promise<void>((resolve) => globalThis.setTimeout(resolve, chunk));
+          milliseconds -= BigInt(chunk);
+        }
+      } catch (policyError) {
+        return Result.err(new SagaRetryFailure(original, { type: 'policy-error', policyError }));
+      }
     }
   }
 }
@@ -216,7 +308,7 @@ export async function infallibleSaga<Out>(f: (saga: InfallibleSaga) => Promise<O
  * If a compensation returns `Result::Err`, compensation stops and the saga reports
  * `FailedAndRolledBackPartially`.
  *
- * Unexpected thrown errors trap without compensation or automatic retry.
+ * Caught exceptions run compensation and are rethrown unchanged when rollback completes.
  *
  * @param f - The async function that defines the saga.
  * @returns A promise resolving to the result of the saga.
@@ -235,22 +327,9 @@ export async function fallibleSaga<Out, Err>(
     }
     return out;
   } catch (e) {
-    // Force an uncatchable trap. Note: this only fires for *thrown* errors,
-    // which are unexpected. Expected failures are returned via Result.err
-    // and processed by `saga.onFailure` above without trapping.
-    trap(`fallibleSaga failed: ${formatErrorForTrap(e)}`);
+    const failure = await saga.onFailure(e as Err);
+    if (failure.type === 'FailedAndRolledBackPartially') return Result.err(failure);
     throw e;
-  }
-}
-
-function formatErrorForTrap(err: unknown): string {
-  if (err instanceof Error) {
-    return err.stack ?? `${err.name}: ${err.message}`;
-  }
-  try {
-    return String(err);
-  } catch {
-    return '<unprintable error>';
   }
 }
 

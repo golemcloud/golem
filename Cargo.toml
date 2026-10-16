@@ -289,7 +289,6 @@ time = { version = "0.3.41", features = ["default", "macros"] }
 tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "sync", "io-std", "net", "tracing", "process", "signal"] }
 tokio-metrics = { version = "0.5.0", features = ["metrics-rs-integration"] }
 tokio-postgres = "0.7.13"
-tokio-rustls = { version = "0.26.2" }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-tungstenite = { version = "0.27.0", features = ["rustls-tls-webpki-roots"] }
 tokio-util = { version = "0.7.13", features = ["rt"] }

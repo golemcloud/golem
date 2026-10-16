@@ -2358,7 +2358,14 @@ mod tests {
                             .unwrap(),
                         summary: None,
                     },
-                    _ => OplogEntry::RecoverySucceeded { timestamp },
+                    _ => OplogEntry::Log {
+                        timestamp,
+                        parent_start_index: None,
+                        level: golem_common::model::oplog::LogLevel::Info,
+                        context: "fixture".to_string(),
+                        message: String::new(),
+                        trace_context: None,
+                    },
                 };
                 oplog.add(entry).await.unwrap();
             }

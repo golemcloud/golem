@@ -9,8 +9,11 @@
  */
 import { Context, Layer } from "effect"
 import * as RetryHost from "golem:api/retry@1.5.0"
+import { now } from "wasi:clocks/system-clock@0.3.0"
 
 export interface RetryClientShape {
+  readonly nextRetryDelay: typeof RetryHost.nextRetryDelay
+  readonly now: () => bigint
   /** Mirrors `golem:api/retry.get-retry-policies`. */
   readonly getRetryPolicies: () => ReadonlyArray<RetryHost.NamedRetryPolicy>
   /** Mirrors `golem:api/retry.get-retry-policy-by-name`. */
@@ -34,6 +37,11 @@ export class RetryClient extends Context.Service<RetryClient, RetryClientShape>(
 export const RetryLive: Layer.Layer<RetryClient> = Layer.succeed(
   RetryClient,
   RetryClient.of({
+    nextRetryDelay: (...args) => RetryHost.nextRetryDelay(...args),
+    now: () => {
+      const instant = now()
+      return instant.seconds * 1_000_000_000n + BigInt(instant.nanoseconds)
+    },
     getRetryPolicies: () => RetryHost.getRetryPolicies(),
     getRetryPolicyByName: (name) => RetryHost.getRetryPolicyByName(name),
     resolveRetryPolicy: (verb, nounUri, properties) =>

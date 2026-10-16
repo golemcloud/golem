@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Policy for durable outgoing HTTP: idempotence, transparent retries,
+//! Policy for durable outgoing HTTP: transparent retries,
 //! Golem-managed headers and Range-based response-body resumption.
 
 use crate::durable_host::DurableWorkerCtx;
@@ -20,7 +20,7 @@ use crate::durable_host::durability::{DurableExecutionState, HostFailureKind};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::oplog::types::{SerializableHttpErrorCode, SerializableHttpMethod};
+use golem_common::model::oplog::types::SerializableHttpErrorCode;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::headers::TraceContextHeaders;
 use http::{HeaderName, HeaderValue};
@@ -71,21 +71,6 @@ pub(crate) fn classify_serializable_http_error_code(
         | SerializableHttpErrorCode::HttpResponseIncomplete
         | SerializableHttpErrorCode::InternalError(_) => HostFailureKind::Transient,
     }
-}
-
-/// Returns true if the HTTP method is idempotent per RFC 9110 §9.2.2: the safe
-/// methods (GET, HEAD, OPTIONS, TRACE) plus PUT and DELETE. Idempotent methods
-/// determine the request's cancellation behavior.
-pub(crate) fn is_idempotent_http_method(method: &SerializableHttpMethod) -> bool {
-    matches!(
-        method,
-        SerializableHttpMethod::Get
-            | SerializableHttpMethod::Head
-            | SerializableHttpMethod::Put
-            | SerializableHttpMethod::Delete
-            | SerializableHttpMethod::Options
-            | SerializableHttpMethod::Trace
-    )
 }
 
 /// Reasons why the worker state forbids any transparent HTTP retry
@@ -268,22 +253,6 @@ pub(crate) fn apply_managed_http_headers(
 mod tests {
     use super::*;
     use test_r::test;
-
-    #[test]
-    fn idempotent_methods_follow_rfc_9110() {
-        assert!(is_idempotent_http_method(&SerializableHttpMethod::Get));
-        assert!(is_idempotent_http_method(&SerializableHttpMethod::Head));
-        assert!(is_idempotent_http_method(&SerializableHttpMethod::Put));
-        assert!(is_idempotent_http_method(&SerializableHttpMethod::Delete));
-        assert!(is_idempotent_http_method(&SerializableHttpMethod::Options));
-        assert!(is_idempotent_http_method(&SerializableHttpMethod::Trace));
-        assert!(!is_idempotent_http_method(&SerializableHttpMethod::Post));
-        assert!(!is_idempotent_http_method(&SerializableHttpMethod::Patch));
-        assert!(!is_idempotent_http_method(&SerializableHttpMethod::Connect));
-        assert!(!is_idempotent_http_method(&SerializableHttpMethod::Other(
-            "CUSTOM".to_string()
-        )));
-    }
 
     fn live_exec_state() -> DurableExecutionState {
         DurableExecutionState {

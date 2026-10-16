@@ -26,7 +26,9 @@ repeat:
       if failure is acceptable:
         return the original domain error
       otherwise:
-        start another attempt
+        resolve the saga policy and request next-retry-delay with continuation state
+        if exhausted or invalid, return failure preserving the original error
+        await the delay with a durable timer, then start another attempt
   if every step succeeded:
     return success
 ```
@@ -34,9 +36,12 @@ repeat:
 Register compensation only after a step succeeds. Preserve compensation failures so callers do
 not mistake partial compensation for a completed rollback. A permanent domain failure can loop
 forever; prefer a fallible workflow unless the application has an explicit retry decision.
-There is no SDK-provided attempt bound or backoff guarantee for this application loop. Add an
-explicit application policy if the workflow needs a limit or a delay; host retry policies do not
-schedule saga attempts.
+The SDK exposes `@api.resolve_retry_policy` and `@api.next_retry_delay`, not a saga runner.
+An application can resolve verb `saga`, noun the agent URN, with `attempt`/`error-kind` after
+complete compensation. Pass the opaque binary continuation unchanged, measure elapsed work and
+waiting with durable clocks, and await delays with durable timers. No matching policy selects
+the agent default. Unbounded policies are rejected; exhaustion and policy errors must return a
+failure preserving the original error. Do not invent a MoonBit saga helper or reset the budget.
 
 ## Recovery rules
 

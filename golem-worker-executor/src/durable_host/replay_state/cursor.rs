@@ -3774,6 +3774,24 @@ impl ReplayState {
             .await
     }
 
+    /// Ends a failed replay without publishing its incomplete authority state for live use.
+    pub(in crate::durable_host) async fn abandon_replay_for_failure(
+        &self,
+    ) -> Result<(), WorkerExecutorError> {
+        self.run_owned_cursor_op(|state| async move {
+            state
+                .with_tx(async |tx| {
+                    if let Some(wallet) = &tx.cursor.wallet {
+                        wallet.retire();
+                    }
+                    tx.switch_to_live();
+                    Ok(())
+                })
+                .await
+        })
+        .await
+    }
+
     pub(super) async fn switch_cursor_to_live(&self) -> Result<OplogIndex, WorkerExecutorError> {
         self.run_owned_cursor_op(|state| async move {
             let replay_target = state

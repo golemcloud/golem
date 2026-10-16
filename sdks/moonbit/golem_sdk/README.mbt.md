@@ -6,6 +6,22 @@ Build durable, fault-tolerant agents on the [Golem](https://golem.cloud) platfor
 
 This SDK lets you write Golem agents in MoonBit with minimal boilerplate. Agents are compiled to WebAssembly components and run on Golem, which provides automatic durable execution, persistent state, and agent-to-agent communication.
 
+## Host retry evaluation
+
+`@api.next_retry_delay(policy, state, elapsed, verb, noun_uri, properties)` exposes
+the host retry evaluator. Start a sequence with an empty `FixedArray[Byte]` and
+pass the returned `RetryDecision.state` unchanged after each failed, compensated
+attempt. `elapsed` is nanoseconds since before the first attempt, including work,
+compensation, and waiting. Supply the same operation context used to resolve the
+policy. `None` selects `config.retry`.
+
+`Ok(decision)` with `decision.delay == None` means exhaustion. A delay is in
+nanoseconds; wait with a durable timer before the next attempt. `Err(reason)`
+reports evaluation errors, including policy changes or unbounded saga policies.
+The host records decisions, jitter, and errors for replay. The token is opaque:
+do not decode it or replace it with an attempt counter. MoonBit provides this
+host API, not a public saga helper.
+
 ## Self metadata and authority
 
 `@api.get_self_metadata()` calls the host operation `get-self-metadata`. It requires
