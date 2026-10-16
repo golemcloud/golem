@@ -275,8 +275,21 @@ An `@asyncCore.Stream[Byte]` input becomes a client parameter. Either declared o
 started-invocation result shape, with independent optional stdout/stderr streams, structured result,
 collection, and cancellation. Providers can write with `write_all`/`write_all_bytes`, select
 successful completion with `finish`, or select a typed `@tool.ToolStreamError` terminal with
-`fail`. Returning normally also finishes open outputs; dropping one while still open selects
-`Abandoned` for that channel. See the
+`fail`. Returning normally attempts to finish each open output independently, including returned
+declared errors and invalid-result errors. An ordinary implicit finish error cannot replace the
+structured outcome or prevent cleanup of the other output. Explicit terminals remain unchanged.
+An unhandled error raised by the handler (including an explicit output operation) follows the
+failure path and is rethrown; it is not a returned invalid-result error. Task cancellation remains
+cancellation. Dropping an open provider output selects `Abandoned` for that channel.
+
+On the caller, closing or dropping an output permanently closes only that reader. It does not cancel
+the invocation or close the sibling output. There is no guarantee that a cancelled pending read can
+resume. `detach_result_observer()` stops delivery of the structured result without cancelling the
+invocation or closing either output. It releases unclaimed cached and late result capabilities.
+Capabilities already delivered by `get()` remain the caller's responsibility. If a host `get` is
+active, physical disposal waits for it to settle. `cancel()` still requests invocation cancellation
+until physical disposal; after disposal it is a no-op. `drop()` detaches the result and closes both
+readers, but does not cancel the invocation. See the
 [`golem_sdk_tools` documentation](https://mooncakes.io/docs/#/golemcloud/golem_sdk_tools/) and the
 canonical `grep`/`git` examples for the complete annotation surface.
 

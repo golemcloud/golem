@@ -284,17 +284,18 @@ pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
 
     /// Deletes the directory at the path and all the entries below it, at any depth.
     ///
-    /// A root path changes nothing and returns false. A path is at the root when it has no
+    /// A root path changes nothing and returns `None`. A path is at the root when it has no
     /// name in it, for example an empty path or `.`. A directory that only holds blobs
-    /// exists. A blob at the path itself is not below the path, so it stays. Returns true if the
-    /// path had a directory. Returns false if the path had no directory.
+    /// exists. A blob at the path itself is not below the path, so it stays. Returns the sum of
+    /// the sizes of the deleted blobs if the path had a directory. Returns `None` if the path had
+    /// no directory.
     async fn delete_dir(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<bool, Error>;
+    ) -> Result<Option<u64>, Error>;
 
     /// Tells what the path has.
     ///
@@ -558,14 +559,15 @@ pub trait BlobStorageBackend: Debug + Send + Sync {
     ) -> Result<Box<[ListedBlob]>, Error>;
 
     /// Deletes the directory at the path and all the entries below it, at any depth. Returns
-    /// true if the path had a directory.
+    /// the sum of the sizes of the deleted blobs if the path had a directory, and `None` if it
+    /// had no directory.
     async fn delete_dir_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
-    ) -> Result<bool, Error>;
+    ) -> Result<Option<u64>, Error>;
 
     /// Tells what the path has.
     async fn exists_at(
@@ -845,13 +847,13 @@ impl<B: BlobStorageBackend> BlobStorage for B {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<bool, Error> {
+    ) -> Result<Option<u64>, Error> {
         match blob_path(path)? {
             Some(path) => {
                 self.delete_dir_at(target_label, op_label, namespace, &path)
                     .await
             }
-            None => Ok(false),
+            None => Ok(None),
         }
     }
 
@@ -1138,7 +1140,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         &self,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<bool, Error> {
+    ) -> Result<Option<u64>, Error> {
         self.record("delete_dir");
         self.storage
             .delete_dir(self.svc_name, self.api_name, namespace, path)

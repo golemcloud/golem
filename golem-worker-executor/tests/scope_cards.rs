@@ -406,7 +406,7 @@ async fn start_scope_card_executor(
                     authority: authority.clone(),
                 })
             })),
-            ..Default::default()
+            ..TestExecutorOverrides::agent_sockets_enabled()
         },
     )
     .await

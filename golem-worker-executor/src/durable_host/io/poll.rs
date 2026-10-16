@@ -400,6 +400,7 @@ mod tests {
             std::io::empty(),
             |duration| wasmtime::Error::from(SuspendForSleep(duration)),
             Some(max),
+            false,
         )
         .unwrap();
         let timer = table.push(Pending).unwrap();

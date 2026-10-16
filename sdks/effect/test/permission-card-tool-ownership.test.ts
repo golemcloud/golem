@@ -69,6 +69,7 @@ describe("permission-card ownership across tool boundaries", () => {
               result: { graph: outputCodec.schemaGraph, value: output },
             }),
             cancel: Effect.void,
+            detach: Effect.void,
           }
         }),
     }

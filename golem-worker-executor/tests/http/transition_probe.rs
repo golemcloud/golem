@@ -15,9 +15,9 @@ inherit_test_dep!(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RecoverySchedule {
-    ClaimBeforeCleanup,
-    CleanupFirst,
-    AlreadyIssued,
+    ClockClaimFirst,
+    SendClaimFirst,
+    ClockIssuedBeforeSend,
     RetainedControl,
 }
 
@@ -134,17 +134,11 @@ async fn http_clock_recovery(
         "monotonic-clock::now",
         Stage::AfterDeferredStart,
     );
-    let mut before_jump = executor.gate_next_replay_access_admission(
-        &worker,
-        "client::send",
-        Stage::BeforeBatchedJump,
-    );
-    let mut after_jump = executor.gate_next_replay_access_admission(
-        &worker,
-        "client::send",
-        Stage::AfterBatchedJump,
-    );
-    let mut before_scope = (schedule == RecoverySchedule::AlreadyIssued).then(|| {
+    let mut before_send =
+        executor.gate_next_replay_access_admission(&worker, "client::send", Stage::AfterScope);
+    let mut issued_send =
+        executor.gate_next_replay_access_admission(&worker, "client::send", Stage::AfterStart);
+    let mut before_scope = (schedule == RecoverySchedule::ClockIssuedBeforeSend).then(|| {
         executor.gate_next_replay_access_admission(&worker, "client::send", Stage::BeforeScope)
     });
     let reconstruction =
@@ -157,31 +151,24 @@ async fn http_clock_recovery(
             issued_clock.entered().await;
             before_scope.release();
         }
-        if schedule != RecoverySchedule::RetainedControl {
-            before_jump.entered().await;
-            if schedule == RecoverySchedule::ClaimBeforeCleanup {
-                before_clock.release();
-                issued_clock.entered().await;
-            }
-            before_jump.release();
-            after_jump.entered().await;
-            if schedule == RecoverySchedule::CleanupFirst {
-                before_clock.release();
-                issued_clock.entered().await;
-            }
-            after_jump.release();
-        } else {
-            // HTTP has re-entered its live effect, leaving the unrelated clock Start retained.
-            let release = requests.recv().await.expect("GET recovery starts");
+        before_send.entered().await;
+        if schedule == RecoverySchedule::ClockClaimFirst {
             before_clock.release();
             issued_clock.entered().await;
-            release.send(()).unwrap();
         }
+        before_send.release();
+        issued_send.entered().await;
+        if matches!(
+            schedule,
+            RecoverySchedule::SendClaimFirst | RecoverySchedule::RetainedControl
+        ) {
+            before_clock.release();
+            issued_clock.entered().await;
+        }
+        issued_send.release();
         issued_clock.release();
-        if schedule != RecoverySchedule::RetainedControl {
-            let release = requests.recv().await.expect("POST recovery starts");
-            release.send(()).unwrap();
-        }
+        let release = requests.recv().await.expect("HTTP recovery starts");
+        release.send(()).unwrap();
         anyhow::Ok(())
     };
     let (recovered, coordinated) = timeout(Duration::from_secs(40), async {
@@ -193,6 +180,21 @@ async fn http_clock_recovery(
     assert_eq!(count.load(Ordering::SeqCst), 2);
     executor.commit_oplog(&worker).await?;
     let repaired = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let dropped_regions: Vec<_> = repaired
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Revert(params) => Some(params.dropped_region.clone()),
+            _ => None,
+        })
+        .collect();
+    let repaired: Vec<_> = repaired
+        .into_iter()
+        .filter(|entry| {
+            !dropped_regions
+                .iter()
+                .any(|region| region.contains(entry.oplog_index))
+        })
+        .collect();
     let jumps: Vec<_> = repaired
         .iter()
         .filter_map(|entry| match &entry.entry {
@@ -200,42 +202,27 @@ async fn http_clock_recovery(
             _ => None,
         })
         .collect();
-    assert_eq!(
-        jumps.iter().any(|(_, region)| region.contains(clock)),
-        schedule != RecoverySchedule::RetainedControl,
-        "the destructive schedules must invalidate the recorded clock Start"
+    assert!(
+        jumps.is_empty(),
+        "call-local HTTP recovery must preserve all interleaved history: {jumps:?}"
     );
-    let orphaned_completions: Vec<_> = repaired
-        .iter()
-        .filter_map(|entry| {
-            let start = match &entry.entry {
-                PublicOplogEntry::End(params) => params.start_index,
-                PublicOplogEntry::CompletionDelivered(params) => params.start_index,
-                _ => return None,
-            };
-            jumps
-                .iter()
-                .any(|(jump_index, region)| {
-                    entry.oplog_index > *jump_index && region.contains(start)
-                })
-                .then_some((entry.oplog_index, start))
-        })
-        .collect();
+    let sends = partition_starts(&repaired, "http::client::send");
+    assert_eq!(sends.counts(), (0, 1, 0));
+    assert_eq!(
+        sends.ended,
+        partition_starts(&entries, "http::client::send").ended,
+        "recovery completes the original send Start in place"
+    );
     let retained_clock = repaired.iter().find_map(|entry| match &entry.entry {
-        PublicOplogEntry::Start(start)
-            if start.function_name == "clocks::monotonic-clock::now"
-                && !jumps
-                    .iter()
-                    .any(|(_, region)| region.contains(entry.oplog_index)) =>
-        {
+        PublicOplogEntry::Start(start) if start.function_name == "clocks::monotonic-clock::now" => {
             Some(entry.oplog_index)
         }
         _ => None,
     });
     drop(before_clock);
     drop(issued_clock);
-    drop(before_jump);
-    drop(after_jump);
+    drop(before_send);
+    drop(issued_send);
     drop(before_scope);
     drop(executor);
 
@@ -247,22 +234,8 @@ async fn http_clock_recovery(
     )
     .await;
     server.abort();
-    assert!(
-        orphaned_completions.is_empty(),
-        "{schedule:?} recorded completions under skipped Starts: {orphaned_completions:?}; second replay: {second:?}"
-    );
     let retained_clock = retained_clock.expect("a replayable clock Start survives recovery");
-    if schedule == RecoverySchedule::RetainedControl {
-        assert_eq!(
-            retained_clock, clock,
-            "ordinary replay adopts the old Start"
-        );
-    } else {
-        assert!(
-            retained_clock > clock,
-            "invalidated history needs a new Start"
-        );
-    }
+    assert_eq!(retained_clock, clock, "recovery adopts the old clock Start");
     assert!(repaired.iter().any(|entry| matches!(
         &entry.entry,
         PublicOplogEntry::End(params) if params.start_index == retained_clock
@@ -283,7 +256,7 @@ async fn http_clock_recovery(
 
 #[test]
 #[test_r::timeout("3m")]
-async fn http_clock_claim_before_jump_cleanup(
+async fn http_clock_claim_before_send_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("http_tests")] component: &PrecompiledComponent,
@@ -293,14 +266,14 @@ async fn http_clock_claim_before_jump_cleanup(
         last_unique_id,
         deps,
         component,
-        RecoverySchedule::ClaimBeforeCleanup,
+        RecoverySchedule::ClockClaimFirst,
     )
     .await
 }
 
 #[test]
 #[test_r::timeout("3m")]
-async fn http_clock_jump_cleanup_before_claim(
+async fn http_clock_send_recovery_before_claim(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("http_tests")] component: &PrecompiledComponent,
@@ -310,14 +283,14 @@ async fn http_clock_jump_cleanup_before_claim(
         last_unique_id,
         deps,
         component,
-        RecoverySchedule::CleanupFirst,
+        RecoverySchedule::SendClaimFirst,
     )
     .await
 }
 
 #[test]
 #[test_r::timeout("3m")]
-async fn http_clock_issued_before_jump_recovery(
+async fn http_clock_issued_before_send_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("http_tests")] component: &PrecompiledComponent,
@@ -327,7 +300,7 @@ async fn http_clock_issued_before_jump_recovery(
         last_unique_id,
         deps,
         component,
-        RecoverySchedule::AlreadyIssued,
+        RecoverySchedule::ClockIssuedBeforeSend,
     )
     .await
 }

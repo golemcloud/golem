@@ -159,7 +159,7 @@ impl ShardService for ShardServiceDefault {
                     "ShardService.assign_shards"
                 );
                 let outcome = shard_assignment.set_shards(number_of_shards, shard_epochs, revision);
-                record_delivery(ShardDelivery::Assign, &outcome, shard_assignment.len());
+                record_delivery(ShardDelivery::Assign, &outcome, shard_assignment);
                 Ok(outcome)
             }
             None => Err(sharding_not_ready_error()),
@@ -175,14 +175,18 @@ impl ShardService for ShardServiceDefault {
 
     fn check_admission(&self, agent_id: &AgentId) -> Result<(), WorkerExecutorError> {
         let now = Instant::now();
-        self.with_read_shard_assignment(|shard_assignment: &ShardAssignment| {
-            if shard_assignment.lease_is_live(now) {
-                shard_assignment.check_worker(agent_id)
-            } else {
-                Err(shard_lease_expired_error())
-            }
-        })
-        .and_then(identity)
+        let guard = self.shard_assignment.read().unwrap();
+        let Some(shard_assignment) = guard.as_ref() else {
+            record_shard_admission_refusal(ShardAdmissionRefusal::NotRegistered);
+            return Err(sharding_not_ready_error());
+        };
+        if !shard_assignment.lease_is_live(now) {
+            record_shard_admission_refusal(ShardAdmissionRefusal::LeaseLapsed);
+            return Err(shard_lease_expired_error());
+        }
+        shard_assignment
+            .check_worker(agent_id)
+            .inspect_err(|_| record_shard_admission_refusal(ShardAdmissionRefusal::NotOwned))
     }
 
     fn current_assignment(&self) -> Result<ShardAssignment, WorkerExecutorError> {
@@ -224,7 +228,7 @@ impl ShardService for ShardServiceDefault {
                     shard_assignment.set_shards(number_of_shards, shard_epochs, revision)
                 }
             };
-            record_delivery(ShardDelivery::Register, &outcome, shard_assignment.len());
+            record_delivery(ShardDelivery::Register, &outcome, shard_assignment);
             outcome
         })
     }
@@ -243,14 +247,14 @@ impl ShardService for ShardServiceDefault {
             let set_changed = shard_assignment
                 .as_ref()
                 .is_none_or(|current| current.shard_epochs != *shard_epochs);
-            *shard_assignment = Some(ShardAssignment {
+            let installed = shard_assignment.insert(ShardAssignment {
                 number_of_shards,
                 shard_epochs: shard_epochs.clone(),
                 expires_at: None,
                 revision: None,
             });
             let outcome = ShardDeliveryOutcome::Applied { set_changed };
-            record_delivery(ShardDelivery::Register, &outcome, shard_epochs.len());
+            record_delivery(ShardDelivery::Register, &outcome, installed);
             outcome
         })
     }
@@ -269,7 +273,7 @@ impl ShardService for ShardServiceDefault {
                     "ShardService.revoke_shards"
                 );
                 let outcome = shard_assignment.revoke_shards(shard_ids, revision);
-                record_delivery(ShardDelivery::Revoke, &outcome, shard_assignment.len());
+                record_delivery(ShardDelivery::Revoke, &outcome, shard_assignment);
                 Ok(outcome)
             }
             None => Err(sharding_not_ready_error()),
@@ -292,7 +296,7 @@ impl ShardService for ShardServiceDefault {
                 );
                 let outcome =
                     shard_assignment.adopt_grant(None, shard_epochs, expires_at, revision);
-                record_delivery(ShardDelivery::Renewal, &outcome, shard_assignment.len());
+                record_delivery(ShardDelivery::Renewal, &outcome, shard_assignment);
                 Ok(outcome)
             }
             None => Err(sharding_not_ready_error()),
@@ -310,6 +314,7 @@ impl ShardService for ShardServiceDefault {
                 // Lapsed as of now, not "never expires".
                 shard_assignment.clear(now);
                 record_assigned_shard_count(0);
+                record_shard_lease_expiry(now);
             }
         })
     }
@@ -319,14 +324,21 @@ impl ShardService for ShardServiceDefault {
     }
 }
 
-/// Records what every delivery updates: the resulting shard count, and, when the delivery was
-/// dropped - older than the last applied, or pushed by a manager this executor does not follow -
-/// the drop itself.
+/// Records what every delivery updates: the resulting shard count, the lease expiry when the
+/// lease expires, and, when the delivery was dropped - older than the last applied, or pushed by a
+/// manager this executor does not follow - the drop itself.
 ///
 /// One function rather than a line per delivery, so a delivery added later cannot record the
-/// count and silently forget the staleness.
-fn record_delivery(delivery: ShardDelivery, outcome: &ShardDeliveryOutcome, assigned: usize) {
-    record_assigned_shard_count(assigned);
+/// count and silently forget the staleness or the expiry.
+fn record_delivery(
+    delivery: ShardDelivery,
+    outcome: &ShardDeliveryOutcome,
+    shard_assignment: &ShardAssignment,
+) {
+    record_assigned_shard_count(shard_assignment.len());
+    if let Some(expires_at) = shard_assignment.expires_at {
+        record_shard_lease_expiry(expires_at);
+    }
     if matches!(outcome, ShardDeliveryOutcome::Stale { .. }) {
         record_stale_shard_delivery(delivery);
     }

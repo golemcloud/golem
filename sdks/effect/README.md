@@ -557,7 +557,8 @@ const program = Effect.scoped(
 )
 ```
 
-Scope closure cancels the invocation and releases owned output streams. Tool failures retain their
+Scope closure detaches result observation and releases owned output streams without cancelling the
+invocation. Run `invocation.cancel` explicitly to cancel accepted work. Tool failures retain their
 declared payloads separately from RPC failures, and decoding validates the exact schema graph.
 
 For an external Effect application, request an external bridge in the manifest and run
@@ -603,8 +604,10 @@ const result = yield * echo({ message: "hello" })
 ```
 
 Use `Tool.err(name, value)` for a declared tool error and `Tool.ok(value)` where an explicit success
-carrier is needed. Tool clients cancel the host future and close owned streams when their scope
-ends.
+carrier is needed. After success or a declared error, implicit output completion attempts both
+writers independently; a failed finish or release never replaces that structured outcome. Explicit
+unhandled output failures and cancellation still fail the invocation. Handler exceptions and defects
+trap; malformed returned results and undeclared returned errors report `invalid-result`.
 
 For a tool selected at runtime, `Reflection.getToolType(name)` and `getAllToolTypes` discover
 caller-visible registrations. The selected command exposes its canonical path, aliases, ordered
@@ -626,9 +629,16 @@ const call = Effect.gen(function* () {
 
 `invokeJson` and `invokeValue` validate inputs before opening RPC and check declared outputs.
 Canonical JSON records include every argument key; use `null` for absent optional values.
-`startJson` and `startValue` expose scoped stdout, stderr, result, concurrent collection, and
-cancellation for pending calls. Use them when either output is required and drain both outputs
-concurrently. `Reflection.DynamicToolClient` accepts a
+`startJson` and `startValue` expose scoped stdout, stderr, result, concurrent collection, cancellation,
+and `detach`. Generated streaming clients expose the same operations. The result is single-use:
+concurrent or repeated observation fails without opening another host get. `detach` stops result
+delivery and releases unclaimed capabilities, including a result arriving after detach. Physical
+observer disposal waits for an active host get to settle; cancel after physical disposal is a no-op.
+Neither detach nor closing one output cancels the invocation or its sibling output. Closing an
+output is permanent; there is no resumable pending-read guarantee. Whole-call interruption of typed
+clients, reflected `invoke*`, or generated `.collect` still cancels the invocation.
+Use started calls when either output is required and drain both outputs concurrently.
+`Reflection.DynamicToolClient` accepts a
 caller-packed value when the deployed schema is unavailable and does not infer validation rules.
 Reflected failures are typed Effect errors, including `ToolReflectionError` for malformed output.
 

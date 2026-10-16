@@ -1099,7 +1099,7 @@ func (d *definitions) invokeCommand(
 	stdin *byteReader, outs hostOutputs, principal golem.Principal,
 ) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 	fail := witTypes.Err[toolCommon.InvocationResult, types.ToolError]
-	defer stdin.close()
+	defer stdin.closeAfterHandler()
 	n := e.root.find(commandPath)
 	if n == nil || n.body == nil {
 		return fail(types.MakeToolErrorInvalidCommandPath(slices.Clone(commandPath)))
@@ -1126,7 +1126,7 @@ func (d *definitions) invokeCommand(
 	out, err := runWithOutputs(ce.label(), []*Output{stdout, stderr},
 		func() (reflect.Value, error) {
 			out, err := ce.invoke(ctx, args)
-			if stdin != nil && stdin.emptyChunk {
+			if stdin != nil && stdin.hasEmptyChunk() {
 				return out, &emptyChunkError{stream: "stdin"}
 			}
 			return out, err
@@ -1134,7 +1134,7 @@ func (d *definitions) invokeCommand(
 	if err != nil {
 		return fail(d.handlerError(ce, err))
 	}
-	return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](d.encodeResult(ce, out))
+	return d.encodeResult(ce, out)
 }
 
 // hostOutputs are the writers the host supplied for an invocation's standard
@@ -1193,7 +1193,16 @@ func (ce *commandEntry) decodeArgs(
 }
 
 // encodeResult packages a command's result as a self-contained typed value.
-func (d *definitions) encodeResult(ce *commandEntry, out reflect.Value) toolCommon.InvocationResult {
+func (d *definitions) encodeResult(ce *commandEntry, out reflect.Value) (result witTypes.Result[toolCommon.InvocationResult, types.ToolError]) {
+	defer func() {
+		if r := recover(); r != nil {
+			if e, ok := r.(*engine.EncodeError); ok {
+				result = witTypes.Err[toolCommon.InvocationResult](types.MakeToolErrorInvalidResult(e.Error()))
+			} else {
+				panic(r)
+			}
+		}
+	}()
 	res := toolCommon.InvocationResult{
 		Result: witTypes.None[types.TypedSchemaValue](),
 		Stdout: witTypes.None[*witTypes.StreamReader[uint8]](),
@@ -1207,13 +1216,22 @@ func (d *definitions) encodeResult(ce *commandEntry, out reflect.Value) toolComm
 		graph.Root = root
 		res.Result = witTypes.Some(types.TypedSchemaValue{Graph: graph, Value: engine.EncodeWith(c, out)})
 	}
-	return res
+	return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](res)
 }
 
 // handlerError turns what a handler failed with into the wire error: a
 // declared case of the command, a failure of a tool it called passed through
 // as [passThroughToolError] passes it, or an invalid result.
-func (d *definitions) handlerError(ce *commandEntry, err error) types.ToolError {
+func (d *definitions) handlerError(ce *commandEntry, err error) (result types.ToolError) {
+	defer func() {
+		if r := recover(); r != nil {
+			if e, ok := r.(*engine.EncodeError); ok {
+				result = types.MakeToolErrorInvalidResult(e.Error())
+			} else {
+				panic(r)
+			}
+		}
+	}()
 	var raised *RaisedError
 	if errors.As(err, &raised) {
 		return d.declaredToolError(ce, raised)
@@ -1232,11 +1250,18 @@ func (d *definitions) handlerError(ce *commandEntry, err error) types.ToolError 
 // rejection built with [InvalidInput] or [ConstraintViolation] keeps its kind;
 // a failure of the call itself is mapped as the other SDKs map it — denial,
 // cancellation and exhaustion become constraint violations, protocol and
-// internal failures an invalid result; anything else is an invalid result.
+// internal failures an invalid result. Unclassified errors panic.
 func passThroughToolError(err error) types.ToolError {
+	var raised *RaisedError
+	if errors.As(err, &raised) {
+		if raised == nil || raised.info == nil {
+			return types.MakeToolErrorInvalidResult("malformed RaisedError")
+		}
+		return types.MakeToolErrorInvalidResult(fmt.Sprintf("undeclared error %q", raised.info.name))
+	}
 	var call *CallError
 	if !errors.As(err, &call) {
-		return types.MakeToolErrorInvalidResult(err.Error())
+		panic(err)
 	}
 	if call.wire != nil {
 		return sendableToolError(*call.wire)
@@ -1289,60 +1314,59 @@ func sendOnce(v types.TypedSchemaValue) types.TypedSchemaValue {
 	return sent
 }
 
-// runWithOutputs calls a handler, recovering a panic rather than letting it
-// kill the component, and selects each output stream's terminal: finished when
-// the handler succeeds or fails with one of its declared errors, failed when it
-// returns any other error or panics. The wire accepts exactly one terminal and
-// treats a dropped writer as abandoned, so choosing one here keeps a failing
-// handler from looking like an abandoned transfer. Every output gets its
-// terminal even when finishing an earlier one failed. A failure to finish does
-// not change the result, as in the other SDKs: it usually means the caller
-// stopped reading the output, which is the caller's choice.
+// runWithOutputs finishes each output independently for returned outcomes,
+// including invalid results. A RaisedError panic is a named outcome; an ordinary
+// panic fails outputs best effort and escapes unchanged to trap the component.
+// Implicit cleanup never changes the outcome or an explicit stream terminal.
 func runWithOutputs(label string, outputs []*Output, run func() (reflect.Value, error)) (out reflect.Value, err error) {
 	defer func() {
-		if r := recover(); r != nil {
+		r := recover()
+		if r != nil {
 			if re, ok := r.(*RaisedError); ok {
 				err = re
+				r = nil
 			} else {
 				err = fmt.Errorf("command %s panicked: %s", label, panicMessage(r))
 			}
 		}
-		failed := err != nil && !isDeclaredError(err)
 		for _, o := range outputs {
 			if o == nil {
 				continue
 			}
-			if failed {
-				o.fail(OutputFailed(err.Error()))
-			} else {
-				_ = o.finish()
-			}
+			func() {
+				// Implicit cleanup is best effort, including host panics. Each
+				// output is independent and cannot replace the handler outcome.
+				defer func() { _ = recover() }()
+				if r != nil {
+					o.fail(OutputFailed(err.Error()))
+				} else {
+					_ = o.finish()
+				}
+			}()
+		}
+		if r != nil {
+			panic(r)
 		}
 	}()
 	out, err = run()
 	if err != nil {
 		var raised *RaisedError
 		var call *CallError
-		if !errors.As(err, &raised) && !errors.As(err, &call) {
-			err = fmt.Errorf("command %s failed: %w", label, err)
+		var empty *emptyChunkError
+		if !errors.As(err, &raised) && !errors.As(err, &call) && !errors.As(err, &empty) {
+			panic(err)
 		}
 	}
 	return out, err
-}
-
-// isDeclaredError reports whether err is one of the command's declared error
-// cases, raised here or passed on from the tool beneath a middleware. Such an
-// error is an ordinary outcome, so the outputs end normally.
-func isDeclaredError(err error) bool {
-	var raised *RaisedError
-	var call *CallError
-	return errors.As(err, &raised) || errors.As(err, &call) && call.Kind == CallDeclaredError
 }
 
 // declaredToolError turns a declared error case into the wire error. Returning
 // a case the command did not list is itself a failure: the caller was handed a
 // contract that does not mention it.
 func (d *definitions) declaredToolError(ce *commandEntry, raised *RaisedError) types.ToolError {
+	if raised == nil || raised.info == nil {
+		return types.MakeToolErrorInvalidResult("malformed RaisedError")
+	}
 	if !slices.Contains(ce.spec.settings.raises, raised.info) {
 		return types.MakeToolErrorInvalidResult(fmt.Sprintf(
 			"command %s returned the undeclared error %q; list it with Raises",
@@ -1368,7 +1392,9 @@ func (d *definitions) declaredToolError(ce *commandEntry, raised *RaisedError) t
 }
 
 // panicMessage renders a recovered panic for the stream failure reason.
-func panicMessage(r any) string {
+func panicMessage(r any) (message string) {
+	message = "handler panicked"
+	defer func() { _ = recover() }()
 	if e, ok := r.(error); ok {
 		return e.Error()
 	}

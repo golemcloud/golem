@@ -25,6 +25,11 @@ let componentContext = 0
 let nextWaitableSet = 1
 let schemaValueStreamHostMode = 0
 let toolHostMode = 0
+let toolPendingGet = false
+let toolReplyNode = 0
+let toolReplyEmpty = []
+let toolNextOutput = 3001
+const toolOutputReads = new Set()
 let durableStreamHostMode = 0
 let nextDurableStreamHandle = 400
 const durableStreamResources = new Map()
@@ -346,7 +351,11 @@ const rootImports = new Proxy(
               ? 3
               : 0
         case "[stream-new-unit]":
-          return () => 0n
+          return () => (802n << 32n) | 801n
+        case "[async-lower][stream-read-unit]":
+          return () => -1
+        case "[async-lower][stream-write-unit]":
+          return () => 16
         default:
           return () => 0
       }
@@ -487,6 +496,17 @@ const importObject = {
     },
     "set-tool-host-mode"(mode) {
       toolHostMode = mode
+      toolNextOutput = 3001
+      toolOutputReads.clear()
+    },
+    "tool-result-node"(pointer, types, defs, name) {
+      toolReplyNode = pointer
+      toolReplyEmpty = [types, defs, name]
+    },
+    "settle-tool-result"() {
+      if (!toolPendingGet) throw new Error("no active tool result get")
+      toolPendingGet = false
+      return 901
     },
     "set-durable-stream-host-mode"(mode) {
       durableStreamHostMode = mode
@@ -659,6 +679,8 @@ for (const imported of WebAssembly.Module.imports(module)) {
       }
       const memory = new DataView(instance.exports.memory.buffer)
       switch (imported.name) {
+        case "[constructor]tool-rpc":
+          return 1001
         case "[static]tool-rpc.create": {
           const resultPtr = args[2]
           memory.setUint8(resultPtr, 0)
@@ -669,12 +691,22 @@ for (const imported of WebAssembly.Module.imports(module)) {
           return
         case "create-output": {
           const resultPtr = args[0]
-          memory.setInt32(resultPtr, 3001, true)
-          memory.setInt32(resultPtr + 4, 3002, true)
+          memory.setInt32(resultPtr, toolNextOutput++, true)
+          memory.setInt32(resultPtr + 4, toolNextOutput++, true)
           return
         }
-        case "[async-lower][stream-read-0]create-output":
+        case "[async-lower][stream-read-0]create-output": {
+          if (toolHostMode === 8 && !toolOutputReads.has(args[0])) {
+            toolOutputReads.add(args[0])
+            const pointer = args[1]
+            // One canonical result<list<u8>, failure> item, backed by owned bytes.
+            memory.setUint8(pointer, 0)
+            memory.setInt32(pointer + 4, toolReplyNode, true)
+            memory.setInt32(pointer + 8, 2, true)
+            return 16
+          }
           return toolHostMode === 3 ? -1 : 1
+        }
         case "[stream-cancel-read-0]create-output":
           resourceDrops["tool-output-cancel-read"]++
           return 2
@@ -688,6 +720,28 @@ for (const imported of WebAssembly.Module.imports(module)) {
           return
         case "[async-lower][method]future-invoke-result.get": {
           const resultPtr = args[1]
+          new Uint8Array(instance.exports.memory.buffer, resultPtr, 56).fill(0)
+          if (toolHostMode >= 4 && toolHostMode <= 7) {
+            const custom = toolHostMode === 5 || toolHostMode === 7
+            const payload = custom ? resultPtr + 20 : resultPtr + 8
+            if (custom) {
+              memory.setUint8(resultPtr, 1)
+              memory.setUint8(resultPtr + 4, 4)
+              memory.setUint8(resultPtr + 8, 5)
+              memory.setInt32(resultPtr + 12, toolReplyEmpty[2], true)
+            } else {
+              memory.setUint8(resultPtr + 4, 1)
+            }
+            memory.setInt32(payload, toolReplyEmpty[0], true)
+            memory.setInt32(payload + 8, toolReplyEmpty[1], true)
+            memory.setInt32(payload + 20, toolReplyNode, true)
+            memory.setInt32(payload + 24, 1, true)
+            if (toolHostMode <= 5) {
+              toolPendingGet = true
+              return (901 << 4) | 1
+            }
+            return 2
+          }
           if (toolHostMode === 1) {
             memory.setUint8(resultPtr, 1)
             memory.setUint8(resultPtr + 4, 5)
@@ -700,6 +754,7 @@ for (const imported of WebAssembly.Module.imports(module)) {
           return 2
         }
         case "[resource-drop]future-invoke-result":
+          if (toolPendingGet) throw new Error("dropped tool future with an active get borrow")
           resourceDrops["future-invoke-result"]++
           return
         default:

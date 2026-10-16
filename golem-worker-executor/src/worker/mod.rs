@@ -8109,17 +8109,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
     }
 
-    fn durable_stream_consumer_auth_ctx(&self) -> Result<AuthCtx, WorkerExecutorError> {
+    fn durable_stream_consumer_auth_ctx(&self) -> Result<Arc<AuthCtx>, WorkerExecutorError> {
         let surface = crate::durable_host::owner_effective_surface_from_component_metadata(
             self.current_component.load().as_ref(),
             &self.owned_agent_id,
             &self.owner_context,
         )?;
-        Ok(AuthCtx::agent_with_effective_surface(
+        Ok(Arc::new(AuthCtx::agent_with_effective_surface(
             self.initial_worker_metadata.created_by,
             self.initial_worker_metadata.created_by_email.clone(),
             surface,
-        ))
+        )))
     }
 
     fn has_durable_stream_history(&self) -> bool {

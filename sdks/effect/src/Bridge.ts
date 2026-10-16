@@ -23,6 +23,8 @@ import {
   type PermissionCardKind,
 } from "./internal/schema-model/permissionCardHandle.js"
 import { PERMISSION_CARD_INTERNAL } from "./internal/schema-model/permissionCardInternal.js"
+import { retainCapabilityAdoption } from "./internal/tool/collectionOwnership.js"
+import { discardSchemaValueTree } from "./internal/tool/discardRejectedPayload.js"
 import type { GuestSecretHandle } from "./internal/schema-model/secretHandle.js"
 import type { SchemaGraph, SchemaValue, TypedSchemaValue } from "./internal/schema-model/model.js"
 import {
@@ -414,20 +416,13 @@ export const decodeWire = <A>(
   decode: (value: SchemaValue | undefined) => A,
 ): A => {
   try {
-    return withCapabilityAdoptionTransaction((transaction) =>
-      decode(value === undefined ? undefined : schemaValueFromWit(value, transaction)),
+    return withCapabilityAdoptionTransaction(
+      (transaction) =>
+        decode(value === undefined ? undefined : schemaValueFromWit(value, transaction)),
+      value === undefined ? undefined : (rollback) => retainCapabilityAdoption(value, rollback),
     )
   } catch (error) {
-    for (const node of value?.valueNodes ?? []) {
-      if (node.tag === "stream-value" && node.val !== undefined) {
-        const stream = node.val as { [Symbol.dispose]?: () => void }
-        try {
-          stream[Symbol.dispose]?.()
-        } finally {
-          node.val = undefined as never
-        }
-      }
-    }
+    if (value) void discardSchemaValueTree(value).catch(() => {})
     throw error
   }
 }
