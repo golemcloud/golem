@@ -47,9 +47,16 @@ type obj = map[string]any
 // ToJSONSchema renders the type as a JSON Schema document. includeDraftMarker
 // adds the $schema dialect declaration, which belongs on a standalone document
 // but is usually stripped when the schema is embedded.
+//
+// A root record field the reference has a default for is not required, and
+// its property carries the default's canonical JSON under "default" when the
+// default has one.
 func (r Ref) ToJSONSchema(includeDraftMarker bool) (any, error) {
 	root, err := r.renderSchema(r.typ)
 	if err != nil {
+		return nil, err
+	}
+	if err := r.renderFieldDefaults(root); err != nil {
 		return nil, err
 	}
 	out := obj{}
@@ -67,6 +74,46 @@ func (r Ref) ToJSONSchema(includeDraftMarker bool) (any, error) {
 		out["$defs"] = defs
 	}
 	return out, nil
+}
+
+// renderFieldDefaults applies the root record's field defaults to its rendered
+// object schema.
+func (r Ref) renderFieldDefaults(root obj) error {
+	defaults := r.rootFieldDefaults()
+	if len(defaults) == 0 {
+		return nil
+	}
+	record := r.typ.Body.(RecordType)
+	props, _ := root["properties"].(obj)
+	required, _ := root["required"].([]string)
+	kept := make([]string, 0, len(required))
+	for _, name := range required {
+		if _, defaulted := defaults[name]; !defaulted {
+			kept = append(kept, name)
+		}
+	}
+	root["required"] = kept
+	for _, f := range record.Fields {
+		d, defaulted := defaults[f.Name]
+		if !defaulted {
+			continue
+		}
+		prop, _ := props[f.Name].(obj)
+		if prop == nil {
+			continue
+		}
+		rendered, err := r.At(f.Body).UnpackJSON(d)
+		if err != nil {
+			return fmt.Errorf("golem: default of field %q: %w", f.Name, err)
+		}
+		// A default with no canonical JSON form, such as a NaN float, is left
+		// unstated rather than rendered as something it is not.
+		if _, err := json.Marshal(rendered); err != nil {
+			continue
+		}
+		prop["default"] = rendered
+	}
+	return nil
 }
 
 // ToJSONSchemaBytes renders the document and marshals it.

@@ -282,7 +282,7 @@ pub fn encode_invocation_input(
   let model_value = @model.SchemaValue::Record(values)
   @model.schema_value_to_wit(model_value) catch {
     e => {
-      model_value.release_resources(@model_host.resource_drops())
+      model_value.rollback_input_resources(@model_host.resource_drops())
       raise @common.AgentError::InvalidInput(
         "failed encoding invocation input: \{repr(e)}",
       )
@@ -299,11 +299,11 @@ pub async fn encode_invocation_input_async(
   let model_value = @model.SchemaValue::Record(values)
   @model.schema_value_to_wit_async(model_value) catch {
     @async-core.Cancelled::Cancelled as error => {
-      model_value.release_resources(@model_host.resource_drops())
+      model_value.rollback_input_resources(@model_host.resource_drops())
       raise error
     }
     e => {
-      model_value.release_resources(@model_host.resource_drops())
+      model_value.rollback_input_resources(@model_host.resource_drops())
       raise @common.AgentError::InvalidInput(
         "failed encoding invocation input: \{repr(e)}",
       )

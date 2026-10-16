@@ -23,6 +23,13 @@ world agent-guest {
   import golem:secrets/types@0.1.0;
   import golem:secrets/reveal@0.1.0;
 
+  import golem:permissions/types@0.1.0;
+  import golem:permissions/inspect@0.1.0;
+  import golem:permissions/derive@0.1.0;
+  import golem:permissions/revoke@0.1.0;
+  import golem:permissions/wallet@0.1.0;
+  import golem:permissions/kernel-introspection@0.1.0;
+
   import wasi:blobstore/blobstore;
   import wasi:blobstore/container;
   import wasi:blobstore/types;

@@ -70,7 +70,7 @@ use golem_common::model::invocation_session_public::{
     PublicTypedValue,
 };
 use golem_common::model::oplog::OplogCursor;
-use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
@@ -1208,6 +1208,39 @@ impl WorkerService {
             .await?;
 
         Ok(result)
+    }
+
+    /// Reads one oplog entry in full. Oplog pages omit the entries that are too large for them;
+    /// this returns such an entry. `component_revision` is the revision that the page reported
+    /// for the omitted entry; without it, the executor scans the oplog for it.
+    pub async fn get_oplog_entry(
+        &self,
+        agent_id: &AgentId,
+        oplog_index: OplogIndex,
+        component_revision: Option<ComponentRevision>,
+        auth_ctx: AuthCtx,
+    ) -> Result<PublicOplogEntryWithIndex, WorkerServiceError> {
+        let component = self
+            .component_service
+            .get_current_by_id(agent_id.component_id)
+            .await?;
+
+        authorize_oplog_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            OplogResourcePattern::range(Some(oplog_index.into()), Some(oplog_index.into())),
+        )?;
+
+        self.worker_client
+            .get_oplog_entry(
+                agent_id,
+                oplog_index,
+                component_revision,
+                component.environment_id,
+                auth_ctx,
+            )
+            .await
     }
 
     pub async fn search_oplog(
@@ -4260,6 +4293,7 @@ mod tests {
         metadata_component_revision: Mutex<Option<ComponentRevision>>,
         deleted_agent_ids: Mutex<Vec<AgentId>>,
         fingerprint: AgentFingerprint,
+        oplog_entry_reads: Mutex<Vec<(OplogIndex, Option<ComponentRevision>)>>,
     }
 
     impl RecordingWorkerClient {
@@ -4278,6 +4312,7 @@ mod tests {
                 metadata_component_revision: Mutex::new(None),
                 deleted_agent_ids: Mutex::new(Vec::new()),
                 fingerprint: AgentFingerprint::new(),
+                oplog_entry_reads: Mutex::new(Vec::new()),
             }
         }
 
@@ -4299,6 +4334,7 @@ mod tests {
                 metadata_component_revision: Mutex::new(Some(component_revision)),
                 deleted_agent_ids: Mutex::new(Vec::new()),
                 fingerprint: AgentFingerprint::new(),
+                oplog_entry_reads: Mutex::new(Vec::new()),
             }
         }
 
@@ -4529,6 +4565,30 @@ mod tests {
                 next: None,
                 first_index_in_chunk: 0,
                 last_index: 0,
+            })
+        }
+
+        async fn get_oplog_entry(
+            &self,
+            _: &AgentId,
+            oplog_index: OplogIndex,
+            component_revision: Option<ComponentRevision>,
+            _: EnvironmentId,
+            _: AuthCtx,
+        ) -> Result<golem_common::model::oplog::PublicOplogEntryWithIndex, super::WorkerServiceError>
+        {
+            self.oplog_entry_reads
+                .lock()
+                .unwrap()
+                .push((oplog_index, component_revision));
+            Ok(golem_common::model::oplog::PublicOplogEntryWithIndex {
+                oplog_index,
+                attribution: golem_common::model::oplog::PublicOplogEntryAttribution::agent(),
+                entry: golem_common::model::oplog::PublicOplogEntry::NoOp(
+                    golem_common::model::oplog::public_oplog_entry::NoOpParams {
+                        timestamp: golem_common::model::Timestamp::now_utc(),
+                    },
+                ),
             })
         }
 
@@ -5492,6 +5552,48 @@ mod tests {
                 "file-contents",
                 "cancel-invocation",
             ]
+        );
+    }
+
+    #[test]
+    async fn oplog_entry_reads_require_permission_for_the_exact_oplog_index() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let agent_id = AgentId {
+            component_id: harness.component_id,
+            agent_id: "weather-agent()".to_string(),
+        };
+        let auth_ctx = auth_ctx_with_permissions(vec![oplog_target(
+            &agent_id,
+            OplogResourcePattern::range(Some(6), Some(6)),
+        )]);
+
+        let entry = harness
+            .worker_service
+            .get_oplog_entry(
+                &agent_id,
+                OplogIndex::from_u64(6),
+                Some(ComponentRevision::new(3).unwrap()),
+                auth_ctx.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(entry.oplog_index, OplogIndex::from_u64(6));
+
+        assert!(
+            harness
+                .worker_service
+                .get_oplog_entry(&agent_id, OplogIndex::from_u64(7), None, auth_ctx)
+                .await
+                .is_err(),
+            "the permission covers only oplog index 6"
+        );
+        assert_eq!(
+            *harness.worker_client.oplog_entry_reads.lock().unwrap(),
+            vec![(
+                OplogIndex::from_u64(6),
+                Some(ComponentRevision::new(3).unwrap())
+            )],
+            "a denied oplog entry read reached the worker client"
         );
     }
 

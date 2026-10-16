@@ -373,8 +373,18 @@ export function reflectedToolkit(
     if (reflected.stderr && selection.options.maxStderrBytes === undefined)
       throw new TypeError(`AI command '${selection.modelName}' requires maxStderrBytes`)
 
-    const optional = reflected.arguments.filter((argument) => !argument.required)
-    const optionalNames = optional.map((argument) => argument.name)
+    const inputJsonSchema = inputSchema.toJsonSchema({ includeDraftMarker: false })
+    const requiredInputs = new Set(
+      typeof inputJsonSchema === "object" &&
+        inputJsonSchema !== null &&
+        !Array.isArray(inputJsonSchema) &&
+        Array.isArray(inputJsonSchema.required)
+        ? inputJsonSchema.required.map(String)
+        : [],
+    )
+    const optional = reflected.arguments.filter(
+      (argument) => !argument.required || !requiredInputs.has(argument.name),
+    )
     const defaults = new Map(
       optional.map((argument) => {
         if (argument.defaultJson !== undefined)
@@ -384,8 +394,8 @@ export function reflectedToolkit(
       }),
     )
     const parameterSchema = reflectedParameterSchema(
-      inputSchema.toJsonSchema({ includeDraftMarker: false }),
-      optionalNames,
+      inputJsonSchema,
+      optional.map((argument) => argument.name),
       reflected.stdin?.required,
     )
     const decodeParameters = (value: Readonly<Record<string, unknown>>) =>
@@ -555,7 +565,9 @@ const reflectedParameterSchema = (
   return {
     ...object,
     properties: {
-      ...properties,
+      ...Object.fromEntries(
+        Object.entries(properties).map(([name, property]) => [name, withoutDefault(property)]),
+      ),
       ...(stdinRequired === undefined
         ? {}
         : {
@@ -572,6 +584,13 @@ const reflectedParameterSchema = (
     },
     required,
   }
+}
+
+// Model-facing parameter schemas match the typed toolkit, which declares no defaults.
+const withoutDefault = (property: JsonValue): JsonValue => {
+  if (typeof property !== "object" || property === null || Array.isArray(property)) return property
+  const { default: _default, ...rest } = property as Record<string, JsonValue>
+  return rest
 }
 
 const normalizeReflectedParameters = (
@@ -601,7 +620,11 @@ const validateReflectedParameters = (
       return parameters
     },
     catch: (cause) =>
-      cause instanceof Error ? cause : new TypeError(`invalid tool parameters: ${String(cause)}`),
+      cause instanceof Error
+        ? cause
+        : new TypeError(
+            `invalid tool parameters: ${cause instanceof GolemReflection.ToolReflectionError ? cause.message : String(cause)}`,
+          ),
   })
 
 const normalizeApproval = (

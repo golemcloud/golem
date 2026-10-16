@@ -4258,6 +4258,7 @@ dependencies = [
  "tryhard",
  "url",
  "uuid",
+ "zstd",
 ]
 
 [[package]]
@@ -4664,6 +4665,7 @@ dependencies = [
  "golem-worker-executor",
  "golem-xfs-quotad",
  "prometheus",
+ "prost",
  "regex",
  "rustls",
  "scc",

@@ -468,6 +468,7 @@ dependencies = [
  "futures-concurrency",
  "golem-rust",
  "wasi",
+ "wit-bindgen 0.59.0",
 ]
 
 [[package]]

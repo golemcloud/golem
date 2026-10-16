@@ -1,29 +1,4 @@
 ///|
-fn run_dispatch_async(body : async () -> Unit) -> Unit raise {
-  let mut callback = @async-core.with_waitableset(async fn() {
-    body()
-    @async-core.task_returned()
-  })
-  let mut steps = 0
-  while callback != 0 {
-    steps += 1
-    if steps > 1000 {
-      fail("dispatch async test did not complete")
-    }
-    if (callback & 0xf) != 1 {
-      fail("dispatch async test unexpectedly waited on a host event")
-    }
-    callback = @async-core.cb(0, 0, 0)
-  }
-}
-
-///|
-extern "wasm" fn reset_resource_drop_counts() = "golem:test" "reset-resource-drop-counts"
-
-///|
-extern "wasm" fn resource_drop_count(kind : Int) -> Int = "golem:test" "resource-drop-count"
-
-///|
 extern "wasm" fn set_schema_value_stream_host_mode(mode : Int) = "golem:test" "set-schema-value-stream-host-mode"
 
 ///|
@@ -71,10 +46,10 @@ test "parameter failure rolls back an earlier decoded stream" {
 
 ///|
 test "output encoding preserves wrap cancellation and cleanup" {
-  reset_resource_drop_counts()
+  @test_support.reset_resource_drop_counts()
   let producer_started = [false]
   let cleanup_runs = [0]
-  run_dispatch_async(async fn() {
+  @test_support.run_async(async fn() {
     set_schema_value_stream_host_mode(3)
     defer set_schema_value_stream_host_mode(0)
     let captured = @types.Secret::Secret(40)
@@ -107,15 +82,15 @@ test "output encoding preserves wrap cancellation and cleanup" {
   })
   assert_false(producer_started[0])
   assert_eq(cleanup_runs[0], 1)
-  assert_eq(resource_drop_count(0), 1)
+  assert_eq(@test_support.resource_drop_count(@test_support.SECRET_DROPS), 1)
 }
 
 ///|
 test "input encoding preserves wrap cancellation and cleanup" {
-  reset_resource_drop_counts()
+  @test_support.reset_resource_drop_counts()
   let producer_started = [false]
   let cleanup_runs = [0]
-  run_dispatch_async(async fn() {
+  @test_support.run_async(async fn() {
     set_schema_value_stream_host_mode(3)
     defer set_schema_value_stream_host_mode(0)
     let captured = @types.Secret::Secret(41)
@@ -148,5 +123,42 @@ test "input encoding preserves wrap cancellation and cleanup" {
   })
   assert_false(producer_started[0])
   assert_eq(cleanup_runs[0], 1)
-  assert_eq(resource_drop_count(0), 1)
+  assert_eq(@test_support.resource_drop_count(@test_support.SECRET_DROPS), 1)
+}
+
+///|
+test "a failed input encode keeps argument permission cards" {
+  @test_support.reset_resource_drop_counts()
+  let card_a = @card.adopt(@types.PermissionCard::PermissionCard(613))
+  let result = try? encode_invocation_input(
+    @test_support.failing_card_input(card_a, 612),
+  )
+  assert_true(result is Err(_))
+  assert_true(card_a.is_present())
+  assert_eq(
+    @test_support.resource_drop_count(@test_support.QUOTA_TOKEN_DROPS),
+    1,
+  )
+  assert_eq(
+    @test_support.resource_drop_count(@test_support.PERMISSION_CARD_DROPS),
+    0,
+  )
+  let card_b = @card.adopt(@types.PermissionCard::PermissionCard(614))
+  @test_support.run_async(async fn() {
+    let result = try? encode_invocation_input_async(
+      @test_support.failing_card_input(card_b, 615),
+    )
+    assert_true(result is Err(_))
+  })
+  assert_true(card_b.is_present())
+  assert_eq(
+    @test_support.resource_drop_count(@test_support.QUOTA_TOKEN_DROPS),
+    2,
+  )
+  assert_eq(
+    @test_support.resource_drop_count(@test_support.PERMISSION_CARD_DROPS),
+    0,
+  )
+  ignore(@card.take(card_a))
+  ignore(@card.take(card_b))
 }

@@ -79,7 +79,7 @@ This agent may run `bash`, read anything under `/workspace`, delete files direct
 
 Every card comes from an earlier one. An account starts with a **root card**. An account owner can give another account part of its authority with a **permission share**, and each environment has **default cards** for managing it. When you deploy, Golem creates an **initial card** for each agent type, which can never exceed the authority of the person deploying.
 
-At runtime, an agent can derive a narrower card from one it holds and pass it to another agent or a tool, for example read access to one folder for 30 days (written `P30D`). A derived card can only narrow its parent; it can never add permissions. Cards can expire, and revoking a card also revokes every card derived from it.
+At runtime, an agent can derive a narrower card from one it holds and pass it to another agent or a tool, for example read access to one folder for 30 days (written `P30D`). A derived card can only narrow its parent; it can never add permissions. Cards can expire, and revoking a card also revokes every card derived from it. See the [cards reference](/v1.6/develop/cards) for the guest API that every SDK provides.
 
 <ThemedImage
   lightSrc="/images/getting-started/card-derivation-light.webp"

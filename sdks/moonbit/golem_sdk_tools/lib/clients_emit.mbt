@@ -146,6 +146,34 @@ fn encode_input_async_expr(params : Array[(String, ParamType)]) -> String {
 }
 
 ///|
+/// The optional label of awaited client methods that attaches a scope card.
+const SCOPE_CARD_LABEL : String = "scope_card"
+
+///|
+/// The generated client method that sets the default scope card. An agent
+/// method with this name would produce a duplicate definition.
+const SET_DEFAULT_SCOPE_CARD : String = "set_default_scope_card"
+
+///|
+/// Renames a positional parameter named like the `scope_card` label to a name
+/// that no other parameter of the method uses. Positional parameters are not
+/// part of the call syntax, so renaming them does not affect callers.
+fn rename_scope_card_param(
+  params : Array[(String, ParamType)],
+) -> Array[(String, ParamType)] {
+  params.map(fn(p) {
+    if p.0 != SCOPE_CARD_LABEL {
+      return p
+    }
+    let mut candidate = SCOPE_CARD_LABEL + "_"
+    while params.iter().any(other => other.0 == candidate) {
+      candidate = candidate + "_"
+    }
+    (candidate, p.1)
+  })
+}
+
+///|
 /// Generates typed RPC client stubs for all agents.
 pub fn generate_client_code(
   agents : Array[AgentInfo],
@@ -161,6 +189,13 @@ pub fn generate_client_code(
   for agent in agents {
     if agent.is_http_router() {
       continue
+    }
+    for meth in agent.methods {
+      if meth.name == SET_DEFAULT_SCOPE_CARD {
+        raise AgentParseError(
+          "Cannot generate native client for agent '\{agent.name}': method name '\{SET_DEFAULT_SCOPE_CARD}' is reserved for the generated client method that sets the default scope card",
+        )
+      }
     }
     match stream_bearing_constructor_param(agent, value_types_by_name) {
       Some(param) =>
@@ -251,6 +286,11 @@ fn emit_client(
   buf.write_string(
     "pub fn \{client}::drop(self : \{client}) -> Unit {\n  self.client.drop()\n}\n\n",
   )
+  // default scope card for awaited invocations
+  buf.write_string("///|\n")
+  buf.write_string(
+    "pub fn \{client}::\{SET_DEFAULT_SCOPE_CARD}(self : \{client}, card : @permissions.ScopeCard?) -> Unit {\n  self.client.set_default_scope_card(card)\n}\n\n",
+  )
   // scoped (durable only)
   if durable {
     emit_client_scoped(buf, client, "scoped", "get", vis, [])
@@ -335,7 +375,8 @@ fn emit_client_method(
   durable : Bool,
   contains_stream : Bool,
 ) -> Unit {
-  let vis = visible_params(meth.params)
+  // The awaited method takes a `scope_card?` label.
+  let vis = rename_scope_card_param(visible_params(meth.params))
   let ctx = escape_string_lit("\{agent.name}.\{meth.name}")
   let input_expr = encode_input_expr(vis)
   let awaited_input_expr = encode_input_async_expr(vis)
@@ -357,11 +398,14 @@ fn emit_client_method(
   // awaited invoke
   buf.write_string("///|\n")
   buf.write_string(
-    "pub async fn \{client}::\{meth.name}(\n  \{self_args},\n) -> \{ret} {\n",
+    "pub async fn \{client}::\{meth.name}(\n  \{self_args},\n  \{SCOPE_CARD_LABEL}? : @permissions.ScopeCard,\n) -> \{ret} {\n",
   )
+  // A dropped scope card aborts before the input encoding moves any argument
+  // card.
+  buf.write_string("  self.client.check_scope_card(\{SCOPE_CARD_LABEL}?)\n")
   buf.write_string("  let input = \{awaited_input_expr}\n")
   buf.write_string(
-    "  let response = self.client.invoke_and_await(\"\{escape_string_lit(meth.name)}\", input)\n",
+    "  let response = self.client.invoke_and_await(\"\{escape_string_lit(meth.name)}\", input, \{SCOPE_CARD_LABEL}?)\n",
   )
   match meth.return_type {
     None =>

@@ -833,6 +833,9 @@ impl Default for AuthServiceConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerExecutorClientConfig {
     pub retries: RetryConfig,
+    /// Maximum number of oplog entry reads that hold a full entry in memory at the same time.
+    /// Further reads wait for a running read to end.
+    pub max_concurrent_oplog_entry_reads: usize,
     #[serde(flatten)]
     pub client: GrpcClientConfig,
 }
@@ -847,6 +850,7 @@ impl Default for WorkerExecutorClientConfig {
                 multiplier: 10.0,
                 max_jitter_factor: Some(0.15),
             },
+            max_concurrent_oplog_entry_reads: 4,
             client: GrpcClientConfig {
                 retries_on_unavailable: RetryConfig {
                     max_attempts: 0, // we want to invalidate the routing table asap
@@ -862,12 +866,31 @@ impl Default for WorkerExecutorClientConfig {
     }
 }
 
+impl WorkerExecutorClientConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.max_concurrent_oplog_entry_reads == 0
+            || self.max_concurrent_oplog_entry_reads > tokio::sync::Semaphore::MAX_PERMITS
+        {
+            return Err(format!(
+                "worker_executor.max_concurrent_oplog_entry_reads must be between 1 and {}",
+                tokio::sync::Semaphore::MAX_PERMITS
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl SafeDisplay for WorkerExecutorClientConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
 
         let _ = writeln!(&mut result, "retries:");
         let _ = writeln!(result, "{}", self.retries.to_safe_string_indented());
+        let _ = writeln!(
+            &mut result,
+            "max concurrent oplog entry reads: {}",
+            self.max_concurrent_oplog_entry_reads
+        );
 
         let _ = writeln!(&mut result, "{}", self.client.to_safe_string());
 

@@ -1,0 +1,13 @@
+error[E0277]: the trait bound `golem_rust::permissions::CardId: From<golem_rust::Uuid>` is not satisfied
+ --> tests/ui/fail/permission_card_id_not_constructible.rs:5:10
+  |
+5 |     uuid.into()
+  |          ^^^^ the trait `From<golem_rust::Uuid>` is not implemented for `golem_rust::permissions::CardId`
+  |
+  = note: required for `golem_rust::Uuid` to implement `Into<golem_rust::permissions::CardId>`
+
+error[E0616]: field `uuid` of struct `golem_rust::permissions::CardId` is private
+ --> tests/ui/fail/permission_card_id_not_constructible.rs:9:8
+  |
+9 |     id.uuid
+  |        ^^^^ private field

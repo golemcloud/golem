@@ -988,6 +988,7 @@ fn rpc_durable_request_captures_scope_card_and_logical_streaming_origin_determin
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
+        expires_at: None,
     };
     let request = HostRequestGolemRpcInvoke {
         remote_agent_id: AgentId {

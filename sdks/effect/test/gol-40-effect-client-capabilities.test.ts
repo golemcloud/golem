@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises"
 import { describe, expect, it } from "vitest"
 import { Effect, Layer, Schema } from "effect"
 import type * as CoreTypes from "golem:core/types@2.0.0"
@@ -86,11 +85,5 @@ describe("GOL-40 Effect client capability acceptance", () => {
       "reserve:matrix-capacity:1",
       "commit:1",
     ])
-  })
-
-  it("CLIENT-PERMISSION does not add wallet or derive authority imports", async () => {
-    const world = await readFile(new URL("../wit/main.wit", import.meta.url), "utf8")
-    expect(world).not.toContain("import golem:permissions/wallet@0.1.0;")
-    expect(world).not.toContain("import golem:permissions/derive@0.1.0;")
   })
 })
