@@ -775,6 +775,7 @@ message OmittedOplogEntry {
   google.protobuf.Timestamp timestamp = 3;
   string entry_type = 4;
   uint64 size = 5;
+  uint64 component_revision = 6;
 }
 
 message OplogPageEntry {

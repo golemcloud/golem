@@ -1078,7 +1078,9 @@ paths:
       summary: Get one oplog entry of a worker
       description: |-
         Oplog pages omit entries whose encoded form is larger than a server limit, and describe
-        them by their type, timestamp and size. This endpoint returns such an entry in full.
+        them by their type, timestamp, size and component revision. This endpoint returns such an
+        entry in full. Pass the component revision of the description to save the server from
+        scanning the oplog for it.
       parameters:
       - name: component_id
         schema:
@@ -1101,6 +1103,14 @@ paths:
           format: uint64
         in: path
         required: true
+        deprecated: false
+        explode: true
+      - name: component_revision
+        schema:
+          type: integer
+          format: uint64
+        in: query
+        required: false
         deprecated: false
         explode: true
       responses:
@@ -5653,6 +5663,7 @@ components:
       - timestamp
       - entryType
       - size
+      - componentRevision
       properties:
         oplogIndex:
           type: integer
@@ -5669,6 +5680,12 @@ components:
           type: integer
           format: uint64
           description: The size of the encoded entry in bytes.
+        componentRevision:
+          type: integer
+          format: uint64
+          description: |-
+            The component revision the server decodes the entry with. Passing it to the oplog
+            entry endpoint saves the server from scanning the oplog for it.
     OplogCursor:
       type: object
       title: OplogCursor

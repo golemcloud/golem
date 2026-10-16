@@ -373,6 +373,9 @@ declare_structs! {
         pub entry_type: String,
         /// The size of the encoded entry in bytes.
         pub size: u64,
+        /// The component revision the server decodes the entry with. Passing it to the oplog
+        /// entry endpoint saves the server from scanning the oplog for it.
+        pub component_revision: ComponentRevision,
     }
 
     pub struct PublicAgentEntity {

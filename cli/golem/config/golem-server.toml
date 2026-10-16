@@ -466,6 +466,7 @@ fuel_to_borrow = 10000
 invocation_result_broadcast_capacity = 100000
 live_stream_event_broadcast_capacity = 32
 max_active_agents = 1024
+max_concurrent_oplog_entry_reads = 4
 max_concurrent_streams = 1024
 max_inline_oplog_entry_size = 1048576
 max_invocation_context_stack_depth = 1024
@@ -812,6 +813,7 @@ connect_timeout = "10s"
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
+max_concurrent_oplog_entry_reads = 4
 max_message_size = 33554432
 
 [worker_service.worker_executor.retries]
@@ -1376,6 +1378,7 @@ type = "Disabled"
 # invocation_result_broadcast_capacity = 100000
 # live_stream_event_broadcast_capacity = 32
 # max_active_agents = 1024
+# max_concurrent_oplog_entry_reads = 4
 # max_concurrent_streams = 1024
 # max_inline_oplog_entry_size = 1048576
 # max_invocation_context_stack_depth = 1024
@@ -1749,6 +1752,7 @@ type = "Disabled"
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_concurrent_oplog_entry_reads = 4
 # max_message_size = 33554432
 #
 # [worker_service.worker_executor.retries]

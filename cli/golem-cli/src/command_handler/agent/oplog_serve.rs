@@ -65,7 +65,12 @@ pub async fn oplog_page_entry_view(
     let clients = ctx.golem_clients().await?;
     match clients
         .worker
-        .get_oplog_entry(component_id, agent_name, omitted.oplog_index.as_u64())
+        .get_oplog_entry(
+            component_id,
+            agent_name,
+            omitted.oplog_index.as_u64(),
+            Some(omitted.component_revision.into()),
+        )
         .await
         .map_service_error()
     {

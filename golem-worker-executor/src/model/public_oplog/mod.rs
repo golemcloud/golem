@@ -111,8 +111,12 @@ trait ChunkBuilder {
     type Entry;
 
     /// Returns the form of `entry` that the chunk holds, or `None` if the entry does not fit in
-    /// the chunk.
-    fn admit(&mut self, entry: PublicOplogEntryWithIndex) -> Result<Option<Self::Entry>, String>;
+    /// the chunk. `component_revision` is the revision that `entry` was decoded with.
+    fn admit(
+        &mut self,
+        entry: PublicOplogEntryWithIndex,
+        component_revision: ComponentRevision,
+    ) -> Result<Option<Self::Entry>, String>;
 }
 
 /// The chunk of a reader in the executor process, which gets every entry in full.
@@ -121,7 +125,11 @@ struct InProcessChunk;
 impl ChunkBuilder for InProcessChunk {
     type Entry = PublicOplogEntryWithIndex;
 
-    fn admit(&mut self, entry: PublicOplogEntryWithIndex) -> Result<Option<Self::Entry>, String> {
+    fn admit(
+        &mut self,
+        entry: PublicOplogEntryWithIndex,
+        _component_revision: ComponentRevision,
+    ) -> Result<Option<Self::Entry>, String> {
         Ok(Some(entry))
     }
 }
@@ -149,13 +157,18 @@ impl ChunkBuilder for RemotePage {
     /// Replaces an entry that is larger than `max_entry_bytes` with an `OmittedOplogEntry`. The
     /// first entry of a page always fits in the byte budget, so that a reader makes progress past
     /// an entry that is larger than the budget.
-    fn admit(&mut self, entry: PublicOplogEntryWithIndex) -> Result<Option<Self::Entry>, String> {
+    fn admit(
+        &mut self,
+        entry: PublicOplogEntryWithIndex,
+        component_revision: ComponentRevision,
+    ) -> Result<Option<Self::Entry>, String> {
         let omitted = OmittedOplogEntry {
             oplog_index: entry.oplog_index,
             attribution: entry.attribution.clone(),
             timestamp: entry.entry.timestamp(),
             entry_type: entry.entry.entry_type().to_string(),
             size: 0,
+            component_revision,
         };
         let full: golem_api_grpc::proto::golem::worker::OplogEntryWithIndex = entry.try_into()?;
         let full_size = prost::Message::encoded_len(&full);
@@ -710,7 +723,9 @@ pub async fn get_public_oplog_page(
     Ok(chunk)
 }
 
-/// Reads one oplog entry in full.
+/// Reads one oplog entry in full. `component_revision` is the revision to decode the entry with,
+/// as an oplog page reports it for an omitted entry; without it, the oplog is scanned up to the
+/// entry to find the revision.
 pub async fn get_public_oplog_entry(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
@@ -718,6 +733,7 @@ pub async fn get_public_oplog_entry(
     agent_mode: AgentMode,
     agent_type_name: Option<&AgentTypeName>,
     oplog_index: OplogIndex,
+    component_revision: Option<ComponentRevision>,
 ) -> Result<PublicOplogEntryWithIndex, WorkerExecutorError> {
     let last_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
@@ -727,13 +743,18 @@ pub async fn get_public_oplog_entry(
             "agent {owned_agent_id} has no oplog entry at index {oplog_index}"
         )));
     }
-    let component_revision = find_component_revision_at(
-        oplog_service.clone(),
-        owned_agent_id,
-        agent_mode,
-        oplog_index,
-    )
-    .await?;
+    let component_revision = match component_revision {
+        Some(component_revision) => component_revision,
+        None => {
+            find_component_revision_at(
+                oplog_service.clone(),
+                owned_agent_id,
+                agent_mode,
+                oplog_index,
+            )
+            .await?
+        }
+    };
     let chunk = get_public_oplog_chunk(
         components,
         oplog_service,
@@ -825,7 +846,7 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
                 attribution,
                 entry,
             };
-            match builder.admit(entry)? {
+            match builder.admit(entry, entry_component_revision)? {
                 Some(chunk_entry) => entries.push(chunk_entry),
                 None => {
                     page_full = true;

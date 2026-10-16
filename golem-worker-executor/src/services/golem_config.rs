@@ -439,6 +439,12 @@ impl GolemConfig {
         self.mcp_transport.validate().map_err(anyhow::Error::msg)?;
         self.durable_stream.validate()?;
         self.invocation_results.validate()?;
+        anyhow::ensure!(
+            (1..=tokio::sync::Semaphore::MAX_PERMITS)
+                .contains(&self.limits.max_concurrent_oplog_entry_reads),
+            "limits.max_concurrent_oplog_entry_reads must be between 1 and {}",
+            tokio::sync::Semaphore::MAX_PERMITS
+        );
         if let Some(advertised_ip) = self.grpc.advertised_ip {
             let advertised_ip = canonical_advertised_ip(advertised_ip)
                 .map_err(|error| anyhow::anyhow!("grpc.advertised_ip: {error}"))?;
@@ -477,6 +483,9 @@ pub struct Limits {
     /// Oplog query pages omit entries whose encoded size is larger than this. The oplog entry
     /// read returns them in full.
     pub max_inline_oplog_entry_size: usize,
+    /// Maximum number of oplog entry reads that hold a full entry in memory at the same time.
+    /// Further reads wait for a running read to end.
+    pub max_concurrent_oplog_entry_reads: usize,
     pub max_invocation_context_stack_depth: usize,
     /// Maximum accepted payload bytes in each completion-buffered tool attachment direction.
     pub max_tool_attachment_bytes: usize,
@@ -546,6 +555,11 @@ impl SafeDisplay for Limits {
             &mut result,
             "max inline oplog entry size: {}",
             self.max_inline_oplog_entry_size
+        );
+        let _ = writeln!(
+            &mut result,
+            "max concurrent oplog entry reads: {}",
+            self.max_concurrent_oplog_entry_reads
         );
         let _ = writeln!(
             &mut result,
@@ -2019,6 +2033,7 @@ impl Default for Limits {
             max_oplog_query_pages_size: 100,
             max_oplog_query_page_bytes: 8 * 1024 * 1024,
             max_inline_oplog_entry_size: 1024 * 1024,
+            max_concurrent_oplog_entry_reads: 4,
             max_invocation_context_stack_depth: 1024,
             max_tool_attachment_bytes: 16 * 1024 * 1024,
             max_invocation_duration: None,

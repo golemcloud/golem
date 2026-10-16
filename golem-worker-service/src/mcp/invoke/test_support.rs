@@ -519,6 +519,7 @@ impl WorkerClient for RecordingWorkerClient {
         &self,
         _: &AgentId,
         _: OplogIndex,
+        _: Option<golem_common::model::component::ComponentRevision>,
         _: EnvironmentId,
         _: AuthCtx,
     ) -> Result<

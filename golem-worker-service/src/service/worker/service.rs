@@ -1211,11 +1211,13 @@ impl WorkerService {
     }
 
     /// Reads one oplog entry in full. Oplog pages omit the entries that are too large for them;
-    /// this returns such an entry.
+    /// this returns such an entry. `component_revision` is the revision that the page reported
+    /// for the omitted entry; without it, the executor scans the oplog for it.
     pub async fn get_oplog_entry(
         &self,
         agent_id: &AgentId,
         oplog_index: OplogIndex,
+        component_revision: Option<ComponentRevision>,
         auth_ctx: AuthCtx,
     ) -> Result<PublicOplogEntryWithIndex, WorkerServiceError> {
         let component = self
@@ -1231,7 +1233,13 @@ impl WorkerService {
         )?;
 
         self.worker_client
-            .get_oplog_entry(agent_id, oplog_index, component.environment_id, auth_ctx)
+            .get_oplog_entry(
+                agent_id,
+                oplog_index,
+                component_revision,
+                component.environment_id,
+                auth_ctx,
+            )
             .await
     }
 
@@ -4285,7 +4293,7 @@ mod tests {
         metadata_component_revision: Mutex<Option<ComponentRevision>>,
         deleted_agent_ids: Mutex<Vec<AgentId>>,
         fingerprint: AgentFingerprint,
-        oplog_entry_reads: Mutex<Vec<OplogIndex>>,
+        oplog_entry_reads: Mutex<Vec<(OplogIndex, Option<ComponentRevision>)>>,
     }
 
     impl RecordingWorkerClient {
@@ -4564,11 +4572,15 @@ mod tests {
             &self,
             _: &AgentId,
             oplog_index: OplogIndex,
+            component_revision: Option<ComponentRevision>,
             _: EnvironmentId,
             _: AuthCtx,
         ) -> Result<golem_common::model::oplog::PublicOplogEntryWithIndex, super::WorkerServiceError>
         {
-            self.oplog_entry_reads.lock().unwrap().push(oplog_index);
+            self.oplog_entry_reads
+                .lock()
+                .unwrap()
+                .push((oplog_index, component_revision));
             Ok(golem_common::model::oplog::PublicOplogEntryWithIndex {
                 oplog_index,
                 attribution: golem_common::model::oplog::PublicOplogEntryAttribution::agent(),
@@ -5557,7 +5569,12 @@ mod tests {
 
         let entry = harness
             .worker_service
-            .get_oplog_entry(&agent_id, OplogIndex::from_u64(6), auth_ctx.clone())
+            .get_oplog_entry(
+                &agent_id,
+                OplogIndex::from_u64(6),
+                Some(ComponentRevision::new(3).unwrap()),
+                auth_ctx.clone(),
+            )
             .await
             .unwrap();
         assert_eq!(entry.oplog_index, OplogIndex::from_u64(6));
@@ -5565,14 +5582,17 @@ mod tests {
         assert!(
             harness
                 .worker_service
-                .get_oplog_entry(&agent_id, OplogIndex::from_u64(7), auth_ctx)
+                .get_oplog_entry(&agent_id, OplogIndex::from_u64(7), None, auth_ctx)
                 .await
                 .is_err(),
             "the permission covers only oplog index 6"
         );
         assert_eq!(
             *harness.worker_client.oplog_entry_reads.lock().unwrap(),
-            vec![OplogIndex::from_u64(6)],
+            vec![(
+                OplogIndex::from_u64(6),
+                Some(ComponentRevision::new(3).unwrap())
+            )],
             "a denied oplog entry read reached the worker client"
         );
     }

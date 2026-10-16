@@ -1200,6 +1200,20 @@ async fn oplog_returns_host_call_entries_larger_than_the_page_entry_limit(
     assert_eq!(omitted.oplog_index, random_bytes_end.oplog_index);
     assert_eq!(omitted.entry_type, "End");
     assert_eq!(omitted.size, encoded_size as u64);
+    assert_eq!(omitted.component_revision, component.revision);
+
+    // A read with the revision of the page and a read that scans the oplog for it agree.
+    for component_revision in [Some(omitted.component_revision), None] {
+        let entry = executor
+            .get_oplog_entry(
+                &worker_id,
+                component.environment_id,
+                omitted.oplog_index,
+                component_revision,
+            )
+            .await?;
+        assert_eq!(&entry, random_bytes_end);
+    }
 
     drop(executor);
     Ok(())

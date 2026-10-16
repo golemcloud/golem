@@ -1247,6 +1247,7 @@ async fn full_oplog_entries(
                         &agent_id.component_id.0,
                         &agent_id.agent_id,
                         omitted.oplog_index.as_u64(),
+                        Some(omitted.component_revision.into()),
                     )
                     .await
                     .map_err(|e| {

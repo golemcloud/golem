@@ -24,7 +24,9 @@ use golem_common::base_model::api;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::card::StoredCard;
-use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
+use golem_common::model::component::{
+    CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
+};
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::{PublicOplogEntryWithIndex, PublicOplogPageEntry};
@@ -670,7 +672,9 @@ impl WorkerApi {
     /// Get one oplog entry of a worker
     ///
     /// Oplog pages omit entries whose encoded form is larger than a server limit, and describe
-    /// them by their type, timestamp and size. This endpoint returns such an entry in full.
+    /// them by their type, timestamp, size and component revision. This endpoint returns such an
+    /// entry in full. Pass the component revision of the description to save the server from
+    /// scanning the oplog for it.
     #[oai(
         path = "/:component_id/workers/:agent_name/oplog/:oplog_index",
         method = "get",
@@ -681,6 +685,7 @@ impl WorkerApi {
         component_id: Path<ComponentId>,
         agent_name: Path<String>,
         oplog_index: Path<u64>,
+        component_revision: Query<Option<ComponentRevision>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<PublicOplogEntryWithIndex>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
@@ -696,7 +701,12 @@ impl WorkerApi {
         );
 
         let response = self
-            .get_oplog_entry_internal(agent_id, OplogIndex::from_u64(oplog_index.0), auth)
+            .get_oplog_entry_internal(
+                agent_id,
+                OplogIndex::from_u64(oplog_index.0),
+                component_revision.0,
+                auth,
+            )
             .instrument(record.span.clone())
             .await;
 
@@ -707,11 +717,12 @@ impl WorkerApi {
         &self,
         agent_id: AgentId,
         oplog_index: OplogIndex,
+        component_revision: Option<ComponentRevision>,
         auth: AuthCtx,
     ) -> Result<Json<PublicOplogEntryWithIndex>> {
         let mut entry = self
             .worker_service
-            .get_oplog_entry(&agent_id, oplog_index, auth)
+            .get_oplog_entry(&agent_id, oplog_index, component_revision, auth)
             .await?;
         entry.entry.redact_host_managed_values_for_external();
         Ok(Json(entry))

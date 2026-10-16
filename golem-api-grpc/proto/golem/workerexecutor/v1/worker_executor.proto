@@ -336,6 +336,9 @@ message GetOplogEntryRequest {
   golem.common.EnvironmentId environment_id = 2;
   golem.auth.AuthCtx auth_ctx = 3;
   uint64 oplog_index = 4;
+  // The component revision to decode the entry with. Without it, the executor scans the oplog
+  // up to the entry to find it.
+  optional uint64 component_revision = 5;
 }
 
 message GetOplogEntryResponse {

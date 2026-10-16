@@ -3543,6 +3543,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogPageEntry> for PublicOpl
                 timestamp: omitted.timestamp.ok_or("Missing field: timestamp")?.into(),
                 entry_type: omitted.entry_type,
                 size: omitted.size,
+                component_revision: omitted.component_revision.try_into()?,
             })),
         }
     }
@@ -3563,6 +3564,7 @@ impl TryFrom<PublicOplogPageEntry> for golem_api_grpc::proto::golem::worker::Opl
                     timestamp: Some(omitted.timestamp.into()),
                     entry_type: omitted.entry_type,
                     size: omitted.size,
+                    component_revision: omitted.component_revision.into(),
                 })
             }
         };

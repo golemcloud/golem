@@ -113,6 +113,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};
 use tracing::info_span;
@@ -132,6 +133,8 @@ pub struct WorkerExecutorImpl<
     /// Same arrangement for the assignment-changed hook: the shard manager service holds a Weak
     /// to it (see `GrpcShardManagerService::assignment_changed_hook`); this is the strong one.
     _assignment_changed_hook: ShardAssignmentChangedHook,
+    /// Admits `GetOplogEntry` reads, each of which holds one full oplog entry in memory.
+    oplog_entry_reads: Arc<Semaphore>,
     ctx: PhantomData<Ctx>,
 }
 
@@ -143,6 +146,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             services: self.services.clone(),
             _worker_activator: self._worker_activator.clone(),
             _assignment_changed_hook: self._assignment_changed_hook.clone(),
+            oplog_entry_reads: self.oplog_entry_reads.clone(),
             ctx: PhantomData,
         }
     }
@@ -155,14 +159,17 @@ type ResponseStream = WorkerEventStream;
 const OPLOG_ENTRY_CHUNK_SIZE: usize = 4 * 1024 * 1024;
 
 /// Splits an encoded oplog entry into `GetOplogEntry` chunk frames. The stream owns the encoded
-/// entry and copies a chunk out of it only when the frame is polled.
-fn oplog_entry_frames(
+/// entry and copies a chunk out of it only when the frame is polled. It also owns `admission`,
+/// which it releases when it is dropped: after the last frame, or when the caller cancels.
+fn oplog_entry_frames<A: Send + 'static>(
     encoded: Vec<u8>,
     chunk_size: usize,
+    admission: A,
 ) -> impl Stream<Item = Result<GetOplogEntryResponse, Status>> + Send + 'static {
     use golem::workerexecutor::v1::get_oplog_entry_response::Result as Frame;
     let len = encoded.len();
     futures::stream::iter((0..len).step_by(chunk_size).map(move |start| {
+        let _admission = &admission;
         let end = (start + chunk_size).min(len);
         Ok(GetOplogEntryResponse {
             result: Some(Frame::Chunk(encoded[start..end].to_vec())),
@@ -209,6 +216,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             services: services.clone(),
             _worker_activator: worker_activator,
             _assignment_changed_hook: assignment_changed_hook.clone(),
+            oplog_entry_reads: Arc::new(Semaphore::new(
+                services.config().limits.max_concurrent_oplog_entry_reads,
+            )),
             ctx: PhantomData,
         };
 
@@ -1774,7 +1784,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn get_oplog_entry_internal(
         &self,
         request: GetOplogEntryRequest,
-    ) -> Result<Vec<u8>, WorkerExecutorError> {
+    ) -> Result<(Vec<u8>, OwnedSemaphorePermit), WorkerExecutorError> {
         let owned_agent_id =
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
@@ -1791,6 +1801,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let agent_type_name =
             ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
+        let component_revision = request
+            .component_revision
+            .map(golem_common::model::component::ComponentRevision::try_from)
+            .transpose()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("invalid component_revision: {e}"))
+            })?;
+
+        let admission = self
+            .oplog_entry_reads
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("the oplog entry read semaphore is never closed");
         let entry = get_public_oplog_entry(
             self.component_service(),
             self.oplog_service(),
@@ -1798,11 +1822,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             identity.agent_mode,
             agent_type_name.as_ref(),
             OplogIndex::from_u64(request.oplog_index),
+            component_revision,
         )
         .await?;
         let entry: golem::worker::OplogEntryWithIndex =
             entry.try_into().map_err(WorkerExecutorError::unknown)?;
-        Ok(prost::Message::encode_to_vec(&entry))
+        Ok((prost::Message::encode_to_vec(&entry), admission))
     }
 
     async fn search_oplog_internal(
@@ -2929,9 +2954,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         use golem::workerexecutor::v1::get_oplog_entry_response::Result as Frame;
         let stream: Self::GetOplogEntryStream = match result {
-            Ok(encoded) => record.succeed(Box::pin(oplog_entry_frames(
+            Ok((encoded, admission)) => record.succeed(Box::pin(oplog_entry_frames(
                 encoded,
                 OPLOG_ENTRY_CHUNK_SIZE,
+                admission,
             ))),
             Err(mut err) => {
                 let stream: Self::GetOplogEntryStream =
@@ -3666,7 +3692,7 @@ mod tests {
     use test_r::test;
 
     async fn frame_chunks(encoded: Vec<u8>, chunk_size: usize) -> Vec<Vec<u8>> {
-        oplog_entry_frames(encoded, chunk_size)
+        oplog_entry_frames(encoded, chunk_size, ())
             .map(|frame| match frame.expect("frame").result {
                 Some(Frame::Chunk(chunk)) => chunk,
                 other => panic!("expected a chunk frame, got {other:?}"),
@@ -3689,5 +3715,18 @@ mod tests {
         assert_eq!(chunks, vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7]]);
 
         assert!(frame_chunks(Vec::new(), 4).await.is_empty());
+    }
+
+    #[test]
+    async fn oplog_entry_frames_hold_the_admission_until_the_stream_is_dropped() {
+        let reads = Arc::new(Semaphore::new(1));
+        let admission = reads.clone().acquire_owned().await.unwrap();
+        let mut frames = Box::pin(oplog_entry_frames(vec![0; 12], 4, admission));
+
+        assert!(frames.next().await.is_some());
+        assert_eq!(reads.available_permits(), 0);
+
+        drop(frames);
+        assert_eq!(reads.available_permits(), 1);
     }
 }

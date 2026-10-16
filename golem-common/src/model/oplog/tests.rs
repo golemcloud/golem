@@ -1637,6 +1637,7 @@ fn oplog_page_entries_roundtrip_through_serde_and_protobuf() {
             timestamp: entry.timestamp(),
             entry_type: entry.entry_type().to_string(),
             size: 62_914_560,
+            component_revision: ComponentRevision::new(7).unwrap(),
         }),
     ];
 

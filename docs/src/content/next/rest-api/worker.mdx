@@ -769,7 +769,15 @@ Path|Method|Protected
 `/v1/components/{component_id}/workers/{agent_name}/oplog/{oplog_index}`|GET|Yes
 
 Oplog pages omit entries whose encoded form is larger than a server limit, and describe
-them by their type, timestamp and size. This endpoint returns such an entry in full.
+them by their type, timestamp, size and component revision. This endpoint returns such an
+entry in full. Pass the component revision of the description to save the server from
+scanning the oplog for it.
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+component_revision|integer|No|-
 
 **Example Response JSON**
 

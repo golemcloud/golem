@@ -111,8 +111,13 @@ impl TestWorkerExecutor {
             match page_entry {
                 PublicOplogPageEntry::Included(entry) => result.push(entry),
                 PublicOplogPageEntry::Omitted(omitted) => result.push(
-                    self.get_oplog_entry(agent_id, environment_id, omitted.oplog_index)
-                        .await?,
+                    self.get_oplog_entry(
+                        agent_id,
+                        environment_id,
+                        omitted.oplog_index,
+                        Some(omitted.component_revision),
+                    )
+                    .await?,
                 ),
             }
         }
@@ -125,6 +130,7 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
         environment_id: EnvironmentId,
         oplog_index: OplogIndex,
+        component_revision: Option<ComponentRevision>,
     ) -> anyhow::Result<PublicOplogEntryWithIndex> {
         let mut stream = self
             .client
@@ -134,6 +140,7 @@ impl TestWorkerExecutor {
                 environment_id: Some(environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
                 oplog_index: oplog_index.into(),
+                component_revision: component_revision.map(Into::into),
             })
             .await?
             .into_inner();

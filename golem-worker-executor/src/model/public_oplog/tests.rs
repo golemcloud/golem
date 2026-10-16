@@ -1815,6 +1815,7 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
         .unwrap();
     let large_log_index = oplog.add(log_entry(5000)).await.unwrap();
     oplog.commit(CommitLevel::Always).await.unwrap();
+    let page_revision = ComponentRevision::new(5).unwrap();
 
     let page = get_public_oplog_page(
         Arc::new(PanicComponentService),
@@ -1822,7 +1823,7 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
         &owned_agent_id,
         AgentMode::Durable,
         None,
-        ComponentRevision::INITIAL,
+        page_revision,
         OplogIndex::INITIAL,
         page_limits(1_000_000, 1000),
     )
@@ -1851,6 +1852,7 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
             AgentMode::Durable,
             None,
             omitted.oplog_index,
+            Some(omitted.component_revision),
         )
         .await
         .unwrap();
@@ -1863,6 +1865,7 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
         assert_eq!(omitted.timestamp, full.entry.timestamp());
         assert_eq!(omitted.attribution, full.attribution);
         assert_eq!(omitted.size, full_size as u64);
+        assert_eq!(omitted.component_revision, page_revision);
         assert!(omitted.size > 5000);
     }
 
@@ -1873,6 +1876,7 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
         AgentMode::Durable,
         None,
         snapshot_index,
+        None,
     )
     .await
     .unwrap()
@@ -1898,6 +1902,7 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
             AgentMode::Durable,
             None,
             large_log_index.next(),
+            None,
         )
         .await
         .is_err()
