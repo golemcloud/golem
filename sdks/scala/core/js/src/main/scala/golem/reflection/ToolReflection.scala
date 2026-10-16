@@ -35,7 +35,10 @@ private[reflection] object ToolReflectionFailures {
   def recover[A](future: Future[Either[ToolError[NamedToolError], A]])(implicit
     ec: ExecutionContext
   ): Future[Either[ToolError[NamedToolError], A]] =
-    ToolCollectionFailures.result(future)
+    future.transformWith {
+      case scala.util.Failure(error: ToolResultDetached) => Future.failed(error)
+      case outcome                                       => ToolCollectionFailures.result(Future.fromTry(outcome))
+    }
 
   def collect[A](
     stdout: Option[ToolInputStream],
@@ -440,7 +443,8 @@ final class ToolCommand private[reflection] (
         started.stdout,
         started.stderr,
         ToolReflectionFailures.recover(started.result.map(_.left.map(mapFailure).flatMap(decodeResult))),
-        started.cancel
+        started.cancel,
+        started.detach
       )
   }
 
@@ -457,7 +461,8 @@ final class ToolCommand private[reflection] (
           case Some(output) =>
             result.get.unpackJson(output).left.map(issue => ToolError.MalformedRemoteOutput(issue.message)).map(Some(_))
         })),
-        started.cancel
+        started.cancel,
+        started.detach
       )
     }
 
@@ -485,7 +490,8 @@ final case class ReflectedToolInvocation(
   stdout: Option[ToolInputStream],
   stderr: Option[ToolInputStream],
   result: Future[Either[ToolError[NamedToolError], Option[SchemaValue]]],
-  cancel: () => Unit
+  cancel: () => Unit,
+  detach: () => Unit = () => ()
 ) {
   def collect()(implicit
     ec: ExecutionContext
@@ -497,7 +503,8 @@ final case class ReflectedToolJsonInvocation(
   stdout: Option[ToolInputStream],
   stderr: Option[ToolInputStream],
   result: Future[Either[ToolError[NamedToolError], Option[Json]]],
-  cancel: () => Unit
+  cancel: () => Unit,
+  detach: () => Unit = () => ()
 ) {
   def collect()(implicit
     ec: ExecutionContext
@@ -549,7 +556,8 @@ final class DynamicToolClient(val toolName: String) {
         started.stdout,
         started.stderr,
         ToolReflectionFailures.recover(started.result.map(_.left.map(mapFailure))),
-        started.cancel
+        started.cancel,
+        started.detach
       )
     )
 
@@ -565,7 +573,8 @@ final case class DynamicToolInvocation(
   stdout: Option[ToolInputStream],
   stderr: Option[ToolInputStream],
   result: Future[Either[ToolError[NamedToolError], ToolInvokeResult]],
-  cancel: () => Unit
+  cancel: () => Unit,
+  detach: () => Unit = () => ()
 ) {
   def collect()(implicit
     ec: ExecutionContext

@@ -10517,11 +10517,16 @@ async fn missing_start_claim_is_divergence_when_the_owning_body_settles_without_
 }
 
 #[test]
-async fn missing_start_claim_is_divergence_with_a_top_level_sibling_start_at_the_head() {
-    // [NoOp(1), Start(entity=2), Start(3, top level), ..] — an active body exists, but the head
-    // is another top-level call of the primary, so the missing Start is decided at once.
-    let (rs, _handle, mut reconstruction, _oplog) =
-        replay_with_undrained_reconstruction(vec![start_now(), end_for(3, 1), end_for(2, 2)]).await;
+async fn missing_start_claim_retains_a_top_level_sibling_start_while_a_body_is_active() {
+    // [NoOp(1), Start(entity=2), Start(3, top level), End(3), End(2)] — an active body exists,
+    // and the head is another top-level call of the primary. The claim retains that sibling for
+    // its owner and reaches the replay target.
+    let (rs, _handle, mut reconstruction, _oplog) = replay_with_undrained_reconstruction(vec![
+        wait_for_start(300_000_000, Some(2)),
+        end_for(3, 1),
+        end_for(2, 2),
+    ])
+    .await;
     let claim = spawn_start_claim(
         &rs,
         StartClaim::unowned(
@@ -10529,10 +10534,11 @@ async fn missing_start_claim_is_divergence_with_a_top_level_sibling_start_at_the
             &DurableFunctionType::ReadLocal,
         ),
     );
-    assert!(
-        finished_claim(claim).await.is_err(),
-        "a top-level sibling Start at the head must stay strict divergence"
-    );
+    assert!(matches!(
+        finished_claim(claim).await.unwrap(),
+        ReplayStartClaimOutcome::ReplayEnded
+    ));
+    assert!(rs.has_unclaimed_retained_starts());
     reconstruction.body_settled();
 }
 
@@ -10934,20 +10940,17 @@ async fn missing_start_claim_keeps_waiting_on_a_custom_root_of_the_active_body()
 }
 
 #[test]
-async fn missing_start_claim_is_divergence_at_a_top_level_custom_root() {
+async fn missing_start_claim_retains_a_top_level_custom_root_after_the_body_entry() {
     // The same oplog with a custom root that records no parent is a top-level invocation of the
-    // primary: when the woken claim runs again, it finds a sibling at the head and reports the
-    // divergence.
-    let (_rs, _handle, mut reconstruction, claim) =
+    // primary: when the woken claim runs again, it retains that sibling for its owner and reaches
+    // the replay target.
+    let (rs, _handle, mut reconstruction, claim) =
         replay_with_body_entry_before_custom_root(None).await;
-    let error = match finished_claim(claim).await {
-        Err(error) => error,
-        Ok(_) => panic!("a top-level custom root at the head must not hide the missing Start"),
-    };
-    assert!(
-        format!("{error}").contains("no matching Start"),
-        "missing replay claim must be strict divergence: {error}"
-    );
+    assert!(matches!(
+        finished_claim(claim).await.unwrap(),
+        ReplayStartClaimOutcome::ReplayEnded
+    ));
+    assert!(rs.has_unclaimed_retained_starts());
     reconstruction.body_settled();
 }
 
@@ -11422,6 +11425,281 @@ fn wait_for_claim(invocation_id: Option<u64>) -> StartClaim {
         &DurableFunctionType::ReadLocal,
     )
     .with_invocation_id(invocation_id.map(test_invocation_id))
+}
+
+#[test]
+async fn missing_start_claim_retains_the_start_of_a_sibling_recorded_before_a_crash() {
+    // The guest made wait-for 1 and wait-for 2 concurrently, and only wait-for 2 recorded its
+    // Start before the crash, with and without its End. Wait-for 1 claims first on replay.
+    for sibling_end in [false, true] {
+        let mut entries = vec![noop(), wait_for_start(300_000_000, Some(2))];
+        if sibling_end {
+            entries.push(end_for(2, 0));
+        }
+        let rs = replay_state_over(entries).await;
+
+        let outcome = rs.claim_start_or_replay_end(wait_for_claim(Some(1))).await;
+        assert!(
+            matches!(outcome, Ok(ReplayStartClaimOutcome::ReplayEnded)),
+            "the missing Start of a crash prefix must end replay"
+        );
+        assert!(rs.has_unclaimed_retained_starts());
+
+        let sibling = claimed(&rs, wait_for_claim(Some(2))).await;
+        assert_eq!(sibling.start_idx(), OplogIndex::from_u64(2));
+        assert!(!rs.has_unclaimed_retained_starts());
+        if sibling_end {
+            assert!(matches!(
+                rs.await_resolution(sibling).await.unwrap(),
+                Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(3)
+            ));
+        }
+    }
+}
+
+#[test]
+async fn missing_start_claim_does_not_depend_on_how_far_the_sibling_claimed() {
+    // The sibling guest call (id 2) recorded a wait-for and a child under it with its own id
+    // before the crash; guest call 1 recorded nothing. Call 1 ends replay whether or not the
+    // sibling has already claimed its outer Start, and the sibling still claims both.
+    let nested_wait_for = |invocation_id: DurableInvocationId| {
+        let mut entry = wait_for_start(1, None);
+        let OplogEntry::Start {
+            parent_start_index,
+            invocation_id: id,
+            ..
+        } = &mut entry
+        else {
+            unreachable!();
+        };
+        *parent_start_index = Some(OplogIndex::from_u64(2));
+        *id = Some(invocation_id);
+        entry
+    };
+    let nested_claim = || {
+        StartClaim::owned(
+            &HostFunctionName::P3MonotonicClockWaitFor,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .with_invocation_id(Some(test_invocation_id(2)))
+    };
+    for sibling_claimed_first in [false, true] {
+        let rs = replay_state_over(vec![
+            noop(),
+            wait_for_start(300_000_000, Some(2)),
+            nested_wait_for(test_invocation_id(2)),
+            end_for(3, 0),
+            end_for(2, 0),
+        ])
+        .await;
+        let sibling = if sibling_claimed_first {
+            Some(claimed(&rs, wait_for_claim(Some(2))).await)
+        } else {
+            None
+        };
+
+        assert!(
+            matches!(
+                rs.claim_start_or_replay_end(wait_for_claim(Some(1))).await,
+                Ok(ReplayStartClaimOutcome::ReplayEnded)
+            ),
+            "sibling_claimed_first = {sibling_claimed_first}"
+        );
+
+        let sibling = match sibling {
+            Some(sibling) => sibling,
+            None => claimed(&rs, wait_for_claim(Some(2))).await,
+        };
+        assert_eq!(sibling.start_idx(), OplogIndex::from_u64(2));
+        let nested = claimed(&rs, nested_claim()).await;
+        assert_eq!(nested.start_idx(), OplogIndex::from_u64(3));
+        assert!(!rs.has_unclaimed_retained_starts());
+    }
+
+    // A child that carries an invocation id of its own under an ordinary call is not the
+    // sibling guest call's to claim, whether its parent is still retained or already claimed.
+    for sibling_claimed_first in [false, true] {
+        let rs = replay_state_over(vec![
+            noop(),
+            wait_for_start(300_000_000, Some(2)),
+            nested_wait_for(DurableInvocationId::new(OplogIndex::from_u64(2), 0)),
+            end_for(3, 0),
+            end_for(2, 0),
+        ])
+        .await;
+        let _sibling = if sibling_claimed_first {
+            Some(claimed(&rs, wait_for_claim(Some(2))).await)
+        } else {
+            None
+        };
+        assert!(
+            matches!(
+                rs.claim_start_or_replay_end(wait_for_claim(Some(1))).await,
+                Err(error) if error.to_string().contains("no matching Start")
+            ),
+            "sibling_claimed_first = {sibling_claimed_first}"
+        );
+    }
+}
+
+#[test]
+async fn missing_start_claim_retains_the_observed_calls_of_a_sibling_custom_invocation() {
+    // The sibling guest call (id 2) ran a custom durable invocation that observed a physical call,
+    // which made a nested call, before the crash; guest call 1 recorded nothing.
+    for sibling_claimed_first in [false, true] {
+        let rs = replay_state_over(vec![
+            noop(),
+            custom_start("outer", 1, None, 2),
+            observational_start_now(2, None),
+            owned_start_now(3),
+            end_for(4, 0),
+            end_for(3, 0),
+            custom_end(2, 10),
+        ])
+        .await;
+        let outer = HostFunctionName::Custom("outer".to_string());
+        let claim_custom = || {
+            claim_custom_start(
+                &rs,
+                &outer,
+                &DurableFunctionType::ReadRemote,
+                None,
+                test_invocation_id(2),
+            )
+        };
+        let sibling = if sibling_claimed_first {
+            Some(claim_custom().await.unwrap())
+        } else {
+            None
+        };
+
+        assert!(
+            matches!(
+                rs.claim_start_or_replay_end(wait_for_claim(Some(1))).await,
+                Ok(ReplayStartClaimOutcome::ReplayEnded)
+            ),
+            "sibling_claimed_first = {sibling_claimed_first}"
+        );
+
+        if sibling.is_none() {
+            claim_custom().await.unwrap();
+        }
+        assert!(!rs.has_unclaimed_retained_starts());
+    }
+}
+
+#[test]
+async fn missing_start_claim_waits_for_the_body_of_a_retained_entity_invocation() {
+    // The sibling guest call (id 2) dispatched a tool whose body recorded a positional entry
+    // before the crash; guest call 1 recorded nothing. The body consumes its entry only after
+    // its invocation is claimed, so the missing claim waits instead of reporting divergence.
+    let mut entity_start = rejected_tool_reconstruction_start(OplogIndex::from_u64(2));
+    let OplogEntry::Start { invocation_id, .. } = &mut entity_start else {
+        unreachable!();
+    };
+    *invocation_id = Some(test_invocation_id(2));
+    let rs = replay_state_over(vec![
+        noop(),
+        wait_for_start(300_000_000, Some(2)),
+        entity_start,
+        anchored_noop(3),
+        end_for(3, 0),
+        end_for(2, 0),
+    ])
+    .await;
+
+    let claim = spawn_start_claim(&rs, wait_for_claim(Some(1)));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !claim.is_finished(),
+        "the body entry of a retained entity invocation must not be divergence"
+    );
+
+    let _dispatch = claimed(&rs, wait_for_claim(Some(2))).await;
+    let mut entity = claimed(
+        &rs,
+        StartClaim::tool_invocation(
+            &HostFunctionName::GolemEntityInvoke,
+            &HostFunctionName::GolemToolInvocationRejected,
+            &DurableFunctionType::WriteLocal,
+            OplogIndex::from_u64(2),
+        )
+        .with_invocation_id(Some(test_invocation_id(2))),
+    )
+    .await;
+    assert_eq!(entity.start_idx(), OplogIndex::from_u64(3));
+    let mut reconstruction = entity
+        .take_historical_reconstruction()
+        .expect("reconstruction guard");
+    let (idx, _) = rs
+        .get_oplog_entry(Some(OplogIndex::from_u64(3)))
+        .await
+        .unwrap();
+    assert_eq!(idx, OplogIndex::from_u64(4));
+
+    assert!(matches!(
+        finished_claim(claim).await.unwrap(),
+        ReplayStartClaimOutcome::ReplayEnded
+    ));
+    reconstruction.body_settled();
+}
+
+#[test]
+async fn missing_start_claim_with_the_invocation_id_of_an_unclaimed_start_is_divergence() {
+    // The Start that the claiming guest call recorded under its own invocation id names another
+    // function: the guest call itself diverged.
+    for retained in [false, true] {
+        let rs = replay_state_over(vec![
+            noop(),
+            custom_start("recorded", 1, None, 1),
+            wait_for_start(300_000_000, Some(2)),
+            noop(),
+        ])
+        .await;
+        if retained {
+            assert!(matches!(
+                rs.claim_start_or_replay_end(wait_for_claim(Some(3))).await,
+                Err(error) if error.to_string().contains("no matching Start")
+            ));
+            assert!(rs.has_unclaimed_retained_starts());
+        }
+
+        let error = match rs
+            .claim_start_or_replay_end(
+                StartClaim::unowned(
+                    &HostFunctionName::Custom("claimed".to_string()),
+                    &DurableFunctionType::ReadRemote,
+                )
+                .with_invocation_id(Some(test_invocation_id(1))),
+            )
+            .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("a Start with the claim's own invocation id must not be retained"),
+        };
+        assert!(
+            error.to_string().contains("same invocation id"),
+            "unexpected error: {error}"
+        );
+    }
+}
+
+#[test]
+async fn missing_start_claim_is_divergence_at_a_positional_entry_after_a_sibling_start() {
+    let rs = replay_state_over(vec![noop(), wait_for_start(300_000_000, Some(2)), noop()]).await;
+
+    let error = match rs.claim_start_or_replay_end(wait_for_claim(Some(1))).await {
+        Err(error) => error,
+        Ok(_) => panic!("a positional entry of the claiming Store must not end replay"),
+    };
+    assert!(
+        error.to_string().contains("no matching Start"),
+        "unexpected error: {error}"
+    );
+
+    let sibling = claimed(&rs, wait_for_claim(Some(2))).await;
+    assert_eq!(sibling.start_idx(), OplogIndex::from_u64(2));
 }
 
 #[test]

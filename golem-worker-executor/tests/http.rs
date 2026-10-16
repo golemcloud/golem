@@ -22,7 +22,8 @@ use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    WorkerExecutorTestDependencies, start, start_with_overrides,
 };
 use http::HeaderMap;
 use pretty_assertions::assert_eq;
@@ -2911,7 +2912,12 @@ async fn interrupt_while_parked_in_p2_http_blocking_splice(
     const BODY: &[u8] = b"splice!";
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides::agent_sockets_enabled(),
+    )
+    .await?;
     let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let tcp_port = tcp_listener.local_addr()?.port();
     let http_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
