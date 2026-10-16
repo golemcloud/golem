@@ -1044,6 +1044,20 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                     record: encode_public_typed_schema_value(record)?,
                 })
             }
+            PublicOplogEntry::ToolAttachmentControl(params) => {
+                Self::ToolAttachmentControl(oplog::ToolAttachmentControlParameters {
+                    timestamp: params.timestamp.into(),
+                    attachment: encode_public_typed_schema_value(params.attachment)?,
+                    transition: encode_public_typed_schema_value(params.transition)?,
+                })
+            }
+            PublicOplogEntry::ToolAttachmentRead(params) => {
+                Self::ToolAttachmentRead(oplog::ToolAttachmentReadParameters {
+                    timestamp: params.timestamp.into(),
+                    observation: encode_public_typed_schema_value(params.observation)?,
+                    payload: params.payload,
+                })
+            }
             PublicOplogEntry::StreamItems(StreamItemsParams { timestamp, record }) => {
                 Self::StreamItems(oplog::DurableStreamRecordParameters {
                     timestamp: timestamp.into(),
@@ -2012,6 +2026,31 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 record: oplog_payload_from_wit(params.record),
                 summary: params.summary.map(durable_stream_summary_from_wit),
             }),
+            oplog::OplogEntry::ToolAttachmentControl(params) => {
+                use golem_common::schema::FromSchema as _;
+                use golem_common::base_model::oplog::attachment::{ToolAttachmentId, ToolAttachmentControl};
+                let attachment = golem_schema::schema::wit::decode_typed(&params.attachment).map_err(|error| error.to_string())?;
+                let transition = golem_schema::schema::wit::decode_typed(&params.transition).map_err(|error| error.to_string())?;
+                Ok(Self::ToolAttachmentControl {
+                    timestamp: timestamp_from_datetime(params.timestamp),
+                    entity_parent_start_index: params.entity_parent_start_index.map(golem_common::base_model::OplogIndex::from_u64),
+                    attachment: ToolAttachmentId::from_value(attachment.value()).map_err(|error| error.to_string())?,
+                    transition: ToolAttachmentControl::from_value(transition.value()).map_err(|error| error.to_string())?,
+                })
+            }
+            oplog::OplogEntry::ToolAttachmentRead(params) => {
+                use golem_common::schema::FromSchema as _;
+                let observation = golem_schema::schema::wit::decode_typed(&params.observation).map_err(|error| error.to_string())?;
+                let observation = golem_common::base_model::oplog::attachment::ToolAttachmentReadObservation::from_value(observation.value()).map_err(|error| error.to_string())?;
+                observation.validate_payload_presence(params.payload.is_some())
+                    .map_err(|error| format!("Invalid attachment read payload: {error:?}"))?;
+                Ok(Self::ToolAttachmentRead {
+                    timestamp: timestamp_from_datetime(params.timestamp),
+                    entity_parent_start_index: params.entity_parent_start_index.map(golem_common::base_model::OplogIndex::from_u64),
+                    observation: Box::new(observation),
+                    payload: params.payload.map(oplog_payload_from_wit),
+                })
+            }
             oplog::OplogEntry::StreamItems(params) => Ok(Self::StreamItems {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 entity_parent_start_index: None,
@@ -2693,6 +2732,50 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                     summary: summary.map(durable_stream_summary_to_wit),
                 },
             )),
+            M::ToolAttachmentControl {
+                timestamp,
+                entity_parent_start_index,
+                attachment,
+                transition,
+            } => {
+                use golem_common::schema::IntoTypedSchemaValue as _;
+                Ok(Self::ToolAttachmentControl(
+                    oplog::RawToolAttachmentControlParameters {
+                        timestamp: timestamp.into(),
+                        entity_parent_start_index: entity_parent_start_index.map(Into::into),
+                        attachment: encode_public_typed_schema_value(
+                            attachment
+                                .into_typed_schema_value()
+                                .map_err(|error| error.to_string())?,
+                        )?,
+                        transition: encode_public_typed_schema_value(
+                            transition
+                                .into_typed_schema_value()
+                                .map_err(|error| error.to_string())?,
+                        )?,
+                    },
+                ))
+            }
+            M::ToolAttachmentRead {
+                timestamp,
+                entity_parent_start_index,
+                observation,
+                payload,
+            } => {
+                use golem_common::schema::IntoTypedSchemaValue as _;
+                Ok(Self::ToolAttachmentRead(
+                    oplog::RawToolAttachmentReadParameters {
+                        timestamp: timestamp.into(),
+                        entity_parent_start_index: entity_parent_start_index.map(Into::into),
+                        observation: encode_public_typed_schema_value(
+                            (*observation)
+                                .into_typed_schema_value()
+                                .map_err(|error| error.to_string())?,
+                        )?,
+                        payload: payload.map(oplog_payload_to_wit).transpose()?,
+                    },
+                ))
+            }
             M::StreamItems {
                 timestamp,
                 record,

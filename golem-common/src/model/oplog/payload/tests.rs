@@ -14,6 +14,813 @@
 
 use test_r::test;
 
+mod tool_attachment {
+    use crate::base_model::durable_stream::StreamConsumerObservation;
+    use crate::base_model::oplog::attachment::*;
+    use crate::base_model::regions::{DeletedRegions, OplogRegion};
+    use crate::base_model::{IdempotencyKey, OplogIndex};
+    use crate::model::oplog::payload::tool_attachment::*;
+    use test_r::test;
+
+    fn index(value: u64) -> OplogIndex {
+        OplogIndex::from_u64(value)
+    }
+    fn fixture() -> (ToolAttachmentHistory, ToolAttachmentReadObservation) {
+        let attachment = ToolAttachmentId {
+            creation_start: index(2),
+            slot: ToolAttachmentSlot::Stdout,
+        };
+        let request = ToolAttachmentWriteRequest::new(attachment, 0, b"abcdefghijklm");
+        let outcome = ToolAttachmentWriteOutcome::Accepted;
+        let mut history = ToolAttachmentHistory::default();
+        history.writes.insert(
+            index(7),
+            outcome.metadata(&request, index(4), true).unwrap(),
+        );
+        let read = ToolAttachmentReadObservation {
+            attachment,
+            logical_invocation: IdempotencyKey::new("owner-invocation".into()),
+            observation: StreamConsumerObservation::Guest {
+                parent_start_index: Some(index(3)),
+            },
+            ordinal: 3,
+            read_attempt_ordinal: 7,
+            outcome: ToolAttachmentReadOutcome::RawBytes {
+                end: AcceptedAttachmentWriteEnd(index(7)),
+                offset: 3,
+                length: 8,
+            },
+            reobserves: None,
+        };
+        (history, read)
+    }
+
+    #[test]
+    fn attachment_deleted_observation_missing_source_is_not_removal() {
+        let (mut history, read) = fixture();
+        history.observations.insert(index(10), read);
+        history.writes.clear();
+        let deleted = DeletedRegions::from_regions([OplogRegion::from_range(10..=15)]);
+        history.retain_history(&deleted);
+        assert_eq!(
+            history.validate_observations(&deleted),
+            Err(ToolAttachmentHistoryError::MissingAcceptance)
+        );
+    }
+
+    #[test]
+    fn attachment_consumer_payload_ownership_and_lengths() {
+        let (mut history, mut read) = fixture();
+        assert_eq!(
+            history.validate_read_payload(index(10), &read, Some(b"12345678")),
+            Ok(())
+        );
+        assert_eq!(
+            history.validate_read_payload(index(10), &read, None),
+            Err(ToolAttachmentHistoryError::InvalidEffect)
+        );
+        assert_eq!(
+            history.validate_read_payload(index(10), &read, Some(b"1234567")),
+            Err(ToolAttachmentHistoryError::InvalidRange)
+        );
+        read.outcome = ToolAttachmentReadOutcome::TypedChunk(AcceptedAttachmentWriteEnd(index(7)));
+        assert_eq!(
+            history.validate_read_payload(index(10), &read, Some(b"abcdefghijklm")),
+            Ok(())
+        );
+        assert_eq!(
+            history.validate_read_payload(index(10), &read, Some(b"12345678")),
+            Err(ToolAttachmentHistoryError::InvalidRange)
+        );
+        history.controls.insert(
+            index(9),
+            ToolAttachmentControlMetadata {
+                attachment: read.attachment,
+                producer_start: None,
+                entity_parent_start: None,
+                transition: ToolAttachmentControl::TerminalSelected(
+                    ToolAttachmentTerminal::Application(ByteStreamCloseCause::Failed(
+                        ByteStreamFailure::Abandoned,
+                    )),
+                ),
+                retained: true,
+            },
+        );
+        for outcome in [
+            ToolAttachmentReadOutcome::Eof {
+                terminal_index: index(9),
+            },
+            ToolAttachmentReadOutcome::Error {
+                terminal_index: index(9),
+                failure: ByteStreamFailure::Abandoned,
+            },
+        ] {
+            read.outcome = outcome;
+            assert_eq!(
+                history.validate_read_payload(index(10), &read, None),
+                Ok(())
+            );
+            assert_eq!(
+                history.validate_read_payload(index(10), &read, Some(b"")),
+                Err(ToolAttachmentHistoryError::InvalidEffect)
+            );
+        }
+        let (original_history, original) = fixture();
+        history = original_history;
+        history.observations.insert(index(10), original.clone());
+        read = original.clone();
+        read.reobserves = Some(index(10));
+        history.observations.insert(index(20), read.clone());
+        read.reobserves = Some(index(20));
+        assert_eq!(
+            history.validate_read_payload(index(30), &read, None),
+            Ok(())
+        );
+        assert_eq!(
+            history.validate_read_payload(index(30), &read, Some(b"12345678")),
+            Err(ToolAttachmentHistoryError::InvalidEffect)
+        );
+        history.observations.insert(index(30), read);
+        let deleted = DeletedRegions::from_regions([OplogRegion::from_range(10..=20)]);
+        assert_eq!(history.validate_observations(&deleted), Ok(()));
+        history.observations.insert(index(40), original);
+        assert_eq!(
+            history.validate_observations(&deleted),
+            Err(ToolAttachmentHistoryError::DuplicateObservation)
+        );
+    }
+
+    #[test]
+    fn attachment_reference_validates_asymmetric_ranges() {
+        let (history, mut read) = fixture();
+        assert_eq!(history.validate_read(index(10), &read), Ok(()));
+        for (offset, length) in [(11, 3), (u64::MAX, 2), (3, 0), (14, 1)] {
+            read.outcome = ToolAttachmentReadOutcome::RawBytes {
+                end: AcceptedAttachmentWriteEnd(index(7)),
+                offset,
+                length,
+            };
+            assert_eq!(
+                history.validate_read(index(10), &read),
+                Err(ToolAttachmentHistoryError::InvalidRange)
+            );
+        }
+        read.outcome = ToolAttachmentReadOutcome::TypedChunk(AcceptedAttachmentWriteEnd(index(7)));
+        assert_eq!(history.validate_read(index(10), &read), Ok(()));
+        assert_eq!(
+            history.validate_read(index(7), &read),
+            Err(ToolAttachmentHistoryError::InvalidChronology)
+        );
+        read.attachment.slot = ToolAttachmentSlot::Stderr;
+        assert_eq!(
+            history.validate_read(index(10), &read),
+            Err(ToolAttachmentHistoryError::WrongAttachment)
+        );
+    }
+
+    #[test]
+    fn attachment_reference_requires_retained_nonempty_acceptance() {
+        let (mut history, read) = fixture();
+        let request = ToolAttachmentWriteRequest::new(read.attachment, 0, b"abcdefghijklm");
+        let rejection = ToolAttachmentWriteOutcome::Rejected(StreamWriteError::Closed(
+            ByteStreamCloseCause::ConsumerCancelled,
+        ));
+        history.writes.insert(
+            index(7),
+            rejection.metadata(&request, index(4), true).unwrap(),
+        );
+        assert_eq!(
+            history.validate_read(index(10), &read),
+            Err(ToolAttachmentHistoryError::NotAccepted)
+        );
+        history.writes.get_mut(&index(7)).unwrap().accepted_length = Some(0);
+        assert_eq!(
+            history.validate_read(index(10), &read),
+            Err(ToolAttachmentHistoryError::NotAccepted)
+        );
+        history.writes.get_mut(&index(7)).unwrap().accepted_length = Some(13);
+        history.writes.get_mut(&index(7)).unwrap().retained = false;
+        assert_eq!(
+            history.validate_read(index(10), &read),
+            Err(ToolAttachmentHistoryError::RemovedAcceptance)
+        );
+        history.writes.clear();
+        assert_eq!(
+            history.validate_read(index(10), &read),
+            Err(ToolAttachmentHistoryError::MissingAcceptance)
+        );
+    }
+
+    #[test]
+    fn attachment_rollback_preserves_acceptance_and_logical_reobservation() {
+        let (mut history, read) = fixture();
+        // The old observation is removed from the retained branch but available
+        // as metadata for validating its replacement.
+        history.observations.insert(index(10), read.clone());
+        let mut replacement = read.clone();
+        replacement.reobserves = Some(index(10));
+        replacement.read_attempt_ordinal = 2;
+        replacement.observation = StreamConsumerObservation::Guest {
+            parent_start_index: Some(index(16)),
+        };
+        assert_eq!(history.validate_read(index(20), &replacement), Ok(()));
+        history.observations.insert(index(20), replacement.clone());
+        assert_eq!(
+            history.validate_observations(&DeletedRegions::new()),
+            Err(ToolAttachmentHistoryError::DuplicateObservation)
+        );
+        let deleted = DeletedRegions::from_regions([OplogRegion::from_range(10..=15)]);
+        history.retain_history(&deleted);
+        assert_eq!(history.validate_observations(&deleted), Ok(()));
+        let mut host_read = read.clone();
+        host_read.observation = StreamConsumerObservation::Host;
+        history.observations.insert(index(10), host_read);
+        assert_eq!(history.validate_read(index(20), &replacement), Ok(()));
+        assert_eq!(history.validate_observations(&deleted), Ok(()));
+        assert_eq!(
+            history.validate_observations(&DeletedRegions::new()),
+            Err(ToolAttachmentHistoryError::DuplicateObservation)
+        );
+        let mut host_replacement = replacement.clone();
+        host_replacement.observation = StreamConsumerObservation::Host;
+        assert_eq!(history.validate_read(index(20), &host_replacement), Ok(()));
+        history.observations.insert(index(10), read.clone());
+        assert_eq!(history.validate_read(index(20), &host_replacement), Ok(()));
+        let mut invalid_original = read.clone();
+        invalid_original.observation = StreamConsumerObservation::Guest {
+            parent_start_index: Some(index(11)),
+        };
+        history.observations.insert(index(10), invalid_original);
+        assert_eq!(
+            history.validate_observations(&deleted),
+            Err(ToolAttachmentHistoryError::InvalidChronology)
+        );
+        history.observations.insert(index(10), read.clone());
+        assert_eq!(history.writes[&index(7)].accepted_length, Some(13));
+        assert!(history.writes[&index(7)].retained);
+        let mut different_range = replacement.clone();
+        different_range.outcome = ToolAttachmentReadOutcome::RawBytes {
+            end: AcceptedAttachmentWriteEnd(index(7)),
+            offset: 4,
+            length: 7,
+        };
+        assert_eq!(
+            history.validate_read(index(20), &different_range),
+            Err(ToolAttachmentHistoryError::DifferentObservation)
+        );
+        replacement.ordinal += 1;
+        assert_eq!(
+            history.validate_read(index(20), &replacement),
+            Err(ToolAttachmentHistoryError::DifferentObservation)
+        );
+        replacement = read.clone();
+        // With no retained observation, the accepted bytes can be read again.
+        history.observations.clear();
+        assert_eq!(history.validate_read(index(20), &replacement), Ok(()));
+        replacement.reobserves = Some(index(10));
+        assert_eq!(
+            history.validate_read(index(20), &replacement),
+            Err(ToolAttachmentHistoryError::MissingObservation)
+        );
+        history.observations.insert(index(10), read);
+        history.retain_history(&DeletedRegions::from_regions([OplogRegion::from_range(
+            7..=15,
+        )]));
+        assert_eq!(
+            history.validate_read(index(20), &replacement),
+            Err(ToolAttachmentHistoryError::RemovedAcceptance)
+        );
+    }
+
+    #[test]
+    fn attachment_rollback_replaces_input_only_when_acceptance_is_removed() {
+        let (mut history, read) = fixture();
+        history.observations.insert(index(10), read.clone());
+        let request = ToolAttachmentWriteRequest::new(read.attachment, 1, b"second");
+        history.writes.insert(
+            index(19),
+            ToolAttachmentWriteOutcome::Accepted
+                .metadata(&request, index(18), true)
+                .unwrap(),
+        );
+        let mut replacement = read;
+        replacement.outcome =
+            ToolAttachmentReadOutcome::TypedChunk(AcceptedAttachmentWriteEnd(index(19)));
+        history.observations.insert(index(20), replacement);
+        let read_only_cut = DeletedRegions::from_regions([OplogRegion::from_range(10..=15)]);
+        history.retain_history(&read_only_cut);
+        assert_eq!(
+            history.validate_observations(&read_only_cut),
+            Err(ToolAttachmentHistoryError::DuplicateObservation)
+        );
+        let source_cut = DeletedRegions::from_regions([OplogRegion::from_range(4..=15)]);
+        history.retain_history(&source_cut);
+        assert_eq!(history.validate_observations(&source_cut), Ok(()));
+        let inconsistent_cut = DeletedRegions::from_regions([OplogRegion::from_range(4..=7)]);
+        history.retain_history(&inconsistent_cut);
+        assert_eq!(
+            history.validate_observations(&inconsistent_cut),
+            Err(ToolAttachmentHistoryError::RemovedAcceptance)
+        );
+    }
+
+    #[test]
+    fn attachment_owner_control_retention_tracks_parent_without_changing_logical_reads() {
+        let (mut history, mut read) = fixture();
+        history.writes.clear();
+        history.controls.insert(
+            index(9),
+            ToolAttachmentControlMetadata {
+                attachment: read.attachment,
+                producer_start: None,
+                entity_parent_start: Some(index(1)),
+                transition: ToolAttachmentControl::TerminalSelected(
+                    ToolAttachmentTerminal::HostResourceExhausted,
+                ),
+                retained: true,
+            },
+        );
+        read.outcome = ToolAttachmentReadOutcome::Error {
+            terminal_index: index(9),
+            failure: ByteStreamFailure::ResourceExhausted,
+        };
+        history.observations.insert(index(10), read.clone());
+        let mut replacement = read.clone();
+        replacement.reobserves = Some(index(10));
+        history.observations.insert(index(20), replacement);
+        let read_cut = DeletedRegions::from_regions([OplogRegion::from_range(10..=15)]);
+        history.retain_history(&read_cut);
+        assert_eq!(history.validate_observations(&read_cut), Ok(()));
+        assert_eq!(history.controls[&index(9)].producer_start, None);
+
+        let parent_cut = DeletedRegions::from_regions([
+            OplogRegion::from_range(1..=1),
+            OplogRegion::from_range(10..=15),
+        ]);
+        history.retain_history(&parent_cut);
+        assert!(!history.controls[&index(9)].retained);
+        assert!(history.source_was_removed(&read));
+        assert_eq!(
+            history.validate_observations(&parent_cut),
+            Err(ToolAttachmentHistoryError::RemovedAcceptance)
+        );
+        let mut projection = ToolAttachmentProjection::default();
+        projection
+            .advance_to(index(9), &history, &parent_cut)
+            .unwrap();
+        assert!(projection.attachment(&read.attachment).is_none());
+        assert_eq!(history.observations[&index(10)], read);
+    }
+
+    #[test]
+    fn attachment_terminal_reobservation_requires_the_same_retained_source() {
+        for error in [false, true] {
+            let (mut history, mut read) = fixture();
+            history.controls.insert(
+                index(9),
+                ToolAttachmentControlMetadata {
+                    attachment: read.attachment,
+                    producer_start: Some(index(8)),
+                    entity_parent_start: None,
+                    transition: ToolAttachmentControl::TerminalSelected(
+                        ToolAttachmentTerminal::Application(ByteStreamCloseCause::Failed(
+                            ByteStreamFailure::Abandoned,
+                        )),
+                    ),
+                    retained: true,
+                },
+            );
+            read.outcome = if error {
+                ToolAttachmentReadOutcome::Error {
+                    terminal_index: index(9),
+                    failure: ByteStreamFailure::Abandoned,
+                }
+            } else {
+                ToolAttachmentReadOutcome::Eof {
+                    terminal_index: index(9),
+                }
+            };
+            history.observations.insert(index(10), read.clone());
+            let mut replacement = read;
+            replacement.reobserves = Some(index(10));
+            history.observations.insert(index(20), replacement.clone());
+            let read_cut = DeletedRegions::from_regions([OplogRegion::from_range(10..=15)]);
+            history.retain_history(&read_cut);
+            assert_eq!(history.validate_observations(&read_cut), Ok(()));
+            history.controls.insert(
+                index(18),
+                ToolAttachmentControlMetadata {
+                    producer_start: Some(index(17)),
+                    ..history.controls[&index(9)].clone()
+                },
+            );
+            match &mut replacement.outcome {
+                ToolAttachmentReadOutcome::Error { terminal_index, .. }
+                | ToolAttachmentReadOutcome::Eof { terminal_index } => *terminal_index = index(18),
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                history.validate_read(index(20), &replacement),
+                Err(ToolAttachmentHistoryError::DifferentObservation)
+            );
+            let source_cut = DeletedRegions::from_regions([OplogRegion::from_range(8..=15)]);
+            history.retain_history(&source_cut);
+            assert_eq!(
+                history.validate_observations(&source_cut),
+                Err(ToolAttachmentHistoryError::RemovedAcceptance)
+            );
+            replacement.reobserves = None;
+            history.observations.insert(index(20), replacement);
+            assert_eq!(history.validate_observations(&source_cut), Ok(()));
+        }
+    }
+
+    #[test]
+    fn attachment_fold_restores_unacknowledged_unread_bytes_only_at_crossed_boundaries() {
+        let (mut history, mut read) = fixture();
+        let id = read.attachment;
+        read.outcome = ToolAttachmentReadOutcome::RawBytes {
+            end: AcceptedAttachmentWriteEnd(index(7)),
+            offset: 0,
+            length: 5,
+        };
+        history.observations.insert(index(10), read.clone());
+        let cancelled = ToolAttachmentTerminal::Application(ByteStreamCloseCause::Failed(
+            ByteStreamFailure::Cancelled,
+        ));
+        history.controls.insert(
+            index(12),
+            ToolAttachmentControlMetadata {
+                attachment: id,
+                producer_start: None,
+                entity_parent_start: None,
+                transition: ToolAttachmentControl::TerminalSelected(cancelled.clone()),
+                retained: true,
+            },
+        );
+        let retained = DeletedRegions::new();
+        let mut projection = ToolAttachmentProjection::default();
+        projection
+            .advance_to(index(6), &history, &retained)
+            .unwrap();
+        assert!(projection.attachment(&id).is_none());
+        projection
+            .advance_to(index(7), &history, &retained)
+            .unwrap();
+        assert_eq!(
+            projection.attachment(&id).unwrap().unread[&index(7)],
+            ToolAttachmentUnreadRange {
+                offset: 0,
+                length: 13
+            }
+        );
+        projection
+            .advance_to(index(12), &history, &retained)
+            .unwrap();
+        let state = projection.attachment(&id).unwrap();
+        assert_eq!(
+            state.unread[&index(7)],
+            ToolAttachmentUnreadRange {
+                offset: 5,
+                length: 8
+            }
+        );
+        assert_eq!(state.terminal, Some(cancelled));
+
+        let deleted = DeletedRegions::from_regions([OplogRegion::from_range(10..=11)]);
+        history.retain_history(&deleted);
+        let mut reconstructed = ToolAttachmentProjection::default();
+        reconstructed
+            .advance_to(index(12), &history, &deleted)
+            .unwrap();
+        assert_eq!(
+            reconstructed.attachment(&id).unwrap().unread[&index(7)],
+            ToolAttachmentUnreadRange {
+                offset: 0,
+                length: 13
+            }
+        );
+        read.reobserves = Some(index(10));
+        history.observations.insert(index(15), read);
+        history.validate_observations(&deleted).unwrap();
+        reconstructed
+            .advance_to(index(15), &history, &deleted)
+            .unwrap();
+        assert_eq!(
+            reconstructed.attachment(&id).unwrap().unread[&index(7)],
+            ToolAttachmentUnreadRange {
+                offset: 5,
+                length: 8
+            }
+        );
+        history.controls.insert(
+            index(16),
+            ToolAttachmentControlMetadata {
+                attachment: id,
+                producer_start: None,
+                entity_parent_start: None,
+                transition: ToolAttachmentControl::ReaderDiscarded,
+                retained: true,
+            },
+        );
+        reconstructed
+            .advance_to(index(16), &history, &deleted)
+            .unwrap();
+        let state = reconstructed.attachment(&id).unwrap();
+        assert!(state.unread.is_empty());
+        assert!(state.reader_discarded);
+        assert_eq!(state.terminal, projection.attachment(&id).unwrap().terminal);
+
+        let removed_write = DeletedRegions::from_regions([OplogRegion::from_range(7..=11)]);
+        history.retain_history(&removed_write);
+        let mut invalid = ToolAttachmentProjection::default();
+        assert_eq!(
+            invalid.advance_to(index(15), &history, &removed_write),
+            Err(ToolAttachmentHistoryError::RemovedAcceptance)
+        );
+    }
+
+    #[test]
+    fn attachment_fold_keeps_error_delivery_separate_from_eof() {
+        let (mut history, mut read) = fixture();
+        let id = read.attachment;
+        read.outcome = ToolAttachmentReadOutcome::TypedChunk(AcceptedAttachmentWriteEnd(index(7)));
+        history.observations.insert(index(10), read.clone());
+        history.controls.insert(
+            index(11),
+            ToolAttachmentControlMetadata {
+                attachment: id,
+                producer_start: Some(index(9)),
+                entity_parent_start: None,
+                retained: true,
+                transition: ToolAttachmentControl::TerminalSelected(
+                    ToolAttachmentTerminal::HostResourceExhausted,
+                ),
+            },
+        );
+        read.ordinal += 1;
+        read.outcome = ToolAttachmentReadOutcome::Eof {
+            terminal_index: index(11),
+        };
+        history.observations.insert(index(12), read.clone());
+        let retained = DeletedRegions::new();
+        assert_eq!(
+            ToolAttachmentProjection::default().advance_to(index(12), &history, &retained),
+            Err(ToolAttachmentHistoryError::InvalidEffect)
+        );
+        read.outcome = ToolAttachmentReadOutcome::Error {
+            terminal_index: index(11),
+            failure: ByteStreamFailure::ResourceExhausted,
+        };
+        history.observations.insert(index(12), read.clone());
+        read.ordinal += 1;
+        read.outcome = ToolAttachmentReadOutcome::Eof {
+            terminal_index: index(11),
+        };
+        history.observations.insert(index(13), read);
+        let mut projection = ToolAttachmentProjection::default();
+        projection
+            .advance_to(index(13), &history, &retained)
+            .unwrap();
+        let state = projection.attachment(&id).unwrap();
+        assert!(state.error_observed);
+        assert!(state.unread.is_empty());
+        assert_eq!(
+            state.terminal,
+            Some(ToolAttachmentTerminal::HostResourceExhausted)
+        );
+        // Successful no-op producer Ends add no control effect. A second
+        // selection is invalid even when it repeats the same cause.
+        history.controls.insert(
+            index(14),
+            ToolAttachmentControlMetadata {
+                attachment: id,
+                producer_start: Some(index(9)),
+                entity_parent_start: None,
+                retained: true,
+                transition: ToolAttachmentControl::TerminalSelected(
+                    ToolAttachmentTerminal::HostResourceExhausted,
+                ),
+            },
+        );
+        assert_eq!(
+            projection.advance_to(index(14), &history, &retained),
+            Err(ToolAttachmentHistoryError::InvalidEffect)
+        );
+        let deleted = DeletedRegions::from_regions([OplogRegion::from_range(9..=9)]);
+        history.retain_history(&deleted);
+        let mut rolled_back = ToolAttachmentProjection::default();
+        rolled_back
+            .advance_to(index(11), &history, &deleted)
+            .unwrap();
+        assert!(rolled_back.attachment(&id).unwrap().terminal.is_none());
+        history.observations.clear();
+        history.controls.clear();
+        history
+            .writes
+            .get_mut(&index(7))
+            .unwrap()
+            .attachment
+            .creation_start = OplogIndex::NONE;
+        assert_eq!(
+            ToolAttachmentProjection::default().advance_to(index(7), &history, &retained),
+            Err(ToolAttachmentHistoryError::InvalidChronology)
+        );
+    }
+
+    #[test]
+    fn attachment_payloads_validate_input_and_roundtrip() {
+        let (_, read) = fixture();
+        let request = ToolAttachmentWriteRequest::new(read.attachment, 7, b"asymmetric-body");
+        assert!(request.matches_input(b"asymmetric-body"));
+        assert!(!request.matches_input(b"asymmetric-bodx"));
+        let outcomes = [
+            ToolAttachmentWriteOutcome::Accepted,
+            ToolAttachmentWriteOutcome::Discarded,
+            ToolAttachmentWriteOutcome::Rejected(StreamWriteError::ConcurrentOperation),
+            ToolAttachmentWriteOutcome::HostResourceExhausted,
+        ];
+        for outcome in outcomes {
+            assert!(outcome.validate(&request));
+            let encoded = desert_rust::serialize_to_byte_vec(&outcome).unwrap();
+            let decoded: ToolAttachmentWriteOutcome = desert_rust::deserialize(&encoded).unwrap();
+            assert_eq!(outcome, decoded);
+        }
+        let host_exhausted = ToolAttachmentWriteOutcome::HostResourceExhausted;
+        assert_eq!(
+            host_exhausted.result(),
+            Err(StreamWriteError::Closed(ByteStreamCloseCause::Failed(
+                ByteStreamFailure::ResourceExhausted
+            )))
+        );
+        assert_eq!(
+            host_exhausted
+                .metadata(&request, index(4), true)
+                .unwrap()
+                .accepted_length,
+            None
+        );
+        assert!(!ToolAttachmentWriteOutcome::Empty.validate(&request));
+        assert!(
+            ToolAttachmentWriteOutcome::Empty.validate(&ToolAttachmentWriteRequest::new(
+                read.attachment,
+                8,
+                &[]
+            ))
+        );
+        let empty = ToolAttachmentWriteRequest::new(read.attachment, 8, &[]);
+        assert!(!ToolAttachmentWriteOutcome::Accepted.validate(&empty));
+        assert!(!ToolAttachmentWriteOutcome::HostResourceExhausted.validate(&empty));
+        assert!(!ToolAttachmentWriteOutcome::Discarded.validate(&empty));
+        assert!(
+            ToolAttachmentWriteOutcome::Rejected(StreamWriteError::ConcurrentOperation)
+                .validate(&empty)
+        );
+        assert!(
+            !ToolAttachmentWriteOutcome::Rejected(StreamWriteError::Closed(
+                ByteStreamCloseCause::Finished,
+            ))
+            .validate(&empty)
+        );
+        let record = ToolAttachmentRecord::Read(read);
+        let encoded = desert_rust::serialize_to_byte_vec(&record).unwrap();
+        let decoded: ToolAttachmentRecord = desert_rust::deserialize(&encoded).unwrap();
+        assert_eq!(record, decoded);
+    }
+
+    #[test]
+    fn attachment_host_payload_declarations_roundtrip() {
+        use crate::model::oplog::payload::*;
+        let (_, mut read) = fixture();
+        for outcome in [
+            ToolAttachmentTerminalOutcome::Selected(ToolAttachmentTerminal::Application(
+                ByteStreamCloseCause::Failed(ByteStreamFailure::Failed(
+                    "stream producer failed".into(),
+                )),
+            )),
+            ToolAttachmentTerminalOutcome::Selected(ToolAttachmentTerminal::HostResourceExhausted),
+            ToolAttachmentTerminalOutcome::Unchanged,
+            ToolAttachmentTerminalOutcome::Rejected(StreamWriteError::Closed(
+                ByteStreamCloseCause::Finished,
+            )),
+        ] {
+            let bytes = desert_rust::serialize_to_byte_vec(&outcome).unwrap();
+            let decoded: ToolAttachmentTerminalOutcome = desert_rust::deserialize(&bytes).unwrap();
+            assert_eq!(decoded, outcome);
+            assert_eq!(decoded.result(), outcome.result());
+            super::assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolStdinFinish>(
+                HostRequestToolAttachmentFinish {
+                    attachment: read.attachment,
+                    operation_ordinal: 9,
+                },
+                HostResponseToolAttachmentTerminalResult { outcome },
+            );
+        }
+        for failure in [
+            ByteStreamFailure::Cancelled,
+            ByteStreamFailure::Abandoned,
+            ByteStreamFailure::ResourceExhausted,
+            ByteStreamFailure::Failed("exact message".into()),
+        ] {
+            read.outcome = ToolAttachmentReadOutcome::Error {
+                terminal_index: index(9),
+                failure: failure.clone(),
+            };
+            let record = ToolAttachmentRecord::Read(read.clone());
+            let bytes = desert_rust::serialize_to_byte_vec(&record).unwrap();
+            assert_eq!(
+                desert_rust::deserialize::<ToolAttachmentRecord>(&bytes).unwrap(),
+                record
+            );
+            let response: HostResponse = HostResponseToolAttachmentClosed {
+                cause: ByteStreamCloseCause::Failed(failure),
+            }
+            .into();
+            let bytes = desert_rust::serialize_to_byte_vec(&response).unwrap();
+            assert_eq!(
+                desert_rust::deserialize::<HostResponse>(&bytes).unwrap(),
+                response
+            );
+        }
+        let response: HostResponse = HostResponseToolAttachmentCreated {
+            created: ToolAttachmentCreated {
+                attachment: read.attachment,
+                capacity_bytes: 7919,
+            },
+        }
+        .into();
+        let bytes = desert_rust::serialize_to_byte_vec(&response).unwrap();
+        assert_eq!(
+            desert_rust::deserialize::<HostResponse>(&bytes).unwrap(),
+            response
+        );
+        let request: HostRequest = HostRequestToolAttachmentWrite {
+            request: ToolAttachmentWriteRequest::new(read.attachment, 3, b"abc"),
+        }
+        .into();
+        let bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();
+        assert_eq!(
+            desert_rust::deserialize::<HostRequest>(&bytes).unwrap(),
+            request
+        );
+        let name = host_functions::HostFunctionName::GolemToolOutputWrite;
+        let bytes = desert_rust::serialize_to_byte_vec(&name).unwrap();
+        assert_eq!(
+            desert_rust::deserialize::<host_functions::HostFunctionName>(&bytes).unwrap(),
+            name
+        );
+        super::assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolOutputWrite>(
+            HostRequestToolAttachmentWrite {
+                request: ToolAttachmentWriteRequest::new(read.attachment, 4, b"schema-body"),
+            },
+            HostResponseToolAttachmentWrite {
+                outcome: ToolAttachmentWriteOutcome::Accepted,
+            },
+        );
+        super::assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolCreateStdin>(
+            HostRequestNoInput {},
+            HostResponseToolAttachmentCreated {
+                created: ToolAttachmentCreated {
+                    attachment: read.attachment,
+                    capacity_bytes: 7919,
+                },
+            },
+        );
+        super::assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolStdinFinish>(
+            HostRequestToolAttachmentFinish {
+                attachment: read.attachment,
+                operation_ordinal: 5,
+            },
+            HostResponseToolAttachmentTerminalResult {
+                outcome: ToolAttachmentTerminalOutcome::Selected(
+                    ToolAttachmentTerminal::Application(ByteStreamCloseCause::Finished),
+                ),
+            },
+        );
+        super::assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolOutputFail>(
+            HostRequestToolAttachmentFail {
+                attachment: read.attachment,
+                operation_ordinal: 6,
+                reason: ByteStreamFailure::Abandoned,
+            },
+            HostResponseToolAttachmentTerminalResult {
+                outcome: ToolAttachmentTerminalOutcome::Rejected(StreamWriteError::Closed(
+                    ByteStreamCloseCause::Finished,
+                )),
+            },
+        );
+        super::assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolStdinWait>(
+            HostRequestToolAttachmentEndpoint {
+                attachment: read.attachment,
+                operation_ordinal: 1,
+            },
+            HostResponseToolAttachmentClosed {
+                cause: ByteStreamCloseCause::ConsumerCancelled,
+            },
+        );
+    }
+}
+
 use super::{
     HostRequestGolemApiGetAgents, HostRequestGolemApiRevertAgent,
     HostRequestGolemContextSpanAttributes, HostRequestGolemContextSpanResource,
@@ -44,9 +851,9 @@ use crate::model::oplog::types::{
     SerializableP3HttpRequestOptions, SerializableP3HttpScheme, SerializableP3IpSocketAddress,
     SerializableP3SocketErrorCode, SerializableP3TcpChunk, SerializableP3UdpDatagram,
     SerializableResponseHeaders, SerializableRpcError, SerializableScheduleId,
-    SerializableStreamError, SerializableToolError, SerializableToolInvocationResult,
-    SerializableToolOperationTerminal, SerializableToolResultValue, SerializableToolRpcError,
-    SerializableToolStructuredResult,
+    SerializableStreamError, SerializableToolAdmissionRefusal, SerializableToolError,
+    SerializableToolInvocationResult, SerializableToolOperationTerminal,
+    SerializableToolResultValue, SerializableToolRpcError, SerializableToolStructuredResult,
 };
 use crate::model::oplog::{
     HostPayloadPair, HostRequest, HostRequestCliEnvironmentGetEnvironment,
@@ -1653,6 +2460,7 @@ fn tool_predispatch_rejection_payload_roundtrips_with_selected_error() {
     let terminal = SerializableToolOperationTerminal {
         body_execution: SerializableEntityBodyExecution::Skipped,
         result: Err(error.clone()),
+        admission_refusal: None,
     };
     let request = HostRequestGolemToolInvocationRejected {
         attempt_ordinal: 11,
@@ -1703,6 +2511,7 @@ fn named_custom_tool_error_payload_roundtrips() {
         result: Ok(SerializableToolOperationTerminal {
             body_execution: SerializableEntityBodyExecution::Executed,
             result: Err(error),
+            admission_refusal: None,
         }
         .into_typed_schema_value()
         .unwrap()),
@@ -1715,7 +2524,18 @@ fn named_custom_tool_error_payload_roundtrips() {
 
 #[test]
 fn tool_operation_terminal_is_schema_native_and_excludes_output_attachments() {
+    use crate::base_model::durable_stream::{
+        LocalStreamId, SessionStreamRole, StreamBindingRecord, StreamConsumerObservation,
+        StreamRecordReference, StreamRegistrationInvocation,
+    };
+    use crate::base_model::oplog::attachment::{
+        ByteStreamCloseCause, ByteStreamFailure, ToolAttachmentId, ToolAttachmentSlot,
+        ToolAttachmentTerminal,
+    };
+    use crate::model::oplog::payload::types::SerializableToolPositionalRequest;
+
     let terminal = SerializableToolOperationTerminal {
+        admission_refusal: None,
         body_execution: SerializableEntityBodyExecution::Skipped,
         result: Err(SerializableToolRpcError::ResourceExhausted(
             "max_tool_attachment_bytes".to_string(),
@@ -1726,6 +2546,7 @@ fn tool_operation_terminal_is_schema_native_and_excludes_output_attachments() {
 
     assert_eq!(decoded, terminal);
     let success = SerializableToolOperationTerminal {
+        admission_refusal: None,
         body_execution: SerializableEntityBodyExecution::Executed,
         result: Ok(SerializableToolStructuredResult { result: None }),
     };
@@ -1736,12 +2557,65 @@ fn tool_operation_terminal_is_schema_native_and_excludes_output_attachments() {
         .unwrap(),
         success
     );
+    for refusal in [
+        SerializableToolAdmissionRefusal::BeforeStart {
+            initiating_function: "golem:tool/host::finish".to_string(),
+            claim: vec![3, 7, 11],
+        },
+        SerializableToolAdmissionRefusal::AtRecordedOplogEntry { index: 37 },
+        SerializableToolAdmissionRefusal::BeforePositional {
+            request: SerializableToolPositionalRequest::RemoveRetryPolicy,
+        },
+        SerializableToolAdmissionRefusal::BeforeInputRead {
+            session: StreamRegistrationInvocation::Local(crate::base_model::IdempotencyKey::new(
+                "input-owner".into(),
+            )),
+            binding: Box::new(StreamBindingRecord {
+                transport_stream_id: 7,
+                source: StreamRecordReference::Local(LocalStreamId(
+                    crate::base_model::OplogIndex::from_u64(19),
+                )),
+                role: SessionStreamRole::ToolStdin,
+            }),
+            consumer_read_ordinal: 11,
+            observation: StreamConsumerObservation::Guest {
+                parent_start_index: Some(crate::base_model::OplogIndex::from_u64(23)),
+            },
+        },
+        SerializableToolAdmissionRefusal::BeforeAttachmentDisposal {
+            attachment: ToolAttachmentId {
+                creation_start: crate::base_model::OplogIndex::from_u64(29),
+                slot: ToolAttachmentSlot::Output,
+            },
+            terminal: ToolAttachmentTerminal::Application(ByteStreamCloseCause::Failed(
+                ByteStreamFailure::Abandoned,
+            )),
+        },
+    ] {
+        let mut terminal = success.clone();
+        terminal.admission_refusal = Some(refusal);
+        assert_eq!(
+            SerializableToolOperationTerminal::from_value(
+                terminal.clone().into_typed_schema_value().unwrap().value(),
+            )
+            .unwrap(),
+            terminal,
+        );
+        assert_eq!(
+            golem_common::serialization::deserialize::<SerializableToolOperationTerminal>(
+                &golem_common::serialization::serialize(&terminal).unwrap(),
+            )
+            .unwrap(),
+            terminal,
+        );
+    }
 
     let structured = "structured result"
         .to_string()
         .into_typed_schema_value()
         .unwrap();
     let success = SerializableToolOperationTerminal {
+        admission_refusal: None,
         body_execution: SerializableEntityBodyExecution::Executed,
         result: Ok(SerializableToolStructuredResult {
             result: Some(SerializableToolResultValue::from_typed(&structured).unwrap()),

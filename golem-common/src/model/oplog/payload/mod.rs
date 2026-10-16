@@ -13,11 +13,15 @@
 // limitations under the License.
 
 pub mod external_durable_stream;
+pub mod tool_attachment;
 pub mod types;
 
 #[cfg(test)]
 mod tests;
 
+use crate::base_model::oplog::attachment::{
+    ByteStreamCloseCause, ByteStreamFailure, ToolAttachmentId,
+};
 use crate::model::agent::AgentTypeName;
 use crate::model::card::PermissionTarget;
 use crate::model::card::ScopeCard;
@@ -66,6 +70,10 @@ use golem_api_grpc::proto::golem::worker::UpdateMode;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
+use tool_attachment::{
+    ToolAttachmentCreated, ToolAttachmentTerminalOutcome, ToolAttachmentWriteOutcome,
+    ToolAttachmentWriteRequest,
+};
 use uuid::Uuid;
 
 pub type HttpTrailers = HashMap<String, Vec<Vec<u8>>>;
@@ -418,6 +426,10 @@ oplog_payload! {
         GolemAgentGetAgentTypeByAgentId {
             agent_id: String
         },
+        ToolAttachmentWrite { request: ToolAttachmentWriteRequest },
+        ToolAttachmentEndpoint { attachment: ToolAttachmentId, operation_ordinal: u64 },
+        ToolAttachmentFail { attachment: ToolAttachmentId, operation_ordinal: u64, reason: ByteStreamFailure },
+        ToolAttachmentFinish { attachment: ToolAttachmentId, operation_ordinal: u64 },
     }
 }
 
@@ -759,6 +771,10 @@ oplog_payload! {
         EntityInvocation {
             result: Result<TypedSchemaValue, String>
         },
+        ToolAttachmentCreated { created: ToolAttachmentCreated },
+        ToolAttachmentWrite { outcome: ToolAttachmentWriteOutcome },
+        ToolAttachmentTerminalResult { outcome: ToolAttachmentTerminalOutcome },
+        ToolAttachmentClosed { cause: ByteStreamCloseCause },
     }
 }
 
@@ -1014,7 +1030,16 @@ pub mod host_functions {
         (GolemToolInvocationRejected => "golem::tool::internal", "invocation-rejected", GolemToolInvocationRejected, EntityInvocation),
         (McpToolCall => "golem::tool::mcp", "call", McpToolCall, McpToolCall),
         (McpToolPresence => "golem::tool::mcp", "presence", McpToolPresence, McpToolPresence),
-        (GolemAgentGetAgentTypeByAgentId => "golem::agent", "get_agent_type_by_agent_id", GolemAgentGetAgentTypeByAgentId, GolemAgentAgentType)
+        (GolemAgentGetAgentTypeByAgentId => "golem::agent", "get_agent_type_by_agent_id", GolemAgentGetAgentTypeByAgentId, GolemAgentAgentType),
+        (GolemToolCreateStdin => "golem::tool::host", "create-stdin", NoInput, ToolAttachmentCreated),
+        (GolemToolCreateOutput => "golem::tool::host", "create-output", NoInput, ToolAttachmentCreated),
+        (GolemToolStdinWrite => "golem::tool::host::tool-stdin-writer", "write", ToolAttachmentWrite, ToolAttachmentWrite),
+        (GolemToolStdinFinish => "golem::tool::host::tool-stdin-writer", "finish", ToolAttachmentFinish, ToolAttachmentTerminalResult),
+        (GolemToolStdinFail => "golem::tool::host::tool-stdin-writer", "fail", ToolAttachmentFail, ToolAttachmentTerminalResult),
+        (GolemToolStdinWait => "golem::tool::host::tool-stdin-closed", "wait", ToolAttachmentEndpoint, ToolAttachmentClosed),
+        (GolemToolOutputWrite => "golem::tool::streams::tool-output-writer", "write", ToolAttachmentWrite, ToolAttachmentWrite),
+        (GolemToolOutputFinish => "golem::tool::streams::tool-output-writer", "finish", ToolAttachmentFinish, ToolAttachmentTerminalResult),
+        (GolemToolOutputFail => "golem::tool::streams::tool-output-writer", "fail", ToolAttachmentFail, ToolAttachmentTerminalResult)
     }
 }
 

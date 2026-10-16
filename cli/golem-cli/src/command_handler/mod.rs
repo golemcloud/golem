@@ -22,8 +22,7 @@ use crate::command::agent_type::AgentTypeSubcommand;
 use crate::command::server::ServerSubcommand;
 use crate::command::tool::ToolSubcommand;
 use crate::command::{
-    GolemCliCommand, GolemCliCommandParseResult, GolemCliFallbackCommand, GolemCliGlobalFlags,
-    GolemCliSubcommand,
+    GolemCliCommand, GolemCliCommandParseResult, GolemCliGlobalFlags, GolemCliSubcommand,
 };
 use crate::command_handler::account::AccountCommandHandler;
 use crate::command_handler::agent::AgentCommandHandler;
@@ -64,7 +63,7 @@ use colored::control::SHOULD_COLORIZE;
 use std::marker::PhantomData;
 use std::process::ExitCode;
 use std::sync::Arc;
-use tracing::{Level, debug};
+use tracing::debug;
 
 pub(crate) use app::tool_middleware::ResolvedToolMiddlewareGrants;
 
@@ -237,7 +236,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 init_tracing(fallback_command.global_flags.verbosity(), false);
 
                 debug!(partial_match = ?partial_match, "Partial match");
-                debug_log_parse_error(&error, &fallback_command);
+                debug_log_parse_error(&error);
 
                 let ctx = Self::new_context_with_init_hint_error_handler(
                     fallback_command.global_flags.clone(),
@@ -264,7 +263,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 fallback_command,
             } => {
                 init_tracing(fallback_command.global_flags.verbosity(), false);
-                debug_log_parse_error(&error, &fallback_command);
+                debug_log_parse_error(&error);
                 end_on_closed_pipe(error.print());
 
                 Ok(clamp_exit_code(error.exit_code()))
@@ -805,14 +804,8 @@ fn clamp_exit_code(exit_code: i32) -> ExitCode {
     }
 }
 
-fn debug_log_parse_error(error: &clap::Error, fallback_command: &GolemCliFallbackCommand) {
-    debug!(fallback_command = ?fallback_command, "Fallback command");
-    debug!(error = ?error, "Clap error");
-    if tracing::enabled!(Level::DEBUG) {
-        for (kind, value) in error.context() {
-            debug!(kind = %kind, value = %value, "Clap error context");
-        }
-    }
+fn debug_log_parse_error(error: &clap::Error) {
+    debug!(kind = ?error.kind(), "Clap parse error");
 }
 
 #[cfg(all(test, feature = "server-commands"))]

@@ -13,8 +13,9 @@
 // limitations under the License.
 
 use super::*;
+use crate::worker::owner_wallet::OwnerWallet;
 use std::collections::HashSet;
-use std::sync::Mutex;
+use std::sync::{Mutex, Weak};
 use tokio::sync::watch;
 
 /// Replayable single-shot channel used to deliver a call's [`Resolution`] from the replay cursor
@@ -187,6 +188,7 @@ struct HistoricalReconstructionInner {
     state: Arc<ReconstructionClaimState>,
     start_index: OplogIndex,
     body: Mutex<Option<OplogIndex>>,
+    wallet: Option<Weak<OwnerWallet>>,
 }
 
 impl Default for ConcurrentReplayResolver {
@@ -206,7 +208,14 @@ impl Default for ConcurrentReplayResolver {
 }
 
 impl ReconstructionClaimState {
-    fn register(self: &Arc<Self>, start_index: OplogIndex) -> HistoricalReconstruction {
+    fn register(
+        self: &Arc<Self>,
+        start_index: OplogIndex,
+        wallet: Option<Weak<OwnerWallet>>,
+    ) -> HistoricalReconstruction {
+        if let Some(wallet) = wallet.as_ref().and_then(Weak::upgrade) {
+            wallet.register_replayed_entity(start_index);
+        }
         let mut active = 0;
         self.active_fences.send_modify(|fences| {
             assert!(
@@ -231,6 +240,7 @@ impl ReconstructionClaimState {
                 state: self.clone(),
                 start_index,
                 body: Mutex::new(Some(start_index)),
+                wallet,
             }),
         }
     }
@@ -340,6 +350,9 @@ impl Drop for HistoricalReconstructionInner {
             self.state.settle_body(start_index);
         }
         self.state.settle_fence(self.start_index);
+        if let Some(wallet) = self.wallet.as_ref().and_then(Weak::upgrade) {
+            wallet.finish_replayed_entity(self.start_index);
+        }
     }
 }
 
@@ -351,8 +364,9 @@ impl ConcurrentReplayResolver {
     pub(crate) fn register_reconstruction(
         &self,
         start_index: OplogIndex,
+        wallet: Option<Weak<OwnerWallet>>,
     ) -> HistoricalReconstruction {
-        self.reconstruction_claims.register(start_index)
+        self.reconstruction_claims.register(start_index, wallet)
     }
 
     /// Registers an awaiter for the call started at `start_idx` and returns the receiver it should

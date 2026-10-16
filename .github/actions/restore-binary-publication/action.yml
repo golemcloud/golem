@@ -1,0 +1,46 @@
+name: 'Restore Binary Publication'
+description: 'Mount an immutable producer snapshot and validate its identity and checksum'
+inputs:
+  run-id:
+    description: 'GitHub run ID that published the binary'
+    required: true
+  disk-key:
+    description: 'Exact sticky disk key exported by the producer attempt'
+    required: true
+  path:
+    description: 'Sticky disk mount path'
+    required: true
+  file:
+    description: 'Published binary or archive filename'
+    required: true
+runs:
+  using: 'composite'
+  steps:
+    - name: Mount binary publication
+      uses: useblacksmith/stickydisk@v1
+      with:
+        key: ${{ inputs.disk-key }}
+        path: ${{ inputs.path }}
+        commit: 'false'
+    - name: Validate binary publication
+      shell: bash
+      env:
+        DISK_KEY: ${{ inputs.disk-key }}
+        PUBLICATION_RUN_ID: ${{ inputs.run-id }}
+        SOURCE_SHA: ${{ github.sha }}
+        PUBLICATION_PATH: ${{ inputs.path }}
+        PUBLICATION_FILE: ${{ inputs.file }}
+      run: |
+        set -euo pipefail
+        mountpoint -q "$PUBLICATION_PATH" || { echo 'Binary publication sticky disk is not mounted' >&2; exit 1; }
+        cd "$PUBLICATION_PATH"
+        [[ -n "$DISK_KEY" && "$PUBLICATION_RUN_ID" == "$GITHUB_RUN_ID" ]] || { echo 'Invalid binary producer inputs' >&2; exit 1; }
+        for file in PUBLICATION SHA256SUMS "$PUBLICATION_FILE"; do
+          [[ -s "$file" && ! -L "$file" ]] || { echo "Missing binary publication: $file (snapshot may be absent or publication denied)" >&2; exit 1; }
+        done
+        printf 'run-id=%s\nsource-sha=%s\ndisk-key=%s\n' "$PUBLICATION_RUN_ID" "$SOURCE_SHA" "$DISK_KEY" | cmp -s - PUBLICATION || { echo 'Binary publication identity mismatch' >&2; exit 1; }
+        read -r digest filename < SHA256SUMS
+        [[ $(wc -l < SHA256SUMS) -eq 1 && "$digest" =~ ^[0-9a-f]{64}$ && "$filename" == "$PUBLICATION_FILE" ]] || { echo 'Invalid binary checksum manifest' >&2; exit 1; }
+        echo "Checking publication $DISK_KEY ($PUBLICATION_FILE)"
+        time sha256sum --check --strict SHA256SUMS
+        printf 'Validated binary sha256=%s file=%s\n' "$digest" "$filename"

@@ -14,18 +14,18 @@
     },
     "git_tool": {
       "component": "git-tool",
-      "version": "0.0.16",
-      "sha256": "817c68fafd59d9f643af3395e51338367bcd3e3917bf9331d095272c8b86f1f6"
+      "version": "0.0.17",
+      "sha256": "21b8981e5811652569738fd028515fb11d157803f0fd6fa10698a0e848196d08"
     },
     "javascript_tools": {
       "component": "javascript-tools",
-      "version": "0.0.16",
-      "sha256": "570d97399d9aa8ddf618e19f566a2d52aed79844f57e32dfdcf2790637607301"
+      "version": "0.0.17",
+      "sha256": "2236f768dcc45e6633e4b10ba0e6dec72370de15ab5c66b245e2c0b268cbbe75"
     },
     "otlp_exporter": {
       "component": "otlp-exporter",
-      "version": "0.0.5",
-      "sha256": "b7d15c3fcdedd922d77884f91dfe8eb81b70ba3b189961dbb7eca989f81183bf"
+      "version": "0.0.6",
+      "sha256": "b6fd5f7a28dd4403f32e325849848f8ce8e895c90aba989df2ba51988653bf54"
     },
     "python": {
       "component": "python",
@@ -34,8 +34,8 @@
     },
     "typescript_tools": {
       "component": "typescript-tools",
-      "version": "0.0.15",
-      "sha256": "927440d671c43888f5911b8b3c6fb6dd118adcb43846fcb4e3559b084a0f5f66"
+      "version": "0.0.16",
+      "sha256": "d5c11d0e25db6d60aa6b80ad50a04fc200a330789c01a31721e99a76893c1dc5"
     },
     "web_fetch": {
       "component": "web-fetch",

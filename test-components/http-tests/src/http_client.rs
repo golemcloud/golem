@@ -1,3 +1,4 @@
+use golem_rust::http::{self, Request};
 use golem_rust::{agent_definition, agent_implementation};
 
 #[agent_definition]
@@ -45,19 +46,15 @@ impl HttpClient for HttpClientImpl {
 async fn do_send_request() -> (u16, String) {
     let port = std::env::var("PORT").unwrap_or("9999".to_string());
 
-    let response = wasi_fetch::Client::new()
-        .post(&format!("http://localhost:{port}/"))
+    let request = Request::post(format!("http://localhost:{port}/"))
         .header("X-Test", "test-header")
         .header("Content-Length", "9")
-        .body("test-body")
-        .send()
-        .await
-        .expect("Request failed");
+        .body(b"test-body".to_vec())
+        .expect("Invalid request");
+    let response = http::send(request).await.expect("Request failed");
 
     let status = response.status().as_u16();
-    let body = response
-        .into_body()
-        .text()
+    let body = http::response_text(response)
         .await
         .expect("Response body read failed");
     println!("Got incoming response");
@@ -67,11 +64,9 @@ async fn do_send_request() -> (u16, String) {
 async fn send_restart_request() {
     let port = std::env::var("PORT").unwrap_or("9999".to_string());
 
-    let _ = wasi_fetch::Client::new()
-        .post(&format!("http://localhost:{port}/restart"))
+    let request = Request::post(format!("http://localhost:{port}/restart"))
         .header("X-Test", "test-header")
-        .body("test-body")
-        .send()
-        .await
-        .expect("Request failed");
+        .body(b"test-body".to_vec())
+        .expect("Invalid request");
+    let _ = http::send(request).await.expect("Request failed");
 }
