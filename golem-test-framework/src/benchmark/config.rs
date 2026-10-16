@@ -302,6 +302,10 @@ pub struct RunConfig {
 #[serde(rename_all = "camelCase")]
 pub struct BenchmarkSuite {
     pub name: String,
+    /// Leave the TypeScript agents out of the throughput benchmarks. The other
+    /// benchmarks choose one agent type each, so a suite selects them by name.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub skip_ts_agents: bool,
     pub benchmarks: Vec<BenchmarkSuiteItem>,
 }
 
