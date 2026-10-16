@@ -19,7 +19,7 @@ use crate::durable_host::tail_work::TailActivity;
 pub struct MarkerReceipt(tokio::sync::oneshot::Receiver<Result<(), WorkerExecutorError>>);
 
 impl MarkerReceipt {
-    pub(in crate::durable_host) fn pending(
+    pub fn pending(
         receiver: tokio::sync::oneshot::Receiver<Result<(), WorkerExecutorError>>,
     ) -> Self {
         Self(receiver)
@@ -54,13 +54,13 @@ impl OrderedAppend {
 /// Delivered markers reserve their oplog position synchronously from Wasmtime's terminal observer.
 /// Discards of pending terminals wait for persistence success before reserving a position.
 #[derive(Clone, Debug)]
-pub(in crate::durable_host) struct CompletionMarkerRecorder {
+pub struct CompletionMarkerRecorder {
     oplog: Arc<dyn Oplog>,
     replay_state: ReplayState,
 }
 
 impl CompletionMarkerRecorder {
-    pub(in crate::durable_host) fn new(oplog: Arc<dyn Oplog>, replay_state: ReplayState) -> Self {
+    pub fn new(oplog: Arc<dyn Oplog>, replay_state: ReplayState) -> Self {
         Self {
             oplog,
             replay_state,
@@ -138,13 +138,13 @@ pub(super) struct CompletionMarkerRecord {
 /// the re-executed guest — instead of recording `CompletionDiscarded`, which would withhold the
 /// completion from a guest that never saw it.
 #[derive(Clone)]
-pub(in crate::durable_host) struct TeardownProbe {
+pub struct TeardownProbe {
     executor_shutdown: tokio_util::sync::CancellationToken,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
 }
 
 impl TeardownProbe {
-    pub(in crate::durable_host) fn new(
+    pub fn new(
         executor_shutdown: tokio_util::sync::CancellationToken,
         runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
     ) -> Self {
@@ -186,9 +186,7 @@ impl CompletionMarkerRecord {
     }
 }
 
-pub(in crate::durable_host) async fn await_marker_receipt(
-    receipt: &mut MarkerReceipt,
-) -> Result<(), WorkerExecutorError> {
+pub async fn await_marker_receipt(receipt: &mut MarkerReceipt) -> Result<(), WorkerExecutorError> {
     (&mut receipt.0)
         .await
         .map_err(|_| marker_recorder_closed_error())?
@@ -349,7 +347,7 @@ impl ReplayDelivery {
 /// otherwise: a direct call's guest task is synchronously blocked inside the host call, so its
 /// delivery coincides with the host return and has no pre-delivery divergence window.
 #[derive(Debug, Clone, Copy)]
-pub(in crate::durable_host) enum ReplayDeliveryDisposition {
+pub enum ReplayDeliveryDisposition {
     /// A cancelled call's recorded partial result: guest-initiated, never marker-bearing.
     Immediate,
     /// A completed `End` with its recorded `CompletionDelivered` marker.
@@ -377,7 +375,7 @@ pub(super) struct LiveDelivery {
 impl CompletionDelivery {
     /// Owns an accepted terminal until persistence completes. Cancellation leaves the receipt
     /// with this token so discard and teardown settlement cannot overtake the terminal.
-    pub(in crate::durable_host) async fn wait_terminal(
+    pub async fn wait_terminal(
         &mut self,
         terminal: tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
     ) -> Result<(), WorkerExecutorError> {
@@ -401,7 +399,7 @@ impl CompletionDelivery {
         result
     }
 
-    pub(in crate::durable_host) fn live(
+    pub fn live(
         start_index: OplogIndex,
         recorder: CompletionMarkerRecorder,
         trap_context: DurableCallTrapContext,
@@ -436,7 +434,7 @@ impl CompletionDelivery {
     /// live-armed once the replay tail exhausts (see [`Self::prepare_delivery`]);
     /// `live_call_permit` stays `None` — a marker lost after a suspension just tail-gates the
     /// `End` again.
-    pub(in crate::durable_host) fn replay_delivered(
+    pub fn replay_delivered(
         disposition: ReplayDeliveryDisposition,
         start_index: OplogIndex,
         recorder: CompletionMarkerRecorder,
