@@ -7357,26 +7357,31 @@ async fn direct_stdin_reversed_replay_admission(
     let synchronize = async {
         if let Some(gate) = &mut live_write {
             tokio::time::timeout(Duration::from_secs(30), gate.entered()).await?;
-            let second = next_promise_checkpoint(
-                &mut checkpoints,
-                if identical {
-                    "first-stdin-write-accepted"
-                } else {
-                    "second-stdin-write-done"
-                },
-            )
-            .await?;
-            wait_for_promise_checkpoint_to_await(&executor, &worker, &second).await?;
+            let first =
+                next_promise_checkpoint(&mut checkpoints, "first-stdin-write-accepted").await?;
+            wait_for_promise_checkpoint_to_await(&executor, &worker, &first).await?;
             executor
                 .complete_promise(
                     &PromiseId {
                         agent_id: worker.clone(),
-                        oplog_idx: second.oplog_idx,
+                        oplog_idx: first.oplog_idx,
                     },
                     Vec::new(),
                 )
                 .await?;
             if !identical {
+                let second =
+                    next_promise_checkpoint(&mut checkpoints, "second-stdin-write-done").await?;
+                wait_for_promise_checkpoint_to_await(&executor, &worker, &second).await?;
+                executor
+                    .complete_promise(
+                        &PromiseId {
+                            agent_id: worker.clone(),
+                            oplog_idx: second.oplog_idx,
+                        },
+                        Vec::new(),
+                    )
+                    .await?;
                 gate.release();
             }
         }
