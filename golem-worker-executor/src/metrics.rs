@@ -1907,6 +1907,12 @@ pub mod agent_filesystem {
             golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
         )
         .unwrap();
+        static ref PRESSURE_UNLOAD_ATTEMPTS: IntCounterVec = register_int_counter_vec!(
+            "filesystem_pressure_unload_attempts_total",
+            "Unloads of idle agents that a recovery of free space on the agent filesystem volume tried, by outcome",
+            &["outcome"]
+        )
+        .unwrap();
         static ref STORAGE_REFUSALS: IntCounterVec = register_int_counter_vec!(
             "filesystem_storage_refusals_total",
             "Agent filesystem calls that failed because no space was left, by cause",
@@ -1947,6 +1953,24 @@ pub mod agent_filesystem {
     }
 
     label_values! {
+        /// How one unload of an idle agent in a recovery of free space ended, as the `outcome` label.
+        PressureUnload {
+            /// The agent was unloaded and its filesystem cleaned up.
+            Unloaded => "unloaded",
+            /// The agent was no longer an idle candidate when the unload ran, for example because
+            /// it got new work or is being deleted. The recovery goes on with the next candidate.
+            Ineligible => "ineligible",
+            /// The agent was stopped, but the cleanup of its filesystem failed. The recovery stops.
+            CleanupFailed => "cleanup_failed",
+            /// The unload task panicked or was cancelled. The recovery stops.
+            TaskFailed => "task_failed",
+            /// The deadline of the recovery passed before the unload finished. The unload task can
+            /// still finish later.
+            Deadline => "deadline",
+        }
+    }
+
+    label_values! {
         /// Why an agent filesystem call found no space, as the `cause` label.
         StorageRefusal {
             /// The agent used up its own quota.
@@ -1975,6 +1999,9 @@ pub mod agent_filesystem {
         for outcome in PressureRecovery::ALL {
             PRESSURE_RECOVERY_SECONDS.with_label_values(&[outcome.label()]);
         }
+        for outcome in PressureUnload::ALL {
+            PRESSURE_UNLOAD_ATTEMPTS.with_label_values(&[outcome.label()]);
+        }
         for cause in StorageRefusal::ALL {
             STORAGE_REFUSALS.with_label_values(&[cause.label()]);
         }
@@ -1990,6 +2017,12 @@ pub mod agent_filesystem {
         PRESSURE_RECOVERY_SECONDS
             .with_label_values(&[outcome.label()])
             .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_pressure_unload_attempt(outcome: PressureUnload) {
+        PRESSURE_UNLOAD_ATTEMPTS
+            .with_label_values(&[outcome.label()])
+            .inc();
     }
 
     pub fn record_storage_refusal(cause: StorageRefusal) {

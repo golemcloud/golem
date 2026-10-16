@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::metrics::agent_filesystem::{self, PressureRecovery};
+use crate::metrics::agent_filesystem::{self, PressureRecovery, PressureUnload};
 use crate::sandbox_filesystem::{
     FilesystemSpace, FilesystemStorageError, FilesystemVolume, observe_space,
 };
@@ -422,7 +422,15 @@ async fn reclaim_filesystem_capacity_from<S: CapacityRecoverySource>(
     let candidates = before_deadline(deadline, source.eligible_loaded_idle_victims()).await?;
     let mut unloaded_agents = 0u32;
     for candidate in candidates {
-        match before_deadline(deadline, source.request_unload(candidate, deadline)).await?? {
+        let unload = before_deadline(deadline, source.request_unload(candidate, deadline)).await;
+        agent_filesystem::record_pressure_unload_attempt(match &unload {
+            Ok(Ok(EvictionStopOutcome::Unloaded)) => PressureUnload::Unloaded,
+            Ok(Ok(EvictionStopOutcome::Ineligible)) => PressureUnload::Ineligible,
+            Ok(Ok(EvictionStopOutcome::CleanupFailed)) => PressureUnload::CleanupFailed,
+            Ok(Err(_)) => PressureUnload::TaskFailed,
+            Err(_) => PressureUnload::Deadline,
+        });
+        match unload?? {
             EvictionStopOutcome::Ineligible => continue,
             EvictionStopOutcome::CleanupFailed => {
                 return Err(FilesystemPressureError::CleanupFailed);
