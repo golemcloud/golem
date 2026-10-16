@@ -182,8 +182,9 @@ methods never attach one. The same `scope_card?` option and `set_default_scope_c
 `PermissionCard` and `PolymorphicPermissionCard` implement the schema traits, so they can be a
 method parameter, a return value, or a field of a `#derive.golem_schema` type. A `PermissionCard`
 declares `permission-card { polymorphic: false }` and a `PolymorphicPermissionCard` declares
-`permission-card { polymorphic: true }`. The host does not check the kind of a card in a value:
-a received card becomes the type that the parameter or return value declares. Generated clients
+`permission-card { polymorphic: true }`. A received card becomes the type that the parameter or
+return value declares, and the host refuses an agent call input or output whose card does not match
+the declared kind. Generated clients
 map `polymorphic: true` to `PolymorphicPermissionCard`.
 
 ## Raw bindings

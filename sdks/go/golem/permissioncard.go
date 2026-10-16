@@ -40,7 +40,8 @@ import (
 //
 // The card types are not convertible into each other. A receiver decodes a
 // card, from a call or a [TypedValue], as the type its parameter or Go type
-// declares: the kind is schema metadata, and the host does not check it. A
+// declares. The host refuses an agent call input or output whose card does
+// not match the declared kind. A
 // [ScopeCard] is not a permission card at all: it cannot be sent, only
 // attached to awaited calls.
 

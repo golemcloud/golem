@@ -21,7 +21,7 @@ var _ = agent.Handle(Forward, func(_ *golem.Context[state], in ForwardIn) golem.
 })
 ```
 
-In a tool, bind it like any other argument (`s.Positional(&a.Card)`) or return it. Use `golem.PolymorphicPermissionCard` when the card's grants may leave the owner or resource id open (a template card). The card types do not convert into each other. A receiver decodes a card as the type its parameter declares; the kind is schema metadata, and the host does not check it.
+In a tool, bind it like any other argument (`s.Positional(&a.Card)`) or return it. Use `golem.PolymorphicPermissionCard` when the card's grants may leave the owner or resource id open (a template card). The card types do not convert into each other. A receiver decodes a card as the type its parameter declares. The host refuses an agent call input or output whose card does not match the declared kind.
 
 ## Managing cards
 

@@ -571,9 +571,9 @@ pub fn PermissionCard::drop(self : PermissionCard) -> Unit {
 /// handle that a card already holds. `derive_child` returns a concrete
 /// `PermissionCard`. As an agent or tool parameter or return value its schema
 /// is `permission-card { polymorphic: true }`; a `PermissionCard` declares
-/// `polymorphic: false`. The schema flag is metadata: the host does not check
-/// the kind of a received card, which decodes into the type that the parameter
-/// or return value declares.
+/// `polymorphic: false`. A received card decodes into the type that the
+/// parameter or return value declares, and the host refuses an agent call
+/// input or output whose card does not match the declared kind.
 pub struct PolymorphicPermissionCard {
   priv handle : @card.GuestPermissionCardHandle
 }

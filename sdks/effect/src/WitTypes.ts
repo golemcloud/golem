@@ -449,8 +449,8 @@ export const PermissionCard = native(
 
 /**
  * Opaque template permission-card capability schema (`permission-card { polymorphic: true }`).
- * It accepts only template cards, and decodes a received card as a template card. The host does
- * not check the kind of a received card; the flag is schema metadata.
+ * It accepts only template cards, and decodes a received card as a template card. The host refuses
+ * an agent call input or output whose card does not match the declared kind.
  *
  * @since 1.6.0
  * @category schemas

@@ -158,8 +158,8 @@ Generated RPC clients copy method signatures but not the imports of the agent tr
 write the fully qualified card type names in an agent trait.
 
 A received card is decoded into the type that the parameter or result declares, and so is any card
-that goes through a schema codec. The host does not check the kind; the schema flag is metadata.
-The host keeps the real kind of the card, so the declared type gives no authority.
+that goes through a schema codec. The host refuses an agent call input or output whose card does
+not match the declared kind, and it keeps the real kind of the card, so the declared type gives no authority.
 
 The rules below apply to `PermissionCard` and `PolymorphicPermissionCard` in the same way. Sending
 a card moves it: the sender can no longer use it. To keep authority and also send it,

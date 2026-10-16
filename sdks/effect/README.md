@@ -637,7 +637,8 @@ permission card, whose grants name concrete owners and resources.
 `WitTypes.PolymorphicPermissionCard` (`polymorphic: true`) represents a template card, whose grants
 may contain slot variables (`?agent`, `?env`, ...) that resolve for each holder. A schema encodes
 only cards of its own kind, and a decoded card takes the type that the parameter or result
-declares; the host does not check the kind. Cards are opaque affine
+declares. The host refuses an agent call input or output whose card does not match the declared
+kind. Cards are opaque affine
 capabilities: successful encoding transfers the exact handle across agent RPC, tool calls, and
 middleware. The sender must not inspect or reuse a transferred card. Transactional graph encoding
 does not consume it if validation or another sibling conversion fails, so a corrected retry remains

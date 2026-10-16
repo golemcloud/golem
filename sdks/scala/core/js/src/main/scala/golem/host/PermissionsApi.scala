@@ -540,8 +540,8 @@ object PermissionsApi {
 
     /**
      * Wraps a decoded handle with the rules of [[PermissionCard.fromSchema]].
-     * The host does not check the kind of a received card; the declared type
-     * chooses the wrapper.
+     * The declared type chooses the wrapper; the host refuses an agent call
+     * input or output whose card does not match the declared kind.
      */
     implicit val fromSchema: FromSchema[PolymorphicPermissionCard] = codecs.fromSchema
 

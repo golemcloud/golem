@@ -6,8 +6,8 @@
 ///|
 /// A card is a first-class capability node in the schema model
 /// (`SchemaType::permission-card`). The schema is never polymorphic: a
-/// `PermissionCard` declares a concrete card. The host does not check the kind
-/// of a received card.
+/// `PermissionCard` declares a concrete card. The host refuses an agent call
+/// input or output whose card does not match the declared kind.
 pub impl @schema.IntoSchema for PermissionCard with fn type_id() {
   "golem.core.PermissionCard"
 }

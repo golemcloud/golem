@@ -674,7 +674,7 @@ describe('permission card non-forgeability', () => {
     );
     expect(() => s.permissionCard({ polymorphic: 'yes' } as never)).toThrow(TypeError);
 
-    // The host does not check the kind: a received card becomes the declared type.
+    // A local schema round trip decodes a card as the declared type.
     const decoded = templateCodec.fromValue(
       schemaValueFromWit(schemaValueToWit(concreteCodec.toValue(concrete))),
     );
