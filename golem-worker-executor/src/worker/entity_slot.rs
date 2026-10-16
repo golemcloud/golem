@@ -185,15 +185,21 @@ impl EntitySlot {
             }
         }
 
-        Ok(EntitySlotRegistration {
-            slot: self.clone(),
-            invocation_id,
-            cancellation,
-        })
+        Ok(EntitySlotRegistration(Arc::new(
+            EntitySlotRegistrationInner {
+                slot: self.clone(),
+                invocation_id,
+                cancellation,
+            },
+        )))
     }
 }
 
-pub(crate) struct EntitySlotRegistration {
+/// Keeps the invocation registered until every retained context has been destroyed.
+#[derive(Clone)]
+pub(crate) struct EntitySlotRegistration(Arc<EntitySlotRegistrationInner>);
+
+struct EntitySlotRegistrationInner {
     slot: Arc<EntitySlot>,
     invocation_id: EntityInvocationId,
     cancellation: CancellationToken,
@@ -201,15 +207,15 @@ pub(crate) struct EntitySlotRegistration {
 
 impl EntitySlotRegistration {
     pub(crate) fn cancellation(&self) -> CancellationToken {
-        self.cancellation.clone()
+        self.0.cancellation.clone()
     }
 
     pub(crate) fn attach_linear_memory(
         &self,
         linear_memory: LinearMemoryTracker,
     ) -> Result<(), WorkerExecutorError> {
-        let invocation_id = &self.invocation_id;
-        let mut state = self.slot.state.lock().unwrap();
+        let invocation_id = &self.0.invocation_id;
+        let mut state = self.0.slot.state.lock().unwrap();
         let invocation = state.active.get_mut(invocation_id).ok_or_else(|| {
             WorkerExecutorError::runtime(format!(
                 "Entity invocation {invocation_id} is no longer registered"
@@ -220,7 +226,7 @@ impl EntitySlotRegistration {
     }
 }
 
-impl Drop for EntitySlotRegistration {
+impl Drop for EntitySlotRegistrationInner {
     fn drop(&mut self) {
         self.slot
             .state

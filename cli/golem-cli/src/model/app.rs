@@ -882,10 +882,7 @@ pub struct Application {
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<HttpApiDeploymentDeployProperties>>>,
     mcp_deployments:
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
-    mcp_imports: BTreeMap<
-        EnvironmentName,
-        WithSource<Vec<golem_common::model::mcp_import::McpImportDeployment>>,
-    >,
+    mcp_imports: BTreeMap<EnvironmentName, WithSource<Vec<app_raw::McpImport>>>,
     agent_secrets_defaults: BTreeMap<EnvironmentName, WithSource<app_raw::JsonObject>>,
     retry_policy_defaults:
         BTreeMap<EnvironmentName, BTreeMap<String, WithSource<DeploymentRetryPolicyDefault>>>,
@@ -1996,10 +1993,7 @@ impl Application {
         self.mcp_deployments.get(environment)
     }
 
-    pub fn mcp_imports(
-        &self,
-        environment: &EnvironmentName,
-    ) -> Option<&Vec<golem_common::model::mcp_import::McpImportDeployment>> {
+    pub fn mcp_imports(&self, environment: &EnvironmentName) -> Option<&Vec<app_raw::McpImport>> {
         self.mcp_imports
             .get(environment)
             .map(|imports| &imports.value)
@@ -4622,10 +4616,7 @@ mod app_builder {
 
         mcp_deployments:
             BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
-        mcp_imports: BTreeMap<
-            EnvironmentName,
-            WithSource<Vec<golem_common::model::mcp_import::McpImportDeployment>>,
-        >,
+        mcp_imports: BTreeMap<EnvironmentName, WithSource<Vec<app_raw::McpImport>>>,
 
         bridge_sdks: WithSource<BridgeSdks>,
 
@@ -6100,7 +6091,17 @@ mod app_builder {
             validation: &mut ValidationBuilder,
             environments: &BTreeMap<EnvironmentName, app_raw::Environment>,
         ) {
-            for environment in self.mcp_imports.keys() {
+            for (environment, imports) in &self.mcp_imports {
+                let mut names = BTreeSet::new();
+                for import in &imports.value {
+                    if let Some(name) = &import.name
+                        && !names.insert(name)
+                    {
+                        validation.add_error(format!(
+                            "Duplicate MCP import name '{name}' in environment '{environment}'; use distinct names"
+                        ));
+                    }
+                }
                 if !environments.contains_key(environment) {
                     validation.add_warn(format!(
                         "Unknown environment in manifest: {}\n\n{}",
@@ -7222,7 +7223,7 @@ mod test {
             app.mcp_imports(&EnvironmentName("local".into()))
                 .unwrap()
                 .iter()
-                .map(|import| import.url.as_str())
+                .map(|import| import.import.url.as_str())
                 .collect::<Vec<_>>(),
             ["https://z.example/mcp", "https://a.example/mcp"]
         );
@@ -7252,6 +7253,34 @@ mod test {
         .into_product();
         assert!(
             errors.iter().any(|error| error.contains("mcp.imports")),
+            "{errors:?}"
+        );
+
+        let duplicate_names = source.replace("- url:", "- name: same\n        url:");
+        let apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_string(
+                dir.path().join("golem.yaml"),
+                &duplicate_names,
+            )
+            .unwrap(),
+        ];
+        let preload = Application::preload_from_raw_apps(&apps)
+            .into_product()
+            .0
+            .unwrap();
+        let (_, _, errors) = Application::from_raw_apps(
+            dir.path().to_path_buf(),
+            preload.application_name,
+            preload.environments,
+            preload.local_server,
+            selector("local", &[]),
+            apps,
+        )
+        .into_product();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Duplicate MCP import name 'same'")),
             "{errors:?}"
         );
     }

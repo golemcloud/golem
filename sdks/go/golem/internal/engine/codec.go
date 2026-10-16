@@ -47,6 +47,9 @@ type Codec struct {
 	// CyclicTypeWithoutRef — so such a type is emitted as a named def and
 	// referenced through ref-type, which is the only valid recursion form.
 	Recursive bool
+	// Named marks a type the schema always emits as a named def, so that
+	// another language can recognise it by its type-id.
+	Named bool
 	// building is true while this codec's children are being compiled. Re-entry
 	// while building is exactly what identifies a recursive type.
 	building bool

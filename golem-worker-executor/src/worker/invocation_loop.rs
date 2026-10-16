@@ -2477,6 +2477,12 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             match resume_replay_result {
                 Ok(None) => CommandOutcome::Continue,
                 Ok(Some(decision)) => CommandOutcome::BreakInnerLoop(decision),
+                Err(WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::Jump,
+                }) => {
+                    store.data().set_suspended();
+                    CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
+                }
                 Err(err) => {
                     warn!("Failed to resume replay: {err}");
                     store.data().set_suspended();
@@ -3916,17 +3922,19 @@ fn failed_agent_invocation_outcome(
 }
 
 fn selected_infrastructure_recovery_error<'a>(
-    owner_failure: Option<&OwnerFailureWinner>,
+    owner_failure: Option<&'a OwnerFailureWinner>,
     agent_mode: AgentMode,
     result: &'a Result<InvokeResult, WorkerExecutorError>,
 ) -> Option<&'a WorkerExecutorError> {
-    if owner_failure.is_some() || agent_mode != AgentMode::Durable {
+    if agent_mode != AgentMode::Durable {
         return None;
     }
-    match result {
-        Err(error @ WorkerExecutorError::RecoveryRequired { .. }) => Some(error),
-        _ => None,
-    }
+    let error = match owner_failure {
+        Some(OwnerFailureWinner::Infrastructure(error)) => error,
+        Some(_) => return None,
+        None => result.as_ref().err()?,
+    };
+    matches!(error, WorkerExecutorError::RecoveryRequired { .. }).then_some(error)
 }
 
 fn is_recovery_required_error(error: &WorkerExecutorError) -> bool {
@@ -4246,7 +4254,7 @@ impl<Ctx: WorkerCtx> UpdateSnapshotHost for UpdateHost<'_, '_, Ctx> {
 mod tests {
     use super::{
         CommandOutcome, ConcurrentAgentPermitState, InvocationLoop, OwnerFailureWinner,
-        PeriodicFailure, PeriodicSnapshotAction, ResidentAgentOwnership, ResidentWakeup,
+        PeriodicFailure, PeriodicSnapshotAction, ResidentAgentOwnership, ResidentWakeup, TrapType,
         apply_delayed_retry_commands_after_unload, catch_invocation_loop_panic,
         close_usage_before_delete, coalesce_delayed_retry_prefix, coalesce_filesystem_limit_update,
         failed_agent_invocation_outcome, finish_filesystem_limit_unload, measured_capture,
@@ -5310,7 +5318,7 @@ mod tests {
     }
 
     #[test]
-    fn infrastructure_recovery_branch_selects_only_durable_unowned_failure() {
+    fn infrastructure_recovery_branch_preserves_owner_and_ephemeral_priority() {
         let result = Err(WorkerExecutorError::recovery_required(
             "payload backend unavailable",
         ));
@@ -5333,6 +5341,32 @@ mod tests {
                 Some(&quota_throttle),
                 AgentMode::Durable,
                 &result,
+            )
+            .is_none()
+        );
+        for winner in [
+            OwnerFailureWinner::Trap(TrapType::Exit),
+            OwnerFailureWinner::Infrastructure(WorkerExecutorError::runtime("earlier failure")),
+        ] {
+            assert!(
+                selected_infrastructure_recovery_error(Some(&winner), AgentMode::Durable, &result)
+                    .is_none()
+            );
+        }
+        let recovery = WorkerExecutorError::recovery_required("elected recovery failure");
+        let winner = OwnerFailureWinner::Infrastructure(recovery.clone());
+        let interrupted = Err(WorkerExecutorError::Interrupted {
+            kind: InterruptKind::Jump,
+        });
+        assert_eq!(
+            selected_infrastructure_recovery_error(Some(&winner), AgentMode::Durable, &interrupted),
+            Some(&recovery)
+        );
+        assert!(
+            selected_infrastructure_recovery_error(
+                Some(&winner),
+                AgentMode::Ephemeral,
+                &interrupted
             )
             .is_none()
         );

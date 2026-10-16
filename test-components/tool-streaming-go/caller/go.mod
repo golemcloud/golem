@@ -34,6 +34,9 @@ replace go.bytecodealliance.org/pkg => github.com/golemcloud/go-pkg v0.2.3-golem
 require (
 	github.com/golemcloud/golem/sdks/go/golem v0.0.0
 	golem.local/bridge/matrix-core-tool-guest-client v0.0.0
+	golem.local/bridge/stdin-probe-tool-guest-client v0.0.0
 )
 
 replace golem.local/bridge/matrix-core-tool-guest-client => ../golem-temp/bridge-sdk/go/internal/matrix-core-tool-guest-client
+
+replace golem.local/bridge/stdin-probe-tool-guest-client => ../golem-temp/bridge-sdk/go/internal/stdin-probe-tool-guest-client

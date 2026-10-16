@@ -50,7 +50,7 @@ The Git tool is implemented in TypeScript under `builtin-tools/git/`, backed by 
 `isomorphic-git`, and built into `builtin-tools/git-tool.wasm`. The source implements local
 `init`, `status`, `diff`, `log`, `branch`, `add`, `commit`, `checkout`, and repository-local `config`,
 plus HTTP(S) `remote`, `ls-remote`, `clone`, `fetch`, `push`, `pull`, `merge`, and linear `rebase`.
-The published `git@0.1.13` release provides these workflows through the checksum-pinned artifact.
+The `git@0.1.14` release provides these workflows through the checksum-pinned artifact.
 All network commands inject the component's WASI HTTP adapter; they do not use sockets.
 Called from a shell, commands start in the shell's current directory; other callers start at `/`
 unless they pass `--cwd`. Repeated `-C` options resolve from that starting directory in order.
@@ -251,7 +251,7 @@ tools:
     release:
       account: builtin-tool-owner@golem.cloud
       name: git
-      version: 0.1.13
+      version: 0.1.14
 
 agents:
   CodingAgent:

@@ -33,6 +33,7 @@ pub mod invocation;
 mod invocation_loop;
 mod lifecycle;
 pub mod owner_lane;
+pub(crate) mod owner_wallet;
 pub mod read_only_cache;
 pub(crate) mod snapshot_selection;
 pub(crate) mod start_outcome;
@@ -730,7 +731,7 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     /// Earliest oplog index requested for deletion by runtime recovery. The same lock is the
     /// publication gate between accepting a cut and publishing a successful invocation.
     pending_runtime_jump: Arc<Mutex<Option<OplogIndex>>>,
-    runtime_append_tasks: StdMutex<Arc<tasks::RuntimeAppendTasks>>,
+    runtime_append_tasks: Arc<StdMutex<Arc<tasks::RuntimeAppendTasks>>>,
     infrastructure_recovery_retry_config: RetryConfig,
     infrastructure_recovery_attempt: AtomicU32,
     oom_retry_config: RetryConfig,
@@ -2663,10 +2664,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             published_authority_generation.clone(),
             instance.clone(),
         ));
+        let card_event_boundary_lock = Arc::new(Mutex::new(()));
+        let runtime_append_tasks = Arc::new(StdMutex::new(Arc::default()));
         let owner_execution = Arc::new(OwnerExecution::new(
             owned_agent_id.clone(),
             oplog.clone(),
             state_actor.owner_commit_controller(),
+            card_event_boundary_lock.clone(),
+            runtime_append_tasks.clone(),
+            self.card_interest_index.clone(),
         ));
         let owner_runtime_resources = Arc::new(OwnerRuntimeResources::new(
             Arc::clone(&resource_entry),
@@ -2703,7 +2709,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             interrupts: Arc::default(),
             interrupt_establishment_tail: StdMutex::new(InterruptEstablishment::ready()),
             pending_runtime_jump: Arc::new(Mutex::new(None)),
-            runtime_append_tasks: StdMutex::new(Arc::default()),
+            runtime_append_tasks,
             infrastructure_recovery_retry_config: deps.config().retry.clone(),
             infrastructure_recovery_attempt: AtomicU32::new(0),
             execution_status,
@@ -2712,7 +2718,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             registered_concurrent_account,
             last_known_status: current_status,
             metrics_status,
-            card_event_boundary_lock: Arc::new(Mutex::new(())),
+            card_event_boundary_lock,
             stream_session_creation_lock: Arc::new(Mutex::new(())),
             published_authority_generation,
             oom_retry_config: deps.config().memory.oom_retry_config.clone(),
@@ -2826,6 +2832,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         activation: Arc<golem_common::model::entity::EntityActivation>,
         owner_component_metadata: Arc<golem_service_base::model::component::Component>,
         authority_wallet: Vec<StoredCard>,
+        entity_start_index: Option<OplogIndex>,
     ) -> Result<Ctx, WorkerExecutorError> {
         if !matches!(runtime, OwnerRuntime::Entity(_)) {
             return Err(WorkerExecutorError::runtime(
@@ -3002,6 +3009,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 filesystem_snapshots::ReplayBaseline::initial_files(),
                 agent_effective_surface,
                 Some(authority_wallet),
+                entity_start_index,
                 Some(owner_component_metadata),
             ),
             self.execution_status.clone(),
@@ -6088,7 +6096,34 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
         snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
-    ) -> Result<(), OplogError> {
+    ) -> Result<(), WorkerExecutorError> {
+        let wallet = self.owner_execution.wallet().await?;
+        let boundary = Box::pin(wallet.lock_boundary());
+        self.persist_successful_update_with_boundary(
+            linear_memory,
+            target_revision,
+            new_component_size,
+            new_active_plugins,
+            snapshot_assisted_details,
+            wallet,
+            boundary,
+        )
+        .await
+    }
+
+    pub(crate) async fn persist_successful_update_with_boundary(
+        self: &Arc<Self>,
+        linear_memory: &LinearMemoryTracker,
+        target_revision: ComponentRevision,
+        new_component_size: u64,
+        new_active_plugins: HashSet<EnvironmentPluginGrantId>,
+        snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
+        wallet: Arc<owner_wallet::OwnerWallet>,
+        boundary: futures::future::BoxFuture<
+            'static,
+            Result<Arc<owner_wallet::CardEventBoundary>, WorkerExecutorError>,
+        >,
+    ) -> Result<(), WorkerExecutorError> {
         let done = {
             let mut growth = self.memory_growth.lock().unwrap();
             let entry = OplogEntry::successful_update(
@@ -6100,7 +6135,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             );
             *growth = Arc::new(PendingMemoryGrowth::default());
             self.state_actor
-                .queue_ordered_oplog_entry(self.clone(), entry)
+                .queue_ordered_oplog_entry(self.clone(), entry, wallet, boundary)
         };
         // A refusal is returned: an update the oplog does not record has not been applied.
         done.await.unwrap_or_else(|_| {
@@ -6109,6 +6144,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 self.owned_agent_id
             )
         })
+    }
+
+    pub(crate) fn recover_wallet_generation(self: &Arc<Self>) {
+        self.state_actor.recover_wallet_generation(self.clone());
     }
 
     pub(crate) fn request_memory_limit_interrupt(self: &Arc<Self>, memory: LinearMemoryTracker) {
@@ -8995,64 +9034,76 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         source_card_id: CardId,
         card: StoredCard,
     ) -> Result<(), WorkerExecutorError> {
-        let instance_guard = self.lock_non_stopping_worker_owned().await;
+        loop {
+            let instance_guard = self.lock_non_stopping_worker_owned().await;
 
-        if instance_guard.ensure_not_deleting().is_err() {
-            return Err(WorkerExecutorError::invalid_request(
-                "Cannot deliver a permission card to a deleting worker",
-            ));
-        }
+            if instance_guard.ensure_not_deleting().is_err() {
+                return Err(WorkerExecutorError::invalid_request(
+                    "Cannot deliver a permission card to a deleting worker",
+                ));
+            }
 
-        let status = self.state_actor.status().await;
-        if let Some(received) = status.received_card_transfers.get(&transfer_id) {
-            return match received {
-                golem_common::model::ReceivedCardTransferState::Received {
-                    source_card_id: recorded_source_card_id,
-                    card: recorded_card,
-                } if *recorded_source_card_id == source_card_id && recorded_card == &card => Ok(()),
-                golem_common::model::ReceivedCardTransferState::Received { .. }
-                | golem_common::model::ReceivedCardTransferState::Conflict => Err(
-                    WorkerExecutorError::invalid_request(PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT),
-                ),
+            // Ordered updates can own the boundary while a preceding lifecycle notification needs
+            // the instance lock. Never retain the instance lock while waiting for that boundary.
+            let Ok(boundary_guard) = self.card_event_boundary_lock.clone().try_lock_owned() else {
+                drop(instance_guard);
+                let boundary_guard = self.card_event_boundary_lock.clone().lock_owned().await;
+                drop(boundary_guard);
+                continue;
             };
+
+            let status = self.state_actor.status().await;
+            if let Some(received) = status.received_card_transfers.get(&transfer_id) {
+                return match received {
+                    golem_common::model::ReceivedCardTransferState::Received {
+                        source_card_id: recorded_source_card_id,
+                        card: recorded_card,
+                    } if *recorded_source_card_id == source_card_id && recorded_card == &card => {
+                        Ok(())
+                    }
+                    golem_common::model::ReceivedCardTransferState::Received { .. }
+                    | golem_common::model::ReceivedCardTransferState::Conflict => {
+                        Err(WorkerExecutorError::invalid_request(
+                            PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
+                        ))
+                    }
+                };
+            }
+
+            let parsed_agent_id = self.parsed_agent_id.as_ref().ok_or_else(|| {
+                WorkerExecutorError::invalid_request(
+                    "permission cards can only be delivered to agents",
+                )
+            })?;
+            let component = self.current_component.load();
+            let target_context =
+                agent_monomorphization_context(&component, &self.owned_agent_id, parsed_agent_id);
+            if !card_matches_agent_recipient(&card, &target_context) {
+                return Err(WorkerExecutorError::invalid_request(
+                    PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH,
+                ));
+            }
+
+            // A refused entry is not delivered: the sender learns the shard moved instead of treating
+            // a transfer this oplog never recorded as received.
+            self.state_actor
+                .append_and_commit_attached(
+                    OplogEntry::card_event_queued(
+                        None,
+                        Box::new(QueuedCardEvent::transfer_received(
+                            transfer_id,
+                            source_card_id,
+                            card,
+                        )),
+                    ),
+                    self.clone(),
+                    instance_guard,
+                    Some(boundary_guard),
+                )
+                .await?;
+
+            return Ok(());
         }
-
-        let parsed_agent_id = self.parsed_agent_id.as_ref().ok_or_else(|| {
-            WorkerExecutorError::invalid_request("permission cards can only be delivered to agents")
-        })?;
-        let component = self.current_component.load();
-        let target_context =
-            agent_monomorphization_context(&component, &self.owned_agent_id, parsed_agent_id);
-        if !card_matches_agent_recipient(&card, &target_context) {
-            return Err(WorkerExecutorError::invalid_request(
-                PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH,
-            ));
-        }
-
-        let boundary_guard = self.card_event_boundary_lock.clone().lock_owned().await;
-        // A refused entry is not delivered: the sender learns the shard moved instead of treating
-        // a transfer this oplog never recorded as received.
-        self.state_actor
-            .append_and_commit_attached(
-                OplogEntry::card_event_queued(
-                    None,
-                    Box::new(QueuedCardEvent::transfer_received(
-                        transfer_id,
-                        source_card_id,
-                        card,
-                    )),
-                ),
-                self.clone(),
-                instance_guard,
-                Some(boundary_guard),
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    pub(crate) fn card_event_boundary_lock(&self) -> Arc<Mutex<()>> {
-        self.card_event_boundary_lock.clone()
     }
 
     pub(crate) fn published_authority_generation(&self) -> Arc<AtomicU64> {
@@ -11911,7 +11962,7 @@ impl RunningWorker {
         // Transport-owned bodies and custom begin coordinators can outlive their Stores. Seal
         // their old admission handle permanently before fixing the committed replay horizon.
         parent.runtime_append_tasks().seal_and_wait().await;
-        *parent.runtime_append_tasks.lock().unwrap() = Arc::default();
+        let wallet_installation_guard = parent.card_event_boundary_lock.clone().lock_owned().await;
 
         if parent.durable_stream_producer.is_recovering() {
             parent
@@ -11959,6 +12010,7 @@ impl RunningWorker {
                     ))
                     .await
                     .map_err(WorkerExecutorError::from)?;
+                drop(wallet_installation_guard);
                 return Box::pin(Self::create_instance(
                     parent,
                     concurrent_agent_permit,
@@ -11974,6 +12026,7 @@ impl RunningWorker {
                     start_outcome::RawStartError::StaleSource(&found),
                 );
                 Self::perform_start_action(&parent, action).await?;
+                drop(wallet_installation_guard);
                 return Box::pin(Self::create_instance(
                     parent,
                     concurrent_agent_permit,
@@ -12069,6 +12122,7 @@ impl RunningWorker {
                             start_outcome::RawStartError::ModeChange(&details),
                         );
                         Self::perform_start_action(&parent, action).await?;
+                        drop(wallet_installation_guard);
                         return Box::pin(Self::create_instance(
                             parent,
                             concurrent_agent_permit,
@@ -12112,6 +12166,7 @@ impl RunningWorker {
                                 }
                                 error => error,
                             })?;
+                        drop(wallet_installation_guard);
                         return Box::pin(Self::create_instance(
                             parent,
                             concurrent_agent_permit,
@@ -12166,6 +12221,7 @@ impl RunningWorker {
                     start_outcome::RawStartError::Disabled,
                 );
                 Self::perform_start_action(&parent, action).await?;
+                drop(wallet_installation_guard);
                 return Box::pin(Self::create_instance(
                     parent,
                     concurrent_agent_permit,
@@ -12221,6 +12277,7 @@ impl RunningWorker {
                         .await
                         .map_err(WorkerExecutorError::from)?;
                     drop(pending_runtime_jump);
+                    drop(wallet_installation_guard);
                     return Box::pin(Self::create_instance(
                         parent,
                         concurrent_agent_permit,
@@ -12415,6 +12472,41 @@ impl RunningWorker {
                 );
             }
         };
+        let install_wallet = async {
+            parent
+                .commit_oplog_and_update_state(CommitLevel::Always)
+                .await?;
+            let horizon = parent.oplog.current_oplog_index().await;
+            let snapshot_index = replay.snapshot.map(|(index, _)| index);
+            let baseline = owner_wallet::WalletBaseline::new(
+                parent.owned_agent_id.clone(),
+                parent.owner_context.clone(),
+                parent.component_service(),
+                &component_metadata_for_replay,
+                parent.oplog.as_ref(),
+                snapshot_index,
+                worker_metadata.config.clone(),
+            )
+            .await?;
+            parent
+                .owner_execution
+                .install_replay_generation_locked(
+                    skipped_regions.clone(),
+                    snapshot_index,
+                    baseline,
+                    horizon,
+                    parent.tasks.clone(),
+                    &wallet_installation_guard,
+                )
+                .await
+        }
+        .await;
+        if let Err(error) = install_wallet {
+            return Err(
+                cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await,
+            );
+        }
+        drop(wallet_installation_guard);
         let mut context = match Ctx::create(
             worker_metadata.created_by,
             OwnedAgentId::new(worker_metadata.environment_id, &worker_metadata.agent_id),
@@ -12451,6 +12543,7 @@ impl RunningWorker {
                 worker_metadata.config,
                 replay,
                 agent_effective_surface,
+                None,
                 None,
                 None,
             ),

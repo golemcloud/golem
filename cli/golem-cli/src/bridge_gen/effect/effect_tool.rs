@@ -14,7 +14,7 @@ use serde_json::json;
 /// Generates the exact graph-backed TypeScript tool client and binds it to the Effect transport.
 pub struct EffectToolBridgeGenerator {
     tool: Tool,
-    tool_name: String,
+    rpc_tool_name: String,
     target_path: Utf8PathBuf,
     testing: bool,
 }
@@ -25,9 +25,18 @@ impl EffectToolBridgeGenerator {
             .name()
             .context("tool command tree must contain a root command")?
             .to_string();
+        Self::new_with_rpc_tool_name(tool, tool_name, target_path, testing)
+    }
+
+    pub fn new_with_rpc_tool_name(
+        tool: Tool,
+        rpc_tool_name: String,
+        target_path: &Utf8Path,
+        testing: bool,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
             tool,
-            tool_name,
+            rpc_tool_name,
             target_path: target_path.to_path_buf(),
             testing,
         })
@@ -35,14 +44,18 @@ impl EffectToolBridgeGenerator {
 
     pub fn generate(&mut self) -> anyhow::Result<()> {
         std::fs::create_dir_all(&self.target_path)?;
-        let package_name = tool_bridge_client_directory_name(&self.tool_name);
-        let mut canonical =
-            TypeScriptToolBridgeGenerator::new(self.tool.clone(), &self.target_path, self.testing)?;
+        let package_name = tool_bridge_client_directory_name(&self.rpc_tool_name);
+        let mut canonical = TypeScriptToolBridgeGenerator::new_with_rpc_tool_name(
+            self.tool.clone(),
+            self.rpc_tool_name.clone(),
+            &self.target_path,
+            self.testing,
+        )?;
         let root = canonical.root_client_class_name()?.to_string();
         let source = canonical.source_effect()?;
         let source = format!(
             "{source}\n/** Effect client using the same structural codecs and canonical projection. */\nexport const client = base.client({root}, {});\n",
-            serde_json::to_string(&self.tool_name)?
+            serde_json::to_string(&self.rpc_tool_name)?
         );
         std::fs::write(self.target_path.join(format!("{package_name}.ts")), source)?;
 

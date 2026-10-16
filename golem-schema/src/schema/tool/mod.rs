@@ -371,7 +371,9 @@ pub struct TailPositional {
     pub item_type: SchemaType,
     pub min: u32,
     pub max: Option<u32>,
-    /// Token required before tail items (e.g. `--` for `git log -- <paths>`).
+    /// Token required before tail items (e.g. `--` for `git log -- <paths>`). The argument parser
+    /// lets a verbatim `--` tail start without it when the command has no fixed positionals and
+    /// no subcommands.
     pub separator: Option<String>,
     /// If true, tokens after `separator` are not flag-parsed.
     pub verbatim: bool,

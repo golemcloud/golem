@@ -24,45 +24,14 @@ use uuid::Uuid;
 inherit_test_dep!(Tracing);
 
 async fn streaming_invocation_context() -> TestContext {
+    let started = std::time::Instant::now();
     let mut ctx = TestContext::new();
-    let component_dir = ctx.cwd_path_join("component");
-    fs::create_dir_all(&component_dir).unwrap();
-
-    let fixture = workspace_path().join("test-components/agent-rpc/golem-it-agent-rpc-rust");
-    fs_extra::dir::copy(
-        fixture.join("src"),
-        &component_dir,
-        &fs_extra::dir::CopyOptions::new(),
-    )
-    .unwrap();
-
-    let sdk_path = workspace_path().join("sdks/rust/golem-rust");
-    fs::write_str(
-        component_dir.join("Cargo.toml"),
-        formatdoc! {r#"
-            [package]
-            name = "golem_it_agent_rpc_rust"
-            version = "0.0.1"
-            edition = "2024"
-
-            [profile.release]
-            opt-level = "s"
-            lto = true
-
-            [lib]
-            crate-type = ["cdylib"]
-            path = "src/lib.rs"
-
-            [dependencies]
-            bytes = "1.11.0"
-            log = {{ version = "0.4.29", features = ["kv"] }}
-            golem-rust = {{ path = "{sdk_path}", features = ["bytes", "export_golem_agentic"] }}
-            serde = {{ version = "1", features = ["derive"] }}
-            serde_json = "1"
-            wasi-fetch = "=0.2.0"
-        "#, sdk_path = sdk_path.display()},
-    )
-    .unwrap();
+    let fixture = workspace_path().join("test-components/golem_it_agent_rpc_rust_release.wasm");
+    assert!(
+        fixture.is_file(),
+        "build the benchmarks test-component group before running streaming tests"
+    );
+    fs::copy(&fixture, ctx.cwd_path_join("component.wasm")).unwrap();
 
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
@@ -71,23 +40,10 @@ async fn streaming_invocation_context() -> TestContext {
 
             app: streaming-invocation
 
-            componentTemplates:
-              rust-streaming-test:
-                guestLanguage: rust
-                build:
-                - command: cargo build --target wasm32-wasip2 --release
-                  sources:
-                  - "{{{{ componentDir }}}}/src"
-                  - "{{{{ componentDir }}}}/Cargo.toml"
-                  targets:
-                  - "{{{{ cargoTarget }}}}/wasm32-wasip2/release/golem_it_agent_rpc_rust.wasm"
-                componentWasm: "{{{{ cargoTarget }}}}/wasm32-wasip2/release/golem_it_agent_rpc_rust.wasm"
-                outputWasm: "{{{{ golemTempDir }}}}/agents/golem_it_agent_rpc_rust.wasm"
-
             components:
               golem-it:agent-rpc-rust:
-                dir: component
-                templates: rust-streaming-test
+                componentWasm: component.wasm
+                outputWasm: component-final.wasm
                 presets:
                   release: {{}}
 
@@ -102,6 +58,11 @@ async fn streaming_invocation_context() -> TestContext {
     ctx.start_server().await;
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
+    eprintln!(
+        "STREAMING_CONTEXT_READY directory={} seconds={:.3}",
+        ctx.cwd_path_join("").display(),
+        started.elapsed().as_secs_f64(),
+    );
     ctx
 }
 
@@ -214,7 +175,28 @@ async fn start_interrupting_websocket_proxy(
 async fn run_generated_driver(command: std::process::Command) -> std::process::Output {
     tokio::task::spawn_blocking(move || {
         let mut command = command;
-        command.output().unwrap()
+        let program = Path::new(command.get_program())
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let directory = command.get_current_dir().unwrap().display().to_string();
+        let started = std::time::Instant::now();
+        eprintln!("STREAMING_DRIVER_COMMAND start program={program} directory={directory}");
+        let output = command.output().unwrap();
+        eprintln!(
+            "STREAMING_DRIVER_COMMAND end program={program} directory={directory} seconds={:.3} status={}",
+            started.elapsed().as_secs_f64(),
+            output.status,
+        );
+        for line in String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .chain(String::from_utf8_lossy(&output.stderr).lines())
+            .filter(|line| line.starts_with("STREAMING_DRIVER_TIMING "))
+        {
+            eprintln!("{line}");
+        }
+        output
     })
     .await
     .unwrap()
@@ -234,7 +216,6 @@ fn assert_generated_driver(output: std::process::Output, language: &str, marker:
 }
 
 #[test]
-#[tag(agents_streaming)]
 #[timeout("15 minutes")]
 async fn test_agent_stream_ends_when_stdout_is_closed() {
     let ctx = streaming_invocation_context().await;
@@ -278,7 +259,6 @@ async fn test_agent_stream_ends_when_stdout_is_closed() {
 
 /// The reader takes the first part of the output and then goes away, as `head` does.
 #[test]
-#[tag(agents_streaming)]
 #[timeout("15 minutes")]
 async fn test_reader_that_leaves_after_the_first_oplog_output_ends_agent_oplog_with_the_exit_code_of_sigpipe()
  {
@@ -401,7 +381,6 @@ async fn assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
 /// after the reader has left, because the command writes nothing more.
 #[cfg(unix)]
 #[test]
-#[tag(agents_streaming)]
 #[timeout("15 minutes")]
 async fn test_reader_that_leaves_after_the_first_byte_ends_agent_invoke_with_the_exit_code_of_sigpipe()
  {
@@ -416,7 +395,6 @@ async fn test_reader_that_leaves_after_the_first_byte_ends_agent_invoke_with_the
 /// The invocation goes on writing after the reader has left, so a failed write of the output
 /// ends the command, not the watch.
 #[test]
-#[tag(agents_streaming)]
 #[timeout("15 minutes")]
 async fn test_reader_that_leaves_while_the_output_is_written_ends_agent_invoke_after_the_cancel() {
     let ctx = streaming_invocation_context().await;
@@ -432,7 +410,6 @@ async fn test_reader_that_leaves_while_the_output_is_written_ends_agent_invoke_a
 /// fails while `agent invoke` holds back the end of the process, and the command must still end
 /// with the exit code of SIGPIPE when the session is over.
 #[test]
-#[tag(agents_streaming)]
 #[timeout("15 minutes")]
 async fn test_rejected_agent_invoke_ends_with_the_exit_code_of_sigpipe_when_stderr_is_closed() {
     let ctx = streaming_invocation_context().await;
@@ -475,7 +452,6 @@ async fn test_rejected_agent_invoke_ends_with_the_exit_code_of_sigpipe_when_stde
 
 #[cfg(unix)]
 #[test]
-#[tag(agents_streaming)]
 #[timeout("15 minutes")]
 async fn test_idle_agent_stream_ends_when_stdout_is_closed() {
     let ctx = streaming_invocation_context().await;
@@ -502,7 +478,6 @@ async fn test_idle_agent_stream_ends_when_stdout_is_closed() {
 }
 
 #[test]
-#[tag(agents_streaming)]
 #[timeout("15 minutes")]
 async fn test_streaming_invocation_cli_end_to_end() {
     let ctx = streaming_invocation_context().await;
@@ -1472,6 +1447,7 @@ async fn test_go_generated_streaming_bridge_end_to_end() {
             }}
 
             func main() {{
+            	started := time.Now()
             	ctx := context.Background()
             	if err := bridge.Configure(bridge.Configuration{{
             		Server:  bridge.Custom("{proxy}", "{token}"),
@@ -1511,7 +1487,9 @@ async fn test_go_generated_streaming_bridge_end_to_end() {
             	for i := range bytes {{
             		bytes[i] = uint8(i)
             	}}
+            	bytesStarted := time.Now()
             	expect("transform bytes", must(must(agent.TransformBytes(ctx, bridge.StreamOf(bytes...))).Collect(ctx)), bytes)
+            	fmt.Printf("STREAMING_DRIVER_TIMING go transform_bytes seconds=%.3f\n", time.Since(bytesStarted).Seconds())
 
             	cancelled := must(agent.ProduceByteThenWait(ctx))
             	waiting, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -1532,6 +1510,7 @@ async fn test_go_generated_streaming_bridge_end_to_end() {
             		}}),
             	)).Describe(ctx))
             	expect("describe", described, values.Tuple3[string, string, uint32]{{A: "go-configured", B: "go-label", C: 7}})
+            	fmt.Printf("STREAMING_DRIVER_TIMING go execution seconds=%.3f\n", time.Since(started).Seconds())
             	fmt.Println("GO_STREAMING_BRIDGE_E2E_OK")
             }}
             "#
@@ -1621,6 +1600,7 @@ async fn test_generated_streaming_bridges_end_to_end() {
 
         #[tokio::main]
         async fn main() -> Result<(), Box<dyn std::error::Error>> {{
+            let started = std::time::Instant::now();
             configure(
                 GolemServer::Custom {{
                     url: "{rust_proxy}".parse()?,
@@ -1667,12 +1647,14 @@ async fn test_generated_streaming_bridges_end_to_end() {
 
             let byte_count = 2 * 1024 * 1024 + 17;
             let bytes = (0..byte_count).map(|value| value as u8).collect::<Vec<_>>();
+            let bytes_started = std::time::Instant::now();
             let transformed_bytes = agent
                 .transform_bytes(input(bytes.clone()))
                 .await?
                 .try_collect::<Vec<_>>()
                 .await?;
             assert_eq!(transformed_bytes, bytes);
+            println!("STREAMING_DRIVER_TIMING rust transform_bytes seconds={{:.3}}", bytes_started.elapsed().as_secs_f64());
 
             let mut cancelled = agent.produce_byte_then_wait().await?;
             assert_eq!(
@@ -1683,15 +1665,18 @@ async fn test_generated_streaming_bridges_end_to_end() {
                 Some(1),
             );
             cancelled.cancel();
+            println!("STREAMING_DRIVER_TIMING rust execution seconds={{:.3}}", started.elapsed().as_secs_f64());
             println!("RUST_STREAMING_BRIDGE_E2E_OK");
             Ok(())
         }}
         "#};
     std::fs::create_dir_all(rust_client.join("examples")).unwrap();
     std::fs::write(rust_client.join("examples/e2e.rs"), rust_driver).unwrap();
+    let rust_target_dir = ctx.cwd_path_join("rust-bridge-target");
     let mut rust_command = std::process::Command::new("cargo");
     rust_command
         .args(["run", "--quiet", "--example", "e2e"])
+        .env("CARGO_TARGET_DIR", &rust_target_dir)
         .current_dir(&rust_client);
     let rust_output = run_generated_driver(rust_command).await;
     rust_proxy_task.abort();
@@ -1747,6 +1732,7 @@ async fn test_generated_streaming_bridges_end_to_end() {
     let mut rust_config_command = std::process::Command::new("cargo");
     rust_config_command
         .args(["run", "--quiet", "--example", "e2e"])
+        .env("CARGO_TARGET_DIR", &rust_target_dir)
         .current_dir(&rust_config_client);
     assert_generated_driver(
         run_generated_driver(rust_config_command).await,
@@ -2381,7 +2367,6 @@ async fn test_go_counter() {
 /// direct guest ABI and native same-component agent RPC. This does not depend
 /// on generated cross-component bridges or public streaming bridge clients.
 #[test]
-#[tag(agents_streaming)]
 #[timeout("15 minutes")]
 async fn test_scala_streaming_rpc_e2e() {
     let mut ctx = TestContext::new();
