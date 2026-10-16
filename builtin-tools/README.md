@@ -1,12 +1,13 @@
 # Built-in tools
 
-Built-in tools and middlewares are component sources built from this repository, published as
-immutable releases in [`golemcloud/golem-builtins`](https://github.com/golemcloud/golem-builtins),
-downloaded into the registry-service artifact cache, and provisioned at registry startup.
+Built-in tools and middlewares are component sources built from this repository and provisioned
+at registry startup. Development uses local WASMs prepared by
+`cargo make ensure-builtin-artifacts`. Tagged releases publish immutable assets in
+[`golemcloud/golem-builtins`](https://github.com/golemcloud/golem-builtins).
 `BUILTIN_EXPORTS` in `golem-registry-service/src/services/builtin_tool_provisioner.rs` is the
-production export inventory; `builtin-artifacts.lock.json` pins each component artifact's
-independent version and SHA-256. The registry derives the canonical GitHub release URL from that
-lock. Server configuration is only for deployment-specific cache placement and source overrides;
+production export inventory; `builtin-artifacts.json` lists build tasks, source inputs, and outputs.
+The generated `builtin-artifacts.release.json` pins release versions and SHA-256 values.
+Server configuration is only for deployment-specific cache placement and source overrides;
 it does not duplicate the production release catalog.
 
 The filesystem component is implemented in Rust under `builtin-tools/filesystem-tools/`. The same
@@ -133,16 +134,15 @@ the sibling tool's locked dependencies before bundling; a warm tool `node_module
 1. Add a standalone tool component source and build it through its Golem application manifest. Do
    not invoke its language compiler directly.
 2. Add its logical artifact ID to `BuiltinExportDescriptor`; keep export metadata in the descriptor
-   and add the component name, independent artifact version, and checksum to
-   `builtin-artifacts.lock.json`.
+   and add the component name, output path, build task, and transitive inputs to
+   `builtin-artifacts.json`.
 3. Set `component_name`, `export_name`, `release_version`, and `kind` to the artifact's exported
    metadata. Provisioning validates these values before writing anything.
 4. Add an independent build task and include it in `build-builtin-tools`. Validate the generated
    WASM and run the registry provisioning tests.
-5. Commit the exact source and build inputs, then manually publish an immutable component release
-   from that clean local checkout with `cargo make publish-builtin-artifact`. Commit the resulting
-   version/checksum update to `builtin-artifacts.lock.json` separately. Generated WASMs are never
-   committed.
+5. Verify `cargo make ensure-builtin-artifacts` and local provisioning. Development changes need
+   no publication. Follow [the release procedure](../BUILTIN_ARTIFACTS.md) for tagged releases.
+   Generated WASMs and release manifests are never committed.
 
 Provisioning is idempotent for identical bytes and an identical exact version. A published system
 release is protected and immutable. Every byte-changing component publication requires a new

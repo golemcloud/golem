@@ -22,7 +22,8 @@ pub(crate) use invocation_session::{build_durable_streaming_request, decode_invo
 use crate::durable_host::agent_monomorphization_context;
 use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
-    find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
+    PublicOplogPageLimits, find_component_revision_at, get_public_oplog_entry,
+    get_public_oplog_page, search_public_oplog_page,
 };
 use crate::model::{LastError, LookupResult};
 use crate::services::events::Event;
@@ -59,10 +60,11 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     DurableStreamSegmentReadResponse, ForkStreamSlotRequest, ForkStreamSlotResponse,
     ForkWorkerRequest, ForkWorkerResponse, GetAgentWalletRequest, GetAgentWalletResponse,
     GetAgentWalletSuccess, GetFileContentsRequest, GetFileContentsResponse,
-    GetFileSystemNodeRequest, GetFileSystemNodeResponse, GetOplogRequest, GetOplogResponse,
-    GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest,
-    GetWorkersMetadataResponse, ProcessOplogEntriesRequest, ProcessOplogEntriesResponse,
-    ReadStreamSlotRequest, ReadStreamSlotResponse, ResolveRevertLastInvocationsRequest,
+    GetFileSystemNodeRequest, GetFileSystemNodeResponse, GetOplogEntryRequest,
+    GetOplogEntryResponse, GetOplogRequest, GetOplogResponse, GetRunningWorkersMetadataRequest,
+    GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
+    ProcessOplogEntriesRequest, ProcessOplogEntriesResponse, ReadStreamSlotRequest,
+    ReadStreamSlotResponse, ResolveRevertLastInvocationsRequest,
     ResolveRevertLastInvocationsResponse, RevertWorkerRequest, RevertWorkerResponse,
     SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
     deliver_card_transfer_response, durable_stream_attachment_control_response,
@@ -111,6 +113,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};
 use tracing::info_span;
@@ -130,6 +133,8 @@ pub struct WorkerExecutorImpl<
     /// Same arrangement for the assignment-changed hook: the shard manager service holds a Weak
     /// to it (see `GrpcShardManagerService::assignment_changed_hook`); this is the strong one.
     _assignment_changed_hook: ShardAssignmentChangedHook,
+    /// Admits `GetOplogEntry` reads, each of which holds one full oplog entry in memory.
+    oplog_entry_reads: Arc<Semaphore>,
     ctx: PhantomData<Ctx>,
 }
 
@@ -141,6 +146,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             services: self.services.clone(),
             _worker_activator: self._worker_activator.clone(),
             _assignment_changed_hook: self._assignment_changed_hook.clone(),
+            oplog_entry_reads: self.oplog_entry_reads.clone(),
             ctx: PhantomData,
         }
     }
@@ -148,6 +154,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
 type ResponseResult<T> = Result<Response<T>, Status>;
 type ResponseStream = WorkerEventStream;
+
+/// The size of the chunks in which `GetOplogEntry` sends an encoded oplog entry.
+const OPLOG_ENTRY_CHUNK_SIZE: usize = 4 * 1024 * 1024;
+
+/// Splits an encoded oplog entry into `GetOplogEntry` chunk frames. The stream owns the encoded
+/// entry and copies a chunk out of it only when the frame is polled. It also owns `admission`,
+/// which it releases when it is dropped: after the last frame, or when the caller cancels.
+fn oplog_entry_frames<A: Send + 'static>(
+    encoded: Vec<u8>,
+    chunk_size: usize,
+    admission: A,
+) -> impl Stream<Item = Result<GetOplogEntryResponse, Status>> + Send + 'static {
+    use golem::workerexecutor::v1::get_oplog_entry_response::Result as Frame;
+    let len = encoded.len();
+    futures::stream::iter((0..len).step_by(chunk_size).map(move |start| {
+        let _admission = &admission;
+        let end = (start + chunk_size).min(len);
+        Ok(GetOplogEntryResponse {
+            result: Some(Frame::Chunk(encoded[start..end].to_vec())),
+        })
+    }))
+}
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -188,6 +216,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             services: services.clone(),
             _worker_activator: worker_activator,
             _assignment_changed_hook: assignment_changed_hook.clone(),
+            oplog_entry_reads: Arc::new(Semaphore::new(
+                services.config().limits.max_concurrent_oplog_entry_reads,
+            )),
             ctx: PhantomData,
         };
 
@@ -262,6 +293,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         agent_id: impl AsRef<AgentId>,
     ) -> Result<(), WorkerExecutorError> {
         self.shard_service().check_admission(agent_id.as_ref())
+    }
+
+    /// Limits of an oplog page that this executor returns to a remote caller. They keep the
+    /// page below the gRPC message size limit; `GetOplogEntry` returns the omitted entries.
+    fn oplog_query_limits(&self, requested_count: u64) -> PublicOplogPageLimits {
+        let limits = &self.services.config().limits;
+        PublicOplogPageLimits {
+            count: min(requested_count as usize, limits.max_oplog_query_pages_size),
+            max_bytes: limits.max_oplog_query_page_bytes,
+            max_entry_bytes: limits.max_inline_oplog_entry_size,
+        }
     }
 
     /// Rewrites the `OwnedAgentId` so that `environment_id` comes from the
@@ -1677,7 +1719,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ))
                     })?;
 
-                get_public_oplog_chunk(
+                get_public_oplog_page(
                     component_service.clone(),
                     self.oplog_service(),
                     &owned_agent_id,
@@ -1685,10 +1727,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     agent_type_name.as_ref(),
                     current_component_revision,
                     OplogIndex::from_u64(cursor.next_oplog_index),
-                    min(
-                        request.count as usize,
-                        self.services.config().limits.max_oplog_query_pages_size,
-                    ),
+                    self.oplog_query_limits(request.count),
                 )
                 .await
                 .map_err(WorkerExecutorError::unknown)?
@@ -1703,7 +1742,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 )
                 .await?;
 
-                get_public_oplog_chunk(
+                get_public_oplog_page(
                     component_service.clone(),
                     self.oplog_service(),
                     &owned_agent_id,
@@ -1711,10 +1750,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     agent_type_name.as_ref(),
                     initial_component_revision,
                     start,
-                    min(
-                        request.count as usize,
-                        self.services.config().limits.max_oplog_query_pages_size,
-                    ),
+                    self.oplog_query_limits(request.count),
                 )
                 .await
                 .map_err(WorkerExecutorError::unknown)?
@@ -1734,12 +1770,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             result: Some(
                 golem::workerexecutor::v1::get_oplog_response::Result::Success(
                     golem::workerexecutor::v1::GetOplogSuccessResponse {
-                        entries: chunk
-                            .entries
-                            .into_iter()
-                            .map(|entry| entry.try_into())
-                            .collect::<Result<Vec<_>, _>>()
-                            .map_err(WorkerExecutorError::unknown)?,
+                        entries: chunk.entries,
                         next,
                         first_index_in_chunk: chunk.first_index_in_chunk.into(),
                         last_index: chunk.last_index.into(),
@@ -1747,6 +1778,55 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ),
             ),
         })
+    }
+
+    async fn get_oplog_entry_internal(
+        &self,
+        request: GetOplogEntryRequest,
+    ) -> Result<(Vec<u8>, OwnedSemaphorePermit), WorkerExecutorError> {
+        let owned_agent_id =
+            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+
+        let identity = self
+            .worker_service()
+            .resolve_agent_identity(&owned_agent_id)
+            .await?
+            .ok_or_else(|| {
+                WorkerExecutorError::invalid_request(format!(
+                    "agent {owned_agent_id} does not exist"
+                ))
+            })?;
+        let agent_type_name =
+            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+
+        let component_revision = request
+            .component_revision
+            .map(golem_common::model::component::ComponentRevision::try_from)
+            .transpose()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("invalid component_revision: {e}"))
+            })?;
+
+        let admission = self
+            .oplog_entry_reads
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("the oplog entry read semaphore is never closed");
+        let entry = get_public_oplog_entry(
+            self.component_service(),
+            self.oplog_service(),
+            &owned_agent_id,
+            identity.agent_mode,
+            agent_type_name.as_ref(),
+            OplogIndex::from_u64(request.oplog_index),
+            component_revision,
+        )
+        .await?;
+        let entry: golem::worker::OplogEntryWithIndex =
+            entry.try_into().map_err(WorkerExecutorError::unknown)?;
+        Ok((prost::Message::encode_to_vec(&entry), admission))
     }
 
     async fn search_oplog_internal(
@@ -1782,7 +1862,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ))
                     })?;
 
-                search_public_oplog(
+                search_public_oplog_page(
                     component_service.clone(),
                     self.oplog_service(),
                     &owned_agent_id,
@@ -1790,10 +1870,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     agent_type_name.as_ref(),
                     current_component_revision,
                     OplogIndex::from_u64(cursor.next_oplog_index),
-                    min(
-                        request.count as usize,
-                        self.services.config().limits.max_oplog_query_pages_size,
-                    ),
+                    self.oplog_query_limits(request.count),
                     &request.query,
                 )
                 .await
@@ -1808,7 +1885,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     start,
                 )
                 .await?;
-                search_public_oplog(
+                search_public_oplog_page(
                     component_service.clone(),
                     self.oplog_service(),
                     &owned_agent_id,
@@ -1816,10 +1893,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     agent_type_name.as_ref(),
                     initial_component_revision,
                     start,
-                    min(
-                        request.count as usize,
-                        self.services.config().limits.max_oplog_query_pages_size,
-                    ),
+                    self.oplog_query_limits(request.count),
                     &request.query,
                 )
                 .await
@@ -1840,12 +1914,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             result: Some(
                 golem::workerexecutor::v1::search_oplog_response::Result::Success(
                     golem::workerexecutor::v1::SearchOplogSuccessResponse {
-                        entries: chunk
-                            .entries
-                            .into_iter()
-                            .map(|entry| entry.try_into())
-                            .collect::<Result<Vec<_>, _>>()
-                            .map_err(WorkerExecutorError::unknown)?,
+                        entries: chunk.entries,
                         next,
                         last_index: chunk.last_index.into(),
                     },
@@ -2868,6 +2937,43 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
+    type GetOplogEntryStream =
+        Pin<Box<dyn Stream<Item = Result<GetOplogEntryResponse, Status>> + Send + 'static>>;
+
+    async fn get_oplog_entry(
+        &self,
+        request: Request<GetOplogEntryRequest>,
+    ) -> ResponseResult<Self::GetOplogEntryStream> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_oplog_entry",
+            agent_id = proto_agent_id_string(&request.agent_id),
+            oplog_index = request.oplog_index,
+        );
+
+        let result = self
+            .get_oplog_entry_internal(request)
+            .instrument(record.span.clone())
+            .await;
+
+        use golem::workerexecutor::v1::get_oplog_entry_response::Result as Frame;
+        let stream: Self::GetOplogEntryStream = match result {
+            Ok((encoded, admission)) => record.succeed(Box::pin(oplog_entry_frames(
+                encoded,
+                OPLOG_ENTRY_CHUNK_SIZE,
+                admission,
+            ))),
+            Err(mut err) => {
+                let stream: Self::GetOplogEntryStream =
+                    Box::pin(futures::stream::iter([Ok(GetOplogEntryResponse {
+                        result: Some(Frame::Failure(err.clone().into())),
+                    })]));
+                record.fail(stream, &mut err)
+            }
+        };
+        Ok(Response::new(stream))
+    }
+
     async fn search_oplog(
         &self,
         request: Request<SearchOplogRequest>,
@@ -3581,4 +3687,50 @@ fn extract_owned_agent_id<T>(
         .map_err(WorkerExecutorError::invalid_request)?;
 
     Ok(OwnedAgentId::new(environment_id, &agent_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem::workerexecutor::v1::get_oplog_entry_response::Result as Frame;
+    use test_r::test;
+
+    async fn frame_chunks(encoded: Vec<u8>, chunk_size: usize) -> Vec<Vec<u8>> {
+        oplog_entry_frames(encoded, chunk_size, ())
+            .map(|frame| match frame.expect("frame").result {
+                Some(Frame::Chunk(chunk)) => chunk,
+                other => panic!("expected a chunk frame, got {other:?}"),
+            })
+            .collect()
+            .await
+    }
+
+    #[test]
+    async fn oplog_entry_frames_split_the_encoded_entry_into_chunks_of_the_chunk_size() {
+        let encoded: Vec<u8> = (0..=10u8).collect();
+
+        let chunks = frame_chunks(encoded.clone(), 4).await;
+        assert_eq!(
+            chunks,
+            vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7], vec![8, 9, 10]]
+        );
+
+        let chunks = frame_chunks(encoded[..8].to_vec(), 4).await;
+        assert_eq!(chunks, vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7]]);
+
+        assert!(frame_chunks(Vec::new(), 4).await.is_empty());
+    }
+
+    #[test]
+    async fn oplog_entry_frames_hold_the_admission_until_the_stream_is_dropped() {
+        let reads = Arc::new(Semaphore::new(1));
+        let admission = reads.clone().acquire_owned().await.unwrap();
+        let mut frames = Box::pin(oplog_entry_frames(vec![0; 12], 4, admission));
+
+        assert!(frames.next().await.is_some());
+        assert_eq!(reads.available_permits(), 0);
+
+        drop(frames);
+        assert_eq!(reads.available_permits(), 1);
+    }
 }

@@ -14,7 +14,7 @@
 
 use super::{
     AccessClaimOptions, CallReplayOutcome, Cancellable, CompletionDelivery,
-    DeferredCallReplayOutcome, DurableCallSession, NotCancellable,
+    DeferredCallReplayOutcome, DurableCallSession, NotCancellable, ScopeReplayRecovery,
 };
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::durability::{DurableCallTrapContext, TerminalCallError};
@@ -75,6 +75,9 @@ where
     demands: mpsc::Receiver<Demand>,
     observational_owner: Option<OplogIndex>,
     delivery_mode: DemandDeliveryMode,
+    /// The parent scope re-executes its effect call-locally, so a child recorded without a
+    /// terminal is completed live under its recorded `Start` instead of failing replay.
+    children_repair_incomplete: bool,
     _child: std::marker::PhantomData<Child>,
 }
 
@@ -98,11 +101,21 @@ where
         F: AsyncFnOnce(super::AccessStartContext) -> Result<Parent::Req, WorkerExecutorError>,
     {
         let observational_owner = claim_options.observational_owner;
+        let children_repair_incomplete = matches!(
+            claim_options.scope_replay_recovery,
+            ScopeReplayRecovery::Reexecute { .. }
+        );
+        // The parent's own `Start` is completed in place as well: when every recorded child
+        // replayed but the crash preceded the parent's terminal, the stream finishes live under
+        // the recorded parent `Start` instead of refusing the batched replay.
         let parent = DurableCallSession::<Parent, Cancellable>::start_access_with_options(
             store,
             get_ctx,
             DurableFunctionType::WriteRemoteBatched(None),
-            claim_options,
+            AccessClaimOptions {
+                incomplete_repair_authorized_by_scope: children_repair_incomplete,
+                ..claim_options
+            },
             build_request,
         )
         .await?;
@@ -111,6 +124,7 @@ where
             demands,
             observational_owner,
             delivery_mode,
+            children_repair_incomplete,
             _child: std::marker::PhantomData,
         })
     }
@@ -144,7 +158,7 @@ where
     }
 
     pub(crate) async fn next<T, D, Ctx>(
-        &self,
+        &mut self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         request: Child::Req,
@@ -160,6 +174,7 @@ where
             DurableFunctionType::WriteRemoteBatched(Some(self.parent.begin_index())),
             AccessClaimOptions {
                 observational_owner: self.observational_owner,
+                incomplete_repair_authorized_by_scope: self.children_repair_incomplete,
                 ..Default::default()
             },
             async move |_| Ok(request),
@@ -176,9 +191,8 @@ where
                             response,
                             delivery: CompletionDelivery::unarmed(),
                         }),
-                        CallReplayOutcome::Incomplete(mut child) => {
-                            child.abandon_for_trap();
-                            Err(incomplete_child_error())
+                        CallReplayOutcome::Incomplete(child) => {
+                            self.incomplete_child(store, get_ctx, child).await
                         }
                     }
                 }
@@ -187,14 +201,48 @@ where
                         DeferredCallReplayOutcome::Replayed(response, delivery) => {
                             Ok(DurableDemandItem::Replayed { response, delivery })
                         }
-                        DeferredCallReplayOutcome::Incomplete(mut child) => {
-                            child.abandon_for_trap();
-                            Err(incomplete_child_error())
+                        DeferredCallReplayOutcome::Incomplete(child) => {
+                            self.incomplete_child(store, get_ctx, child).await
                         }
                     }
                 }
             }
         }
+    }
+
+    /// A child whose `Start` is recorded without a terminal: the crash happened while its item was
+    /// produced. Under a call-locally re-executing parent the child is the live tail of the stream
+    /// and is completed under its recorded `Start`; otherwise it is a replay failure.
+    ///
+    /// The parent is repaired in the same step. The owner writes the parent terminal only after
+    /// every child has reached its delivery boundary, so an incomplete child proves the parent
+    /// `Start` has no terminal, and from here on the parent owns a live tail: the adapter routes
+    /// the tail's transient failures to the parent's retry point, which requires a live handle.
+    async fn incomplete_child<T, D, Ctx>(
+        &mut self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        mut child: DurableCallSession<Child, NotCancellable>,
+    ) -> Result<DurableDemandItem<Child>, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        if !self.children_repair_incomplete {
+            child.abandon_for_trap();
+            return Err(incomplete_child_error());
+        }
+        if !self.parent.is_live()
+            && let Err(error) = self
+                .parent
+                .repair_incomplete_parent_access(store, get_ctx)
+                .await
+        {
+            child.abandon_for_trap();
+            return Err(error);
+        }
+        Ok(DurableDemandItem::Live(child))
     }
 
     pub(crate) async fn complete_item<T, D, Ctx>(

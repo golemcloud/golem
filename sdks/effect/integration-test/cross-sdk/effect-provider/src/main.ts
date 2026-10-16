@@ -132,8 +132,8 @@ defineAgent({
       success: Quota.QuotaTokenSchema,
     }),
     echoPermissionCard: method({
-      input: { card: WitTypes.PermissionCard({ polymorphic: false }) },
-      success: WitTypes.PermissionCard({ polymorphic: false }),
+      input: { card: WitTypes.PermissionCard },
+      success: WitTypes.PermissionCard,
     }),
   },
 }).implement({

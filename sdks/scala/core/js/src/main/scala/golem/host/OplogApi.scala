@@ -154,13 +154,8 @@ object OplogApi {
     final case class ExternalSpan(data: ExternalSpanData) extends SpanData
   }
 
-  final case class WalletVersionToken(
-    walletIdHash: Array[Byte],
-    generation: BigInt
-  )
-
   final case class PublicInvocationWalletPin(
-    walletToken: WalletVersionToken,
+    walletToken: PermissionsApi.WalletVersionToken,
     scopeCardId: Option[Uuid]
   )
 
@@ -771,8 +766,8 @@ object OplogApi {
 
   private def parseWalletPin(raw: JsPublicInvocationWalletPin): PublicInvocationWalletPin =
     PublicInvocationWalletPin(
-      walletToken = WalletVersionToken(
-        walletIdHash = raw.walletToken.walletIdHash.toArray.map(_.toByte),
+      walletToken = PermissionsApi.WalletVersionToken(
+        walletIdHash = raw.walletToken.walletIdHash.toArray.iterator.map(_.toByte).toVector,
         generation = BigInt(raw.walletToken.generation.toString)
       ),
       scopeCardId = raw.scopeCardId.toOption.map(cardId =>

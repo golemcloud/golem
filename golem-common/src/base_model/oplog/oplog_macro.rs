@@ -109,6 +109,21 @@ macro_rules! oplog_entry {
                 }
             )),*
         }
+
+        impl PublicOplogEntry {
+            /// The type of the entry, the value of the `type` field of its serialized form.
+            pub fn entry_type(&self) -> &'static str {
+                match self {
+                    $(Self::$case(_) => stringify!($case)),*
+                }
+            }
+
+            pub fn timestamp(&self) -> Timestamp {
+                match self {
+                    $(Self::$case(params) => params.timestamp),*
+                }
+            }
+        }
     }
 }
 

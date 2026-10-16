@@ -194,6 +194,16 @@ export * as Multimodal from "./Multimodal.js"
  */
 export * as Oplog from "./Oplog.js"
 
+/**
+ * Effect-typed permission-card management over `golem:permissions@0.1.0`:
+ * inspection, derivation, scope cards, revocation, installation, the wallet,
+ * and kernel introspection.
+ *
+ * @since 1.6.0
+ * @category modules
+ */
+export * as Permissions from "./Permissions.js"
+
 /** Runtime agent-type discovery. @since 1.6.0 @category modules */
 export * as Reflection from "./Reflection.js"
 

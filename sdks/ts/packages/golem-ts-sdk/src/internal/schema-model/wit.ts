@@ -71,6 +71,7 @@ import {
   abandonGuestPermissionCardWireHandle,
   assertGuestPermissionCardHandleCanLiftFromWire,
   GuestPermissionCardHandle,
+  isHostPermissionCardResource,
   liftGuestPermissionCardHandleFromWire,
   peekGuestPermissionCardHandle,
   takeGuestPermissionCardHandle,
@@ -1343,6 +1344,11 @@ export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNo
         }
         if (seenRaw.has(raw)) {
           throw new SchemaDecodeError('the same permission-card resource appeared more than once');
+        }
+        if (!isHostPermissionCardResource(raw)) {
+          throw new SchemaDecodeError(
+            'permission-card handle is not a host permission-card resource',
+          );
         }
         try {
           assertGuestPermissionCardHandleCanLiftFromWire(PERMISSION_CARD_INTERNAL, raw, n);

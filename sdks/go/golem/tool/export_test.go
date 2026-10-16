@@ -54,6 +54,50 @@ func FilesMetadata(t *testing.T) Metadata {
 // Files is the files fixture's identity type.
 type Files struct{}
 
+// Bash is the bash fixture's identity type.
+type Bash struct{}
+
+// BashArgs is the bash fixture's run command: a required script, two options
+// with defaults, an optional option with none, and a flag that defaults to on.
+type BashArgs struct {
+	Script  string
+	Cwd     string
+	Timeout uint32
+	Shell   golem.Option[string]
+	Login   bool
+}
+
+// BashFixture declares the bash fixture in a fresh registry. It returns the
+// published metadata, a function that invokes the run command with an input as
+// the host would deliver it, and the arguments the handler last saw.
+func BashFixture(t *testing.T) (Metadata, func(types.TypedSchemaValue) error, func() BashArgs) {
+	t.Helper()
+	r, d := newToolRegistry(), newDefinitions()
+	def := defineToolInto[Bash](r, d, "bash", Spec{Version: "1.0.0", Summary: "Run shell scripts"}, false)
+	var seen BashArgs
+	run := def.Command[BashArgs, string]("run", func(a *BashArgs, s *CommandSpec) {
+		s.Doc("Run a script")
+		s.Positional(&a.Script)
+		s.Option(&a.Cwd).Default("")
+		s.Option(&a.Timeout).Default(600)
+		s.Option(&a.Shell)
+		s.Flag(&a.Login).Negatable().Default(true)
+	})
+	_ = run.Handle(func(_ *Context, in BashArgs) (string, error) {
+		seen = in
+		return in.Script, nil
+	})
+	meta := metadataOf(t, r, d, "bash")
+	invoke := func(input types.TypedSchemaValue) error {
+		e, _ := r.get("bash")
+		if got := d.invokeCommand(e, []string{"run"}, input, nil, hostOutputs{}, nil); got.IsErr() {
+			return &CallError{Kind: CallInvalidInput, Message: "invoke failed"}
+		}
+		return nil
+	}
+	return meta, invoke, func() BashArgs { return seen }
+}
+
 // LookupMetadata declares the lookup fixture in a fresh registry and returns
 // its published metadata.
 func LookupMetadata(t *testing.T) Metadata {

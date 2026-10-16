@@ -107,7 +107,7 @@ mod tests {
         AgentOplogEntryView {
             index,
             attribution: PublicOplogEntryAttribution::agent(),
-            entry,
+            entry: entry.into(),
         }
     }
 
