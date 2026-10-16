@@ -125,6 +125,28 @@ const MEMORY_SIZE_BUCKETS: &[f64; 16] = &[
     1073741824.0, // 1 GiB
 ];
 
+/// Declares the enum of the values of a metric label, with the value of each variant and the list
+/// of all variants.
+macro_rules! label_values {
+    ($(#[$meta:meta])* $name:ident { $($(#[$variant_meta:meta])* $variant:ident => $label:literal,)+ }) => {
+        $(#[$meta])*
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum $name {
+            $($(#[$variant_meta])* $variant,)+
+        }
+
+        impl $name {
+            const ALL: &'static [Self] = &[$(Self::$variant,)+];
+
+            fn label(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $label,)+
+                }
+            }
+        }
+    };
+}
+
 pub mod component {
     use std::time::Duration;
 
@@ -1904,28 +1926,6 @@ pub mod agent_filesystem {
         .unwrap();
     }
 
-    /// Declares the enum of the values of a metric label, with the value of each variant and the
-    /// list of all variants.
-    macro_rules! label_values {
-        ($(#[$meta:meta])* $name:ident { $($(#[$variant_meta:meta])* $variant:ident => $label:literal,)+ }) => {
-            $(#[$meta])*
-            #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-            pub enum $name {
-                $($(#[$variant_meta])* $variant,)+
-            }
-
-            impl $name {
-                const ALL: &'static [Self] = &[$(Self::$variant,)+];
-
-                fn label(self) -> &'static str {
-                    match self {
-                        $(Self::$variant => $label,)+
-                    }
-                }
-            }
-        };
-    }
-
     label_values! {
         /// How a recovery of free space ended, as the `outcome` label.
         PressureRecovery {
@@ -2126,28 +2126,6 @@ pub mod filesystem_snapshots {
             &["outcome"]
         )
         .unwrap();
-    }
-
-    /// Declares the enum of the values of a metric label, with the value of each variant and the
-    /// list of all variants.
-    macro_rules! label_values {
-        ($(#[$meta:meta])* $name:ident { $($(#[$variant_meta:meta])* $variant:ident => $label:literal,)+ }) => {
-            $(#[$meta])*
-            #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-            pub enum $name {
-                $($(#[$variant_meta])* $variant,)+
-            }
-
-            impl $name {
-                const ALL: &'static [Self] = &[$(Self::$variant,)+];
-
-                fn label(self) -> &'static str {
-                    match self {
-                        $(Self::$variant => $label,)+
-                    }
-                }
-            }
-        };
     }
 
     label_values! {
