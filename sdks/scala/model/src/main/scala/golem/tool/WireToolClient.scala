@@ -56,7 +56,8 @@ final case class WireToolRpcStarted(
   stdout: Option[ToolInputStream],
   stderr: Option[ToolInputStream],
   result: Future[Either[WireToolRpcFailure, WireToolInvokeResult]],
-  cancel: () => Unit
+  cancel: () => Unit,
+  detach: () => Unit = () => ()
 )
 
 /** Model-free helpers used by statically generated tool clients. */
@@ -154,7 +155,8 @@ object WireToolClientRuntime {
                 out,
                 err,
                 started.result.map(_.left.map(mapFailure(_, decodeError)).flatMap(decode)),
-                started.cancel
+                started.cancel,
+                started.detach
               )
             )
           )

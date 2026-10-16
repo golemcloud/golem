@@ -202,6 +202,42 @@ invocations return `InvalidToolName`; agent initialization and invocation return
 and snapshot save trap with an explicit unsupported message because their WIT
 signatures have no error result.
 
+## Tool output and result ownership
+
+After a tool handler returns success or a declared error, the generated dispatch
+attempts to finish stdout and stderr independently. A finish failure does not
+replace the structured outcome. An explicit `OutputStream::finish` or `fail`
+consumes the shared writer, so implicit finishing cannot replace its terminal.
+SDK result-encoding failures and host declaration-validation failures (including
+undeclared named errors with decodable payloads) are `InvalidResult`; outputs
+finish normally for these returned outcomes. Structurally undecodable wire
+payloads can instead produce host runtime or protocol errors. An ordinary handler panic
+remains a panic or trap, not `InvalidResult`. The SDK does not guarantee implicit
+finishing during panic unwinding or after a trap.
+
+`ToolInvocationOutput::close` permanently closes only that output. It does not
+close its sibling or cancel the invocation. Later `next` calls return `None`.
+Dropping a pending `next` future does not guarantee that a later read resumes it;
+the SDK adds no pending-read or buffering mechanism.
+
+`ToolInvocation::detach_result` permanently stops structured result delivery.
+Pending and future `result` observers return
+`ToolError::Rpc(RpcError::Protocol("tool result delivery is detached"))`, not
+`RpcError::Cancelled`. This is a local observation error, not invocation
+cancellation. Dropping one `result` future is not detachment: other observers
+and outputs still share the cached outcome.
+Detachment releases unclaimed cached results and discards late results, including
+their unclaimed capabilities. Capabilities already delivered to a caller remain
+owned by that caller.
+
+Detachment continues the shared host observation in a background task, so output
+readers and filesystem-capable calls still make progress, even without a result
+consumer. Physical disposal of an unsettled host observer waits for settlement;
+a call that never settles can retain that observer. `ToolInvocation::cancel`
+remains an explicit invocation cancellation request while the observer exists.
+After physical disposal, `cancel` is a no-op. Closing or dropping local outputs
+does not issue an invocation cancellation request.
+
 ## File response headers
 
 Live filesystem bindings and HTTP router static files can attach an ordered list
