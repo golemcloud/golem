@@ -1216,7 +1216,10 @@ where
                 }
                 // The owner cannot re-issue this response, but still owns completion of its
                 // original scope and chunk calls with HttpResponseIncomplete.
-                None => ScopeReplayRecovery::CompleteWithLoss,
+                None => {
+                    unreconstructable.store(true, Ordering::Release);
+                    ScopeReplayRecovery::CompleteWithLoss
+                }
             },
             _ => ScopeReplayRecovery::Default,
         };
@@ -1494,20 +1497,25 @@ where
                                     HttpBodyFrame::Error(ErrorCode::HttpResponseIncomplete)
                                 }
                             }
-                        } else if let Some(cancel_rx) = cancel_rx {
-                            tokio::select! {
-                                _ = cancel_rx => {
-                                    cancel_ack = read_cancel_ack;
-                                    HttpBodyFrame::Cancelled
-                                }
-                                frame = read_http_body_frame(&mut body) => frame,
-                            }
                         } else {
                             read_http_body_frame(&mut body).await
                         };
                         Ok::<_, WorkerExecutorError>(frame)
                     };
+                    let cancelled = async {
+                        match cancel_rx {
+                            Some(cancel_rx) => {
+                                let _ = cancel_rx.await;
+                            }
+                            None => std::future::pending().await,
+                        }
+                    };
                     let mut frame = tokio::select! {
+                        biased;
+                        () = cancelled => {
+                            cancel_ack = read_cancel_ack;
+                            HttpBodyFrame::Cancelled
+                        }
                         frame = read_frame => match frame {
                             Ok(frame) => frame,
                             Err(error) => {
@@ -1542,6 +1550,10 @@ where
                         child.abandon_for_trap();
                         stream.abandon_for_trap();
                         return Err(error.into());
+                    }
+                    if matches!(frame, HttpBodyFrame::Cancelled) {
+                        // Stop the resend's connection driver before acknowledging cancellation.
+                        drop(_rebuild_io_guard.take());
                     }
 
                     // Inline response-body resume, mirroring the P2
@@ -1958,8 +1970,19 @@ where
         // finalize failure can tag the guest-facing trailers trap for correct
         // retry grouping.
         let parent_trap_context = stream.trap_context();
-        let response = HostResponseP3HttpClientConsumeBodyResult {
-            result: serialize_consume_body_result(&terminal),
+        let repairing_terminal = !stream.is_live();
+        let response = || {
+            let terminal = if repairing_terminal && unreconstructable.load(Ordering::Acquire) {
+                Err(ErrorCode::HttpResponseIncomplete)
+            } else {
+                terminal
+            };
+            (
+                HostResponseP3HttpClientConsumeBodyResult {
+                    result: serialize_consume_body_result(&terminal),
+                },
+                body_span_outcome(body_cancelled, &terminal),
+            )
         };
         let close_span = response_span
             .as_ref()
@@ -1967,16 +1990,14 @@ where
         let finish = if close_span {
             let span = response_span.as_ref().expect("checked above");
             stream
-                .finish_deferred_with_span(
-                    accessor,
-                    durable_worker_ctx::<Ctx, U>,
-                    response,
-                    p3_send_span_finished(span, body_span_outcome(body_cancelled, &terminal)),
-                )
+                .finish_deferred_with_span(accessor, durable_worker_ctx::<Ctx, U>, || {
+                    let (response, outcome) = response();
+                    (response, p3_send_span_finished(span, outcome))
+                })
                 .await
         } else {
             stream
-                .finish_deferred(accessor, durable_worker_ctx::<Ctx, U>, response)
+                .finish_deferred(accessor, durable_worker_ctx::<Ctx, U>, || response().0)
                 .await
         };
         let (response, mut delivery) = match finish {

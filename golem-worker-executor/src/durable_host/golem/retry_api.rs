@@ -183,7 +183,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let persisted = handle
             .run(self, async |ctx| -> anyhow::Result<_> {
                 let policies = ctx.state.named_retry_policies().await;
-                let result = NamedRetryPolicy::resolve(&policies, &props)
+                let result =
+                    NamedRetryPolicy::resolve_applicable_treating_missing_properties_as_no_match(
+                        &policies, &props,
+                    )
                     .map(|matched| matched.map(|p| p.policy.clone()))
                     .map_err(|err| format!("Retry policy resolution error: {err}"));
                 Ok(HostResponseGolemRetryResolvedPolicy { result })

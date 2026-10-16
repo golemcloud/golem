@@ -157,7 +157,7 @@ func Infallible[Out, E any](f func(*Tx[E]) golem.Result[Out, E]) golem.Result[Ou
 		}
 		kind := "operation-error"
 		if p != nil {
-			kind = "panic"
+			kind = "exception"
 		}
 		elapsed := uint64(0)
 		if now := sagaNow(); now > start {

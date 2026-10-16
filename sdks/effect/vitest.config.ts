@@ -33,7 +33,6 @@ const golemAliases = [
   },
   { find: "golem:quota/types@1.5.0", replacement: resolve(mockDir, "golem-quota-types.ts") },
   { find: "wasi:cli/environment@0.3.0", replacement: resolve(mockDir, "wasi-cli-environment.ts") },
-  { find: "wasi:clocks/system-clock@0.3.0", replacement: resolve(mockDir, "wasi-system-clock.ts") },
   { find: "wasi:logging/logging", replacement: resolve(mockDir, "wasi-logging.ts") },
   { find: "golem:api/context@1.5.0", replacement: resolve(mockDir, "golem-api-context.ts") },
   { find: "node:sqlite", replacement: resolve(mockDir, "node-sqlite.ts") },

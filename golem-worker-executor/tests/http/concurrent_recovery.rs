@@ -946,3 +946,336 @@ async fn incomplete_send_resumes_a_body_kept_open_until_response_read(
     server.abort();
     Ok(())
 }
+
+#[test]
+#[test_r::timeout("2m")]
+async fn parent_only_response_repair_reports_loss_after_delivered_eof(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::host_functions::HostFunctionName;
+    use golem_common::model::oplog::payload::OplogPayload;
+    use golem_common::model::oplog::{HostStreamKind, OplogEntry};
+    let context = TestContext::new(last_unique_id);
+    let executor = golem_worker_executor_test_utils::start_with_overrides(
+        deps,
+        &context,
+        golem_worker_executor_test_utils::TestExecutorOverrides {
+            configure: Some(Arc::new(|config| config.oplog.max_payload_size = 0)),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let posts = Arc::new(AtomicUsize::new(0));
+    let gets = Arc::new(AtomicUsize::new(0));
+    let release_headers = Arc::new(tokio::sync::Semaphore::new(0));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
+        let posts = posts.clone();
+        let gets = gets.clone();
+        let release_headers = release_headers.clone();
+        async move {
+            let router = Router::new()
+                .route(
+                    "/inference",
+                    post(move |_: Bytes| {
+                        let posts = posts.clone();
+                        let release_headers = release_headers.clone();
+                        async move {
+                            if posts.fetch_add(1, Ordering::SeqCst) == 0 {
+                                release_headers.acquire().await.unwrap().forget();
+                            }
+                            INFERENCE_BODY
+                        }
+                    }),
+                )
+                .route(
+                    "/sibling",
+                    get(move || {
+                        gets.fetch_add(1, Ordering::SeqCst);
+                        async { SIBLING_BODY }
+                    }),
+                );
+            axum::serve(listener, router).await.unwrap();
+        }
+    }));
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("HttpClient4");
+    let worker = executor
+        .start_agent_with(
+            &component.id,
+            agent.clone(),
+            HashMap::from([("PORT".to_string(), port.to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    let key = IdempotencyKey::fresh();
+    let method = "post_with_concurrent_get";
+    executor
+        .invoke_agent_with_key(&component, &agent, &key, method, data_value!())
+        .await?;
+    wait_for_oplog(&executor, &worker, "completed sibling body", |entries| {
+        partition_starts(entries, "http::types::response::consume-body").counts() == (0, 1, 0)
+    })
+    .await?;
+    let (entered, release_end) = executor.gate_next_oplog_function_end(
+        &worker,
+        HostFunctionName::P3HttpClientConsumeBody,
+        true,
+    );
+    release_headers.add_permits(1);
+    timeout(Duration::from_secs(20), entered).await??;
+    executor.commit_oplog(&worker).await?;
+    let before = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let parent = partition_starts(&before, "http::types::response::consume-body").incomplete[0];
+    let last_child = before
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start) if start.parent_start_index == Some(parent) => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .last()
+        .unwrap();
+    assert!(before.iter().any(|entry| matches!(&entry.entry,
+        PublicOplogEntry::CompletionDelivered(delivered) if delivered.start_index == last_child)));
+    assert!(
+        partition_starts(&before, "http::types::response::consume-body-chunk")
+            .incomplete
+            .is_empty()
+    );
+    let send_start = before
+        .iter()
+        .find_map(|entry| {
+            use golem_common::model::oplog::payload::HostRequestP3HttpClientRequestBodyFrame;
+            use golem_common::model::oplog::types::SerializableP3HttpRequestBodyFrame;
+            use golem_common::schema::FromSchema;
+            let PublicOplogEntry::HostStreamFrame(frame) = &entry.entry else {
+                return None;
+            };
+            if frame.kind != HostStreamKind::P3HttpRequestBody {
+                return None;
+            }
+            let payload =
+                HostRequestP3HttpClientRequestBodyFrame::from_value(frame.payload.value()).unwrap();
+            matches!(
+                payload.frame,
+                SerializableP3HttpRequestBodyFrame::Data { .. }
+            )
+            .then_some(frame.parent_start_index)
+        })
+        .unwrap();
+    let payload = executor
+        .stored_oplog(&worker)
+        .await
+        .into_iter()
+        .find_map(|entry| match entry {
+            OplogEntry::HostStreamFrame {
+                parent_start_index,
+                kind: HostStreamKind::P3HttpRequestBody,
+                payload: OplogPayload::External { payload_id, .. },
+                ..
+            } if parent_start_index == send_start => Some(payload_id),
+            _ => None,
+        })
+        .unwrap();
+    executor.set_oplog_download_corruption(&worker, payload);
+    executor.simulated_crash(&worker).await?;
+    release_end.send(()).unwrap();
+    let result = timeout(
+        Duration::from_secs(30),
+        executor.invoke_and_await_agent_with_key(&component, &agent, &key, method, data_value!()),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(
+        result,
+        format!(
+            "post=200 {INFERENCE_BODY} incomplete(ErrorCode::HttpResponseIncomplete) | get=200 {SIBLING_BODY}"
+        )
+    );
+    assert_eq!(
+        (posts.load(Ordering::SeqCst), gets.load(Ordering::SeqCst)),
+        (1, 1)
+    );
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert!(
+        partition_starts(&entries, "http::types::response::consume-body")
+            .ended
+            .contains(&parent)
+    );
+    let result = timeout(
+        Duration::from_secs(30),
+        executor.invoke_and_await_agent(&component, &agent, method, data_value!()),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(result, full_success());
+    assert_eq!(
+        (posts.load(Ordering::SeqCst), gets.load(Ordering::SeqCst)),
+        (2, 2)
+    );
+    drop(executor);
+    drop(server);
+    Ok(())
+}
+
+#[test]
+#[test_r::timeout("2m")]
+async fn cancelling_response_reconstruction_does_not_wait_for_peer_headers(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let signals = Arc::new(AtomicUsize::new(0));
+    let cancel = Arc::new(tokio::sync::Semaphore::new(0));
+    let (arrived_tx, mut arrived) = mpsc::unbounded_channel();
+    let (closed_tx, mut closed) = mpsc::unbounded_channel();
+    let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
+        let requests = requests.clone();
+        let cancel = cancel.clone();
+        async move {
+            let mut connections = tokio::task::JoinSet::new();
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let requests = requests.clone();
+                let signals = signals.clone();
+                let cancel = cancel.clone();
+                let arrived_tx = arrived_tx.clone();
+                let closed_tx = closed_tx.clone();
+                connections.spawn(async move {
+                    let headers = read_request_headers(&mut socket).await.unwrap();
+                    if headers.starts_with(b"GET /gated-body ") {
+                        let count = requests.fetch_add(1, Ordering::SeqCst) + 1;
+                        if count == 1 {
+                            socket
+                                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\n")
+                                .await
+                                .unwrap();
+                            socket.flush().await.unwrap();
+                        }
+                        arrived_tx.send(count).unwrap();
+                        let mut byte = [0];
+                        while socket.read(&mut byte).await.is_ok_and(|len| len > 0) {}
+                        let _ = closed_tx.send(count);
+                    } else if headers.starts_with(b"GET /cancel-signal ") {
+                        if signals.fetch_add(1, Ordering::SeqCst) == 0 {
+                            std::future::pending::<()>().await;
+                        }
+                        cancel.acquire().await.unwrap().forget();
+                        socket
+                            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+                            .await
+                            .unwrap();
+                    } else {
+                        assert!(headers.starts_with(b"GET /cancel-done "));
+                        socket
+                            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+                            .await
+                            .unwrap();
+                    }
+                });
+            }
+        }
+    }));
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("HttpClient4");
+    let worker = executor
+        .start_agent_with(
+            &component.id,
+            agent.clone(),
+            HashMap::from([("PORT".to_string(), port.to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    let method = "get_and_cancel_body_read_after_signal";
+    let key = IdempotencyKey::fresh();
+    executor
+        .invoke_agent_with_key(&component, &agent, &key, method, data_value!())
+        .await?;
+    assert_eq!(
+        timeout(Duration::from_secs(20), arrived.recv()).await?,
+        Some(1)
+    );
+    timeout(Duration::from_secs(20), async {
+        loop {
+            executor.commit_oplog(&worker).await?;
+            let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+            if partition_starts(&entries, "http::types::response::consume-body-chunk")
+                .incomplete
+                .len()
+                == 1
+                && partition_starts(&entries, "http::client::send").counts() == (0, 1, 1)
+            {
+                break anyhow::Ok(());
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await??;
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    let invocation =
+        executor.invoke_and_await_agent_with_key(&component, &agent, &key, method, data_value!());
+    let coordinate = async {
+        assert_eq!(
+            timeout(Duration::from_secs(20), arrived.recv()).await?,
+            Some(2)
+        );
+        cancel.add_permits(1);
+        anyhow::Ok(())
+    };
+    let (result, coordinated) = timeout(Duration::from_secs(30), async {
+        tokio::join!(invocation, coordinate)
+    })
+    .await?;
+    coordinated?;
+    assert_eq!(
+        result?.into_typed::<String>()?,
+        "cancelled-after-signal(200, 200) done=200"
+    );
+    timeout(Duration::from_secs(10), async {
+        while closed.recv().await != Some(2) {}
+    })
+    .await?;
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
+    let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        partition_starts(&entries, "http::client::send").counts(),
+        (0, 3, 0)
+    );
+    assert_eq!(
+        partition_starts(&entries, "http::types::response::consume-body").counts(),
+        (0, 1, 0)
+    );
+    let chunks = partition_starts(&entries, "http::types::response::consume-body-chunk");
+    assert_eq!(chunks.counts(), (0, 1, 0));
+    let expected: golem_common::model::oplog::HostResponse =
+        golem_common::model::oplog::HostResponseP3HttpClientConsumeBodyChunk {
+            chunk: golem_common::model::oplog::types::SerializableP3HttpBodyChunk::Cancelled,
+        }
+        .into();
+    let expected = expected.into_typed_schema_value().unwrap();
+    assert!(entries.iter().any(|entry| matches!(&entry.entry,
+        PublicOplogEntry::End(end) if end.start_index == chunks.ended[0] && end.response.as_ref() == Some(&expected))));
+    drop(executor);
+    drop(server);
+    Ok(())
+}

@@ -4800,12 +4800,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 
     /// Deferred-delivery form of [`Self::finish_access`]. The returned token always describes the
     /// recorded delivery state, regardless of whether this invocation completed the item live,
-    /// repaired an incomplete `Start`, or replayed an existing terminal.
+    /// repaired an incomplete `Start`, or replayed an existing terminal. The fallback response
+    /// is built only after incomplete-call readiness has selected the owner's recovery outcome.
     pub(crate) async fn finish_access_deferred<T, D, Ctx>(
         self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-        response: Pair::Resp,
+        response: impl FnOnce() -> Pair::Resp,
     ) -> Result<(Pair::Resp, CompletionDelivery), TerminalCallError>
     where
         T: 'static,
@@ -4814,7 +4815,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     {
         let context = self.trap_context();
         if self.is_live() {
-            self.complete_access_deferred(store, get_ctx, response)
+            self.complete_access_deferred(store, get_ctx, response())
                 .await
         } else {
             match self
@@ -4824,7 +4825,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             {
                 DeferredCallReplayOutcome::Replayed(recorded, delivery) => Ok((recorded, delivery)),
                 DeferredCallReplayOutcome::Incomplete(call) => {
-                    call.complete_access_deferred(store, get_ctx, response)
+                    call.complete_access_deferred(store, get_ctx, response())
                         .await
                 }
             }
@@ -4835,8 +4836,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-        response: Pair::Resp,
-        span_finished: golem_common::model::oplog::SpanFinished,
+        response: impl FnOnce() -> (Pair::Resp, golem_common::model::oplog::SpanFinished),
     ) -> Result<(Pair::Resp, CompletionDelivery), TerminalCallError>
     where
         T: 'static,
@@ -4845,6 +4845,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     {
         let context = self.trap_context();
         if self.is_live() {
+            let (response, span_finished) = response();
             self.complete_access_deferred_with_span(store, get_ctx, response, span_finished)
                 .await
         } else {
@@ -4855,6 +4856,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             {
                 DeferredCallReplayOutcome::Replayed(recorded, delivery) => Ok((recorded, delivery)),
                 DeferredCallReplayOutcome::Incomplete(call) => {
+                    let (response, span_finished) = response();
                     call.complete_access_deferred_with_span(store, get_ctx, response, span_finished)
                         .await
                 }

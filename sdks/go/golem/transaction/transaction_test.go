@@ -137,7 +137,7 @@ func TestInfallibleRetriesWithStateElapsedAndWait(t *testing.T) {
 			decisions++
 			wantKind := "operation-error"
 			if panics {
-				wantKind = "panic"
+				wantKind = "exception"
 			}
 			if kind != wantKind || attempt != int64(decisions) || elapsed != uint64(decisions*7+(decisions-1)*10) {
 				t.Fatalf("context: %d %d %s", elapsed, attempt, kind)

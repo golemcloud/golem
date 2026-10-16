@@ -14,7 +14,7 @@
 
 import { getSelfMetadata } from './hostapi';
 import { nextRetryDelay, resolveRetryPolicy, type PredicateValue } from 'golem:api/retry@1.5.0';
-import { now } from 'wasi:clocks/system-clock@0.3.0';
+import process from 'node:process';
 import { Result } from './result';
 
 /**
@@ -83,8 +83,7 @@ export class SagaRetryFailure extends Error {
 }
 
 function clock(): bigint {
-  const instant = now();
-  return instant.seconds * 1_000_000_000n + BigInt(instant.nanoseconds);
+  return process.hrtime.bigint();
 }
 
 class InfallibleSaga {

@@ -35,7 +35,6 @@ afterEach(() => {
   vi.doUnmock('golem:durability/durability@1.6.0');
   vi.doUnmock('golem:api/host@1.5.0');
   vi.doUnmock('golem:api/retry@1.5.0');
-  vi.doUnmock('wasi:clocks/system-clock@0.3.0');
   vi.resetModules();
 });
 
@@ -91,9 +90,6 @@ async function load() {
     trap: () => {
       throw new Error('trap');
     },
-  }));
-  vi.doMock('wasi:clocks/system-clock@0.3.0', () => ({
-    now: () => ({ seconds: 0n, nanoseconds: 0 }),
   }));
   vi.doMock('golem:api/retry@1.5.0', () => ({
     resolveRetryPolicy: () => undefined,

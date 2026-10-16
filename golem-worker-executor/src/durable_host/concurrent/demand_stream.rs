@@ -302,7 +302,7 @@ where
         self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-        response: Parent::Resp,
+        response: impl FnOnce() -> Parent::Resp,
     ) -> Result<(Parent::Resp, CompletionDelivery), TerminalCallError>
     where
         T: 'static,
@@ -318,8 +318,7 @@ where
         self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-        response: Parent::Resp,
-        span_finished: golem_common::model::oplog::SpanFinished,
+        response: impl FnOnce() -> (Parent::Resp, golem_common::model::oplog::SpanFinished),
     ) -> Result<(Parent::Resp, CompletionDelivery), TerminalCallError>
     where
         T: 'static,
@@ -327,7 +326,7 @@ where
         Ctx: WorkerCtx,
     {
         self.parent
-            .finish_access_deferred_with_span(store, get_ctx, response, span_finished)
+            .finish_access_deferred_with_span(store, get_ctx, response)
             .await
     }
 }

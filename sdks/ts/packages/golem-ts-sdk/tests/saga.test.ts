@@ -15,11 +15,8 @@ vi.mock('golem:api/retry@1.5.0', () => ({
   resolveRetryPolicy: boundary.resolve,
   nextRetryDelay: boundary.next,
 }));
-vi.mock('wasi:clocks/system-clock@0.3.0', () => ({
-  now: () => ({
-    seconds: boundary.time / 1_000_000_000n,
-    nanoseconds: Number(boundary.time % 1_000_000_000n),
-  }),
+vi.mock('node:process', () => ({
+  default: { hrtime: { bigint: () => boundary.time } },
 }));
 import { compensable, fallibleSaga, infallibleSaga, SagaRetryFailure } from '../src/host/saga';
 

@@ -9,7 +9,7 @@
  */
 import { Context, Layer } from "effect"
 import * as RetryHost from "golem:api/retry@1.5.0"
-import { now } from "wasi:clocks/system-clock@0.3.0"
+import process from "node:process"
 
 export interface RetryClientShape {
   readonly nextRetryDelay: typeof RetryHost.nextRetryDelay
@@ -38,10 +38,7 @@ export const RetryLive: Layer.Layer<RetryClient> = Layer.succeed(
   RetryClient,
   RetryClient.of({
     nextRetryDelay: (...args) => RetryHost.nextRetryDelay(...args),
-    now: () => {
-      const instant = now()
-      return instant.seconds * 1_000_000_000n + BigInt(instant.nanoseconds)
-    },
+    now: () => process.hrtime.bigint(),
     getRetryPolicies: () => RetryHost.getRetryPolicies(),
     getRetryPolicyByName: (name) => RetryHost.getRetryPolicyByName(name),
     resolveRetryPolicy: (verb, nounUri, properties) =>

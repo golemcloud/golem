@@ -5369,10 +5369,13 @@ impl TestOplog {
     }
 
     fn is_consume_body_scope_start(entry: &OplogEntry) -> bool {
-        matches!(entry, OplogEntry::Start {
-            function_name: HostFunctionName::Custom(function_name),
-            ..
-        } if function_name == "<scope:batched-write:consume-body>")
+        matches!(
+            entry,
+            OplogEntry::Start {
+                function_name: HostFunctionName::P3HttpClientConsumeBody,
+                ..
+            }
+        )
     }
 
     async fn pause_before_consume_body_scope_start(&self) -> bool {
