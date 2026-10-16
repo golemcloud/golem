@@ -1691,9 +1691,12 @@ where
                     // error raises a retry trap here — before anything about this
                     // frame is persisted or delivered, so the guest never observes
                     // a truncated stream — leaving the parent `Start` incomplete.
-                    // The retry's replay then jumps the scope and re-issues the
-                    // recorded request (see `reissue_recorded_request`), re-reading
-                    // the body from a fresh response. Permanent errors — and
+                    // The retry's replay repairs that parent in place and re-issues
+                    // the recorded request (see `reissue_recorded_request`),
+                    // resuming the body from a fresh response. The parent is live
+                    // here on both the first attempt and a repaired tail (the
+                    // demand stream repairs it together with its first incomplete
+                    // child), which the retry routing requires. Permanent errors — and
                     // transient ones whose retry budget is exhausted — fall through
                     // and are recorded as the terminal, which is also what a
                     // recorded terminal replays as. A retry-exempt failure (refused
@@ -1733,10 +1736,11 @@ where
                         };
                         if let Some(error) = trap {
                             // The retry trap tears the invocation down after the
-                            // parent handle has been abandoned. The child `Start` is persisted but the
-                            // jumped scope discards it on replay; abandon the handle
-                            // so its drop does not record a `Cancelled`. The span is
-                            // deliberately left open — the retry's replay reconstructs it.
+                            // parent handle has been abandoned. The child `Start` is
+                            // persisted and the retry's replay completes it as the
+                            // repaired tail; abandon the handle so its drop does not
+                            // record a `Cancelled`. The span is deliberately left
+                            // open — the retry's replay reconstructs it.
                             child.abandon_for_trap();
                             let _ = demand.send(HttpBodyChunkReply::Failed {
                                 message: error.to_string(),

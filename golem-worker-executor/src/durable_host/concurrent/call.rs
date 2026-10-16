@@ -3440,7 +3440,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         ))
                     }
                     OplogEntryLookupResult::NotFound { .. } => {
-                        switch_prepared_access_to_live(prepared, store, get_ctx)
+                        // The refusal is the invocation's terminal failure. Replay is abandoned
+                        // for that failure, as on the direct path, instead of being published as
+                        // live authority: a concurrent sibling's recorded entries or delivery
+                        // boundary after this scope `Start` are still unconsumed, and publication
+                        // over an unconsumed replay prefix is itself a replay error.
+                        prepared
+                            .replay_state
+                            .abandon_replay_for_failure()
                             .await
                             .map_err(|error| {
                                 (
@@ -3450,6 +3457,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                     },
                                 )
                             })?;
+                        store.with(|mut access| {
+                            get_ctx(access.data_mut())
+                                .state
+                                .authoritative_replay_failure = true;
+                        });
                         Err((
                             WorkerExecutorError::runtime(
                                 "Non-idempotent remote write operation was not completed, cannot retry",
@@ -5272,47 +5284,110 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 park_undelivered_forever().await
             }
             ReplayedResolution::Incomplete => {
-                let transition = publish_incomplete_replay_tail_at(
-                    &mut AccessorContext::new(store, get_ctx),
-                    Some(SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
-                        index: self.start_idx.into(),
-                    }),
-                )
-                .await;
-                if let Err(error) = transition.and_then(FinishReplayToLive::require_live) {
-                    self.finished = true;
-                    return Err(error);
-                }
-                self.prepare_incomplete_live_repair(
-                    |initiation_region, repairable_when_incomplete| {
-                        store.with(|mut access| {
-                            let state = &mut get_ctx(access.data_mut()).state;
-                            let lease = register_live_repair_atomic_lease(
-                                &mut state.active_atomic_regions,
-                                initiation_region,
-                                repairable_when_incomplete,
-                            );
-                            (state.live_host_call_counter(), lease)
-                        })
-                    },
-                )?;
-                let synchronization = if self.requires_agent_authority {
-                    match crate::durable_host::call_coordinator::capture_live_agent_authority_access(store, get_ctx, |ctx| DurableWorkerCtx::agent_auth_ctx(ctx)).await {
-                        Ok(Some(auth_ctx)) => {
-                            self.agent_auth_ctx = Some(auth_ctx);
-                            Ok(())
-                        }
-                        Ok(None) => Err(WorkerExecutorError::runtime("incomplete durable call did not switch to live execution")),
-                        Err(error) => Err(error),
-                    }
-                } else {
-                    Ok(())
-                };
-                if let Err(error) = synchronization {
-                    self.abandon_for_trap();
-                    return Err(error);
-                }
+                self.repair_incomplete_access(store, get_ctx).await?;
                 Ok(CallReplayOutcome::Incomplete(self))
+            }
+        }
+    }
+
+    /// Switches a replaying accessor handle whose `Start` was resolved as incomplete to live
+    /// completion of that `Start`: publishes the live tail, takes the in-flight permit and the
+    /// atomic-region lease, and captures the agent authority the live call needs. On failure the
+    /// handle is finished or abandoned, so its drop records no terminal.
+    async fn repair_incomplete_access<T, D, Ctx>(
+        &mut self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    ) -> Result<(), WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        let transition = publish_incomplete_replay_tail_at(
+            &mut AccessorContext::new(store, get_ctx),
+            Some(SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
+                index: self.start_idx.into(),
+            }),
+        )
+        .await;
+        if let Err(error) = transition.and_then(FinishReplayToLive::require_live) {
+            self.finished = true;
+            return Err(error);
+        }
+        self.prepare_incomplete_live_repair(|initiation_region, repairable_when_incomplete| {
+            store.with(|mut access| {
+                let state = &mut get_ctx(access.data_mut()).state;
+                let lease = register_live_repair_atomic_lease(
+                    &mut state.active_atomic_regions,
+                    initiation_region,
+                    repairable_when_incomplete,
+                );
+                (state.live_host_call_counter(), lease)
+            })
+        })?;
+        let synchronization = if self.requires_agent_authority {
+            match crate::durable_host::call_coordinator::capture_live_agent_authority_access(
+                store,
+                get_ctx,
+                |ctx| DurableWorkerCtx::agent_auth_ctx(ctx),
+            )
+            .await
+            {
+                Ok(Some(auth_ctx)) => {
+                    self.agent_auth_ctx = Some(auth_ctx);
+                    Ok(())
+                }
+                Ok(None) => Err(WorkerExecutorError::runtime(
+                    "incomplete durable call did not switch to live execution",
+                )),
+                Err(error) => Err(error),
+            }
+        } else {
+            Ok(())
+        };
+        if let Err(error) = synchronization {
+            self.abandon_for_trap();
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Repairs a replaying parent handle in place once one of its children has been resolved as
+    /// incomplete. A demand-stream owner writes the parent terminal only after every child has
+    /// reached its delivery boundary, so an incomplete child proves the parent `Start` has no
+    /// terminal either; the parent is the live tail's owner from this point on and must be live
+    /// before the tail routes a transient failure to this call's retry point. A recorded parent
+    /// terminal here is a protocol violation and finishes the handle with a replay error.
+    pub(crate) async fn repair_incomplete_parent_access<T, D, Ctx>(
+        &mut self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    ) -> Result<(), WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        self.ensure_accessor_terminal_supported("repair_incomplete_parent_access")?;
+        let replay_state =
+            store.with(|mut access| get_ctx(access.data_mut()).state.replay_state.clone());
+        let replay = self
+            .replay
+            .take()
+            .expect("repair_incomplete_parent_access() called on a live handle");
+        let outcome = replay_state.await_resolution_outcome(replay).await?;
+        match classify_replay_resolution(outcome) {
+            ReplayedResolution::Incomplete => self.repair_incomplete_access(store, get_ctx).await,
+            ReplayedResolution::Delivered(..) | ReplayedResolution::Undelivered(_) => {
+                self.finished = true;
+                Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "incomplete demand-stream parent Start",
+                    format!(
+                        "recorded terminal for parent Start {} whose child is incomplete",
+                        self.start_idx
+                    ),
+                ))
             }
         }
     }

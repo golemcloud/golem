@@ -158,7 +158,7 @@ where
     }
 
     pub(crate) async fn next<T, D, Ctx>(
-        &self,
+        &mut self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         request: Child::Req,
@@ -191,7 +191,9 @@ where
                             response,
                             delivery: CompletionDelivery::unarmed(),
                         }),
-                        CallReplayOutcome::Incomplete(child) => self.incomplete_child(child),
+                        CallReplayOutcome::Incomplete(child) => {
+                            self.incomplete_child(store, get_ctx, child).await
+                        }
                     }
                 }
                 DemandDeliveryMode::Deferred => {
@@ -200,7 +202,7 @@ where
                             Ok(DurableDemandItem::Replayed { response, delivery })
                         }
                         DeferredCallReplayOutcome::Incomplete(child) => {
-                            self.incomplete_child(child)
+                            self.incomplete_child(store, get_ctx, child).await
                         }
                     }
                 }
@@ -211,16 +213,36 @@ where
     /// A child whose `Start` is recorded without a terminal: the crash happened while its item was
     /// produced. Under a call-locally re-executing parent the child is the live tail of the stream
     /// and is completed under its recorded `Start`; otherwise it is a replay failure.
-    fn incomplete_child(
-        &self,
+    ///
+    /// The parent is repaired in the same step. The owner writes the parent terminal only after
+    /// every child has reached its delivery boundary, so an incomplete child proves the parent
+    /// `Start` has no terminal, and from here on the parent owns a live tail: the adapter routes
+    /// the tail's transient failures to the parent's retry point, which requires a live handle.
+    async fn incomplete_child<T, D, Ctx>(
+        &mut self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         mut child: DurableCallSession<Child, NotCancellable>,
-    ) -> Result<DurableDemandItem<Child>, WorkerExecutorError> {
-        if self.children_repair_incomplete {
-            Ok(DurableDemandItem::Live(child))
-        } else {
+    ) -> Result<DurableDemandItem<Child>, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        if !self.children_repair_incomplete {
             child.abandon_for_trap();
-            Err(incomplete_child_error())
+            return Err(incomplete_child_error());
         }
+        if !self.parent.is_live()
+            && let Err(error) = self
+                .parent
+                .repair_incomplete_parent_access(store, get_ctx)
+                .await
+        {
+            child.abandon_for_trap();
+            return Err(error);
+        }
+        Ok(DurableDemandItem::Live(child))
     }
 
     pub(crate) async fn complete_item<T, D, Ctx>(

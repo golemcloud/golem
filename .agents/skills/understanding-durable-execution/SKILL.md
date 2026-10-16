@@ -665,7 +665,11 @@ the request body) and keeps every operation recorded next to it. The response bo
 `<scope:batched-write:consume-body>` scope opens with `ScopeReplayRecovery::Reexecute` for such a
 request; on replay an incomplete scope is retained instead of scanned and Jumped
 (`execute_access_scope_start`), its recorded chunks replay to the guest, and the first live
-demand continues the body (`response_body.rs::resume_recorded_response`): nothing delivered means
+demand continues the body (`response_body.rs::resume_recorded_response`). The demand stream
+repairs the scope `Start` together with its first incomplete child
+(`DurableDemandStream::incomplete_child`, `repair_incomplete_parent_access`): the owner writes the
+scope terminal last, so an incomplete child proves the scope has none, and the parent must be live
+before the tail routes a transient body error to the scope's retry point. Nothing delivered means
 a fresh re-issue of the recorded request; a delivered prefix means a re-send with
 `Range: bytes=<delivered>-`, accepted as a `206` continuing at that offset or as a full response
 whose prefix is byte-identical to the delivered bytes (a blake3 digest accumulated over delivered

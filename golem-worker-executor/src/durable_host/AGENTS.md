@@ -71,7 +71,11 @@ A P3 HTTP send chooses `WriteRemote` when the request is effectively idempotent 
 method, or any method under `assume_idempotence`) and `WriteRemoteBatched(None)` otherwise. A
 `WriteRemote` send repairs an incomplete `Start` in place and keeps the operations recorded next
 to it; a batched send can only recover through a suffix rollback, which must refuse when a foreign
-remote write interleaves.
+remote write interleaves. That refusal abandons replay for the failure
+(`ReplayState::abandon_replay_for_failure`) and never publishes live authority: the sibling's
+entries after the scope `Start` are still unconsumed. A demand stream that completes an incomplete
+child under a `Reexecute` scope repairs the parent `Start` in the same step, so the live tail's
+retry routing always sees a live parent.
 
 ## RPC
 
