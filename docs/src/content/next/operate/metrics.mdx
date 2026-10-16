@@ -23,7 +23,7 @@ Component service exposes the following Prometheus metrics:
 | `poem_errors_count`        | counter   | `http.request.method`, `url.full`, `[http.path_pattern]`, `http.response.status_code`, `exception.message` | Counts failed requests on the HTTP interface                                    |
 | `poem_request_duration_ms` | histogram | `http.request.method`, `url.full`, `[http.path_pattern]`, `http.response.status_code`, `exception.message` | Measures the duration of handling requests on the HTTP interface                |
 | `api_success_seconds`      | histogram | `api`, `api_type`                                                                                          | Measures the duration of successfully serving API requests (both HTTP and gRPC) |
-| `api_failure_seconds`      | histogram | `api`, `api_type`                                                                                          | Measures the duration of failed API requests (both HTTP and gRPC)               |
+| `api_failure_seconds`      | histogram | `api`, `api_type`, `error`                                                                                 | Measures the duration of failed API requests (both HTTP and gRPC)               |
 | `grpc_api_active_streams`  | gauge     |                                                                                                            | Number of open incoming gRPC streams                                            |
 | `http_api_active_streams`  | gauge     |                                                                                                            | Number of open incoming HTTP streams                                            |
 
@@ -47,7 +47,7 @@ Shard manager exposes the following Prometheus metrics:
 | Metric                              | Type      | Labels              | Description                                                                     |
 | ----------------------------------- | --------- | ------------------- | ------------------------------------------------------------------------------- |
 | `api_success_seconds`               | histogram | `api`, `api_type`   | Measures the duration of successfully serving API requests (both HTTP and gRPC) |
-| `api_failure_seconds`               | histogram | `api`, `api_type`   | Measures the duration of failed API requests (both HTTP and gRPC)               |
+| `api_failure_seconds`               | histogram | `api`, `api_type`, `error` | Measures the duration of failed API requests (both HTTP and gRPC)               |
 | `grpc_api_active_streams`           | gauge     |                     | Number of open incoming gRPC streams                                            |
 | `http_api_active_streams`           | gauge     |                     | Number of open incoming HTTP streams                                            |
 | `external_call_success_seconds`     | histogram | `target`, `op`      | Duration of successful outgoing calls                                          |
@@ -69,7 +69,7 @@ Worker executors expose the following Prometheus metrics:
 | Metric                              | Type      | Labels              | Description                                                                     |
 | ----------------------------------- | --------- | ------------------- | ------------------------------------------------------------------------------- |
 | `api_success_seconds`               | histogram | `api`, `api_type`   | Measures the duration of successfully serving API requests (both HTTP and gRPC) |
-| `api_failure_seconds`               | histogram | `api`, `api_type`   | Measures the duration of failed API requests (both HTTP and gRPC)               |
+| `api_failure_seconds`               | histogram | `api`, `api_type`, `error` | Measures the duration of failed API requests (both HTTP and gRPC)               |
 | `grpc_api_active_streams`           | gauge     |                     | Number of open incoming gRPC streams                                            |
 | `http_api_active_streams`           | gauge     |                     | Number of open incoming HTTP streams                                            |
 | `external_call_success_seconds`     | histogram | `target`, `op`      | Duration of successful outgoing calls                                          |
@@ -151,7 +151,7 @@ Worker service exposes the following Prometheus metrics:
 | `poem_errors_count`                 | counter   | `http.request.method`, `url.full`, `[http.path_pattern]`, `http.response.status_code`, `exception.message` | Counts failed requests on the HTTP interface                                    |
 | `poem_request_duration_ms`          | histogram | `http.request.method`, `url.full`, `[http.path_pattern]`, `http.response.status_code`, `exception.message` | Measures the duration of handling requests on the HTTP interface                |
 | `api_success_seconds`               | histogram | `api`, `api_type`                                                                                          | Measures the duration of successfully serving API requests (both HTTP and gRPC) |
-| `api_failure_seconds`               | histogram | `api`, `api_type`                                                                                          | Measures the duration of failed API requests (both HTTP and gRPC)               |
+| `api_failure_seconds`               | histogram | `api`, `api_type`, `error`                                                                                 | Measures the duration of failed API requests (both HTTP and gRPC)               |
 | `grpc_api_active_streams`           | gauge     |                                                                                                            | Number of open incoming gRPC streams                                            |
 | `http_api_active_streams`           | gauge     |                                                                                                            | Number of open incoming HTTP streams                                            |
 | `external_call_success_seconds`     | histogram | `target`, `op`                                                                                             | Duration of successful outgoing calls                                          |
@@ -162,5 +162,16 @@ Worker service exposes the following Prometheus metrics:
 | `cache_hit_total`                   | counter   | `cache`                                                                                                    | Number of cache hits                                                            |
 | `cache_miss_total`                  | counter   | `cache`                                                                                                    | Number of cache misses                                                          |
 | `cache_eviction_total`              | counter   | `cache`, `trigger`                                                                                         | Number of cache evictions                                                       |
+| `http_session_reattach_attempts_total` | counter |                                                                                                          | HTTP session reattach attempts                                                  |
+| `http_session_reattach_seconds`     | histogram | `outcome`                                                                                                  | Duration of an HTTP session reattach                                            |
+| `http_session_stale_fencing_total`  | counter   |                                                                                                            | Stale HTTP sessions that a newer attachment fenced                              |
+| `http_session_explicit_cancellations_total` | counter |                                                                                                        | HTTP sessions that ended by cancellation                                        |
+| `http_session_terminal_total`       | counter   | `cause`                                                                                                    | HTTP sessions that ended without a completed exchange, by cause                 |
+| `http_session_cleanup_seconds`      | histogram | `outcome`                                                                                                  | Duration of the cleanup of an HTTP session that did not complete                |
+| `durable_stream_append_total`       | counter   | `outcome`                                                                                                  | Durable stream append requests by outcome                                       |
+| `durable_stream_load_rejection_total` | counter | `reason`                                                                                                   | Durable stream requests that load limiting rejected                             |
+| `ephemeral_phantom_invocation_rejection_total` | counter | `reason`                                                                                          | Ephemeral invocation requests rejected for an invalid phantom ID                |
+| `openapi_cache_total`               | counter   | `outcome`                                                                                                  | OpenAPI cache lookups and stale fencing                                         |
+| `openapi_generation_seconds`        | histogram | `outcome`                                                                                                  | Duration of an OpenAPI generation                                               |
 
 For application-level observability with traces, logs, and metrics exported via OpenTelemetry, see the [Observability](/next/develop/observability) page.
