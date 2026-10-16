@@ -29,8 +29,8 @@
     },
     "python": {
       "component": "python",
-      "version": "0.0.1",
-      "sha256": "42f4fbb234a94f295c3b9f11f6dd3f50f73ac92608e08efe666aa4c8b41962b9"
+      "version": "0.0.2",
+      "sha256": "b6f2d0881ff3551015a486cf3408fe1391e893b25b84ba29baa29d3ae2f93d26"
     },
     "typescript_tools": {
       "component": "typescript-tools",
