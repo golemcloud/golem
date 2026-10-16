@@ -800,7 +800,7 @@ async fn cancellation_during_capable_attachment_activation_rolls_back_the_batch(
                 tool_operation: Some(operation),
                 local_live_tail,
             }
-            .finish()
+            .finish_at(None)
             .await
         }
     });
@@ -2594,7 +2594,6 @@ fn probed_entity_invocation(
         InvocationExecutionMode::Live,
         golem_common::model::IdempotencyKey::fresh(),
         false,
-        false,
         golem_common::model::IdempotencyKey::fresh(),
     )
     .unwrap();
@@ -2683,7 +2682,6 @@ async fn retained_registration_keeps_fenced_slot_alive_until_last_lease_is_relea
         operation.principal,
         InvocationExecutionMode::Live,
         golem_common::model::IdempotencyKey::fresh(),
-        false,
         false,
         golem_common::model::IdempotencyKey::fresh(),
     )

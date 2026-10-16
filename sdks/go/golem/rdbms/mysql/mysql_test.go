@@ -224,6 +224,7 @@ func TestErrorMapping(t *testing.T) {
 		{my.MakeErrorQueryExecutionFailure("e"), QueryExecutionFailure, "e"},
 		{my.MakeErrorQueryResponseFailure("r"), QueryResponseFailure, "r"},
 		{my.MakeErrorOther("o"), Other, "o"},
+		{my.MakeErrorResourceLost("lost"), ResourceLost, "lost"},
 	}
 	for _, c := range cases {
 		err := myError(c.raw).(*Error)

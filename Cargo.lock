@@ -4649,7 +4649,6 @@ dependencies = [
  "http-body-util",
  "humansize",
  "humantime-serde",
- "hyper",
  "ignite-v2-client",
  "include_dir",
  "itertools 0.14.0",

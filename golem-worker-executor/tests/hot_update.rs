@@ -3559,7 +3559,7 @@ async fn assert_promoted_automatic_snapshot_load_failure_retries_required_baseli
     let expected_error = match failure {
         AutomaticSnapshotLoadFailure::InvalidEntry => {
             // Context initialization reads the snapshot boundary once before recovery loads it.
-            executor.return_no_op_after_oplog_reads(&worker_id, snapshot_index, 1);
+            executor.return_non_snapshot_after_oplog_reads(&worker_id, snapshot_index, 1);
             "Expected Snapshot entry"
         }
         AutomaticSnapshotLoadFailure::PayloadDownload => {
@@ -6414,7 +6414,7 @@ async fn assert_manual_snapshot_load_failure_fails_the_start_and_keeps_the_basel
         ManualSnapshotLoadFailure::InvalidEntry => {
             // The start reads the update entry for its filesystem baseline, and context
             // initialization reads the snapshot boundary, before recovery loads it.
-            executor.return_no_op_after_oplog_reads(&worker_id, snapshot_index, 2);
+            executor.return_non_snapshot_after_oplog_reads(&worker_id, snapshot_index, 2);
             "Expected Snapshot entry"
         }
         ManualSnapshotLoadFailure::PayloadDownload => {

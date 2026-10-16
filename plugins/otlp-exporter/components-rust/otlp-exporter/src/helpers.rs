@@ -49,8 +49,6 @@ pub(crate) fn wrapped_function_type_name(t: &WrappedFunctionType) -> &'static st
         WrappedFunctionType::WriteLocal => "write-local",
         WrappedFunctionType::ReadRemote => "read-remote",
         WrappedFunctionType::WriteRemote => "write-remote",
-        WrappedFunctionType::WriteRemoteBatched(_) => "write-remote-batched",
-        WrappedFunctionType::WriteRemoteTransaction(_) => "write-remote-transaction",
     }
 }
 

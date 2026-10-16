@@ -42,3 +42,35 @@ Tool handlers and middleware use the same output terminal rules:
 
 An implicit finish error or cleanup panic never replaces the handler outcome,
 skips cleanup of its sibling, or overwrites an explicit output terminal.
+
+## Compensable transactions
+
+`transaction.Fallible` and `transaction.Infallible` compensate successful steps in
+reverse order after a body error or a catchable panic. A failed or panicking step
+does not register its compensation. Compensation stops at its first error or panic.
+`Fallible` returns a `Failure` after a returned error. After a panic it compensates,
+then re-panics with the original value only after complete rollback. Partial rollback
+returns a `Failure` that preserves the original panic and the compensation failure.
+
+`Infallible` returns `golem.Result[Out, transaction.Failure[E]]`, not a bare `Out`.
+Handle its error arm: a partial rollback, an exhausted retry policy, or a policy
+error must not be ignored. `Failure.Error` holds the returned body error;
+`Failure.Panic` holds the original recovered value instead when the body panicked.
+`CompensationFailure` and `CompensationPanic` preserve rollback failures.
+`RolledBackFully` accounts for both kinds of rollback failure.
+
+After a complete rollback, `Infallible` resolves a policy with verb `saga`, the
+current agent's `urn:worker:<component-id>/<agent-id>` URI, a one-based `attempt`,
+and `error-kind` (`operation-error` or `panic`). No transaction name is available
+in this API. It passes that same context and the opaque retry state to the host
+evaluator. The first state is empty; subsequent decisions receive the returned
+state. The host uses its configured retry policy when no rule matches. A saga
+policy must have a finite retry count or time bound, or use `Never`; policy changes
+and invalid policies return `Failure.PolicyError`. Exhaustion returns
+`Failure.Exhausted`. Partial rollback never starts another attempt.
+
+The durable clock is observed before the first attempt. Elapsed time includes
+the body, rollback, and each durable `time.Sleep`. Saga retries use the host
+evaluator, not `retry.Policy.Schedule`. Attempts append history; they do not
+rewind previous calls. A process abort or an uncatchable runtime trap cannot run
+Go compensation code.

@@ -190,10 +190,6 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "RECOVERY SUCCEEDED");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
         }
-        PublicOplogEntry::NoOp(params) => {
-            let _ = writeln!(result, "NOP");
-            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-        }
         PublicOplogEntry::Jump(params) => {
             let _ = writeln!(result, "JUMP");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
@@ -207,15 +203,6 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
         PublicOplogEntry::Exited(params) => {
             let _ = writeln!(result, "EXITED");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-        }
-        PublicOplogEntry::BeginAtomicRegion(params) => {
-            let _ = writeln!(result, "BEGIN ATOMIC REGION");
-            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-        }
-        PublicOplogEntry::EndAtomicRegion(params) => {
-            let _ = writeln!(result, "END ATOMIC REGION");
-            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-            let _ = writeln!(result, "{pad}begin index:       {}", params.begin_index);
         }
         PublicOplogEntry::PendingAgentInvocation(params) => match &params.invocation {
             PublicAgentInvocation::AgentInitialization(inner_params) => {

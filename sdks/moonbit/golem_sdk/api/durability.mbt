@@ -5,8 +5,6 @@ pub(all) enum DurableFunctionType {
   WriteLocal
   ReadRemote
   WriteRemote
-  WriteRemoteBatched(UInt64?)
-  WriteRemoteTransaction(UInt64?)
 } derive(Debug, Eq)
 
 ///|
@@ -24,10 +22,6 @@ fn DurableFunctionType::to_raw(
     WriteLocal => @oplog.WrappedFunctionType::WriteLocal
     ReadRemote => @oplog.WrappedFunctionType::ReadRemote
     WriteRemote => @oplog.WrappedFunctionType::WriteRemote
-    WriteRemoteBatched(parent) =>
-      @oplog.WrappedFunctionType::WriteRemoteBatched(parent)
-    WriteRemoteTransaction(parent) =>
-      @oplog.WrappedFunctionType::WriteRemoteTransaction(parent)
   }
 }
 

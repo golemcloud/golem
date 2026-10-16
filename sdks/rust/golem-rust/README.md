@@ -4,6 +4,30 @@ A library that help writing [Golem](https://golem.cloud) programs by providing h
 wrappers for Golem's runtime APIs, including functions for defining and performing operations
 transactionally.
 
+## Saga transactions
+
+`fallible_transaction` returns after one attempt and compensation. Use
+`infallible_transaction` to retry a fully compensated failure with the host's
+bounded saga retry policy. Both functions return `Result<Out, TransactionFailure<Err>>`.
+Return operation failures as `Result`, and propagate them with `?` in the body.
+
+Successful operations register compensations. A failed attempt runs them in
+reverse order. A compensation failure returns `FailedAndRolledBackPartially`
+immediately; the SDK does not repeat partly compensated side effects.
+`RetryExhausted` retains the last operation error. `RetryPolicyError` retains
+that error and the host's policy error, and never substitutes immediate retries.
+
+The SDK resolves policies with verb `saga`, the agent URN as the noun,
+`attempt` starting at 1 for the first failed attempt, and
+`error-kind` set to `operation-error`. No transaction name is available in this API.
+Reading the agent identity uses `get_self_metadata` and requires self-view
+permission. An identity lookup failure returns `RetryPolicyError`.
+No matching policy selects the configured default. The host rejects unbounded
+policies and changed effective policies rather than resetting the retry budget.
+It records decisions, jitter, and policy errors for replay. The SDK carries the
+opaque continuation between compensated failures and uses the durable clock and
+timer; elapsed time includes body execution, compensation, and waits.
+
 ## Outgoing HTTP
 
 Use `golem_rust::http` for WASI HTTP p3 requests in async agent methods. No separate
@@ -75,6 +99,7 @@ schedule and applied to arbitrary async user code:
 
 ```rust
 let raw = resolve_retry_policy("send", "email://welcome", &context)
+    .map_err(std::io::Error::other)?
     .expect("matching named policy");
 let schedule = RetrySchedule::try_from(&raw)?;
 
@@ -175,9 +200,8 @@ Transient transport, timeout, 429 and unavailable errors use bounded retries
 and durable timers, respecting Retry-After; protocol/conflict errors do not.
 An active bounded HTTP request remains resident; idle/retry timers can suspend.
 
-The SDK does not change Golem's idempotence mode. Explicitly disabling it retains
-fail-closed recovery for interrupted writes. Exactly-once external effects rely
-on the peer atomically persisting and retaining producer deduplication state.
+Exactly-once external effects rely on the peer atomically persisting and
+retaining producer deduplication state.
 Golem forks copy checkpoints, producer IDs, epochs and pending data: they do not
 call a Durable Streams fork API or create independent producers. Divergent
 branches can collide on the same tuple; a later acknowledged sequence is a typed

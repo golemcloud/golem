@@ -15115,8 +15115,7 @@ components:
         skippedRegions:
           description: |-
             Oplog regions that are skipped during the worker's state recovery, but describe
-            the history of the worker. For example if an atomic region gets restarted, its partially
-            recorded oplog entries will be skipped on retry.
+            the history of the worker.
           type: array
           items:
             $ref: '#/components/schemas/OplogRegion'
@@ -18521,16 +18520,12 @@ components:
           WriteLocal: '#/components/schemas/PublicDurableFunctionType_Empty'
           ReadRemote: '#/components/schemas/PublicDurableFunctionType_Empty'
           WriteRemote: '#/components/schemas/PublicDurableFunctionType_Empty'
-          WriteRemoteBatched: '#/components/schemas/PublicDurableFunctionType_WriteRemoteBatchedParameters'
-          WriteRemoteTransaction: '#/components/schemas/PublicDurableFunctionType_WriteRemoteTransactionParameters'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
       - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
       - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
       - $ref: '#/components/schemas/PublicDurableFunctionType_Empty'
-      - $ref: '#/components/schemas/PublicDurableFunctionType_WriteRemoteBatchedParameters'
-      - $ref: '#/components/schemas/PublicDurableFunctionType_WriteRemoteTransactionParameters'
     PublicDurableFunctionType_Empty:
       allOf:
       - type: object
@@ -18543,30 +18538,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/Empty'
-    PublicDurableFunctionType_WriteRemoteBatchedParameters:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: WriteRemoteBatched
-            type: string
-            enum:
-            - WriteRemoteBatched
-        required:
-        - type
-      - $ref: '#/components/schemas/WriteRemoteBatchedParameters'
-    PublicDurableFunctionType_WriteRemoteTransactionParameters:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: WriteRemoteTransaction
-            type: string
-            enum:
-            - WriteRemoteTransaction
-        required:
-        - type
-      - $ref: '#/components/schemas/WriteRemoteTransactionParameters'
     PublicEntityCallMode:
       type: string
       enum:
@@ -18766,12 +18737,9 @@ components:
           Suspend: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
           Error: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
           RecoverySucceeded: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
-          NoOp: '#/components/schemas/PublicOplogEntry_r#NoOpParams'
           Jump: '#/components/schemas/PublicOplogEntry_r#JumpParams'
           Interrupted: '#/components/schemas/PublicOplogEntry_r#InterruptedParams'
           Exited: '#/components/schemas/PublicOplogEntry_r#ExitedParams'
-          BeginAtomicRegion: '#/components/schemas/PublicOplogEntry_r#BeginAtomicRegionParams'
-          EndAtomicRegion: '#/components/schemas/PublicOplogEntry_r#EndAtomicRegionParams'
           PendingAgentInvocation: '#/components/schemas/PublicOplogEntry_r#PendingAgentInvocationParams'
           PendingUpdate: '#/components/schemas/PublicOplogEntry_r#PendingUpdateParams'
           SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
@@ -18827,12 +18795,9 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#NoOpParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#JumpParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#InterruptedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ExitedParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#BeginAtomicRegionParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#EndAtomicRegionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#PendingAgentInvocationParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#PendingUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
@@ -18962,18 +18927,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#AgentInvocationStartedParams'
-    PublicOplogEntry_r#BeginAtomicRegionParams:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: BeginAtomicRegion
-            type: string
-            enum:
-            - BeginAtomicRegion
-        required:
-        - type
-      - $ref: '#/components/schemas/r#BeginAtomicRegionParams'
     PublicOplogEntry_r#BeginRemoteTransactionParams:
       allOf:
       - type: object
@@ -19214,18 +19167,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#DropResourceParams'
-    PublicOplogEntry_r#EndAtomicRegionParams:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: EndAtomicRegion
-            type: string
-            enum:
-            - EndAtomicRegion
-        required:
-        - type
-      - $ref: '#/components/schemas/r#EndAtomicRegionParams'
     PublicOplogEntry_r#EndParams:
       allOf:
       - type: object
@@ -19334,18 +19275,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#LogParams'
-    PublicOplogEntry_r#NoOpParams:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: NoOp
-            type: string
-            enum:
-            - NoOp
-        required:
-        - type
-      - $ref: '#/components/schemas/r#NoOpParams'
     PublicOplogEntry_r#OplogProcessorCheckpointParams:
       allOf:
       - type: object
@@ -22440,20 +22369,6 @@ components:
           $ref: '#/components/schemas/ScanCursor'
       required:
       - workers
-    WriteRemoteBatchedParameters:
-      title: WriteRemoteBatchedParameters
-      type: object
-      properties:
-        index:
-          type: integer
-          format: uint64
-    WriteRemoteTransactionParameters:
-      title: WriteRemoteTransactionParameters
-      type: object
-      properties:
-        index:
-          type: integer
-          format: uint64
     r#ActivatePluginParams:
       title: r#ActivatePluginParams
       type: object
@@ -22503,15 +22418,6 @@ components:
       - timestamp
       - invocation
       - walletPin
-    r#BeginAtomicRegionParams:
-      title: r#BeginAtomicRegionParams
-      type: object
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-      required:
-      - timestamp
     r#BeginRemoteTransactionParams:
       title: r#BeginRemoteTransactionParams
       type: object
@@ -22919,19 +22825,6 @@ components:
       - id
       - name
       - owner
-    r#EndAtomicRegionParams:
-      title: r#EndAtomicRegionParams
-      type: object
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        beginIndex:
-          type: integer
-          format: uint64
-      required:
-      - timestamp
-      - beginIndex
     r#EndParams:
       title: r#EndParams
       type: object
@@ -22968,8 +22861,6 @@ components:
         retryFrom:
           type: integer
           format: uint64
-        insideAtomicRegion:
-          type: boolean
         retryPolicyState:
           $ref: '#/components/schemas/PublicRetryPolicyState'
       required:
@@ -22977,7 +22868,6 @@ components:
       - kind
       - error
       - retryFrom
-      - insideAtomicRegion
     r#ExitedParams:
       title: r#ExitedParams
       type: object
@@ -23080,15 +22970,6 @@ components:
       - level
       - context
       - message
-    r#NoOpParams:
-      title: r#NoOpParams
-      type: object
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-      required:
-      - timestamp
     r#OplogProcessorCheckpointParams:
       title: r#OplogProcessorCheckpointParams
       type: object

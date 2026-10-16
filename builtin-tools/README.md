@@ -32,7 +32,9 @@ provider state.
 The web fetch tool is implemented separately under `builtin-tools/web-fetch/`. Its generated
 `builtin-tools/web-fetch.wasm` is published externally rather than committed. It provides the
 read-only, open-world `web-fetch` tool for bounded HTTP and HTTPS retrieval without filesystem
-access. Its timeout, response-size, and redirect limits are optional invocation arguments, not
+access. The source exports `web-fetch@0.1.2`; its new immutable component release awaits
+authorized publication. The artifact lock still pins the previous release. Its timeout,
+response-size, and redirect limits are optional invocation arguments, not
 deployment configuration. HTML is returned as decoded source unless the invocation enables
 conversion to readable text.
 
@@ -51,7 +53,8 @@ The Git tool is implemented in TypeScript under `builtin-tools/git/`, backed by 
 `isomorphic-git`, and built into `builtin-tools/git-tool.wasm`. The source implements local
 `init`, `status`, `diff`, `log`, `branch`, `add`, `commit`, `checkout`, and repository-local `config`,
 plus HTTP(S) `remote`, `ls-remote`, `clone`, `fetch`, `push`, `pull`, `merge`, and linear `rebase`.
-The `git@0.1.14` release provides these workflows through the checksum-pinned artifact.
+The source exports `git@0.1.15`; its new immutable component release awaits authorized
+publication. The artifact lock still pins the previous release.
 All network commands inject the component's WASI HTTP adapter; they do not use sockets.
 Called from a shell, commands start in the shell's current directory; other callers start at `/`
 unless they pass `--cwd`. Repeated `-C` options resolve from that starting directory in order.
@@ -251,7 +254,7 @@ tools:
     release:
       account: builtin-tool-owner@golem.cloud
       name: git
-      version: 0.1.14
+      version: 0.1.15
 
 agents:
   CodingAgent:
@@ -282,7 +285,7 @@ tools:
     release:
       account: builtin-tool-owner@golem.cloud
       name: web-fetch
-      version: 0.1.0
+      version: 0.1.2
 
 agents:
   ResearchAgent:

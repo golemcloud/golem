@@ -7,8 +7,7 @@ use golem_rust::bindings::wasi::keyvalue::eventual::{Bucket, get};
 use golem_rust::retry::{NamedPolicy, Policy, set_named_policy};
 use golem_rust::{
     ConfigSchema, FromSchema, FromWire, IntoSchema, IntoWire, PromiseId, SchemaValue, Uuid,
-    WireSchema, agent_definition, agent_implementation, encode_schema_value, mark_atomic_operation,
-    oplog_commit,
+    WireSchema, agent_definition, agent_implementation, encode_schema_value, oplog_commit,
 };
 use std::future::Future;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -936,12 +935,6 @@ pub trait StreamingRpcCaller {
     ) -> Vec<u64>;
     async fn drop_new_increment_output(&self);
     async fn streaming_increment(&self, synchronous: bool) -> Vec<u64>;
-    async fn atomic_streaming_increment(
-        &self,
-        gate: PromiseId,
-        synchronous: bool,
-        with_input: bool,
-    );
     async fn call_producer_error(&self) -> Vec<u32>;
     async fn call_stream_free(&self) -> u64;
     async fn collect_context_stream(&self, gate: PromiseId) -> Vec<(String, String, String)>;
@@ -1113,46 +1106,6 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
             .collect()
             .await
             .expect("failed to drain increment stream")
-    }
-
-    async fn atomic_streaming_increment(
-        &self,
-        gate: PromiseId,
-        synchronous: bool,
-        with_input: bool,
-    ) {
-        golem_rust::atomically_async(|| async {
-            let output = if synchronous {
-                let rpc = WasmRpc::new(
-                    "StreamingRpcTarget",
-                    encode_single_parameter(self.name.clone()),
-                    None,
-                    Vec::new(),
-                );
-                let input = encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap();
-                let result = rpc
-                    .invoke_and_await("increment_stream", input, None)
-                    .unwrap();
-                AgentStream::<u64>::from_value(
-                    &golem_rust::decode_schema_value(result.result.unwrap()).unwrap(),
-                )
-                .unwrap()
-            } else if with_input {
-                StreamingRpcTargetClient::get(self.name.clone())
-                    .increment_stream_input(agent_stream(vec![13, 29]))
-                    .await
-            } else {
-                StreamingRpcTargetClient::get(self.name.clone())
-                    .increment_stream()
-                    .await
-            };
-            output
-                .collect()
-                .await
-                .expect("failed to drain increment stream");
-            golem_rust::await_promise(&gate).await;
-        })
-        .await;
     }
 
     async fn recover_input_after_caller_crash(&self, gate: PromiseId) -> Vec<u32> {
@@ -1687,8 +1640,6 @@ pub trait RpcAuthTester {
     async fn denied_streaming_metadata(&self) -> String;
 
     fn invalid_async_call_without_get(&self) -> String;
-
-    fn denied_durable_async_without_get(&self) -> String;
 }
 
 struct RpcAuthTesterImpl {
@@ -1713,8 +1664,6 @@ pub trait CancelTester {
     fn name(&self) -> String;
 
     fn grow_memory_before_rpc_activation(&self, counter_name: String);
-
-    fn sync_counter_with_policy(&self, counter_name: String, idempotent: bool, atomic: bool);
 
     async fn await_counter(
         &self,
@@ -1794,7 +1743,6 @@ impl RpcAuthTester for RpcAuthTesterImpl {
             None,
             Vec::new(),
         );
-        let _idempotence = golem_rust::use_idempotence_mode(false);
         let input = encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap();
         let result = rpc.async_invoke_and_await("produce_siblings", input, None);
         assert!(matches!(
@@ -1817,22 +1765,6 @@ impl RpcAuthTester for RpcAuthTesterImpl {
             None,
         );
         result.metadata.idempotency_key
-    }
-
-    fn denied_durable_async_without_get(&self) -> String {
-        let rpc = WasmRpc::new(
-            "RpcCounter",
-            encode_single_parameter("denied-durable-target".to_string()),
-            None,
-            Vec::new(),
-        );
-        let _atomic = mark_atomic_operation();
-        let first = rpc.async_invoke_and_await("inc_by", encode_single_parameter(1u64), None);
-        let second = rpc.async_invoke_and_await("inc_by", encode_single_parameter(2u64), None);
-        format!(
-            "{}:{}",
-            first.metadata.idempotency_key, second.metadata.idempotency_key
-        )
     }
 
     async fn try_call_counter(&self, counter_name: String) -> RpcCallOutcome {
@@ -1918,21 +1850,6 @@ impl CancelTester for CancelTesterImpl {
         let rpc = WasmRpc::new("RpcCounter", constructor, None, Vec::new());
         assert_ne!(core::arch::wasm32::memory_grow::<0>(1), usize::MAX);
         rpc.invoke_and_await("inc_by", input, None).unwrap();
-    }
-
-    fn sync_counter_with_policy(&self, counter_name: String, idempotent: bool, atomic: bool) {
-        let rpc = WasmRpc::new(
-            "RpcCounter",
-            encode_single_parameter(counter_name),
-            None,
-            Vec::new(),
-        );
-        let _idempotence = golem_rust::use_idempotence_mode(idempotent);
-        let _atomic = atomic.then(mark_atomic_operation);
-        for amount in [7u64, 11u64] {
-            rpc.invoke_and_await("inc_by", encode_single_parameter(amount), None)
-                .unwrap();
-        }
     }
 
     async fn await_counter(
@@ -2096,12 +2013,7 @@ impl CancelTester for CancelTesterImpl {
                 let span = start_span("rpc-replay-tail");
                 drop(span);
             }
-            "atomic" => {
-                let guard = mark_atomic_operation();
-                drop(guard);
-            }
             "commit" => {
-                let _ = golem_rust::get_oplog_index();
                 oplog_commit(0);
             }
             "retry-policy" => {

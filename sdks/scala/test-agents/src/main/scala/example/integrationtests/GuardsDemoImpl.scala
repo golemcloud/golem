@@ -16,7 +16,7 @@
 
 package example.integrationtests
 
-import golem.{Guards, HostApi}
+import golem.HostApi
 import golem.host.RetryApi
 import golem.runtime.annotations.agentImplementation
 
@@ -41,59 +41,20 @@ final class GuardsDemoImpl(@unused private val name: String) extends GuardsDemo 
     else sb.append(s"result=retry-visible-missing (${missing.mkString(",")})\n")
   }
 
-  private implicit val ec: scala.concurrent.ExecutionContext = scala.concurrent.ExecutionContext.global
-
   override def guardsBlockDemo(): Future[String] = {
     val sb = new StringBuilder
     sb.append("=== Block-scoped Guards Demo ===\n")
 
-    // withRetryPolicy
     appendRetryPolicyVisibility(sb)
 
-    val origIdem = HostApi.getIdempotenceMode()
-    sb.append(s"original idempotence=$origIdem\n")
-    Guards
-      .withIdempotenceMode(!origIdem) {
-        val inner = HostApi.getIdempotenceMode()
-        sb.append(s"inside withIdempotenceMode: mode=$inner\n")
-        Future.successful("idem-ok")
-      }
-      .flatMap { idemResult =>
-        val afterIdem = HostApi.getIdempotenceMode()
-        sb.append(s"after withIdempotenceMode: mode=$afterIdem, result=$idemResult\n")
-
-        Guards.atomically {
-          sb.append("inside atomically block\n")
-          Future.successful("atomic-ok")
-        }.map { atomicResult =>
-          sb.append(s"after atomically: result=$atomicResult\n")
-          sb.result()
-        }
-      }
+    Future.successful(sb.result())
   }
 
   override def guardsResourceDemo(): Future[String] = Future.successful {
     val sb = new StringBuilder
     sb.append("=== Resource-style Guards Demo ===\n")
 
-    // useRetryPolicy
     appendRetryPolicyVisibility(sb)
-
-    // useIdempotenceMode
-    val origIdem = HostApi.getIdempotenceMode()
-    sb.append(s"original idempotence=$origIdem\n")
-    val idemGuard = Guards.useIdempotenceMode(!origIdem)
-    val innerIdem = HostApi.getIdempotenceMode()
-    sb.append(s"after useIdempotenceMode: mode=$innerIdem\n")
-    idemGuard.drop()
-    val afterIdem = HostApi.getIdempotenceMode()
-    sb.append(s"after drop(): mode=$afterIdem\n")
-
-    // markAtomicOperation
-    val atomicGuard = Guards.markAtomicOperation()
-    sb.append("markAtomicOperation: guard created\n")
-    atomicGuard.drop()
-    sb.append("markAtomicOperation: guard dropped\n")
 
     sb.result()
   }
@@ -101,18 +62,6 @@ final class GuardsDemoImpl(@unused private val name: String) extends GuardsDemo 
   override def oplogDemo(): Future[String] = Future.successful {
     val sb = new StringBuilder
     sb.append("=== Oplog Management Demo ===\n")
-
-    val idx = HostApi.getOplogIndex()
-    sb.append(s"current oplog index=$idx\n")
-
-    val beginIdx = HostApi.markBeginOperation()
-    sb.append(s"markBeginOperation returned=$beginIdx\n")
-
-    HostApi.markEndOperation(beginIdx)
-    sb.append("markEndOperation completed\n")
-
-    val afterIdx = HostApi.getOplogIndex()
-    sb.append(s"oplog index after atomic region=$afterIdx\n")
 
     HostApi.oplogCommit(1)
     sb.append("oplogCommit(1) completed\n")

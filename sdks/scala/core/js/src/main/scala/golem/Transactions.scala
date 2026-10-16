@@ -16,344 +16,224 @@
 
 package golem
 
+import golem.host.RetryApi
+import golem.host.js.JsPredicateValue
 import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import scala.scalajs.js
+import scala.scalajs.js.annotation.JSImport
+import scala.scalajs.js.typedarray.Uint8Array
+import scala.util.control.NonFatal
 
 /**
- * Transaction helpers for managing atomic operations with automatic rollback.
- *
- * This mirrors the JS SDK's `infallibleTransaction` and `fallibleTransaction`
- * helpers, providing the same ergonomics for Scala.js agents.
- *
- * ==Infallible Transactions==
- *
- * Use [[infallibleTransaction]] when operations must eventually succeed. On
- * failure, compensations run and the transaction retries automatically:
- *
- * {{{
- * val result = Transactions.infallibleTransaction { tx =>
- *   val op = Transactions.operation[Unit, Int, String](
- *     _ => Future.successful(Right(42))
- *   )((_, _) => Future.successful(Right(())))
- *   tx.execute(op, ())
- * }
- * }}}
- *
- * ==Fallible Transactions==
- *
- * Use [[fallibleTransaction]] when you want explicit error handling:
- *
- * {{{
- * val result = Transactions.fallibleTransaction[String, Int] { tx =>
- *   val op = Transactions.operation[Int, Int, String](
- *     in => Future.successful(Right(in + 1))
- *   )((_, _) => Future.successful(Right(())))
- *   tx.execute(op, 1)
- * }
- * }}}
- *
- * @see
- *   [[docs/transactions.md]] for detailed usage patterns
- */
-/**
- * Transaction helpers for managing atomic operations with automatic rollback.
+ * Sagas append attempts and compensations to the oplog; they never rewind it.
  */
 object Transactions {
+  trait Operation[-In, Out, Err] {
+    def execute(input: In): Future[Either[Err, Out]]
+    def compensate(input: In, output: Out): Future[Either[Err, Unit]]
+  }
 
-  /**
-   * Creates an operation from execute and compensate functions.
-   *
-   * This is a convenience method equivalent to [[Operation.apply]].
-   *
-   * @param run
-   *   The forward operation
-   * @param compensate
-   *   The rollback operation
-   */
-  def operation[In, Out, Err](
-    run: In => Future[Either[Err, Out]]
-  )(
-    compensate: (In, Out) => Future[Either[Err, Unit]]
-  ): Operation[In, Out, Err] =
-    Operation(run, compensate)
-
-  /**
-   * Runs an infallible transaction that retries on failure.
-   *
-   * When any operation fails:
-   *   1. All registered compensations run in reverse order
-   *      2. The oplog index resets to the transaction start
-   *      3. The entire transaction body re-executes
-   *
-   * The transaction keeps retrying until all operations succeed.
-   *
-   * @param body
-   *   The transaction body receiving the transaction context
-   * @return
-   *   A Future containing the result of a successful transaction run
-   */
-  def infallibleTransaction[A](body: InfallibleTransaction => Future[A]): Future[A] = {
-    def loop(): Future[A] = {
-      val guard = Guards.markAtomicOperation()
-      val begin = HostApi.getOplogIndex()
-      val tx    = new InfallibleTransaction
-      body(tx)
-        .transform(
-          result => {
-            guard.drop()
-            result
-          },
-          {
-            case RetrySignal =>
-              HostApi.setOplogIndex(begin)
-              guard.drop()
-              // Cannot directly recurse here in transform's failure handler,
-              // so we throw and catch below
-              throw RetrySignal
-            case other =>
-              // Force an uncatchable trap so user code cannot observe the
-              // failure with `recover`/`recoverWith`. The atomic region is
-              // intentionally left open; the existing replay-time fallback
-              // in `markBeginOperation` deletes the partial inner side
-              // effects and re-executes the block.
-              HostApi.trap(s"infallibleTransaction failed: ${formatErrorForTrap(other)}")
-          }
-        )
-        .recoverWith { case RetrySignal =>
-          loop()
-        }
+  object Operation {
+    def apply[In, Out, Err](
+      run: In => Future[Either[Err, Out]],
+      compensateFn: (In, Out) => Future[Either[Err, Unit]]
+    ): Operation[In, Out, Err] = new Operation[In, Out, Err] {
+      def execute(input: In): Future[Either[Err, Out]]                  = run(input)
+      def compensate(input: In, output: Out): Future[Either[Err, Unit]] = compensateFn(input, output)
     }
+  }
 
-    loop()
+  def operation[In, Out, Err](run: In => Future[Either[Err, Out]])(
+    compensate: (In, Out) => Future[Either[Err, Unit]]
+  ): Operation[In, Out, Err] = Operation(run, compensate)
+
+  sealed trait TransactionFailure[+Err]
+  object TransactionFailure {
+    final case class FailedAndRolledBackCompletely[Err](error: Err) extends TransactionFailure[Err]
+    final case class FailedAndRolledBackPartially[Err](error: Err, compensationFailure: Any)
+        extends TransactionFailure[Err]
+    final case class RetryExhausted(error: Any)                        extends TransactionFailure[Nothing]
+    final case class RetryEvaluationFailed(error: Any, reason: String) extends TransactionFailure[Nothing]
   }
 
   /**
-   * Runs a fallible transaction that returns errors instead of retrying.
-   *
-   * When an operation fails:
-   *   1. Registered compensations run in reverse order (best-effort)
-   *      2. The failure is returned with rollback status
-   *
-   * @param body
-   *   The transaction body receiving the transaction context
-   * @return
-   *   A Future containing either a failure description or the successful result
+   * Keeps the original failure and compensation evidence on a thrown failure.
+   */
+  final case class PartialRollbackException(originalFailure: Throwable, compensationFailure: Any)
+      extends RuntimeException(
+        s"Saga compensation failed: $compensationFailure",
+        originalFailure
+      )
+
+  private final case class OperationFailure(error: Any) extends RuntimeException with scala.util.control.NoStackTrace
+
+  // Future.delegate and Try exclude InterruptedException. Catch it at user boundaries too.
+  private def invoke[A](body: => Future[A]): Future[A] =
+    try body
+    catch {
+      case error: InterruptedException => Future.failed(error)
+      case NonFatal(error)             => Future.failed(error)
+    }
+
+  private def original(error: Throwable): Throwable = error match {
+    case wrapped: java.util.concurrent.ExecutionException if wrapped.getCause != null => wrapped.getCause
+    case other                                                                        => other
+  }
+
+  /**
+   * Returns domain errors, but compensates and rethrows catchable thrown
+   * failures.
    */
   def fallibleTransaction[A, Err](
     body: FallibleTransaction[Err] => Future[Either[Err, A]]
   ): Future[Either[TransactionFailure[Err], A]] = {
-    val guard = Guards.markAtomicOperation()
-    val tx    = new FallibleTransaction[Err]
-    body(tx).flatMap {
-      case Right(value) =>
-        guard.drop()
-        Future.successful(Right(value))
-      case Left(err) =>
-        tx.onFailure(err)
-          .map { failure =>
-            guard.drop()
-            Left(failure)
-          }
-          .recover { case e =>
-            // Force an uncatchable trap. Note: this only fires for *thrown*
-            // errors, which are unexpected. Expected failures are returned
-            // via Left and processed by `tx.onFailure` above without trapping.
-            HostApi.trap(s"fallibleTransaction failed: ${formatErrorForTrap(e)}")
-          }
-    }.recover { case e =>
-      // Same reasoning as above — thrown errors are unexpected, trap.
-      HostApi.trap(s"fallibleTransaction failed: ${formatErrorForTrap(e)}")
+    val tx = new FallibleTransaction[Err]
+    invoke(body(tx)).transformWith {
+      case scala.util.Success(Right(value)) => Future.successful(Right(value))
+      case scala.util.Success(Left(error))  => tx.onFailure(error).map(Left(_))
+      case scala.util.Failure(error)        =>
+        val cause = original(error)
+        tx.rollback().flatMap {
+          case None               => Future.failed(cause)
+          case Some(compensation) => Future.failed(PartialRollbackException(cause, compensation))
+        }
     }
   }
 
-  private def formatErrorForTrap(error: Throwable): String = {
-    val sw = new java.io.StringWriter
-    val pw = new java.io.PrintWriter(sw)
-    error.printStackTrace(pw)
-    sw.toString
+  /**
+   * Retries fully compensated failures with the host policy and durable
+   * clock/timer. None of the operation errors or caught causes are discarded on
+   * exhaustion.
+   */
+  def infallibleTransaction[A](body: InfallibleTransaction => Future[A]): Future[Either[TransactionFailure[Any], A]] =
+    namedInfallibleTransaction(None)(body)
+
+  def namedInfallibleTransaction[A](name: Option[String])(
+    body: InfallibleTransaction => Future[A]
+  ): Future[Either[TransactionFailure[Any], A]] = {
+    val started = BigInt(Clock.now().toString)
+    var state   = new Uint8Array(0)
+    var attempt = BigInt(0)
+
+    def loop(): Future[Either[TransactionFailure[Any], A]] = {
+      val tx = new InfallibleTransaction
+      invoke(body(tx)).flatMap(value => tx.checkActive().map(_ => value)).transformWith {
+        case scala.util.Success(value) => Future.successful(Right(value))
+        case scala.util.Failure(error) =>
+          val cause   = tx.terminal.getOrElse(original(error))
+          val failure = cause match {
+            case OperationFailure(value) => value
+            case other                   => other
+          }
+          tx.rollback().flatMap {
+            case Some(compensation) =>
+              Future.successful(Left(TransactionFailure.FailedAndRolledBackPartially(failure, compensation)))
+            case None =>
+              attempt += 1
+              val kind = cause match {
+                case _: OperationFailure     => "operation-error"
+                case _: InterruptedException => "interrupted"
+                case _                       => "exception"
+              }
+              val properties = List(
+                "attempt"    -> JsPredicateValue.integer(js.BigInt(attempt.toString)),
+                "error-kind" -> JsPredicateValue.text(kind)
+              ) ++ name.toList.map(value => "transaction-name" -> JsPredicateValue.text(value))
+              val decision = try {
+                val id        = HostApi.getSelfMetadata().agentId
+                val uuid      = id.componentId.uuid
+                val component =
+                  Uuid.toStandardString(Uuid(BigInt(uuid.highBits.toString), BigInt(uuid.lowBits.toString)))
+                val noun   = s"urn:worker:$component/${id.agentId}"
+                val policy = RetryApi.resolveRetryPolicy("saga", noun, properties)
+                RetryApi.nextRetryDelay(
+                  policy,
+                  state,
+                  (BigInt(Clock.now().toString) - started).max(0),
+                  "saga",
+                  noun,
+                  properties
+                )
+              } catch {
+                case NonFatal(e) => Left(e.getMessage)
+              }
+              decision match {
+                case Left(reason) => Future.successful(Left(TransactionFailure.RetryEvaluationFailed(failure, reason)))
+                case Right(next)  =>
+                  state = next.state
+                  next.delay match {
+                    case None        => Future.successful(Left(TransactionFailure.RetryExhausted(failure)))
+                    case Some(delay) =>
+                      FutureInterop.fromPromise(Clock.waitFor(js.BigInt(delay.toString))).flatMap(_ => loop())
+                  }
+              }
+          }
+      }
+    }
+    loop()
   }
 
-  /**
-   * Describes how a fallible transaction failed.
-   *
-   * @tparam Err
-   *   The error type from operations
-   */
-  sealed trait TransactionFailure[+Err]
-
-  /**
-   * Represents an atomic operation with execute and compensate steps.
-   *
-   * @tparam In
-   *   Input type for the operation
-   * @tparam Out
-   *   Output type on success
-   * @tparam Err
-   *   Error type on failure
-   */
-  trait Operation[-In, Out, Err] {
-
-    /**
-     * Executes the operation, returning a Future of either an error or the
-     * result.
-     */
-    def execute(input: In): Future[Either[Err, Out]]
-
-    /** Compensates (undoes) a successful operation during rollback. */
-    def compensate(input: In, output: Out): Future[Either[Err, Unit]]
-  }
-
-  /**
-   * Transaction context for infallible transactions.
-   *
-   * Operations that fail trigger automatic rollback and retry.
-   */
   final class InfallibleTransaction private[golem] () {
-    private var compensations: List[() => Future[Unit]] = Nil
+    private val tx                                     = new FallibleTransaction[Any]
+    private[golem] var terminal: Option[Throwable]     = None
+    private[golem] def checkActive(): Future[Unit]     = terminal.fold(Future.successful(()))(Future.failed)
+    private[golem] def rollback(): Future[Option[Any]] = tx.rollback()
 
-    /**
-     * Executes an operation within the transaction.
-     *
-     * On success, registers the compensation for potential rollback. On
-     * failure, runs all compensations and signals retry.
-     *
-     * @param operation
-     *   The operation to execute
-     * @param input
-     *   The input to the operation
-     * @return
-     *   A Future containing the operation result (signals retry on failure)
-     */
     def execute[In, Out, Err](operation: Operation[In, Out, Err], input: In): Future[Out] =
-      operation.execute(input).flatMap {
-        case Right(value) =>
-          compensations ::= (() =>
-            operation.compensate(input, value).map {
-              case Right(_)     => ()
-              case Left(reason) => throw new IllegalStateException(s"Infallible compensation failed: $reason")
-            }
-          )
-          Future.successful(value)
-        case Left(_) =>
-          rollback()
-      }
-
-    private def rollback(): Future[Nothing] = {
-      def runCompensations(remaining: List[() => Future[Unit]]): Future[Unit] =
-        remaining match {
-          case Nil          => Future.successful(())
-          case head :: tail => head().flatMap(_ => runCompensations(tail))
+      checkActive().flatMap { _ =>
+        invoke(operation.execute(input)).map {
+          case Right(value) =>
+            tx.register(() => invoke(operation.compensate(input, value)))
+            value
+          case Left(error) => throw OperationFailure(error)
+        }.recoverWith { case error =>
+          terminal = Some(original(error))
+          Future.failed(error)
         }
-
-      runCompensations(compensations).flatMap(_ => Future.failed(RetrySignal))
-    }
+      }
   }
 
-  /**
-   * Transaction context for fallible transactions.
-   *
-   * Operations that fail trigger best-effort rollback without retry.
-   */
   final class FallibleTransaction[Err] private[golem] () {
-    private var compensations: List[() => Future[Either[Err, Unit]]] = Nil
+    private var compensations: List[() => Future[Either[Any, Unit]]]                 = Nil
+    private[golem] def register(compensation: () => Future[Either[Any, Unit]]): Unit =
+      compensations ::= compensation
 
-    /**
-     * Executes an operation within the transaction.
-     *
-     * On success, registers the compensation for potential rollback. On
-     * failure, returns the error (call [[onFailure]] to trigger rollback).
-     *
-     * @param operation
-     *   The operation to execute
-     * @param input
-     *   The input to the operation
-     * @return
-     *   A Future containing either an error or the operation result
-     */
-    def execute[In, Out](
-      operation: Operation[In, Out, Err],
-      input: In
-    ): Future[Either[Err, Out]] =
-      operation.execute(input).map {
-        case Right(output) =>
-          compensations ::= (() => operation.compensate(input, output))
-          Right(output)
-        case left =>
-          left
+    def execute[In, Out](operation: Operation[In, Out, Err], input: In): Future[Either[Err, Out]] =
+      invoke(operation.execute(input)).map {
+        case Right(value) =>
+          register(() => invoke(operation.compensate(input, value)))
+          Right(value)
+        case left => left
       }
 
-    /**
-     * Triggers rollback after a failure.
-     *
-     * Runs all registered compensations in reverse order.
-     *
-     * @param error
-     *   The error that caused the failure
-     * @return
-     *   A Future containing a description of how the rollback completed
-     */
-    def onFailure(error: Err): Future[TransactionFailure[Err]] = {
-      def compensateLater(pending: List[() => Future[Either[Err, Unit]]]): Future[Option[Err]] =
-        pending match {
-          case Nil          => Future.successful(None)
-          case head :: tail =>
-            head().flatMap {
-              case Right(_)        => compensateLater(tail)
-              case Left(compError) => Future.successful(Some(compError))
-            }
-        }
-
-      compensateLater(compensations).map {
-        case Some(compError) =>
-          TransactionFailure.FailedAndRolledBackPartially(error, compError)
-        case None =>
-          TransactionFailure.FailedAndRolledBackCompletely(error)
+    private[golem] def rollback(): Future[Option[Any]] = {
+      val pending = compensations
+      compensations = Nil
+      def run(remaining: List[() => Future[Either[Any, Unit]]]): Future[Option[Any]] = remaining match {
+        case Nil          => Future.successful(None)
+        case head :: tail =>
+          invoke(head()).transformWith {
+            case scala.util.Success(Right(_))    => run(tail)
+            case scala.util.Success(Left(error)) => Future.successful(Some(error))
+            case scala.util.Failure(error)       => Future.successful(Some(original(error)))
+          }
       }
+      run(pending)
     }
-  }
 
-  object Operation {
-
-    /**
-     * Creates an operation from execute and compensate functions.
-     *
-     * @param run
-     *   The forward operation
-     * @param compensateFn
-     *   The rollback operation, given original input and output
-     */
-    def apply[In, Out, Err](
-      run: In => Future[Either[Err, Out]],
-      compensateFn: (In, Out) => Future[Either[Err, Unit]]
-    ): Operation[In, Out, Err] =
-      new Operation[In, Out, Err] {
-        override def execute(input: In): Future[Either[Err, Out]] = run(input)
-
-        override def compensate(input: In, output: Out): Future[Either[Err, Unit]] = compensateFn(input, output)
+    def onFailure(error: Err): Future[TransactionFailure[Err]] =
+      rollback().map {
+        case None               => TransactionFailure.FailedAndRolledBackCompletely(error)
+        case Some(compensation) =>
+          TransactionFailure.FailedAndRolledBackPartially(error, compensation)
       }
   }
 
-  object TransactionFailure {
-
-    /**
-     * The transaction failed, but all compensations succeeded.
-     *
-     * @param error
-     *   The error that caused the transaction to fail
-     */
-    final case class FailedAndRolledBackCompletely[Err](error: Err) extends TransactionFailure[Err]
-
-    /**
-     * The transaction failed, and some compensations also failed.
-     *
-     * @param error
-     *   The original error
-     * @param compensationFailure
-     *   The error from a failed compensation
-     */
-    final case class FailedAndRolledBackPartially[Err](error: Err, compensationFailure: Err)
-        extends TransactionFailure[Err]
+  @js.native
+  @JSImport("wasi:clocks/monotonic-clock@0.3.0", JSImport.Namespace)
+  private object Clock extends js.Object {
+    def now(): js.BigInt                               = js.native
+    def waitFor(duration: js.BigInt): js.Promise[Unit] = js.native
   }
-
-  private case object RetrySignal extends Throwable with scala.util.control.NoStackTrace
 }

@@ -252,13 +252,12 @@ const KINDS = {
   AgentInvocationStarted: ['INVOKE', 'invocation'], AgentInvocationFinished: ['INVOKE COMPLETED', 'invocation'],
   PendingAgentInvocation: ['ENQUEUED', 'invocation', 1], CancelPendingInvocation: ['CANCEL INVOCATION', 'invocation', 1],
   Suspend: ['SUSPEND', 'lifecycle', 1], Error: ['ERROR', 'error', 1], RecoverySucceeded: ['RECOVERY SUCCEEDED', 'lifecycle', 1],
-  NoOp: ['NOP', 'lifecycle'], Jump: ['JUMP', 'lifecycle', 1], Interrupted: ['INTERRUPTED', 'lifecycle', 1],
+  Jump: ['JUMP', 'lifecycle', 1], Interrupted: ['INTERRUPTED', 'lifecycle', 1],
   Exited: ['EXITED', 'lifecycle', 1], Restart: ['RESTART', 'lifecycle', 1], Resumed: ['RESUMED', 'lifecycle', 1],
   Revert: ['REVERT', 'lifecycle', 1], GrowMemory: ['GROW MEMORY', 'lifecycle', 1],
-  BeginAtomicRegion: ['BEGIN ATOMIC REGION', 'region'], EndAtomicRegion: ['END ATOMIC REGION', 'region'],
-  BeginRemoteTransaction: ['BEGIN REMOTE TRANSACTION', 'region'], PreCommitRemoteTransaction: ['PRE COMMIT', 'region'],
-  PreRollbackRemoteTransaction: ['PRE ROLLBACK', 'region'], CommittedRemoteTransaction: ['COMMITTED', 'region'],
-  RolledBackRemoteTransaction: ['ROLLED BACK', 'region'],
+  BeginRemoteTransaction: ['BEGIN REMOTE TRANSACTION', 'region', 1], PreCommitRemoteTransaction: ['PRE COMMIT', 'region', 1],
+  PreRollbackRemoteTransaction: ['PRE ROLLBACK', 'region', 1], CommittedRemoteTransaction: ['COMMITTED', 'region', 1],
+  RolledBackRemoteTransaction: ['ROLLED BACK', 'region', 1],
   PendingUpdate: ['ENQUEUED UPDATE', 'update', 1], SuccessfulUpdate: ['SUCCESSFUL UPDATE', 'update', 1], FailedUpdate: ['FAILED UPDATE', 'update', 1],
   CreateResource: ['CREATE RESOURCE', 'resource', 1], DropResource: ['DROP RESOURCE', 'resource', 1],
   Log: ['LOG', 'log', 1],
@@ -580,10 +579,9 @@ function summary(e) {
     case 'AgentInvocationFinished': { const r = p.result; const err = resultError(r); const out = resultOutput(r); return [span('val', p.methodName || (r && r.type) || ''), ' ', err ? [span('err', 'error: ' + err)] : out ? [arrow(), span('val', typedText(out, 120))] : r && r.type === 'SaveSnapshot' ? [arrow(), span('val', snapshotText(r.snapshot))] : span('ok', 'ok')]; }
     case 'PendingAgentInvocation': { const inv = p.invocation; const inp = invocationInput(inv); return [span('fn', invocationName(inv)), inp ? span('val', '(' + typedText(inp, 100) + ')') : null, span('val', ' · queued')]; }
     case 'CancelPendingInvocation': return [span('val', 'idempotency key ' + (p.idempotencyKey && p.idempotencyKey.value || p.idempotencyKey))];
-    case 'Error': return [span('err', (p.kind || '') + ': ' + trunc(String(p.error || ''), 200)), span('val', ` · retry from #${idxOf(p.retryFrom)}` + (e.attempt ? ` · attempt ${e.attempt}` : '') + (p.insideAtomicRegion ? ' · inside atomic region' : ''))];
+    case 'Error': return [span('err', (p.kind || '') + ': ' + trunc(String(p.error || ''), 200)), span('val', ` · retry from #${idxOf(p.retryFrom)}` + (e.attempt ? ` · attempt ${e.attempt}` : ''))];
     case 'Jump': return [span('val', `replay skips #${idxOf(p.jump.start)} … #${idxOf(p.jump.end)}`)];
     case 'Revert': return [span('val', `dropped #${idxOf(p.droppedRegion.start)} … #${idxOf(p.droppedRegion.end)} · reverted to #${idxOf(p.droppedRegion.start) - 1}`)];
-    case 'EndAtomicRegion': return [span('val', 'begin #' + idxOf(p.beginIndex))];
     case 'BeginRemoteTransaction': return [span('val', 'transaction ' + (p.transactionId && p.transactionId.value || p.transactionId))];
     case 'PreCommitRemoteTransaction': case 'PreRollbackRemoteTransaction': case 'CommittedRemoteTransaction': case 'RolledBackRemoteTransaction': return [span('val', 'begin #' + idxOf(p.beginIndex))];
     case 'PendingUpdate': return [span('fn', '→ revision ' + p.targetRevision), span('val', ' · ' + (p.description && p.description.type || '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase() + ` · attempt #${idxOf(p.updateAttemptIndex)}`)];
@@ -629,8 +627,7 @@ function detailFields(e) {
 }
 
 // ---------------------------------------------------------------------------
-// Structure: build a tree of groups (invocations, host calls, entity chains,
-// atomic regions, transactions) from the flat entry list.
+// Structure: build a tree of invocations, host calls and entity chains from the flat entry list.
 // ---------------------------------------------------------------------------
 function buildTree(entries, extraDropped) {
   const root = { kind: 'root', children: [], members: [], parent: null };
@@ -639,9 +636,9 @@ function buildTree(entries, extraDropped) {
   // Entries that belong to a host call (its end, stream frames, completion marker) are kept as
   // members of the host node so the merged row can summarize them.
   const member = (e, host) => { const m = { kind: 'entry', e, children: [], members: [], parent: host, frames: [] }; host.members.push(m); return m; };
-  let invocation = null; const regions = []; const hosts = new Map(); const hostNodes = new Map(); const entities = new Map();
+  let invocation = null; const hosts = new Map(); const hostNodes = new Map(); const entities = new Map();
   const errorsByRetry = new Map(); const nodeOf = new Map();
-  const container = () => regions.length ? regions[regions.length - 1] : (invocation || root);
+  const container = () => invocation || root;
   for (const e of entries) {
     const p = e.entry; const t = e.type; let n = null;
     let target = container();
@@ -657,16 +654,12 @@ function buildTree(entries, extraDropped) {
       target = parent;
     }
     switch (t) {
-      case 'AgentInvocationStarted': if (invocation) invocation.unfinished = true; regions.length = 0; n = mk('invocation', e, root); invocation = n; break;
-      case 'AgentInvocationFinished': regions.length = 0; if (invocation) { invocation.end = e; n = leaf(e, invocation); invocation = null; } else n = leaf(e, root); break;
+      case 'AgentInvocationStarted': if (invocation) invocation.unfinished = true; n = mk('invocation', e, root); invocation = n; break;
+      case 'AgentInvocationFinished': if (invocation) { invocation.end = e; n = leaf(e, invocation); invocation = null; } else n = leaf(e, root); break;
       case 'Start': { const parent = p.parentStartIndex != null ? hosts.get(idxOf(p.parentStartIndex)) : null; n = mk('host', e, parent || target); hosts.set(e.index, n); hostNodes.set(e.index, n); break; }
       case 'End': case 'Cancelled': { const s = hosts.get(idxOf(p.startIndex)); if (s) { s.end = e; hosts.delete(idxOf(p.startIndex)); n = member(e, s); } else n = leaf(e, target); break; }
       case 'CompletionDelivered': case 'CompletionDiscarded': { const s = hostNodes.get(idxOf(p.startIndex)); if (s) { s.completion = e; n = member(e, s); } else n = leaf(e, target); break; }
       case 'HostStreamFrame': { const s = hostNodes.get(idxOf(p.parentStartIndex)); if (s) { s.frames.push(e); n = member(e, s); } else n = leaf(e, target); break; }
-      case 'BeginAtomicRegion': n = mk('atomic', e, target); regions.push(n); break;
-      case 'EndAtomicRegion': { const i = regions.findIndex(r => r.kind === 'atomic' && r.e.index === idxOf(p.beginIndex)); if (i >= 0) { const r = regions[i]; regions.length = i; r.end = e; n = leaf(e, r); } else n = leaf(e, target); break; }
-      case 'BeginRemoteTransaction': n = mk('transaction', e, target); regions.push(n); break;
-      case 'CommittedRemoteTransaction': case 'RolledBackRemoteTransaction': { const i = regions.findIndex(r => r.kind === 'transaction' && r.e.index === idxOf(p.beginIndex)); if (i >= 0) { const r = regions[i]; regions.length = i; r.end = e; n = leaf(e, r); } else n = leaf(e, target); break; }
       case 'Error': { const k = idxOf(p.retryFrom); const c = (errorsByRetry.get(k) || 0) + 1; errorsByRetry.set(k, c); e.attempt = c; n = leaf(e, target); break; }
       default: n = leaf(e, target);
     }
@@ -752,10 +745,6 @@ function groupHeader(n) {
   } else if (n.kind === 'entity') {
     const inv = n.inv; const op = inv.operation;
     parts.push(h('span', { class: 'badge', style: `--c:${catColor('plugin')}` }, inv.entity.kind === 'toolMiddleware' ? 'MIDDLEWARE' : 'TOOL'), h('span', { class: 'sum' }, span('fn', inv.entity.name), op && op.type === 'Tool' ? span('val', ' ' + (op.commandPath || []).join(' ')) : null, span('val', ` · ${inv.callMode.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()} · start #${idxOf(inv.startIndex)}`)));
-    right.push(h('span', { class: 'tag' }, n.vis + ' entries'));
-  } else if (n.kind === 'atomic' || n.kind === 'transaction') {
-    parts.push(badge(e.type), h('span', { class: 'sum' }, n.kind === 'transaction' ? span('val', 'transaction ' + (e.entry.transactionId && e.entry.transactionId.value || e.entry.transactionId)) : span('val', 'atomic region'), n.end ? [arrow(), span(n.end.type === 'RolledBackRemoteTransaction' ? 'err' : 'ok', n.end.type === 'RolledBackRemoteTransaction' ? 'rolled back' : n.end.type === 'CommittedRemoteTransaction' ? 'committed' : 'ended at #' + n.end.index)] : span('err', ' · never closed')));
-    if (n.end) right.push(h('span', { class: 'tag dur' }, fmtDur(n.end.ts - e.ts)));
     right.push(h('span', { class: 'tag' }, n.vis + ' entries'));
   }
   return { parts, cls, right };
@@ -977,7 +966,7 @@ function renderSidebar() {
     h('h3', null, 'legend'), h('div', null, CATEGORIES.map(c => h('div', { style: 'margin:2px 0' }, h('span', { class: 'badge', style: `--c:${catColor(c)}` }, c), ' ', h('span', { class: 'muted' }, LEGEND[c])))),
     h('h3', null, 'notes'), h('div', { class: 'muted' }, 'Hint entries are not consumed during replay. Entries struck through lie in a region skipped by a JUMP or dropped by a REVERT. A START row is merged with its END / CANCELLED entry; expand it to see stream frames, the end entry and completion markers. Entries executed by a tool entity are nested under the tool invocation.'));
 }
-const LEGEND = { invocation: 'agent invocations: start, finish, queue', host: 'durable host calls and their completions', error: 'failures and retries', log: 'stdout, stderr and structured logs', region: 'atomic regions and remote transactions', lifecycle: 'create, suspend, restart, jump, exit', update: 'component updates', snapshot: 'state and filesystem snapshots', resource: 'resource instances', plugin: 'plugins and oplog processors', retry: 'retry policies', card: 'permission cards and wallet', stream: 'durable streams' };
+const LEGEND = { invocation: 'agent invocations: start, finish, queue', host: 'durable host calls and their completions', error: 'failures and retries', log: 'stdout, stderr and structured logs', region: 'remote transactions', lifecycle: 'create, suspend, restart, jump, exit', update: 'component updates', snapshot: 'state and filesystem snapshots', resource: 'resource instances', plugin: 'plugins and oplog processors', retry: 'retry policies', card: 'permission cards and wallet', stream: 'durable streams' };
 
 // ---------------------------------------------------------------------------
 // Loading data.

@@ -3,7 +3,7 @@ import { uuidToString } from "golem:core/types@2.0.0"
 import {
   AgentIdentity,
   Agents,
-  Oplog,
+  Durability,
   SelfAgentId,
   Snapshot,
   defineAgent,
@@ -20,7 +20,6 @@ for (const snapshots of [false, true]) {
     methods: {
       observe: method({ input: {}, success: Schema.String }),
       status: method({ input: {}, success: Schema.String }),
-      checkpoint: method({ input: {}, success: Schema.String }),
       forkNamed: method({
         input: { name: Schema.String, cutoff: Schema.String },
         success: Schema.Void,
@@ -45,7 +44,7 @@ for (const snapshots of [false, true]) {
           const self = yield* SelfAgentId.SelfAgentId
           // Different durable calls make an incorrect historical identity diverge.
           if (self.agentId.includes('"parent"')) yield* Agents.getSelfMetadata
-          else yield* Oplog.currentIndex
+          else yield* Durability.generateIdempotencyKey
           state.trace.push(self.agentId)
           return self.agentId
         }),
@@ -61,7 +60,6 @@ for (const snapshots of [false, true]) {
             addressed: addressed?.agentId.agentId,
           })
         }),
-      checkpoint: () => Oplog.currentIndex.pipe(Effect.map(String)),
       forkNamed: ({ name, cutoff }) =>
         Effect.gen(function* () {
           const source = yield* SelfAgentId.SelfAgentId

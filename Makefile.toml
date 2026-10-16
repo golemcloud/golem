@@ -2369,7 +2369,7 @@ if equals ${component} otlp-exporter
     build_task = set build-otlp-exporter
     wasm = set plugins/otlp-exporter.wasm
     artifact_id = set otlp_exporter
-    exports_json = set "{\"plugin\":\"golem-otlp-exporter\",\"version\":\"1.5.7\"}"
+    exports_json = set "{\"plugin\":\"golem-otlp-exporter\",\"version\":\"1.5.8\"}"
     licenses = set LICENSE
     sbom = set ""
 elif equals ${component} filesystem-tools
@@ -2383,7 +2383,7 @@ elif equals ${component} javascript-tools
     build_task = set build-javascript-tools
     wasm = set builtin-tools/javascript-tools.wasm
     artifact_id = set javascript_tools
-    exports_json = set "{\"tools\":[\"node@0.1.9\",\"npm@10.9.9+golem.8\",\"npx@10.9.9+golem.8\"]}"
+    exports_json = set "{\"tools\":[\"node@0.1.9\",\"npm@10.9.9+golem.9\",\"npx@10.9.9+golem.9\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/npm
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/npm/sbom.spdx.json
@@ -2391,7 +2391,7 @@ elif equals ${component} typescript-tools
     build_task = set build-typescript-tools
     wasm = set builtin-tools/typescript-tools.wasm
     artifact_id = set typescript_tools
-    exports_json = set "{\"tools\":[\"tsc@5.9.2+golem.8\"]}"
+    exports_json = set "{\"tools\":[\"tsc@5.9.2+golem.9\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/typescript
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/typescript/sbom.spdx.json
@@ -2407,7 +2407,7 @@ elif equals ${component} git-tool
     build_task = set build-git-tool
     wasm = set builtin-tools/git-tool.wasm
     artifact_id = set git_tool
-    exports_json = set "{\"tools\":[\"git@0.1.14\"]}"
+    exports_json = set "{\"tools\":[\"git@0.1.15\"]}"
     licenses = set builtin-tools/git/licenses/git
     source_notice = set builtin-tools/git/licenses/SOURCE.md
     sbom = set builtin-tools/git/licenses/git/sbom.spdx.json
@@ -2415,7 +2415,7 @@ elif equals ${component} web-fetch
     build_task = set build-web-fetch
     wasm = set builtin-tools/web-fetch.wasm
     artifact_id = set web_fetch
-    exports_json = set "{\"tools\":[\"web-fetch@0.1.1\"]}"
+    exports_json = set "{\"tools\":[\"web-fetch@0.1.2\"]}"
     licenses = set builtin-tools/web-fetch/licenses/THIRD_PARTY_LICENSES.html
     source_notice = set LICENSE
     sbom = set ""

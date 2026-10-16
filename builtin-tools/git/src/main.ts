@@ -5,10 +5,14 @@ import {
   c,
   command,
   err,
+  NamedPolicy,
   ok,
+  Policy,
+  Predicate,
+  Props,
   s,
   toolDefinition,
-  withIdempotenceMode,
+  withRetryPolicy,
 } from "@golemcloud/golem-ts-sdk";
 import {
   compileSchema,
@@ -128,8 +132,12 @@ function credentials(handle: Secret | undefined): Credentials | undefined {
   }
 }
 
+const noReceivePackResend = NamedPolicy.named("git-push-no-resend", Policy.never())
+  .priority(0xffffffff)
+  .appliesWhen(Predicate.eq(Props.verb, "POST"));
+
 const definition = toolDefinition("git", { requiresFilesystem: true })
-  .version("0.1.14")
+  .version("0.1.15")
   .doc({
     summary: "Run local and HTTP(S) remote Git workflows.",
     description:
@@ -1073,8 +1081,9 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
       atomic,
       authentication: handle,
     }) =>
-      // A lost receive-pack response may follow a successful remote update.
-      withIdempotenceMode(false, () =>
+      // A lost receive-pack response may follow a successful remote update, and Git servers
+      // do not deduplicate by idempotency key, so the host must not resend the POST.
+      withRetryPolicy(noReceivePackResend, () =>
         withAuthentication(handle, async (auth) =>
           pushCommand(
             await repository(workingDirectory ?? [], cwd),
@@ -1402,7 +1411,14 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
         const oid = await createCommit(repo, message, author, allowEmpty);
         return { oid, summary: message[0] ?? "" };
       }),
-    checkout: async ({ cwd, workingDirectory, newBranch, detach, ref, paths }) =>
+    checkout: async ({
+      cwd,
+      workingDirectory,
+      newBranch,
+      detach,
+      ref,
+      paths,
+    }) =>
       guard(async () => {
         const repo = await repository(workingDirectory ?? [], cwd);
         const tracking =
