@@ -54,7 +54,9 @@ pub(super) struct ReplayedRequestBodyRecording {
 }
 
 pub(super) struct ReplayedRequestBodyDrainReadiness {
-    pub(super) proof: oneshot::Receiver<Result<ReplayedRequestBodyRecordingProof, String>>,
+    pub(super) proof: oneshot::Receiver<
+        Result<ReplayedRequestBodyRecordingProof, super::request_body::RecordedFrameError>,
+    >,
     pub(super) progress: Arc<ReplayedRequestBodyDrainProgress>,
 }
 
@@ -275,7 +277,9 @@ pub(super) struct ReplayRequestBodyDrain<Ctx> {
     body: UnsyncBoxBody<Bytes, ErrorCode>,
     recorded_body: Option<ReplayedRequestBodyRecording>,
     result_tx: oneshot::Sender<Result<(), ErrorCode>>,
-    recording_finished_tx: oneshot::Sender<Result<ReplayedRequestBodyRecordingProof, String>>,
+    recording_finished_tx: oneshot::Sender<
+        Result<ReplayedRequestBodyRecordingProof, super::request_body::RecordedFrameError>,
+    >,
     progress: Arc<ReplayedRequestBodyDrainProgress>,
     activity: TailActivity,
     _phantom: PhantomData<fn() -> Ctx>,
@@ -286,7 +290,9 @@ impl<Ctx> ReplayRequestBodyDrain<Ctx> {
         body: UnsyncBoxBody<Bytes, ErrorCode>,
         recorded_body: Option<ReplayedRequestBodyRecording>,
         result_tx: oneshot::Sender<Result<(), ErrorCode>>,
-        recording_finished_tx: oneshot::Sender<Result<ReplayedRequestBodyRecordingProof, String>>,
+        recording_finished_tx: oneshot::Sender<
+            Result<ReplayedRequestBodyRecordingProof, super::request_body::RecordedFrameError>,
+        >,
         progress: Arc<ReplayedRequestBodyDrainProgress>,
         activity: TailActivity,
     ) -> Self {
@@ -343,13 +349,21 @@ where
                             .await,
                         Some(Err(
                             "the incomplete request-body recording cannot be healed while snapshotting"
-                                .to_string(),
+                                .to_string().into(),
                         )),
                     )
                 }
             }
         };
         if let Some(recording_result) = recording_result {
+            if let Some(error) = recording_result
+                .as_ref()
+                .err()
+                .and_then(|error| error.recovery_error())
+            {
+                let _ = recording_finished_tx.send(recording_result);
+                return Err(error.into());
+            }
             let _ = recording_finished_tx.send(recording_result);
         }
         let _ = result_tx.send(result);
@@ -359,7 +373,8 @@ where
 
 pub(super) struct ReplayRequestBodyDrainOutcome {
     pub(super) transmission: Result<(), ErrorCode>,
-    pub(super) recording: Result<ReplayedRequestBodyRecordingProof, String>,
+    pub(super) recording:
+        Result<ReplayedRequestBodyRecordingProof, super::request_body::RecordedFrameError>,
 }
 
 /// Drains a replayed request body whose oplog recording may be incomplete,
@@ -399,6 +414,12 @@ async fn drain_replayed_request_body_completing_recording_with_progress(
 ) -> ReplayRequestBodyDrainOutcome {
     let scan = match scan_recorded_request_body_frames(oplog.clone(), send_start_index).await {
         Ok(scan) => scan,
+        Err(error @ super::request_body::RecordedFrameError::Infrastructure(_)) => {
+            return ReplayRequestBodyDrainOutcome {
+                transmission: Ok(()),
+                recording: Err(error),
+            };
+        }
         Err(error) => {
             warn!(
                 send_start_index = %send_start_index,
@@ -412,7 +433,8 @@ async fn drain_replayed_request_body_completing_recording_with_progress(
                     .await,
                 recording: Err(format!(
                     "the recorded request-body frames could not be scanned: {error}"
-                )),
+                )
+                .into()),
             };
         }
     };
@@ -459,7 +481,7 @@ async fn drain_past_recorded_prefix(
     activity: &TailActivity,
     progress: &Arc<ReplayedRequestBodyDrainProgress>,
 ) -> ReplayRequestBodyDrainOutcome {
-    let mut recording = true;
+    let mut recording = Ok(());
     let mut trailers_recorded = scan.trailers_recorded();
     let terminal_recorded = scan.terminal_recorded();
     let mut reproduced_trailers = false;
@@ -474,7 +496,7 @@ async fn drain_past_recorded_prefix(
             Ok(frame) => match frame.into_data().map_err(http_body::Frame::into_trailers) {
                 Ok(data) => {
                     let end = pos.saturating_add(data.len() as u64);
-                    if recording && end > scan.covered_len {
+                    if recording.is_ok() && end > scan.covered_len {
                         let skip = scan.covered_len.saturating_sub(pos);
                         recording = record_frame_or_warn(
                             &oplog,
@@ -490,7 +512,7 @@ async fn drain_past_recorded_prefix(
                 }
                 Err(Ok(trailers)) => {
                     reproduced_trailers = true;
-                    if recording && !trailers_recorded {
+                    if recording.is_ok() && !trailers_recorded {
                         recording = record_frame_or_warn(
                             &oplog,
                             send_start_index,
@@ -505,8 +527,8 @@ async fn drain_past_recorded_prefix(
                 Err(Err(_)) => {}
             },
             Err(error) => {
-                if recording {
-                    record_frame_or_warn(
+                if recording.is_ok() {
+                    recording = record_frame_or_warn(
                         &oplog,
                         send_start_index,
                         SerializableP3HttpRequestBodyFrame::Error(serialize_error_code(&error)),
@@ -515,15 +537,16 @@ async fn drain_past_recorded_prefix(
                 }
                 return ReplayRequestBodyDrainOutcome {
                     transmission: Err(error),
-                    recording: Err(
+                    recording: recording.and(Err(
                         "the deterministically reproduced guest request body ended with an error"
-                            .to_string(),
-                    ),
+                            .to_string()
+                            .into(),
+                    )),
                 };
             }
         }
     }
-    if recording && !terminal_recorded {
+    if recording.is_ok() && !terminal_recorded {
         recording = record_frame_or_warn(
             &oplog,
             send_start_index,
@@ -533,17 +556,10 @@ async fn drain_past_recorded_prefix(
     }
     ReplayRequestBodyDrainOutcome {
         transmission: Ok(()),
-        recording: if recording {
-            Ok(ReplayedRequestBodyRecordingProof {
-                final_length: pos,
-                trailers_present: reproduced_trailers,
-            })
-        } else {
-            Err(
-                "a required request-body frame could not be appended while healing the recording"
-                    .to_string(),
-            )
-        },
+        recording: recording.map(|()| ReplayedRequestBodyRecordingProof {
+            final_length: pos,
+            trailers_present: reproduced_trailers,
+        }),
     }
 }
 
@@ -554,16 +570,16 @@ async fn record_frame_or_warn(
     oplog: &Arc<dyn Oplog>,
     send_start_index: OplogIndex,
     frame: SerializableP3HttpRequestBodyFrame,
-) -> bool {
+) -> Result<(), super::request_body::RecordedFrameError> {
     match record_frame_entry(oplog.clone(), send_start_index, frame).await {
-        Ok(_) => true,
+        Ok(_) => Ok(()),
         Err(error) => {
             warn!(
                 send_start_index = %send_start_index,
                 error = %error,
                 "Failed to append a p3 HTTP request-body frame while completing a replayed send's recording; leaving the recording incomplete"
             );
-            false
+            Err(error.into())
         }
     }
 }
@@ -1121,7 +1137,10 @@ mod tests {
         .await;
 
         assert!(matches!(&outcome.transmission, Ok(())));
-        assert!(outcome.recording.is_err());
+        assert!(matches!(
+            outcome.recording,
+            Err(super::super::request_body::RecordedFrameError::Infrastructure(_))
+        ));
         let scan = scan_recorded_request_body_frames(oplog, PARENT)
             .await
             .expect("scan failed");
@@ -1130,6 +1149,39 @@ mod tests {
             scan.terminal,
             Some(RecordedRequestBodyTerminal::End)
         ));
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn replay_drain_preserves_upload_failure_while_draining_to_guest_error() {
+        let oplog = FrameTestOplog::new();
+        oplog.fail_uploads();
+        let outcome = drain_replayed_request_body_completing_recording(
+            frame_body(
+                vec![http_body::Frame::data(Bytes::from_static(b"upload"))],
+                Some(ErrorCode::HttpProtocolError),
+            ),
+            oplog.clone(),
+            PARENT,
+            &test_activity(),
+        )
+        .await;
+        assert!(matches!(
+            outcome.transmission,
+            Err(ErrorCode::HttpProtocolError)
+        ));
+        let error = outcome.recording.expect_err("upload must fail");
+        assert!(matches!(
+            error,
+            super::super::request_body::RecordedFrameError::Infrastructure(_)
+        ));
+        assert!(matches!(
+            error.recovery_error(),
+            Some(
+                golem_service_base::error::worker_executor::WorkerExecutorError::RecoveryRequired { .. }
+            )
+        ));
+        assert!(oplog.recorded_frames_for(PARENT).is_empty());
     }
 
     /// Guest trailers past the covered prefix are recorded when the recording

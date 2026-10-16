@@ -6,6 +6,7 @@
 import { beforeEach, expect, layer } from "@effect/vitest"
 import { Cause, Effect, Exit, Layer, Stream } from "effect"
 import { ConnectionError, SqlError, SqlSyntaxError, UnknownError } from "effect/sql/SqlError"
+import { vi } from "vitest"
 import { MysqlHostClient } from "../src/host/MysqlHostClient.js"
 import { MySql, MySqlClient } from "../src/Mysql/MySqlClient.js"
 import * as MockMy from "./mocks/golem-rdbms-mysql.js"
@@ -44,12 +45,28 @@ const MySqlStub = Layer.succeed(
 )
 
 beforeEach(() => {
+  vi.restoreAllMocks()
   __resetMySqlMock()
 })
 
 const ADDR = "mysql://localhost/test"
 
 layer(MySqlStub)("MySqlClient (mocked golem:rdbms/mysql@1.5.0)", (it) => {
+  for (const operation of ["getColumns", "getNext"] as const) {
+    it.effect(`propagates ${operation} failures from result streams`, () =>
+      Effect.gen(function* () {
+        const sql = yield* MySqlClient.make({ connectionAddress: ADDR })
+        vi.spyOn(MockMy.DbResultStream.prototype, operation).mockImplementationOnce(() => {
+          throw { tag: "query-response-failure", val: "stream failed" }
+        })
+        const exit = yield* Effect.exit(Stream.runCollect(sql`SELECT n FROM t`.stream))
+        expect(failureValue(exit)).toBeInstanceOf(SqlError)
+        const rows = yield* Stream.runCollect(sql`SELECT n FROM t`.stream)
+        expect(rows).toEqual([])
+      }),
+    )
+  }
+
   it.effect("opens a connection and runs DDL via execute", () =>
     Effect.gen(function* () {
       const sql = yield* MySqlClient.make({ connectionAddress: ADDR })

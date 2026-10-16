@@ -305,10 +305,6 @@ pub struct DroppedCall {
     pub(super) request_upload: PendingUpload,
     pub(super) span_finished: Option<golem_common::model::oplog::SpanFinished>,
     pub(super) span_observer: Option<Arc<dyn CallSpanObserver>>,
-    /// The dropped call's atomic-region ownership lease, shared with every other holder (the
-    /// originating handle, terminal guards). Released — store-free and idempotently — once the
-    /// call's terminal is recorded.
-    pub(super) atomic_lease: Option<Arc<AtomicRegionLease>>,
     /// The dropped call's own trap classification, captured from its execution scope at drop time.
     /// A cancellation-drain failure (deferred request upload / terminal recorder join) traps with
     /// this context so the retry grouping belongs to the dropped call, not to whichever later host
@@ -347,18 +343,6 @@ impl DroppedCall {
         &self.request_upload
     }
 
-    /// The atomic region currently owning the dropped call, read through its lease.
-    pub fn atomic_region(&self) -> Option<OplogIndex> {
-        self.atomic_lease.as_ref().and_then(|lease| lease.owner())
-    }
-
-    /// Releases the dropped call's atomic-region membership (idempotent, store-free).
-    pub(super) fn release_atomic_lease(&self) {
-        if let Some(lease) = &self.atomic_lease {
-            lease.release();
-        }
-    }
-
     pub fn trap_context(&self) -> DurableCallTrapContext {
         self.trap_context
     }
@@ -378,7 +362,6 @@ impl DroppedCall {
     ) -> Result<(), WorkerExecutorError> {
         self.append_cancelled_with_oplog(ctx.state.oplog.clone(), partial)
             .await?;
-        self.release_atomic_lease();
         ctx.end_durable_function(&self.function_type, self.begin_index, false)
             .await?;
         Ok(())
@@ -417,12 +400,10 @@ pub enum DropEvent {
     UnfinishedCancellable { call: DroppedCall },
     /// A `NotCancellable` handle was dropped unfinished; this is a programming error.
     UnfinishedNotCancellable { call: DroppedCall },
-    /// A terminal append was handed to an owned task; wait for it before releasing the call's
-    /// atomic-region lease. A join failure traps with the dropped call's own `trap_context`
+    /// A terminal append was handed to an owned task; wait for it before closing the call's
+    /// durable scope. A join failure traps with the dropped call's own `trap_context`
     /// rather than ambient state.
     CleanupAfterTerminal {
-        atomic_lease: Option<Arc<AtomicRegionLease>>,
-        successful_end: bool,
         function_type: DurableFunctionType,
         durable_begin_index: OplogIndex,
         terminal: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
@@ -436,7 +417,7 @@ pub enum DropEvent {
     /// A deferred guest-delivery token ([`CompletionDelivery`]) was dropped while still armed:
     /// its call's terminal `End` is already recorded and the durable scope already closed, so the
     /// only remaining work is joining the owned marker (or trailing ordered-append) task while
-    /// keeping the call counted as in flight — no scope close and no atomic-region cleanup.
+    /// keeping the call counted as in flight — no scope close.
     AwaitCompletionMarker {
         receipt: Option<MarkerReceipt>,
         trap_context: DurableCallTrapContext,
@@ -554,27 +535,6 @@ pub async fn drain_queued_dropped_call_events<Ctx: WorkerCtx>(
     Ok(recorded)
 }
 
-pub(super) fn finish_terminal_atomic_region(
-    regions: &mut [crate::durable_host::ActiveAtomicRegion],
-    lease: Option<&AtomicRegionLease>,
-    successful_end: bool,
-) -> Result<(), WorkerExecutorError> {
-    if let Some(lease) = lease {
-        let owner = lease.owner();
-        let marked = !successful_end
-            || owner.is_none_or(|index| {
-                crate::durable_host::mark_atomic_region_has_side_effects_for(regions, index)
-            });
-        lease.release();
-        if !marked {
-            return Err(WorkerExecutorError::runtime(
-                "durable call completed after its atomic region closed",
-            ));
-        }
-    }
-    Ok(())
-}
-
 async fn record_dropped_call_event<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     event: DropEvent,
@@ -599,8 +559,6 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
             ));
         }
         DropEvent::CleanupAfterTerminal {
-            atomic_lease,
-            successful_end,
             function_type,
             durable_begin_index,
             terminal,
@@ -622,12 +580,6 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
                     }
                 }
             }
-            finish_terminal_atomic_region(
-                &mut ctx.state.active_atomic_regions,
-                atomic_lease.as_deref(),
-                successful_end,
-            )
-            .map_err(|err| TerminalCallError::new(err, trap_context))?;
             ctx.end_durable_function(&function_type, durable_begin_index, false)
                 .await
                 .map_err(|err| TerminalCallError::new(err, trap_context))?;
@@ -840,7 +792,7 @@ where
 
 /// Accessor-window variant of [`drain_queued_dropped_call_events`]. It drains the queue from a short
 /// worker-state window, records `Cancelled` entries using owned oplog handles outside the window,
-/// then re-enters only to unregister atomic-region membership.
+/// then closes the durable-function scope.
 pub async fn drain_dropped_call_events_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
@@ -888,11 +840,9 @@ where
                 .await;
                 match result {
                     Ok(()) => {
-                        // The `Cancelled` entry is durable and the lease release is synchronous
-                        // (store-free), so neutralize the event before the remaining fallible
+                        // The `Cancelled` entry is durable, so neutralize the event before the remaining fallible
                         // work: a torn drain from here re-queues only a permit-holding no-op
                         // instead of re-appending a second `Cancelled`.
-                        call.release_atomic_lease();
                         let live_call_permit = call.live_call_permit.take();
                         drain.replace_current(DropEvent::AwaitCompletionMarker {
                             receipt: None,
@@ -933,8 +883,6 @@ where
                 });
             }
             DropEvent::CleanupAfterTerminal {
-                atomic_lease,
-                successful_end,
                 function_type,
                 durable_begin_index,
                 terminal,
@@ -944,8 +892,6 @@ where
                 // finished or dropped.
                 live_call_permit: _,
             } => {
-                let atomic_lease = atomic_lease.clone();
-                let successful_end = *successful_end;
                 let function_type = function_type.clone();
                 let durable_begin_index = *durable_begin_index;
                 let trap_context = *trap_context;
@@ -968,17 +914,6 @@ where
                     }
                 }
                 if terminal_recorded {
-                    let finish = store.with(|mut access| {
-                        finish_terminal_atomic_region(
-                            &mut get_ctx(access.data_mut()).state.active_atomic_regions,
-                            atomic_lease.as_deref(),
-                            successful_end,
-                        )
-                    });
-                    if let Err(err) = finish {
-                        first_error
-                            .get_or_insert_with(|| TerminalCallError::new(err, trap_context));
-                    }
                     if let Err(err) = end_durable_function_access(
                         store,
                         get_ctx,
@@ -1236,9 +1171,10 @@ pub(super) mod tests {
     use test_r::test;
 
     fn noop() -> OplogEntry {
-        OplogEntry::NoOp {
+        OplogEntry::RemoveRetryPolicy {
             timestamp: Timestamp::now_utc(),
             entity_parent_start_index: None,
+            name: "test-policy".to_string(),
         }
     }
 
@@ -1512,7 +1448,7 @@ pub(super) mod tests {
             }
             let (index, entry) = replay.get_oplog_entry(None).await.unwrap();
             assert_eq!(index, OplogIndex::from_u64(3));
-            assert!(matches!(entry, OplogEntry::NoOp { .. }));
+            assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
             assert!(matches!(
                 cleanup.progress.clone().await.unwrap(),
                 HttpSpanCleanupProgress::Complete

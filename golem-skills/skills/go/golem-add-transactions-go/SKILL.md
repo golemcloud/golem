@@ -9,9 +9,8 @@ description: "Adding saga-pattern transactions with compensation to a Go Golem a
 
 Golem supports the **saga pattern** for multi-step operations where each step has a
 compensation (undo). If a later step fails, the steps that already succeeded are
-compensated in **reverse order**. The saga helpers build on the durability
-primitives (an atomic region + the oplog) — no persistence beyond what the runtime
-already provides.
+compensated in **reverse order**. The saga helpers use ordinary guest control flow
+and durable host calls. They do not delete recorded history.
 
 The Go API lives in the `transaction` package (`github.com/golemcloud/golem/sdks/go/golem/transaction`):
 
@@ -23,8 +22,7 @@ The Go API lives in the `transaction` package (`github.com/golemcloud/golem/sdks
   transaction until it succeeds.
 
 Expected step failures are modeled as the **error arm** of a `golem.Result` (type
-`E`, often `string`). A `panic` is an infra failure: it traps the component at once
-and leaves the atomic region open, so the runtime replays it.
+`E`, often `string`). A `panic` fails the invocation without guaranteed compensation.
 
 ## Steps
 
@@ -124,9 +122,10 @@ if result.IsErr() {
 
 ## Infallible Transactions
 
-On a step failure, the completed steps are compensated in reverse, the oplog is
-rewound to the transaction start, and the runtime **replays the whole
-transaction** — so it returns the plain `Out` value, always succeeding eventually:
+On a step failure, the completed steps are compensated in reverse and the helper
+starts a new guest-code attempt. Each attempt appends new durable calls and keeps the
+earlier attempts and compensations in history. The helper returns a plain `Out` if an
+attempt succeeds; a permanent domain failure can loop forever:
 
 ```go
 orderID := transaction.Infallible(func(tx *transaction.Tx[string]) golem.Result[string, string] {
@@ -161,7 +160,7 @@ so the error type comes from the transaction itself.
 ## Guidelines
 
 - Model expected step failures as the **error arm** of the step's `golem.Result`;
-  reserve `panic` for infra failures (it leaves the region open for replay).
+  reserve `panic` for unexpected failures, not business retry signals.
 - Run every step with `tx.Step(op, input)` — that is what records the
   compensation to run on rollback.
 - Keep compensation logic **idempotent** — it may run more than once (especially
@@ -170,15 +169,13 @@ so the error type comes from the transaction itself.
 - All steps in one transaction share the error type `E` (commonly `string`).
 - Use `transaction.Fallible` when failure is an acceptable outcome;
   `transaction.Infallible` when the operation must eventually succeed.
-- A transaction opens a **worker-global** atomic region — keep the whole
-  transaction on one logical flow; don't run concurrent goroutines that perform
-  durable side effects while it is open.
+- Host retry policies remain responsible for retryable individual calls. Reconstruction
+  repairs an eligible incomplete call at its own `Start`; it does not rerun completed steps.
 
 ### Related Skills
 
 | Skill | When to Load |
 |-------|--------------|
-| `golem-atomic-block-go` | The atomic-region / durability primitives transactions build on |
 | `golem-call-another-agent-go` | Steps that call other agents via RPC |
 | `golem-make-http-request-go` | Steps that call external HTTP APIs |
 | `golem-retry-policies-go` | Tune how failing steps/operations are retried |

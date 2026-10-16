@@ -30,10 +30,9 @@ use crate::durable_host::durability::{
     try_trigger_host_trap_retry,
 };
 use crate::durable_host::http::policy::{
-    apply_managed_http_headers, golem_managed_http_headers, http_transparent_retry_allowed,
-    is_http_request_idempotent, is_idempotent_http_method,
+    apply_managed_http_headers, classify_serializable_http_error_code, golem_managed_http_headers,
+    http_worker_state_allows_retry, is_idempotent_http_method,
 };
-use crate::durable_host::http::types::classify_serializable_http_error_code;
 use crate::durable_host::p3::{DurableP3, DurableP3View, durable_worker_ctx, wasi_http_view};
 use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
@@ -51,9 +50,7 @@ use golem_common::model::oplog::{
     HostResponseP3HttpClientSendResult, OplogEntry, OplogIndex, SpanFinished, SpanKind,
     SpanStarted,
 };
-use golem_common::model::{
-    NamedRetryPolicy, OwnedAgentId, PredicateValue, RetryContext, RetryProperties,
-};
+use golem_common::model::{NamedRetryPolicy, OwnedAgentId, RetryContext, RetryProperties};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use http::HeaderMap;
 use http_body_util::BodyExt as _;
@@ -91,26 +88,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> client::HostWithStore<U> for DurableP3<C
             })?
         };
 
-        // The durable call shape follows the request's effective idempotence, not only its
-        // method. A `WriteRemote` send has no durable scope: a crash before the response headers
-        // repairs the recorded `Start` in place (same index, same derived idempotency key, the
-        // deterministic guest re-produces the body), and independent operations recorded next to
-        // it are kept. A batched send can only recover through a suffix rollback, which must
-        // refuse when a foreign remote write interleaves, so it is reserved for requests that are
-        // not re-executable at all. The guest sets the idempotence mode deterministically, so the
-        // replayed call claims the same shape it recorded.
+        // Repair an incomplete send under its original Start and idempotency key. Method
+        // idempotence controls guest cancellation, not the durable call shape.
         let serialized_method = serialize_method(method);
         if is_idempotent_http_method(&serialized_method) {
             send_with_durability::<Ctx, U, LeaveIncompleteOnDrop>(
-                store,
-                req,
-                DurableFunctionType::WriteRemote,
-            )
-            .await
-        } else if effective_method_idempotence::<Ctx, U>(store, &serialized_method) {
-            // A guest drop of a pending non-idempotent-method send stays a recorded `Cancelled`
-            // terminal, as before; only the crash recovery changes.
-            send_with_durability::<Ctx, U, Cancellable>(
                 store,
                 req,
                 DurableFunctionType::WriteRemote,
@@ -120,7 +102,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> client::HostWithStore<U> for DurableP3<C
             send_with_durability::<Ctx, U, Cancellable>(
                 store,
                 req,
-                DurableFunctionType::WriteRemoteBatched(None),
+                DurableFunctionType::WriteRemote,
             )
             .await
         }
@@ -186,7 +168,7 @@ where
     // `request::new` wrapper (e.g. a forwarded incoming request); such a request
     // has no guest-held transmission future wired through us, so there is
     // nothing to record — deterministically on both live and replay paths.
-    let pending_transmission = store.with(|mut access| {
+    let mut pending_transmission = store.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
         ctx.state
             .pending_p3_http_request_transmissions
@@ -426,10 +408,6 @@ where
                                 span: span.clone(),
                                 method: serialized_request.method.to_string(),
                                 uri: outgoing_http_request_uri(&serialized_request),
-                                is_idempotent: effective_method_idempotence::<Ctx, U>(
-                                    store,
-                                    &serialized_request.method,
-                                ),
                                 resend: Some(P3HttpSendRebuild {
                                     request: serialized_request,
                                     injected_headers,
@@ -662,6 +640,9 @@ where
         }
     };
     let PhysicalSend::Replayable(physical) = converted;
+    if let Some(pending) = pending_transmission.as_mut() {
+        pending.recovery = physical.body.recovery.clone();
+    }
     let mut retry_state = InFunctionRetryState::new();
     let mut retry_task_ctx = make_p3_http_retry_task_context::<Ctx, U>(
         store,
@@ -689,17 +670,15 @@ where
             }
         };
 
+        if let Some(error) = physical.body.recovery.error() {
+            handle.abandon_for_trap();
+            return Err(HttpError::trap(error));
+        }
         match attempt_result {
             Ok((response, io, pooled_connection)) => {
-                // A send whose lease is still owned by an open atomic region may not retry
-                // inline (that would skip the region's rollback semantics), so
-                // `inline_retry_eligible` is false — but a matching user-defined status-code
-                // policy must still be honoured. Escalate to trap+replay keyed on the owning
-                // region (via the call's execution scope): without this the guest would see
-                // the rejected response, throw, and trap with an impoverished context (no
-                // `status-code`), silently falling back to the default trap policy. Mirrors
-                // `try_status_code_retry`'s atomic-region fallback on the p2 path.
-                if (handle.trap_context().in_atomic_region || handle.is_observational())
+                // Observational calls cannot retry inline, but must still honour a matching
+                // status-code policy through the worker's trap-based retry path.
+                if handle.is_observational()
                     && store.with(|mut access| {
                         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
                         ctx.state.is_live() && !ctx.state.snapshotting_mode
@@ -728,7 +707,7 @@ where
                         &serialized_request.method,
                     );
                     let for_retry: Result<(), String> = Err(format!(
-                        "HTTP status {status} matched a status-code retry policy inside an atomic region"
+                        "HTTP status {status} matched a status-code retry policy in an observational call"
                     ));
                     handle
                         .try_trigger_retry_access(
@@ -913,6 +892,7 @@ where
                 http_response,
                 io,
                 physical.final_transmission_tx,
+                physical.body.recovery.clone(),
             )?;
             let headers = serialize_response_headers::<Ctx, U>(store, borrow_resource(&response))?;
             // When the request body was recorded as durable frames, the
@@ -950,10 +930,6 @@ where
                     span: span.clone(),
                     method: retry_method.clone(),
                     uri: retry_uri.clone(),
-                    is_idempotent: effective_method_idempotence::<Ctx, U>(
-                        store,
-                        &serialized_request.method,
-                    ),
                     resend: Some(P3HttpSendRebuild {
                         request: serialized_request,
                         injected_headers,
@@ -1244,6 +1220,7 @@ pub(super) fn response_resource_from_http<Ctx, U>(
     response: http::Response<UnsyncBoxBody<Bytes, ErrorCode>>,
     io: Box<dyn Future<Output = Result<(), ErrorCode>> + Send>,
     final_transmission_tx: oneshot::Sender<Result<(), ErrorCode>>,
+    recovery: RequestBodyRecovery,
 ) -> HttpResult<Resource<Response>>
 where
     Ctx: WorkerCtx,
@@ -1263,7 +1240,7 @@ where
                 debug!(?result, "p3 HTTP send I/O future finished");
                 let _ = io_result_tx.send(result);
             });
-            let io_guard = AbortOnDropIoTask(io_task);
+            let io_guard = AbortOnDropIoTask(io_task, recovery);
             tokio::task::spawn(async move {
                 let result = io_result_rx.await.unwrap_or(Ok(()));
                 let _ = final_transmission_tx.send(result);
@@ -1348,46 +1325,23 @@ where
 }
 
 pub(super) fn http_retry_properties<Ctx, U>(
-    store: &Accessor<U, DurableP3<Ctx>>,
+    _store: &Accessor<U, DurableP3<Ctx>>,
     method: &str,
     uri: &str,
     status_code: Option<u16>,
     error_type: &str,
-    serialized_method: &SerializableHttpMethod,
+    _serialized_method: &SerializableHttpMethod,
 ) -> RetryProperties
 where
     Ctx: WorkerCtx,
     U: Send + 'static,
 {
-    let mut properties = RetryContext::http_with_response(method, uri, status_code, error_type);
-    let effective_idempotence = effective_method_idempotence::<Ctx, U>(store, serialized_method);
-    apply_method_idempotence(&mut properties, effective_idempotence);
-    properties
-}
-
-/// Effective idempotence of a request for retry decisions: the worker-level
-/// `assume_idempotence` override, or an idempotent HTTP method.
-pub(super) fn effective_method_idempotence<Ctx, U>(
-    store: &Accessor<U, DurableP3<Ctx>>,
-    serialized_method: &SerializableHttpMethod,
-) -> bool
-where
-    Ctx: WorkerCtx,
-    U: Send + 'static,
-{
-    store.with(|mut access| {
-        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-        is_http_request_idempotent(ctx.state.assume_idempotence, serialized_method)
-    })
-}
-
-pub(super) fn apply_method_idempotence(properties: &mut RetryProperties, is_idempotent: bool) {
-    properties.set("is-idempotent", PredicateValue::Boolean(is_idempotent));
+    RetryContext::http_with_response(method, uri, status_code, error_type)
 }
 
 pub(super) fn inline_retry_eligible_for_method<Ctx, U>(
     store: &Accessor<U, DurableP3<Ctx>>,
-    method: &SerializableHttpMethod,
+    _method: &SerializableHttpMethod,
 ) -> bool
 where
     Ctx: WorkerCtx,
@@ -1395,12 +1349,7 @@ where
 {
     store.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-        http_transparent_retry_allowed(
-            &ctx.durable_execution_state(),
-            ctx.in_atomic_region(),
-            method,
-        )
-        .is_ok()
+        http_worker_state_allows_retry(&ctx.durable_execution_state()).is_ok()
     })
 }
 
@@ -1914,9 +1863,8 @@ mod terminal_tests {
         for abandon_before_start in [true, false] {
             let oplog = FrameTestOplog::new();
             oplog
-                .add(OplogEntry::NoOp {
+                .add(OplogEntry::RecoverySucceeded {
                     timestamp: Timestamp::now_utc(),
-                    entity_parent_start_index: None,
                 })
                 .await
                 .unwrap();
@@ -1966,9 +1914,8 @@ mod terminal_tests {
         ] {
             let oplog = FrameTestOplog::new();
             oplog
-                .add(OplogEntry::NoOp {
+                .add(OplogEntry::RecoverySucceeded {
                     timestamp: Timestamp::now_utc(),
-                    entity_parent_start_index: None,
                 })
                 .await
                 .unwrap();
@@ -1993,9 +1940,8 @@ mod terminal_tests {
         for persisted in [true, false] {
             let oplog = FrameTestOplog::new();
             oplog
-                .add(OplogEntry::NoOp {
+                .add(OplogEntry::RecoverySucceeded {
                     timestamp: Timestamp::now_utc(),
-                    entity_parent_start_index: None,
                 })
                 .await
                 .unwrap();

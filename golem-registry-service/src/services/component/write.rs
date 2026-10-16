@@ -2119,6 +2119,7 @@ async fn analyze_and_validate_component_wasm(
     }
 
     let component_metadata = run_cpu_bound_work(move || {
+        validate_component_http_imports(&wasm)?;
         ComponentMetadata::analyse_component_with_config(
             &wasm,
             config_schema,
@@ -2132,6 +2133,40 @@ async fn analyze_and_validate_component_wasm(
     .await?;
 
     Ok(component_metadata)
+}
+
+fn validate_component_http_imports(wasm: &[u8]) -> Result<(), ComponentProcessingError> {
+    // Only the outer component's imports are host requirements. Nested
+    // components can satisfy their own imports internally through composition.
+    let mut depth = 0;
+    for payload in wasmparser::Parser::new(0).parse_all(wasm) {
+        let payload =
+            payload.map_err(|error| ComponentProcessingError::Parsing(error.to_string()))?;
+        match payload {
+            wasmparser::Payload::ComponentSection { .. }
+            | wasmparser::Payload::ModuleSection { .. } => depth += 1,
+            wasmparser::Payload::End(_) if depth > 0 => depth -= 1,
+            wasmparser::Payload::ComponentImportSection(imports) if depth == 0 => {
+                for import in imports {
+                    let import = import
+                        .map_err(|error| ComponentProcessingError::Parsing(error.to_string()))?;
+                    let name = import.name.name;
+                    if let Some((interface, version)) = name.split_once('@')
+                        && matches!(interface, "wasi:http/types" | "wasi:http/outgoing-handler")
+                        && let Ok(version) = semver::Version::parse(version)
+                        && version.major == 0
+                        && version.minor == 2
+                    {
+                        return Err(ComponentProcessingError::Metadata(format!(
+                            "Unsupported WASI HTTP P2 import `{name}`. Use golem_rust::http or raw WASI HTTP P3 bindings instead."
+                        )));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn provision_configs_for_agent_types(
@@ -2463,6 +2498,47 @@ mod tests {
     use golem_common::schema::{MetadataEnvelope, SchemaGraph, SchemaType};
     use std::collections::{BTreeMap, HashMap};
     use test_r::test;
+
+    #[test]
+    async fn component_upload_rejects_only_p2_http_imports() {
+        for interface in ["types", "outgoing-handler"] {
+            for version in ["0.2.0", "0.2.4", "0.2.99"] {
+                let name = format!("wasi:http/{interface}@{version}");
+                let wasm =
+                    wat::parse_str(format!("(component (import \"{name}\" (instance)))")).unwrap();
+                let error = super::analyze_and_validate_component_wasm(
+                    ComponentConfigSchema::default(),
+                    Default::default(),
+                    Vec::new(),
+                    wasm.into(),
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                )
+                .await
+                .unwrap_err()
+                .to_string();
+                assert!(error.contains(&name));
+                assert!(error.contains("golem_rust::http"));
+                assert!(error.contains("P3"));
+            }
+        }
+        for name in [
+            "wasi:http/types@0.3.0",
+            "wasi:http/client@0.3.0",
+            "wasi:io/streams@0.2.4",
+            "wasi:filesystem/types@0.2.4",
+            "wasi:sockets/tcp@0.2.4",
+        ] {
+            let wasm =
+                wat::parse_str(format!("(component (import \"{name}\" (instance)))")).unwrap();
+            super::validate_component_http_imports(&wasm).unwrap();
+        }
+        let composed =
+            wat::parse_str("(component (component (import \"wasi:http/types@0.2.4\" (instance))))")
+                .unwrap();
+        super::validate_component_http_imports(&composed).unwrap();
+    }
 
     fn bool_component_schema(source: AgentConfigSource) -> ComponentConfigSchema {
         ComponentConfigSchema {

@@ -749,9 +749,8 @@ async fn append_session(oplog: &dyn Oplog, record: StreamSessionRecord) -> Oplog
 
 async fn append_noop(oplog: &dyn Oplog) -> OplogIndex {
     oplog
-        .add(OplogEntry::NoOp {
+        .add(OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
-            entity_parent_start_index: None,
         })
         .await
         .expect("oplog write")
@@ -3214,9 +3213,8 @@ async fn identity_resolution_distinguishes_absent_and_malformed_oplogs() {
             &mut oplog_service.lock_lifecycle(&malformed.agent_id).await,
             &malformed,
             AgentMode::Durable,
-            OplogEntry::NoOp {
+            OplogEntry::RecoverySucceeded {
                 timestamp: Timestamp::now_utc(),
-                entity_parent_start_index: None,
             },
             metadata,
             stale_status(),
@@ -3655,9 +3653,8 @@ fn status_fold_tracks_local_lifecycle_without_retaining_caller_results() {
         status,
         BTreeMap::from([(
             OplogIndex::INITIAL,
-            OplogEntry::NoOp {
+            OplogEntry::RecoverySucceeded {
                 timestamp: Timestamp::now_utc(),
-                entity_parent_start_index: None,
             },
         )]),
         &RetryConfig::default(),

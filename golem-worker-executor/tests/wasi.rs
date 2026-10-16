@@ -26,7 +26,7 @@ use golem_common::model::worker::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind, RevertToOplogIndex,
     RevertWorkerTarget,
 };
-use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex, RetryConfig};
+use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::ResultValuePayload;
 #[cfg(target_os = "linux")]
@@ -5319,61 +5319,6 @@ async fn sleep_and_awaiting_parallel_responses(
         "Ok(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\n"
     );
     assert!(healthcheck_result);
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("4m")]
-async fn jump_with_in_flight_durable_call_fails(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
-
-    let context = TestContext::new(last_unique_id);
-    let overrides = TestExecutorOverrides {
-        configure: Some(Arc::new(|config| {
-            config.retry = RetryConfig {
-                max_attempts: 1,
-                min_delay: Duration::from_millis(10),
-                max_delay: Duration::from_millis(10),
-                multiplier: 1.0,
-                max_jitter_factor: None,
-            };
-        })),
-        ..Default::default()
-    };
-    let executor = start_with_overrides(deps, &context, overrides).await?;
-
-    let (port, server) = simulated_slow_request_server(Duration::from_secs(2)).await;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
-        .store()
-        .await?;
-    let agent_id = agent_id!("Clock", "jump-during-request");
-    executor
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
-
-    let result = executor
-        .invoke_and_await_agent(&component, &agent_id, "jump_during_request", data_value!())
-        .await;
-
-    drop(executor);
-    server.abort();
-
-    assert!(result.is_err());
-    let err = format!("{}", result.unwrap_err());
-    assert!(
-        err.contains("durable host calls are still in flight"),
-        "Unexpected error: {err}"
-    );
 
     Ok(())
 }

@@ -81,6 +81,20 @@ async fn status(ctx: &TestContext, agent: &str) -> Value {
     status
 }
 
+async fn fork_cutoff(ctx: &TestContext, agent: &str) -> String {
+    let output = ctx
+        .cli([cmd::AGENT, "oplog", agent, flag::FORMAT, "json"])
+        .await;
+    assert!(output.success_or_dump());
+    output
+        .stdout_json::<Value>()
+        .into_iter()
+        .filter_map(|entry| entry["index"].as_u64())
+        .max()
+        .expect("the agent has durable history")
+        .to_string()
+}
+
 async fn self_identity_follows_durable_history(language: &str) {
     let mut ctx = TestContext::new();
     let app = format!("self-identity-{language}");
@@ -123,7 +137,7 @@ async fn self_identity_follows_durable_history(language: &str) {
         let child = format!("{agent_type}(\"child\")");
         let grandchild = format!("{agent_type}(\"grandchild\")");
         assert_eq!(invoke(&ctx, &parent, "observe", &[]).await, parent);
-        let cutoff = invoke(&ctx, &parent, "checkpoint", &[]).await;
+        let cutoff = fork_cutoff(&ctx, &parent).await;
         invoke(
             &ctx,
             &parent,
@@ -148,7 +162,7 @@ async fn self_identity_follows_durable_history(language: &str) {
         if agent_type == "SnapshotIdentity" {
             assert_eq!(restarted["snapshotIdentity"], child);
         }
-        let cutoff = invoke(&ctx, &child, "checkpoint", &[]).await;
+        let cutoff = fork_cutoff(&ctx, &child).await;
         invoke(
             &ctx,
             &child,

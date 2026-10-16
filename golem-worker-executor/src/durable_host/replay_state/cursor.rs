@@ -121,17 +121,15 @@ impl ReplayCursor {
     /// removes the old self-deadlock hazard of a scan that needed the cursor lock while the cursor
     /// lock was already held.
     #[allow(clippy::too_many_arguments)]
-    pub(super) async fn scan_oplog<State>(
+    pub(super) async fn scan_oplog(
         &self,
         mut start: OplogIndex,
         end: OplogIndex,
         skipped_regions: &DeletedRegions,
         mut current_next_skip_region: Option<OplogRegion>,
         begin_idx: OplogIndex,
-        end_check: impl Fn(&OplogEntry, OplogIndex, &State) -> bool,
-        for_all_intermediate: impl Fn(&OplogEntry, OplogIndex, &State) -> bool,
-        mut state: State,
-        mut update_state: impl FnMut(&OplogEntry, OplogIndex, &mut State),
+        end_check: impl Fn(&OplogEntry, OplogIndex, OplogIndex) -> bool,
+        for_all_intermediate: impl Fn(&OplogEntry, OplogIndex, OplogIndex) -> bool,
     ) -> OplogEntryLookupResult {
         const CHUNK_SIZE: u64 = 1024;
 
@@ -160,9 +158,7 @@ impl ReplayCursor {
                     continue;
                 }
 
-                update_state(entry, *idx, &mut state);
-
-                if end_check(entry, begin_idx, &state) {
+                if end_check(entry, begin_idx, *idx) {
                     return OplogEntryLookupResult::Found {
                         index: *idx,
                         entry: Box::new(entry.clone()),
@@ -170,7 +166,7 @@ impl ReplayCursor {
                     };
                 }
 
-                if !for_all_intermediate(entry, begin_idx, &state) {
+                if !for_all_intermediate(entry, begin_idx, *idx) {
                     violation = true;
                 }
             }
@@ -1748,13 +1744,10 @@ impl RetainedClaims<'_> {
                         .skipped_regions
                         .find_next_deleted_region(start_idx.next()),
                     OplogIndex::NONE,
-                    |entry, _, index: &Option<OplogIndex>| {
-                        terminal_start_index(entry) == Some(start_idx)
-                            && index.is_some_and(|index| index < marker_idx)
+                    |entry, _, index| {
+                        terminal_start_index(entry) == Some(start_idx) && index < marker_idx
                     },
                     |_, _, _| true,
-                    None,
-                    |_, index, current: &mut Option<OplogIndex>| *current = Some(index),
                 )
                 .await;
             match scan {
@@ -1842,8 +1835,6 @@ impl CursorState {
                         && !matches!(entry, OplogEntry::End { .. } | OplogEntry::Cancelled { .. })
                 },
                 |_, _, _| true,
-                (),
-                |_, _, _| {},
             )
             .await;
         // Any earlier positional record wins, including a different kind that must still
@@ -1878,12 +1869,10 @@ impl CursorState {
                     &self.skipped_regions,
                     self.skipped_regions.find_next_deleted_region(next),
                     OplogIndex::NONE,
-                    |entry, _, index: &OplogIndex| {
-                        !self.claimed_starts.contains(index) && claim.matches_start_identity(entry)
+                    |entry, _, index| {
+                        !self.claimed_starts.contains(&index) && claim.matches_start_identity(entry)
                     },
                     |_, _, _| true,
-                    OplogIndex::NONE,
-                    |_, index, current| *current = index,
                 )
                 .await;
             match candidate {
@@ -1971,19 +1960,14 @@ impl CursorTx<'_> {
                 &self.st.skipped_regions,
                 self.st.next_skipped_region.clone(),
                 OplogIndex::NONE,
-                |entry, _begin_idx, state: &Option<OplogIndex>| {
-                    state
-                        .map(|idx| idx <= replay_target && !already_claimed.contains(&idx))
-                        .unwrap_or(false)
+                |entry, _begin_idx, index| {
+                    index <= replay_target
+                        && !already_claimed.contains(&index)
                         && (matches_identity(entry)
                             || matches!(entry, OplogEntry::CompletionDelivered { .. })
-                            || state.is_some_and(|idx| self.is_stream_observation(idx)))
+                            || self.is_stream_observation(index))
                 },
                 |_, _, _| true,
-                None,
-                |_, idx, state: &mut Option<OplogIndex>| {
-                    *state = Some(idx);
-                },
             )
             .await;
 
@@ -2008,7 +1992,7 @@ impl CursorTx<'_> {
     /// Returns the latest `Start` matching this claim in a jump-deleted region. An incomplete
     /// entity Store uses this to continue live locally while sibling Stores finish replaying the
     /// surviving owner-oplog tail; the latest match ensures an earlier abandoned attempt cannot
-    /// hide another attempt beyond a retained atomic-region boundary.
+    /// hide another attempt beyond a retained positional entry.
     pub(super) async fn deleted_region_contains_start(
         &self,
         claim: &StartClaim,
@@ -2144,8 +2128,6 @@ impl CursorTx<'_> {
                             && *invocation_id == claim.expected_invocation_id())
                 },
                 |_, _, _| true,
-                (),
-                |_, _, _| {},
             )
             .await;
         if matches!(name_collision, OplogEntryLookupResult::Found { .. }) {
@@ -2167,31 +2149,17 @@ impl CursorTx<'_> {
                     .skipped_regions
                     .find_next_deleted_region(suffix_start),
                 OplogIndex::NONE,
-                |entry, begin_idx, (state, index)| {
+                |entry, _, index| {
                     matches!(entry, OplogEntry::CompletionDelivered { .. })
-                        || self.is_stream_observation(*index)
-                        || !entry.no_concurrent_side_effect(begin_idx, state)
+                        || self.is_stream_observation(index)
                 },
                 |_, _, _| true,
-                (
-                    ScopeScanState {
-                        root: OplogIndex::NONE,
-                        descendants: HashSet::new(),
-                        current_is_descendant_scope: false,
-                    },
-                    OplogIndex::NONE,
-                ),
-                |entry, idx, (state, index)| {
-                    *index = idx;
-                    entry.track_scope_membership(idx, state);
-                },
             )
             .await;
         if matches!(unsafe_suffix, OplogEntryLookupResult::Found { .. }) {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
                 claim.expected_description(),
-                "the scope Start is missing before an unsafe concurrent side effect or delivery boundary"
-                    .to_string(),
+                "the scope Start is missing before a guest observation boundary".to_string(),
             ));
         }
 
@@ -2872,14 +2840,15 @@ impl ReplayState {
         let last_oplog_index = oplog.current_oplog_index().await;
         let mut tool_attachment_reconstruction = ToolAttachmentReconstruction::default();
         let metadata_floor = recovery_metadata_floor(&skipped_regions, initial_snapshot_skip_end);
-        let (completion_markers, stream_observations) = Self::scan_completion_markers(
-            &oplog,
-            metadata_floor,
-            last_oplog_index,
-            &skipped_regions,
-            &mut tool_attachment_reconstruction,
-        )
-        .await?;
+        let (completion_markers, stream_observations, transaction_markers) =
+            Self::scan_completion_markers(
+                &oplog,
+                metadata_floor,
+                last_oplog_index,
+                &skipped_regions,
+                &mut tool_attachment_reconstruction,
+            )
+            .await?;
         crate::metrics::workers::record_replay_metadata_scan(
             if metadata_floor == OplogIndex::INITIAL {
                 "initial"
@@ -2919,6 +2888,7 @@ impl ReplayState {
             unclaimed_retained_starts: RetainedStartCounts::default(),
             reconstruction_claims,
             completion_markers: std::sync::Mutex::new(completion_markers),
+            transaction_markers: std::sync::Mutex::new(transaction_markers),
             tool_attachment_reconstruction: std::sync::Mutex::new(tool_attachment_reconstruction),
             attachment_validation_slot: tokio::sync::Semaphore::new(1),
             log_hashes: std::sync::Mutex::new(HashMap::new()),
@@ -2946,7 +2916,7 @@ impl ReplayState {
         })
     }
 
-    /// Scans the non-deleted entries of `[from, to]` for successful-completion delivery markers.
+    /// Scans retained history for delivery, transaction, stream and attachment recovery metadata.
     /// Exactly one visible `CompletionDelivered` or `CompletionDiscarded` may reference a
     /// `Start`; duplicates or a conflicting pair are oplog corruption.
     pub(super) async fn scan_completion_markers(
@@ -2955,10 +2925,18 @@ impl ReplayState {
         to: OplogIndex,
         skipped_regions: &DeletedRegions,
         attachments: &mut ToolAttachmentReconstruction,
-    ) -> Result<(CompletionMarkers, StreamObservationPositions), WorkerExecutorError> {
+    ) -> Result<
+        (
+            CompletionMarkers,
+            StreamObservationPositions,
+            TransactionMarkers,
+        ),
+        WorkerExecutorError,
+    > {
         const CHUNK_SIZE: u64 = 1024;
         let mut markers = HashMap::new();
         let mut stream_observations = HashMap::new();
+        let mut transaction_markers = TransactionMarkers::new();
         let mut next = from;
         while next <= to {
             let available = u64::from(to) - u64::from(next) + 1;
@@ -2997,6 +2975,20 @@ impl ReplayState {
                     continue;
                 }
                 let marker = match entry {
+                    entry @ (OplogEntry::BeginRemoteTransaction { .. }
+                    | OplogEntry::PreCommitRemoteTransaction { .. }
+                    | OplogEntry::PreRollbackRemoteTransaction { .. }
+                    | OplogEntry::CommittedRemoteTransaction { .. }
+                    | OplogEntry::RolledBackRemoteTransaction { .. }) => {
+                        let owner = scope_entry_owner(marker_idx, &entry).unwrap();
+                        if !skipped_regions.is_in_deleted_region(owner) {
+                            transaction_markers
+                                .entry(owner)
+                                .or_default()
+                                .insert(marker_idx, entry);
+                        }
+                        None
+                    }
                     OplogEntry::Start {
                         function_name,
                         parent_start_index,
@@ -3263,7 +3255,22 @@ impl ReplayState {
                 WorkerExecutorError::runtime(format!("invalid attachment history: {error:?}"))
             })?;
         attachments.index_logical_observations();
-        Ok((markers, stream_observations))
+        Ok((markers, stream_observations, transaction_markers))
+    }
+
+    pub(crate) fn transaction_marker(
+        &self,
+        owner: OplogIndex,
+        predicate: impl Fn(&OplogEntry) -> bool,
+    ) -> Option<OplogEntry> {
+        self.cursor
+            .transaction_markers
+            .lock()
+            .unwrap()
+            .get(&owner)?
+            .values()
+            .find(|entry| predicate(entry))
+            .cloned()
     }
 
     /// Records a live-appended successful-completion delivery marker in the same map populated by
@@ -3751,71 +3758,6 @@ impl ReplayState {
         false
     }
 
-    /// Makes Jumps appended during replay effective in the shared cursor. Positional readers skip
-    /// the deleted regions (a deleted cursor head is skipped immediately), retained `Start`s
-    /// inside them are dropped because they belong to the abandoned attempt the Jump hides, and
-    /// surviving sibling history keeps its resolver awaiters. Callers append the Jump entry and
-    /// then register its regions here; the cursor may already be live.
-    pub(crate) async fn register_replay_jump(
-        &self,
-        regions: Vec<OplogRegion>,
-    ) -> Result<(), WorkerExecutorError> {
-        self.run_owned_cursor_op(move |state| async move {
-            state
-                .with_tx(async |tx| {
-                    for region in regions {
-                        tx.st.skipped_regions.add(region);
-                    }
-                    let skipped_regions = tx.st.skipped_regions.clone();
-                    {
-                        let mut attachments =
-                            tx.cursor.tool_attachment_reconstruction.lock().unwrap();
-                        attachments.history.retain_history(&skipped_regions);
-                        attachments
-                            .history
-                            .validate_observations(&skipped_regions)
-                            .map_err(|error| {
-                                WorkerExecutorError::runtime(format!(
-                                    "invalid attachment history after Jump: {error:?}"
-                                ))
-                            })?;
-                        attachments.retain(|index| !skipped_regions.is_in_deleted_region(index));
-                    }
-                    tx.cursor
-                        .stream_observations
-                        .lock()
-                        .unwrap()
-                        .retain(|index, _| !skipped_regions.is_in_deleted_region(*index));
-                    tx.prune_retained_starts(|idx| skipped_regions.is_in_deleted_region(idx));
-                    let head = tx.cursor.last_replayed_index().next();
-                    tx.st.next_skipped_region = tx
-                        .st
-                        .skipped_regions
-                        .regions()
-                        .find(|region| region.end >= head)
-                        .map(|region| OplogRegion {
-                            start: region.start.max(head),
-                            end: region.end,
-                        });
-                    if tx
-                        .st
-                        .next_skipped_region
-                        .as_ref()
-                        .is_some_and(|region| region.start == head)
-                    {
-                        tx.move_replay_idx(head.previous()).await;
-                        tx.skip_forward().await?;
-                        tx.st.skip_hints_after_delivery = false;
-                    }
-                    Ok(())
-                })
-                .await?;
-            state.cursor.progress.notify_waiters();
-            Ok(())
-        })
-        .await
-    }
-
     /// Returns the replay-visible terminal for `start_index` without advancing the positional
     /// cursor. Tool replay uses the terminal's body-execution decision before allocating a
     /// transient Store; the ordinary reconstruction path subsequently consumes the same terminal.
@@ -3910,8 +3852,6 @@ impl ReplayState {
 
             let mut projection = OplogScopeProjection::new(root);
             let mut parents = HashMap::new();
-            let mut previous_index = None;
-            let mut previous_included_start = None;
             let mut next = root;
             while next <= head {
                 let available = u64::from(head) - u64::from(next) + 1;
@@ -3926,12 +3866,10 @@ impl ReplayState {
                         break;
                     }
                     if st.skipped_regions.is_in_deleted_region(index) {
-                        previous_index = Some(index);
-                        previous_included_start = None;
                         continue;
                     }
                     let included = projection.includes(index, &entry);
-                    let included_start = if included
+                    if included
                         && let OplogEntry::Start {
                             parent_start_index, ..
                         } = &entry
@@ -3939,10 +3877,7 @@ impl ReplayState {
                         if let Some(parent) = parent_start_index {
                             parents.insert(index, *parent);
                         }
-                        Some(index)
-                    } else {
-                        None
-                    };
+                    }
 
                     if index == head {
                         if !included {
@@ -3959,12 +3894,7 @@ impl ReplayState {
                         {
                             return Ok(None);
                         }
-                        let owner = scope_entry_owner(
-                            index,
-                            &entry,
-                            previous_index,
-                            previous_included_start,
-                        );
+                        let owner = scope_entry_owner(index, &entry);
                         if owner.is_some_and(|mut owner| {
                             while owner != root {
                                 if active_entity_bodies.contains(&owner) {
@@ -3996,9 +3926,6 @@ impl ReplayState {
                         }
                         return Ok(Some(index));
                     }
-
-                    previous_index = Some(index);
-                    previous_included_start = included_start;
                 }
                 next = last_read.next();
             }
@@ -4123,12 +4050,16 @@ impl ReplayState {
                         .unwrap()
                         .retain(|_, marker| marker.index() <= new_target);
                     cursor.stream_observations.lock().unwrap().retain(|index, _| *index <= new_target);
+                    cursor.transaction_markers.lock().unwrap().retain(|_, entries| {
+                        entries.retain(|index, _| *index <= new_target);
+                        !entries.is_empty()
+                    });
                     cursor.tool_attachment_reconstruction.lock().unwrap()
                         .truncate(new_target);
                 }
                 std::cmp::Ordering::Greater => {
                     let mut attachments = cursor.tool_attachment_reconstruction.lock().unwrap().clone();
-                    let (additions, stream_observations) = Self::scan_completion_markers(
+                    let (additions, stream_observations, transaction_markers) = Self::scan_completion_markers(
                         &cursor.oplog,
                         old_target.next(),
                         new_target,
@@ -4158,6 +4089,12 @@ impl ReplayState {
                         markers.extend(additions);
                     }
                     cursor.stream_observations.lock().unwrap().extend(stream_observations);
+                    {
+                        let mut current = cursor.transaction_markers.lock().unwrap();
+                        for (owner, entries) in transaction_markers {
+                            current.entry(owner).or_default().extend(entries);
+                        }
+                    }
                     let mut current = cursor.tool_attachment_reconstruction.lock().unwrap();
                     current.starts.extend(attachments.starts);
                     current.accepted.extend(attachments.accepted);
@@ -4187,18 +4124,9 @@ impl ReplayState {
         .await
     }
 
-    /// Snapshots replay's deleted regions for readers that also scan the live oplog suffix.
-    pub(crate) async fn skipped_regions(&self) -> Result<DeletedRegions, WorkerExecutorError> {
-        self.run_owned_cursor_op(move |state| async move {
-            let st = state.cursor.state.lock().await;
-            Ok(st.skipped_regions.clone())
-        })
-        .await
-    }
-
-    /// Whether `oplog_index` lies in a deleted (skipped) oplog region. Used as a validity guard
-    /// (e.g. rejecting jumps into deleted regions), so a failed cursor read propagates as an error
-    /// rather than defaulting to an answer.
+    /// Whether `oplog_index` lies in a deleted (skipped) oplog region. Session replay uses this
+    /// validity guard, so a failed cursor read propagates as an error rather than defaulting to
+    /// an answer.
     pub async fn is_in_skipped_region(
         &self,
         oplog_index: OplogIndex,
@@ -4594,108 +4522,6 @@ impl ReplayState {
             .store(!log_hashes.is_empty(), Ordering::Relaxed);
     }
 
-    /// Includes foreign work: another scope may have observed bytes from the incomplete attempt.
-    pub async fn has_attempt_suffix(&self, start: OplogIndex) -> bool {
-        !matches!(
-            self.lookup_oplog_entry_with_condition(
-                start,
-                |entry, _| !matches!(
-                    entry,
-                    OplogEntry::Jump { .. }
-                        | OplogEntry::Suspend { .. }
-                        | OplogEntry::Interrupted { .. }
-                        | OplogEntry::Restart { .. }
-                        | OplogEntry::Error { .. }
-                        | OplogEntry::RecoverySucceeded { .. }
-                ),
-                |_, _| true,
-            )
-            .await,
-            OplogEntryLookupResult::NotFound {
-                violates_for_all: false
-            }
-        )
-    }
-
-    pub async fn lookup_oplog_entry(
-        &self,
-        begin_idx: OplogIndex,
-        check: impl Fn(&OplogEntry, OplogIndex) -> bool,
-    ) -> Option<OplogIndex> {
-        match self
-            .lookup_oplog_entry_with_condition(begin_idx, check, |_, _| true)
-            .await
-        {
-            OplogEntryLookupResult::Found { index, .. } => Some(index),
-            OplogEntryLookupResult::NotFound { .. } => None,
-        }
-    }
-
-    pub async fn lookup_oplog_entry_with_condition(
-        &self,
-        begin_idx: OplogIndex,
-        end_check: impl Fn(&OplogEntry, OplogIndex) -> bool,
-        for_all_intermediate: impl Fn(&OplogEntry, OplogIndex) -> bool,
-    ) -> OplogEntryLookupResult {
-        self.lookup_oplog_entry_with_condition_and_state(
-            begin_idx,
-            |entry, idx, ()| end_check(entry, idx),
-            |entry, idx, ()| for_all_intermediate(entry, idx),
-            (),
-            |_, _, ()| {},
-        )
-        .await
-    }
-
-    /// Forward-scans the replay-visible oplog after `begin_idx` (a claimed `Start`) for a matching
-    /// entry. The scan starts right after `begin_idx` rather than at the cursor head: a claimed
-    /// `Start` may lie ahead of the head (scan-ahead claim) or behind it (a `Start` the cursor
-    /// committed past and retained, possibly together with its already-committed terminal), and
-    /// in every case the recorded history between the `Start` and its terminal is what the probe
-    /// must judge. The skip-region state is snapshotted under a brief cursor-lock acquisition,
-    /// then the scan itself runs lock-free (see [`ReplayCursor::scan_oplog`]). Holding the lock
-    /// only for the snapshot — rather than across the whole (potentially full-oplog) scan — keeps
-    /// the snapshot internally consistent without blocking concurrent cursor advances for the
-    /// scan's duration.
-    pub async fn lookup_oplog_entry_with_condition_and_state<State>(
-        &self,
-        begin_idx: OplogIndex,
-        end_check: impl Fn(&OplogEntry, OplogIndex, &State) -> bool,
-        for_all_intermediate: impl Fn(&OplogEntry, OplogIndex, &State) -> bool,
-        state: State,
-        update_state: impl FnMut(&OplogEntry, OplogIndex, &mut State),
-    ) -> OplogEntryLookupResult {
-        let cursor = &*self.cursor;
-        // The snapshot is taken on an owned task (see `run_owned_cursor_op`): this lookup is
-        // called from accessor futures (e.g. the replay-side remote-write scope checks), which
-        // must never queue on the cursor mutex directly.
-        let snapshot = self.skipped_regions().await;
-        let skipped_regions = match snapshot {
-            Ok(snapshot) => snapshot,
-            Err(err) => {
-                warn!("oplog lookup cursor snapshot did not complete: {err}");
-                return OplogEntryLookupResult::NotFound {
-                    violates_for_all: true,
-                };
-            }
-        };
-        let start = begin_idx.next();
-        let next_skipped_region = skipped_regions.find_next_deleted_region(start);
-        cursor
-            .scan_oplog(
-                start,
-                cursor.replay_target().next(),
-                &skipped_regions,
-                next_skipped_region,
-                begin_idx,
-                end_check,
-                for_all_intermediate,
-                state,
-                update_state,
-            )
-            .await
-    }
-
     pub async fn get_oplog_entry_agent_invocation_started(
         &self,
     ) -> Result<Option<AgentInvocationStartedEntry>, WorkerExecutorError> {
@@ -4911,8 +4737,8 @@ fn positional_reader_accepts(scope: Option<OplogIndex>) -> impl FnMut(&OplogEntr
 /// The first oplog index whose recovery metadata a new replay generation can need.
 ///
 /// A start from an execution snapshot replaces the history `INITIAL.next()..=snapshot_end` with
-/// the loaded state and skips it. A snapshot is taken only at a clean boundary: no durable call,
-/// scope or atomic region is open, and no tool attachment endpoint or unread accepted output
+/// the loaded state and skips it. A snapshot is taken only at a clean boundary: no durable call
+/// or scope is open, and no tool attachment endpoint or unread accepted output
 /// remains (`PrivateDurableWorkerState::snapshot_boundary_blocker`). Therefore no `Start`,
 /// terminal, delivery marker, attachment write, attachment control or attachment re-observation
 /// after the snapshot refers to metadata before it, and the scan starts after the snapshot. A
@@ -4960,12 +4786,7 @@ fn is_active_stream_observation(
         })
 }
 
-pub(super) fn scope_entry_owner(
-    index: OplogIndex,
-    entry: &OplogEntry,
-    previous_index: Option<OplogIndex>,
-    previous_included_start: Option<OplogIndex>,
-) -> Option<OplogIndex> {
+pub(super) fn scope_entry_owner(index: OplogIndex, entry: &OplogEntry) -> Option<OplogIndex> {
     if let Some(owner) = entry.entity_parent_start_index() {
         return Some(owner);
     }
@@ -4991,17 +4812,9 @@ pub(super) fn scope_entry_owner(
         } => Some(*parent_start_index),
         OplogEntry::Error { retry_from, .. } => Some(*retry_from),
         OplogEntry::BeginRemoteTransaction {
-            original_begin_index: Some(begin),
+            original_begin_index: begin,
             ..
         } => Some(*begin),
-        OplogEntry::BeginRemoteTransaction {
-            original_begin_index: None,
-            ..
-        } => previous_index
-            .zip(previous_included_start)
-            .and_then(|(previous, start)| {
-                (previous == start && previous.next() == index).then_some(start)
-            }),
         OplogEntry::PreCommitRemoteTransaction { begin_index, .. }
         | OplogEntry::PreRollbackRemoteTransaction { begin_index, .. }
         | OplogEntry::CommittedRemoteTransaction { begin_index, .. }
@@ -5011,12 +4824,9 @@ pub(super) fn scope_entry_owner(
         | OplogEntry::AgentInvocationFinished { .. }
         | OplogEntry::Suspend { .. }
         | OplogEntry::RecoverySucceeded { .. }
-        | OplogEntry::NoOp { .. }
         | OplogEntry::Jump { .. }
         | OplogEntry::Interrupted { .. }
         | OplogEntry::Exited { .. }
-        | OplogEntry::BeginAtomicRegion { .. }
-        | OplogEntry::EndAtomicRegion { .. }
         | OplogEntry::PendingAgentInvocation { .. }
         | OplogEntry::PendingUpdate { .. }
         | OplogEntry::SuccessfulUpdate { .. }
@@ -5099,12 +4909,9 @@ pub(super) fn terminal_start_index(entry: &OplogEntry) -> Option<OplogIndex> {
         | OplogEntry::Suspend { .. }
         | OplogEntry::Error { .. }
         | OplogEntry::RecoverySucceeded { .. }
-        | OplogEntry::NoOp { .. }
         | OplogEntry::Jump { .. }
         | OplogEntry::Interrupted { .. }
         | OplogEntry::Exited { .. }
-        | OplogEntry::BeginAtomicRegion { .. }
-        | OplogEntry::EndAtomicRegion { .. }
         | OplogEntry::PendingAgentInvocation { .. }
         | OplogEntry::PendingUpdate { .. }
         | OplogEntry::SuccessfulUpdate { .. }

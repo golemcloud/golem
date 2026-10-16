@@ -31,11 +31,11 @@ use crate::durable_host::durability::{
     InFunctionRetryState, TaskRetryContext, mark_durable_call_trap_context,
     semantic_trap_retry_override_error,
 };
+use crate::durable_host::http::policy::classify_serializable_http_error_code;
 use crate::durable_host::http::policy::{
     ResumeResponseAction, classify_resume_response, has_guest_range_header,
     parse_content_range_start, resume_range_headers,
 };
-use crate::durable_host::http::types::classify_serializable_http_error_code;
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, expect_ctx, observe_function_call,
     observe_function_call_store, wasi_http_view,
@@ -88,10 +88,6 @@ pub(crate) struct OpenP3HttpResponseState {
     pub(crate) method: String,
     /// Request URI, for retry properties of body-transfer failures.
     pub(crate) uri: String,
-    /// Effective idempotence of the request (the worker-level
-    /// `assume_idempotence` override, or an idempotent HTTP method), applied
-    /// to the retry properties of body-transfer failures.
-    pub(super) is_idempotent: bool,
     /// How to re-send the recorded request without a new guest-visible call.
     /// Used to re-issue the request when a replayed placeholder body's
     /// durable consume-body scope turns out to be incomplete and must
@@ -977,6 +973,7 @@ pub(super) async fn skip_body_prefix(
 /// How a replayed response whose body the guest already partly observed continues after a
 /// restart.
 pub(super) enum ResumeOutcome {
+    RecoveryRequired(WorkerExecutorError),
     /// The fresh response continues the delivered prefix; stream its body from here on.
     Resumed {
         body: UnsyncBoxBody<Bytes, ErrorCode>,
@@ -1015,6 +1012,7 @@ pub(super) async fn resume_recorded_response<Ctx: WorkerCtx, U: 'static>(
         resume_range_headers(delivered_bytes)
     };
     match resend_recorded_request::<Ctx, U>(accessor, resend, &range_headers).await {
+        ResendOutcome::RecoveryRequired(error) => ResumeOutcome::RecoveryRequired(error),
         ResendOutcome::Refused(reason) => ResumeOutcome::Interrupted(reason),
         ResendOutcome::Failed(code) => ResumeOutcome::Failed(code),
         ResendOutcome::Sent { response, io_guard } if guest_range => {
@@ -1026,7 +1024,11 @@ pub(super) async fn resume_recorded_response<Ctx: WorkerCtx, U: 'static>(
                 ));
             }
             let mut body = response.into_body();
-            match skip_body_prefix(&mut body, delivered_bytes, delivered).await {
+            let skipped = skip_body_prefix(&mut body, delivered_bytes, delivered).await;
+            if let Some(error) = io_guard.1.error() {
+                return ResumeOutcome::RecoveryRequired(error);
+            }
+            match skipped {
                 Ok(leftover) => ResumeOutcome::Resumed {
                     body,
                     io_guard,
@@ -1069,7 +1071,11 @@ pub(super) async fn resume_recorded_response<Ctx: WorkerCtx, U: 'static>(
                 ),
                 ResumeResponseAction::SkipPrefix => {
                     let mut body = response.into_body();
-                    match skip_body_prefix(&mut body, delivered_bytes, delivered).await {
+                    let skipped = skip_body_prefix(&mut body, delivered_bytes, delivered).await;
+                    if let Some(error) = io_guard.1.error() {
+                        return ResumeOutcome::RecoveryRequired(error);
+                    }
+                    match skipped {
                         Ok(leftover) => ResumeOutcome::Resumed {
                             body,
                             io_guard,
@@ -1177,26 +1183,26 @@ where
             ..
         } = self;
 
+        let recording_recovery = RequestBodyRecovery::default();
         let scope_replay_recovery = match response_state.as_mut() {
-            Some(state) if state.body_is_placeholder && state.is_idempotent => {
-                match state.resend.as_mut() {
-                    Some(rebuild) => {
-                        let request_body_progress = rebuild
-                            .replayed_request_body_drain
-                            .as_ref()
-                            .map(|drain| drain.progress.clone());
-                        ScopeReplayRecovery::reexecute_when(
-                            require_recording_before_response_demand(
-                                recorded_request_body_replayability(accessor, rebuild),
-                                demand_signal.clone(),
-                                request_body_progress,
-                            ),
-                        )
-                    }
-                    None => ScopeReplayRecovery::Forbidden,
+            Some(state) if state.body_is_placeholder => match state.resend.as_mut() {
+                Some(rebuild) => {
+                    let request_body_progress = rebuild
+                        .replayed_request_body_drain
+                        .as_ref()
+                        .map(|drain| drain.progress.clone());
+                    ScopeReplayRecovery::reexecute_when(require_recording_before_response_demand(
+                        recorded_request_body_replayability(
+                            accessor,
+                            rebuild,
+                            recording_recovery.clone(),
+                        ),
+                        demand_signal.clone(),
+                        request_body_progress,
+                    ))
                 }
-            }
-            Some(state) if state.body_is_placeholder => ScopeReplayRecovery::Forbidden,
+                None => ScopeReplayRecovery::Forbidden,
+            },
             _ => ScopeReplayRecovery::Default,
         };
 
@@ -1209,12 +1215,11 @@ where
             observational_owner,
         ) = match response_state {
             Some(state) => {
-                let mut properties = RetryContext::http(&state.method, &state.uri);
-                apply_method_idempotence(&mut properties, state.is_idempotent);
+                let properties = RetryContext::http(&state.method, &state.uri);
                 (
                     Some(state.span),
                     Some(properties),
-                    Some((state.method, state.uri, state.is_idempotent)),
+                    Some((state.method, state.uri)),
                     state.resend,
                     state.body_is_placeholder,
                     state.observational_owner,
@@ -1222,19 +1227,15 @@ where
             }
             None => (None, None, None, None, false, None),
         };
-        // Keeps the re-issued request's I/O task alive while its body is read;
-        // dropped (aborting the task) when this task finishes. Never read —
-        // it exists only for its drop timing.
+        // Keeps re-issued request I/O alive and carries storage failures from its request body.
         let mut _rebuild_io_guard: Option<AbortOnDropIoTask> = None;
         // Set when a terminal error must not be routed through worker-level
-        // or inline retry: a captured non-idempotent request, a refused rebuild
+        // or inline retry: a refused rebuild
         // (request body not reconstructable — a retry
         // would replay into the same refusal forever) or a content-changed
         // response-body resume (416 / short full response — deterministic for
         // the same request).
-        let mut retry_exempt = resume_context
-            .as_ref()
-            .is_some_and(|(_, _, is_idempotent)| !*is_idempotent);
+        let mut retry_exempt = false;
         // In-function retry budget of the response-body resume path, shared across all resume
         // attempts of this consume-body scope.
         let mut resume_retry_state = InFunctionRetryState::new();
@@ -1274,6 +1275,9 @@ where
             // `WorkerExecutorError` carries no call context but there is no scope
             // to group against either.
             Err(error) => {
+                if let Some(error) = recording_recovery.error() {
+                    return Err(error.into());
+                }
                 return fail_consume_body_task(trailers_tx, wasmtime::Error::from(error), None);
             }
         };
@@ -1390,7 +1394,7 @@ where
                         durable_worker_ctx::<Ctx, U>(access.data_mut()).create_interrupt_signal()
                     });
                     let read_frame = async {
-                        if pending_reissue {
+                        let frame = if pending_reissue {
                             // First live read of a replayed response's placeholder body:
                             // the durable consume-body scope was either missing entirely
                             // (the crash happened before its `Start` was committed, so a
@@ -1415,6 +1419,9 @@ where
                                     )
                                     .await
                                     {
+                                        ResumeOutcome::RecoveryRequired(error) => {
+                                            return Err(error);
+                                        }
                                         ResumeOutcome::Resumed {
                                             body: fresh_body,
                                             io_guard,
@@ -1443,6 +1450,9 @@ where
                                 Some(resend) => {
                                     match reissue_recorded_request::<Ctx, U>(accessor, resend).await
                                     {
+                                        RebuildOutcome::RecoveryRequired(error) => {
+                                            return Err(error);
+                                        }
                                         RebuildOutcome::Rebuilt {
                                             body: fresh_body,
                                             io_guard,
@@ -1479,10 +1489,18 @@ where
                             }
                         } else {
                             read_http_body_frame(&mut body).await
-                        }
+                        };
+                        Ok::<_, WorkerExecutorError>(frame)
                     };
                     let mut frame = tokio::select! {
-                        frame = read_frame => frame,
+                        frame = read_frame => match frame {
+                            Ok(frame) => frame,
+                            Err(error) => {
+                                child.abandon_for_trap();
+                                stream.abandon_for_trap();
+                                return Err(error.into());
+                            }
+                        },
                         kind = interrupt => {
                             // An interrupt is not a cancellation and not a hard error:
                             // abandon the open chunk child first, then the parent, so
@@ -1496,6 +1514,21 @@ where
                         }
                     };
 
+                    if let Some(error) = _rebuild_io_guard
+                        .as_ref()
+                        .and_then(|guard| guard.1.error())
+                        .or_else(|| {
+                            resend
+                                .as_ref()
+                                .and_then(|resend| resend.durable_body.as_ref())
+                                .and_then(|body| body.recovery.error())
+                        })
+                    {
+                        child.abandon_for_trap();
+                        stream.abandon_for_trap();
+                        return Err(error.into());
+                    }
+
                     // Inline response-body resume, mirroring the P2
                     // `try_resuming_response_body_inline_retry` path: a transient
                     // live read failure re-sends the recorded request with a
@@ -1508,7 +1541,7 @@ where
                         if retry_exempt {
                             break;
                         }
-                        let (Some(resend), Some((method, uri, is_idempotent))) =
+                        let (Some(resend), Some((method, uri))) =
                             (resend.as_ref(), resume_context.as_ref())
                         else {
                             break;
@@ -1525,9 +1558,7 @@ where
                         {
                             break;
                         }
-                        // The same worker-state and idempotence gates as the send's
-                        // own inline-retry loop (live, not snapshotting, persistence
-                        // on, no atomic region, idempotence predicate).
+                        // The same live/snapshot and observational gates as the send's retry loop.
                         if observational_owner.is_some()
                             || !inline_retry_eligible_for_method::<Ctx, U>(
                                 accessor,
@@ -1537,9 +1568,8 @@ where
                             break;
                         }
 
-                        let mut properties =
+                        let properties =
                             RetryContext::http_with_response(method, uri, None, "transient");
-                        apply_method_idempotence(&mut properties, *is_idempotent);
                         if resume_retry_ctx.is_none() {
                             resume_retry_ctx = Some(
                                 make_p3_http_retry_task_context::<Ctx, U>(
@@ -1578,6 +1608,11 @@ where
                             // resume is refused, the original failure falls through
                             // to the worker-level retry classification (whose replay
                             // re-issues from a then-complete recording, or fails).
+                            ResendOutcome::RecoveryRequired(error) => {
+                                child.abandon_for_trap();
+                                stream.abandon_for_trap();
+                                return Err(error.into());
+                            }
                             ResendOutcome::Refused(reason) => {
                                 debug!(%reason, "p3 HTTP response-body resume refused");
                                 break;
@@ -1626,13 +1661,18 @@ where
                                         // byte-identical to what the guest observed, and
                                         // continue from there.
                                         let mut fresh_body = response.into_body();
-                                        match skip_body_prefix(
+                                        let skipped = skip_body_prefix(
                                             &mut fresh_body,
                                             delivered_bytes,
                                             &delivered_digest,
                                         )
-                                        .await
-                                        {
+                                        .await;
+                                        if let Some(error) = io_guard.1.error() {
+                                            child.abandon_for_trap();
+                                            stream.abandon_for_trap();
+                                            return Err(error.into());
+                                        }
+                                        match skipped {
                                             Ok(leftover) => {
                                                 body = fresh_body;
                                                 _rebuild_io_guard = Some(io_guard);
@@ -1684,6 +1724,13 @@ where
                                 }
                             }
                         }
+                        if let Some(error) =
+                            _rebuild_io_guard.as_ref().and_then(|guard| guard.1.error())
+                        {
+                            child.abandon_for_trap();
+                            stream.abandon_for_trap();
+                            return Err(error.into());
+                        }
                     }
 
                     // Worker-level retry classification for live body-transfer
@@ -1697,9 +1744,8 @@ where
                     // transient ones whose retry budget is exhausted — fall through
                     // and are recorded as the terminal, which is also what a
                     // recorded terminal replays as. A retry-exempt failure (refused
-                    // rebuild, content-changed resume, or captured non-idempotent
-                    // request) is never retry-routed: repeating it would either
-                    // fail deterministically or risk duplicating an external effect.
+                    // rebuild or content-changed resume) is never retry-routed:
+                    // repeating it would fail deterministically.
                     if let HttpBodyFrame::Error(error_code) = &frame
                         && !retry_exempt
                         && let Some(retry_properties) = retry_properties.clone()

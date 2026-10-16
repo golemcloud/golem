@@ -94,6 +94,7 @@ const REQUEST_BODY_RESEND_CACHE_BYTES: usize = 256 * 1024;
 #[derive(Clone)]
 pub(super) struct DurableRequestBody {
     oplog: Arc<dyn Oplog>,
+    pub(super) recovery: RequestBodyRecovery,
     parent_start_index: OplogIndex,
     recording_enabled: bool,
     state: Arc<Mutex<DurableRequestBodyState>>,
@@ -198,6 +199,7 @@ impl DurableRequestBody {
     ) -> Self {
         Self {
             oplog,
+            recovery: RequestBodyRecovery::default(),
             parent_start_index,
             recording_enabled,
             recording_tasks,
@@ -422,6 +424,7 @@ impl DurableRequestBody {
             state.recording_failed = Some(OplogError::Payload(
                 "request body belongs to an abandoned runtime".to_string(),
             ));
+            self.recovery.producer.lock().unwrap().1 = state.recording_failed.clone();
             state.wake_all();
             return;
         };
@@ -434,12 +437,26 @@ impl DurableRequestBody {
             state.slots.len() - 1
         });
         state.pending_recordings += 1;
+        let recovery = self.recovery.clone();
+        recovery.producer.lock().unwrap().0 += 1;
         let oplog = self.oplog.clone();
         let parent_start_index = self.parent_start_index;
         let shared = self.state.clone();
         tokio::task::spawn(async move {
             let _recording = recording;
             let result = record_frame_entry(oplog, parent_start_index, frame).await;
+            {
+                let mut producer = recovery.producer.lock().unwrap();
+                producer.0 -= 1;
+                if let Err(error) = &result {
+                    if producer.1.is_none() || matches!(error, OplogError::Fenced(_)) {
+                        producer.1 = Some(error.clone());
+                    }
+                }
+                for waker in producer.2.drain(..) {
+                    waker.wake();
+                }
+            }
             let mut state = shared
                 .lock()
                 .expect("p3 durable request body mutex poisoned");
@@ -501,8 +518,8 @@ pub(super) async fn record_frame_entry(
 async fn load_recorded_frame(
     oplog: Arc<dyn Oplog>,
     index: OplogIndex,
-) -> Result<Frame<Bytes>, ErrorCode> {
-    let internal = |message: String| ErrorCode::InternalError(Some(message));
+) -> Result<Frame<Bytes>, RecordedFrameError> {
+    let internal = RecordedFrameError::Corrupt;
     let entry = oplog.read(index).await;
     let OplogEntry::HostStreamFrame { payload, .. } = entry else {
         return Err(internal(format!(
@@ -510,9 +527,9 @@ async fn load_recorded_frame(
         )));
     };
     let request = oplog
-        .download_payload::<HostRequest>(payload)
+        .download_payload_classified::<HostRequest>(payload)
         .await
-        .map_err(internal)?;
+        .map_err(RecordedFrameError::from)?;
     let HostRequest::P3HttpClientRequestBodyFrame(frame) = request else {
         return Err(internal(format!(
             "oplog entry at {index} carries an unexpected payload type"
@@ -584,22 +601,117 @@ impl RecordedRequestBodyScan {
     }
 }
 
-/// Scans the oplog for the request-body frames recorded for the send whose
-/// `Start` entry is at `parent_start_index`, from right after that `Start` to
-/// the current physical end of the oplog.
-///
-/// This is a direct scan, not a `ReplayState` lookup: frames are hint entries
-/// that the replay cursor auto-skips, so by the time a replayed send result is
-/// available the cursor is already past them. Frames recorded for *other*
-/// sends — including abandoned `Start`s from crashed generations — are skipped
-/// by the `parent_start_index` key. Each matching frame's payload is
-/// downloaded one at a time and dropped right after inspection, so scanning an
-/// arbitrarily large recorded body needs bounded memory (plus one
-/// `(offset, len)` pair per data frame).
+/// Storage availability and corrupt history require different recovery paths.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum RecordedFrameError {
+    Infrastructure(String),
+    Fenced(OplogFence),
+    Corrupt(String),
+}
+
+impl From<OplogError> for RecordedFrameError {
+    fn from(error: OplogError) -> Self {
+        match error {
+            OplogError::Fenced(fence) => Self::Fenced(fence),
+            error => Self::Infrastructure(error.to_string()),
+        }
+    }
+}
+
+impl RecordedFrameError {
+    pub(super) fn recovery_error(
+        &self,
+    ) -> Option<golem_service_base::error::worker_executor::WorkerExecutorError> {
+        use golem_service_base::error::worker_executor::WorkerExecutorError;
+        match self {
+            Self::Infrastructure(message) => {
+                Some(WorkerExecutorError::recovery_required(message.clone()))
+            }
+            Self::Fenced(fence) => Some(OplogError::Fenced(fence.clone()).into()),
+            Self::Corrupt(_) => None,
+        }
+    }
+}
+
+impl From<String> for RecordedFrameError {
+    fn from(message: String) -> Self {
+        Self::Corrupt(message)
+    }
+}
+
+impl From<crate::services::oplog::OplogPayloadDownloadError> for RecordedFrameError {
+    fn from(error: crate::services::oplog::OplogPayloadDownloadError) -> Self {
+        use crate::services::oplog::OplogPayloadDownloadError;
+        match error {
+            OplogPayloadDownloadError::Backend(error) => Self::Infrastructure(error.to_string()),
+            OplogPayloadDownloadError::Corrupt(error) => Self::Corrupt(error.to_string()),
+        }
+    }
+}
+
+/// Carries storage failures across the HTTP transport's binding-specific body error channel.
+#[derive(Clone, Default)]
+pub(super) struct RequestBodyRecovery {
+    message: Arc<Mutex<Option<String>>>,
+    producer: Arc<Mutex<(usize, Option<OplogError>, Vec<std::task::Waker>)>>,
+}
+
+impl RequestBodyRecovery {
+    pub(super) fn transport_error(&self, error: RecordedFrameError) -> ErrorCode {
+        if let RecordedFrameError::Fenced(fence) = &error {
+            self.producer.lock().unwrap().1 = Some(OplogError::Fenced(fence.clone()));
+        }
+        if let RecordedFrameError::Infrastructure(message) = &error {
+            self.message
+                .lock()
+                .unwrap()
+                .get_or_insert_with(|| message.clone());
+        }
+        ErrorCode::InternalError(Some(error.to_string()))
+    }
+
+    pub(super) fn error(
+        &self,
+    ) -> Option<golem_service_base::error::worker_executor::WorkerExecutorError> {
+        if let Some(error) = &self.producer.lock().unwrap().1 {
+            return RecordedFrameError::from(error.clone()).recovery_error();
+        }
+        self.message
+            .lock()
+            .unwrap()
+            .clone()
+            .map(golem_service_base::error::worker_executor::WorkerExecutorError::recovery_required)
+    }
+
+    async fn settle_recordings(&self) {
+        std::future::poll_fn(|cx| {
+            let mut producer = self.producer.lock().unwrap();
+            if producer.0 == 0 {
+                Poll::Ready(())
+            } else {
+                producer.2.push(cx.waker().clone());
+                Poll::Pending
+            }
+        })
+        .await
+    }
+}
+
+impl std::fmt::Display for RecordedFrameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Infrastructure(message) | Self::Corrupt(message) => f.write_str(message),
+            Self::Fenced(fence) => write!(f, "{fence:?}"),
+        }
+    }
+}
+
+/// Scans matching request-body hints directly, independently of the replay cursor.
+/// Frames are downloaded one at a time and merged by offset across generations.
 pub(super) async fn scan_recorded_request_body_frames(
     oplog: Arc<dyn Oplog>,
     parent_start_index: OplogIndex,
-) -> Result<RecordedRequestBodyScan, String> {
+) -> Result<RecordedRequestBodyScan, RecordedFrameError> {
     const SCAN_CHUNK: u64 = 1024;
     let scan_end = oplog.current_oplog_index().await;
     let mut data_frames: Vec<RecordedDataFrame> = Vec::new();
@@ -623,15 +735,25 @@ pub(super) async fn scan_recorded_request_body_frames(
                 continue;
             }
             let request = oplog
-                .download_payload::<HostRequest>(payload.clone())
+                .download_payload_classified::<HostRequest>(payload.clone())
                 .await
-                .map_err(|err| {
-                    format!("failed to read recorded request-body frame at {index}: {err}")
+                .map_err(|error| {
+                    use crate::services::oplog::OplogPayloadDownloadError;
+                    let message =
+                        format!("failed to read recorded request-body frame at {index}: {error}");
+                    match error {
+                        OplogPayloadDownloadError::Backend(_) => {
+                            RecordedFrameError::Infrastructure(message)
+                        }
+                        OplogPayloadDownloadError::Corrupt(_) => {
+                            RecordedFrameError::Corrupt(message)
+                        }
+                    }
                 })?;
             let HostRequest::P3HttpClientRequestBodyFrame(frame) = request else {
-                return Err(format!(
+                return Err(RecordedFrameError::Corrupt(format!(
                     "oplog entry at {index} carries an unexpected payload type"
-                ));
+                )));
             };
             match frame.frame {
                 SerializableP3HttpRequestBodyFrame::Data { offset, bytes } => {
@@ -682,9 +804,11 @@ pub(super) async fn scan_recorded_request_body_frames(
 pub(super) fn recorded_request_body_replay(
     oplog: Arc<dyn Oplog>,
     scan: &RecordedRequestBodyScan,
+    recovery: RequestBodyRecovery,
 ) -> UnsyncBoxBody<Bytes, ErrorCode> {
     struct ReplayState {
         oplog: Arc<dyn Oplog>,
+        recovery: RequestBodyRecovery,
         /// `(frame index, bytes to skip at its start)` per planned load.
         plan: std::collections::VecDeque<(OplogIndex, usize)>,
         trailers: Option<OplogIndex>,
@@ -705,12 +829,15 @@ pub(super) fn recorded_request_body_replay(
     }
     let state = ReplayState {
         oplog,
+        recovery,
         plan,
         trailers: scan.trailers_index,
     };
     let stream = futures::stream::try_unfold(state, |mut state| async move {
         if let Some((index, skip)) = state.plan.pop_front() {
-            let frame = load_recorded_frame(state.oplog.clone(), index).await?;
+            let frame = load_recorded_frame(state.oplog.clone(), index)
+                .await
+                .map_err(|error| state.recovery.transport_error(error))?;
             let data = frame.into_data().map_err(|_| {
                 ErrorCode::InternalError(Some(format!(
                     "recorded request-body frame at {index} is no longer a data frame"
@@ -719,7 +846,9 @@ pub(super) fn recorded_request_body_replay(
             return Ok(Some((Frame::data(data.slice(skip..)), state)));
         }
         if let Some(index) = state.trailers.take() {
-            let frame = load_recorded_frame(state.oplog.clone(), index).await?;
+            let frame = load_recorded_frame(state.oplog.clone(), index)
+                .await
+                .map_err(|error| state.recovery.transport_error(error))?;
             return Ok(Some((frame, state)));
         }
         Ok(None)
@@ -728,7 +857,8 @@ pub(super) fn recorded_request_body_replay(
 }
 
 /// An in-flight load of one recorded body frame from the oplog.
-type PendingFrameLoad = Pin<Box<dyn Future<Output = Result<Frame<Bytes>, ErrorCode>> + Send>>;
+type PendingFrameLoad =
+    Pin<Box<dyn Future<Output = Result<Frame<Bytes>, RecordedFrameError>> + Send>>;
 
 /// One attempt's request body handed to the HTTP client: replays the recorded
 /// frame prefix from the oplog, then continues with the live guest body.
@@ -772,7 +902,9 @@ impl HttpBody for DurableRequestBodyView {
                 let frame = std::task::ready!(load.as_mut().poll(cx));
                 this.pending_load = None;
                 this.pos += 1;
-                return Poll::Ready(Some(frame));
+                return Poll::Ready(Some(
+                    frame.map_err(|error| this.shared.recovery.transport_error(error)),
+                ));
             }
             let shared = this.shared.clone();
             let mut state = shared.lock_state();
@@ -957,6 +1089,7 @@ pub(crate) struct PendingHttpRequestBodyTransmission {
     raw_rx: oneshot::Receiver<Result<(), ErrorCode>>,
     resolution_tx: oneshot::Sender<HttpTransmissionResolution>,
     demand_rx: oneshot::Receiver<()>,
+    pub(super) recovery: RequestBodyRecovery,
 }
 
 /// Host-side consumer forwarding the built-in transmission future's value into
@@ -1145,6 +1278,7 @@ pub(super) struct HttpRequestBodyTransmissionTask<Ctx> {
     raw_rx: oneshot::Receiver<Result<(), ErrorCode>>,
     resolution_tx: oneshot::Sender<HttpTransmissionResolution>,
     demand_rx: oneshot::Receiver<()>,
+    recovery: RequestBodyRecovery,
     observational_owner: Option<OplogIndex>,
     /// The invocation id of the send whose body transmission the task records.
     invocation_id: InvocationIdSource,
@@ -1163,6 +1297,7 @@ impl<Ctx> HttpRequestBodyTransmissionTask<Ctx> {
             raw_rx: pending.raw_rx,
             resolution_tx: pending.resolution_tx,
             demand_rx: pending.demand_rx,
+            recovery: pending.recovery,
             observational_owner,
             invocation_id,
             activity,
@@ -1181,6 +1316,7 @@ where
             raw_rx,
             resolution_tx,
             demand_rx,
+            recovery,
             observational_owner,
             invocation_id,
             activity,
@@ -1261,7 +1397,19 @@ where
         // the `End` must land before the invocation boundary — and the guest
         // exiting terminates the transmission, which resolves the wait.
         let raw = raw_rx.await.unwrap_or(Ok(()));
+        recovery.settle_recordings().await;
         let trap_context = handle.trap_context();
+        if let Some(error) = recovery.error() {
+            handle.abandon_for_trap();
+            return fail_transmission_task(
+                resolution_tx,
+                wasmtime::Error::from_anyhow(mark_durable_call_trap_context(
+                    error.into(),
+                    trap_context,
+                )),
+                trap_context,
+            );
+        }
         match handle
             .complete_access(
                 accessor,
@@ -1411,6 +1559,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostRequestWithStore<U> for Durab
                     raw_rx,
                     resolution_tx,
                     demand_rx,
+                    recovery: RequestBodyRecovery::default(),
                 },
             );
         }
@@ -1462,6 +1611,34 @@ mod tests {
         while body.has_pending_recordings() {
             tokio::task::yield_now().await;
         }
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn transmission_settles_late_accepted_frame_upload_failure() {
+        use golem_service_base::error::worker_executor::WorkerExecutorError;
+        let oplog = FrameTestOplog::gated();
+        let durable = DurableRequestBody::new(
+            frame_body(vec![Frame::data(Bytes::from_static(b"upload"))], None),
+            oplog.clone(),
+            OplogIndex::INITIAL,
+            true,
+            Default::default(),
+        );
+        let mut view = durable.replayer();
+        assert!(view.frame().await.unwrap().is_ok());
+        assert!(durable.has_pending_recordings());
+        let settlement = durable.recovery.settle_recordings();
+        tokio::pin!(settlement);
+        assert!(futures::poll!(&mut settlement).is_pending());
+        assert!(durable.recovery.error().is_none());
+        oplog.fail_uploads();
+        settlement.await;
+        assert!(matches!(
+            durable.recovery.error(),
+            Some(WorkerExecutorError::RecoveryRequired { .. })
+        ));
+        assert!(oplog.recorded_frames_for(OplogIndex::INITIAL).is_empty());
     }
 
     /// Splits recorded frames into (data frames sorted by offset, trailers
@@ -1968,7 +2145,6 @@ mod tests {
                     message: "request-body transmission durable persistence failed".to_string(),
                     trap_context: DurableCallTrapContext {
                         retry_from: OplogIndex::INITIAL,
-                        in_atomic_region: false,
                     },
                 })
                 .is_ok()
@@ -2035,10 +2211,76 @@ mod tests {
         );
     }
 
-    /// The rebuild resend body streams the recorded coverage back from the
-    /// oplog: overlapping frames from merged crash/re-exec generations are
-    /// split at the already-delivered boundary (never duplicating bytes), the
-    /// recorded trailers follow the data, and the body ends cleanly.
+    #[test]
+    async fn recorded_request_payload_storage_failure_requires_recovery() {
+        use golem_common::model::oplog::{OplogPayload, PayloadId};
+        use golem_service_base::error::worker_executor::WorkerExecutorError;
+
+        let oplog = FrameTestOplog::new();
+        let index = oplog
+            .add(OplogEntry::host_stream_frame(
+                OplogIndex::NONE,
+                HostStreamKind::P3HttpRequestBody,
+                OplogPayload::External {
+                    payload_id: PayloadId::new(),
+                    md5_hash: Vec::new(),
+                    cached: None,
+                },
+            ))
+            .await
+            .unwrap();
+        let error = scan_recorded_request_body_frames(oplog.clone(), OplogIndex::NONE)
+            .await
+            .err()
+            .expect("storage failure must not become an empty recording");
+        assert!(matches!(error, RecordedFrameError::Infrastructure(_)));
+        let recovery = RequestBodyRecovery::default();
+        recovery.transport_error(error);
+        assert!(matches!(
+            recovery.error(),
+            Some(WorkerExecutorError::RecoveryRequired { .. })
+        ));
+
+        let error = load_recorded_frame(oplog.clone(), index).await.unwrap_err();
+        assert!(matches!(error, RecordedFrameError::Infrastructure(_)));
+        let recovery = RequestBodyRecovery::default();
+        recovery.transport_error(error);
+        assert!(matches!(
+            recovery.error(),
+            Some(WorkerExecutorError::RecoveryRequired { .. })
+        ));
+
+        let scan = RecordedRequestBodyScan {
+            covered_len: 1,
+            data_frames: vec![RecordedDataFrame {
+                offset: 0,
+                len: 1,
+                index,
+            }],
+            trailers_index: None,
+            terminal: Some(RecordedRequestBodyTerminal::End),
+        };
+        let recovery = RequestBodyRecovery::default();
+        assert!(
+            recorded_request_body_replay(oplog, &scan, recovery.clone())
+                .collect()
+                .await
+                .is_err()
+        );
+        assert!(matches!(
+            recovery.error(),
+            Some(WorkerExecutorError::RecoveryRequired { .. })
+        ));
+
+        let corrupt = RequestBodyRecovery::default();
+        corrupt.transport_error(RecordedFrameError::Corrupt("wrong payload".to_string()));
+        assert!(
+            corrupt.error().is_none(),
+            "corrupt history must remain a refusal"
+        );
+    }
+
+    /// Overlapping frames from merged generations must not duplicate delivered bytes.
     #[test]
     #[timeout("10s")]
     async fn recorded_request_body_replay_splits_overlapping_generations() {
@@ -2078,7 +2320,7 @@ mod tests {
             Some(RecordedRequestBodyTerminal::End)
         ));
 
-        let collected = recorded_request_body_replay(oplog, &scan)
+        let collected = recorded_request_body_replay(oplog, &scan, RequestBodyRecovery::default())
             .collect()
             .await
             .expect("replay body failed");
@@ -2115,7 +2357,7 @@ mod tests {
             Some(RecordedRequestBodyTerminal::End)
         ));
 
-        let collected = recorded_request_body_replay(oplog, &scan)
+        let collected = recorded_request_body_replay(oplog, &scan, RequestBodyRecovery::default())
             .collect()
             .await
             .expect("replay body failed");

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! A streaming POST that is effectively idempotent (the default idempotence mode is on) recovers
+//! A streaming POST recovers
 //! call-locally after a crash: the recorded send `Start` is completed in place, the response body
 //! continues after the chunks the guest already observed, and an independent remote operation
 //! recorded next to it (a concurrent GET) keeps its recorded outcome instead of being rolled back
@@ -542,40 +542,5 @@ async fn post_crash_mid_body_reports_an_incomplete_response_when_the_body_change
         "the fresh invocation sends no Range and receives the full body"
     );
     assert_eq!(run.after_replay.post_range_headers[2], None);
-    Ok(())
-}
-
-/// With the idempotence mode off, the POST is not re-executable: its batched scope can only be
-/// rolled back, which the completed sibling GET recorded next to it forbids, so the invocation
-/// fails instead of re-issuing the POST or discarding the sibling.
-#[test]
-#[tracing::instrument]
-async fn non_idempotent_post_crash_before_headers_refuses_recovery_next_to_a_sibling(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
-) -> anyhow::Result<()> {
-    let run = recover_concurrent_post(
-        last_unique_id,
-        deps,
-        http_tests,
-        InferenceMode::BeforeHeaders,
-        "post_non_idempotent_with_concurrent_get",
-        false,
-    )
-    .await?;
-    let error = run
-        .result
-        .expect_err("a non-idempotent POST must not be re-issued");
-    assert!(
-        error.contains("cannot retry"),
-        "expected the non-idempotent recovery refusal, got: {error}"
-    );
-    assert_eq!(
-        (run.recovered.posts, run.recovered.gets),
-        (1, 1),
-        "neither request is re-issued and the sibling is not rolled back"
-    );
     Ok(())
 }

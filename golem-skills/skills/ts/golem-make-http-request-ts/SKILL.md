@@ -97,13 +97,13 @@ you validate the response in TypeScript:
 1. the outgoing HTTP side effect completes and its response status/body is recorded in the oplog;
 2. your code later throws based on that recorded `Response`.
 
-There are two ways to make Golem retry the HTTP call itself when a non-2xx response arrives.
+Use a host retry policy to retry the HTTP call itself when a selected status arrives.
 
 ### Preferred: a `status-code`-keyed retry policy
 
 Define a named retry policy whose predicate explicitly references `status-code`. When the response
-arrives the host transparently re-sends the request — no `atomically(...)` and no application-level
-throw needed. The resolved `Response` is the *last* attempt. See the
+arrives the host transparently re-sends the request without an application-level throw.
+The resolved `Response` is the *last* attempt. See the
 `golem-retry-policies-ts` skill for the policy YAML / SDK shape.
 
 This is the recommended path when the retry trigger is a status code (or status-code range). It
@@ -111,8 +111,9 @@ also handles request-body reconstruction, idempotency checks, and replay correct
 
 > **POST/PUT/PATCH work out of the box.** Idempotence mode defaults to `true`, so a plain `POST
 > /charge` with a JSON body is already eligible for status-code retry — there is **no** need to
-> wrap the call in `withIdempotenceMode(true, ...)`. See `golem-atomic-block-ts` for details on
-> when (rarely) to opt out with `withIdempotenceMode(false, ...)`.
+> wrap the call in `withIdempotenceMode(true, ...)`. Opt out with
+> `withIdempotenceMode(false, ...)` when repeating an ambiguous write is unsafe.
+> Exactly-once processing still requires the peer to enforce an idempotency key.
 
 Minimal POST example — the policy is defined once (in `golem.yaml` or via the SDK) and the call
 site is just `fetch`:
@@ -133,7 +134,7 @@ http-5xx-retry:
 ```
 
 ```typescript
-// Plain fetch — no atomically(...), no withIdempotenceMode wrapper.
+// The host applies the configured status-code policy.
 const response = await fetch('https://payments.example.com/charge', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
@@ -152,49 +153,18 @@ If status retry "doesn't seem to work", load the `golem-local-dev-server` skill 
 `HTTP status retry skipped, reason: …` debug line — it pinpoints why a particular request was not
 retried (e.g. `BodyNotFinished`, `NotIdempotent`, `NoRetry`).
 
-### Fallback: `atomically(...)`
+### Application-level retry
 
-When the retry trigger is application-level (e.g. retrying based on a parsed body field, or
-combining multiple side effects into one logical step), wrap the **entire** request,
-response-body read, and status check in `atomically(...)`. The failed atomic block is not
-committed, so recovery re-executes the `fetch` instead of replaying the recorded failed response.
-
-```typescript
-import { atomically } from '@golemcloud/golem-ts-sdk';
-
-async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  return atomically(async () => {
-    const response = await fetch(url, init);
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      throw new Error(`HTTP ${response.status}: ${errorBody}`);
-    }
-
-    return (await response.json()) as T;
-  });
-}
-```
-
-Use the same pattern for third-party HTTP clients that resolve with a response and then throw from
-application code based on the status.
-
-```typescript
-try {
-  const result = await fetchJson<unknown>('https://api.example.com/data');
-
-  return result;
-} catch (error) {
-  console.error('Request failed:', error);
-  throw error;
-}
-```
+For a retry decision based on a parsed body, use explicit guest control flow or an SDK saga.
+Each new request appends a new call; earlier responses stay recorded. Throwing after a response
+fails the invocation and does not retry the completed request. Host transport and body-resumption
+retries remain enabled independently of application-level decisions.
 
 ## Complete Example in an Agent
 
 ```typescript
 import { z } from 'zod';
-import { defineAgent, method, http, atomically } from '@golemcloud/golem-ts-sdk';
+import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
 
 const WeatherReport = z.object({ temperature: z.number(), description: z.string() });
 
@@ -211,7 +181,6 @@ export const WeatherAgentImpl = WeatherAgent.implement({
   init: ({ id }) => ({ city: id.city }),
   methods: {
     async getCurrent() {
-      return atomically(async () => {
         const response = await fetch(
           `https://api.weather.example.com/current?city=${encodeURIComponent(this.city)}`,
           { headers: { 'Accept': 'application/json' } },
@@ -222,7 +191,6 @@ export const WeatherAgentImpl = WeatherAgent.implement({
         }
 
         return await response.json();
-      });
     },
   },
 });
@@ -265,5 +233,5 @@ await fetch('http://my-app.localhost:9006/recorder/main/record', {
 - Server-side APIs (`http.createServer`, `net.listen`) are **not** available in WASM
 - Third-party HTTP client libraries that use `fetch` or `node:http` internally (e.g., `axios`) generally work; libraries that depend on native C/C++ bindings will not
 - All HTTP requests go through the WASI HTTP layer, which provides durable execution guarantees
-- HTTP error statuses are still recorded responses. Use a `status-code`-keyed retry policy (preferred) or wrap status-based throwing in `atomically` when a retry must send a new HTTP request.
+- HTTP error statuses are recorded responses. Use a `status-code`-keyed host retry policy; throwing after the response does not retry that completed call.
 - Requests are async — always use `await`

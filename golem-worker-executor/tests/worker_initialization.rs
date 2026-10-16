@@ -231,10 +231,7 @@ async fn late_initialization_storage_failure_is_shared_then_retried(
         let original = original.clone();
         async move {
             original
-                .add_and_commit_oplog(OplogEntry::NoOp {
-                    timestamp: Timestamp::now_utc(),
-                    entity_parent_start_index: None,
-                })
+                .add_and_commit_oplog(OplogEntry::grow_memory(0))
                 .await
         }
     });
@@ -1255,39 +1252,6 @@ async fn jump_projection_finishes_without_its_producer(
             sentinel
         );
     }
-    let before = worker.get_last_known_status().await;
-    let first = worker
-        .add_and_commit_oplog(OplogEntry::grow_memory(13))
-        .await?;
-    let second = worker
-        .add_and_commit_oplog(OplogEntry::grow_memory(17))
-        .await?;
-    let regions = vec![
-        OplogRegion {
-            start: first,
-            end: first,
-        },
-        OplogRegion {
-            start: second,
-            end: second,
-        },
-    ];
-    let error = golem_worker_executor::durable_host::test_commit_jumps_with_failed_registration(
-        worker.as_ref(),
-        regions,
-    )
-    .await
-    .unwrap_err();
-    assert!(error.to_string().contains("test registration failure"));
-    // Both Jumps were accepted even though replay registration failed.
-    let status = worker.get_last_known_status().await;
-    assert_eq!(status.oplog_idx, second.next().next());
-    assert_eq!(
-        status.total_linear_memory_size,
-        before.total_linear_memory_size
-    );
-    assert!(status.skipped_regions.is_in_deleted_region(first));
-    assert!(status.skipped_regions.is_in_deleted_region(second));
     Ok(())
 }
 

@@ -7282,7 +7282,6 @@ impl DurableInputProducer {
                     .expect("worker cleanup queue"),
                 trap_context: DurableCallTrapContext {
                     retry_from: InFunctionRetryHost::current_retry_point(ctx),
-                    in_atomic_region: InFunctionRetryHost::in_atomic_region(ctx),
                 },
                 live_call_permit: LiveCallPermit::new(ctx.state.live_host_call_counter()),
             };

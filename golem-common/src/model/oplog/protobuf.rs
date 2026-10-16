@@ -62,20 +62,19 @@ use crate::model::oplog::payload::types::{
 };
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, CardDerivedParams, CardEventQueuedParams, CardInstallFailedParams,
-    CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams, CardTransferConfirmedParams,
+    BeginRemoteTransactionParams, CancelPendingInvocationParams, CancelledParams,
+    CardDerivedParams, CardEventQueuedParams, CardInstallFailedParams, CardInstalledParams,
+    CardRevokedCascadeParams, CardRevokedParams, CardTransferConfirmedParams,
     CardTransferStartedParams, CardTransferredParams, CommittedRemoteTransactionParams,
     CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
-    DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams,
-    ExitedParams, FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams,
-    JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, RecoverySucceededParams, RemoveRetryPolicyParams,
-    RestartParams, ResumedParams, RevertParams, RolledBackRemoteTransactionParams,
-    SetRetryPolicyParams, SnapshotConfirmedParams, SnapshotParams, StartParams, StreamCancelParams,
-    StreamEndParams, StreamItemsParams, StreamRegisteredParams, StreamSessionParams,
-    SuccessfulUpdateParams, SuspendParams,
+    DeactivatePluginParams, DropResourceParams, EndParams, ErrorParams, ExitedParams,
+    FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
+    LogParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RecoverySucceededParams,
+    RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
+    SnapshotParams, StartParams, StreamCancelParams, StreamEndParams, StreamItemsParams,
+    StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::raw_types::{
     AttributeMap, CreateParameters, DurableStreamEventSummary, DurableStreamOutcome,
@@ -1535,7 +1534,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 kind: oplog_error_kind_from_proto(error.kind)?,
                 error: error.error,
                 retry_from: OplogIndex::from_u64(error.retry_from),
-                inside_atomic_region: error.inside_atomic_region,
                 retry_policy_state: error
                     .retry_policy_state
                     .map(TryInto::try_into)
@@ -1549,9 +1547,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .into(),
                 }),
             ),
-            oplog_entry::Entry::NoOp(no_op) => Ok(PublicOplogEntry::NoOp(NoOpParams {
-                timestamp: no_op.timestamp.ok_or("Missing timestamp field")?.into(),
-            })),
             oplog_entry::Entry::Jump(jump) => Ok(PublicOplogEntry::Jump(JumpParams {
                 timestamp: jump.timestamp.ok_or("Missing timestamp field")?.into(),
                 jump: OplogRegion {
@@ -1570,24 +1565,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
             oplog_entry::Entry::Exited(exited) => Ok(PublicOplogEntry::Exited(ExitedParams {
                 timestamp: exited.timestamp.ok_or("Missing timestamp field")?.into(),
             })),
-            oplog_entry::Entry::BeginAtomicRegion(begin_atomic_region) => Ok(
-                PublicOplogEntry::BeginAtomicRegion(BeginAtomicRegionParams {
-                    timestamp: begin_atomic_region
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                }),
-            ),
-            oplog_entry::Entry::EndAtomicRegion(end_atomic_region) => {
-                Ok(PublicOplogEntry::EndAtomicRegion(EndAtomicRegionParams {
-                    timestamp: end_atomic_region
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                    begin_index: OplogIndex::from_u64(end_atomic_region.begin_index),
-                }))
-            }
-
             oplog_entry::Entry::PendingAgentInvocation(pending_worker_invocation) => Ok(
                 PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
                     timestamp: pending_worker_invocation
@@ -2219,7 +2196,6 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         kind: oplog_error_kind_to_proto(error.kind) as i32,
                         error: error.error,
                         retry_from: error.retry_from.0,
-                        inside_atomic_region: error.inside_atomic_region,
                         retry_policy_state: error.retry_policy_state.map(Into::into),
                     },
                 )),
@@ -2233,13 +2209,6 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     )),
                 }
             }
-            PublicOplogEntry::NoOp(no_op) => golem_api_grpc::proto::golem::worker::OplogEntry {
-                entry: Some(oplog_entry::Entry::NoOp(
-                    golem_api_grpc::proto::golem::worker::TimestampParameter {
-                        timestamp: Some(no_op.timestamp.into()),
-                    },
-                )),
-            },
             PublicOplogEntry::Jump(jump) => golem_api_grpc::proto::golem::worker::OplogEntry {
                 entry: Some(oplog_entry::Entry::Jump(
                     golem_api_grpc::proto::golem::worker::JumpParameters {
@@ -2265,26 +2234,6 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     },
                 )),
             },
-            PublicOplogEntry::BeginAtomicRegion(begin_atomic_region) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::BeginAtomicRegion(
-                        golem_api_grpc::proto::golem::worker::TimestampParameter {
-                            timestamp: Some(begin_atomic_region.timestamp.into()),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::EndAtomicRegion(end_atomic_region) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::EndAtomicRegion(
-                        golem_api_grpc::proto::golem::worker::EndAtomicRegionParameters {
-                            timestamp: Some(end_atomic_region.timestamp.into()),
-                            begin_index: end_atomic_region.begin_index.into(),
-                        },
-                    )),
-                }
-            }
-
             PublicOplogEntry::PendingAgentInvocation(pending_worker_invocation) => {
                 golem_api_grpc::proto::golem::worker::OplogEntry {
                     entry: Some(oplog_entry::Entry::PendingAgentInvocation(
@@ -4192,15 +4141,10 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 kind: error.kind,
                 error: AgentError::Unknown(error.error),
                 retry_from: error.retry_from,
-                inside_atomic_region: error.inside_atomic_region,
                 retry_policy_state: error.retry_policy_state.map(Into::into),
             }),
             PublicOplogEntry::RecoverySucceeded(p) => Ok(OplogEntry::RecoverySucceeded {
                 timestamp: p.timestamp,
-            }),
-            PublicOplogEntry::NoOp(p) => Ok(OplogEntry::NoOp {
-                timestamp: p.timestamp,
-                entity_parent_start_index: None,
             }),
             PublicOplogEntry::Jump(jump) => Ok(OplogEntry::Jump {
                 timestamp: jump.timestamp,
@@ -4213,20 +4157,6 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
             PublicOplogEntry::Exited(p) => Ok(OplogEntry::Exited {
                 timestamp: p.timestamp,
             }),
-            PublicOplogEntry::BeginAtomicRegion(p) => {
-                Ok(OplogEntry::BeginAtomicRegion {
-                    timestamp: p.timestamp,
-                    entity_parent_start_index: None,
-                })
-            }
-            PublicOplogEntry::EndAtomicRegion(p) => {
-                Ok(OplogEntry::EndAtomicRegion {
-                    timestamp: p.timestamp,
-                    entity_parent_start_index: None,
-                    begin_index: p.begin_index,
-                })
-            }
-
             PublicOplogEntry::PendingAgentInvocation(_) => {
                 Err("Cannot convert PendingAgentInvocation from public to raw oplog entry".to_string())
             }
@@ -5006,11 +4936,11 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             RawCardTransferredParameters, RawCompletionDeliveredParameters,
             RawCompletionDiscardedParameters, RawCreateParameters, RawCreateResourceParameters,
             RawDeactivatePluginParameters, RawDropResourceParameters,
-            RawDurableStreamRecordParameters, RawEndAtomicRegionParameters, RawEndParameters,
-            RawEnvVar, RawErrorParameters, RawFailedSnapshotAssistedUpdateDetails,
-            RawFailedUpdateParameters, RawGrowMemoryParameters, RawHostStreamFrameParameters,
-            RawJumpParameters, RawLogParameters, RawOplogProcessorCheckpointParameters,
-            RawOplogRegion, RawPendingAgentInvocationParameters, RawPendingUpdateParameters,
+            RawDurableStreamRecordParameters, RawEndParameters, RawEnvVar, RawErrorParameters,
+            RawFailedSnapshotAssistedUpdateDetails, RawFailedUpdateParameters,
+            RawGrowMemoryParameters, RawHostStreamFrameParameters, RawJumpParameters,
+            RawLogParameters, RawOplogProcessorCheckpointParameters, RawOplogRegion,
+            RawPendingAgentInvocationParameters, RawPendingUpdateParameters,
             RawRemoteTransactionParameters, RawRemoveRetryPolicyParameters, RawResourceTypeId,
             RawRevertParameters, RawSetRetryPolicyParameters, RawSnapshotAssistedUpdateDetails,
             RawSnapshotConfirmedParameters, RawSnapshotParameters, RawStartParameters,
@@ -5156,20 +5086,17 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 kind,
                 error,
                 retry_from,
-                inside_atomic_region,
                 retry_policy_state,
                 ..
             } => Entry::Error(RawErrorParameters {
                 error: Some(error.into()),
                 kind: oplog_error_kind_to_proto(kind) as i32,
                 retry_from: retry_from.into(),
-                inside_atomic_region,
                 retry_policy_state: retry_policy_state
                     .map(|s| crate::serialization::serialize(&s))
                     .transpose()?,
             }),
             OplogEntry::RecoverySucceeded { .. } => Entry::RecoverySucceeded(RawTimestampOnly {}),
-            OplogEntry::NoOp { .. } => Entry::NoOp(RawTimestampOnly {}),
             OplogEntry::Jump { jump, .. } => Entry::Jump(RawJumpParameters {
                 jump: Some(RawOplogRegion {
                     start: jump.start.into(),
@@ -5178,13 +5105,6 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             }),
             OplogEntry::Interrupted { .. } => Entry::Interrupted(RawTimestampOnly {}),
             OplogEntry::Exited { .. } => Entry::Exited(RawTimestampOnly {}),
-            OplogEntry::BeginAtomicRegion { .. } => Entry::BeginAtomicRegion(RawTimestampOnly {}),
-            OplogEntry::EndAtomicRegion { begin_index, .. } => {
-                Entry::EndAtomicRegion(RawEndAtomicRegionParameters {
-                    begin_index: begin_index.into(),
-                })
-            }
-
             OplogEntry::PendingAgentInvocation {
                 idempotency_key,
                 payload,
@@ -5322,7 +5242,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 ..
             } => Entry::BeginRemoteTransaction(RawBeginRemoteTransactionParameters {
                 transaction_id: String::from(transaction_id),
-                original_begin_index: original_begin_index.map(|i: OplogIndex| i.into()),
+                original_begin_index: original_begin_index.into(),
             }),
             OplogEntry::PreCommitRemoteTransaction { begin_index, .. } => {
                 Entry::PreCommitRemoteTransaction(RawRemoteTransactionParameters {
@@ -5798,15 +5718,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     kind: oplog_error_kind_from_proto(p.kind)?,
                     error,
                     retry_from,
-                    inside_atomic_region: p.inside_atomic_region,
                     retry_policy_state,
                 })
             }
             Entry::RecoverySucceeded(_) => Ok(OplogEntry::RecoverySucceeded { timestamp }),
-            Entry::NoOp(_) => Ok(OplogEntry::NoOp {
-                timestamp,
-                entity_parent_start_index,
-            }),
             Entry::Jump(p) => {
                 let jump = p.jump.ok_or("Missing jump region")?;
                 Ok(OplogEntry::Jump {
@@ -5820,15 +5735,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
             }
             Entry::Interrupted(_) => Ok(OplogEntry::Interrupted { timestamp }),
             Entry::Exited(_) => Ok(OplogEntry::Exited { timestamp }),
-            Entry::BeginAtomicRegion(_) => Ok(OplogEntry::BeginAtomicRegion {
-                timestamp,
-                entity_parent_start_index,
-            }),
-            Entry::EndAtomicRegion(p) => Ok(OplogEntry::EndAtomicRegion {
-                timestamp,
-                entity_parent_start_index,
-                begin_index: OplogIndex::from_u64(p.begin_index),
-            }),
             Entry::PendingAgentInvocation(p) => {
                 let idempotency_key = p.idempotency_key.ok_or("Missing idempotency_key")?.into();
                 let payload = oplog_payload_from_proto(p.payload.ok_or("Missing payload")?)?;
@@ -6004,7 +5910,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
             }
             Entry::BeginRemoteTransaction(p) => {
                 let transaction_id = crate::model::TransactionId::from(p.transaction_id);
-                let original_begin_index = p.original_begin_index.map(OplogIndex::from_u64);
+                let original_begin_index = OplogIndex::from_u64(p.original_begin_index);
                 Ok(OplogEntry::BeginRemoteTransaction {
                     timestamp,
                     transaction_id,

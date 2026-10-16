@@ -71,13 +71,10 @@ where
         | OplogEntry::Suspend { .. }
         | OplogEntry::Error { .. }
         | OplogEntry::RecoverySucceeded { .. }
-        | OplogEntry::NoOp { .. }
         | OplogEntry::Jump { .. }
         | OplogEntry::Interrupted { .. }
         | OplogEntry::Resumed { .. }
         | OplogEntry::Exited { .. }
-        | OplogEntry::BeginAtomicRegion { .. }
-        | OplogEntry::EndAtomicRegion { .. }
         | OplogEntry::PendingUpdate {
             description:
                 UpdateDescription::Automatic { .. }

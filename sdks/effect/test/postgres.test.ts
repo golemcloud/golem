@@ -6,6 +6,7 @@
 import { beforeEach, expect, layer } from "@effect/vitest"
 import { Cause, Effect, Exit, Layer, Stream } from "effect"
 import { ConnectionError, SqlError, SqlSyntaxError, UnknownError } from "effect/sql/SqlError"
+import { vi } from "vitest"
 import { PostgresHostClient } from "../src/host/PostgresHostClient.js"
 import { Pg, PgClient } from "../src/Postgres/PgClient.js"
 import * as MockPg from "./mocks/golem-rdbms-postgres.js"
@@ -46,12 +47,28 @@ const PgStub = Layer.succeed(
 )
 
 beforeEach(() => {
+  vi.restoreAllMocks()
   __resetPostgresMock()
 })
 
 const ADDR = "postgres://localhost/test"
 
 layer(PgStub)("PgClient (mocked golem:rdbms/postgres@1.5.0)", (it) => {
+  for (const operation of ["getColumns", "getNext"] as const) {
+    it.effect(`propagates ${operation} failures from result streams`, () =>
+      Effect.gen(function* () {
+        const sql = yield* PgClient.make({ connectionAddress: ADDR })
+        vi.spyOn(MockPg.DbResultStream.prototype, operation).mockImplementationOnce(() => {
+          throw { tag: "query-response-failure", val: "stream failed" }
+        })
+        const exit = yield* Effect.exit(Stream.runCollect(sql`SELECT n FROM t`.stream))
+        expect(failureValue(exit)).toBeInstanceOf(SqlError)
+        const rows = yield* Stream.runCollect(sql`SELECT n FROM t`.stream)
+        expect(rows).toEqual([])
+      }),
+    )
+  }
+
   it.effect("opens a connection and runs DDL via execute", () =>
     Effect.gen(function* () {
       const sql = yield* PgClient.make({ connectionAddress: ADDR })

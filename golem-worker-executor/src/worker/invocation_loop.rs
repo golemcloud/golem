@@ -3213,8 +3213,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 let trap_type = TrapType::Error {
                     error: AgentError::InternalError(error.to_string()),
                     retry_from: OplogIndex::INITIAL,
-                    in_atomic_region: false,
-                    atomic_region_had_side_effects: false,
                     semantic_trap_retry_override: None,
                 };
                 self.store
@@ -3283,8 +3281,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 Some(TrapType::from_worker_executor_error::<Ctx>(
                     error,
                     OplogIndex::INITIAL,
-                    false,
-                    false,
                     self.parent.agent_mode(),
                 ))
             }
@@ -3293,8 +3289,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 Err(error) => Some(TrapType::from_worker_executor_error::<Ctx>(
                     error,
                     OplogIndex::INITIAL,
-                    false,
-                    false,
                     self.parent.agent_mode(),
                 )),
             },
@@ -5430,8 +5424,6 @@ mod tests {
             timed_out: false,
             error: AgentError::InternalError("boom".to_string()),
             retry_from: OplogIndex::INITIAL,
-            in_atomic_region: false,
-            atomic_region_had_side_effects: false,
             semantic_trap_retry_override: None,
         });
 

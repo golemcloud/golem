@@ -67,7 +67,6 @@ export type { GuestPermissionCardHandle as PermissionCard } from './internal/sch
 export * from './host/retry';
 export * from './host/result';
 export * from './host/saga';
-export * from './host/checkpoint';
 export * from './host/durable';
 
 export { defineAgent } from './defineAgent';

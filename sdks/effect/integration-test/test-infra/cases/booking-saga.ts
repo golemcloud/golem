@@ -9,8 +9,6 @@
  *   3. Force hotel failure with `compFailsAt: "hotel"` → tag =
  *      "failed-partially". Flight + hotel compensations both run; the
  *      hotel comp itself failed and is reported in compensationError.
- *   4. After the three drives, oplog must contain balanced
- *      `BeginAtomicRegion` / `EndAtomicRegion` entries.
  */
 import { Effect } from "effect"
 import { GolemCli } from "../harness/golem-cli.ts"
@@ -91,19 +89,6 @@ const run: Effect.Effect<void, TestFailure, GolemCli | TestSession> = Effect.gen
     partial.stdout,
     /comp:hotel/,
     "partial failure trace records hotel comp (the failing one)",
-  )
-
-  // 4. Oplog must contain matched atomic-region pairs.
-  const oplog = yield* liftCliError(cli.oplog(r))
-  yield* expectMatch(
-    oplog.stdout,
-    /BEGIN\s*ATOMIC\s*REGION/i,
-    "BookingSaga oplog has BeginAtomicRegion entry",
-  )
-  yield* expectMatch(
-    oplog.stdout,
-    /END\s*ATOMIC\s*REGION/i,
-    "BookingSaga oplog has EndAtomicRegion entry",
   )
 })
 

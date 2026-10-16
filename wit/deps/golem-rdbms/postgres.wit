@@ -263,8 +263,8 @@ interface postgres {
 
   /// A potentially very large and lazy stream of rows:
   resource db-result-stream {
-    get-columns: func() -> list<db-column>;
-    get-next: func() -> option<list<db-row>>;
+    get-columns: func() -> result<list<db-column>, error>;
+    get-next: func() -> result<option<list<db-row>>, error>;
   }
 
   resource db-connection {

@@ -37,7 +37,7 @@ use async_trait::async_trait;
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse, OplogEntry, OplogIndex,
-    OplogPayload, ScopeScanState, host_functions::HostFunctionName,
+    OplogPayload, host_functions::HostFunctionName,
 };
 use golem_common::model::{RetryProperties, Timestamp};
 use golem_service_base::error::worker_executor::{
@@ -55,12 +55,10 @@ use crate::durable_host::durability::{
     semantic_trap_retry_override_error, try_trigger_host_trap_retry,
 };
 use crate::durable_host::durable_session::DroppedDurableInput;
-use crate::durable_host::replay_state::{
-    OplogEntryLookupResult, ReplayState, ReplayToLiveRole, ScopeStartClaimOutcome,
-};
+use crate::durable_host::replay_state::{ReplayState, ReplayToLiveRole, ScopeStartClaimOutcome};
 use crate::durable_host::{
-    AtomicRegionLease, BeginReplayToLive, DurableScopeKind, DurableWorkerCtx, FinishReplayToLive,
-    PendingReplayToLive, PublicDurableWorkerState,
+    BeginReplayToLive, DurableScopeKind, DurableWorkerCtx, FinishReplayToLive, PendingReplayToLive,
+    PublicDurableWorkerState,
 };
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, PendingUpload};
 use crate::services::{HasShutdownToken, HasWorker};
@@ -86,9 +84,7 @@ pub(in crate::durable_host) use access::prepare_access_terminal_effect;
 use access::*;
 pub use call::*;
 #[cfg(test)]
-use call::{
-    BegunCallExecutionScope, CallExecutionScope, ScopedRetryHost, unregistered_atomic_lease,
-};
+use call::{BegunCallExecutionScope, CallExecutionScope, ScopedRetryHost};
 pub(in crate::durable_host) use context::AccessorContext;
 pub(crate) use context::{DurableAccess, DurableContext, SharedDurableContext};
 pub use delivery::*;

@@ -21,7 +21,7 @@ Transactions group a sequence of operations where:
 
 1. Each operation has an **execute** step and a **compensate** step
 2. When an operation returns a domain error, previous compensations run in reverse order
-3. An infallible transaction resets the oplog index and retries; a fallible transaction returns the error with rollback status
+3. An infallible transaction starts a fresh attempt; a fallible transaction returns the error with rollback status
 
 ### Transaction Types
 
@@ -37,9 +37,9 @@ Transactions group a sequence of operations where:
 Use `infallibleTransaction` when operations must eventually succeed. When an operation returns `Left`, compensations
 execute and the entire transaction retries automatically.
 
-Both transaction runners create an atomic region. An unexpected failed `Future` traps without running compensations;
-the region is retried according to the applicable retry policy. If the policy gives up, the agent becomes failed.
-Outside an atomic region, an uncaught exception or failed `Future` fails the agent without retry.
+These helpers implement sagas, not atomic regions. Attempts and compensations append to the oplog.
+They do not rewind execution or undo concurrent work. An unexpected failed `Future` traps without
+running compensations and fails the invocation.
 
 ```scala
 import golem.Transactions
@@ -67,13 +67,13 @@ val result: Future[Int] = Transactions.infallibleTransaction { tx =>
 
 ### How Infallible Transactions Work
 
-1. Transaction begins, oplog index is recorded
+1. A fresh transaction context is created
 2. Each `tx.execute` runs the operation
 3. On success, compensation is registered
 4. On failure:
     - All compensations run in reverse order
-    - Oplog resets to original index
-    - Transaction retries from the beginning
+    - Transaction retries from the beginning with a fresh context
+    - Prior attempts and compensations remain in the oplog
 
 ---
 
@@ -272,10 +272,6 @@ Transactions.fallibleTransaction[Int, String] { tx =>
 
 ## Integration with Host
 
-Both helpers manage the host's atomic markers:
-
-- `markBeginOperation` / `markEndOperation`
-- `setOplogIndex` for retry positioning
-
-Use these transaction helpers whenever you need higher-level control over oplog retries without writing boilerplate in
-every agent.
+Both helpers use ordinary durable host calls. Each retry appends fresh operations after the
+compensations of the previous attempt. Operations must provide their own compensation semantics;
+the helpers do not provide isolation from concurrent invocations.

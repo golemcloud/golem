@@ -1102,7 +1102,6 @@ mod tests {
             InvocationExecutionMode::Live,
             golem_common::model::IdempotencyKey::fresh(),
             false,
-            false,
             golem_common::model::IdempotencyKey::fresh(),
         )
         .unwrap();

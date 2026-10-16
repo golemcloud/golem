@@ -304,7 +304,6 @@ These are the **first** debug lines to grep for when a feature "doesn't seem to 
 - **Status-code retry not firing for an outgoing HTTP request:**
   ```
   HTTP status retry skipped              reason=<NotIdempotent|BodyNotFinished|NoRetry|...>  uri=...  status=...
-  HTTP status retry skipped: inside atomic region
   ```
   The `reason` field is the source of truth — it tells you exactly why a particular request was
   not retried (most commonly `NotIdempotent` for opt-out-of-idempotence cases, or `NoRetry` when
@@ -317,7 +316,7 @@ These are the **first** debug lines to grep for when a feature "doesn't seem to 
   Semantic trap retry: exhausted         retry_policy=...  attempt=...  trap=...
   ```
   Indicates which named retry policy matched a retryable trap and how it decided. A deterministic
-  trap outside an atomic region is not retried, so it does not produce these policy decisions.
+  guest trap is not retried, so it does not produce these policy decisions.
   For a retryable trap, policies that require an absent property (such as `status-code` in the
   trap context) are skipped; the synthesized default policy provides the fallback.
 

@@ -4,7 +4,7 @@ import { Callout, Tabs } from "nextra/components"
 
 ### Using Golem's retry mechanism
 
-Golem applies retry policies to retryable agent failures. The selected policy controls delays and retry limits. Permanent errors, permission failures, stack overflows, and deterministic traps outside atomic regions are not retried.
+Golem applies retry policies to retryable host operations and agent failures. The selected policy controls delays and retry limits. Permanent errors, permission failures, stack overflows, and deterministic guest traps are not retried.
 
 If the maximum number of retries is reached, the agent will be marked as failed and no further invocations will be possible on it.
 

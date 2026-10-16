@@ -432,9 +432,8 @@ impl ReplayState {
                                 }
                                 match tx.deleted_region_contains_start(&owned_claim).await? {
                                     Some(index) if index > tx.cursor.last_replayed_index() => {
-                                        // The entity's atomic mask is installed before its body
-                                        // starts. A host subtask must not publish local liveness
-                                        // before the guest consumes the retained atomic Begin.
+                                        // A host subtask must not publish local liveness before
+                                        // the guest consumes the surviving positional prefix.
                                         Ok((None, Some(BlockedOn::CursorProgress), None))
                                     }
                                     Some(_) => Ok((None, None, Some(Missing::DeletedRegion))),

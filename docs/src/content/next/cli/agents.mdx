@@ -203,8 +203,6 @@ The terms and fields are interpreted in the following way:
 | `Jump`                                                       | `jump`                                                                                                                                                        |
 | `Interrupted`                                                | `interrupted`                                                                                                                                                 |
 | `Exited`                                                     | `exited`                                                                                                                                                      |
-| `BeginAtomicRegion`                                          | `begin-atomic-region`                                                                                                                                         |
-| `EndAtomicRegion`                                            | `end-atomic-region`                                                                                                                                           |
 | `PendingUpdate`                                              | `pending-update`, `update`, match on target revision                                                                                                          |
 | `SuccessfulUpdate`                                           | `successful-update`, `update`, match on target revision                                                                                                       |
 | `FailedUpdate`                                               | `failed-update`, `update`, match on target revision, match on error details                                                                                   |
@@ -228,7 +226,7 @@ The terms and fields are interpreted in the following way:
 | Card entries                                                 | `card-installed`, `card-install-failed`, `card-derived`, `card-revoked`, `card-revoked-cascade`, `card-expired`, `card-event-queued`, `card-transfer-started`, `card-transferred`, `card-transfer-confirmed`; match on card ID or transfer ID |
 | Stream entries                                               | `host-stream-frame`, `stream-registered`, `stream-items`, `stream-end`, `stream-cancel`, `stream-session`                                                     |
 
-Search terms are case-insensitive substring matches, so for example `start` also matches `agent-invocation-started` and `start-span` entries; combine terms with `AND` / `NOT` to narrow the results. Most entry kinds can also be matched by their name without dashes (for example `beginatomicregion`), except `CancelPendingInvocation`.
+Search terms are case-insensitive substring matches, so for example `start` also matches `agent-invocation-started` entries; combine terms with `AND` / `NOT` to narrow the results. Most entry kinds can also be matched by their name without dashes (for example `pendingupdate`), except `CancelPendingInvocation`.
 
 The cases marked with **(\*)** can use the `field:value` syntax to look into the typed, structured values. For `Start`, `End` and `Cancelled` entries the field path starts with `request`, `response` or `partial` and continues with record field names, for example `request.product-id:123`. For span attributes, the field path is the attribute key, for example `http.method:GET`.
 

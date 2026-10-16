@@ -36,7 +36,7 @@ var Engine *engine.Engine
 var NewEngine func() *engine.Engine
 
 // TrapPanic reports a panic recovered in a region that must not resume, such
-// as an atomic region, and traps the component. Off the wasm target it panics
+// as a durable operation, and traps the component. Off the wasm target it panics
 // again with the value.
 var TrapPanic func(region string, value any)
 

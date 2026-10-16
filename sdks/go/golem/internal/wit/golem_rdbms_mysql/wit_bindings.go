@@ -780,376 +780,457 @@ func DbTransactionFromBorrowHandle(handleValue int32) *DbTransaction {
 //go:wasmimport golem:rdbms/mysql@1.5.0 [method]db-result-stream.get-columns
 func wasm_import_method_db_result_stream_get_columns(arg0 int32, arg1 uintptr)
 
-func (self *DbResultStream) GetColumns() []DbColumn {
+func (self *DbResultStream) GetColumns() witTypes.Result[[]DbColumn, Error] {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
-	returnArea := uintptr(witRuntime.Allocate(pinner, (2 * 4), 4))
+	returnArea := uintptr(witRuntime.Allocate(pinner, (4 * 4), 4))
 	wasm_import_method_db_result_stream_get_columns((self).Handle(), returnArea)
-	result := make([]DbColumn, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
-	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))); index++ {
-		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0)))), index*(16+4*4))
-		value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-		var variant DbColumnType
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
-		case 0:
+	var result7 witTypes.Result[[]DbColumn, Error]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
+	case 0:
+		result := make([]DbColumn, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))
+		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))); index++ {
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))), index*(16+4*4))
+			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+			var variant DbColumnType
+			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
+			case 0:
 
-			variant = MakeDbColumnTypeBoolean()
+				variant = MakeDbColumnTypeBoolean()
+
+			case 1:
+
+				variant = MakeDbColumnTypeTinyint()
+
+			case 2:
+
+				variant = MakeDbColumnTypeSmallint()
+
+			case 3:
+
+				variant = MakeDbColumnTypeMediumint()
+
+			case 4:
+
+				variant = MakeDbColumnTypeInt()
+
+			case 5:
+
+				variant = MakeDbColumnTypeBigint()
+
+			case 6:
+
+				variant = MakeDbColumnTypeTinyintUnsigned()
+
+			case 7:
+
+				variant = MakeDbColumnTypeSmallintUnsigned()
+
+			case 8:
+
+				variant = MakeDbColumnTypeMediumintUnsigned()
+
+			case 9:
+
+				variant = MakeDbColumnTypeIntUnsigned()
+
+			case 10:
+
+				variant = MakeDbColumnTypeBigintUnsigned()
+
+			case 11:
+
+				variant = MakeDbColumnTypeFloat()
+
+			case 12:
+
+				variant = MakeDbColumnTypeDouble()
+
+			case 13:
+
+				variant = MakeDbColumnTypeDecimal()
+
+			case 14:
+
+				variant = MakeDbColumnTypeDate()
+
+			case 15:
+
+				variant = MakeDbColumnTypeDatetime()
+
+			case 16:
+
+				variant = MakeDbColumnTypeTimestamp()
+
+			case 17:
+
+				variant = MakeDbColumnTypeTime()
+
+			case 18:
+
+				variant = MakeDbColumnTypeYear()
+
+			case 19:
+
+				variant = MakeDbColumnTypeFixchar()
+
+			case 20:
+
+				variant = MakeDbColumnTypeVarchar()
+
+			case 21:
+
+				variant = MakeDbColumnTypeTinytext()
+
+			case 22:
+
+				variant = MakeDbColumnTypeText()
+
+			case 23:
+
+				variant = MakeDbColumnTypeMediumtext()
+
+			case 24:
+
+				variant = MakeDbColumnTypeLongtext()
+
+			case 25:
+
+				variant = MakeDbColumnTypeBinary()
+
+			case 26:
+
+				variant = MakeDbColumnTypeVarbinary()
+
+			case 27:
+
+				variant = MakeDbColumnTypeTinyblob()
+
+			case 28:
+
+				variant = MakeDbColumnTypeBlob()
+
+			case 29:
+
+				variant = MakeDbColumnTypeMediumblob()
+
+			case 30:
+
+				variant = MakeDbColumnTypeLongblob()
+
+			case 31:
+
+				variant = MakeDbColumnTypeEnumeration()
+
+			case 32:
+
+				variant = MakeDbColumnTypeSet()
+
+			case 33:
+
+				variant = MakeDbColumnTypeBit()
+
+			case 34:
+
+				variant = MakeDbColumnTypeJson()
+
+			default:
+				panic("unreachable")
+			}
+			value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
+
+			result = append(result, DbColumn{Ordinal: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 0))), Name: value, DbType: variant, DbTypeName: value0})
+		}
+
+		result7 = witTypes.Ok[[]DbColumn, Error](result)
+	case 1:
+		var variant6 Error
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
+		case 0:
+			value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant6 = MakeErrorConnectionFailure(value1)
 
 		case 1:
+			value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant = MakeDbColumnTypeTinyint()
+			variant6 = MakeErrorQueryParameterFailure(value2)
 
 		case 2:
+			value3 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant = MakeDbColumnTypeSmallint()
+			variant6 = MakeErrorQueryExecutionFailure(value3)
 
 		case 3:
+			value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant = MakeDbColumnTypeMediumint()
+			variant6 = MakeErrorQueryResponseFailure(value4)
 
 		case 4:
+			value5 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant = MakeDbColumnTypeInt()
-
-		case 5:
-
-			variant = MakeDbColumnTypeBigint()
-
-		case 6:
-
-			variant = MakeDbColumnTypeTinyintUnsigned()
-
-		case 7:
-
-			variant = MakeDbColumnTypeSmallintUnsigned()
-
-		case 8:
-
-			variant = MakeDbColumnTypeMediumintUnsigned()
-
-		case 9:
-
-			variant = MakeDbColumnTypeIntUnsigned()
-
-		case 10:
-
-			variant = MakeDbColumnTypeBigintUnsigned()
-
-		case 11:
-
-			variant = MakeDbColumnTypeFloat()
-
-		case 12:
-
-			variant = MakeDbColumnTypeDouble()
-
-		case 13:
-
-			variant = MakeDbColumnTypeDecimal()
-
-		case 14:
-
-			variant = MakeDbColumnTypeDate()
-
-		case 15:
-
-			variant = MakeDbColumnTypeDatetime()
-
-		case 16:
-
-			variant = MakeDbColumnTypeTimestamp()
-
-		case 17:
-
-			variant = MakeDbColumnTypeTime()
-
-		case 18:
-
-			variant = MakeDbColumnTypeYear()
-
-		case 19:
-
-			variant = MakeDbColumnTypeFixchar()
-
-		case 20:
-
-			variant = MakeDbColumnTypeVarchar()
-
-		case 21:
-
-			variant = MakeDbColumnTypeTinytext()
-
-		case 22:
-
-			variant = MakeDbColumnTypeText()
-
-		case 23:
-
-			variant = MakeDbColumnTypeMediumtext()
-
-		case 24:
-
-			variant = MakeDbColumnTypeLongtext()
-
-		case 25:
-
-			variant = MakeDbColumnTypeBinary()
-
-		case 26:
-
-			variant = MakeDbColumnTypeVarbinary()
-
-		case 27:
-
-			variant = MakeDbColumnTypeTinyblob()
-
-		case 28:
-
-			variant = MakeDbColumnTypeBlob()
-
-		case 29:
-
-			variant = MakeDbColumnTypeMediumblob()
-
-		case 30:
-
-			variant = MakeDbColumnTypeLongblob()
-
-		case 31:
-
-			variant = MakeDbColumnTypeEnumeration()
-
-		case 32:
-
-			variant = MakeDbColumnTypeSet()
-
-		case 33:
-
-			variant = MakeDbColumnTypeBit()
-
-		case 34:
-
-			variant = MakeDbColumnTypeJson()
+			variant6 = MakeErrorOther(value5)
 
 		default:
 			panic("unreachable")
 		}
-		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
 
-		result = append(result, DbColumn{Ordinal: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 0))), Name: value, DbType: variant, DbTypeName: value0})
+		result7 = witTypes.Err[[]DbColumn, Error](variant6)
+	default:
+		panic("unreachable")
 	}
-
-	result1 := result
-	return result1
+	result8 := result7
+	return result8
 
 }
 
 //go:wasmimport golem:rdbms/mysql@1.5.0 [method]db-result-stream.get-next
 func wasm_import_method_db_result_stream_get_next(arg0 int32, arg1 uintptr)
 
-func (self *DbResultStream) GetNext() witTypes.Option[[]DbRow] {
+func (self *DbResultStream) GetNext() witTypes.Result[witTypes.Option[[]DbRow], Error] {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
-	returnArea := uintptr(witRuntime.Allocate(pinner, (3 * 4), 4))
+	returnArea := uintptr(witRuntime.Allocate(pinner, (4 * 4), 4))
 	wasm_import_method_db_result_stream_get_next((self).Handle(), returnArea)
-	var option witTypes.Option[[]DbRow]
+	var result23 witTypes.Result[witTypes.Option[[]DbRow], Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
+		var option witTypes.Option[[]DbRow]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
+		case 0:
 
-		option = witTypes.None[[]DbRow]()
-	case 1:
-		result16 := make([]DbRow, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))
-		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))), index*(2*4))
-			result15 := make([]DbValue, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)))), index*24)
-				var variant DbValue
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
-				case 0:
+			option = witTypes.None[[]DbRow]()
+		case 1:
+			result16 := make([]DbRow, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))); index++ {
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))), index*(2*4))
+				result15 := make([]DbValue, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))); index++ {
+					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)))), index*24)
+					var variant DbValue
+					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
+					case 0:
 
-					variant = MakeDbValueBoolean((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0))
+						variant = MakeDbValueBoolean((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0))
 
-				case 1:
+					case 1:
 
-					variant = MakeDbValueTinyint(int8(int8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
+						variant = MakeDbValueTinyint(int8(int8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
 
-				case 2:
+					case 2:
 
-					variant = MakeDbValueSmallint(int16(int16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
+						variant = MakeDbValueSmallint(int16(int16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
 
-				case 3:
+					case 3:
 
-					variant = MakeDbValueMediumint(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
+						variant = MakeDbValueMediumint(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
-				case 4:
+					case 4:
 
-					variant = MakeDbValueInt(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
+						variant = MakeDbValueInt(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
-				case 5:
+					case 5:
 
-					variant = MakeDbValueBigint(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)))
+						variant = MakeDbValueBigint(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)))
 
-				case 6:
+					case 6:
 
-					variant = MakeDbValueTinyintUnsigned(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
+						variant = MakeDbValueTinyintUnsigned(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
 
-				case 7:
+					case 7:
 
-					variant = MakeDbValueSmallintUnsigned(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
+						variant = MakeDbValueSmallintUnsigned(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
 
-				case 8:
+					case 8:
 
-					variant = MakeDbValueMediumintUnsigned(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
+						variant = MakeDbValueMediumintUnsigned(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
 
-				case 9:
+					case 9:
 
-					variant = MakeDbValueIntUnsigned(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
+						variant = MakeDbValueIntUnsigned(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
 
-				case 10:
+					case 10:
 
-					variant = MakeDbValueBigintUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))))
+						variant = MakeDbValueBigintUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))))
 
-				case 11:
+					case 11:
 
-					variant = MakeDbValueFloat(*(*float32)(unsafe.Add(unsafe.Pointer(base), 8)))
+						variant = MakeDbValueFloat(*(*float32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
-				case 12:
+					case 12:
 
-					variant = MakeDbValueDouble(*(*float64)(unsafe.Add(unsafe.Pointer(base), 8)))
+						variant = MakeDbValueDouble(*(*float64)(unsafe.Add(unsafe.Pointer(base), 8)))
 
-				case 13:
-					value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+					case 13:
+						value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-					variant = MakeDbValueDecimal(value)
+						variant = MakeDbValueDecimal(value)
 
-				case 14:
+					case 14:
 
-					variant = MakeDbValueDate(golem_rdbms_types.Date{Year: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Month: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12)))), Day: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 13))))})
+						variant = MakeDbValueDate(golem_rdbms_types.Date{Year: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Month: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12)))), Day: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 13))))})
 
-				case 15:
+					case 15:
 
-					variant = MakeDbValueDatetime(golem_rdbms_types.Timestamp{Date: golem_rdbms_types.Date{Year: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Month: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12)))), Day: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 13))))}, Time: golem_rdbms_types.Time{Hour: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16)))), Minute: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 17)))), Second: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 18)))), Nanosecond: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)))}})
+						variant = MakeDbValueDatetime(golem_rdbms_types.Timestamp{Date: golem_rdbms_types.Date{Year: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Month: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12)))), Day: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 13))))}, Time: golem_rdbms_types.Time{Hour: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16)))), Minute: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 17)))), Second: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 18)))), Nanosecond: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)))}})
 
-				case 16:
+					case 16:
 
-					variant = MakeDbValueTimestamp(golem_rdbms_types.Timestamp{Date: golem_rdbms_types.Date{Year: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Month: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12)))), Day: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 13))))}, Time: golem_rdbms_types.Time{Hour: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16)))), Minute: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 17)))), Second: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 18)))), Nanosecond: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)))}})
+						variant = MakeDbValueTimestamp(golem_rdbms_types.Timestamp{Date: golem_rdbms_types.Date{Year: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Month: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12)))), Day: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 13))))}, Time: golem_rdbms_types.Time{Hour: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16)))), Minute: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 17)))), Second: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 18)))), Nanosecond: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)))}})
 
-				case 17:
+					case 17:
 
-					variant = MakeDbValueTime(golem_rdbms_types.Time{Hour: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), Minute: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 9)))), Second: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 10)))), Nanosecond: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))})
+						variant = MakeDbValueTime(golem_rdbms_types.Time{Hour: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), Minute: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 9)))), Second: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 10)))), Nanosecond: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))})
 
-				case 18:
+					case 18:
 
-					variant = MakeDbValueYear(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
+						variant = MakeDbValueYear(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
 
-				case 19:
-					value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+					case 19:
+						value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-					variant = MakeDbValueFixchar(value0)
+						variant = MakeDbValueFixchar(value0)
 
-				case 20:
-					value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+					case 20:
+						value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-					variant = MakeDbValueVarchar(value1)
+						variant = MakeDbValueVarchar(value1)
 
-				case 21:
-					value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+					case 21:
+						value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-					variant = MakeDbValueTinytext(value2)
+						variant = MakeDbValueTinytext(value2)
 
-				case 22:
-					value3 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+					case 22:
+						value3 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-					variant = MakeDbValueText(value3)
+						variant = MakeDbValueText(value3)
 
-				case 23:
-					value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+					case 23:
+						value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-					variant = MakeDbValueMediumtext(value4)
+						variant = MakeDbValueMediumtext(value4)
 
-				case 24:
-					value5 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+					case 24:
+						value5 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-					variant = MakeDbValueLongtext(value5)
+						variant = MakeDbValueLongtext(value5)
 
-				case 25:
-					value6 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+					case 25:
+						value6 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-					variant = MakeDbValueBinary(value6)
+						variant = MakeDbValueBinary(value6)
 
-				case 26:
-					value7 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+					case 26:
+						value7 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-					variant = MakeDbValueVarbinary(value7)
+						variant = MakeDbValueVarbinary(value7)
 
-				case 27:
-					value8 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+					case 27:
+						value8 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-					variant = MakeDbValueTinyblob(value8)
+						variant = MakeDbValueTinyblob(value8)
 
-				case 28:
-					value9 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+					case 28:
+						value9 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-					variant = MakeDbValueBlob(value9)
+						variant = MakeDbValueBlob(value9)
 
-				case 29:
-					value10 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+					case 29:
+						value10 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-					variant = MakeDbValueMediumblob(value10)
+						variant = MakeDbValueMediumblob(value10)
 
-				case 30:
-					value11 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+					case 30:
+						value11 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-					variant = MakeDbValueLongblob(value11)
+						variant = MakeDbValueLongblob(value11)
 
-				case 31:
-					value12 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+					case 31:
+						value12 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-					variant = MakeDbValueEnumeration(value12)
+						variant = MakeDbValueEnumeration(value12)
 
-				case 32:
-					value13 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+					case 32:
+						value13 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-					variant = MakeDbValueSet(value13)
+						variant = MakeDbValueSet(value13)
 
-				case 33:
-					result := make([]bool, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*1)
+					case 33:
+						result := make([]bool, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
+							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*1)
 
-						result = append(result, (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) != 0))
+							result = append(result, (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) != 0))
+						}
+
+						variant = MakeDbValueBit(result)
+
+					case 34:
+						value14 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+
+						variant = MakeDbValueJson(value14)
+
+					case 35:
+
+						variant = MakeDbValueNull()
+
+					default:
+						panic("unreachable")
 					}
 
-					variant = MakeDbValueBit(result)
-
-				case 34:
-					value14 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-					variant = MakeDbValueJson(value14)
-
-				case 35:
-
-					variant = MakeDbValueNull()
-
-				default:
-					panic("unreachable")
+					result15 = append(result15, variant)
 				}
 
-				result15 = append(result15, variant)
+				result16 = append(result16, DbRow{Values: result15})
 			}
 
-			result16 = append(result16, DbRow{Values: result15})
+			option = witTypes.Some[[]DbRow](result16)
+		default:
+			panic("unreachable")
 		}
 
-		option = witTypes.Some[[]DbRow](result16)
+		result23 = witTypes.Ok[witTypes.Option[[]DbRow], Error](option)
+	case 1:
+		var variant22 Error
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
+		case 0:
+			value17 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant22 = MakeErrorConnectionFailure(value17)
+
+		case 1:
+			value18 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant22 = MakeErrorQueryParameterFailure(value18)
+
+		case 2:
+			value19 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant22 = MakeErrorQueryExecutionFailure(value19)
+
+		case 3:
+			value20 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant22 = MakeErrorQueryResponseFailure(value20)
+
+		case 4:
+			value21 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant22 = MakeErrorOther(value21)
+
+		default:
+			panic("unreachable")
+		}
+
+		result23 = witTypes.Err[witTypes.Option[[]DbRow], Error](variant22)
 	default:
 		panic("unreachable")
 	}
-	result17 := option
-	return result17
+	result24 := result23
+	return result24
 
 }
 

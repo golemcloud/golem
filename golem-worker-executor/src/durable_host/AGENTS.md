@@ -50,38 +50,35 @@ Any value replay must reproduce (idempotency keys, phantom ids, scope discrimina
 that reach the guest) derives from oplog indices or recorded data — `derive_idempotency_key`,
 `ephemeral_invocation_phantom_id` (UUIDv5 of the key). Fresh randomness or clock reads are
 allowed only when appended and committed before the guest can observe them and read back on
-replay (as `caller_attempt_id` does); unrecorded guest-observable randomness is a bug. Inside
-atomic regions use the outermost region's logical counter (`current_idempotency_key_oplog_index`),
-not the physical index: a rollback re-executes the region at new physical positions.
+replay (as `caller_attempt_id` does); unrecorded guest-observable randomness is a bug.
 
 ## Retry eligibility is part of the function type
 
 `DurableFunctionType` decides two things with one predicate (`is_eligible_for_internal_retry`,
 `durability.rs`): whether a failed call may be retried in-function under the same `Start` instead
 of trapping and reconstructing the worker, and whether an incomplete `Start` may be re-executed on
-replay (`can_reexecute_on_incomplete_replay`). `ReadLocal`/`ReadRemote`/`WriteLocal` always;
-`WriteRemote` only under `assume_idempotence`; batched/transaction writes never. The one addition
+replay (`can_reexecute_on_incomplete_replay`). `ReadLocal`/`ReadRemote`/`WriteLocal`/`WriteRemote`
+always; batched/transaction writes never. The one addition
 to the replay predicate is a batched child of a scope whose owner re-executes the scope's effect
 call-locally (`ScopeReplayRecovery::Reexecute`, the P3 consume-body scope): the owner authorizes
 the child's in-place completion through `AccessClaimOptions::incomplete_repair_authorized_by_scope`;
 it never widens in-function retry. Choose the type for re-execution safety, and test both the
 inline path and the fall-back-to-trap path (`tests/in_function_retry/`).
 
-A P3 HTTP send chooses `WriteRemote` when the request is effectively idempotent (an idempotent
-method, or any method under `assume_idempotence`) and `WriteRemoteBatched(None)` otherwise. A
-`WriteRemote` send repairs an incomplete `Start` in place and keeps the operations recorded next
-to it; a batched send can only recover through a suffix rollback, which must refuse when a foreign
-remote write interleaves.
+A P3 HTTP send uses `WriteRemote`. It repairs an incomplete `Start` in place and keeps the
+operations recorded next to it. Nonresumable RDBMS handles complete incomplete calls with typed
+loss under the original `Start`, without replacing the transaction or requerying the stream.
+Transaction phase hints carry their owning scope's `Start` and are indexed before replay;
+they must not be consumed positionally by another transaction.
 
 ## RPC
 
-The key is derived from the durable call's `Start` index, or the outermost atomic region's
-logical counter, and reused by every attempt. Streaming and non-streaming RPC follow the same
+The key is derived from the durable call's `Start` index and reused by every attempt.
+Streaming and non-streaming RPC follow the same
 rule. Streaming session descriptors must exclude retry tracing and canonicalize environment-map
 ordering without discarding execution-relevant configuration.
-`InvocationFreshnessDisposition::MayExist` is the default; `KnownFresh` is allowed only for live,
-ephemeral, non-`assume_idempotence` dispatch and must commit `DurableOnly` first
-(`wasm_rpc/mod.rs`). Same-key retry attaches to the existing target invocation; it is never new
+Dispatch uses `InvocationFreshnessDisposition::MayExist`. Same-key retry attaches to the existing
+target invocation; it is never new
 work. RPC preparation does not acquire target execution capacity. An execution-needing target
 invocation durably enqueues its acceptance prefix before reporting acceptance, and caller
 cancellation must not split that prefix. Settled read-only cache hits and coalesced followers do
@@ -131,8 +128,8 @@ not add a feature-specific recovery path or immediate restart.
   delivery, replay fails with `UnexpectedOplogEntry` and poisons the shared cursor instead of
   discarding the value or waiting forever. The canonical cancellation policy is unchanged; do not
   force always-blocked returns.
-- Atomic rollback retains logical consumer input, including its ordinal, source offset and nested
-  reader identities. Re-executing a read whose physical boundary a `Jump` deleted appends one
+- Retained history preserves logical consumer input, including its ordinal, source offset and nested
+  reader identities. Re-executing a read whose physical boundary a cut deleted appends one
   consumer record with `reobserves` referencing the original record. Append and replay validate
   identical logical content. A re-observation reserves its new guest boundary but advances no
   consumer progress and introduces no nested readers; their identities retain the original index.

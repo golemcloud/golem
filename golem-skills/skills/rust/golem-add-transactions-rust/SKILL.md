@@ -75,7 +75,7 @@ let result = fallible_transaction(|tx| boxed(async move {
 
 match result {
     Ok((reservation, charge)) => { /* success */ }
-    Err(e) => { /* all steps were compensated */ }
+    Err(e) => { /* inspect complete or partial compensation failure */ }
 }
 ```
 
@@ -91,7 +91,7 @@ let (reservation, charge) = infallible_transaction(|tx| boxed(async move {
     let charge = tx.execute(charge_payment, 4999).await;
     (reservation, charge)
 })).await;
-// Always succeeds eventually
+// A permanent domain failure can loop forever.
 ```
 
 ## Guidelines
@@ -103,5 +103,7 @@ let (reservation, charge) = infallible_transaction(|tx| boxed(async move {
 - Use `operation` with `Box::pin(async move { ... })` closures for async logic
 - Keep compensation logic idempotent — it may be called more than once
 - Compensation runs in reverse order of execution
+- Infallible transactions compensate and loop in guest code. New attempts append new calls; they do not delete history or use the host retry policy.
+- Recovery repairs an eligible incomplete call at its own `Start`, not a group of completed effects. Panics fail the invocation without guaranteed compensation.
 - Use `fallible_transaction` when failure is an acceptable outcome
 - Use `infallible_transaction` when the operation must eventually succeed

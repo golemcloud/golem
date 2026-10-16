@@ -407,23 +407,16 @@ pub use json::*;
 #[cfg(feature = "json")]
 pub mod durable_streams;
 
-mod checkpoint;
 pub mod quota;
 pub mod secrets;
 pub mod tool;
 mod transaction;
 
-use std::future::Future;
-
-use bindings::golem::api::host::{
-    self as host_api, get_idempotence_mode, mark_begin_operation, mark_end_operation,
-    set_idempotence_mode,
-};
+use bindings::golem::api::host as host_api;
 
 pub type OplogIndex = u64;
 
 pub mod websocket;
-pub use checkpoint::*;
 pub use quota::*;
 pub use secrets::*;
 pub mod retry;
@@ -986,14 +979,6 @@ pub fn complete_promise(promise_id: &PromiseId, data: &[u8]) -> bool {
     host_api::complete_promise(&schema_promise_id_to_wire(promise_id), data)
 }
 
-pub fn get_oplog_index() -> OplogIndex {
-    host_api::get_oplog_index()
-}
-
-pub fn set_oplog_index(oplog_idx: OplogIndex) {
-    host_api::set_oplog_index(oplog_idx)
-}
-
 pub fn oplog_commit(replicas: u8) {
     host_api::oplog_commit(replicas)
 }
@@ -1058,132 +1043,9 @@ pub async fn await_promise(promise_id: &PromiseId) -> Vec<u8> {
     promise.get().await
 }
 
-pub struct IdempotenceModeGuard {
-    original: bool,
-}
-
-impl Drop for IdempotenceModeGuard {
-    fn drop(&mut self) {
-        set_idempotence_mode(self.original);
-    }
-}
-
-/// Temporarily sets the idempotence mode to the given value.
-///
-/// When the returned guard is dropped, the original idempotence mode is restored.
-#[must_use]
-pub fn use_idempotence_mode(mode: bool) -> IdempotenceModeGuard {
-    let original = get_idempotence_mode();
-    set_idempotence_mode(mode);
-    IdempotenceModeGuard { original }
-}
-
-/// Executes the given function with the idempotence mode set to the given value.
-pub fn with_idempotence_mode<R>(mode: bool, f: impl FnOnce() -> R) -> R {
-    let _guard = use_idempotence_mode(mode);
-    f()
-}
-
-/// Executes the given async function with the idempotence mode set to the given value.
-pub async fn with_idempotence_mode_async<R, F: Future<Output = R>>(
-    mode: bool,
-    f: impl FnOnce() -> F,
-) -> R {
-    let _guard = use_idempotence_mode(mode);
-    f().await
-}
-
 /// Generates an idempotency key. This operation will never be replayed —
 /// i.e. not only is this key generated, but it is persisted and committed, such that the key can be used in third-party systems (e.g. payment processing)
 /// to introduce idempotence.
 pub fn generate_idempotency_key() -> uuid::Uuid {
     Into::into(host_api::generate_idempotency_key())
-}
-
-pub struct AtomicOperationGuard {
-    begin: OplogIndex,
-}
-
-impl Drop for AtomicOperationGuard {
-    fn drop(&mut self) {
-        // If we're unwinding from a panic, leave the atomic region open so the
-        // worker recovery + replay-time fallback in `mark_begin_operation`
-        // re-executes the block from the begin marker. WASM panics are wasm
-        // traps, so the executor will recover the worker.
-        if !std::thread::panicking() {
-            mark_end_operation(self.begin);
-        }
-    }
-}
-
-/// Marks a block as an atomic operation
-///
-/// When the returned guard is dropped, the operation gets committed —
-/// unless the current thread is panicking, in which case the region is left
-/// open so worker recovery re-executes the block.
-#[must_use]
-pub fn mark_atomic_operation() -> AtomicOperationGuard {
-    let begin = mark_begin_operation();
-    AtomicOperationGuard { begin }
-}
-
-/// Executes the given function as an atomic operation.
-///
-/// On panic the region is left open and the worker recovers + re-executes
-/// the block. Use [`atomically_result`] when the body returns a `Result` so
-/// that error returns also force a trap rather than silently committing the
-/// region.
-pub fn atomically<T>(f: impl FnOnce() -> T) -> T {
-    let _guard = mark_atomic_operation();
-    f()
-}
-
-/// Executes the given async function as an atomic operation.
-///
-/// On panic the region is left open and the worker recovers + re-executes
-/// the block.
-pub async fn atomically_async<T, F: Future<Output = T>>(f: impl FnOnce() -> F) -> T {
-    let _guard = mark_atomic_operation();
-    f().await
-}
-
-/// Executes the given fallible function as an atomic operation.
-///
-/// On `Ok` the region is committed.
-/// On `Err` the SDK calls the host `trap` function, which surfaces as an
-/// uncatchable wasm trap so the failure cannot be observed by user code.
-/// The atomic region is intentionally left open so the existing replay-time
-/// fallback in `mark_begin_operation` deletes the partial inner side effects
-/// and re-executes the block.
-pub fn atomically_result<T, E>(f: impl FnOnce() -> Result<T, E>) -> Result<T, E>
-where
-    E: core::fmt::Display,
-{
-    let guard = mark_atomic_operation();
-    match f() {
-        Ok(v) => Ok(v),
-        Err(e) => {
-            // Skip the Drop closing the region — the trap is the terminator.
-            core::mem::forget(guard);
-            host_api::trap(&format!("atomic block failed: {e}"));
-            unreachable!("trap host call must not return")
-        }
-    }
-}
-
-/// Async version of [`atomically_result`].
-pub async fn atomically_result_async<T, E, F>(f: impl FnOnce() -> F) -> Result<T, E>
-where
-    E: core::fmt::Display,
-    F: Future<Output = Result<T, E>>,
-{
-    let guard = mark_atomic_operation();
-    match f().await {
-        Ok(v) => Ok(v),
-        Err(e) => {
-            core::mem::forget(guard);
-            host_api::trap(&format!("atomic block failed: {e}"));
-            unreachable!("trap host call must not return")
-        }
-    }
 }

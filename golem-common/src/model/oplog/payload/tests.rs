@@ -844,15 +844,14 @@ use crate::model::oplog::raw_types::SpanData;
 use crate::model::oplog::types::{
     SerializableCustomToolError, SerializableDateTime, SerializableEntityBodyExecution,
     SerializableFileTimes, SerializableHttpErrorCode, SerializableHttpMethod,
-    SerializableHttpVersion, SerializableIpAddress, SerializableIpAddresses,
-    SerializableP3FileSystemError, SerializableP3FsErrorCode, SerializableP3HttpBodyChunk,
-    SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
-    SerializableP3HttpConsumeBodyResult, SerializableP3HttpRequestBodyFrame,
-    SerializableP3HttpRequestOptions, SerializableP3HttpScheme, SerializableP3IpSocketAddress,
-    SerializableP3SocketErrorCode, SerializableP3TcpChunk, SerializableP3UdpDatagram,
-    SerializableResponseHeaders, SerializableRpcError, SerializableScheduleId,
-    SerializableStreamError, SerializableToolAdmissionRefusal, SerializableToolError,
-    SerializableToolInvocationResult, SerializableToolOperationTerminal,
+    SerializableIpAddress, SerializableIpAddresses, SerializableP3FileSystemError,
+    SerializableP3FsErrorCode, SerializableP3HttpBodyChunk, SerializableP3HttpClientSend,
+    SerializableP3HttpClientSendResult, SerializableP3HttpConsumeBodyResult,
+    SerializableP3HttpRequestBodyFrame, SerializableP3HttpRequestOptions, SerializableP3HttpScheme,
+    SerializableP3IpSocketAddress, SerializableP3SocketErrorCode, SerializableP3TcpChunk,
+    SerializableP3UdpDatagram, SerializableResponseHeaders, SerializableRpcError,
+    SerializableScheduleId, SerializableStreamError, SerializableToolAdmissionRefusal,
+    SerializableToolError, SerializableToolInvocationResult, SerializableToolOperationTerminal,
     SerializableToolResultValue, SerializableToolRpcError, SerializableToolStructuredResult,
 };
 use crate::model::oplog::{
@@ -892,7 +891,6 @@ use crate::schema::tool::{CommandNode, CommandTree, DiscoveredTool, Doc, Globals
 use crate::schema::{
     FromSchema, IntoTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
 };
-use http::Version;
 use iso8601_timestamp as iso_ts;
 use proptest::collection::vec;
 use proptest::option::of;
@@ -2742,32 +2740,6 @@ fn keyvalue_host_request_binary_roundtrip() {
 }
 
 #[test]
-fn p3_http_payload_additions_keep_existing_host_function_name_binary_tags_stable() {
-    let old_random_get_random_bytes_name = [0, 36, 0];
-
-    let decoded: host_functions::HostFunctionName =
-        desert_rust::deserialize(&old_random_get_random_bytes_name).unwrap();
-
-    assert_eq!(
-        decoded,
-        host_functions::HostFunctionName::RandomGetRandomBytes
-    );
-}
-
-#[test]
-fn p3_http_payload_additions_keep_preexisting_blobstore_create_container_tag_stable() {
-    let old_blobstore_create_container_name = [0, 65, 0];
-
-    let decoded: host_functions::HostFunctionName =
-        desert_rust::deserialize(&old_blobstore_create_container_name).unwrap();
-
-    assert_eq!(
-        decoded,
-        host_functions::HostFunctionName::BlobstoreBlobstoreCreateContainer
-    );
-}
-
-#[test]
 fn p3_response_and_function_name_binary_roundtrip() {
     let response = HostResponse::P3MonotonicClockUnit(
         crate::model::oplog::HostResponseP3MonotonicClockUnit {},
@@ -2795,16 +2767,6 @@ fn p3_http_payload_additions_p3_filesystem_stat_function_name_roundtrips_from_st
         host_functions::HostFunctionName::from(serialized.as_str()),
         function_name
     );
-}
-
-fn version_strat() -> impl Strategy<Value = Version> {
-    prop_oneof![
-        Just(Version::HTTP_09),
-        Just(Version::HTTP_10),
-        Just(Version::HTTP_11),
-        Just(Version::HTTP_2),
-        Just(Version::HTTP_3),
-    ]
 }
 
 fn field_size_payload_strat() -> impl Strategy<Value = FieldSizePayload> {
@@ -2859,13 +2821,6 @@ fn error_code_strat() -> impl Strategy<Value = ErrorCode> {
 }
 
 proptest! {
-    #[test]
-    fn test_http_version_roundtrip(version in version_strat()) {
-        let serialized: SerializableHttpVersion = version.try_into().unwrap();
-        let deserialized: Version = serialized.into();
-        prop_assert_eq!(version, deserialized);
-    }
-
     #[test]
     fn test_error_code_roundtrip(error_code in error_code_strat()) {
         let serialized: SerializableHttpErrorCode = (&error_code).into();

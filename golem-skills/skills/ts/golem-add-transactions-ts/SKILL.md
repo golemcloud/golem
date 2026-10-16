@@ -74,7 +74,7 @@ const result = await infallibleSaga(async (saga) => {
     const charge = await saga.execute(chargePayment, 49.99);
     return { reservation, charge };
 });
-// Resolves once the whole sequence succeeds.
+// Resolves if an attempt succeeds; a permanent domain failure can loop forever.
 ```
 
 ## Using a Saga Inside an Agent Method
@@ -110,6 +110,8 @@ OrderAgent.implement({
 
 - Keep compensation logic idempotent — it may be called more than once
 - Compensation runs in reverse order of execution
-- Steps signal expected failures with `Result.err`; a `throw` inside a saga is an unexpected defect and traps without running compensations. Both saga runners create an atomic region, so the saga is retried according to the applicable retry policy; if the policy gives up, the agent becomes failed
+- Steps signal expected failures with `Result.err`; a `throw` is an unexpected defect and fails the invocation without guaranteed compensation.
+- Infallible sagas compensate and loop in guest code. Each attempt appends new durable calls; earlier calls and compensations remain recorded. This loop is independent of host retry policies and does not guarantee eventual success.
+- Reconstruction repairs an eligible incomplete call at its own `Start`, without repeating completed saga steps.
 - Use `fallibleSaga` when failure is an acceptable outcome the caller should observe
 - Use `infallibleSaga` when the operation must eventually succeed (failures roll back and retry)

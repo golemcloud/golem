@@ -831,11 +831,15 @@ type Stream struct {
 }
 
 // Columns returns the result column metadata.
-func (s *Stream) Columns() []Column {
+func (s *Stream) Columns() ([]Column, error) {
 	if s.cols == nil {
-		s.cols = convColumns(s.raw.GetColumns())
+		r := s.raw.GetColumns()
+		if r.IsErr() {
+			return nil, myError(r.Err())
+		}
+		s.cols = convColumns(r.Ok())
 	}
-	return s.cols
+	return s.cols, nil
 }
 
 // Next returns the next row. ok is false (with a nil error) once the stream is
@@ -845,7 +849,11 @@ func (s *Stream) Next() (row Row, ok bool, err error) {
 		if s.done {
 			return Row{}, false, nil
 		}
-		opt := s.raw.GetNext()
+		r := s.raw.GetNext()
+		if r.IsErr() {
+			return Row{}, false, myError(r.Err())
+		}
+		opt := r.Ok()
 		if opt.IsNone() {
 			s.done = true
 			return Row{}, false, nil

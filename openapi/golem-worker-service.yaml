@@ -2775,8 +2775,7 @@ components:
           type: array
           description: |-
             Oplog regions that are skipped during the worker's state recovery, but describe
-            the history of the worker. For example if an atomic region gets restarted, its partially
-            recorded oplog entries will be skipped on retry.
+            the history of the worker.
           items:
             $ref: '#/components/schemas/OplogRegion'
         deletedRegions:
@@ -6369,12 +6368,9 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#NoOpParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#JumpParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#InterruptedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ExitedParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#BeginAtomicRegionParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#EndAtomicRegionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#PendingAgentInvocationParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#PendingUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
@@ -6431,12 +6427,9 @@ components:
           Suspend: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
           Error: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
           RecoverySucceeded: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
-          NoOp: '#/components/schemas/PublicOplogEntry_r#NoOpParams'
           Jump: '#/components/schemas/PublicOplogEntry_r#JumpParams'
           Interrupted: '#/components/schemas/PublicOplogEntry_r#InterruptedParams'
           Exited: '#/components/schemas/PublicOplogEntry_r#ExitedParams'
-          BeginAtomicRegion: '#/components/schemas/PublicOplogEntry_r#BeginAtomicRegionParams'
-          EndAtomicRegion: '#/components/schemas/PublicOplogEntry_r#EndAtomicRegionParams'
           PendingAgentInvocation: '#/components/schemas/PublicOplogEntry_r#PendingAgentInvocationParams'
           PendingUpdate: '#/components/schemas/PublicOplogEntry_r#PendingUpdateParams'
           SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
@@ -6566,18 +6559,6 @@ components:
             - AgentInvocationStarted
             example: AgentInvocationStarted
       - $ref: '#/components/schemas/r#AgentInvocationStartedParams'
-    PublicOplogEntry_r#BeginAtomicRegionParams:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - BeginAtomicRegion
-            example: BeginAtomicRegion
-      - $ref: '#/components/schemas/r#BeginAtomicRegionParams'
     PublicOplogEntry_r#BeginRemoteTransactionParams:
       allOf:
       - type: object
@@ -6818,18 +6799,6 @@ components:
             - DropResource
             example: DropResource
       - $ref: '#/components/schemas/r#DropResourceParams'
-    PublicOplogEntry_r#EndAtomicRegionParams:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - EndAtomicRegion
-            example: EndAtomicRegion
-      - $ref: '#/components/schemas/r#EndAtomicRegionParams'
     PublicOplogEntry_r#EndParams:
       allOf:
       - type: object
@@ -6938,18 +6907,6 @@ components:
             - Log
             example: Log
       - $ref: '#/components/schemas/r#LogParams'
-    PublicOplogEntry_r#NoOpParams:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - NoOp
-            example: NoOp
-      - $ref: '#/components/schemas/r#NoOpParams'
     PublicOplogEntry_r#OplogProcessorCheckpointParams:
       allOf:
       - type: object
@@ -10064,15 +10021,6 @@ components:
           $ref: '#/components/schemas/PublicAgentInvocation'
         walletPin:
           $ref: '#/components/schemas/PublicInvocationWalletPin'
-    r#BeginAtomicRegionParams:
-      type: object
-      title: r#BeginAtomicRegionParams
-      required:
-      - timestamp
-      properties:
-        timestamp:
-          type: string
-          format: date-time
     r#BeginRemoteTransactionParams:
       type: object
       title: r#BeginRemoteTransactionParams
@@ -10480,19 +10428,6 @@ components:
           type: string
         owner:
           type: string
-    r#EndAtomicRegionParams:
-      type: object
-      title: r#EndAtomicRegionParams
-      required:
-      - timestamp
-      - beginIndex
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        beginIndex:
-          type: integer
-          format: uint64
     r#EndParams:
       type: object
       title: r#EndParams
@@ -10523,7 +10458,6 @@ components:
       - kind
       - error
       - retryFrom
-      - insideAtomicRegion
       properties:
         timestamp:
           type: string
@@ -10535,8 +10469,6 @@ components:
         retryFrom:
           type: integer
           format: uint64
-        insideAtomicRegion:
-          type: boolean
         retryPolicyState:
           $ref: '#/components/schemas/PublicRetryPolicyState'
     r#ExitedParams:
@@ -10641,15 +10573,6 @@ components:
           type: string
         traceContext:
           $ref: '#/components/schemas/LogTraceContext'
-    r#NoOpParams:
-      type: object
-      title: r#NoOpParams
-      required:
-      - timestamp
-      properties:
-        timestamp:
-          type: string
-          format: date-time
     r#OplogProcessorCheckpointParams:
       type: object
       title: r#OplogProcessorCheckpointParams

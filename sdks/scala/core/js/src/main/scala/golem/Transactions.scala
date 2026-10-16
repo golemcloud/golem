@@ -20,7 +20,7 @@ import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 
 /**
- * Transaction helpers for managing atomic operations with automatic rollback.
+ * Saga helpers for operations with compensations.
  *
  * This mirrors the JS SDK's `infallibleTransaction` and `fallibleTransaction`
  * helpers, providing the same ergonomics for Scala.js agents.
@@ -56,7 +56,7 @@ import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
  *   [[docs/transactions.md]] for detailed usage patterns
  */
 /**
- * Transaction helpers for managing atomic operations with automatic rollback.
+ * Saga helpers for operations with compensations.
  */
 object Transactions {
 
@@ -82,10 +82,10 @@ object Transactions {
    *
    * When any operation fails:
    *   1. All registered compensations run in reverse order
-   *      2. The oplog index resets to the transaction start
-   *      3. The entire transaction body re-executes
+   *      2. The entire transaction body runs as a fresh attempt
    *
-   * The transaction keeps retrying until all operations succeed.
+   * The transaction keeps retrying until all operations succeed. Attempts and
+   * compensations append to the oplog; they never rewind other concurrent work.
    *
    * @param body
    *   The transaction body receiving the transaction context
@@ -94,34 +94,14 @@ object Transactions {
    */
   def infallibleTransaction[A](body: InfallibleTransaction => Future[A]): Future[A] = {
     def loop(): Future[A] = {
-      val guard = Guards.markAtomicOperation()
-      val begin = HostApi.getOplogIndex()
-      val tx    = new InfallibleTransaction
-      body(tx)
-        .transform(
-          result => {
-            guard.drop()
-            result
-          },
-          {
-            case RetrySignal =>
-              HostApi.setOplogIndex(begin)
-              guard.drop()
-              // Cannot directly recurse here in transform's failure handler,
-              // so we throw and catch below
-              throw RetrySignal
-            case other =>
-              // Force an uncatchable trap so user code cannot observe the
-              // failure with `recover`/`recoverWith`. The atomic region is
-              // intentionally left open; the existing replay-time fallback
-              // in `markBeginOperation` deletes the partial inner side
-              // effects and re-executes the block.
-              HostApi.trap(s"infallibleTransaction failed: ${formatErrorForTrap(other)}")
-          }
-        )
-        .recoverWith { case RetrySignal =>
-          loop()
+      val tx = new InfallibleTransaction
+      body(tx).flatMap(value => tx.checkActive().map(_ => value)).recoverWith { case error =>
+        tx.failure(error) match {
+          case RetrySignal => loop()
+          case other       =>
+            HostApi.trap(s"infallibleTransaction failed: ${formatErrorForTrap(other)}")
         }
+      }
     }
 
     loop()
@@ -142,16 +122,13 @@ object Transactions {
   def fallibleTransaction[A, Err](
     body: FallibleTransaction[Err] => Future[Either[Err, A]]
   ): Future[Either[TransactionFailure[Err], A]] = {
-    val guard = Guards.markAtomicOperation()
-    val tx    = new FallibleTransaction[Err]
+    val tx = new FallibleTransaction[Err]
     body(tx).flatMap {
       case Right(value) =>
-        guard.drop()
         Future.successful(Right(value))
       case Left(err) =>
         tx.onFailure(err)
           .map { failure =>
-            guard.drop()
             Left(failure)
           }
           .recover { case e =>
@@ -182,7 +159,7 @@ object Transactions {
   sealed trait TransactionFailure[+Err]
 
   /**
-   * Represents an atomic operation with execute and compensate steps.
+   * Represents an operation with execute and compensate steps.
    *
    * @tparam In
    *   Input type for the operation
@@ -210,6 +187,12 @@ object Transactions {
    */
   final class InfallibleTransaction private[golem] () {
     private var compensations: List[() => Future[Unit]] = Nil
+    private var terminal: Option[Throwable]             = None
+
+    private[golem] def checkActive(): Future[Unit] =
+      terminal.fold(Future.successful(()))(Future.failed)
+
+    private[golem] def failure(error: Throwable): Throwable = terminal.filterNot(_ == RetrySignal).getOrElse(error)
 
     /**
      * Executes an operation within the transaction.
@@ -225,7 +208,7 @@ object Transactions {
      *   A Future containing the operation result (signals retry on failure)
      */
     def execute[In, Out, Err](operation: Operation[In, Out, Err], input: In): Future[Out] =
-      operation.execute(input).flatMap {
+      checkActive().flatMap(_ => operation.execute(input)).flatMap {
         case Right(value) =>
           compensations ::= (() =>
             operation.compensate(input, value).map {
@@ -239,13 +222,19 @@ object Transactions {
       }
 
     private def rollback(): Future[Nothing] = {
+      terminal = Some(RetrySignal)
       def runCompensations(remaining: List[() => Future[Unit]]): Future[Unit] =
         remaining match {
           case Nil          => Future.successful(())
-          case head :: tail => head().flatMap(_ => runCompensations(tail))
+          case head :: tail => Future.successful(()).flatMap(_ => head()).flatMap(_ => runCompensations(tail))
         }
 
-      runCompensations(compensations).flatMap(_ => Future.failed(RetrySignal))
+      val pending = compensations
+      compensations = Nil
+      runCompensations(pending).recoverWith { case error =>
+        terminal = Some(error)
+        Future.failed(error)
+      }.flatMap(_ => Future.failed(RetrySignal))
     }
   }
 

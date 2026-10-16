@@ -2524,8 +2524,6 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                 0,
                 &error,
                 store.data().get_current_retry_point().await,
-                store.data().current_in_atomic_region(),
-                store.data().current_atomic_region_had_side_effects(),
                 store.data().agent_mode(),
             )
             .as_trap_type::<Ctx>()

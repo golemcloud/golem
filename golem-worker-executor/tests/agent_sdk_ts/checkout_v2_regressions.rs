@@ -639,37 +639,13 @@ async fn ts_v2_s2_shipment_hangs_then_reset(
         "S2: /shipment attempt count must be bounded (tight retry loop bug), observed {ship_a}"
     );
 
-    // Regression: the /shipment retries happen inside `atomically(...)`, so
-    // every persisted `OplogEntry::Error.retry_from` must point at the
-    // active `BeginAtomicRegion` index (BAR) — never at a per-attempt
-    // `BeginRemoteWrite` index. If `retry_from` were keyed off the unstable
-    // BeginRemoteWrite index, the retry budget would silently reset on
-    // every replay and the named retry policy could never exhaust, which is
-    // exactly the unbounded-loop bug that the now-removed
-    // `lookup_retry_state_with_replay_aggregation` fallback used to mask.
     let oplog = executor
         .get_oplog(&worker_id, golem_common::model::oplog::OplogIndex::INITIAL)
         .await?;
-    let begin_atomic_region_indices: std::collections::HashSet<_> = oplog
+    let start_indices: std::collections::HashSet<_> = oplog
         .iter()
         .filter_map(|e| match &e.entry {
-            golem_common::model::oplog::PublicOplogEntry::BeginAtomicRegion(_) => {
-                Some(e.oplog_index)
-            }
-            _ => None,
-        })
-        .collect();
-    // Scope-`Start` entries (e.g. the batched-write scope opened around
-    // `atomically(...)`) carry no `request` payload and the synthetic
-    // `<scope:batched-write>` function name.
-    let begin_remote_write_indices: std::collections::HashSet<_> = oplog
-        .iter()
-        .filter_map(|e| match &e.entry {
-            golem_common::model::oplog::PublicOplogEntry::Start(params)
-                if params.request.is_none() && params.function_name == "<scope:batched-write>" =>
-            {
-                Some(e.oplog_index)
-            }
+            golem_common::model::oplog::PublicOplogEntry::Start(_) => Some(e.oplog_index),
             _ => None,
         })
         .collect();
@@ -677,20 +653,11 @@ async fn ts_v2_s2_shipment_hangs_then_reset(
     for e in &oplog {
         if let golem_common::model::oplog::PublicOplogEntry::Error(params) = &e.entry {
             assert!(
-                !begin_remote_write_indices.contains(&params.retry_from),
-                "S2: Error.retry_from must NOT point to a BeginRemoteWrite index \
-                 (would mean unstable per-attempt retry identity); \
+                start_indices.contains(&params.retry_from),
+                "S2: Error.retry_from must identify the durable call Start; \
                  retry_from={:?}, error={:?}",
                 params.retry_from,
                 params.error,
-            );
-            assert!(
-                begin_atomic_region_indices.contains(&params.retry_from),
-                "S2: Error.retry_from must point to the active atomic region's \
-                 BeginAtomicRegion index; retry_from={:?}, error={:?}, BAR indices={:?}",
-                params.retry_from,
-                params.error,
-                begin_atomic_region_indices,
             );
             error_entries_checked += 1;
         }

@@ -132,16 +132,11 @@ the synthesized default and any user-defined "matches all" policy — are intent
 status-based retries remain strictly opt-in.
 
 When a matching policy decides to retry, the rejected response is dropped, the request body is
-reconstructed from the oplog, and the request is re-sent — without needing `atomically(...)` and
-without the user-land throw pattern.
+reconstructed from the oplog, and the request is re-sent without a user-land throw.
 
 Eligibility rules (mirror inline transport retry):
 - live execution (not replay or snapshotting)
 - request body and trailers are reconstructible
-- the HTTP method is idempotent, or `assumeIdempotence` was set on the outgoing request
-- not inside an `atomically(...)` block — in v1 status retries are skipped inside atomic
-  regions; the user-land throw still triggers atomic-region replay, which gives equivalent
-  end-to-end behavior
 
 Example status-code policy:
 
@@ -163,10 +158,9 @@ http-5xx-retry:
 
 > **`fetch()` interaction:** `fetch()` resolves with a `Response` for HTTP `4xx`/`5xx`
 > statuses. If a status-code-keyed retry policy matches, the host transparently re-sends the
-> request and the resolved `Response` will be the result of the *last* attempt — no extra
-> `atomically(...)` is needed. The `atomically(...)` pattern below is still useful when the
-> retry trigger is application-level (e.g. retry on a parsed body field rather than a status
-> code), or to combine multiple side effects into one logical step.
+> request and the resolved `Response` will be the result of the *last* attempt. For a retry
+> decision based on a parsed body, use explicit guest control flow or an SDK saga. New attempts
+> append new calls; throwing after a response does not retry that completed request.
 
 ## 2. SDK: Build and Apply Retry Policies at Runtime
 
@@ -201,42 +195,9 @@ withRetryPolicy(policy, () => {
 });
 ```
 
-When the retryable condition is detected by application code after `fetch` returns, combine
-`withRetryPolicy` with `atomically` so retries re-send the request instead of replaying the already
-recorded response:
-
-```typescript
-import {
-  Duration,
-  NamedPolicy,
-  Policy,
-  atomically,
-  withRetryPolicy,
-} from '@golemcloud/golem-ts-sdk';
-
-const paymentRetry = NamedPolicy.named(
-  'payment-retry',
-  Policy.exponential(Duration.seconds(1), 2.0)
-    .clamp(Duration.milliseconds(500), Duration.seconds(10)),
-);
-
-const payment = await withRetryPolicy(paymentRetry, () =>
-  atomically(async () => {
-    const response = await fetch('https://payments.example.com/charge', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ orderId, amount }),
-    });
-
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`payment failed: ${response.status} ${body}`);
-    }
-
-    return await response.json();
-  }),
-);
-```
+Host policies retry eligible individual calls at their own `Start`. They do not rerun a guest
+callback or erase earlier results. Use the saga helpers for reverse-order compensation and a
+separate guest-code attempt.
 
 ### Policy Builder Methods
 

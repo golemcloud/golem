@@ -329,7 +329,6 @@ declare module 'golem:api/oplog@1.5.0' {
     kind: OplogErrorKind;
     error: string;
     retryFrom: OplogIndex;
-    insideAtomicRegion: boolean;
     /** Persistent retry policy state, if a semantic retry policy is active. */
     retryPolicyState?: RetryPolicyState;
   };
@@ -460,10 +459,6 @@ declare module 'golem:api/oplog@1.5.0' {
   export type DurableStreamRecordParameters = {
     timestamp: Datetime;
     record: TypedSchemaValue;
-  };
-  export type EndAtomicRegionParameters = {
-    timestamp: Datetime;
-    beginIndex: OplogIndex;
   };
   export type AgentInitializationParameters = {
     idempotencyKey: string;
@@ -953,7 +948,6 @@ declare module 'golem:api/oplog@1.5.0' {
     kind: OplogErrorKind;
     error: WorkerError;
     retryFrom: OplogIndex;
-    insideAtomicRegion: boolean;
     /** Persistent retry policy state, if a semantic retry policy is active. */
     retryPolicyState?: RetryPolicyState;
   };
@@ -1036,7 +1030,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type RawBeginRemoteTransactionParameters = {
     timestamp: Datetime;
     transactionId: string;
-    originalBeginIndex?: OplogIndex;
+    originalBeginIndex: OplogIndex;
   };
   export type RawSnapshotParameters = {
     timestamp: Datetime;
@@ -1104,14 +1098,6 @@ declare module 'golem:api/oplog@1.5.0' {
     val: Timestamp
   } |
   /**
-   * Marker entry added when get-oplog-index is called from the agent, to make the jumping behavior
-   * more predictable.
-   */
-  {
-    tag: 'no-op'
-    val: Timestamp
-  } |
-  /**
    * The agent needs to recover up to the given target oplog index and continue running from
    * the source oplog index from there
    * `jump` is an oplog region representing that from the end of that region we want to go back to the start and
@@ -1133,23 +1119,6 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'exited'
     val: Timestamp
-  } |
-  /**
-   * Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
-   * recovery except if there is a corresponding `EndAtomicRegion` entry.
-   */
-  {
-    tag: 'begin-atomic-region'
-    val: Timestamp
-  } |
-  /**
-   * Ends an atomic region. All oplog entries between the corresponding `BeginAtomicRegion` and this
-   * entry are to be considered during recovery, and the begin/end markers can be removed during oplog
-   * compaction.
-   */
-  {
-    tag: 'end-atomic-region'
-    val: EndAtomicRegionParameters
   } |
   /** An invocation request arrived while the agent was busy */
   {
@@ -1404,14 +1373,6 @@ declare module 'golem:api/oplog@1.5.0' {
     val: Timestamp
   } |
   /**
-   * Marker entry added when get-oplog-index is called from the agent, to make the jumping behavior
-   * more predictable.
-   */
-  {
-    tag: 'no-op'
-    val: Timestamp
-  } |
-  /**
    * The agent needs to recover up to the given target oplog index and continue running from
    * the source oplog index from there
    * `jump` is an oplog region representing that from the end of that region we want to go back to the start and
@@ -1433,23 +1394,6 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'exited'
     val: Timestamp
-  } |
-  /**
-   * Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
-   * recovery except if there is a corresponding `EndAtomicRegion` entry.
-   */
-  {
-    tag: 'begin-atomic-region'
-    val: Timestamp
-  } |
-  /**
-   * Ends an atomic region. All oplog entries between the corresponding `BeginAtomicRegion` and this
-   * entry are to be considered during recovery, and the begin/end markers can be removed during oplog
-   * compaction.
-   */
-  {
-    tag: 'end-atomic-region'
-    val: EndAtomicRegionParameters
   } |
   /** An invocation request arrived while the agent was busy */
   {

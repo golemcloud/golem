@@ -23,23 +23,23 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::payload::types::{SerializableToolError, SerializableToolRpcError};
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams,
-    CardInstalledParams, CardRevokedParams, CommittedRemoteTransactionParams,
-    CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
-    DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams,
-    ExitedParams, FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams,
-    JumpParams, LogParams, ManualUpdateParameters, NoOpParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PluginInstallationDescription,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, PublicAgentInvocation,
-    PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
-    PublicExternalToolResult, PublicSpanAttributes, PublicSpanData, PublicSpanFinished,
-    PublicSpanKind, PublicSpanOutcome, PublicSpanStarted, RecoverySucceededParams,
-    RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
-    SnapshotParams, StartParams, StreamCancelParams, StreamEndParams, StreamItemsParams,
-    StreamRegisteredParams, StreamSessionParams, StringAttributeValue, SuccessfulUpdateParams,
-    SuspendParams, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
+    BeginRemoteTransactionParams, CancelPendingInvocationParams, CancelledParams,
+    CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams, CardInstalledParams,
+    CardRevokedParams, CommittedRemoteTransactionParams, CompletionDeliveredParams,
+    CompletionDiscardedParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
+    DropResourceParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams, GrowMemoryParams,
+    HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, ManualUpdateParameters,
+    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PluginInstallationDescription, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
+    PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicExternalToolResult,
+    PublicSpanAttributes, PublicSpanData, PublicSpanFinished, PublicSpanKind, PublicSpanOutcome,
+    PublicSpanStarted, RecoverySucceededParams, RemoveRetryPolicyParams, RestartParams,
+    ResumedParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
+    SnapshotConfirmedParams, SnapshotParams, StartParams, StreamCancelParams, StreamEndParams,
+    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, StringAttributeValue,
+    SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
+    WriteRemoteTransactionParameters,
 };
 
 fn durable_invocation_id_to_wit(
@@ -698,14 +698,12 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                 kind,
                 error,
                 retry_from,
-                inside_atomic_region,
                 retry_policy_state,
             }) => Self::Error(oplog::ErrorParameters {
                 timestamp: timestamp.into(),
                 kind: kind.into(),
                 error: error.to_string(),
                 retry_from: retry_from.into(),
-                inside_atomic_region,
                 retry_policy_state: retry_policy_state.map(|s| {
                     let internal: golem_common::model::RetryPolicyState = s.into();
                     internal.into()
@@ -714,7 +712,6 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
             PublicOplogEntry::RecoverySucceeded(RecoverySucceededParams { timestamp }) => {
                 Self::RecoverySucceeded(timestamp.into())
             }
-            PublicOplogEntry::NoOp(NoOpParams { timestamp }) => Self::NoOp(timestamp.into()),
             PublicOplogEntry::Jump(JumpParams { timestamp, jump }) => {
                 Self::Jump(oplog::JumpParameters {
                     timestamp: timestamp.into(),
@@ -728,16 +725,6 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                 Self::Interrupted(timestamp.into())
             }
             PublicOplogEntry::Exited(ExitedParams { timestamp }) => Self::Exited(timestamp.into()),
-            PublicOplogEntry::BeginAtomicRegion(BeginAtomicRegionParams { timestamp }) => {
-                Self::BeginAtomicRegion(timestamp.into())
-            }
-            PublicOplogEntry::EndAtomicRegion(EndAtomicRegionParams {
-                timestamp,
-                begin_index,
-            }) => Self::EndAtomicRegion(oplog::EndAtomicRegionParameters {
-                timestamp: timestamp.into(),
-                begin_index: begin_index.into(),
-            }),
             PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
                 timestamp,
                 invocation,
@@ -1705,7 +1692,6 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 kind: params.kind.into(),
                 error: params.error.into(),
                 retry_from: golem_common::model::OplogIndex::from_u64(params.retry_from),
-                inside_atomic_region: params.inside_atomic_region,
                 retry_policy_state: params.retry_policy_state.map(|s| {
                     let internal: golem_common::model::RetryPolicyState = s.into();
                     internal
@@ -1713,10 +1699,6 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             }),
             oplog::OplogEntry::RecoverySucceeded(ts) => Ok(Self::RecoverySucceeded {
                 timestamp: timestamp_from_datetime(ts.timestamp),
-            }),
-            oplog::OplogEntry::NoOp(ts) => Ok(Self::NoOp {
-                timestamp: timestamp_from_datetime(ts.timestamp),
-                entity_parent_start_index: None,
             }),
             oplog::OplogEntry::Jump(params) => Ok(Self::Jump {
                 timestamp: timestamp_from_datetime(params.timestamp),
@@ -1731,15 +1713,6 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             }),
             oplog::OplogEntry::Exited(ts) => Ok(Self::Exited {
                 timestamp: timestamp_from_datetime(ts.timestamp),
-            }),
-            oplog::OplogEntry::BeginAtomicRegion(ts) => Ok(Self::BeginAtomicRegion {
-                timestamp: timestamp_from_datetime(ts.timestamp),
-                entity_parent_start_index: None,
-            }),
-            oplog::OplogEntry::EndAtomicRegion(params) => Ok(Self::EndAtomicRegion {
-                timestamp: timestamp_from_datetime(params.timestamp),
-                entity_parent_start_index: None,
-                begin_index: golem_common::model::OplogIndex::from_u64(params.begin_index),
             }),
             oplog::OplogEntry::PendingAgentInvocation(params) => {
                 let trace_id = golem_common::model::invocation_context::TraceId::from_string(
@@ -1895,9 +1868,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             oplog::OplogEntry::BeginRemoteTransaction(params) => Ok(Self::BeginRemoteTransaction {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 transaction_id: golem_common::model::TransactionId::from(params.transaction_id),
-                original_begin_index: params
-                    .original_begin_index
-                    .map(golem_common::model::OplogIndex::from_u64),
+                original_begin_index: golem_common::model::OplogIndex::from_u64(params.original_begin_index),
             }),
             oplog::OplogEntry::PreCommitRemoteTransaction(params) => {
                 Ok(Self::PreCommitRemoteTransaction {
@@ -2578,7 +2549,6 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 kind,
                 error,
                 retry_from,
-                inside_atomic_region,
                 retry_policy_state,
                 ..
             } => Ok(Self::Error(oplog::RawErrorParameters {
@@ -2586,11 +2556,9 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 kind: kind.into(),
                 error: error.into(),
                 retry_from: retry_from.into(),
-                inside_atomic_region,
                 retry_policy_state: retry_policy_state.map(|s| s.into()),
             })),
             M::RecoverySucceeded { timestamp } => Ok(Self::RecoverySucceeded(timestamp.into())),
-            M::NoOp { timestamp, .. } => Ok(Self::NoOp(timestamp.into())),
             M::Jump {
                 timestamp, jump, ..
             } => Ok(Self::Jump(oplog::JumpParameters {
@@ -2602,15 +2570,6 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
             })),
             M::Interrupted { timestamp } => Ok(Self::Interrupted(timestamp.into())),
             M::Exited { timestamp } => Ok(Self::Exited(timestamp.into())),
-            M::BeginAtomicRegion { timestamp, .. } => Ok(Self::BeginAtomicRegion(timestamp.into())),
-            M::EndAtomicRegion {
-                timestamp,
-                begin_index,
-                ..
-            } => Ok(Self::EndAtomicRegion(oplog::EndAtomicRegionParameters {
-                timestamp: timestamp.into(),
-                begin_index: begin_index.into(),
-            })),
             M::PendingAgentInvocation {
                 timestamp,
                 idempotency_key,
@@ -2945,7 +2904,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 oplog::RawBeginRemoteTransactionParameters {
                     timestamp: timestamp.into(),
                     transaction_id: transaction_id.to_string(),
-                    original_begin_index: original_begin_index.map(|idx| idx.into()),
+                    original_begin_index: original_begin_index.into(),
                 },
             )),
             M::PreCommitRemoteTransaction {

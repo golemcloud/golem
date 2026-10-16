@@ -171,19 +171,6 @@ impl DurableStreamProducerSlot {
         wait_for_result(recovery)
     }
 
-    /// Reopens the slot only after startup has reloaded metadata from the repaired history.
-    pub(super) fn finish_recovery(&self) {
-        let mut state = self.state.lock().unwrap();
-        if state.recovery.is_none() || state.retired {
-            return;
-        }
-        state.producer = None;
-        state.failure = None;
-        state.loading = None;
-        state.recovery = None;
-        self.state_changed.notify_waiters();
-    }
-
     pub(super) fn fence(&self) {
         let mut state = self.state.lock().unwrap();
         state.retired = true;

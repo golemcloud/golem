@@ -70,7 +70,6 @@ use uuid::Uuid;
 use wasmtime::component::Instance;
 use wasmtime::{ResourceLimiterAsync, Store};
 use wasmtime_wasi::WasiView;
-use wasmtime_wasi_http::p2::WasiHttpCtxView;
 use wasmtime_wasi_http::p3::WasiHttpView;
 
 /// Executable identity used to construct a worker context.
@@ -307,7 +306,6 @@ pub trait WorkerCtx:
     ) -> Result<Self, WorkerExecutorError>;
 
     fn as_wasi_view(&mut self) -> impl WasiView;
-    fn as_wasi_http_view(&mut self) -> WasiHttpCtxView<'_>;
 
     /// Get the public part of the worker context
     fn get_public_state(&self) -> &Self::PublicState;
@@ -522,15 +520,6 @@ pub trait InvocationHooks {
     /// by this information. The current oplog index is a good default.
     async fn get_current_retry_point(&self) -> OplogIndex;
 
-    /// Ambient fallback for trap classification: whether any atomic region is currently active.
-    /// Used only for traps that do not carry a call-owned `DurableCallTrapContext` (guest-originated
-    /// traps); durable-call traps carry their own membership.
-    fn current_in_atomic_region(&self) -> bool;
-
-    /// Ambient fallback for trap classification: whether the outermost active atomic region has
-    /// recorded side effects. Used only for traps that do not carry a call-owned context.
-    fn current_atomic_region_had_side_effects(&self) -> bool;
-
     /// Switches the invocation strictness mode to `ReadOnly` for the duration of a single agent
     /// method invocation. Under read-only strictness, outgoing HTTP and RPC host calls trap
     /// with `AgentError::ReadOnlyViolation` before any oplog entry is written.
@@ -552,8 +541,8 @@ pub trait UpdateManagement {
     ///
     /// A committed snapshot is a replay cut point: snapshot-based recovery and snapshot-based
     /// update skip every oplog entry before the snapshot. No durable construct may span that
-    /// cut, so this is `Some` while any durable host call is in flight or any durable scope or
-    /// atomic region is open. The returned blocker names the specific condition for diagnostics.
+    /// cut, so this is `Some` while any durable host call is in flight or any durable scope is
+    /// open. The returned blocker names the specific condition for diagnostics.
     fn snapshot_boundary_blocker(&self) -> Option<SnapshotBoundaryBlocker>;
 
     /// Marks the beginning of a snapshot function call. This can be used to disabled persistence

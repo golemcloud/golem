@@ -480,8 +480,8 @@ impl std::error::Error for ClassifiedHostError {
 ///
 /// Captures the outcome of a named-policy resolution that happened inside a
 /// host call (with full retry properties). When the host call escalates to a
-/// trap because inline retry is not eligible (atomic region, non-idempotent
-/// write, batched write, delay > threshold), this verdict travels with the
+/// trap because inline retry is not eligible (batched write, transaction write,
+/// delay > threshold), this verdict travels with the
 /// failure into the trap-recovery path so the post-trap decision does not
 /// have to re-resolve the policy from an impoverished trap context.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -586,33 +586,21 @@ pub fn find_semantic_trap_retry_override(
 
 /// Call-owned trap classification carried with a hard (non-semantic) host-call trap.
 ///
-/// When a durable call abandons for a trap, the call's own retry point and atomic-region membership
-/// are attached to the escaping error (via the `DurableCallTrapContextMarker` wrapper). The
+/// When a durable call abandons for a trap, the call's own retry point
+/// is attached to the escaping error (via the `DurableCallTrapContextMarker` wrapper). The
 /// post-trap recovery path then groups the failure against the *call's* scope rather than the
 /// ambient/global worker state, which an overlapping sibling call can clobber once concurrent
 /// durable calls truly overlap.
 ///
-/// Both fields are a *pure* function of the call's execution scope captured at initiation (no
+/// The retry point is a *pure* function of the call's execution scope captured at initiation (no
 /// ambient/`ctx` read), so the context can be built at the trap egress point with no early snapshot
-/// and is immune to sibling activity. The only load-bearing field is `retry_from`; `in_atomic_region`
-/// is carried for completeness/future use (see its doc). The persisted
-/// `OplogEntry::Error.inside_atomic_region` side-effect flag is deliberately *not* part of this
-/// context: it only modulates `AgentError::DeterministicTrap` retriability, and a host-call trap (the
-/// only thing carrying this marker) is never a deterministic wasm trap, so it is sourced from ambient
-/// state in `TrapType::from_error`.
+/// and is immune to sibling activity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DurableCallTrapContext {
     /// The retry point owned by the trapping call: its custom invocation owner when observational,
-    /// otherwise its enclosing atomic region begin index if any, otherwise its enclosing durable
+    /// otherwise its enclosing durable
     /// scope `Start` or its own `Start`.
     pub retry_from: OplogIndex,
-    /// Whether the trapping call was initiated inside an atomic region (membership). Pure function of
-    /// the call's execution scope, so it needs no early snapshot and cannot be made stale by a
-    /// sibling. Currently inert for any marked error: it only feeds `TrapType::Error.in_atomic_region`,
-    /// which `fixed_decision_for_trap_type` consults solely for `AgentError::DeterministicTrap`, and a
-    /// host-call trap is never a deterministic wasm trap. Kept so atomic-region legality checks
-    /// under overlap have the call's own membership available.
-    pub in_atomic_region: bool,
 }
 
 /// Marker error wrapping a [`DurableCallTrapContext`] together with the original failure. Mirrors
@@ -629,8 +617,8 @@ impl std::fmt::Display for DurableCallTrapContextMarker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "durable-call-trap-context(retry_from={}, in_atomic_region={})",
-            self.payload.retry_from, self.payload.in_atomic_region
+            "durable-call-trap-context(retry_from={})",
+            self.payload.retry_from
         )
     }
 }
@@ -784,8 +772,6 @@ pub enum AsyncRetryDecision {
 pub struct DurableExecutionState {
     pub is_live: bool,
     pub snapshotting_mode: bool,
-    /// Whether the executor assumes idempotence for remote writes.
-    pub assume_idempotence: bool,
     /// Maximum delay for in-function retries. Delays exceeding this fall back to trap+replay.
     pub max_in_function_retry_delay: Duration,
 }
@@ -798,15 +784,6 @@ pub struct DurableExecutionState {
 /// metric emission, and oplog error writing.
 #[async_trait]
 pub trait InFunctionRetryHost {
-    /// Returns true if the worker is currently inside a user-defined atomic region.
-    ///
-    /// Defaults to `false`, the correct answer for retry hosts detached from any worker atomic
-    /// region (spawned background tasks). Region-aware hosts (`DurableWorkerCtx`,
-    /// `ScopedRetryHost`) must override it.
-    fn in_atomic_region(&self) -> bool {
-        false
-    }
-
     /// Returns the oplog index that `OplogEntry::Error` entries should reference as `retry_from`.
     fn current_retry_point(&self) -> OplogIndex;
 
@@ -819,32 +796,12 @@ pub trait InFunctionRetryHost {
     /// Returns the current durable execution state.
     fn durable_execution_state(&self) -> DurableExecutionState;
 
-    /// Whether the atomic region identified by `begin_index` has recorded side effects. Lets a
-    /// scoped retry host classify against the *call's* own region rather than the ambient state.
-    ///
-    /// Defaults to `false` for retry hosts detached from any worker atomic region; region-aware
-    /// hosts must override it.
-    fn atomic_region_has_side_effects_for(&self, _begin_index: OplogIndex) -> bool {
-        false
-    }
-
-    /// The `inside_atomic_region` flag to persist with an in-function retry `Error` entry: whether
-    /// the retry's owning atomic region had side effects. For a scoped call this is the call's own
-    /// region; for an unscoped/legacy caller it falls back to the ambient outermost-region state.
-    ///
-    /// Defaults to `false` for retry hosts detached from any worker atomic region; region-aware
-    /// hosts must override it.
-    fn retry_context_atomic_region_had_side_effects(&self) -> bool {
-        false
-    }
-
     /// Writes an `OplogEntry::Error` entry for an in-function retry attempt, and commits.
     ///
     /// A refusal is returned: the retry must not run again for an attempt that was never recorded.
     async fn append_retry_error_entry(
         &mut self,
         retry_from: OplogIndex,
-        inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
     ) -> Result<(), OplogError>;
 }
@@ -1039,7 +996,7 @@ impl InFunctionRetryState {
     /// Use this when the caller has already selected the matching policy and must
     /// not re-enter the resolver — for example, code paths whose entire behavior
     /// depends on whether a *user-defined* policy matches (the synthesized default
-    /// must not silently take over). All other semantics — atomic region check,
+    /// must not silently take over). All other semantics —
     /// retry-state tracking, oplog error entry, retry metric — are identical to
     /// `decide_retry_with_properties`.
     pub async fn decide_retry_for_named_policy(
@@ -1049,10 +1006,6 @@ impl InFunctionRetryState {
         properties: &RetryProperties,
         named_policy: &NamedRetryPolicy,
     ) -> AsyncRetryDecision {
-        if ctx.in_atomic_region() {
-            return AsyncRetryDecision::FallBackToTrap(None);
-        }
-
         let retry_point = ctx.current_retry_point();
         let current_state = ctx.current_retry_state_for(retry_point).await;
         let oplog_retry_count = current_state.as_ref().map(|s| s.retry_count()).unwrap_or(0);
@@ -1071,7 +1024,7 @@ impl InFunctionRetryState {
     }
 
     /// Decides whether an in-function retry should happen based on the current retry budget,
-    /// atomic region status, and delay threshold.
+    /// and delay threshold.
     ///
     /// On `RetryAfterDelay`, increments the retry counter, writes an oplog error entry,
     /// emits a debug log, and records the metric.
@@ -1081,10 +1034,6 @@ impl InFunctionRetryState {
         function_label: &str,
         properties: &RetryProperties,
     ) -> AsyncRetryDecision {
-        if ctx.in_atomic_region() {
-            return AsyncRetryDecision::FallBackToTrap(None);
-        }
-
         let retry_point = ctx.current_retry_point();
         let current_state = ctx.current_retry_state_for(retry_point).await;
         let oplog_retry_count = current_state.as_ref().map(|s| s.retry_count()).unwrap_or(0);
@@ -1181,11 +1130,10 @@ impl InFunctionRetryState {
             return AsyncRetryDecision::FallBackToTrap(semantic_override);
         }
 
-        let inside_atomic_region = ctx.retry_context_atomic_region_had_side_effects();
         // Refused, the shard has a new owner: the failure is returned instead of retried, and the
         // trap it becomes is classified as the lost shard.
         if ctx
-            .append_retry_error_entry(retry_point, inside_atomic_region, retry_policy_state)
+            .append_retry_error_entry(retry_point, retry_policy_state)
             .await
             .is_err()
         {
@@ -1282,10 +1230,6 @@ pub trait DurabilityHost: InFunctionRetryHost {
         failure: Error,
         properties: RetryProperties,
     ) -> anyhow::Result<()>;
-
-    /// Marks the outermost active atomic region (if any) as having produced side effects.
-    /// This is called when a non-hint oplog entry is persisted during live execution.
-    fn mark_atomic_region_side_effect(&mut self);
 
     /// Creates an interrupt signal future that resolves when the worker is interrupted/suspended/etc.
     fn create_interrupt_signal(&self) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>>;
@@ -1729,12 +1673,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocat
             ctx.state.active_custom_invocations.remove(&start_index);
             ctx.state
                 .at_clean_checkpoint_boundary()
-                .then(|| (ctx.public_state.worker(), ctx.state.min_exposed_marker))
+                .then(|| ctx.public_state.worker())
         });
-        if let Some((worker, min_exposed_marker)) = checkpoint {
-            worker
-                .checkpoint_status_mid_invocation(min_exposed_marker)
-                .await;
+        if let Some(worker) = checkpoint {
+            worker.checkpoint_status_mid_invocation().await;
         }
         Ok(())
     }
@@ -2117,10 +2059,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
 
 #[async_trait]
 impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
-    fn in_atomic_region(&self) -> bool {
-        !self.state.active_atomic_regions.is_empty()
-    }
-
     fn current_retry_point(&self) -> OplogIndex {
         self.state.effective_retry_point()
     }
@@ -2138,25 +2076,13 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         DurableExecutionState {
             is_live: self.state.durable_call_is_live() || self.state.durability_is_suppressed(),
             snapshotting_mode: self.state.snapshotting_mode,
-            assume_idempotence: self.state.assume_idempotence,
             max_in_function_retry_delay: self.state.config.max_in_function_retry_delay,
         }
-    }
-
-    fn atomic_region_has_side_effects_for(&self, begin_index: OplogIndex) -> bool {
-        self.state.atomic_region_has_side_effects_for(begin_index)
-    }
-
-    fn retry_context_atomic_region_had_side_effects(&self) -> bool {
-        // Unscoped/legacy retry path: fall back to the ambient outermost active region. A scoped
-        // call uses `ScopedRetryHost`, which classifies against its own initiating region instead.
-        self.state.outermost_atomic_region_has_side_effects()
     }
 
     async fn append_retry_error_entry(
         &mut self,
         retry_from: OplogIndex,
-        inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
     ) -> Result<(), OplogError> {
         if self.state.durability_is_suppressed() {
@@ -2169,7 +2095,6 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
             OplogErrorKind::Invocation,
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
-            inside_atomic_region,
             retry_policy_state,
         );
         self.public_state
@@ -2257,10 +2182,6 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         properties: RetryProperties,
     ) -> anyhow::Result<()> {
         try_trigger_host_trap_retry(self, failure, properties).await
-    }
-
-    fn mark_atomic_region_side_effect(&mut self) {
-        self.state.mark_atomic_region_has_side_effects();
     }
 
     fn create_interrupt_signal(&self) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>> {
@@ -2554,8 +2475,8 @@ impl InFunctionRetryController {
         match &self.function_type {
             DurableFunctionType::ReadRemote
             | DurableFunctionType::ReadLocal
-            | DurableFunctionType::WriteLocal => true,
-            DurableFunctionType::WriteRemote => self.durable_execution_state.assume_idempotence,
+            | DurableFunctionType::WriteLocal
+            | DurableFunctionType::WriteRemote => true,
             DurableFunctionType::WriteRemoteBatched(_)
             | DurableFunctionType::WriteRemoteTransaction(_) => false,
         }
@@ -2564,8 +2485,8 @@ impl InFunctionRetryController {
     /// Whether a call of this function type may be safely re-executed when replay finds its
     /// host-call `Start` committed but its `End` missing (see
     /// [`crate::durable_host::concurrent::CallReplayOutcome::Incomplete`]). This is the set that
-    /// is eligible for in-function retry: reads and local/idempotent writes can be re-run without
-    /// duplicating an external side effect; non-idempotent / batched / transaction writes cannot,
+    /// is eligible for in-function retry: reads and local/remote writes can be re-run;
+    /// external peers must deduplicate remote writes. Batched / transaction writes cannot,
     /// and rely on durable-scope recovery instead. A batched child of a scope whose owner
     /// re-executes the scope's effect call-locally is the one addition: the owner authorizes the
     /// repair ([`Self::with_incomplete_repair_authorized_by_scope`]).
@@ -2633,10 +2554,6 @@ pub struct TaskRetryContext<Ctx: WorkerCtx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
-    // Spawned tasks are never inside atomic regions, so the trait's inert defaults for
-    // `in_atomic_region`, `atomic_region_has_side_effects_for` and
-    // `retry_context_atomic_region_had_side_effects` apply.
-
     fn current_retry_point(&self) -> OplogIndex {
         self.retry_point
     }
@@ -2668,7 +2585,6 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
         DurableExecutionState {
             is_live: true,
             snapshotting_mode: false,
-            assume_idempotence: true,
             max_in_function_retry_delay: self.max_in_function_retry_delay,
         }
     }
@@ -2676,7 +2592,6 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
     async fn append_retry_error_entry(
         &mut self,
         retry_from: OplogIndex,
-        inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
     ) -> Result<(), OplogError> {
         use golem_common::model::oplog::AgentError;
@@ -2685,7 +2600,6 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
             OplogErrorKind::Invocation,
             AgentError::TransientError("in-function retry".to_string()),
             retry_from,
-            inside_atomic_region,
             retry_policy_state.clone(),
         );
         self.worker.add_and_commit_oplog(entry).await?;
@@ -2898,8 +2812,6 @@ mod tests {
 
     /// A mock DurabilityHost for testing `try_trigger_retry_or_loop` in isolation.
     struct MockDurabilityHost {
-        in_atomic_region: bool,
-        assume_idempotence: bool,
         max_in_function_retry_delay: Duration,
         named_retry_policies: Vec<NamedRetryPolicy>,
         oplog_retry_count: u32,
@@ -2923,8 +2835,6 @@ mod tests {
     impl MockDurabilityHost {
         fn new() -> Self {
             Self {
-                in_atomic_region: false,
-                assume_idempotence: true,
                 max_in_function_retry_delay: Duration::from_secs(20),
                 named_retry_policies: Vec::new(),
                 oplog_retry_count: 0,
@@ -2941,7 +2851,6 @@ mod tests {
             DurableExecutionState {
                 is_live: true,
                 snapshotting_mode: false,
-                assume_idempotence: self.assume_idempotence,
                 max_in_function_retry_delay: self.max_in_function_retry_delay,
             }
         }
@@ -2949,10 +2858,6 @@ mod tests {
 
     #[async_trait]
     impl InFunctionRetryHost for MockDurabilityHost {
-        fn in_atomic_region(&self) -> bool {
-            self.in_atomic_region
-        }
-
         fn current_retry_point(&self) -> OplogIndex {
             OplogIndex::INITIAL
         }
@@ -2981,18 +2886,9 @@ mod tests {
             MockDurabilityHost::durable_execution_state(self)
         }
 
-        fn atomic_region_has_side_effects_for(&self, _begin_index: OplogIndex) -> bool {
-            self.in_atomic_region
-        }
-
-        fn retry_context_atomic_region_had_side_effects(&self) -> bool {
-            self.in_atomic_region
-        }
-
         async fn append_retry_error_entry(
             &mut self,
             _retry_from: OplogIndex,
-            _inside_atomic_region: bool,
             retry_policy_state: Option<RetryPolicyState>,
         ) -> Result<(), OplogError> {
             self.retry_entries_appended += 1;
@@ -3068,8 +2964,6 @@ mod tests {
             // Simulate: retries exhausted, persist the failure
             Ok(())
         }
-
-        fn mark_atomic_region_side_effect(&mut self) {}
 
         fn check_read_only_allows(&self, host_function: &str) -> Result<(), GolemSpecificWasmTrap> {
             if let Some(method) = &self.read_only_method {
@@ -3392,11 +3286,10 @@ mod tests {
         assert_eq!(ctx.retry_entries_appended, 0);
     }
 
-    // Test 1e: WriteRemote with idempotence is eligible
+    // WriteRemote is always eligible for in-function retry.
     #[test]
-    async fn in_function_retry_eligible_for_write_remote_with_idempotence() {
+    async fn in_function_retry_eligible_for_write_remote() {
         let mut ctx = MockDurabilityHost::new();
-        ctx.assume_idempotence = true;
         ctx.named_retry_policies = vec![NamedRetryPolicy {
             name: "default".to_string(),
             priority: 0,
@@ -3507,36 +3400,6 @@ mod tests {
         assert_eq!(ctx.retry_entries_appended, 0);
     }
 
-    // Test 3: Atomic regions disable in-function retry
-    #[test]
-    async fn atomic_region_disables_in_function_retry() {
-        let mut ctx = MockDurabilityHost::new();
-        ctx.in_atomic_region = true;
-        let mut controller = make_retry_controller(&mut ctx, DurableFunctionType::ReadRemote).await;
-
-        let result: Result<String, String> = Err("connection refused".to_string());
-        let action = controller
-            .try_trigger_retry_or_loop_with_properties(
-                &mut ctx,
-                &result,
-                |_| HostFailureKind::Transient,
-                RetryProperties::new(),
-            )
-            .await
-            .expect("should not propagate error (mock try_trigger_retry returns Ok)");
-
-        // Should fall back to trap+replay because we're in an atomic region
-        assert_eq!(action, InternalRetryResult::Persist);
-        assert_eq!(
-            ctx.trap_triggered_count, 1,
-            "should fall back to trap+replay"
-        );
-        assert_eq!(
-            ctx.retry_entries_appended, 0,
-            "should NOT append in-function retry entry"
-        );
-    }
-
     // Test 3b: WriteRemoteBatched is ineligible (always falls back to trap)
     #[test]
     async fn batched_write_disables_in_function_retry() {
@@ -3566,29 +3429,6 @@ mod tests {
         let mut controller =
             make_retry_controller(&mut ctx, DurableFunctionType::WriteRemoteTransaction(None))
                 .await;
-
-        let result: Result<String, String> = Err("timeout".to_string());
-        let action = controller
-            .try_trigger_retry_or_loop_with_properties(
-                &mut ctx,
-                &result,
-                |_| HostFailureKind::Transient,
-                RetryProperties::new(),
-            )
-            .await
-            .expect("should not propagate error");
-
-        assert_eq!(action, InternalRetryResult::Persist);
-        assert_eq!(ctx.trap_triggered_count, 1);
-    }
-
-    // Test 3d: WriteRemote without idempotence falls back to trap
-    #[test]
-    async fn write_remote_without_idempotence_disables_in_function_retry() {
-        let mut ctx = MockDurabilityHost::new();
-        ctx.assume_idempotence = false;
-        let mut controller =
-            make_retry_controller(&mut ctx, DurableFunctionType::WriteRemote).await;
 
         let result: Result<String, String> = Err("timeout".to_string());
         let action = controller
@@ -3772,31 +3612,6 @@ mod tests {
         assert_eq!(state.retry_count(), 1);
     }
 
-    // Test: decide_retry_for_named_policy honors atomic-region as FallBackToTrap.
-    #[test]
-    async fn decide_retry_for_named_policy_falls_back_in_atomic_region() {
-        let mut ctx = MockDurabilityHost::new();
-        ctx.in_atomic_region = true;
-
-        let explicit = NamedRetryPolicy {
-            name: "explicit".to_string(),
-            priority: 0,
-            predicate: Predicate::True,
-            policy: RetryPolicy::CountBox {
-                max_retries: 5,
-                inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(1))),
-            },
-        };
-
-        let mut state = InFunctionRetryState::new();
-        let decision = state
-            .decide_retry_for_named_policy(&mut ctx, "test-fn", &RetryProperties::new(), &explicit)
-            .await;
-
-        assert!(matches!(decision, AsyncRetryDecision::FallBackToTrap(None)));
-        assert_eq!(ctx.retry_entries_appended, 0);
-    }
-
     // Test: decide_retry_for_named_policy returns Exhausted when the supplied
     // policy has no remaining attempts.
     #[test]
@@ -3868,33 +3683,16 @@ mod tests {
     #[test]
     fn eligibility_matrix() {
         let cases = vec![
-            (DurableFunctionType::ReadRemote, true, true),
-            (DurableFunctionType::ReadRemote, false, true),
-            (DurableFunctionType::ReadLocal, true, true),
-            (DurableFunctionType::ReadLocal, false, true),
-            (DurableFunctionType::WriteLocal, true, true),
-            (DurableFunctionType::WriteLocal, false, true),
-            (DurableFunctionType::WriteRemote, true, true),
-            (DurableFunctionType::WriteRemote, false, false),
-            (DurableFunctionType::WriteRemoteBatched(None), true, false),
-            (DurableFunctionType::WriteRemoteBatched(None), false, false),
-            (
-                DurableFunctionType::WriteRemoteTransaction(None),
-                true,
-                false,
-            ),
-            (
-                DurableFunctionType::WriteRemoteTransaction(None),
-                false,
-                false,
-            ),
+            (DurableFunctionType::ReadRemote, true),
+            (DurableFunctionType::ReadLocal, true),
+            (DurableFunctionType::WriteLocal, true),
+            (DurableFunctionType::WriteRemote, true),
+            (DurableFunctionType::WriteRemoteBatched(None), false),
+            (DurableFunctionType::WriteRemoteTransaction(None), false),
         ];
 
-        for (ft, idempotent, expected) in cases {
-            let ctx = MockDurabilityHost {
-                assume_idempotence: idempotent,
-                ..MockDurabilityHost::new()
-            };
+        for (ft, expected) in cases {
+            let ctx = MockDurabilityHost::new();
             let controller = InFunctionRetryController::new(
                 ft.clone(),
                 ctx.durable_execution_state(),
@@ -3903,7 +3701,12 @@ mod tests {
             assert_eq!(
                 controller.is_eligible_for_internal_retry(),
                 expected,
-                "ft={ft:?}, idempotent={idempotent}"
+                "ft={ft:?}"
+            );
+            assert_eq!(
+                controller.can_reexecute_on_incomplete_replay(),
+                expected,
+                "ft={ft:?}"
             );
         }
     }
@@ -4183,7 +3986,6 @@ mod tests {
     fn terminal_call_error_preserves_marker_and_inner_worker_executor_error() {
         let context = DurableCallTrapContext {
             retry_from: OplogIndex::from_u64(17),
-            in_atomic_region: true,
         };
         let terminal = TerminalCallError::new(
             WorkerExecutorError::ReadOnlyViolation {
@@ -4228,7 +4030,6 @@ mod tests {
     fn terminal_call_error_marker_survives_wasmtime_and_stream_conversions() {
         let context = DurableCallTrapContext {
             retry_from: OplogIndex::from_u64(23),
-            in_atomic_region: false,
         };
 
         // wasmtime::Error funnel -> back to anyhow (as the invocation loop does).

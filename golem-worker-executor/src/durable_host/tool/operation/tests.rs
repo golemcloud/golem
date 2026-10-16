@@ -2594,7 +2594,6 @@ fn probed_entity_invocation(
         InvocationExecutionMode::Live,
         golem_common::model::IdempotencyKey::fresh(),
         false,
-        false,
         golem_common::model::IdempotencyKey::fresh(),
     )
     .unwrap();
@@ -2683,7 +2682,6 @@ async fn retained_registration_keeps_fenced_slot_alive_until_last_lease_is_relea
         operation.principal,
         InvocationExecutionMode::Live,
         golem_common::model::IdempotencyKey::fresh(),
-        false,
         false,
         golem_common::model::IdempotencyKey::fresh(),
     )

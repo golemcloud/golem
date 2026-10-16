@@ -2336,13 +2336,9 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             kind: OplogErrorKind::Invocation,
             error: "generated error".to_string(),
             retry_from: OplogIndex::INITIAL,
-            inside_atomic_region: false,
             retry_policy_state: Some(retry_policy_state),
         }),
         PublicOplogEntry::RecoverySucceeded(RecoverySucceededParams {
-            timestamp: timestamp(),
-        }),
-        PublicOplogEntry::NoOp(NoOpParams {
             timestamp: timestamp(),
         }),
         PublicOplogEntry::Jump(JumpParams {
@@ -2357,13 +2353,6 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::Exited(ExitedParams {
             timestamp: timestamp(),
-        }),
-        PublicOplogEntry::BeginAtomicRegion(BeginAtomicRegionParams {
-            timestamp: timestamp(),
-        }),
-        PublicOplogEntry::EndAtomicRegion(EndAtomicRegionParams {
-            timestamp: timestamp(),
-            begin_index: OplogIndex::from_u64(1),
         }),
         PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
             timestamp: timestamp(),

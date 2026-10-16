@@ -15,7 +15,6 @@
 use super::*;
 use crate::durable_host::durability::reserve_invocation_id;
 use crate::durable_host::replay_state::{ReplayStartClaimOutcome, StartClaim};
-use crate::durable_host::{ActiveAtomicRegion, register_atomic_region_call};
 use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::workerctx::ReplayAdmissionStage;
 use golem_common::model::entity::{AgentEntity, InvocationExecutionMode, OwnerRuntime};
@@ -66,7 +65,6 @@ pub(super) fn ambient_trap_context<Ctx: WorkerCtx>(
 ) -> DurableCallTrapContext {
     DurableCallTrapContext {
         retry_from: InFunctionRetryHost::current_retry_point(ctx),
-        in_atomic_region: InFunctionRetryHost::in_atomic_region(ctx),
     }
 }
 
@@ -131,10 +129,6 @@ impl DropPolicy for LeaveIncompleteOnDrop {
     }
 
     fn unfinished_drop(call: DroppedCall, _sink: Option<&UnboundedSender<DropEvent>>) {
-        // No terminal will ever be recorded for this call (its committed `Start` is left
-        // incomplete for replay), so its atomic-region membership ends here. The release is
-        // store-free, so it is safe directly from the drop path.
-        call.release_atomic_lease();
         tracing::debug!(
             start_idx = %call.start_idx(),
             "durable call dropped unfinished; leaving committed Start incomplete for replay"
@@ -191,10 +185,7 @@ pub struct DurableCallSession<Pair: HostPayloadPair, P: DropPolicy> {
     /// waiting for the deterministic guest to drop it at the same point it did live. Makes that
     /// drop an expected state (debug-logged, scope close enqueued) rather than an anomaly.
     pub(super) parked_undelivered_replay: bool,
-    /// Initiation-time execution metadata owned by this call, including its atomic-region
-    /// ownership lease (see [`CallExecutionScope::atomic_lease`]). Later phases still mirror
-    /// selected fields into `PrivateDurableWorkerState` for compatibility, but the call-owned copy
-    /// is the source we can move retry/atomic decisions onto as the Accessor reshape proceeds.
+    /// Initiation-time execution metadata owned by this call.
     pub(super) execution_scope: CallExecutionScope,
     /// In-function retry decision logic. Also the home of the call's `DurableFunctionType` and
     /// captured `DurableExecutionState`.
@@ -255,9 +246,6 @@ pub(super) struct BegunCallExecutionScope {
     /// The durable scope this host-call `Start` will be nested under, if any. This is derived from
     /// the call's own function type / begin index, never from temporally-open sibling scopes.
     pub(super) parent_start_index: Option<OplogIndex>,
-    /// Atomic region active when the durable call was initiated, captured so the call's membership
-    /// lease is registered against the region it was actually started in.
-    pub(super) atomic_region: Option<OplogIndex>,
     /// Custom durable invocation whose physical execution this call observes. Captured once at
     /// initiation so asynchronous continuations never depend on ambient task context.
     pub(super) observational_owner: Option<OplogIndex>,
@@ -267,11 +255,7 @@ pub(super) struct BegunCallExecutionScope {
 }
 
 impl BegunCallExecutionScope {
-    pub(super) fn finish(
-        self,
-        start_idx: OplogIndex,
-        atomic_lease: Option<Arc<AtomicRegionLease>>,
-    ) -> CallExecutionScope {
+    pub(super) fn finish(self, start_idx: OplogIndex) -> CallExecutionScope {
         CallExecutionScope {
             entity_parent_start_index: self.entity_parent_start_index,
             retry_from: self
@@ -280,7 +264,6 @@ impl BegunCallExecutionScope {
                 .unwrap_or(start_idx),
             durable_scope: self.parent_start_index,
             observational_owner: self.observational_owner,
-            atomic_lease,
             invocation_id: self.invocation_id,
         }
     }
@@ -297,81 +280,22 @@ pub(super) struct CallExecutionScope {
     pub(super) durable_scope: Option<OplogIndex>,
     /// Custom durable invocation that owns this observational call, if any.
     pub(super) observational_owner: Option<OplogIndex>,
-    /// The call's atomic-region ownership lease, registered when the call was initiated inside an
-    /// open atomic region. The lease's *current* owner — not the initiation-time region — drives
-    /// trap/retry classification: region close transfers pending members to the enclosing region
-    /// or detaches them, and a detached call must group at its own `retry_from` instead of
-    /// retrying into the committed region.
-    pub(super) atomic_lease: Option<Arc<AtomicRegionLease>>,
     /// Invocation id of the guest call; see [`BegunCallExecutionScope::invocation_id`].
     pub(super) invocation_id: Option<DurableInvocationId>,
 }
 
 impl CallExecutionScope {
-    /// The atomic region *currently* owning this call, if any (read through the lease, so it
-    /// reflects transfers and detachments performed by region close).
-    pub(super) fn atomic_region(&self) -> Option<OplogIndex> {
-        self.atomic_lease.as_ref().and_then(|lease| lease.owner())
-    }
-
-    /// Releases the call's atomic-region membership (idempotent, store-free).
-    fn release_atomic_lease(&self) {
-        if let Some(lease) = &self.atomic_lease {
-            lease.release();
-        }
-    }
-
     /// The retry point to attach to a trap raised by this call: the owning custom invocation for
-    /// an observational call, otherwise the call's *currently owning* atomic region (whole region
-    /// retried from its begin index) if it still has one, otherwise its enclosing durable scope
-    /// `Start` or its own `Start`. This mirrors
+    /// an observational call, otherwise its enclosing durable scope `Start` or its own `Start`. This mirrors
     /// [`ScopedRetryHost::retry_point`] so a hard (non-semantic) trap groups exactly like an
     /// inline/semantic retry would.
     pub(super) fn trap_retry_point(&self) -> OplogIndex {
-        self.observational_owner
-            .or_else(|| self.atomic_region())
-            .unwrap_or(self.retry_from)
+        self.observational_owner.unwrap_or(self.retry_from)
     }
-}
-
-/// Builds an *unregistered* atomic-region lease: it preserves the call's initiation-time region
-/// for trap/retry classification (matching the immutable capture used before leases existed) but
-/// is not a member of any region registry, so it never transfers or detaches on region close.
-/// Used for replay and unpersisted handles, which do not participate in the live in-flight
-/// member guard.
-pub(super) fn unregistered_atomic_lease(
-    atomic_region: Option<OplogIndex>,
-    repairable_when_incomplete: bool,
-) -> Option<Arc<AtomicRegionLease>> {
-    atomic_region.map(|begin_index| {
-        Arc::new(AtomicRegionLease::new(
-            begin_index,
-            repairable_when_incomplete,
-        ))
-    })
-}
-
-fn register_live_repair_atomic_lease(
-    active_atomic_regions: &mut [ActiveAtomicRegion],
-    initiation_region: Option<OplogIndex>,
-    repairable_when_incomplete: bool,
-) -> Option<Arc<AtomicRegionLease>> {
-    let initiation_region = initiation_region?;
-    let applicable_region = active_atomic_regions
-        .iter()
-        .rev()
-        .find(|region| region.begin_index <= initiation_region)
-        .map(|region| region.begin_index)?;
-    register_atomic_region_call(
-        active_atomic_regions,
-        applicable_region,
-        repairable_when_incomplete,
-    )
 }
 
 pub(crate) struct PreparedContextStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> {
     prepared: PreparedAccessStart<Pair, P, Ctx>,
-    guard: AccessStartAtomicGuard,
 }
 
 struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> {
@@ -391,9 +315,6 @@ struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx>
     execution_scope: BegunCallExecutionScope,
     entity_parent_start_index: Option<OplogIndex>,
     retry: InFunctionRetryController,
-    /// The registered atomic-region membership lease for a live persisted call initiated inside an
-    /// open atomic region; `None` otherwise.
-    atomic_lease: Option<Arc<AtomicRegionLease>>,
     drop_sink: Option<UnboundedSender<DropEvent>>,
     cleanup_sink: Option<UnboundedSender<DropEvent>>,
     claim_options: AccessClaimOptions,
@@ -907,17 +828,12 @@ impl ScopeReplayRecovery {
         }
     }
 
-    fn can_reexecute_incomplete(&self, assume_idempotence: bool) -> bool {
+    fn can_reexecute_incomplete(&self) -> bool {
         match self {
-            Self::Default => assume_idempotence,
+            Self::Default => true,
             Self::Forbidden => false,
-            // `Reexecute` is only constructed for an effectively idempotent replayed
-            // request (idempotent method or the `assume_idempotence` override) with
-            // recorded resend metadata, so an existing but incomplete scope may
-            // re-execute (jump to live) — the same authorization the missing-`Start`
-            // recovery relies on. The readiness proof guards only the missing-`Start`
-            // path; request-body replayability is validated lazily before any network
-            // re-issue, refusing (retry-exempt) if the recording is incomplete.
+            // The readiness proof guards only the missing-`Start` path. Request-body
+            // replayability is validated before any network re-issue.
             Self::Reexecute { .. } => true,
         }
     }
@@ -943,14 +859,13 @@ mod scope_replay_recovery_tests {
     fn reexecute_policy_authorizes_existing_incomplete_scope() {
         let recovery = ScopeReplayRecovery::reexecute_when(async { Ok(()) });
 
-        assert!(recovery.can_reexecute_incomplete(true));
-        assert!(recovery.can_reexecute_incomplete(false));
+        assert!(recovery.can_reexecute_incomplete());
+        assert!(ScopeReplayRecovery::Default.can_reexecute_incomplete());
     }
 
     #[test]
     fn forbidden_policy_does_not_authorize_existing_incomplete_scope() {
-        assert!(!ScopeReplayRecovery::Forbidden.can_reexecute_incomplete(true));
-        assert!(!ScopeReplayRecovery::Forbidden.can_reexecute_incomplete(false));
+        assert!(!ScopeReplayRecovery::Forbidden.can_reexecute_incomplete());
     }
 }
 
@@ -980,12 +895,6 @@ struct AccessOpenedScope {
     switched_to_live: bool,
 }
 
-struct AccessStartCleanup {
-    /// The lease to release when the start failed before a handle was constructed. Release is
-    /// idempotent and store-free.
-    atomic_lease: Option<Arc<AtomicRegionLease>>,
-}
-
 /// Context handed to the request builder of [`DurableCallSession::start_access_with`], available after the
 /// durable scope (if any) has been opened but before the host-call `Start` is written or claimed.
 pub(crate) struct AccessStartContext {
@@ -1010,31 +919,6 @@ pub(crate) type BuildSpanCallback = Box<
 pub(crate) enum ResolvedCall<Pair: HostPayloadPair, P: DropPolicy> {
     Replay(DurableCallSession<Pair, P>),
     Live(BegunCall<Pair, P>),
-}
-
-/// Releases a just-registered atomic-region lease when the accessor start path is torn (the
-/// future dropped between registration and handle construction). Release is store-free, so the
-/// `Drop` impl performs it directly.
-struct AccessStartAtomicGuard {
-    atomic_lease: Option<Arc<AtomicRegionLease>>,
-}
-
-impl AccessStartAtomicGuard {
-    fn new(atomic_lease: Option<Arc<AtomicRegionLease>>) -> Self {
-        Self { atomic_lease }
-    }
-
-    fn disarm(&mut self) {
-        self.atomic_lease = None;
-    }
-}
-
-impl Drop for AccessStartAtomicGuard {
-    fn drop(&mut self) {
-        if let Some(lease) = self.atomic_lease.take() {
-            lease.release();
-        }
-    }
 }
 
 fn is_write_side_effect_for_access(function_type: &DurableFunctionType) -> bool {
@@ -1097,7 +981,6 @@ pub(crate) fn resolve_current_observational_owner<Ctx: WorkerCtx>(
 struct ContextRetryHost<'a, Ctx: WorkerCtx> {
     task: TaskRetryContext<Ctx>,
     execution_state: &'a (dyn Fn() -> DurableExecutionState + Send + Sync),
-    atomic_side_effects: &'a (dyn Fn(OplogIndex) -> bool + Send + Sync),
 }
 
 #[async_trait]
@@ -1127,21 +1010,16 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for ContextRetryHost<'_, Ctx> {
         (self.execution_state)()
     }
 
-    fn atomic_region_has_side_effects_for(&self, begin_index: OplogIndex) -> bool {
-        (self.atomic_side_effects)(begin_index)
-    }
-
     async fn append_retry_error_entry(
         &mut self,
         retry_from: OplogIndex,
-        inside_atomic_region: bool,
         retry_policy_state: Option<golem_common::model::RetryPolicyState>,
     ) -> Result<(), crate::services::oplog::OplogError> {
         if self.durable_execution_state().snapshotting_mode {
             return Ok(());
         }
         self.task
-            .append_retry_error_entry(retry_from, inside_atomic_region, retry_policy_state)
+            .append_retry_error_entry(retry_from, retry_policy_state)
             .await
     }
 }
@@ -1166,10 +1044,6 @@ impl<'a, H> ScopedRetryHost<'a, H> {
 
 #[async_trait]
 impl<H: InFunctionRetryHost + Send + Sync> InFunctionRetryHost for ScopedRetryHost<'_, H> {
-    fn in_atomic_region(&self) -> bool {
-        self.execution_scope.atomic_region().is_some()
-    }
-
     fn current_retry_point(&self) -> OplogIndex {
         self.retry_point()
     }
@@ -1189,28 +1063,13 @@ impl<H: InFunctionRetryHost + Send + Sync> InFunctionRetryHost for ScopedRetryHo
         self.inner.durable_execution_state()
     }
 
-    fn atomic_region_has_side_effects_for(&self, begin_index: OplogIndex) -> bool {
-        self.inner.atomic_region_has_side_effects_for(begin_index)
-    }
-
-    fn retry_context_atomic_region_had_side_effects(&self) -> bool {
-        // Membership-precise: classify against the region *currently owning* this call (via its
-        // lease — the initiation region, a parent it was transferred to on nested close, or none
-        // once detached). A call started outside any atomic region never writes
-        // `inside_atomic_region = true`, even if a sibling later opened one.
-        self.execution_scope
-            .atomic_region()
-            .is_some_and(|begin_index| self.inner.atomic_region_has_side_effects_for(begin_index))
-    }
-
     async fn append_retry_error_entry(
         &mut self,
         retry_from: OplogIndex,
-        inside_atomic_region: bool,
         retry_policy_state: Option<golem_common::model::RetryPolicyState>,
     ) -> Result<(), crate::services::oplog::OplogError> {
         self.inner
-            .append_retry_error_entry(retry_from, inside_atomic_region, retry_policy_state)
+            .append_retry_error_entry(retry_from, retry_policy_state)
             .await
     }
 }
@@ -1278,10 +1137,6 @@ impl<H: DurabilityHost + Send + Sync> DurabilityHost for ScopedRetryHost<'_, H> 
         try_trigger_host_trap_retry(self, failure, properties).await
     }
 
-    fn mark_atomic_region_side_effect(&mut self) {
-        self.inner.mark_atomic_region_side_effect();
-    }
-
     fn create_interrupt_signal(&self) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>> {
         self.inner.create_interrupt_signal()
     }
@@ -1309,19 +1164,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         function_type: DurableFunctionType,
     ) -> Result<Self, WorkerExecutorError> {
         Self::start_inner(ctx, request, function_type, false).await
-    }
-
-    pub(crate) async fn start_repairable_in_scope<Ctx: WorkerCtx>(
-        ctx: &mut DurableWorkerCtx<Ctx>,
-        request: Pair::Req,
-        parent_start_index: OplogIndex,
-    ) -> Result<Self, WorkerExecutorError> {
-        let mut begun = Self::begin_inner(ctx, DurableFunctionType::ReadRemote, false).await?;
-        begun.execution_scope.parent_start_index = Some(parent_start_index);
-        match begun.resolve(ctx).await? {
-            ResolvedCall::Live(begun) => begun.start_live(ctx, request).await,
-            ResolvedCall::Replay(handle) => Ok(handle),
-        }
     }
 
     pub(crate) async fn start_with_agent_authority<Ctx: WorkerCtx>(
@@ -1414,8 +1256,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// returned request is only persisted on the live path. It receives an [`AccessStartContext`]
     /// with the liveness flag.
     ///
-    /// A builder error aborts the call like any other start failure: the atomic-region
-    /// registration is cleaned up and any already-written durable-scope `Start` is left incomplete,
+    /// A builder error aborts the call like any other start failure: any already-written
+    /// durable-scope `Start` is left incomplete,
     /// to be recovered by scope recovery on the next replay.
     pub(crate) async fn start_access_with<T, D, Ctx, F>(
         store: &Accessor<T, D>,
@@ -1718,11 +1560,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 invocation_id,
             )
         })?;
-        let guard = AccessStartAtomicGuard::new(prepared.atomic_lease.clone());
         Self::continue_prepared_context(
             store,
             get_ctx,
-            PreparedContextStart { prepared, guard },
+            PreparedContextStart { prepared },
             build_request,
             build_span,
             span_observer,
@@ -1732,8 +1573,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     }
 
     /// Captures historical call ownership synchronously before an owned job is spawned.
-    /// Replay leases are deliberately unregistered: closing an atomic region must not wait
-    /// for a historical job that has not polled yet.
     pub(crate) fn prepare_historical_context<T, D, Ctx>(
         store: &(impl DurableAccess<T, D> + ?Sized),
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
@@ -1764,8 +1603,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 invocation_id,
             )
         })?;
-        let guard = AccessStartAtomicGuard::new(prepared.atomic_lease.clone());
-        Ok(PreparedContextStart { prepared, guard })
+        Ok(PreparedContextStart { prepared })
     }
 
     pub(crate) async fn start_prepared_context<T, D, Ctx, F>(
@@ -1818,15 +1656,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R,
         F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, WorkerExecutorError>,
     {
-        let PreparedContextStart {
-            prepared,
-            guard: mut start_guard,
-        } = prepared;
+        let PreparedContextStart { prepared } = prepared;
         if let Err(err) = drain_dropped_call_events_context(store, get_ctx).await {
             return Err(err.source);
         }
 
-        match Self::execute_access_start(
+        let executed = Self::execute_access_start(
             store,
             get_ctx,
             prepared,
@@ -1835,27 +1670,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             span_observer,
             capture,
         )
-        .await
-        {
-            Ok(executed) => {
-                let result = store.with(|mut access| {
-                    let ctx = get_ctx(access.data_mut());
-                    Self::finish_access_start(ctx, executed)
-                });
-                if result.is_ok() {
-                    start_guard.disarm();
-                }
-                result
-            }
-            Err((err, cleanup)) => {
-                store.with(|mut access| {
-                    let ctx = get_ctx(access.data_mut());
-                    Self::cleanup_access_start(ctx, cleanup);
-                });
-                start_guard.disarm();
-                Err(err)
-            }
-        }
+        .await?;
+        store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            Self::finish_access_start(ctx, executed)
+        })
     }
 
     /// Claims a replay-only accessor call whose durable request must be reconstructed from the
@@ -1917,8 +1736,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 invocation_id,
             )
         })?;
-        let mut start_guard = AccessStartAtomicGuard::new(prepared.atomic_lease.clone());
-
         let claim = Self::replay_start_claim(
             &prepared.claim_options,
             &prepared.execution_scope,
@@ -1927,15 +1744,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         prepared.admission_boundary = Some(admission_refusal_before_start(&claim, Pair::FQFN)?);
         if prepared.is_live {
             prepared.switch_to_live().await?;
-            store.with(|mut access| {
-                Self::cleanup_access_start(
-                    get_ctx(access.data_mut()),
-                    AccessStartCleanup {
-                        atomic_lease: prepared.atomic_lease.clone(),
-                    },
-                )
-            });
-            start_guard.disarm();
             return if prepared.replaying_incomplete_entity || prepared.primary_runtime {
                 Ok(ReplayAccessStartOutcome::ReplayEnded)
             } else {
@@ -1945,11 +1753,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 ))
             };
         }
-        if opens_accessor_scope(
-            prepared.retry.function_type(),
-            prepared.retry.durable_execution_state().assume_idempotence,
-            prepared.unpersisted,
-        ) {
+        if opens_accessor_scope(prepared.retry.function_type(), prepared.unpersisted) {
             return Err(WorkerExecutorError::runtime(
                 "request-reconstructing replay access cannot open a durable scope",
             ));
@@ -1980,10 +1784,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         {
             ReplayStartClaimOutcome::Claimed { handle, .. } => {
                 let start_idx = handle.start_idx();
-                let atomic_lease = unregistered_atomic_lease(
-                    execution_scope.atomic_region,
-                    retry.can_reexecute_on_incomplete_replay(),
-                );
                 let executed = ExecutedAccessStart {
                     begin_index: start_idx,
                     start_idx,
@@ -1992,7 +1792,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     agent_auth_ctx: None,
                     request_upload: PendingUpload::already_durable(),
                     replay: Some(handle),
-                    execution_scope: execution_scope.finish(start_idx, atomic_lease),
+                    execution_scope: execution_scope.finish(start_idx),
                     retry,
                     opened_scope: None,
                     drop_sink: prepared.drop_sink,
@@ -2004,7 +1804,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     let ctx = get_ctx(access.data_mut());
                     Self::finish_access_start(ctx, executed)
                 })?;
-                start_guard.disarm();
                 handle
                     .supersede_prior_completion_delivery(store, get_ctx)
                     .await?;
@@ -2072,15 +1871,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 )
                 .await?
                 .require_live()?;
-                store.with(|mut access| {
-                    Self::cleanup_access_start(
-                        get_ctx(access.data_mut()),
-                        AccessStartCleanup {
-                            atomic_lease: prepared.atomic_lease.clone(),
-                        },
-                    )
-                });
-                start_guard.disarm();
                 Ok(ReplayAccessStartOutcome::ReplayEnded)
             }
         }
@@ -2182,12 +1972,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             });
         }
 
-        let atomic_region = ctx
-            .state
-            .active_atomic_regions
-            .last()
-            .map(|region| region.begin_index);
-
         let ambient_parent_start_index =
             ctx.child_parent_start_index(&function_type, OplogIndex::INITIAL);
         if claim_options.parent_start_index.is_some()
@@ -2219,7 +2003,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let execution_scope = BegunCallExecutionScope {
             entity_parent_start_index: ctx.entity_parent_start_index(),
             parent_start_index,
-            atomic_region,
             observational_owner,
             invocation_id,
         };
@@ -2230,28 +2013,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 .with_incomplete_repair_authorized_by_scope(
                     claim_options.incomplete_repair_authorized_by_scope,
                 );
-        // A live persisted call initiated inside an open atomic region joins the region's member
-        // registry: its lease starts owned by that region and follows the region's close
-        // transitions (transfer to the enclosing region, or detachment at the outermost close).
-        let atomic_lease = if is_live && !unpersisted {
-            match atomic_region {
-                Some(begin_index) => Some(
-                    ctx.state
-                        .register_atomic_region_call(
-                            begin_index,
-                            retry.can_reexecute_on_incomplete_replay(),
-                        )
-                        .ok_or_else(|| {
-                            WorkerExecutorError::runtime(format!(
-                                "durable call started in atomic region {begin_index}, but the region is not open"
-                            ))
-                        })?,
-                ),
-                None => None,
-            }
-        } else {
-            None
-        };
         let cleanup_sink = ctx.state.dropped_call_event_sender();
         let live_host_calls = ctx.state.live_host_call_counter();
         Ok(PreparedAccessStart {
@@ -2276,7 +2037,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             execution_scope,
             entity_parent_start_index: ctx.entity_parent_start_index(),
             retry,
-            atomic_lease,
             drop_sink: P::production_drop_sink(ctx.state.dropped_call_event_sender()),
             cleanup_sink,
             claim_options,
@@ -2342,7 +2102,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         build_span: Option<BuildSpanCallback>,
         span_observer: Option<Arc<dyn CallSpanObserver>>,
         mut capture: Option<C>,
-    ) -> Result<ExecutedAccessStart<Pair, P>, (WorkerExecutorError, AccessStartCleanup)>
+    ) -> Result<ExecutedAccessStart<Pair, P>, WorkerExecutorError>
     where
         T: 'static,
         D: HasData + ?Sized,
@@ -2358,36 +2118,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 get_ctx,
                 |ctx| (DurableWorkerCtx::agent_auth_ctx(ctx), capture(ctx)),
             )
-            .await
-            .map_err(|err| {
-                (
-                    err,
-                    AccessStartCleanup {
-                        atomic_lease: prepared.atomic_lease.clone(),
-                    },
-                )
-            })?
+            .await?
         } else {
             None
         };
         if capture.is_none() && prepared.is_live && !prepared.unpersisted {
-            let _boundary_guard = lock_synchronized_card_event_boundary_access(store, get_ctx)
-                .await
-                .map_err(|err| {
-                    (
-                        err,
-                        AccessStartCleanup {
-                            atomic_lease: prepared.atomic_lease.clone(),
-                        },
-                    )
-                })?;
+            let _boundary_guard =
+                lock_synchronized_card_event_boundary_access(store, get_ctx).await?;
         }
         let mut live_call_permit = prepared.live_call_permit.take();
-        let starts_scope = opens_accessor_scope(
-            prepared.retry.function_type(),
-            prepared.retry.durable_execution_state().assume_idempotence,
-            prepared.unpersisted,
-        );
+        let starts_scope =
+            opens_accessor_scope(prepared.retry.function_type(), prepared.unpersisted);
         let admission_hook = if prepared.is_live {
             None
         } else {
@@ -2431,7 +2172,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     DurableExecutionState {
                         is_live: true,
                         snapshotting_mode: previous.snapshotting_mode,
-                        assume_idempotence: previous.assume_idempotence,
                         max_in_function_retry_delay: previous.max_in_function_retry_delay,
                     },
                     Pair::FQFN,
@@ -2453,15 +2193,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let replay = if !is_live {
             loop {
                 let claim =
-                    Self::replay_start_claim(&prepared.claim_options, &execution_scope, &retry)
-                        .map_err(|err| {
-                            (
-                                err,
-                                AccessStartCleanup {
-                                    atomic_lease: prepared.atomic_lease.clone(),
-                                },
-                            )
-                        })?;
+                    Self::replay_start_claim(&prepared.claim_options, &execution_scope, &retry)?;
                 let observer = span_observer.clone().map(|observer| {
                     let activity = store.with(|mut access| {
                         get_ctx(access.data_mut()).tail_work_tracker().activity()
@@ -2482,45 +2214,27 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             .clone()
                             .map(|operation| (operation, Pair::FQFN.to_string())),
                     )
-                    .await
-                    .map_err(|err| {
-                        (
-                            err,
-                            AccessStartCleanup {
-                                atomic_lease: prepared.atomic_lease.clone(),
-                            },
-                        )
-                    })?;
+                    .await?;
                 match outcome {
                     ReplayStartClaimOutcome::Claimed { handle, .. } => break Some(handle),
                     outcome @ (ReplayStartClaimOutcome::ReplayEnded
                     | ReplayStartClaimOutcome::DeletedRegion
                     | ReplayStartClaimOutcome::StoreAlreadyLive) => {
                         if prepared.claim_options.require_recorded_start {
-                            return Err((
-                                WorkerExecutorError::unexpected_oplog_entry(
-                                    format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
-                                    "completed parent has no recorded host-internal child",
-                                ),
-                                AccessStartCleanup {
-                                    atomic_lease: prepared.atomic_lease.clone(),
-                                },
+                            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                                format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
+                                "completed parent has no recorded host-internal child",
                             ));
                         }
                         let primary_replay_tail = prepared.primary_runtime
                             && matches!(outcome, ReplayStartClaimOutcome::ReplayEnded);
                         if !prepared.replaying_incomplete_entity && !primary_replay_tail {
-                            return Err((
-                                WorkerExecutorError::unexpected_oplog_entry(
-                                    format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
-                                    format!(
-                                        "replay continuation at {} is valid only for an incomplete entity",
-                                        prepared.replay_state.last_replayed_index()
-                                    ),
+                            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                                format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
+                                format!(
+                                    "replay continuation at {} is valid only for an incomplete entity",
+                                    prepared.replay_state.last_replayed_index()
                                 ),
-                                AccessStartCleanup {
-                                    atomic_lease: prepared.atomic_lease.clone(),
-                                },
                             ));
                         }
 
@@ -2541,15 +2255,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                 transition_role,
                                 prepared.local_live_tail.clone(),
                             )
-                            .await
-                            .map_err(|error| {
-                                (
-                                    error,
-                                    AccessStartCleanup {
-                                        atomic_lease: prepared.atomic_lease.clone(),
-                                    },
-                                )
-                            })? {
+                            .await?
+                            {
                                 BeginReplayToLive::ReplayResumed => continue,
                                 BeginReplayToLive::Pending(pending) => pending,
                             }
@@ -2565,25 +2272,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                 &prepared.replay_state,
                                 prepared.replay_state.replay_target(),
                             )
-                            .await
-                            .map_err(|error| {
-                                (
-                                    error,
-                                    AccessStartCleanup {
-                                        atomic_lease: prepared.atomic_lease.clone(),
-                                    },
-                                )
-                            })?
+                            .await?
                         };
-                        let boundary =
-                            admission_refusal_before_start(&claim, Pair::FQFN).map_err(|err| {
-                                (
-                                    err,
-                                    AccessStartCleanup {
-                                        atomic_lease: prepared.atomic_lease.clone(),
-                                    },
-                                )
-                            })?;
+                        let boundary = admission_refusal_before_start(&claim, Pair::FQFN)?;
                         finish_prepared_access_to_live_at(
                             pending,
                             prepared.primary_runtime,
@@ -2592,22 +2283,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             Some(boundary),
                         )
                         .await
-                        .and_then(FinishReplayToLive::require_live)
-                        .map_err(|error| {
-                            (
-                                error,
-                                AccessStartCleanup {
-                                    atomic_lease: prepared.atomic_lease.clone(),
-                                },
-                            )
-                        })?;
+                        .and_then(FinishReplayToLive::require_live)?;
                         let previous = retry.durable_execution_state();
                         retry = InFunctionRetryController::new(
                             retry.function_type().clone(),
                             DurableExecutionState {
                                 is_live: true,
                                 snapshotting_mode: previous.snapshotting_mode,
-                                assume_idempotence: previous.assume_idempotence,
                                 max_in_function_retry_delay: previous.max_in_function_retry_delay,
                             },
                             Pair::FQFN,
@@ -2660,15 +2342,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         )
                     })
                 })
-                .map(Some)
-                .map_err(|err| {
-                    (
-                        err,
-                        AccessStartCleanup {
-                            atomic_lease: prepared.atomic_lease.clone(),
-                        },
-                    )
-                })?
+                .map(Some)?
             };
         }
         let (agent_auth_ctx, captured) = match captured {
@@ -2682,24 +2356,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         // Build the request between the scope open and the host-call `Start` write/claim. It runs
         // on replay too so positional side entries written by the builder are consumed in the same
         // order.
-        let request = build_request(AccessStartContext { is_live }, captured)
-            .await
-            .map_err(|err| {
-                (
-                    err,
-                    AccessStartCleanup {
-                        atomic_lease: prepared.atomic_lease.clone(),
-                    },
-                )
-            })?;
+        let request = build_request(AccessStartContext { is_live }, captured).await?;
 
         if is_live {
             if prepared.unpersisted {
                 let start_idx = prepared.oplog.current_oplog_index().await;
-                let atomic_lease = unregistered_atomic_lease(
-                    execution_scope.atomic_region,
-                    retry.can_reexecute_on_incomplete_replay(),
-                );
                 Ok(ExecutedAccessStart {
                     begin_index: scope_start
                         .as_ref()
@@ -2711,7 +2372,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     agent_auth_ctx,
                     request_upload: PendingUpload::already_durable(),
                     replay: None,
-                    execution_scope: execution_scope.finish(start_idx, atomic_lease),
+                    execution_scope: execution_scope.finish(start_idx),
                     retry,
                     opened_scope: scope_start,
                     drop_sink: prepared.drop_sink,
@@ -2720,24 +2381,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     _phantom: PhantomData,
                 })
             } else {
-                let _boundary_guard = lock_synchronized_card_event_boundary_access(store, get_ctx)
-                    .await
-                    .map_err(|err| {
-                        (
-                            err,
-                            AccessStartCleanup {
-                                atomic_lease: prepared.atomic_lease.clone(),
-                            },
-                        )
-                    })?;
+                let _boundary_guard =
+                    lock_synchronized_card_event_boundary_access(store, get_ctx).await?;
                 if !store.with(|mut access| get_ctx(access.data_mut()).state.is_live()) {
-                    return Err((
-                        WorkerExecutorError::runtime(
-                            "live accessor start returned to replay during boundary synchronization",
-                        ),
-                        AccessStartCleanup {
-                            atomic_lease: prepared.atomic_lease.clone(),
-                        },
+                    return Err(WorkerExecutorError::runtime(
+                        "live accessor start returned to replay during boundary synchronization",
                     ));
                 }
                 let request: HostRequest = request.into();
@@ -2788,23 +2436,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         },
                     )
                     .await
-                    .map_err(|err| {
-                        (
-                            start_write_error(err),
-                            AccessStartCleanup {
-                                atomic_lease: prepared.atomic_lease.clone(),
-                            },
-                        )
-                    })?;
-                // The registered lease from prepare time when this call started live inside an
-                // open region; a replayed scope that switched to live mid-start falls back to an
-                // unregistered lease preserving its initiation-time classification.
-                let atomic_lease = prepared.atomic_lease.clone().or_else(|| {
-                    unregistered_atomic_lease(
-                        execution_scope.atomic_region,
-                        retry.can_reexecute_on_incomplete_replay(),
-                    )
-                });
+                    .map_err(start_write_error)?;
                 Ok(ExecutedAccessStart {
                     begin_index: scope_start
                         .as_ref()
@@ -2816,7 +2448,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     agent_auth_ctx,
                     request_upload,
                     replay: None,
-                    execution_scope: execution_scope.finish(start_idx, atomic_lease),
+                    execution_scope: execution_scope.finish(start_idx),
                     retry,
                     opened_scope: scope_start,
                     drop_sink: prepared.drop_sink,
@@ -2828,12 +2460,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         } else {
             let replay = replay.expect("a replaying accessor start must claim a recorded Start");
             let start_idx = replay.start_idx();
-            // Replay handles never participate in the live in-flight member guard, but keep
-            // their initiation-time region for trap/retry classification.
-            let atomic_lease = unregistered_atomic_lease(
-                execution_scope.atomic_region,
-                retry.can_reexecute_on_incomplete_replay(),
-            );
             Ok(ExecutedAccessStart {
                 begin_index: scope_start
                     .as_ref()
@@ -2845,7 +2471,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 agent_auth_ctx,
                 request_upload: PendingUpload::already_durable(),
                 replay: Some(replay),
-                execution_scope: execution_scope.finish(start_idx, atomic_lease),
+                execution_scope: execution_scope.finish(start_idx),
                 retry,
                 opened_scope: scope_start,
                 drop_sink: prepared.drop_sink,
@@ -2860,7 +2486,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         store: &(impl DurableAccess<T, D> + ?Sized),
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         prepared: &mut PreparedAccessStart<Pair, P, Ctx>,
-    ) -> Result<AccessOpenedScope, (WorkerExecutorError, AccessStartCleanup)>
+    ) -> Result<AccessOpenedScope, WorkerExecutorError>
     where
         T: 'static,
         D: HasData + ?Sized,
@@ -2879,59 +2505,32 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         )
         .with_observational_owner(prepared.execution_scope.observational_owner)
         .with_invocation_id(prepared.execution_scope.invocation_id);
-        prepared.admission_boundary = Some(
-            admission_refusal_before_start(&scope_claim, &scope_name.to_string()).map_err(
-                |error| {
-                    (
-                        error,
-                        AccessStartCleanup {
-                            atomic_lease: prepared.atomic_lease.clone(),
-                        },
-                    )
-                },
-            )?,
-        );
+        prepared.admission_boundary = Some(admission_refusal_before_start(
+            &scope_claim,
+            &scope_name.to_string(),
+        )?);
         if prepared.is_live {
             match &mut prepared.claim_options.scope_replay_recovery {
                 ScopeReplayRecovery::Forbidden => {
-                    return Err((
-                        WorkerExecutorError::runtime(
-                            "Recorded remote write scope was not completed and cannot be safely recovered",
-                        ),
-                        AccessStartCleanup {
-                            atomic_lease: prepared.atomic_lease.clone(),
-                        },
+                    return Err(WorkerExecutorError::runtime(
+                        "Recorded remote write scope was not completed and cannot be safely recovered",
                     ));
                 }
                 ScopeReplayRecovery::Reexecute { .. } => {
                     if !prepared.replaying_incomplete_entity
                         && !prepared.primary_runtime
-                        && (prepared.execution_scope.atomic_region.is_some()
-                            || prepared.execution_scope.observational_owner.is_some()
+                        && (prepared.execution_scope.observational_owner.is_some()
                             || prepared.entity_parent_start_index.is_some())
                     {
-                        return Err((
-                            WorkerExecutorError::runtime(
-                                "Recorded remote write scope cannot be recovered inside another durable scope",
-                            ),
-                            AccessStartCleanup {
-                                atomic_lease: prepared.atomic_lease.clone(),
-                            },
+                        return Err(WorkerExecutorError::runtime(
+                            "Recorded remote write scope cannot be recovered inside another durable scope",
                         ));
                     }
                     prepared
                         .claim_options
                         .scope_replay_recovery
                         .await_readiness()
-                        .await
-                        .map_err(|err| {
-                            (
-                                err,
-                                AccessStartCleanup {
-                                    atomic_lease: prepared.atomic_lease.clone(),
-                                },
-                            )
-                        })?;
+                        .await?;
                     if !prepared.replaying_incomplete_entity && !prepared.primary_runtime {
                         match prepared
                             .replay_state
@@ -2941,58 +2540,20 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                 prepared.entity_parent_start_index,
                                 prepared.execution_scope.invocation_id,
                             )
-                            .await
-                            .map_err(|err| {
-                                (
-                                    err,
-                                    AccessStartCleanup {
-                                        atomic_lease: prepared.atomic_lease.clone(),
-                                    },
-                                )
-                            })? {
+                            .await?
+                        {
                             ScopeStartClaimOutcome::MissingSettling { replay_target } => {
                                 match prepared
                                     .finish_switch_to_live_from_settling(replay_target)
-                                    .await
-                                    .map_err(|error| {
-                                        (
-                                            error,
-                                            AccessStartCleanup {
-                                                atomic_lease: prepared.atomic_lease.clone(),
-                                            },
-                                        )
-                                    })? {
+                                    .await?
+                                {
                                     BeginReplayToLive::ReplayResumed => {
-                                        return Err((
-                                            WorkerExecutorError::runtime(
-                                                "replay target grew while a missing accessor scope was settling",
-                                            ),
-                                            AccessStartCleanup {
-                                                atomic_lease: prepared.atomic_lease.clone(),
-                                            },
+                                        return Err(WorkerExecutorError::runtime(
+                                            "replay target grew while a missing accessor scope was settling",
                                         ));
                                     }
                                     BeginReplayToLive::Pending(pending) => {
-                                        pending
-                                            .finish()
-                                            .await
-                                            .map_err(|error| {
-                                                (
-                                                    error,
-                                                    AccessStartCleanup {
-                                                        atomic_lease: prepared.atomic_lease.clone(),
-                                                    },
-                                                )
-                                            })?
-                                            .require_live()
-                                            .map_err(|error| {
-                                                (
-                                                    error,
-                                                    AccessStartCleanup {
-                                                        atomic_lease: prepared.atomic_lease.clone(),
-                                                    },
-                                                )
-                                            })?;
+                                        pending.finish().await?.require_live()?;
                                     }
                                 }
                             }
@@ -3000,13 +2561,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                 "missing-scope recovery either claims the scope or enters settlement"
                             ),
                             ScopeStartClaimOutcome::Claimed { .. } => {
-                                return Err((
-                                    WorkerExecutorError::runtime(
-                                        "Recorded remote write scope was already claimed after replay completed",
-                                    ),
-                                    AccessStartCleanup {
-                                        atomic_lease: prepared.atomic_lease.clone(),
-                                    },
+                                return Err(WorkerExecutorError::runtime(
+                                    "Recorded remote write scope was already claimed after replay completed",
                                 ));
                             }
                         }
@@ -3014,16 +2570,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 }
                 ScopeReplayRecovery::Default => {}
             }
-            let begin_index = Self::append_access_scope_start(prepared, scope_name, function_type)
-                .await
-                .map_err(|error| {
-                    (
-                        error,
-                        AccessStartCleanup {
-                            atomic_lease: prepared.atomic_lease.clone(),
-                        },
-                    )
-                })?;
+            let begin_index =
+                Self::append_access_scope_start(prepared, scope_name, function_type).await?;
             Ok(AccessOpenedScope {
                 begin_index,
                 replay_handle: None,
@@ -3036,7 +2584,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 &prepared.claim_options.scope_replay_recovery,
                 ScopeReplayRecovery::Reexecute { .. }
             ) && !prepared.claim_options.require_recorded_start
-                && prepared.execution_scope.atomic_region.is_none()
                 && prepared.execution_scope.observational_owner.is_none()
                 && prepared.entity_parent_start_index.is_none();
             let claimed_scope = if can_recover_missing {
@@ -3052,15 +2599,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             .scope_replay_recovery
                             .await_readiness(),
                     )
-                    .await
-                    .map_err(|error| {
-                        (
-                            error,
-                            AccessStartCleanup {
-                                atomic_lease: prepared.atomic_lease.clone(),
-                            },
-                        )
-                    })? {
+                    .await?
+                {
                     ScopeStartClaimOutcome::Claimed {
                         begin_index,
                         handle,
@@ -3068,23 +2608,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     ScopeStartClaimOutcome::MissingSettling { replay_target } => {
                         let pending = match prepared
                             .finish_switch_to_live_from_settling(replay_target)
-                            .await
-                            .map_err(|error| {
-                                (
-                                    error,
-                                    AccessStartCleanup {
-                                        atomic_lease: prepared.atomic_lease.clone(),
-                                    },
-                                )
-                            })? {
+                            .await?
+                        {
                             BeginReplayToLive::ReplayResumed => {
-                                return Err((
-                                    WorkerExecutorError::runtime(
-                                        "replay target grew while a missing accessor scope was settling",
-                                    ),
-                                    AccessStartCleanup {
-                                        atomic_lease: prepared.atomic_lease.clone(),
-                                    },
+                                return Err(WorkerExecutorError::runtime(
+                                    "replay target grew while a missing accessor scope was settling",
                                 ));
                             }
                             BeginReplayToLive::Pending(pending) => pending,
@@ -3096,15 +2624,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             get_ctx,
                         )
                         .await
-                        .and_then(FinishReplayToLive::require_live)
-                        .map_err(|error| {
-                            (
-                                error,
-                                AccessStartCleanup {
-                                    atomic_lease: prepared.atomic_lease.clone(),
-                                },
-                            )
-                        })?;
+                        .and_then(FinishReplayToLive::require_live)?;
                         None
                     }
                     ScopeStartClaimOutcome::Missing => unreachable!(
@@ -3123,15 +2643,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             .clone()
                             .map(|operation| (operation, scope_name.to_string())),
                     )
-                    .await
-                    .map_err(|error| {
-                        (
-                            error,
-                            AccessStartCleanup {
-                                atomic_lease: prepared.atomic_lease.clone(),
-                            },
-                        )
-                    })?;
+                    .await?;
                 match claim_outcome {
                     ReplayStartClaimOutcome::Claimed { handle, .. } => {
                         Some((handle.start_idx(), handle))
@@ -3140,37 +2652,25 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     | ReplayStartClaimOutcome::DeletedRegion
                     | ReplayStartClaimOutcome::StoreAlreadyLive) => {
                         if prepared.claim_options.require_recorded_start {
-                            return Err((
-                                WorkerExecutorError::unexpected_oplog_entry(
-                                    format!("recorded {scope_name} Start"),
-                                    "historical call has no recorded scope",
-                                ),
-                                AccessStartCleanup {
-                                    atomic_lease: prepared.atomic_lease.clone(),
-                                },
+                            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                                format!("recorded {scope_name} Start"),
+                                "historical call has no recorded scope",
                             ));
                         }
                         if !prepared.replaying_incomplete_entity && !prepared.primary_runtime {
-                            return Err((
-                                WorkerExecutorError::unexpected_oplog_entry(
-                                    format!("recorded {scope_name} Start"),
-                                    format!(
-                                        "replay continuation at {} is valid only for an incomplete entity",
-                                        prepared.replay_state.last_replayed_index()
-                                    ),
+                            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                                format!("recorded {scope_name} Start"),
+                                format!(
+                                    "replay continuation at {} is valid only for an incomplete entity",
+                                    prepared.replay_state.last_replayed_index()
                                 ),
-                                AccessStartCleanup {
-                                    atomic_lease: prepared.atomic_lease.clone(),
-                                },
                             ));
                         }
 
                         let can_reexecute = prepared
                             .claim_options
                             .scope_replay_recovery
-                            .can_reexecute_incomplete(
-                                prepared.retry.durable_execution_state().assume_idempotence,
-                            );
+                            .can_reexecute_incomplete();
                         if can_reexecute
                             && matches!(
                                 &prepared.claim_options.scope_replay_recovery,
@@ -3181,49 +2681,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                 .claim_options
                                 .scope_replay_recovery
                                 .await_readiness()
-                                .await
-                                .map_err(|error| {
-                                    (
-                                        error,
-                                        AccessStartCleanup {
-                                            atomic_lease: prepared.atomic_lease.clone(),
-                                        },
-                                    )
-                                })?;
+                                .await?;
                         }
 
                         if matches!(outcome, ReplayStartClaimOutcome::ReplayEnded) {
-                            switch_prepared_access_to_live(prepared, store, get_ctx)
-                                .await
-                                .map_err(|error| {
-                                    (
-                                        error,
-                                        AccessStartCleanup {
-                                            atomic_lease: prepared.atomic_lease.clone(),
-                                        },
-                                    )
-                                })?;
+                            switch_prepared_access_to_live(prepared, store, get_ctx).await?;
                         } else {
-                            prepared
-                                .continue_entity_live(false)
-                                .await
-                                .map_err(|error| {
-                                    (
-                                        error,
-                                        AccessStartCleanup {
-                                            atomic_lease: prepared.atomic_lease.clone(),
-                                        },
-                                    )
-                                })?;
+                            prepared.continue_entity_live(false).await?;
                         }
                         if !can_reexecute {
-                            return Err((
-                                WorkerExecutorError::runtime(
-                                    "Non-idempotent remote write operation was not completed, cannot retry",
-                                ),
-                                AccessStartCleanup {
-                                    atomic_lease: prepared.atomic_lease.clone(),
-                                },
+                            return Err(WorkerExecutorError::runtime(
+                                "Non-idempotent remote write operation was not completed, cannot retry",
                             ));
                         }
                         None
@@ -3232,29 +2700,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             };
             let Some((begin_index, replay_handle)) = claimed_scope else {
                 let begin_index =
-                    Self::append_access_scope_start(prepared, scope_name, function_type)
-                        .await
-                        .map_err(|error| {
-                            (
-                                error,
-                                AccessStartCleanup {
-                                    atomic_lease: prepared.atomic_lease.clone(),
-                                },
-                            )
-                        })?;
+                    Self::append_access_scope_start(prepared, scope_name, function_type).await?;
                 prepared
                     .public_state
                     .worker()
                     .commit_oplog_and_update_state(CommitLevel::Always)
-                    .await
-                    .map_err(|error| {
-                        (
-                            WorkerExecutorError::from(error),
-                            AccessStartCleanup {
-                                atomic_lease: prepared.atomic_lease.clone(),
-                            },
-                        )
-                    })?;
+                    .await?;
                 return Ok(AccessOpenedScope {
                     begin_index,
                     replay_handle: None,
@@ -3267,198 +2718,19 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 &prepared.replay_state,
                 begin_index,
             )
-            .await
-            .map_err(|error| {
-                (
-                    error,
-                    AccessStartCleanup {
-                        atomic_lease: prepared.atomic_lease.clone(),
-                    },
-                )
-            })?;
+            .await?;
             prepared.admission_boundary =
                 Some(SerializableToolAdmissionRefusal::AtRecordedOplogEntry {
                     index: begin_index.into(),
                 });
 
-            if function_type == DurableFunctionType::WriteRemote
-                && !prepared.retry.durable_execution_state().assume_idempotence
-            {
-                if prepared
-                    .replay_state
-                    .lookup_oplog_entry(begin_index, OplogEntry::is_end_remote_write)
-                    .await
-                    .is_none()
-                {
-                    if prepared.claim_options.require_recorded_start {
-                        return Err((
-                            WorkerExecutorError::unexpected_oplog_entry(
-                                "completed historical remote write scope",
-                                format!("scope at {begin_index} has no retained End"),
-                            ),
-                            AccessStartCleanup {
-                                atomic_lease: prepared.atomic_lease.clone(),
-                            },
-                        ));
-                    }
-                    switch_prepared_access_to_live(prepared, store, get_ctx)
-                        .await
-                        .map_err(|error| {
-                            (
-                                error,
-                                AccessStartCleanup {
-                                    atomic_lease: prepared.atomic_lease.clone(),
-                                },
-                            )
-                        })?;
-                    return Err((
-                        WorkerExecutorError::runtime(
-                            "Non-idempotent remote write operation was not completed, cannot retry",
-                        ),
-                        AccessStartCleanup {
-                            atomic_lease: prepared.atomic_lease.clone(),
-                        },
-                    ));
-                }
-
-                Ok(AccessOpenedScope {
-                    begin_index,
-                    replay_handle: Some(replay_handle),
-                    switched_to_live: false,
-                })
-            } else if matches!(function_type, DurableFunctionType::WriteRemoteBatched(None)) {
-                if matches!(
-                    &prepared.claim_options.scope_replay_recovery,
-                    ScopeReplayRecovery::Reexecute { .. }
-                ) {
-                    // The scope owner re-executes its effect call-locally: the recorded scope
-                    // `Start` and every child the guest already observed stay in place, the
-                    // children replay, and the owner continues live at the incomplete tail under
-                    // the same `Start`. Nothing recorded next to the scope is deleted, so no
-                    // foreign-write scan and no suffix Jump are needed. A complete scope replays
-                    // its `End` through the same handle.
-                    return Ok(AccessOpenedScope {
-                        begin_index,
-                        replay_handle: Some(replay_handle),
-                        switched_to_live: false,
-                    });
-                }
-                let lookup_result = prepared
-                    .replay_state
-                    .lookup_oplog_entry_with_condition_and_state(
-                        begin_index,
-                        OplogEntry::is_end_remote_write_s::<ScopeScanState>,
-                        OplogEntry::no_concurrent_side_effect,
-                        ScopeScanState::new(begin_index),
-                        OplogEntry::track_scope_membership,
-                    )
-                    .await;
-
-                match lookup_result {
-                    OplogEntryLookupResult::Found { .. } => Ok(AccessOpenedScope {
-                        begin_index,
-                        replay_handle: Some(replay_handle),
-                        switched_to_live: false,
-                    }),
-                    OplogEntryLookupResult::NotFound { .. }
-                        if prepared.claim_options.require_recorded_start =>
-                    {
-                        Err((
-                            WorkerExecutorError::unexpected_oplog_entry(
-                                "completed historical batched write scope",
-                                format!("scope at {begin_index} has no retained End"),
-                            ),
-                            AccessStartCleanup {
-                                atomic_lease: prepared.atomic_lease.clone(),
-                            },
-                        ))
-                    }
-                    OplogEntryLookupResult::NotFound {
-                        violates_for_all: false,
-                    } if prepared
-                        .claim_options
-                        .scope_replay_recovery
-                        .can_reexecute_incomplete(
-                            prepared.retry.durable_execution_state().assume_idempotence,
-                        ) =>
-                    {
-                        if !prepared.replay_state.has_attempt_suffix(begin_index).await {
-                            switch_prepared_access_to_live(prepared, store, get_ctx)
-                                .await
-                                .map_err(|error| {
-                                    (
-                                        error,
-                                        AccessStartCleanup {
-                                            atomic_lease: prepared.atomic_lease.clone(),
-                                        },
-                                    )
-                                })?;
-                            return Ok(AccessOpenedScope {
-                                begin_index,
-                                replay_handle: None,
-                                switched_to_live: true,
-                            });
-                        }
-                        if let Some(hook) = store
-                            .with(|mut access| get_ctx(access.data_mut()).replay_admission_hook())
-                        {
-                            hook.before_replay_access_start(
-                                Pair::FQFN,
-                                ReplayAdmissionStage::BeforeBatchedJump,
-                            )
-                            .await;
-                        }
-                        prepared
-                            .public_state
-                            .worker()
-                            .request_runtime_jump(begin_index.next())
-                            .await;
-                        if let Some(hook) = store
-                            .with(|mut access| get_ctx(access.data_mut()).replay_admission_hook())
-                        {
-                            hook.before_replay_access_start(
-                                Pair::FQFN,
-                                ReplayAdmissionStage::AfterBatchedJump,
-                            )
-                            .await;
-                        }
-                        Err((
-                            WorkerExecutorError::Interrupted {
-                                kind: InterruptKind::Jump,
-                            },
-                            AccessStartCleanup {
-                                atomic_lease: prepared.atomic_lease.clone(),
-                            },
-                        ))
-                    }
-                    OplogEntryLookupResult::NotFound { .. } => {
-                        switch_prepared_access_to_live(prepared, store, get_ctx)
-                            .await
-                            .map_err(|error| {
-                                (
-                                    error,
-                                    AccessStartCleanup {
-                                        atomic_lease: prepared.atomic_lease.clone(),
-                                    },
-                                )
-                            })?;
-                        Err((
-                            WorkerExecutorError::runtime(
-                                "Non-idempotent remote write operation was not completed, cannot retry",
-                            ),
-                            AccessStartCleanup {
-                                atomic_lease: prepared.atomic_lease.clone(),
-                            },
-                        ))
-                    }
-                }
-            } else {
-                Ok(AccessOpenedScope {
-                    begin_index,
-                    replay_handle: Some(replay_handle),
-                    switched_to_live: false,
-                })
-            }
+            // Retain the scope and its children. Only the owning protocol can authorize
+            // incomplete repair; opening a scope never abandons neighboring history.
+            Ok(AccessOpenedScope {
+                begin_index,
+                replay_handle: Some(replay_handle),
+                switched_to_live: false,
+            })
         }
     }
 
@@ -3492,17 +2764,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         executed: ExecutedAccessStart<Pair, P>,
     ) -> Result<Self, WorkerExecutorError> {
         if let Some(scope) = executed.opened_scope {
-            let kind = if matches!(
-                executed.retry.function_type(),
-                DurableFunctionType::WriteRemoteBatched(None)
-            ) {
-                DurableScopeKind::BatchedWrite
-            } else {
-                DurableScopeKind::NonIdempotentWrite
-            };
             ctx.state.push_durable_scope(
                 scope.begin_index,
-                kind,
+                DurableScopeKind::BatchedWrite,
                 executed.execution_scope.invocation_id,
                 scope.replay_handle,
             );
@@ -3533,15 +2797,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             live_call_permit: executed.live_call_permit,
             _phantom: PhantomData,
         })
-    }
-
-    fn cleanup_access_start<Ctx: WorkerCtx>(
-        _ctx: &mut DurableWorkerCtx<Ctx>,
-        cleanup: AccessStartCleanup,
-    ) {
-        if let Some(lease) = cleanup.atomic_lease {
-            lease.release();
-        }
     }
 
     /// First phase of a durable call: run `begin_durable_function` (read-only guard, pending replay
@@ -3664,11 +2919,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let execution_scope = BegunCallExecutionScope {
             entity_parent_start_index: ctx.entity_parent_start_index(),
             parent_start_index: ctx.child_parent_start_index(&function_type, begin_index),
-            atomic_region: ctx
-                .state
-                .active_atomic_regions
-                .last()
-                .map(|region| region.begin_index),
             observational_owner,
             invocation_id,
         };
@@ -3828,15 +3078,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         self.finished = true;
     }
 
-    /// The call-owned trap classification for a hard error escaping this call: its own retry point
-    /// and atomic-region membership, derived purely from the call's execution scope (the region it
-    /// was *initiated* in), never from ambient worker state. Being pure, it needs no `ctx` and is
+    /// The call-owned trap classification for a hard error escaping this call: its own retry point,
+    /// derived purely from the call's execution scope, never from ambient worker state.
+    /// Being pure, it needs no `ctx` and is
     /// stable across the call's body, so it can be built at the trap egress point or snapshotted
     /// earlier when the handle is moved before egress (see `io::poll`).
     pub(crate) fn trap_context(&self) -> DurableCallTrapContext {
         DurableCallTrapContext {
             retry_from: self.execution_scope.trap_retry_point(),
-            in_atomic_region: self.execution_scope.atomic_region().is_some(),
         }
     }
 
@@ -3863,7 +3112,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             begin_index: self.begin_index(),
             function_type: self.retry.function_type().clone(),
             request_upload: self.request_upload.clone(),
-            atomic_lease: self.execution_scope.atomic_lease.clone(),
             trap_context: self.trap_context(),
             live_call_permit,
             span_observer: self.span_observer.clone(),
@@ -3883,11 +3131,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// [`Self::abandon_for_trap`] for the non-error control-flow cases.
     pub fn trap(&mut self, err: impl Into<anyhow::Error>) -> anyhow::Error {
         let err = err.into();
-        // Invariant lock: a marked host-call trap must never be a deterministic wasm trap. The
-        // marker carries no call-owned atomic-region side-effect bit (`TrapType::from_error` sources
-        // that from ambient state), which is only sound because the side-effect bit is consulted
-        // solely for `AgentError::DeterministicTrap` and a host error is never one. Guest wasm traps
-        // are classified on the invocation path without a `DurableCallSession`, so they never reach here.
+        // Guest wasm traps are classified on the invocation path without a
+        // `DurableCallSession`, so they never reach here.
         debug_assert!(
             err.root_cause().downcast_ref::<wasmtime::Trap>().is_none(),
             "DurableCallSession::trap must not wrap a deterministic wasm trap (root cause was a wasmtime::Trap)"
@@ -3989,9 +3234,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// The accessor cannot hold the store across the async policy resolution, so the retry
     /// decision runs against a [`TaskRetryContext`] snapshot taken in one short store window: the
     /// same policy tiers as `PrivateDurableWorkerState::named_retry_policies` and the current
-    /// retry state of this call's own retry point (its atomic region or enclosing durable scope
+    /// retry state of this call's own retry point (its call or enclosing durable scope
     /// `Start`, matching [`ScopedRetryHost::retry_point`]). `properties` are enriched with the
-    /// worker-local context (`agent-type`, `is-idempotent`) before resolution.
+    /// worker-local context (`agent-type`) before resolution.
     pub async fn try_trigger_retry_access<T, D, Ctx, Ok, Err>(
         &mut self,
         store: &Accessor<T, D>,
@@ -4086,15 +3331,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             .await;
         let execution_state =
             || store.with(|mut access| get_ctx(access.data_mut()).durable_execution_state());
-        let atomic_side_effects = |index| {
-            store.with(|mut access| {
-                get_ctx(access.data_mut()).atomic_region_has_side_effects_for(index)
-            })
-        };
         let mut context_host = ContextRetryHost {
             task,
             execution_state: &execution_state,
-            atomic_side_effects: &atomic_side_effects,
         };
         let mut retry_host = ScopedRetryHost::new(&mut context_host, &self.execution_scope);
         let outcome = self
@@ -4422,21 +3661,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             .map_err(|source| TerminalCallError::new(source, context))
     }
 
-    pub(crate) async fn complete_forced<Ctx: WorkerCtx>(
-        mut self,
-        ctx: &mut DurableWorkerCtx<Ctx>,
-        response: Pair::Resp,
-    ) -> Result<Pair::Resp, TerminalCallError> {
-        let context = self.trap_context();
-        if let Err(err) = drain_queued_dropped_call_events(ctx).await {
-            self.abandon_for_trap();
-            return Err(err);
-        }
-        self.complete_impl(ctx, response, None, None, true)
-            .await
-            .map_err(|source| TerminalCallError::new(source, context))
-    }
-
     pub async fn complete_with_span<Ctx: WorkerCtx>(
         mut self,
         ctx: &mut DurableWorkerCtx<Ctx>,
@@ -4497,7 +3721,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         self.finished = true;
         let response = if self.persisted {
             let oplog = access.with_ctx(|ctx| ctx.state.oplog.clone());
-            let (response, end) = match prepare_end_entry::<Pair>(
+            let (response, end) = prepare_end_entry::<Pair>(
                 &oplog,
                 &self.request_upload,
                 self.start_idx,
@@ -4505,28 +3729,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 span_finished,
                 span_attributes,
             )
-            .await
-            {
-                Ok(prepared) => prepared,
-                Err(err) => {
-                    self.execution_scope.release_atomic_lease();
-                    return Err(err);
-                }
-            };
-            if let Some(begin_index) = self.execution_scope.atomic_region()
-                && !access.with_ctx(|ctx| {
-                    ctx.state
-                        .mark_atomic_region_has_side_effects_for(begin_index)
-                })
-            {
-                self.execution_scope.release_atomic_lease();
-                return Err(WorkerExecutorError::runtime(format!(
-                    "durable call {} completed after its atomic region {begin_index} was closed",
-                    self.start_idx
-                )));
-            }
+            .await?;
             oplog.add(end).await?;
-            self.execution_scope.release_atomic_lease();
             access
                 .finish_scope_with_commit(
                     self.retry.function_type().clone(),
@@ -4739,7 +3943,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             self.abandon_for_trap();
             return Err(TerminalCallError::new(
                 WorkerExecutorError::Interrupted {
-                    kind: InterruptKind::Jump,
+                    kind: InterruptKind::Restart,
                 },
                 context,
             ));
@@ -4787,10 +3991,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 start_idx: self.start_idx,
                 recorder,
             }),
-            true,
         );
         if let Err(err) = guard.wait_terminal().await {
-            guard.release_atomic_lease();
             guard.disarm();
             return Err(TerminalCallError::new(err, context));
         }
@@ -4928,7 +4130,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             let response = match persist_result {
                 Ok(response) => response,
                 Err(err) => {
-                    guard.release_atomic_lease();
                     guard.disarm();
                     return Err(err);
                 }
@@ -4944,10 +4145,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         guard: &mut AccessTerminalGuard<P>,
     ) -> Result<(), WorkerExecutorError> {
         let result = async {
-            // Consult the current lease owner: a region may have transferred this call
-            // while its terminal was being persisted.
-            access
-                .with_ctx(|ctx| guard.finish_atomic_region(&mut ctx.state.active_atomic_regions))?;
             access
                 .finish_scope(self.retry.function_type().clone(), self.begin_index())
                 .await
@@ -5017,7 +4214,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 start_idx,
                 recorder,
             }),
-            true,
         );
         guard.wait_terminal().await?;
         Ok(response)
@@ -5114,18 +4310,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.finished = true;
                     return Err(error);
                 }
-                self.prepare_incomplete_live_repair(
-                    |initiation_region, repairable_when_incomplete| {
-                        access.with_ctx(|ctx| {
-                            let lease = register_live_repair_atomic_lease(
-                                &mut ctx.state.active_atomic_regions,
-                                initiation_region,
-                                repairable_when_incomplete,
-                            );
-                            (ctx.state.live_host_call_counter(), lease)
-                        })
-                    },
-                )?;
+                self.prepare_incomplete_live_repair(|| {
+                    access.with_ctx(|ctx| ctx.state.live_host_call_counter())
+                })?;
                 if self.requires_agent_authority {
                     match access.agent_auth_ctx().await {
                         Ok(auth_ctx) => self.agent_auth_ctx = Some(auth_ctx),
@@ -5275,19 +4462,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.finished = true;
                     return Err(error);
                 }
-                self.prepare_incomplete_live_repair(
-                    |initiation_region, repairable_when_incomplete| {
-                        store.with(|mut access| {
-                            let state = &mut get_ctx(access.data_mut()).state;
-                            let lease = register_live_repair_atomic_lease(
-                                &mut state.active_atomic_regions,
-                                initiation_region,
-                                repairable_when_incomplete,
-                            );
-                            (state.live_host_call_counter(), lease)
-                        })
-                    },
-                )?;
+                self.prepare_incomplete_live_repair(|| {
+                    store.with(|mut access| {
+                        get_ctx(access.data_mut()).state.live_host_call_counter()
+                    })
+                })?;
                 let synchronization = if self.requires_agent_authority {
                     match crate::durable_host::call_coordinator::capture_live_agent_authority_access(store, get_ctx, |ctx| DurableWorkerCtx::agent_auth_ctx(ctx)).await {
                         Ok(Some(auth_ctx)) => {
@@ -5399,19 +4578,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         return Err(error);
                     }
                 };
-                self.prepare_incomplete_live_repair(
-                    |initiation_region, repairable_when_incomplete| {
-                        store.with(|mut access| {
-                            let state = &mut get_ctx(access.data_mut()).state;
-                            let lease = register_live_repair_atomic_lease(
-                                &mut state.active_atomic_regions,
-                                initiation_region,
-                                repairable_when_incomplete,
-                            );
-                            (state.live_host_call_counter(), lease)
-                        })
-                    },
-                )?;
+                self.prepare_incomplete_live_repair(|| {
+                    store.with(|mut access| {
+                        get_ctx(access.data_mut()).state.live_host_call_counter()
+                    })
+                })?;
                 match transition {
                     FinishReplayToLive::Cancelled => {
                         Ok(ReconstructionReplayOutcome::LiveAdmissionCancelled(self))
@@ -5604,19 +4775,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.finished = true;
                     return Err(error);
                 }
-                self.prepare_incomplete_live_repair(
-                    |initiation_region, repairable_when_incomplete| {
-                        access.with_ctx(|ctx| {
-                            let state = &mut ctx.state;
-                            let lease = register_live_repair_atomic_lease(
-                                &mut state.active_atomic_regions,
-                                initiation_region,
-                                repairable_when_incomplete,
-                            );
-                            (state.live_host_call_counter(), lease)
-                        })
-                    },
-                )?;
+                self.prepare_incomplete_live_repair(|| {
+                    access.with_ctx(|ctx| ctx.state.live_host_call_counter())
+                })?;
                 let synchronization = if self.requires_agent_authority {
                     match access.agent_auth_ctx().await {
                         Ok(auth_ctx) => {
@@ -5758,6 +4919,60 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
     }
 
+    /// Replays a recorded response or completes the original incomplete call with a typed
+    /// failure. This grants no permission to repeat the external effect.
+    pub async fn replay_or_persist_failure<Ctx: WorkerCtx>(
+        mut self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        failure: Pair::Resp,
+    ) -> Result<Pair::Resp, WorkerExecutorError> {
+        self.reproduce_refusal_for_claimed_start(ctx).await?;
+        let replay = self
+            .replay
+            .take()
+            .expect("response-only repair requires replay");
+        let outcome = ctx
+            .state
+            .replay_state
+            .await_resolution_outcome(replay)
+            .await?;
+        match classify_replay_resolution(outcome) {
+            ReplayedResolution::Delivered(payload, disposition) => {
+                self.finished = true;
+                if matches!(disposition, ReplayDeliveryDisposition::AtMarker(_)) {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "a direct host-return terminal",
+                        "a completion-delivery marker".to_string(),
+                    ));
+                }
+                let response = decode_replayed_payload::<Pair>(
+                    &ctx.state.oplog,
+                    payload,
+                    self.execution_scope.trap_retry_point(),
+                )
+                .await?;
+                ctx.finish_scope(self.retry.function_type().clone(), self.begin_index())
+                    .await?;
+                Ok(response)
+            }
+            ReplayedResolution::Undelivered(terminal) => {
+                self.finished = true;
+                Err(terminal.direct_divergence_error())
+            }
+            ReplayedResolution::Incomplete => {
+                if let Err(error) = ctx.publish_direct_replay_tail(self.start_idx).await {
+                    self.finished = true;
+                    return Err(error);
+                }
+                self.is_live = true;
+                self.persisted = true;
+                self.live_call_permit =
+                    Some(LiveCallPermit::new(ctx.state.live_host_call_counter()));
+                self.complete_context(ctx, failure, None, None, true).await
+            }
+        }
+    }
+
     /// Cancels a call.
     ///
     /// Live: append a `Cancelled` entry. Replay: expect the call to resolve as `Cancelled`. This
@@ -5793,21 +5008,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 // As in `complete`: surface a deferred request-upload failure at the call site before
                 // recording the `Cancelled` that references the request. A no-op when the request was
                 // inline or eagerly uploaded.
-                if let Err(err) = dropped_call.wait_request_upload().await {
-                    dropped_call.release_atomic_lease();
-                    return Err(err);
-                }
-                let partial_payload = match upload_partial_response(&oplog, partial).await {
-                    Ok(payload) => payload,
-                    Err(err) => {
-                        dropped_call.release_atomic_lease();
-                        return Err(err);
-                    }
-                };
+                dropped_call.wait_request_upload().await?;
+                let partial_payload = upload_partial_response(&oplog, partial).await?;
                 dropped_call
                     .append_cancelled_with_oplog(oplog, partial_payload)
                     .await?;
-                dropped_call.release_atomic_lease();
                 DurableCallCoordinator::new(ctx)
                     .finish(self.retry.function_type(), self.boundary, false, None)
                     .await?;
@@ -5895,11 +5100,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         Ok(())
                     });
                     // Cancellation terminal: never a discarded completion, no marker.
-                    guard.cleanup_after_terminal(terminal, None, false);
+                    guard.cleanup_after_terminal(terminal, None);
                     guard.wait_terminal().await
                 }
                 .await;
-                guard.release_atomic_lease();
                 if let Err(err) = result {
                     guard.disarm();
                     return Err(err);
@@ -5950,10 +5154,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// accessor callers can bound their `store.with` window to the refusal-free path).
     fn prepare_incomplete_live_repair(
         &mut self,
-        get_live_membership: impl FnOnce(
-            Option<OplogIndex>,
-            bool,
-        ) -> (Arc<AtomicUsize>, Option<Arc<AtomicRegionLease>>),
+        get_counter: impl FnOnce() -> Arc<AtomicUsize>,
     ) -> Result<(), WorkerExecutorError> {
         if !self.retry.can_reexecute_on_incomplete_replay() {
             // Reaching here means the surrounding scope recovery did not already resolve the
@@ -5967,15 +5168,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 ),
             ));
         }
-        let repairable_when_incomplete = self.retry.can_reexecute_on_incomplete_replay();
-        let initiation_region = self
-            .execution_scope
-            .atomic_lease
-            .as_ref()
-            .and_then(|lease| lease.owner());
-        let (counter, atomic_lease) =
-            get_live_membership(initiation_region, repairable_when_incomplete);
-        self.execution_scope.atomic_lease = atomic_lease;
+        let counter = get_counter();
         self.is_live = true;
         self.persisted = true;
         self.live_call_permit = Some(LiveCallPermit::new(counter));
@@ -6144,7 +5337,7 @@ pub(super) fn classify_replay_resolution(outcome: ResolutionOutcome) -> Replayed
 
 /// Serializes and uploads a cancellation's optional partial response payload, shared by the
 /// direct and accessor cancellation paths. The caller is responsible for site-specific failure
-/// cleanup (releasing the atomic lease / terminal guard handling).
+/// cleanup through its terminal guard.
 async fn upload_partial_response<Resp: Into<HostResponse> + Send + 'static>(
     oplog: &Arc<dyn Oplog>,
     partial: Option<Resp>,
@@ -6272,7 +5465,7 @@ fn expect_cancelled_resolution(resolution: &Resolution) -> Result<(), WorkerExec
 /// Store-free persistence preparation shared by the direct ([`DurableCallSession::complete`]) and
 /// accessor ([`DurableCallSession::persist_access_terminal`]) completion paths: waits for the
 /// (possibly deferred) request upload, encodes and uploads the response payload, and constructs
-/// the terminal `End` entry — without appending it, touching atomic-region state, or closing
+/// the terminal `End` entry — without appending it or closing
 /// scopes, which the two paths deliberately order differently (direct appends inline; accessor
 /// hands the append to an owned task via its terminal guard).
 async fn prepare_end_entry<Pair: HostPayloadPair>(
@@ -6368,11 +5561,7 @@ fn response_has_bounded_encoding_stack<Resp: 'static>() -> bool {
         TypeId::of::<HostResponseRandomSeed>(),
         TypeId::of::<HostResponseP3MonotonicClockUnit>(),
         TypeId::of::<HostResponseStreamCheckWrite>(),
-        TypeId::of::<HostResponseStreamChunk>(),
         TypeId::of::<HostResponseStreamSkip>(),
-        TypeId::of::<HostResponseStreamWriteResult>(),
-        TypeId::of::<HostResponseStreamWriteWithBytes>(),
-        TypeId::of::<HostResponseStreamWriteZeroes>(),
         TypeId::of::<HostResponseQuotaTokenAcquired>(),
         TypeId::of::<HostResponseQuotaCommitResult>(),
         TypeId::of::<HostResponsePermissionCardDerived>(),
@@ -6639,17 +5828,13 @@ where
             .worker()
             .commit_oplog_and_update_state(CommitLevel::DurableOnly)
             .await?;
-        if let Some(min_exposed_marker) = store.with(|mut access| {
+        if store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
-            if ctx.state.at_clean_checkpoint_boundary() {
-                Some(ctx.state.min_exposed_marker)
-            } else {
-                None
-            }
+            ctx.state.at_clean_checkpoint_boundary()
         }) {
             public_state
                 .worker()
-                .checkpoint_status_mid_invocation(min_exposed_marker)
+                .checkpoint_status_mid_invocation()
                 .await;
         }
     }
@@ -6751,25 +5936,15 @@ fn is_accessor_supported_function_type(function_type: &DurableFunctionType) -> b
     )
 }
 
-fn opens_accessor_scope(
-    function_type: &DurableFunctionType,
-    assume_idempotence: bool,
-    unpersisted: bool,
-) -> bool {
-    !unpersisted
-        && ((*function_type == DurableFunctionType::WriteRemote && !assume_idempotence)
-            || matches!(function_type, DurableFunctionType::WriteRemoteBatched(None)))
+fn opens_accessor_scope(function_type: &DurableFunctionType, unpersisted: bool) -> bool {
+    !unpersisted && matches!(function_type, DurableFunctionType::WriteRemoteBatched(None))
 }
 
-fn opens_replay_durable_scope(
-    function_type: &DurableFunctionType,
-    assume_idempotence: bool,
-) -> bool {
-    (*function_type == DurableFunctionType::WriteRemote && !assume_idempotence)
-        || matches!(
-            *function_type,
-            DurableFunctionType::WriteRemoteBatched(None)
-        )
+fn opens_replay_durable_scope(function_type: &DurableFunctionType) -> bool {
+    matches!(
+        *function_type,
+        DurableFunctionType::WriteRemoteBatched(None)
+    )
 }
 
 fn is_accessor_terminal_supported_function_type(function_type: &DurableFunctionType) -> bool {
@@ -6915,30 +6090,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                 .map_err(start_write_error)?;
             (idx, true, request_upload)
         };
-        let atomic_lease = if persisted {
-            if let Some(begin_index) = self.execution_scope.atomic_region {
-                let lease = ctx.state.register_atomic_region_call(
-                    begin_index,
-                    self.retry.can_reexecute_on_incomplete_replay(),
-                );
-                if lease.is_none() {
-                    return Err(WorkerExecutorError::runtime(format!(
-                        "durable call {start_idx} started in atomic region {begin_index}, but the region is not open"
-                    )));
-                }
-                lease
-            } else {
-                None
-            }
-        } else {
-            // Snapshotting writes nothing; keep the initiation-time region for trap/retry
-            // classification without joining the live in-flight member guard.
-            unregistered_atomic_lease(
-                self.execution_scope.atomic_region,
-                self.retry.can_reexecute_on_incomplete_replay(),
-            )
-        };
-        let execution_scope = self.execution_scope.finish(start_idx, atomic_lease);
+        let execution_scope = self.execution_scope.finish(start_idx);
         Ok(DurableCallSession {
             start_idx,
             boundary: self.boundary,
@@ -7010,7 +6162,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                         DurableExecutionState {
                             is_live: true,
                             snapshotting_mode: previous.snapshotting_mode,
-                            assume_idempotence: previous.assume_idempotence,
                             max_in_function_retry_delay: previous.max_in_function_retry_delay,
                         },
                         Pair::FQFN,
@@ -7052,13 +6203,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
         replay: ReplayCallHandle,
     ) -> DurableCallSession<Pair, P> {
         let start_idx = replay.start_idx();
-        // Replay handles never participate in the live in-flight member guard, but keep their
-        // initiation-time region for trap/retry classification.
-        let atomic_lease = unregistered_atomic_lease(
-            self.execution_scope.atomic_region,
-            self.retry.can_reexecute_on_incomplete_replay(),
-        );
-        let execution_scope = self.execution_scope.finish(start_idx, atomic_lease);
+        let execution_scope = self.execution_scope.finish(start_idx);
         DurableCallSession {
             start_idx,
             boundary: self.boundary,
@@ -7090,7 +6235,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> Drop for DurableCallSession<Pair, P> 
             return;
         }
         if self.teardown_probe().is_tearing_down() {
-            self.execution_scope.release_atomic_lease();
             tracing::debug!(
                 start_idx = %self.start_idx,
                 "durable call abandoned during executor shutdown"
@@ -7108,10 +6252,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> Drop for DurableCallSession<Pair, P> 
             }
             // Not persisted: there is nothing on disk to reconcile.
         } else {
-            if opens_replay_durable_scope(
-                self.retry.function_type(),
-                self.retry.durable_execution_state().assume_idempotence,
-            ) && let Some(sink) = &self.drop_sink
+            if opens_replay_durable_scope(self.retry.function_type())
+                && let Some(sink) = &self.drop_sink
             {
                 let _ = sink.send(DropEvent::CloseDurableScope {
                     function_type: self.retry.function_type().clone(),
@@ -7142,7 +6284,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> Drop for DurableCallSession<Pair, P> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::durable_host::{atomic_region_surviving_members, close_atomic_region};
     use test_r::test;
 
     #[test]
@@ -7159,9 +6300,8 @@ mod tests {
             };
             let oplog = Arc::new(InMemoryOplog::new());
             oplog
-                .add(OplogEntry::NoOp {
+                .add(OplogEntry::RecoverySucceeded {
                     timestamp: Timestamp::now_utc(),
-                    entity_parent_start_index: None,
                 })
                 .await
                 .unwrap();
@@ -7209,7 +6349,6 @@ mod tests {
                 execution_scope: BegunCallExecutionScope {
                     entity_parent_start_index: parent_start_index,
                     parent_start_index,
-                    atomic_region: None,
                     observational_owner: None,
                     invocation_id: Some(invocation_id),
                 },
@@ -7218,7 +6357,6 @@ mod tests {
                     DurableExecutionState {
                         is_live: false,
                         snapshotting_mode: false,
-                        assume_idempotence: false,
                         max_in_function_retry_delay: std::time::Duration::ZERO,
                     },
                     GolemRpcWasmRpcDrop::FQFN,
@@ -7246,39 +6384,6 @@ mod tests {
             };
             assert_eq!(handle.start_idx(), start_index);
         }
-    }
-
-    #[test]
-    fn repair_lease_parent_transfer() {
-        let outer = OplogIndex::from_u64(10);
-        let inner = OplogIndex::from_u64(20);
-        let later_sibling = OplogIndex::from_u64(30);
-        let mut regions = vec![
-            ActiveAtomicRegion::new(outer, outer.next()),
-            ActiveAtomicRegion::new(inner, inner.next()),
-        ];
-        let replay_lease = unregistered_atomic_lease(Some(inner), true).unwrap();
-
-        close_atomic_region(&mut regions, inner);
-        regions.push(ActiveAtomicRegion::new(later_sibling, later_sibling.next()));
-        let repaired = register_live_repair_atomic_lease(
-            &mut regions,
-            replay_lease.owner(),
-            replay_lease.repairable_when_incomplete(),
-        )
-        .unwrap();
-
-        assert_eq!(replay_lease.owner(), Some(inner));
-        assert_eq!(repaired.owner(), Some(outer));
-        assert!(atomic_region_surviving_members(&regions, later_sibling).is_empty());
-        assert!(Arc::ptr_eq(
-            &atomic_region_surviving_members(&regions, outer)[0],
-            &repaired
-        ));
-
-        close_atomic_region(&mut regions, later_sibling);
-        close_atomic_region(&mut regions, outer);
-        assert_eq!(repaired.owner(), None);
     }
 }
 

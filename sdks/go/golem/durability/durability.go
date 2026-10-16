@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package durability exposes Golem's exactly-once execution knobs: atomic
-// regions, idempotence mode, idempotency keys, oplog commits and checkpoints,
-// and custom durable operations.
+// Package durability exposes idempotency keys, oplog commits, and custom
+// durable operations.
 package durability
 
 import (
@@ -31,55 +30,6 @@ import (
 	witDurability "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_durability_durability"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
-
-// Durability helpers expose Golem's exactly-once execution knobs to a handler:
-// atomic regions, idempotence mode, an idempotency-key generator, and oplog
-// commit. They wrap host functions that the runtime already implements; the
-// durability semantics are guaranteed by the executor, and these are thin,
-// fail-loud wrappers (a host failure traps the component — no in-band error
-// return).
-//
-// Concurrency: these knobs apply at the worker level — the scope is per worker,
-// not per goroutine.
-// Golem runs an agent single-threaded with cooperative task-switching only at
-// await points (RPC, promise, sleep), so an atomic region or a
-// WithIdempotenceMode scope is safe when it does not await while other goroutines
-// run concurrently; nesting on a single logical flow is fine. To keep a scope from
-// affecting concurrent work, don't hold it open across a concurrent await (e.g. a
-// CallAsync fan-out); for concurrency, distribute work across agent instances.
-
-// Atomically runs f as an atomic region: on normal return the region commits, so
-// on a later replay it is treated as a single completed step. If f panics, the
-// component traps at once, with the region left open, and the runtime
-// re-executes the whole region on retry — all-or-nothing. The trap happens even
-// when something above Atomically would recover the panic (a tool handler or
-// the HTTP router turns a panic into a response), because the invocation must
-// not go on inside the open region. Panicking is therefore the way to abort a
-// region, consistent with the fail-loud RPC/promise model.
-//
-// Return a value by capturing it in an outer variable:
-//
-//	var total int64
-//	durability.Atomically(func() { total = recompute() })
-func Atomically(f func()) {
-	begin := apiHost.MarkBeginOperation()
-	link.TrapOnPanic("atomic region", f)
-	apiHost.MarkEndOperation(begin)
-}
-
-// WithIdempotenceMode sets the current idempotence mode and returns a function
-// that restores the previous mode; use it with defer to scope it:
-//
-//	defer durability.WithIdempotenceMode(false)()
-//
-// The default is true — side effects are treated as idempotent and Golem gives
-// at-least-once semantics. Setting it false gives at-most-once: the agent fails
-// if it is unknown whether a side effect already ran.
-func WithIdempotenceMode(idempotent bool) (restore func()) {
-	prev := apiHost.GetIdempotenceMode()
-	apiHost.SetIdempotenceMode(idempotent)
-	return func() { apiHost.SetIdempotenceMode(prev) }
-}
 
 // GenerateIdempotencyKey returns a fresh idempotency key that is stable across
 // replay — it is persisted and committed, so it can be handed to a third-party
@@ -164,8 +114,7 @@ type Spec struct {
 //     value, so the operation is not retried.
 //   - Panicking records nothing: the panic traps the component at once, even
 //     where a caller above would recover it (such as a tool handler), which
-//     fails the agent. Inside [Atomically] the region is retried, and the retry
-//     runs body again.
+//     fails the agent.
 //
 // There is no async variant: a blocking body already suspends the fiber at its
 // await points, so one function covers both cases.

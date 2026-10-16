@@ -2,14 +2,14 @@ import { Callout, Tabs } from "nextra/components"
 
 # High-level transactions
 
-On top of the [durability controls](/next/develop/durability) and [retry controls](/next/develop/retries), the SDKs also provide high level functions for defining transactions supporting **compensation actions** in case of getting reverted.
+The SDKs provide saga helpers for workflows that need **compensation actions** after a domain failure.
 
-Although Golem's automatic retry policies and low-level atomic regions provide a lot of power automatically, a set of external operations such as HTTP requests often needs to be executed **transactionally**; if one operation fails, compensation actions may need to undo earlier successful operations.
+Each host call remains durable on its own. A saga registers compensations for successful steps and runs them in reverse order when a later step fails. Compensation is a new external action, not deletion of the earlier effect.
 
 The SDK provides support for two different types of transactions:
 
 - **fallible transactions** are only dealing with domain errors
-- **infallible transactions** compensate domain errors and rewind for an immediate retry
+- **infallible transactions** compensate domain errors and loop in guest code, appending new calls for the next attempt
 
 ### Fallible transactions
 
@@ -36,8 +36,7 @@ A **fallible transaction** deals with domain errors. Successful steps register c
     </Tabs.Tab>
     <Tabs.Tab>
         In MoonBit, the SDK does not currently provide a dedicated high-level fallible transaction helper. Implement
-        the same pattern manually by combining lower-level durability helpers such as `with_atomic_operation` with
-        explicit compensation logic for the operations you need to roll back.
+        the same pattern manually with explicit compensation logic for the operations you need to undo.
     </Tabs.Tab>
     <Tabs.Tab>
         In Go, a fallible transaction can be executed using the `transaction.Fallible` function of the
@@ -50,7 +49,7 @@ A **fallible transaction** deals with domain errors. Successful steps register c
 
 ### Infallible transactions
 
-In an infallible transaction, a propagated domain error runs compensations and then rewinds for an immediate, retry-policy-independent restart. Unexpected failures follow host recovery semantics and do not guarantee compensation. In Effect, interruption triggers compensation: the fallible helper propagates the interruption, while the infallible helper rewinds.
+In an infallible transaction, a propagated domain error runs compensations and then starts another guest-code attempt. Both the failed attempt and its compensations remain in history. New attempt calls have new `Start` positions; reconstruction of an incomplete call repairs that call at its own `Start`. This loop does not use the host retry policy and can run forever on a deterministic domain failure. Unexpected traps fail the invocation and do not guarantee compensation. Do not use interruption as a business retry signal.
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
@@ -71,9 +70,7 @@ In an infallible transaction, a propagated domain error runs compensations and t
     </Tabs.Tab>
     <Tabs.Tab>
         In MoonBit, the SDK does not yet provide a dedicated high-level infallible transaction helper. Implement the
-        same pattern manually by saving the oplog position with `get_oplog_index`, wrapping each step in
-        `with_atomic_operation`, and rewinding with `set_oplog_index` after running compensations so the whole
-        transaction is retried from the saved checkpoint.
+        same pattern manually with a loop that starts a new attempt only after all required compensations succeed.
     </Tabs.Tab>
     <Tabs.Tab>
         In Go, an infallible transaction can be executed using the `transaction.Infallible` function, by passing a
@@ -92,7 +89,7 @@ It is defined with the following interface:
     <Tabs.Tab>
         ```typescript
         /**
-        * Represents an atomic operation of the transaction which has a rollback action.
+        * Represents a compensable step of the transaction.
         *
         * Implement this interface and use it within a saga block.
         * Compensable steps can also be constructed with `compensable`.
@@ -150,7 +147,7 @@ It is defined with the following interface:
 
       ```rust
 
-      /// Represents an atomic operation of the transaction which has a rollback action.
+      /// Represents a compensable step of the transaction.
       ///
       /// Implement this trait and use it within a `transaction` block.
       /// Operations can also be constructed from closures using `operation`.
@@ -402,7 +399,7 @@ The defined operations can be executed in _fallible_ or _infallible_ mode:
     </Tabs.Tab>
     <Tabs.Tab>
     <Callout type="info">
-    The MoonBit SDK does not yet provide high-level `fallibleTransaction` / `infallibleTransaction` helpers like the other languages. The saga pattern must be implemented manually using oplog primitives as shown below.
+    The MoonBit SDK does not provide high-level saga helpers. Implement the saga with ordinary control flow and durable host calls.
     </Callout>
 
     Add the API package alias to the component's `moon.pkg`; MoonBit source files do not contain import declarations:
@@ -416,27 +413,23 @@ The defined operations can be executed in _fallible_ or _infallible_ mode:
     The following is pseudocode for domain-error handling, not a complete SDK implementation:
 
     ```text
-    checkpoint = get_oplog_index()
-    completed = []
-
-    for each step:
-      result = with_atomic_operation(step.execute)
-      if result succeeded:
-        append the step's compensation to completed
-      else:
-        compensate completed steps in reverse order
-        preserve every compensation result
-
-        if a compensation failed:
-          in fallible mode, return partial-rollback(original error, compensation error)
-          in infallible mode, do not rewind; apply an application-specific failure policy
-
-        if all compensations succeeded:
+    repeat:
+      completed = []
+      for each step:
+        result = step.execute()
+        if result succeeded:
+          append the step's compensation to completed
+        else:
+          compensate completed steps in reverse order
+          preserve every compensation result
+          if a compensation failed:
+            return partial-rollback(original error, compensation error)
           in fallible mode, return the original domain error
-          in infallible mode, set_oplog_index(checkpoint) to rewind and retry
+          otherwise, start the next attempt
+      if all steps succeeded, return success
     ```
 
-    Per-step atomic regions do not undo external effects and do not by themselves make the whole sequence crash-atomic. External operations must be idempotent. A stronger crash-reexecution guarantee requires an enclosing atomic region and application-specific handling of compensation failures.
+    Keep execute and compensation calls duplicate-safe. A crash reconstructs the recorded prefix and repairs eligible incomplete calls; it does not undo external effects. A compensation failure requires explicit application handling, not a claim that rollback completed.
     </Tabs.Tab>
     <Tabs.Tab>
     ```go

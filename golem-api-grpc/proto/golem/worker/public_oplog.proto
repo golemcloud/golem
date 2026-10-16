@@ -31,12 +31,9 @@ message OplogEntry {
     AgentInvocationFinishedParameters AgentInvocationFinished = 4;
     TimestampParameter Suspend = 5;
     ErrorParameters Error = 6;
-    TimestampParameter NoOp = 7;
     JumpParameters Jump = 8;
     TimestampParameter Interrupted = 9;
     TimestampParameter Exited = 10;
-    TimestampParameter BeginAtomicRegion = 12;
-    EndAtomicRegionParameters EndAtomicRegion = 13;
     PendingAgentInvocationParameters PendingAgentInvocation = 16;
     PendingUpdateParameters PendingUpdate = 17;
     SuccessfulUpdateParameters SuccessfulUpdate = 18;
@@ -421,7 +418,6 @@ message ErrorParameters {
   google.protobuf.Timestamp timestamp = 1;
   string error = 2;
   uint64 retry_from = 3;
-  bool inside_atomic_region = 4;
   optional RetryPolicyState retry_policy_state = 5;
   OplogErrorKind kind = 6;
 }
@@ -583,11 +579,6 @@ message ToolAttachmentControlParameters {
 message DurableStreamRecordParameters {
   google.protobuf.Timestamp timestamp = 1;
   golem.schema.TypedSchemaValue record = 2;
-}
-
-message EndAtomicRegionParameters {
-  google.protobuf.Timestamp timestamp = 1;
-  uint64 begin_index = 2;
 }
 
 message BeginRemoteTransactionParameters {

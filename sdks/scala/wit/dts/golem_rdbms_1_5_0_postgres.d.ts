@@ -9,7 +9,13 @@ declare module 'golem:rdbms/postgres@1.5.0' {
     get(): DbColumnType;
   }
   export class DbResultStream {
+    /**
+     * @throws Error
+     */
     getColumns(): DbColumn[];
+    /**
+     * @throws Error
+     */
     getNext(): DbRow[] | undefined;
   }
   export class DbConnection {

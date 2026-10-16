@@ -214,11 +214,6 @@ object OplogApi {
     name: String
   )
 
-  final case class EndAtomicRegionParameters(
-    timestamp: ContextApi.DateTime,
-    beginIndex: OplogIndex
-  )
-
   final case class EndRemoteWriteParameters(
     timestamp: ContextApi.DateTime,
     beginIndex: OplogIndex
@@ -250,7 +245,7 @@ object OplogApi {
 
   sealed trait UpdateDescription extends Product with Serializable
   object UpdateDescription {
-    case object AutoUpdate                            extends UpdateDescription
+    case object AutoUpdate                                                                extends UpdateDescription
     final case class SnapshotBased(data: Array[Byte], filesystemSnapshot: Option[String]) extends UpdateDescription
   }
 
@@ -396,9 +391,6 @@ object OplogApi {
     final case class RecoverySucceeded(ts: ContextApi.DateTime) extends OplogEntry {
       def timestamp: ContextApi.DateTime = ts
     }
-    final case class NoOp(ts: ContextApi.DateTime) extends OplogEntry {
-      def timestamp: ContextApi.DateTime = ts
-    }
     final case class Jump(params: JumpParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
@@ -412,12 +404,6 @@ object OplogApi {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
     final case class RemoveRetryPolicy(params: RemoveRetryPolicyParameters) extends OplogEntry {
-      def timestamp: ContextApi.DateTime = params.timestamp
-    }
-    final case class BeginAtomicRegion(ts: ContextApi.DateTime) extends OplogEntry {
-      def timestamp: ContextApi.DateTime = ts
-    }
-    final case class EndAtomicRegion(params: EndAtomicRegionParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
     final case class BeginRemoteWrite(ts: ContextApi.DateTime) extends OplogEntry {
@@ -545,7 +531,6 @@ object OplogApi {
         case "suspend"            => Suspend(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
         case "error"              => Error(parseErrorParameters(v.asInstanceOf[JsErrorParameters]))
         case "recovery-succeeded" => RecoverySucceeded(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
-        case "no-op"              => NoOp(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
         case "jump"               => Jump(parseJumpParameters(v.asInstanceOf[JsJumpParameters]))
         case "interrupted"        => Interrupted(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
         case "exited"             => Exited(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
@@ -553,9 +538,6 @@ object OplogApi {
           SetRetryPolicy(parseSetRetryPolicyParameters(v.asInstanceOf[JsSetRetryPolicyParameters]))
         case "remove-retry-policy" =>
           RemoveRetryPolicy(parseRemoveRetryPolicyParameters(v.asInstanceOf[JsRemoveRetryPolicyParameters]))
-        case "begin-atomic-region" => BeginAtomicRegion(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
-        case "end-atomic-region"   =>
-          EndAtomicRegion(parseEndAtomicRegionParameters(v.asInstanceOf[JsEndAtomicRegionParameters]))
         case "begin-remote-write" => BeginRemoteWrite(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
         case "end-remote-write"   =>
           EndRemoteWrite(parseEndRemoteWriteParameters(v.asInstanceOf[JsEndRemoteWriteParameters]))
@@ -920,12 +902,6 @@ object OplogApi {
     RemoveRetryPolicyParameters(
       timestamp = parseDateTime(raw.timestamp),
       name = raw.name
-    )
-
-  private def parseEndAtomicRegionParameters(raw: JsEndAtomicRegionParameters): EndAtomicRegionParameters =
-    EndAtomicRegionParameters(
-      timestamp = parseDateTime(raw.timestamp),
-      beginIndex = BigInt(raw.beginIndex.toString)
     )
 
   private def parseEndRemoteWriteParameters(raw: JsEndRemoteWriteParameters): EndRemoteWriteParameters =

@@ -747,7 +747,6 @@ pub trait ToolStreamingCaller {
     async fn collect_capable_dual(&self, path: String, output_size: u64) -> Vec<Vec<u8>>;
     async fn completed_capable_tool_then_promise(&self, path: String, input: Vec<u8>) -> Vec<u8>;
     async fn clean_stdout_then_trap(&self);
-    async fn dependent_sibling_after_unjournaled_stdout(&self) -> Vec<String>;
     async fn trap_with_blocked_sibling(&self);
     async fn trap_with_sibling_lifecycle(&self, lifecycle: String);
     async fn drop_trapping_result(&self);
@@ -1216,14 +1215,10 @@ async fn raw_chunk(stdout: &mut InputStream) -> Vec<u8> {
 }
 
 async fn wait_at_crash_checkpoint(name: &str) {
-    wait_at_crash_checkpoint_with_atomic_gate(name, true).await;
+    wait_at_unscoped_crash_checkpoint(name).await;
 }
 
 async fn wait_at_unscoped_crash_checkpoint(name: &str) {
-    wait_at_crash_checkpoint_with_atomic_gate(name, false).await;
-}
-
-async fn wait_at_crash_checkpoint_with_atomic_gate(name: &str, atomic_gate: bool) {
     use golem_rust::wasip3::http::{client, types};
     use golem_rust::wasip3::sockets::types::{
         IpAddressFamily, IpSocketAddress, Ipv4SocketAddress, TcpSocket,
@@ -1278,10 +1273,7 @@ async fn wait_at_crash_checkpoint_with_atomic_gate(name: &str, atomic_gate: bool
     drop(trailers);
 
     if name == "single-store-http-atomic" {
-        // Give the host-side response body scope time to record while the guest keeps running,
-        // then issue direct (non-accessor) durable calls from the same Store: a plain
-        // idempotency key followed by nested atomic regions containing more keys and oplog index
-        // reads.
+        // Give the response body scope time to record, then issue durable calls from this Store.
         let yields: u32 = std::env::var("GOL581_YIELDS")
             .unwrap_or_else(|_| "1000".to_string())
             .parse()
@@ -1289,25 +1281,9 @@ async fn wait_at_crash_checkpoint_with_atomic_gate(name: &str, atomic_gate: bool
         for _ in 0..yields {
             golem_rust::wasip3::wit_bindgen::yield_async().await;
         }
-        // `GOL581_ATOMIC_FIRST` makes the positional atomic-region marker the first direct call
-        // after the body read; otherwise a strictly matched idempotency key comes first.
-        let atomic_first = std::env::var_os("GOL581_ATOMIC_FIRST").is_some();
-        let outside = if atomic_first {
-            None
-        } else {
-            Some(golem_rust::generate_idempotency_key())
-        };
-        let outer = golem_rust::atomically(|| {
-            let first = golem_rust::generate_idempotency_key();
-            let before = golem_rust::get_oplog_index();
-            let inner = golem_rust::atomically(golem_rust::generate_idempotency_key);
-            let after = golem_rust::get_oplog_index();
-            assert!(before < after);
-            assert_ne!(first, inner);
-            first
-        });
-        let outside = outside.unwrap_or_else(golem_rust::generate_idempotency_key);
-        assert_ne!(outside, outer);
+        let first = golem_rust::generate_idempotency_key();
+        let second = golem_rust::generate_idempotency_key();
+        assert_ne!(first, second);
     }
 
     let wait_for_release = || async {
@@ -1339,11 +1315,7 @@ async fn wait_at_crash_checkpoint_with_atomic_gate(name: &str, atomic_gate: bool
         received.await.expect("finish checkpoint gate receive");
         assert_eq!(bytes, [1], "checkpoint gate returns one release byte");
     };
-    if atomic_gate {
-        golem_rust::atomically_async(wait_for_release).await;
-    } else {
-        wait_for_release().await;
-    }
+    wait_for_release().await;
 }
 
 async fn wait_at_promise_checkpoint(name: &str) {
@@ -4405,7 +4377,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             );
             std::fs::write("/capable-publication-observed.bin", b"observed")
                 .expect("lane must have returned before capable stdout publication");
-            let _ = golem_rust::get_oplog_index();
+            golem_rust::oplog_commit(0);
             wait_at_crash_checkpoint("caller-observed-capable-publication").await;
             read_tool_stdout(stdout).await
         };
@@ -4645,35 +4617,6 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .expect("owner trap must abort this result observation");
     }
 
-    async fn dependent_sibling_after_unjournaled_stdout(&self) -> Vec<String> {
-        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
-        let (stdout_target, stdout) = tool_host::create_output();
-        let changing = rpc.async_invoke_and_await(
-            &["run".to_string()],
-            raw_input("changing-stdout-in-atomic-region"),
-            Some(raw_stdin(Vec::new())),
-            Some(stdout_target),
-            None,
-        );
-        let observed = String::from_utf8(read_all(stdout).await).expect("stdout is UTF-8");
-        let sibling = rpc.async_invoke_and_await(
-            &["no-stream".to_string()],
-            raw_no_stream_input(&observed),
-            None,
-            None,
-            None,
-        );
-        let sibling = decode_no_stream_result(
-            raw_result(&sibling)
-                .await
-                .expect("dependent sibling invocation succeeds"),
-        );
-        raw_result(&changing)
-            .await
-            .expect("changing invocation completes after recovery");
-        vec![observed, sibling]
-    }
-
     async fn trap_with_blocked_sibling(&self) {
         let (blocked_source, blocked_stdin) =
             golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
@@ -4819,7 +4762,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                     .open("/after-input-and-stdout.checkpoint")
                     .and_then(|mut file| file.write_all(b"reached"))
                     .expect("append caller input/output checkpoint once");
-                let _ = golem_rust::get_oplog_index();
+                golem_rust::oplog_commit(0);
                 assert_eq!(first_chunk(&mut invocation).await, b"checkpoint");
                 wait_at_crash_checkpoint("after-input-and-stdout").await;
                 drop(source);
@@ -4836,7 +4779,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 );
                 std::fs::write("/after-eof-before-terminal.checkpoint", b"reached")
                     .expect("write caller EOF checkpoint");
-                let _ = golem_rust::get_oplog_index();
+                golem_rust::oplog_commit(0);
                 assert_eq!(raw_chunk(&mut stdout).await, b"eof-observed");
                 let _ = raw_result(&result).await;
                 drop(stdout);
@@ -4862,7 +4805,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 );
                 std::fs::write("/after-stdout-terminal.checkpoint", b"reached")
                     .expect("write caller stdout-terminal checkpoint");
-                let _ = golem_rust::get_oplog_index();
+                golem_rust::oplog_commit(0);
                 assert_eq!(read_all(stdout).await, b"checkpoint");
                 wait_at_crash_checkpoint("after-stdout-terminal").await;
                 drop(source);
@@ -4890,7 +4833,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                     .expect("write caller terminal checkpoint");
                 drop(source);
                 assert_eq!(read_all(stdout).await, b"checkpoint");
-                let _ = golem_rust::get_oplog_index();
+                golem_rust::oplog_commit(0);
                 wait_at_crash_checkpoint("after-entity-terminal").await;
                 let _ = raw_result(&result).await;
             }
@@ -4973,7 +4916,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         assert_eq!(output, input);
         std::fs::write("/capable-terminal-published.checkpoint", b"reached")
             .expect("record capable terminal publication");
-        let _ = golem_rust::get_oplog_index();
+        golem_rust::oplog_commit(0);
         wait_at_crash_checkpoint("capable-terminal-published").await;
     }
 
@@ -4989,7 +4932,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         assert_eq!(output, input);
         std::fs::write("/capable-published-observed.checkpoint", b"reached")
             .expect("record post-publication capable checkpoint");
-        let _ = golem_rust::get_oplog_index();
+        golem_rust::oplog_commit(0);
         wait_at_crash_checkpoint("capable-published").await;
     }
 
@@ -5006,7 +4949,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .await
             .expect_err("capable stdin overflow must select a no-body terminal");
         assert!(format!("{error:?}").contains("ResourceExhausted"));
-        let _ = golem_rust::get_oplog_index();
+        golem_rust::oplog_commit(0);
         wait_at_crash_checkpoint("capable-stdin-overflow-terminal").await;
         drop(invocation);
     }
@@ -5220,7 +5163,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
 
     async fn hold_completed_reconstruction_overlapping_custom(&self) {
         // The provider body waits at a crash checkpoint in its own entity Store while this
-        // caller Store performs its own checkpoint HTTP request and atomic TCP gate, so the two
+        // caller Store performs its own checkpoint HTTP request and TCP gate, so the two
         // Stores record interleaved positional entries against the same oplog.
         let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let (stdout_target, stdout) = tool_host::create_output();

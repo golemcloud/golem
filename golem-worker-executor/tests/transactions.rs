@@ -15,24 +15,19 @@
 use crate::Tracing;
 use axum::Router;
 use axum::extract::Path;
-use axum::routing::{delete, get, post};
-use bytes::Bytes;
+use axum::routing::{delete, get};
 use golem_common::model::IdempotencyKey;
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
-use golem_test_framework::dsl::{
-    TestDsl, drain_connection, stdout_event_starting_with, stdout_events,
-};
+use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
 use pretty_assertions::{assert_eq, assert_ne};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::task::JoinHandle;
-use tracing::info;
 use tracing::{Instrument, debug, instrument};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -54,10 +49,6 @@ struct TestHttpServer {
 }
 
 impl TestHttpServer {
-    pub async fn start(fail_per_step: u64) -> Self {
-        Self::start_custom(Arc::new(move |_| fail_per_step), false).await
-    }
-
     pub async fn start_custom(
         fail_per_step: Arc<impl Fn(u64) -> u64 + Send + Sync + 'static>,
         log_steps: bool,
@@ -65,7 +56,6 @@ impl TestHttpServer {
         let events = Arc::new(Mutex::new(Vec::new()));
         let events_clone = events.clone();
         let events_clone2 = events.clone();
-        let events_clone3 = events.clone();
 
         let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -102,35 +92,6 @@ impl TestHttpServer {
                             }
                             "false"
                         }),
-                    )
-                    .route(
-                        "/side-effect",
-                        post(
-                            move |headers: axum::http::HeaderMap, body: Bytes| async move {
-                                let body = String::from_utf8(body.to_vec()).unwrap();
-                                debug!("received POST message: {body}");
-                                let is_first = {
-                                    let mut events = events_clone3.lock().unwrap();
-                                    events.push(body.clone());
-                                    events.len() == 1
-                                };
-                                // A request carrying `x-test-first-response-delay-ms` gets
-                                // its response delayed by that many milliseconds if it is the
-                                // first recorded side effect; the event is recorded on arrival
-                                // either way. This lets a guest keep a durable HTTP send in
-                                // flight (dispatched but not completed) while it crashes,
-                                // while a repeated send on retry gets an immediate response.
-                                if is_first
-                                    && let Some(delay_ms) = headers
-                                        .get("x-test-first-response-delay-ms")
-                                        .and_then(|value| value.to_str().ok())
-                                        .and_then(|value| value.parse::<u64>().ok())
-                                {
-                                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                                }
-                                "OK"
-                            },
-                        ),
                     );
 
                 axum::serve(listener, route).await.unwrap();
@@ -158,155 +119,6 @@ impl TestHttpServer {
 }
 
 // golem-rust library tests
-
-#[test]
-#[tracing::instrument]
-#[timeout("4m")]
-async fn golem_rust_jump(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let http_server = TestHttpServer::start(1).await;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), http_server.port().to_string());
-
-    let agent_id = agent_id!("GolemHostApi", "jump");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
-        .await?;
-
-    let (rx, abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
-
-    let result = executor
-        .invoke_and_await_agent(&component, &agent_id, "jump", data_value!())
-        .await?
-        .into_typed::<u64>()?;
-
-    while (rx.len() as u64) < 17 {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
-    drop(executor);
-    http_server.abort();
-
-    abort_capture.send(()).unwrap();
-    let mut events = drain_connection(rx).await;
-    events.retain(|e| match e {
-        Some(e) => {
-            !stdout_event_starting_with(e, "Sending") && !stdout_event_starting_with(e, "Received")
-        }
-        None => false,
-    });
-
-    info!("events: {:?}", events);
-
-    assert_eq!(result, 5);
-    assert_eq!(
-        stdout_events(events.into_iter().flatten()),
-        vec![
-            "started: 0\n",
-            "second: 2\n",
-            "second: 2\n",
-            "third: 3\n",
-            "fourth: 4\n",
-            "fourth: 4\n",
-            "fifth: 5\n",
-        ]
-    );
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("4m")]
-async fn golem_rust_checkpoint(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let http_server = TestHttpServer::start(1).await;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), http_server.port().to_string());
-
-    let agent_id = agent_id!("GolemHostApi", "checkpoint");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
-        .await?;
-
-    let (rx, abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
-
-    let result = executor
-        .invoke_and_await_agent(&component, &agent_id, "checkpoint_test", data_value!())
-        .await?
-        .into_typed::<u64>()?;
-
-    while (rx.len() as u64) < 17 {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
-    drop(executor);
-    http_server.abort();
-
-    abort_capture.send(()).unwrap();
-    let mut events = drain_connection(rx).await;
-    events.retain(|e| match e {
-        Some(e) => {
-            !stdout_event_starting_with(e, "Sending") && !stdout_event_starting_with(e, "Received")
-        }
-        None => false,
-    });
-
-    info!("events: {:?}", events);
-
-    // The checkpoint is created after state=1.
-    // Step 2: remote_call(2) returns true (first call), so unwrap_or_revert reverts to checkpoint.
-    //         On replay from checkpoint: state=2, remote_call(2) returns false, so we continue.
-    // Step 3: remote_call(3) returns true (first call), so assert_or_revert reverts to checkpoint.
-    //         On replay from checkpoint: state=2 again, remote_call(2) returns false, state=3,
-    //         remote_call(3) returns false, so we continue.
-    // Step 4: state=4, done.
-    assert_eq!(result, 4);
-    assert_eq!(
-        stdout_events(events.into_iter().flatten()),
-        vec![
-            "started: 0\n",
-            "second: 2\n", // first attempt
-            "second: 2\n", // replay after first revert (step 2 failed)
-            "third: 3\n",  // continues, step 3 will fail
-            "second: 2\n", // replay after second revert (step 3 failed)
-            "third: 3\n",  // continues, step 3 now succeeds
-            "fourth: 4\n", // done
-        ]
-    );
-
-    Ok(())
-}
 
 #[test]
 #[instrument]
@@ -341,147 +153,6 @@ async fn golem_rust_explicit_oplog_commit(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     assert!(result.is_ok());
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("4m")]
-async fn golem_rust_atomic_region(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let http_server = TestHttpServer::start(2).await;
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), http_server.port().to_string());
-
-    let agent_id = agent_id!("GolemHostApi", "atomic-region");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
-        .await?;
-
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "atomic_region", data_value!())
-        .await?;
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
-    drop(executor);
-    http_server.abort();
-
-    let events = http_server.get_events();
-    info!("events:\n - {}", events.join("\n - "));
-
-    assert_eq!(
-        events,
-        vec!["1", "2", "1", "2", "1", "2", "3", "4", "5", "5", "5", "6"]
-    );
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("4m")]
-async fn golem_rust_idempotence_on(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let http_server = TestHttpServer::start(1).await;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), http_server.port().to_string());
-
-    let agent_id = agent_id!("GolemHostApi", "idempotence-flag-on");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
-        .await?;
-
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "idempotence_flag", data_value!(true))
-        .await?;
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
-    drop(executor);
-    http_server.abort();
-
-    let events = http_server.get_events();
-    info!("events:\n - {}", events.join("\n - "));
-
-    assert_eq!(events, vec!["1", "1"]);
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("4m")]
-async fn golem_rust_idempotence_off(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let http_server = TestHttpServer::start(1).await;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), http_server.port().to_string());
-
-    let agent_id = agent_id!("GolemHostApi", "idempotence-flag-off");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
-        .await?;
-
-    let result = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "idempotence_flag",
-            data_value!(false),
-        )
-        .await;
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
-    drop(executor);
-    http_server.abort();
-
-    let events = http_server.get_events();
-    info!("events:\n - {}", events.join("\n - "));
-    info!("result: {:?}", result);
-
-    assert_eq!(events, vec!["1"]);
-    assert!(result.is_err());
-
     Ok(())
 }
 
@@ -615,132 +286,13 @@ async fn golem_rust_infallible_transaction(
             "=> 1".to_string(),
             "=> 2".to_string(),
             "=> 3".to_string(),
+            "<= 3".to_string(),
+            "<= 2".to_string(),
+            "<= 1".to_string(),
             "=> 1".to_string(),
             "=> 2".to_string(),
             "=> 3".to_string(),
             "=> 4".to_string(),
-        ]
-    );
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("4m")]
-async fn golem_rust_atomic_region_async(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let http_server = TestHttpServer::start(2).await;
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), http_server.port().to_string());
-
-    let agent_id = agent_id!("GolemHostApi", "atomic-region-async");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
-        .await?;
-
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "atomic_region_async", data_value!())
-        .await?;
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
-    drop(executor);
-    http_server.abort();
-
-    let events = http_server.get_events();
-    info!("events:\n - {}", events.join("\n - "));
-
-    assert_eq!(
-        events,
-        vec!["1", "2", "1", "2", "1", "2", "3", "4", "5", "5", "5", "6"]
-    );
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("4m")]
-async fn golem_rust_checkpoint_async(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let http_server = TestHttpServer::start(1).await;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), http_server.port().to_string());
-
-    let agent_id = agent_id!("GolemHostApi", "checkpoint-async");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
-        .await?;
-
-    let (rx, abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
-
-    let result = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "checkpoint_test_async",
-            data_value!(),
-        )
-        .await?
-        .into_typed::<u64>()?;
-
-    while (rx.len() as u64) < 17 {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
-    drop(executor);
-    http_server.abort();
-
-    abort_capture.send(()).unwrap();
-    let mut events = drain_connection(rx).await;
-    events.retain(|e| match e {
-        Some(e) => {
-            !stdout_event_starting_with(e, "Sending") && !stdout_event_starting_with(e, "Received")
-        }
-        None => false,
-    });
-
-    info!("events: {:?}", events);
-
-    assert_eq!(result, 4);
-    assert_eq!(
-        stdout_events(events.into_iter().flatten()),
-        vec![
-            "started: 0\n",
-            "second: 2\n",
-            "second: 2\n",
-            "third: 3\n",
-            "second: 2\n",
-            "third: 3\n",
-            "fourth: 4\n",
         ]
     );
 

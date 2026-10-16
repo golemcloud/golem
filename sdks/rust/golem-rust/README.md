@@ -175,9 +175,8 @@ Transient transport, timeout, 429 and unavailable errors use bounded retries
 and durable timers, respecting Retry-After; protocol/conflict errors do not.
 An active bounded HTTP request remains resident; idle/retry timers can suspend.
 
-The SDK does not change Golem's idempotence mode. Explicitly disabling it retains
-fail-closed recovery for interrupted writes. Exactly-once external effects rely
-on the peer atomically persisting and retaining producer deduplication state.
+Exactly-once external effects rely on the peer atomically persisting and
+retaining producer deduplication state.
 Golem forks copy checkpoints, producer IDs, epochs and pending data: they do not
 call a Durable Streams fork API or create independent producers. Divergent
 branches can collide on the same tuple; a later acknowledged sequence is a typed

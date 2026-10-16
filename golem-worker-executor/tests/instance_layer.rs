@@ -561,7 +561,6 @@ fn invocation_scope(
         principal,
         InvocationExecutionMode::Live,
         IdempotencyKey::new("instance-layer-live-scope".to_string()),
-        true,
         false,
         IdempotencyKey::new("instance-layer-live-streams".to_string()),
     )
@@ -590,194 +589,10 @@ fn replay_invocation_scope(
         principal,
         InvocationExecutionMode::ReplayingCompleted,
         IdempotencyKey::new("instance-layer-replay-scope".to_string()),
-        true,
         false,
         IdempotencyKey::new("instance-layer-replay-streams".to_string()),
     )
     .unwrap()
-}
-
-async fn completed_tool_positional_replay_errors(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    host_api_tests: &PrecompiledComponent,
-    owner_name: &str,
-    record_noop: bool,
-) -> anyhow::Result<(String, String, OplogIndex, OplogIndex)> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-    let agent_id = agent_id!("RpcCounter", owner_name);
-    let worker_id = executor
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
-        .await?;
-    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
-    let active_agent = executor.active_agent(&owner_id).await.unwrap();
-    let owner_metadata =
-        owner_component_metadata(&active_agent, component.id, component.revision).await?;
-    let tool_name = ToolName::try_from(format!("{owner_name}-tool")).unwrap();
-    let entity = AgentEntity::Tool(tool_name.clone());
-    let principal = Principal::Agent(AgentPrincipal {
-        agent_id: owner_id.agent_id.clone(),
-    });
-    let activation = Arc::new(activation(
-        ExecutableTarget::new(component.id, component.revision),
-        &format!("test:{owner_name}-tool"),
-        agent_id.agent_type.clone(),
-        tool_name,
-        context.account_id,
-        FilesystemCapability::Incapable,
-    ));
-    let lane = active_agent.execution().lane();
-    let parent_start = active_agent.execution().oplog().current_oplog_index().await;
-    let entity_start = parent_start.next();
-    let parent_id = OwnerInvocationId::Agent(parent_start);
-
-    let primary = lane.enter_primary(parent_start)?.acquire().await?;
-    let live = active_agent.start_entity_invocation(
-        parent_id.clone(),
-        invocation_scope(
-            &owner_id,
-            &entity,
-            entity_start,
-            parent_start,
-            activation.clone(),
-            principal.clone(),
-        ),
-        owner_metadata.clone(),
-        EntityCallMode::Synchronous,
-        move |_instance, store| {
-            Box::pin(async move {
-                if record_noop {
-                    GolemApiHost::get_oplog_index(store.data_mut().durable_ctx_mut()).await?;
-                }
-                Ok(())
-            })
-        },
-        std::future::ready,
-    )?;
-    live.await_result(&parent_id).await?;
-    drop(primary);
-    active_agent
-        .execution()
-        .commit(CommitLevel::Always)
-        .await
-        .unwrap();
-    let before = active_agent.execution().oplog().current_oplog_index().await;
-
-    active_agent
-        .execution()
-        .install_replay_generation(
-            DeletedRegions::from_regions([OplogRegion::from_index_range(
-                OplogIndex::INITIAL.next()..=parent_start,
-            )]),
-            None,
-        )
-        .await?;
-    let replay_primary = lane.enter_primary(parent_start)?.acquire().await?;
-    let replay = active_agent.start_entity_invocation(
-        parent_id.clone(),
-        replay_invocation_scope(
-            &owner_id,
-            &entity,
-            entity_start,
-            parent_start,
-            activation,
-            principal,
-        ),
-        owner_metadata,
-        EntityCallMode::Synchronous,
-        move |_instance, store| {
-            Box::pin(async move {
-                let ctx = store.data_mut().durable_ctx_mut();
-                let first = if record_noop {
-                    GolemApiHost::mark_begin_operation(ctx).await.map(|_| ())
-                } else {
-                    GolemApiHost::get_oplog_index(ctx).await.map(|_| ())
-                }
-                .expect_err("completed entity positional replay must fail");
-                let second = if record_noop {
-                    GolemApiHost::get_oplog_index(ctx).await.map(|_| ())
-                } else {
-                    GolemApiHost::mark_begin_operation(ctx).await.map(|_| ())
-                }
-                .expect_err("a failed positional replay must not make the entity live");
-                Ok((first.to_string(), second.to_string()))
-            })
-        },
-        std::future::ready,
-    )?;
-    let errors = replay.await_result(&parent_id).await?;
-    drop(replay_primary);
-    let after = active_agent.execution().oplog().current_oplog_index().await;
-    Ok((errors.0, errors.1, before, after))
-}
-
-#[test]
-#[timeout("120s")]
-async fn completed_tool_rejects_new_positional_entries_at_replay_tail(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("agent_rpc_rust")] host_api_tests: &PrecompiledComponent,
-) -> anyhow::Result<()> {
-    let (noop_error, begin_error, before, after) = completed_tool_positional_replay_errors(
-        last_unique_id,
-        deps,
-        host_api_tests,
-        "completed-tail-positional",
-        false,
-    )
-    .await?;
-    assert!(
-        noop_error.contains("NoOp"),
-        "unexpected error: {noop_error}"
-    );
-    assert!(
-        begin_error.contains("BeginAtomicRegion"),
-        "unexpected error: {begin_error}"
-    );
-    assert_eq!(
-        before, after,
-        "rejected positional calls must append nothing"
-    );
-    Ok(())
-}
-
-#[test]
-#[timeout("120s")]
-async fn completed_tool_wrong_positional_entry_remains_a_mismatch(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("agent_rpc_rust")] host_api_tests: &PrecompiledComponent,
-) -> anyhow::Result<()> {
-    let (mismatch, tail_error, before, after) = completed_tool_positional_replay_errors(
-        last_unique_id,
-        deps,
-        host_api_tests,
-        "completed-wrong-positional",
-        true,
-    )
-    .await?;
-    assert!(
-        mismatch.contains("BeginAtomicRegion"),
-        "unexpected error: {mismatch}"
-    );
-    assert!(mismatch.contains("NoOp"), "unexpected error: {mismatch}");
-    assert!(
-        tail_error.contains("NoOp"),
-        "unexpected error: {tail_error}"
-    );
-    assert_eq!(
-        before, after,
-        "mismatch and tail rejection must append nothing"
-    );
-    Ok(())
 }
 
 #[test]
@@ -903,7 +718,7 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
                         reveal.is_err(),
                         "the wallet-negative secret reveal must be durably denied"
                     );
-                    GolemApiHost::get_oplog_index(ctx).await?;
+                    GolemApiHost::generate_idempotency_key(ctx).await?;
                     Ok(())
                 })
             }
@@ -973,7 +788,6 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         principal.clone(),
         InvocationExecutionMode::ReplayingIncomplete,
         IdempotencyKey::new("instance-layer-incomplete-replay-scope".to_string()),
-        true,
         false,
         IdempotencyKey::new("instance-layer-incomplete-replay-streams".to_string()),
     )
@@ -997,7 +811,7 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
                     config_repair_expected,
                 )
                 .await?;
-                GolemApiHost::get_oplog_index(ctx).await?;
+                GolemApiHost::generate_idempotency_key(ctx).await?;
                 Ok(recorded)
             })
         },
@@ -1145,7 +959,7 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
                     let handle = ctx.secret_handle_from_snapshot(&snapshot)?;
                     let denied = SecretRevealHost::reveal(ctx, handle, expected).await?;
                     assert!(denied.is_err(), "wallet-negative reveal must be denied");
-                    GolemApiHost::get_oplog_index(ctx).await?;
+                    GolemApiHost::generate_idempotency_key(ctx).await?;
                     Ok(())
                 })
             }
@@ -1220,7 +1034,6 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
             principal,
             InvocationExecutionMode::ReplayingIncomplete,
             IdempotencyKey::new("instance-layer-incomplete-wallet-reveal".to_string()),
-            true,
             false,
             IdempotencyKey::new("instance-layer-incomplete-wallet-reveal-streams".to_string()),
         )
@@ -1239,7 +1052,7 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
                     let handle = ctx.secret_handle_from_snapshot(&snapshot)?;
                     fail_checks.store(fail_authority_check, Ordering::SeqCst);
                     let repaired = SecretRevealHost::reveal(ctx, handle, expected).await?;
-                    GolemApiHost::get_oplog_index(ctx).await?;
+                    GolemApiHost::generate_idempotency_key(ctx).await?;
                     Ok(repaired)
                 })
             }
@@ -1364,7 +1177,6 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         principal.clone(),
         InvocationExecutionMode::Live,
         IdempotencyKey::new("owner-entity-scope".to_string()),
-        true,
         false,
         IdempotencyKey::new("owner-entity-streams".to_string()),
     )
@@ -1460,7 +1272,6 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
         IdempotencyKey::new("second-entity-scope".to_string()),
-        true,
         false,
         IdempotencyKey::new("second-entity-streams".to_string()),
     )
@@ -1502,7 +1313,6 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
         IdempotencyKey::new("cancelled-entity-scope".to_string()),
-        true,
         false,
         IdempotencyKey::new("cancelled-entity-streams".to_string()),
     )
@@ -1586,7 +1396,6 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
         IdempotencyKey::new("panicking-entity-scope".to_string()),
-        true,
         false,
         IdempotencyKey::new("panicking-entity-streams".to_string()),
     )
@@ -2978,7 +2787,7 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
                     denied,
                     Err(golem_worker_executor::preview2::golem::agent::host::ConfigValueError::PermissionDenied)
                 ));
-                GolemApiHost::get_oplog_index(ctx).await?;
+                GolemApiHost::generate_idempotency_key(ctx).await?;
                 Ok(())
             })
         },
@@ -3070,7 +2879,7 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
                     replay_expected_secret,
                 )
                 .await?;
-                GolemApiHost::get_oplog_index(ctx).await?;
+                GolemApiHost::generate_idempotency_key(ctx).await?;
                 Ok(recorded)
             })
         },
@@ -3136,7 +2945,7 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
                 config_loaded_in_call.store(true, Ordering::SeqCst);
                 let denied = SecretRevealHost::reveal(ctx, handle, expected_plaintext).await?;
                 assert!(denied.is_err(), "empty reveal scope must deny plaintext");
-                GolemApiHost::get_oplog_index(ctx).await?;
+                GolemApiHost::generate_idempotency_key(ctx).await?;
                 Ok(())
             })
         },
@@ -3246,7 +3055,7 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
                 let recorded =
                     SecretRevealHost::reveal(ctx, handle, completed_replay_expected_plaintext)
                         .await?;
-                GolemApiHost::get_oplog_index(ctx).await?;
+                GolemApiHost::generate_idempotency_key(ctx).await?;
                 Ok(recorded)
             })
         },
@@ -3285,7 +3094,6 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
         }),
         InvocationExecutionMode::ReplayingIncomplete,
         IdempotencyKey::new("instance-layer-secret-reveal-repair".to_string()),
-        true,
         false,
         IdempotencyKey::new("instance-layer-secret-reveal-repair-streams".to_string()),
     )
@@ -3320,7 +3128,7 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
                 let handle = ctx.secret_handle_from_snapshot(&snapshot)?;
                 let repaired =
                     SecretRevealHost::reveal(ctx, handle, replay_expected_plaintext).await?;
-                GolemApiHost::get_oplog_index(ctx).await?;
+                GolemApiHost::generate_idempotency_key(ctx).await?;
                 Ok(repaired.is_err())
             })
         },

@@ -686,9 +686,8 @@ pub(crate) mod tests {
             for _ in 2..=3 {
                 fixture
                     .oplog
-                    .add(OplogEntry::NoOp {
+                    .add(OplogEntry::RecoverySucceeded {
                         timestamp: Timestamp::now_utc(),
-                        entity_parent_start_index: None,
                     })
                     .await
                     .unwrap();
@@ -704,9 +703,8 @@ pub(crate) mod tests {
             } else {
                 fixture
                     .oplog
-                    .add(OplogEntry::NoOp {
+                    .add(OplogEntry::RecoverySucceeded {
                         timestamp: Timestamp::now_utc(),
-                        entity_parent_start_index: None,
                     })
                     .await
                     .unwrap();
@@ -861,9 +859,8 @@ pub(crate) mod tests {
                             .unwrap(),
                     }
                 }
-                _ => OplogEntry::NoOp {
+                _ => OplogEntry::RecoverySucceeded {
                     timestamp: Timestamp::now_utc(),
-                    entity_parent_start_index: None,
                 },
             };
             fixture.oplog.add(entry).await.unwrap();
@@ -955,9 +952,8 @@ pub(crate) mod tests {
                         .await
                         .unwrap(),
                 },
-                _ => OplogEntry::NoOp {
+                _ => OplogEntry::RecoverySucceeded {
                     timestamp: Timestamp::now_utc(),
-                    entity_parent_start_index: None,
                 },
             };
             oplog.add(entry).await.unwrap();
@@ -1033,9 +1029,8 @@ pub(crate) mod tests {
                         record: oplog.upload_payload(&session).await.unwrap(),
                     }
                 } else {
-                    OplogEntry::NoOp {
+                    OplogEntry::RecoverySucceeded {
                         timestamp: Timestamp::now_utc(),
-                        entity_parent_start_index: None,
                     }
                 };
                 oplog.add(entry).await.unwrap();
@@ -1088,9 +1083,8 @@ pub(crate) mod tests {
                         .await
                         .unwrap(),
                 },
-                _ => OplogEntry::NoOp {
+                _ => OplogEntry::RecoverySucceeded {
                     timestamp: Timestamp::now_utc(),
-                    entity_parent_start_index: None,
                 },
             };
             assert_eq!(
@@ -1138,9 +1132,8 @@ pub(crate) mod tests {
             assert_eq!(
                 fixture
                     .oplog
-                    .add(OplogEntry::NoOp {
+                    .add(OplogEntry::RecoverySucceeded {
                         timestamp: Timestamp::now_utc(),
-                        entity_parent_start_index: None,
                     })
                     .await
                     .unwrap(),

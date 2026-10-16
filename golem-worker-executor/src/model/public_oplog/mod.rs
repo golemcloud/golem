@@ -31,15 +31,14 @@ use golem_common::model::lucene::Query;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, CardDerivedParams, CardEventQueuedParams, CardExpiredParams,
-    CardInstallFailedParams, CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams,
-    CardTransferConfirmedParams, CardTransferStartedParams, CardTransferredParams,
-    CommittedRemoteTransactionParams, CompletionDeliveredParams, CompletionDiscardedParams,
-    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
-    EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams,
-    GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
-    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    BeginRemoteTransactionParams, CancelPendingInvocationParams, CancelledParams,
+    CardDerivedParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams,
+    CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams, CardTransferConfirmedParams,
+    CardTransferStartedParams, CardTransferredParams, CommittedRemoteTransactionParams,
+    CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
+    DeactivatePluginParams, DropResourceParams, EndParams, ErrorParams, ExitedParams,
+    FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
+    LogParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
     PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RecoverySucceededParams,
     RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
     RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
@@ -270,19 +269,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
                 entity_parent_start_index,
                 ..
             }
-            | OplogEntry::NoOp {
-                entity_parent_start_index,
-                ..
-            }
             | OplogEntry::Jump {
-                entity_parent_start_index,
-                ..
-            }
-            | OplogEntry::BeginAtomicRegion {
-                entity_parent_start_index,
-                ..
-            }
-            | OplogEntry::EndAtomicRegion {
                 entity_parent_start_index,
                 ..
             }
@@ -367,13 +354,9 @@ impl<'a> PublicOplogAttributionResolver<'a> {
                 ..
             } => *entity_parent_start_index,
             OplogEntry::BeginRemoteTransaction {
-                original_begin_index: Some(begin_index),
+                original_begin_index: begin_index,
                 ..
             } => Some(*begin_index),
-            OplogEntry::BeginRemoteTransaction {
-                original_begin_index: None,
-                ..
-            } => Some(index.previous()),
             OplogEntry::PreCommitRemoteTransaction { begin_index, .. }
             | OplogEntry::PreRollbackRemoteTransaction { begin_index, .. }
             | OplogEntry::CommittedRemoteTransaction { begin_index, .. }
@@ -1049,7 +1032,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 kind,
                 error,
                 retry_from,
-                inside_atomic_region,
                 retry_policy_state,
                 ..
             } => Ok(PublicOplogEntry::Error(ErrorParams {
@@ -1057,15 +1039,11 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 kind,
                 error: error.to_string(""),
                 retry_from,
-                inside_atomic_region,
                 retry_policy_state: retry_policy_state.map(Into::into),
             })),
             OplogEntry::RecoverySucceeded { timestamp } => Ok(PublicOplogEntry::RecoverySucceeded(
                 RecoverySucceededParams { timestamp },
             )),
-            OplogEntry::NoOp { timestamp, .. } => {
-                Ok(PublicOplogEntry::NoOp(NoOpParams { timestamp }))
-            }
             OplogEntry::Jump {
                 timestamp, jump, ..
             } => Ok(PublicOplogEntry::Jump(JumpParams { timestamp, jump })),
@@ -1077,17 +1055,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::Exited { timestamp } => {
                 Ok(PublicOplogEntry::Exited(ExitedParams { timestamp }))
             }
-            OplogEntry::BeginAtomicRegion { timestamp, .. } => Ok(
-                PublicOplogEntry::BeginAtomicRegion(BeginAtomicRegionParams { timestamp }),
-            ),
-            OplogEntry::EndAtomicRegion {
-                timestamp,
-                begin_index,
-                ..
-            } => Ok(PublicOplogEntry::EndAtomicRegion(EndAtomicRegionParams {
-                timestamp,
-                begin_index,
-            })),
             OplogEntry::PendingAgentInvocation {
                 timestamp,
                 idempotency_key,

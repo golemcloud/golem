@@ -16,7 +16,7 @@ use crate::durable_host::authorization::targets::{RdbmsEngine, rdbms_sql_targets
 use crate::durable_host::concurrent::{
     CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
 };
-use crate::durable_host::durability::{HostFailureKind, InFunctionRetryHost};
+use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::keyvalue::environment_owner;
 use crate::durable_host::rdbms::serialized::RdbmsRequest;
 use crate::durable_host::{
@@ -37,9 +37,8 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::retry_policy::RetryProperties;
 use golem_common::model::{AgentId, OplogIndex, RdbmsPoolKey, RetryContext, TransactionId};
-use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::marker::PhantomData;
-use std::ops::{ControlFlow, Deref};
+use std::ops::Deref;
 use std::sync::Arc;
 use wasmtime::component::{Resource, ResourceTable};
 use wasmtime_wasi::IoView;
@@ -294,7 +293,7 @@ where
         .await;
 
     match result {
-        Ok(ControlFlow::Continue((begin_oplog_idx, transaction_state))) => {
+        Ok((begin_oplog_idx, transaction_state)) => {
             if ctx.state.is_live() {
                 ctx.as_wasi_view()
                     .table()
@@ -305,8 +304,10 @@ where
             let resource = ctx.as_wasi_view().table().push(entry)?;
             Ok(Ok(resource))
         }
-        Ok(ControlFlow::Break(kind)) => Err(WorkerExecutorError::Interrupted { kind }.into()),
-        Err(error) => Ok(Err(error.into())),
+        Err(error) => match error.downcast::<RdbmsError>() {
+            Ok(error) => Ok(Err(error.into())),
+            Err(error) => Err(error),
+        },
     }
 }
 
@@ -606,10 +607,18 @@ where
         DurableFunctionType::WriteRemoteBatched(Some(begin_index)),
     )
     .await?;
+    let reconstructed = !handle.is_live();
 
     let result = 'result: {
         if !handle.is_live() {
-            break 'result handle.replay_expecting_completion(ctx).await?;
+            break 'result handle
+                .replay_or_persist_failure(
+                    ctx,
+                    HostResponseGolemRdbmsRequest {
+                        request: Err(rdbms_stream_lost().into()),
+                    },
+                )
+                .await?;
         }
 
         if let Some(Err(error)) = authorization {
@@ -676,7 +685,11 @@ where
                 request
                     .try_into()
                     .map_err(|err| anyhow!("Invalid payload: {err}"))?,
-                RdbmsResultStreamState::New,
+                if reconstructed {
+                    RdbmsResultStreamState::Lost
+                } else {
+                    RdbmsResultStreamState::New
+                },
                 None,
                 begin_index,
             );
@@ -728,15 +741,16 @@ where
     Ok(())
 }
 
-async fn db_result_stream_durable_get_columns<Ctx, T, R>(
+async fn db_result_stream_durable_get_columns<Ctx, T, R, E>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     entry: &Resource<RdbmsResultStreamEntry<T>>,
-) -> anyhow::Result<Vec<R>>
+) -> anyhow::Result<Result<Vec<R>, E>>
 where
     Ctx: WorkerCtx,
     T: RdbmsType + RdbmsDurabilityPairs + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     R: FromRdbmsValue<T::DbColumn>,
+    E: From<RdbmsError>,
 {
     let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
 
@@ -755,7 +769,14 @@ where
 
     let result = 'result: {
         if !handle.is_live() {
-            break 'result handle.replay_expecting_completion(ctx).await?;
+            break 'result handle
+                .replay_or_persist_failure(
+                    ctx,
+                    HostResponseGolemRdbmsColumns {
+                        result: Err(rdbms_stream_lost().into()),
+                    },
+                )
+                .await?;
         }
 
         let pool_key = ctx
@@ -768,7 +789,9 @@ where
             Ok(query_stream) => query_stream.deref().get_columns().await,
             Err(error) => Err(error),
         };
-        if let Ok(pool_key) = pool_key.as_ref() {
+        if matches!(ctx.table().get(entry)?.state, RdbmsResultStreamState::Lost) {
+            // Reconstruction loss is permanent for this handle, not a transient connection error.
+        } else if let Ok(pool_key) = pool_key.as_ref() {
             let properties = rdbms_retry_properties(ctx, "stream-get-columns", pool_key);
             handle
                 .try_trigger_retry_with_properties(ctx, &result, classify_rdbms_error, properties)
@@ -799,21 +822,22 @@ where
                 .map(|r| FromRdbmsValue::from(r, ctx.as_wasi_view().table()))
                 .collect::<Result<Vec<R>, String>>()
                 .map_err(|e| anyhow!(RdbmsError::QueryResponseFailure(e)))?;
-            Ok(result)
+            Ok(Ok(result))
         }
-        Err(error) => Err(anyhow!(RdbmsError::from(error))),
+        Err(error) => Ok(Err(RdbmsError::from(error).into())),
     }
 }
 
-async fn db_result_stream_durable_get_next<Ctx, T, R>(
+async fn db_result_stream_durable_get_next<Ctx, T, R, E>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     entry: &Resource<RdbmsResultStreamEntry<T>>,
-) -> anyhow::Result<Option<Vec<R>>>
+) -> anyhow::Result<Result<Option<Vec<R>>, E>>
 where
     Ctx: WorkerCtx,
     T: RdbmsType + RdbmsDurabilityPairs + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     R: FromRdbmsValue<crate::services::rdbms::DbRow<T::DbValue>>,
+    E: From<RdbmsError>,
 {
     let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
 
@@ -832,7 +856,14 @@ where
 
     let result = 'result: {
         if !handle.is_live() {
-            break 'result handle.replay_expecting_completion(ctx).await?;
+            break 'result handle
+                .replay_or_persist_failure(
+                    ctx,
+                    HostResponseGolemRdbmsResultChunk {
+                        result: Err(rdbms_stream_lost().into()),
+                    },
+                )
+                .await?;
         }
 
         let pool_key = ctx
@@ -845,7 +876,9 @@ where
             Ok(query_stream) => query_stream.deref().get_next().await,
             Err(error) => Err(error),
         };
-        if let Ok(pool_key) = pool_key.as_ref() {
+        if matches!(ctx.table().get(entry)?.state, RdbmsResultStreamState::Lost) {
+            // Reconstruction loss is permanent for this handle, not a transient connection error.
+        } else if let Ok(pool_key) = pool_key.as_ref() {
             let properties = rdbms_retry_properties(ctx, "stream-get-next", pool_key);
             handle
                 .try_trigger_retry_with_properties(ctx, &result, classify_rdbms_error, properties)
@@ -891,9 +924,9 @@ where
                 }
                 None => None,
             };
-            Ok(rows)
+            Ok(Ok(rows))
         }
-        Err(error) => Err(anyhow!(RdbmsError::from(error))),
+        Err(error) => Ok(Err(RdbmsError::from(error).into())),
     }
 }
 
@@ -947,31 +980,25 @@ where
         .map(|v| v.pool_key.clone())
         .ok();
 
-    // Build the request payload (pool key + statement + parameters + transaction id) up front,
-    // before the query side effect, mirroring `db_transaction_query`'s request construction. The
-    // transaction id is read from the open transaction handle without executing the query.
-    let prepared: PreparedTransactionRequest<T> =
-        match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
-            Ok(db_params) => match get_db_transaction(ctx, entry) {
-                Ok((pool_key, transaction)) => Ok((pool_key, transaction, db_params)),
-                Err(error) => Err(error),
-            },
-            Err(error) => Err(RdbmsError::QueryParameterFailure(error)),
-        };
-
+    let db_params = to_db_values::<T, P>(params, ctx.as_wasi_view().table());
+    let tx = ctx.table().get(entry)?;
     let request = HostRequestGolemRdbmsRequest {
-        request: prepared
-            .as_ref()
-            .ok()
-            .map(|(pool_key, transaction, db_params)| {
-                RdbmsRequest::<T>::new(
-                    pool_key.clone(),
-                    statement.clone(),
-                    db_params.clone(),
-                    Some(transaction.transaction_id()),
-                )
-                .into()
-            }),
+        request: db_params.as_ref().ok().map(|params| {
+            RdbmsRequest::<T>::new(
+                tx.pool_key.clone(),
+                statement.clone(),
+                params.clone(),
+                Some(tx.transaction_id()),
+            )
+            .into()
+        }),
+    };
+    let prepared: PreparedTransactionRequest<T> = match db_params {
+        Ok(db_params) => match get_db_transaction(ctx, entry) {
+            Ok((pool_key, transaction)) => Ok((pool_key, transaction, db_params)),
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(RdbmsError::QueryParameterFailure(error)),
     };
 
     let authorization = if ctx.state.is_live() {
@@ -992,7 +1019,14 @@ where
 
     let result = 'result: {
         if !handle.is_live() {
-            break 'result handle.replay_expecting_completion(ctx).await?;
+            break 'result handle
+                .replay_or_persist_failure(
+                    ctx,
+                    HostResponseGolemRdbmsResult {
+                        result: Err(rdbms_transaction_lost().into()),
+                    },
+                )
+                .await?;
         }
 
         if let Some(Err(error)) = authorization {
@@ -1017,7 +1051,12 @@ where
             .ok()
             .map(|(pool_key, _, _)| pool_key.clone())
             .or_else(|| txn_pool_key.clone());
-        if let Some(pool_key) = pool_key_for_props.as_ref() {
+        if matches!(
+            ctx.table().get(entry)?.state,
+            RdbmsTransactionState::Lost(_)
+        ) {
+            // A lost transaction cannot be retried on a replacement connection.
+        } else if let Some(pool_key) = pool_key_for_props.as_ref() {
             let properties = rdbms_retry_properties(ctx, "query", pool_key);
             handle
                 .try_trigger_retry_with_properties(ctx, &result, classify_rdbms_error, properties)
@@ -1069,30 +1108,25 @@ where
         .map(|v| v.pool_key.clone())
         .ok();
 
-    // Build the request payload up front, before the execute side effect, mirroring
-    // `db_transaction_execute`'s request construction (transaction id read without executing).
-    let prepared: PreparedTransactionRequest<T> =
-        match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
-            Ok(db_params) => match get_db_transaction(ctx, entry) {
-                Ok((pool_key, transaction)) => Ok((pool_key, transaction, db_params)),
-                Err(error) => Err(error),
-            },
-            Err(error) => Err(RdbmsError::QueryParameterFailure(error)),
-        };
-
+    let db_params = to_db_values::<T, P>(params, ctx.as_wasi_view().table());
+    let tx = ctx.table().get(entry)?;
     let request = HostRequestGolemRdbmsRequest {
-        request: prepared
-            .as_ref()
-            .ok()
-            .map(|(pool_key, transaction, db_params)| {
-                RdbmsRequest::<T>::new(
-                    pool_key.clone(),
-                    statement.clone(),
-                    db_params.clone(),
-                    Some(transaction.transaction_id()),
-                )
-                .into()
-            }),
+        request: db_params.as_ref().ok().map(|params| {
+            RdbmsRequest::<T>::new(
+                tx.pool_key.clone(),
+                statement.clone(),
+                params.clone(),
+                Some(tx.transaction_id()),
+            )
+            .into()
+        }),
+    };
+    let prepared: PreparedTransactionRequest<T> = match db_params {
+        Ok(db_params) => match get_db_transaction(ctx, entry) {
+            Ok((pool_key, transaction)) => Ok((pool_key, transaction, db_params)),
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(RdbmsError::QueryParameterFailure(error)),
     };
 
     let authorization = if ctx.state.is_live() {
@@ -1113,7 +1147,14 @@ where
 
     let result = 'result: {
         if !handle.is_live() {
-            break 'result handle.replay_expecting_completion(ctx).await?;
+            break 'result handle
+                .replay_or_persist_failure(
+                    ctx,
+                    HostResponseGolemRdbmsRowCount {
+                        result: Err(rdbms_transaction_lost().into()),
+                    },
+                )
+                .await?;
         }
 
         if let Some(Err(error)) = authorization {
@@ -1138,7 +1179,12 @@ where
             .ok()
             .map(|(pool_key, _, _)| pool_key.clone())
             .or_else(|| txn_pool_key.clone());
-        if let Some(pool_key) = pool_key_for_props.as_ref() {
+        if matches!(
+            ctx.table().get(entry)?.state,
+            RdbmsTransactionState::Lost(_)
+        ) {
+            // A lost transaction cannot be retried on a replacement connection.
+        } else if let Some(pool_key) = pool_key_for_props.as_ref() {
             let properties = rdbms_retry_properties(ctx, "execute", pool_key);
             handle
                 .try_trigger_retry_with_properties(ctx, &result, classify_rdbms_error, properties)
@@ -1187,10 +1233,18 @@ where
         DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
     )
     .await?;
+    let reconstructed = !handle.is_live();
 
     let result = 'result: {
         if !handle.is_live() {
-            break 'result handle.replay_expecting_completion(ctx).await?;
+            break 'result handle
+                .replay_or_persist_failure(
+                    ctx,
+                    HostResponseGolemRdbmsRequest {
+                        request: Err(rdbms_transaction_lost().into()),
+                    },
+                )
+                .await?;
         }
 
         if let Some(Err(error)) = authorization {
@@ -1204,7 +1258,14 @@ where
                 .await?;
         }
 
-        let result = prepared.clone();
+        let result = if matches!(
+            ctx.table().get(entry)?.state,
+            RdbmsTransactionState::Lost(_)
+        ) {
+            Err(rdbms_transaction_lost())
+        } else {
+            prepared.clone()
+        };
         let pool_key_for_props = result
             .as_ref()
             .map(|r| r.pool_key.clone())
@@ -1215,7 +1276,12 @@ where
                     .ok()
                     .map(|request| request.pool_key.clone())
             });
-        if let Some(pool_key) = pool_key_for_props.as_ref() {
+        if matches!(
+            ctx.table().get(entry)?.state,
+            RdbmsTransactionState::Lost(_)
+        ) {
+            // No replacement transaction is permitted.
+        } else if let Some(pool_key) = pool_key_for_props.as_ref() {
             let properties = rdbms_retry_properties(ctx, "query-stream", pool_key);
             handle
                 .try_trigger_retry_with_properties(ctx, &result, classify_rdbms_error, properties)
@@ -1237,7 +1303,11 @@ where
                 request
                     .try_into()
                     .map_err(|e| anyhow!("Invalid payload: {e}"))?,
-                RdbmsResultStreamState::New,
+                if reconstructed {
+                    RdbmsResultStreamState::Lost
+                } else {
+                    RdbmsResultStreamState::New
+                },
                 Some(entry_rep),
                 begin_oplog_idx,
             );
@@ -1258,42 +1328,7 @@ where
     E: From<RdbmsError>,
     dyn RdbmsService: RdbmsTypeService<T>,
 {
-    ctx.observe_function_call(T::durability_transaction_interface(), "rollback");
-
-    let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
-
-    let pre_result = if ctx.durable_execution_state().is_live {
-        db_transaction_pre_rollback(ctx, entry).await
-    } else {
-        Ok(())
-    };
-
-    if pre_result.is_ok() {
-        ctx.pre_rollback_transaction_function(begin_oplog_idx)
-            .await?;
-    }
-
-    match pre_result {
-        Ok(_) => {
-            let result = if ctx.durable_execution_state().is_live {
-                db_transaction_rollback(ctx, entry).await
-            } else {
-                Ok(())
-            };
-
-            if result.is_ok() {
-                ctx.rolled_back_transaction_function(begin_oplog_idx)
-                    .await?;
-            }
-
-            if ctx.durable_execution_state().is_live {
-                let _ = db_transaction_cleanup(ctx, entry).await;
-            }
-
-            Ok(result.map_err(|e| e.into()))
-        }
-        Err(error) => Ok(Err(error.into())),
-    }
+    db_transaction_terminal(ctx, entry, TransactionTerminal::Rollback).await
 }
 
 async fn db_transaction_durable_commit<Ctx, T, E>(
@@ -1306,40 +1341,136 @@ where
     E: From<RdbmsError>,
     dyn RdbmsService: RdbmsTypeService<T>,
 {
-    ctx.observe_function_call(T::durability_transaction_interface(), "commit");
+    db_transaction_terminal(ctx, entry, TransactionTerminal::Commit).await
+}
 
-    let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
+#[derive(Clone, Copy, PartialEq)]
+enum TransactionTerminal {
+    Commit,
+    Rollback,
+    Drop,
+}
 
-    let pre_result = if ctx.durable_execution_state().is_live {
-        db_transaction_pre_commit(ctx, entry).await
-    } else {
-        Ok(())
-    };
-
-    if pre_result.is_ok() {
-        ctx.pre_commit_transaction_function(begin_oplog_idx).await?;
+async fn db_transaction_terminal<Ctx, T, E>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    entry: &Resource<RdbmsTransactionEntry<T>>,
+    terminal: TransactionTerminal,
+) -> anyhow::Result<Result<(), E>>
+where
+    Ctx: WorkerCtx,
+    T: RdbmsType + 'static,
+    E: From<RdbmsError>,
+    dyn RdbmsService: RdbmsTypeService<T>,
+{
+    use golem_common::model::oplog::OplogEntry;
+    use golem_common::model::oplog::payload::types::SerializableRdbmsTransactionTerminal as Outcome;
+    let tx = ctx.table().get(entry)?.clone();
+    if matches!(tx.state, RdbmsTransactionState::Closed(_)) {
+        return Ok(Ok(()));
     }
-
-    match pre_result {
-        Ok(_) => {
-            let result = if ctx.durable_execution_state().is_live {
-                db_transaction_commit(ctx, entry).await
+    let begin = tx.begin_index;
+    // Resolve protocol markers by the scope owner, independent of interleaved transactions.
+    let pre = ctx
+        .state
+        .replay_state
+        .transaction_marker(begin, |e| {
+            if terminal == TransactionTerminal::Commit {
+                e.is_pre_commit_remote_transaction(begin)
             } else {
-                Ok(())
-            };
-
-            if result.is_ok() {
-                ctx.committed_transaction_function(begin_oplog_idx).await?;
+                e.is_pre_rollback_remote_transaction(begin)
             }
-
-            if ctx.durable_execution_state().is_live {
-                let _ = db_transaction_cleanup(ctx, entry).await;
+        })
+        .is_some();
+    let confirmed = ctx
+        .state
+        .replay_state
+        .transaction_marker(begin, |e| {
+            if terminal == TransactionTerminal::Commit {
+                e.is_committed_remote_transaction(begin)
+            } else {
+                e.is_rolled_back_remote_transaction(begin)
             }
-
-            Ok(result.map_err(|e| e.into()))
-        }
-        Err(error) => Ok(Err(error.into())),
+        })
+        .is_some();
+    if let Some(outcome) = ctx.replay_transaction_terminal(begin).await? {
+        let result = match (terminal, outcome) {
+            (TransactionTerminal::Commit, Outcome::Commit(r))
+            | (TransactionTerminal::Rollback, Outcome::Rollback(r))
+            | (TransactionTerminal::Drop, Outcome::Drop(r)) => r,
+            _ => {
+                return Err(anyhow!(
+                    "Transaction terminal does not match recorded outcome"
+                ));
+            }
+        };
+        ctx.table().get_mut(entry)?.set_closed();
+        return Ok(result.map_err(|e| RdbmsError::from(e).into()));
     }
+    let result = match tx.state {
+        RdbmsTransactionState::Lost(_) if confirmed => Ok(()),
+        RdbmsTransactionState::Lost(ref id) if pre => {
+            let status = ctx
+                .state
+                .rdbms_service
+                .rdbms_type_service()
+                .get_transaction_status(&tx.pool_key, &ctx.state.owned_agent_id.agent_id, id)
+                .await;
+            match status {
+                Ok(RdbmsTransactionStatus::Committed)
+                    if terminal == TransactionTerminal::Commit =>
+                {
+                    Ok(())
+                }
+                Ok(RdbmsTransactionStatus::RolledBack | RdbmsTransactionStatus::NotFound)
+                    if terminal != TransactionTerminal::Commit =>
+                {
+                    Ok(())
+                }
+                _ => Err(rdbms_transaction_lost()),
+            }
+        }
+        RdbmsTransactionState::Lost(_) => Err(rdbms_transaction_lost()),
+        RdbmsTransactionState::Open(ref transaction) => {
+            let prepared = if terminal == TransactionTerminal::Commit {
+                transaction.pre_commit().await
+            } else {
+                transaction.pre_rollback().await
+            };
+            match prepared {
+                Err(error) => Err(error),
+                Ok(()) => {
+                    if terminal == TransactionTerminal::Commit {
+                        ctx.pre_commit_transaction_function(begin).await?;
+                        transaction.commit().await
+                    } else {
+                        ctx.pre_rollback_transaction_function(begin).await?;
+                        transaction.rollback().await
+                    }
+                }
+            }
+        }
+        RdbmsTransactionState::Closed(_) => unreachable!(),
+    };
+    let marker = if result.is_ok() && !confirmed {
+        Some(if terminal == TransactionTerminal::Commit {
+            OplogEntry::committed_remote_transaction(begin)
+        } else {
+            OplogEntry::rolled_back_remote_transaction(begin)
+        })
+    } else {
+        None
+    };
+    let recorded = result.clone().map_err(Into::into);
+    let outcome = match terminal {
+        TransactionTerminal::Commit => Outcome::Commit(recorded),
+        TransactionTerminal::Rollback => Outcome::Rollback(recorded),
+        TransactionTerminal::Drop => Outcome::Drop(recorded),
+    };
+    ctx.finish_transaction_terminal(begin, outcome, marker)
+        .await?;
+    ctx.table().get_mut(entry)?.set_closed();
+    let _ = db_transaction_cleanup(ctx, entry).await;
+    Ok(result.map_err(Into::into))
 }
 
 async fn db_transaction_drop<Ctx, T>(
@@ -1352,68 +1483,9 @@ where
     dyn RdbmsService: RdbmsTypeService<T>,
 {
     ctx.observe_function_call(T::durability_transaction_interface(), "drop");
-
-    let entry = ctx
-        .as_wasi_view()
-        .table()
-        .delete::<RdbmsTransactionEntry<T>>(entry)?;
-
-    if ctx.durable_execution_state().is_live {
-        if let RdbmsTransactionState::Open(transaction) = entry.state {
-            ctx.pre_rollback_transaction_function(entry.begin_index)
-                .await?;
-
-            let _ = transaction.rollback_if_open().await;
-
-            ctx.rolled_back_transaction_function(entry.begin_index)
-                .await?;
-
-            let _ = ctx
-                .state
-                .rdbms_service
-                .deref()
-                .rdbms_type_service()
-                .cleanup_transaction(
-                    &entry.pool_key,
-                    &ctx.owned_agent_id.agent_id,
-                    &transaction.transaction_id(),
-                )
-                .await;
-        }
-    } else {
-        let pre_rollback = ctx
-            .state
-            .replay_state
-            .try_get_oplog_entry(|e| e.is_pre_rollback_remote_transaction(entry.begin_index))
-            .await?;
-
-        if pre_rollback.is_some() {
-            let rolled_back = ctx
-                .state
-                .replay_state
-                .try_get_oplog_entry(|e| e.is_rolled_back_remote_transaction(entry.begin_index))
-                .await?;
-
-            if rolled_back.is_some() {
-                // The rollback was recorded in a previous incarnation. The scope `End` was
-                // folded into the resolver in `begin_transaction_function`, so close the durable
-                // scope by awaiting it (repairing a crash-split half-pair by appending the missing
-                // `End` live) instead of a positional read. Otherwise the begin index would dangle in
-                // `active_durable_scopes` and mis-parent later `Start` entries.
-                ctx.close_durable_scope_replay(entry.begin_index, None)
-                    .await?;
-            } else {
-                // Crashed after `PreRollbackRemoteTransaction` but before the rollback was recorded.
-                // `begin_transaction_function` already confirmed the external rollback (otherwise it
-                // would have restarted), and consuming the pre-marker exhausted the replay, so finish
-                // the durable rollback record live now. This writes the marker plus its scope `End`
-                // and closes the durable scope, mirroring the explicit rollback path.
-                ctx.rolled_back_transaction_function(entry.begin_index)
-                    .await?;
-            }
-        }
-    }
-
+    let _: Result<(), RdbmsError> =
+        db_transaction_terminal(ctx, &entry, TransactionTerminal::Drop).await?;
+    ctx.table().delete(entry)?;
     Ok(())
 }
 
@@ -1467,7 +1539,18 @@ impl<T: RdbmsType + 'static> RdbmsResultStreamEntry<T> {
 #[derive(Clone)]
 pub enum RdbmsResultStreamState<T: RdbmsType + 'static> {
     New,
+    Lost,
     Open(Arc<dyn crate::services::rdbms::DbResultStream<T> + Send + Sync>),
+}
+
+fn rdbms_stream_lost() -> RdbmsError {
+    RdbmsError::ConnectionFailure(
+        "Database result stream was lost during reconstruction".to_string(),
+    )
+}
+
+fn rdbms_transaction_lost() -> RdbmsError {
+    RdbmsError::ConnectionFailure("Database transaction was lost during reconstruction".to_string())
 }
 
 fn is_db_query_stream_in_transaction<Ctx, T>(
@@ -1503,6 +1586,7 @@ where
         .clone();
 
     match query_stream_entry.state {
+        RdbmsResultStreamState::Lost => Err(rdbms_stream_lost()),
         RdbmsResultStreamState::New => {
             let query_stream = match query_stream_entry.transaction_handle {
                 Some(transaction_handle) => {
@@ -1572,6 +1656,9 @@ impl<T: RdbmsType + 'static> RdbmsTransactionEntry<T> {
                 self.state = RdbmsTransactionState::Closed(transaction.deref().transaction_id())
             }
             RdbmsTransactionState::Closed(_) => (),
+            RdbmsTransactionState::Lost(id) => {
+                self.state = RdbmsTransactionState::Closed(id.clone())
+            }
         }
     }
 
@@ -1579,6 +1666,7 @@ impl<T: RdbmsType + 'static> RdbmsTransactionEntry<T> {
         match &self.state {
             RdbmsTransactionState::Open(transaction) => transaction.deref().transaction_id(),
             RdbmsTransactionState::Closed(id) => id.clone(),
+            RdbmsTransactionState::Lost(id) => id.clone(),
         }
     }
 }
@@ -1586,6 +1674,7 @@ impl<T: RdbmsType + 'static> RdbmsTransactionEntry<T> {
 #[derive(Clone)]
 pub enum RdbmsTransactionState<T: RdbmsType + 'static> {
     Open(Arc<dyn crate::services::rdbms::DbTransaction<T> + Send + Sync>),
+    Lost(TransactionId),
     Closed(TransactionId),
 }
 
@@ -1612,6 +1701,7 @@ where
 
     match transaction_entry.state {
         RdbmsTransactionState::Open(transaction) => Ok((transaction_entry.pool_key, transaction)),
+        RdbmsTransactionState::Lost(_) => Err(rdbms_transaction_lost()),
         RdbmsTransactionState::Closed(_) => {
             Err(RdbmsError::other_response_failure("Transaction is closed"))
         }
@@ -1656,106 +1746,18 @@ where
 {
     match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
         Ok(params) => {
-            let (pool_key, transaction) = get_db_transaction(ctx, entry)?;
+            let transaction = ctx
+                .table()
+                .get(entry)
+                .map_err(RdbmsError::other_response_failure)?;
             Ok(RdbmsRequest::<T>::new(
-                pool_key,
+                transaction.pool_key.clone(),
                 statement,
                 params,
                 Some(transaction.transaction_id()),
             ))
         }
         Err(error) => Err(RdbmsError::QueryParameterFailure(error)),
-    }
-}
-
-fn get_db_transaction_state<Ctx, T>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    entry: &Resource<RdbmsTransactionEntry<T>>,
-) -> Result<RdbmsTransactionState<T>, RdbmsError>
-where
-    Ctx: WorkerCtx,
-    T: RdbmsType + 'static,
-{
-    ctx.as_wasi_view()
-        .table()
-        .get::<RdbmsTransactionEntry<T>>(entry)
-        .map(|e| e.state.clone())
-        .map_err(RdbmsError::other_response_failure)
-}
-
-async fn db_transaction_pre_commit<Ctx, T>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    entry: &Resource<RdbmsTransactionEntry<T>>,
-) -> Result<(), RdbmsError>
-where
-    Ctx: WorkerCtx,
-    T: RdbmsType + 'static,
-{
-    let state = get_db_transaction_state(ctx, entry)?;
-    match state {
-        RdbmsTransactionState::Open(transaction) => transaction.pre_commit().await,
-        _ => Ok(()),
-    }
-}
-
-async fn db_transaction_commit<Ctx, T>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    entry: &Resource<RdbmsTransactionEntry<T>>,
-) -> Result<(), RdbmsError>
-where
-    Ctx: WorkerCtx,
-    T: RdbmsType + 'static,
-{
-    let state = get_db_transaction_state(ctx, entry)?;
-    match state {
-        RdbmsTransactionState::Open(transaction) => {
-            let result = transaction.commit().await;
-            ctx.as_wasi_view()
-                .table()
-                .get_mut::<RdbmsTransactionEntry<T>>(entry)
-                .map_err(RdbmsError::other_response_failure)?
-                .set_closed();
-            result
-        }
-        _ => Ok(()),
-    }
-}
-
-async fn db_transaction_pre_rollback<Ctx, T>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    entry: &Resource<RdbmsTransactionEntry<T>>,
-) -> Result<(), RdbmsError>
-where
-    Ctx: WorkerCtx,
-    T: RdbmsType + 'static,
-{
-    let state = get_db_transaction_state(ctx, entry)?;
-    match state {
-        RdbmsTransactionState::Open(transaction) => transaction.pre_rollback().await,
-        _ => Ok(()),
-    }
-}
-
-async fn db_transaction_rollback<Ctx, T>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    entry: &Resource<RdbmsTransactionEntry<T>>,
-) -> Result<(), RdbmsError>
-where
-    Ctx: WorkerCtx,
-    T: RdbmsType + 'static,
-{
-    let state = get_db_transaction_state(ctx, entry)?;
-    match state {
-        RdbmsTransactionState::Open(transaction) => {
-            let result = transaction.rollback().await;
-            ctx.as_wasi_view()
-                .table()
-                .get_mut::<RdbmsTransactionEntry<T>>(entry)
-                .map_err(RdbmsError::other_response_failure)?
-                .set_closed();
-            result
-        }
-        _ => Ok(()),
     }
 }
 
@@ -1869,7 +1871,7 @@ where
     ) -> Result<(TransactionId, RdbmsTransactionState<T>), RdbmsError> {
         Ok((
             transaction_id.clone(),
-            RdbmsTransactionState::Closed(transaction_id.clone()),
+            RdbmsTransactionState::Lost(transaction_id.clone()),
         ))
     }
 

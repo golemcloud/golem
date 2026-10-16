@@ -70,7 +70,7 @@ func eq(a, b []string) bool {
 func TestFallibleCommit(t *testing.T) {
 	tr := &tracker{}
 	a, b := okOp(tr, "1"), okOp(tr, "2")
-	out := runFallible(&Tx[string]{}, func(tx *Tx[string]) golem.Result[int, string] {
+	out := Fallible(func(tx *Tx[string]) golem.Result[int, string] {
 		r1 := tx.Step(a, 10)
 		r2 := tx.Step(b, r1.Ok())
 		return golem.Ok[int, string](r2.Ok())
@@ -92,7 +92,7 @@ func TestFallibleRollbackComplete(t *testing.T) {
 	tr := &tracker{}
 	a, b := okOp(tr, "1"), okOp(tr, "2")
 	bad := failOp(tr, "3", "boom")
-	out := runFallible(&Tx[string]{}, func(tx *Tx[string]) golem.Result[int, string] {
+	out := Fallible(func(tx *Tx[string]) golem.Result[int, string] {
 		if r := tx.Step(a, 1); r.IsErr() {
 			return r
 		}
@@ -138,7 +138,7 @@ func TestFallibleRollbackPartial(t *testing.T) {
 	)
 	b := okOp(tr, "b")
 	bad := failOp(tr, "c", "boom")
-	out := runFallible(&Tx[string]{}, func(tx *Tx[string]) golem.Result[int, string] {
+	out := Fallible(func(tx *Tx[string]) golem.Result[int, string] {
 		if r := tx.Step(a, 1); r.IsErr() {
 			return r
 		}
@@ -164,4 +164,45 @@ func TestFallibleRollbackPartial(t *testing.T) {
 	if !eq(tr.calls, []string{"ea", "eb", "ec", "cb", "ca"}) {
 		t.Fatalf("calls = %v, want [ea eb ec cb ca]", tr.calls)
 	}
+}
+
+func TestInfallibleRetriesWithFreshCompensations(t *testing.T) {
+	tr := &tracker{}
+	a, b := okOp(tr, "1"), okOp(tr, "2")
+	attempts := 0
+	out := Infallible(func(tx *Tx[string]) golem.Result[int, string] {
+		attempts++
+		tx.Step(a, 10)
+		tx.Step(b, 20)
+		if attempts < 3 {
+			return golem.Err[int, string]("retry")
+		}
+		return golem.Ok[int, string](42)
+	})
+	if out != 42 || attempts != 3 {
+		t.Fatalf("result=%d attempts=%d", out, attempts)
+	}
+	if !eq(tr.calls, []string{"e1", "e2", "c2", "c1", "e1", "e2", "c2", "c1", "e1", "e2"}) {
+		t.Fatalf("calls = %v", tr.calls)
+	}
+}
+
+func TestInfallibleStopsOnCompensationFailure(t *testing.T) {
+	attempts := 0
+	defer func() {
+		if recover() == nil || attempts != 1 {
+			t.Fatalf("expected compensation panic without retry, attempts=%d", attempts)
+		}
+	}()
+	op := NewOperation(
+		func(in int) golem.Result[int, string] { return golem.Ok[int, string](in) },
+		func(in, out int) golem.Result[golem.Unit, string] {
+			return golem.Err[golem.Unit, string]("compensation")
+		},
+	)
+	Infallible(func(tx *Tx[string]) golem.Result[int, string] {
+		attempts++
+		tx.Step(op, 1)
+		return golem.Err[int, string]("retry")
+	})
 }

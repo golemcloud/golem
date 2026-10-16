@@ -76,10 +76,6 @@ async function load() {
     };
   });
   vi.doMock('golem:api/host@1.5.0', () => ({
-    getIdempotenceMode: () => false,
-    setIdempotenceMode: () => {},
-    markBeginOperation: () => 0n,
-    markEndOperation: () => {},
     trap: () => {
       throw new Error('trap');
     },

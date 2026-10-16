@@ -217,11 +217,10 @@ handler Effect.
 
 ## Infallible Transactions
 
-`Saga.infallibleTransaction(body)` accepts only `Effect<A, never, R>`. On interruption it drains
-compensations, rewinds to the transaction checkpoint with the Golem oplog, and relies on durable
-replay to try again. Do not cast away a real error channel or turn expected failures into defects to
-force a body into this API. A deterministic retry condition can loop forever, and rewind recovery
-must not be wrapped in `persistNothing`.
+`Saga.infallibleTransaction(body)` accepts only `Effect<A, never, R>`. It uses ordinary guest-code
+attempts rather than an execution-cursor change. Do not cast away a real error channel or turn
+expected failures into defects to force a body into this API. Interruption is not a business retry
+signal. Prefer a fallible saga when the caller must observe a domain failure.
 
 Use `fallibleTransaction` whenever failure is an acceptable caller-visible outcome. It is the right
 choice for methods returning `{ success, error }`.
@@ -236,7 +235,9 @@ choice for methods returning `{ success, error }`.
   `NestedSagaError`.
 - Do not use compensation combinators outside a transaction; the step runs but no rollback is
   retained.
-- Saga atomic regions make each durable step recoverable; they do not make external systems ACID.
+- Saga execute and compensation calls are individually durable. Recovery repairs an eligible
+  incomplete call at its own `Start`, while completed calls replay their results. New attempts
+  append new calls without erasing earlier work; sagas do not make external systems ACID.
 - Await every outgoing HTTP execute and compensation request; do not start either one in a detached
   Effect.
 - Keep the agent durable so the oplog can recover saga steps.

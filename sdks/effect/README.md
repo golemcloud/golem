@@ -675,7 +675,7 @@ must not read those fields; do not treat self-view as a harmless bootstrap permi
 `Agents.getSelfMetadata` returns an `AgentsHostError` in the Effect error channel and retains
 the host failure as its cause. `SelfAgentId.SelfAgentId` preserves its defect-based failure
 contract, including during restoration with an explicit snapshot strategy. Neither path changes
-the card or retries with broader permissions. Atomic and Saga traps preserve typed error
+the card or retries with broader permissions. Saga traps preserve typed error
 messages as well as native error stacks, regardless of which host operation failed.
 
 ## Tool middleware
@@ -726,29 +726,16 @@ unfinished exit, scope cleanup **drops** the live invocation instead of finishin
 `writeRemoteBatched(...)` and `writeRemoteTransaction(...)` are supported by the same wrapper; the
 host resource owns their begin index and lifecycle.
 
-Other durability controls remain under `Durability`: persistence and idempotence scopes, atomic
-regions, checkpoint/revert/compensable helpers, oplog commits, and `FunctionType` constructors.
+Other durability controls remain under `Durability`: oplog commits and `FunctionType` constructors.
 `Saga` provides fallible/infallible compensating transactions; compensations run in reverse order.
 
-`Durability.checkpoint` captures an invocation-local oplog position when the Effect runs:
-
-```ts
-const program = Effect.gen(function* () {
-  const cp = yield* Durability.checkpoint
-  const value = yield* cp.runOrRevert(doWork)
-  yield* cp.assertOrRevert(value.isValid)
-  return value
-})
-```
-
-`cp.revert` rewinds with `Oplog.setIndex` and never returns on successful rollback.
-`Durability.unwrapOrRevert(doWork)` captures a checkpoint and runs the same typed-failure
-policy. Defects and interruption propagate without rollback. Host errors remain typed
-`OplogHostError` failures; a host that returns after rollback causes an unreachable defect.
-There is no returned `reverted` result. Do not persist a checkpoint or use it in another
-invocation. Rollback does not undo external side effects; `Durability.compensable` runs its
-compensation before rewind on typed body failure. `Agents.revertAgent` manages other agents;
-management self-revert is unsupported.
+`Saga.infallibleTransaction` compensates typed failures and runs another attempt. Attempts append
+new durable calls without deleting prior calls or restoring JavaScript state. Compensate local
+state explicitly. Do not reuse a compensated external operation's idempotency key for a new
+attempt: the remote peer can suppress that operation. Defects trap without compensation or
+automatic retry. Cancellation compensates and propagates. `Saga.fallibleTransaction` reports
+complete or partial compensation instead of retrying. `Agents.revertAgent` remains an external
+management operation; management self-revert is unsupported.
 
 ## Existing Effect integrations
 

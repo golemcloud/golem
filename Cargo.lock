@@ -4258,6 +4258,8 @@ dependencies = [
  "tryhard",
  "url",
  "uuid",
+ "wasmparser 0.251.0",
+ "wat",
 ]
 
 [[package]]

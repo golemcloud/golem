@@ -179,6 +179,19 @@ enum TransactionFailOn {
 }
 
 impl TransactionFailOn {
+    fn loses_transaction(&self) -> bool {
+        match self {
+            Self::OplogAdd(entry, _) => {
+                entry == "PreCommitRemoteTransaction" || entry == "PreRollbackRemoteTransaction"
+            }
+            Self::OplogAddAndTx(..) => true,
+        }
+    }
+
+    fn fails_before_commit(&self) -> bool {
+        matches!(self, Self::OplogAdd(entry, _) if entry == "PreCommitRemoteTransaction")
+    }
+
     fn oplog_add(entry: &str, fail_count: u8) -> Self {
         Self::OplogAdd(entry.to_string(), fail_count)
     }
@@ -580,9 +593,16 @@ async fn postgres_transaction_recovery_test(
     )
     .await?;
 
-    check_test_result(&worker_id, result1.clone(), insert_test.clone());
+    if fail_on.loses_transaction() {
+        assert!(
+            get_test_result_error(result1).contains("transaction was lost during reconstruction")
+        );
+    } else {
+        check_test_result(&worker_id, result1.clone(), insert_test.clone());
+    }
 
-    let select_test = if transaction_end == TransactionEnd::Commit {
+    let select_test = if transaction_end == TransactionEnd::Commit && !fail_on.fails_before_commit()
+    {
         RdbmsTest::new(
             postgres_select_statements(&table_name, expected_values),
             None,
@@ -760,7 +780,6 @@ async fn rdbms_postgres_pre_rollback_recovery(
 
 #[test]
 #[tracing::instrument]
-#[ignore] // This test simulates that the commit succeeds, but we neither write this to the oplog or can query this fact from the DB. In this case the transaction gets retried and it leads to violations, which is expected, but the current test does not expect it.
 async fn rdbms_postgres_commit_and_tx_status_not_found_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1255,9 +1274,16 @@ async fn mysql_transaction_recovery_test(
     )
     .await?;
 
-    check_test_result(&worker_id, result1.clone(), insert_test.clone());
+    if fail_on.loses_transaction() {
+        assert!(
+            get_test_result_error(result1).contains("transaction was lost during reconstruction")
+        );
+    } else {
+        check_test_result(&worker_id, result1.clone(), insert_test.clone());
+    }
 
-    let select_test = if transaction_end == TransactionEnd::Commit {
+    let select_test = if transaction_end == TransactionEnd::Commit && !fail_on.fails_before_commit()
+    {
         RdbmsTest::new(mysql_select_statements(&table_name, expected_values), None)
     } else {
         RdbmsTest::new(mysql_select_statements(&table_name, vec![]), None)
@@ -1431,7 +1457,6 @@ async fn rdbms_mysql_pre_rollback_recovery(
 
 #[test]
 #[tracing::instrument]
-#[ignore] // This test simulates that the commit succeeds, but we neither write this to the oplog or can query this fact from the DB. In this case the transaction gets retried and it leads to violations, which is expected, but the current test does not expect it.
 async fn rdbms_mysql_commit_and_tx_status_not_found_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

@@ -234,13 +234,7 @@ async fn shutdown_fences_empty_and_idle_slots_without_flushing_buffered_entries(
             .await
             .unwrap();
         }
-        oplog
-            .add(OplogEntry::NoOp {
-                timestamp: golem_common::model::Timestamp::now_utc(),
-                entity_parent_start_index: None,
-            })
-            .await
-            .unwrap();
+        oplog.add(OplogEntry::suspend()).await.unwrap();
         let shutdown = slot.shutdown();
         assert!(slot.is_retired());
         shutdown.await.unwrap();
@@ -417,12 +411,7 @@ async fn recovery_fence_drains_admitted_work_and_reloads_from_fresh_history() {
         Err(StreamStoreError::RecoveryRequired)
     ));
     drain.await.unwrap();
-
-    slot.finish_recovery();
-    let replacement = slot.get_or_load(unused_commit(), load).await.unwrap();
-    assert!(!Arc::ptr_eq(&replacement, &producer));
     assert!(producer.ensure_healthy().is_err());
-    replacement.ensure_healthy().unwrap();
 }
 
 #[test]
@@ -452,8 +441,6 @@ async fn recovery_fence_owns_an_already_loading_producer() {
     ));
     recovery.await.unwrap();
     assert!(slot.is_recovering());
-    slot.finish_recovery();
-    slot.get_or_load(unused_commit(), load).await.unwrap();
 }
 
 #[test]

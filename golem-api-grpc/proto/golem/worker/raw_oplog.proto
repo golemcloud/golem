@@ -28,12 +28,9 @@ message RawOplogEntry {
     RawAgentInvocationFinishedParameters agent_invocation_finished = 5;
     RawTimestampOnly suspend = 6;
     RawErrorParameters error = 7;
-    RawTimestampOnly no_op = 8;
     RawJumpParameters jump = 9;
     RawTimestampOnly interrupted = 10;
     RawTimestampOnly exited = 11;
-    RawTimestampOnly begin_atomic_region = 12;
-    RawEndAtomicRegionParameters end_atomic_region = 13;
     RawPendingAgentInvocationParameters pending_agent_invocation = 16;
     RawPendingUpdateParameters pending_update = 17;
     RawSuccessfulUpdateParameters successful_update = 18;
@@ -283,17 +280,12 @@ message RawAgentInvocationFinishedParameters {
 message RawErrorParameters {
   AgentError error = 1;
   uint64 retry_from = 2;
-  bool inside_atomic_region = 3;
   optional bytes retry_policy_state = 4;
   OplogErrorKind kind = 5;
 }
 
 message RawJumpParameters {
   RawOplogRegion jump = 1;
-}
-
-message RawEndAtomicRegionParameters {
-  uint64 begin_index = 1;
 }
 
 message RawPendingAgentInvocationParameters {
@@ -392,7 +384,7 @@ message RawCancelPendingInvocationParameters {
 
 message RawBeginRemoteTransactionParameters {
   string transaction_id = 1;
-  optional uint64 original_begin_index = 2;
+  uint64 original_begin_index = 2;
 }
 
 message RawRemoteTransactionParameters {

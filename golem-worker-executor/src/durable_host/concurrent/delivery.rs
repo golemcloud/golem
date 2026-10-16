@@ -757,7 +757,6 @@ impl CompletionDelivery {
                 },
                 trap_context: DurableCallTrapContext {
                     retry_from: start_idx,
-                    in_atomic_region: false,
                 },
                 live_call_permit: None,
                 cleanup_sink: None,
@@ -800,7 +799,6 @@ impl CompletionDelivery {
             recorder,
             DurableCallTrapContext {
                 retry_from: start_idx,
-                in_atomic_region: false,
             },
             cleanup_sink,
             TeardownProbe::never(),

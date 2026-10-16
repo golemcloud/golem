@@ -1095,19 +1095,6 @@ impl TestWorkerExecutor {
         receiver
     }
 
-    pub fn probe_http_body_read_starts(
-        &self,
-        agent_id: &AgentId,
-    ) -> tokio::sync::mpsc::UnboundedReceiver<OplogIndex> {
-        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-        self.additional_test_deps
-            .http_body_read_start_probes
-            .lock()
-            .unwrap()
-            .insert(agent_id.clone(), sender);
-        receiver
-    }
-
     /// The clean status checkpoint of the agent, which a fold of its status starts from when the
     /// cached status is gone.
     pub async fn status_checkpoint(
@@ -3116,14 +3103,6 @@ impl InvocationHooks for TestWorkerCtx {
         self.durable_ctx.get_current_retry_point().await
     }
 
-    fn current_in_atomic_region(&self) -> bool {
-        self.durable_ctx.current_in_atomic_region()
-    }
-
-    fn current_atomic_region_had_side_effects(&self) -> bool {
-        self.durable_ctx.current_atomic_region_had_side_effects()
-    }
-
     fn enter_read_only_mode(&mut self, method_name: String) {
         self.durable_ctx.enter_read_only_mode(method_name)
     }
@@ -3375,10 +3354,6 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn as_wasi_view(&mut self) -> impl WasiView {
         self.durable_ctx.as_wasi_view()
-    }
-
-    fn as_wasi_http_view(&mut self) -> wasmtime_wasi_http::p2::WasiHttpCtxView<'_> {
-        self.durable_ctx.as_wasi_http_view()
     }
 
     fn get_public_state(&self) -> &Self::PublicState {
@@ -5098,25 +5073,6 @@ impl TestOplog {
         }
     }
 
-    fn observe_http_body_read_start(&self, index: OplogIndex, entry: &OplogEntry) {
-        if matches!(
-            entry,
-            OplogEntry::Start {
-                function_name: HostFunctionName::HttpTypesIncomingBodyStreamRead
-                    | HostFunctionName::HttpTypesIncomingBodyStreamBlockingRead,
-                ..
-            }
-        ) && let Some(sender) = self
-            .additional_test_deps
-            .http_body_read_start_probes
-            .lock()
-            .unwrap()
-            .get(&self.owned_agent_id.agent_id)
-        {
-            let _ = sender.send(index);
-        }
-    }
-
     fn new(
         owned_agent_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
@@ -5729,7 +5685,9 @@ impl Oplog for TestOplog {
             .additional_test_deps
             .take_no_op_oplog_read(&self.owned_agent_id.agent_id, oplog_index)
         {
-            return OplogEntry::no_op(None);
+            return OplogEntry::RecoverySucceeded {
+                timestamp: golem_common::model::Timestamp::now_utc(),
+            };
         }
         let mut entry = self.oplog.read(oplog_index).await;
         if matches!(entry, OplogEntry::Snapshot { .. }) {
@@ -5894,7 +5852,6 @@ impl Oplog for TestOplog {
         if let OplogEntry::Start { function_name, .. } = &ordered.entry {
             self.observe_end_failure_target(ordered.index, function_name);
         }
-        self.observe_http_body_read_start(ordered.index, &ordered.entry);
         self.observe_rpc_memory_boundary(ordered.index, &ordered.entry);
         self.pause_after_rpc_checkpoint(ordered.index, &ordered.entry)
             .await;
@@ -5929,7 +5886,6 @@ impl Oplog for TestOplog {
         if let OplogEntry::Start { function_name, .. } = &ordered.entry {
             self.observe_end_failure_target(ordered.index, function_name);
         }
-        self.observe_http_body_read_start(ordered.index, &ordered.entry);
         self.observe_rpc_memory_boundary(ordered.index, &ordered.entry);
         self.pause_after_rpc_checkpoint(ordered.index, &ordered.entry)
             .await;
@@ -6249,8 +6205,6 @@ pub struct AdditionalTestDeps {
     instance_load_counts: Arc<std::sync::Mutex<HashMap<AgentId, usize>>>,
     runtime_disposal_probes:
         Arc<std::sync::Mutex<HashMap<AgentId, tokio::sync::mpsc::UnboundedSender<usize>>>>,
-    http_body_read_start_probes:
-        Arc<std::sync::Mutex<HashMap<AgentId, tokio::sync::mpsc::UnboundedSender<OplogIndex>>>>,
     snapshot_download_failures: Arc<std::sync::Mutex<SnapshotDownloadFailures>>,
     empty_snapshot_payloads: Arc<std::sync::Mutex<HashSet<(AgentId, OplogIndex)>>>,
     no_op_oplog_reads: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), usize>>>,
@@ -6331,7 +6285,6 @@ impl AdditionalTestDeps {
             oplog_download_outage_hits: Arc::new(std::sync::Mutex::new(HashMap::new())),
             instance_load_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
             runtime_disposal_probes: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            http_body_read_start_probes: Arc::new(std::sync::Mutex::new(HashMap::new())),
             snapshot_download_failures: Arc::new(std::sync::Mutex::new(HashMap::new())),
             empty_snapshot_payloads: Arc::new(std::sync::Mutex::new(HashSet::new())),
             no_op_oplog_reads: Arc::new(std::sync::Mutex::new(HashMap::new())),

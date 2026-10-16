@@ -333,6 +333,5 @@ clamped to [100ms, 1s], 15% jitter.
 | Skill | When to Load |
 |-------|--------------|
 | `golem-make-http-request-go` | The outgoing HTTP calls whose responses drive status-code retries |
-| `golem-atomic-block-go` | Idempotence mode and atomic regions interact with retry semantics |
 | `golem-call-another-agent-go` | RPC calls retried via `Function` / `TargetAgentType`-keyed rules |
 | `golem-add-transactions-go` | Saga transactions layered on durable execution and retries |

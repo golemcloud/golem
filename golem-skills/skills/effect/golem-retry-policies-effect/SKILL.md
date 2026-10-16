@@ -85,8 +85,8 @@ statuses. Effect `HttpClient` normally returns 4xx and 5xx responses; when an el
 matches, Golem transparently re-sends the request and `HttpClient` receives the final response.
 
 Status retries require live execution, a reconstructible request, and an idempotent operation.
-They are skipped inside an atomic host region. Prefer GET and other naturally idempotent methods
-unless the operation has explicitly been made safe to retry.
+Prefer GET and other naturally idempotent methods unless the operation has explicitly been made
+safe to retry. Host policies repair individual calls, not whole guest workflows.
 
 ## Build a Host Policy with the Effect SDK
 

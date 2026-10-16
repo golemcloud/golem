@@ -531,7 +531,7 @@ replays failed attempts and waits; it does not restart the retry budget. An expl
 or `retryPending()` starts a new bounded resolution attempt. Empty live responses wait
 `idleDelayMs` (default 100 ms) before another pull. Active HTTP awaits remain resident until their
 bounded deadline; only idle durable timer waits can unload. Do not enclose these waits in custom
-durability or atomic scopes.
+durability scopes.
 
 Client deadline expiry counts against the failure budget even for a quiet live stream. For
 long-poll, set `timeoutMs` above the server's polling window. SSE peers that send no completed
@@ -575,9 +575,8 @@ The configuration `Secret<T>` wrapper is not a raw capability and cannot be pass
 The host enforces reveal/network permissions and pins the secret revision. HTTPS is required except
 for localhost/literal loopback development URLs; URL credentials and redirects are rejected.
 
-Durability uses ordinary Golem host-call replay, without a custom wrapper or changing the global
-idempotence setting. Completed replay performs no external HTTP. With idempotence explicitly
-disabled, interrupted writes retain the platform's fail-closed recovery behavior. Reader/writer
+Durability uses ordinary Golem host-call replay, without a custom wrapper. Completed replay
+performs no external HTTP. Interrupted writes retain the platform's fail-closed recovery behavior. Reader/writer
 buffers reconstruct from the oplog and deterministic execution; no snapshot export is provided,
 and existing restrictions on snapshots of active native streams remain.
 

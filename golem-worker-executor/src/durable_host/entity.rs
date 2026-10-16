@@ -134,7 +134,6 @@ pub struct EntityInvocationDurability {
 pub(crate) struct EntityInvocationKeyContext {
     caller_key: golem_common::model::IdempotencyKey,
     logical_position: Option<OplogIndex>,
-    assume_idempotence: bool,
     stream_session_idempotency_key: golem_common::model::IdempotencyKey,
 }
 
@@ -146,13 +145,17 @@ impl EntityInvocationKeyContext {
         let caller_key = ctx.state.get_current_idempotency_key().ok_or_else(|| {
             WorkerExecutorError::runtime("entity invocation requires an active caller key")
         })?;
-        let logical_position = ctx
-            .state
-            .current_atomic_region_idempotency_key_oplog_index()
-            .map(|_| {
+        let logical_position = if ctx
+            .entity_invocation_scope()
+            .is_some_and(|scope| scope.logical_key_positions())
+        {
+            Some(
                 ctx.state
-                    .current_idempotency_key_oplog_index(OplogIndex::NONE)
-            });
+                    .current_idempotency_key_oplog_index(OplogIndex::NONE),
+            )
+        } else {
+            None
+        };
         let stream_parent_key = ctx
             .entity_invocation_scope()
             .map(|scope| scope.stream_session_idempotency_key().clone())
@@ -162,7 +165,6 @@ impl EntityInvocationKeyContext {
         Ok(Self {
             caller_key,
             logical_position,
-            assume_idempotence: ctx.state.assume_idempotence,
             stream_session_idempotency_key,
         })
     }
@@ -321,7 +323,6 @@ impl EntityInvocationDurability {
             operation,
             principal,
             plan,
-            assume_idempotence: key_context.assume_idempotence,
             authority_wallet: store
                 .with(|mut access| get_ctx(access.data_mut()).agent_wallet_cards_snapshot()),
         };
@@ -583,7 +584,6 @@ impl EntityInvocationDurability {
             calling_principal,
             execution_mode,
             idempotency_key,
-            metadata.assume_idempotence,
             true,
             stream_session_idempotency_key,
         )
@@ -694,7 +694,6 @@ impl EntityInvocationDurability {
             scope.calling_principal().clone(),
             InvocationExecutionMode::Live,
             scope.idempotency_key().clone(),
-            scope.assume_idempotence(),
             scope.logical_key_positions(),
             scope.stream_session_idempotency_key().clone(),
         )
@@ -2135,7 +2134,6 @@ mod tests {
                 agent_id: owner.agent_id,
             }),
             plan,
-            assume_idempotence: true,
             authority_wallet: Vec::new(),
         })
         .unwrap()

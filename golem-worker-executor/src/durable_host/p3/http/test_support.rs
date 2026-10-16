@@ -229,7 +229,7 @@ impl Oplog for FrameTestOplog {
         _payload_id: PayloadId,
         _md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
-        unimplemented!()
+        Err("test payload storage is unavailable".to_string())
     }
 }
 

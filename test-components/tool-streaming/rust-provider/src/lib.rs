@@ -1512,36 +1512,32 @@ async fn wait_at_crash_checkpoint<T>(_retained: &T, name: &str) {
     drop(body);
     drop(trailers);
 
-    golem_rust::atomically_async(|| async {
-        let socket =
-            TcpSocket::create(IpAddressFamily::Ipv4).expect("create checkpoint gate socket");
-        socket
-            .connect(IpSocketAddress::Ipv4(Ipv4SocketAddress {
-                address: (127, 0, 0, 1),
-                port: gate_port,
-            }))
-            .await
-            .expect("connect to checkpoint gate");
-        let (mut stream, received) = socket.receive();
-        let mut bytes = Vec::new();
-        let mut buffer = Vec::with_capacity(1);
-        loop {
-            let (result, next_buffer) = stream.read(buffer).await;
-            buffer = next_buffer;
-            match result {
-                StreamResult::Complete(len) => {
-                    bytes.extend_from_slice(&buffer[..len]);
-                    buffer.clear();
-                }
-                StreamResult::Dropped => break,
-                StreamResult::Cancelled => panic!("checkpoint gate read was cancelled"),
+    let socket = TcpSocket::create(IpAddressFamily::Ipv4).expect("create checkpoint gate socket");
+    socket
+        .connect(IpSocketAddress::Ipv4(Ipv4SocketAddress {
+            address: (127, 0, 0, 1),
+            port: gate_port,
+        }))
+        .await
+        .expect("connect to checkpoint gate");
+    let (mut stream, received) = socket.receive();
+    let mut bytes = Vec::new();
+    let mut buffer = Vec::with_capacity(1);
+    loop {
+        let (result, next_buffer) = stream.read(buffer).await;
+        buffer = next_buffer;
+        match result {
+            StreamResult::Complete(len) => {
+                bytes.extend_from_slice(&buffer[..len]);
+                buffer.clear();
             }
+            StreamResult::Dropped => break,
+            StreamResult::Cancelled => panic!("checkpoint gate read was cancelled"),
         }
-        drop(stream);
-        received.await.expect("finish checkpoint gate receive");
-        assert_eq!(bytes, [1], "checkpoint gate returns one release byte");
-    })
-    .await;
+    }
+    drop(stream);
+    received.await.expect("finish checkpoint gate receive");
+    assert_eq!(bytes, [1], "checkpoint gate returns one release byte");
 }
 
 async fn wait_at_promise_checkpoint(name: &str) {
@@ -1835,8 +1831,7 @@ impl Streaming for StreamingImpl {
                 return Ok(summary);
             }
             "entity-custom-root" => {
-                // A positional atomic region of this body, then a root custom invocation of this
-                // body: both are recorded under the entity invocation.
+                // Record a custom invocation under the entity invocation after draining stdin.
                 while let Some(item) = stdin.next().await {
                     if let Ok(chunk) = item {
                         summary.chunks_read += 1;
@@ -1844,7 +1839,6 @@ impl Streaming for StreamingImpl {
                     }
                 }
                 let _ = stdout.finish().await;
-                golem_rust::atomically_async(|| async {}).await;
                 golem_rust::durability::Durability::<(), String>::new(
                     "golem-it",
                     "entity-custom-root",
@@ -1891,36 +1885,13 @@ impl Streaming for StreamingImpl {
             wait_at_crash_checkpoint(&(), "provider-clean-stdout-before-trap").await;
             panic!("deterministic streaming tool trap after clean stdout");
         }
-        if mode == "changing-stdout-in-atomic-region" {
-            golem_rust::atomically_async(|| async {
-                let first_attempt = is_first_trap_attempt().await;
-                stdout
-                    .write(if first_attempt {
-                        b"first".to_vec()
-                    } else {
-                        b"second".to_vec()
-                    })
-                    .await
-                    .expect("publish attempt-dependent stdout");
-                stdout
-                    .finish()
-                    .await
-                    .expect("finish attempt-dependent stdout");
-                if first_attempt {
-                    wait_at_crash_checkpoint(&(), "provider-changing-stdout").await;
-                }
-            })
-            .await;
-            return Ok(summary);
-        }
-
         summary.output_closed |= stdout.finish().await.is_err();
         Ok(summary)
     }
 
     async fn no_stream(&self, value: String) -> Result<String, StreamingError> {
         if value == "first" || value == "second" {
-            let _ = golem_rust::get_oplog_index();
+            golem_rust::oplog_commit(0);
         }
         if value == "hold-attempt-identity" {
             wait_at_crash_checkpoint(&value, "attempt-identity-accepted").await;
@@ -2124,17 +2095,12 @@ impl CapableStreaming for CapableStreamingImpl {
             write_owner_file(path, &bytes)
                 .expect("capable trap marker must share the owner filesystem");
             let _effect = golem_rust::generate_idempotency_key();
-            golem_rust::atomically_async(|| async {
-                if is_first_trap_attempt().await {
-                    panic!("deterministic capable streaming tool first-attempt trap");
-                }
-            })
-            .await;
+            while is_first_trap_attempt().await {}
             bytes.clone()
         } else if let Some(path) = path.strip_prefix("hold-body:") {
             write_owner_file(path, &bytes)
                 .expect("capable body checkpoint must share the owner filesystem");
-            let _ = golem_rust::get_oplog_index();
+            golem_rust::oplog_commit(0);
             stdout
                 .write(b"body-checkpoint".to_vec())
                 .await
@@ -2150,7 +2116,7 @@ impl CapableStreaming for CapableStreamingImpl {
                 .expect("buffer capable output before the checkpoint");
             append_owner_file(path, b":buffered")
                 .expect("record buffered capable completion checkpoint");
-            let _ = golem_rust::get_oplog_index();
+            golem_rust::oplog_commit(0);
             stdout
                 .write(b"completion-checkpoint".to_vec())
                 .await
@@ -2172,10 +2138,7 @@ impl CapableStreaming for CapableStreamingImpl {
             launch_retained_crash_child();
             bytes.clone()
         } else if path == "atomic-idempotency-parent" {
-            golem_rust::atomically_async(|| async {
-                launch_atomic_idempotency_child();
-            })
-            .await;
+            launch_atomic_idempotency_child();
             bytes.clone()
         } else {
             write_owner_file(&path, &bytes).expect("capable tool must share the owner filesystem");

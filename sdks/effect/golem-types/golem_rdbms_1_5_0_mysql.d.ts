@@ -1,7 +1,13 @@
 declare module 'golem:rdbms/mysql@1.5.0' {
   import * as golemRdbms150Types from 'golem:rdbms/types@1.5.0';
   export class DbResultStream {
+    /**
+     * @throws Error
+     */
     getColumns(): DbColumn[];
+    /**
+     * @throws Error
+     */
     getNext(): DbRow[] | undefined;
   }
   export class DbConnection {
