@@ -8,7 +8,6 @@ use golem_rust::agentic::{
     AgentStream, Config, InputStream, Principal, RpcError, Secret, ToolError, ToolInvocation,
     ToolInvocationOutput, pump_tool_stdin, spawn_local, tool_protocol_error,
 };
-use golem_rust::bindings::golem::permissions::types as permission_types;
 use golem_rust::durability::{Durability, DurableFunctionType};
 use golem_rust::golem_agentic::golem::tool::host::{
     self as tool_host, ByteStreamFailure, ToolRpc, ToolRpcError,
@@ -17,7 +16,7 @@ use golem_rust::quota::QuotaToken;
 use golem_rust::schema::wit::GuestPermissionCardHandle;
 use golem_rust::schema::wit::wire::ToolError as WireToolError;
 use golem_rust::{
-    CardId, ConfigSchema, FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire,
+    ConfigSchema, FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire,
     SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue, WireSchema, agent_definition,
     agent_implementation, decode_typed_schema_value_owned, encode_schema_value, read_only,
 };
@@ -5380,18 +5379,13 @@ impl RustResourceToolStreamingCaller for RustResourceToolStreamingCallerImpl {
         let original = issue.card;
         let original_view = GuestPermissionCardHandle::from_value(&original.to_value())
             .expect("clone matrix permission handle cell");
-        let id = original
-            .with_handle(|card| CardId::from(permission_types::id(card)))
-            .expect("derived matrix permission card is usable");
+        let id = original.id();
         let exchange = MatrixResourceClient::default()
             .permissions()
             .exchange(original)
             .await
             .expect("matrix permission exchange succeeds");
-        let same_identity = exchange
-            .card
-            .with_handle(|card| CardId::from(permission_types::id(card)))
-            .is_some_and(|returned_id| returned_id == id);
+        let same_identity = exchange.card.id() == id;
         let original_consumed = !original_view.is_present();
         assert_eq!(issue.principal, exchange.principal);
         assert_eq!(issue.owner_agent_id, exchange.owner_agent_id);
@@ -5413,15 +5407,7 @@ impl RustResourceToolStreamingCaller for RustResourceToolStreamingCallerImpl {
         let (first, second) = (first.issue(), second.issue()).join().await;
         let first = first.expect("first concurrent permission issue succeeds");
         let second = second.expect("second concurrent permission issue succeeds");
-        let first_id = first
-            .card
-            .with_handle(|card| CardId::from(permission_types::id(card)))
-            .expect("first concurrently derived card is usable");
-        let second_id = second
-            .card
-            .with_handle(|card| CardId::from(permission_types::id(card)))
-            .expect("second concurrently derived card is usable");
-        first_id != second_id
+        first.card.id() != second.card.id()
     }
 
     async fn matrix_typed_stream_observation(&self) -> MatrixResourceObservation {

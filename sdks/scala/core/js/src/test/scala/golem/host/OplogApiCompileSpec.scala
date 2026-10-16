@@ -33,7 +33,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
   private val pluginDesc  = PluginInstallationDescription("plug", "1.0", Map("key" -> "val"))
   private val oplogRegion = OplogRegion(BigInt(0), BigInt(10))
   private val walletPin   = PublicInvocationWalletPin(
-    WalletVersionToken(Array[Byte](1, 2, 3), BigInt(7)),
+    PermissionsApi.WalletVersionToken(Vector[Byte](1, 2, 3), BigInt(7)),
     Some(golem.Uuid(BigInt(10), BigInt(20)))
   )
 

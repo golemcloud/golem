@@ -3,13 +3,10 @@ use golem_rust::agentic::{
     AgentStream, InputStream, OutputStream, Principal, Secret as ConfigSecret, pump_tool_stdin,
     spawn_local,
 };
-use golem_rust::bindings::golem::permissions::{
-    derive as permission_derive, types as permission_types,
-};
 use golem_rust::golem_agentic::golem::agent::host as agent_host;
 use golem_rust::golem_agentic::golem::tool::host::{self as tool_host, ByteStreamFailure, ToolRpc};
 use golem_rust::quota::QuotaToken;
-use golem_rust::schema::wit::GuestPermissionCardHandle;
+use golem_rust::permissions::{self, PermissionCard};
 use golem_rust::schema::wit::direct::{
     WireError, WirePreflight, WireReader, WireSchemaBuilder, WireWriter,
 };
@@ -433,19 +430,19 @@ pub struct QuotaExchange {
     pub token: MatrixCapacityToken,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[derive(Debug, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 #[schema(rename_all = "camelCase")]
 pub struct PermissionExchange {
     pub provider: String,
     pub principal: String,
     pub owner_agent_id: String,
-    pub card: GuestPermissionCardHandle,
+    pub card: PermissionCard,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[derive(Debug, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 #[schema(rename_all = "camelCase")]
 pub struct PermissionIssue {
-    pub card: GuestPermissionCardHandle,
+    pub card: PermissionCard,
     pub issuer: String,
     pub principal: String,
     pub owner_agent_id: String,
@@ -461,14 +458,14 @@ struct MatrixPermissionIssuerImpl;
 #[tool_implementation]
 impl MatrixPermissionIssuer for MatrixPermissionIssuerImpl {
     async fn issue(&self, principal: Principal) -> PermissionIssue {
-        let card = permission_derive::derive_from_wallet(&[], &[], &[], &[], None)
+        let card = permissions::derive_from_wallet(&Default::default(), None)
             .expect("matrix permission issuer derives a card from the owner wallet");
         let owner_agent_id = golem_rust::get_self_metadata()
             .expect("matrix permission issuer owner metadata")
             .agent_id
             .agent_id;
         PermissionIssue {
-            card: GuestPermissionCardHandle::new(card),
+            card,
             issuer: "rust".to_string(),
             principal: matrix_principal(&principal),
             owner_agent_id,
@@ -591,7 +588,7 @@ impl Quota for QuotaImpl {
 pub trait Permissions {
     async fn exchange(
         &self,
-        card: GuestPermissionCardHandle,
+        card: PermissionCard,
         principal: golem_rust::agentic::Principal,
     ) -> PermissionExchange;
 }
@@ -602,14 +599,11 @@ struct PermissionsImpl;
 impl Permissions for PermissionsImpl {
     async fn exchange(
         &self,
-        card: GuestPermissionCardHandle,
+        card: PermissionCard,
         principal: Principal,
     ) -> PermissionExchange {
-        assert_eq!(
-            card.with_handle(permission_types::is_polymorphic),
-            Some(false),
-            "matrix resource permission card must be non-polymorphic"
-        );
+        // Panics unless the received card is present and known to the host.
+        let _ = card.id();
         let (provider, principal, owner_agent_id) = matrix_resource_evidence(&principal);
         PermissionExchange {
             provider,

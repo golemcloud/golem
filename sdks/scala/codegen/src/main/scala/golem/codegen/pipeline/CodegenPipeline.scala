@@ -103,8 +103,10 @@ object CodegenPipeline {
             projection.errors.map(error => SourceDiscovery.Error(Some(error.path), error.message))
           )
 
-        val agents           = discoveredToIR(discovered)
-        val result           = RpcCodegen.generate(agents, discovered.objects)
+        val agents = discoveredToIR(discovered)
+        val result = RpcCodegen.generate(agents, discovered.objects)
+        if (result.errors.nonEmpty)
+          throw new PipelineException(result.errors.map(error => SourceDiscovery.Error(None, error.message)))
         val callProjection   = ToolCallProjectionCodegen.generate(projection.tools, discovered.objects)
         val toolResult       = ToolRpcCodegen.generateFromIR(projection.tools, discovered.objects)
         val middlewareResult = ToolMiddlewareCodegen.generate(projection.tools, discovered.objects)

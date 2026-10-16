@@ -20,7 +20,7 @@ use golem_rust::{
 };
 use serde::{Deserialize, Serialize};
 
-mod gated_host_bindings {
+pub(crate) mod gated_host_bindings {
     wit_bindgen::generate!({
         path: "../../sdks/rust/golem-rust/wit",
         world: "golem-rust",

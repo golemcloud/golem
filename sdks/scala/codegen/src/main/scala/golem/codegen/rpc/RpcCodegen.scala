@@ -35,6 +35,11 @@ import scala.meta.parsers._
  *   - `remote.process(1, "hello")` — await the result via `apply`
  *   - `remote.process.trigger(1, "hello")` — fire-and-forget
  *   - `remote.process.scheduleAt(1, "hello", when)` — schedule at a time
+ *   - `remote.process.withScopeCard(card)(1, "hello")` — await with a scope
+ *     card; the scoped view is the nested
+ *     `ProcessRemoteMethod#GolemScopeCardCall` class
+ *   - `remote.withDefaultScopeCard(card)` — a client whose awaited calls carry
+ *     `card`
  *
  * Generated clients extend `golem.AgentCompanionBase[Trait]` so the existing
  * macro infrastructure can locate the trait type parameter.
@@ -45,10 +50,36 @@ object RpcCodegen {
 
   final case class Warning(message: String)
 
+  final case class Error(message: String)
+
   final case class Result(
     files: Seq[GeneratedFile],
-    warnings: Seq[Warning]
+    warnings: Seq[Warning],
+    errors: Seq[Error] = Nil
   )
+
+  /**
+   * Members of the generated remote trait; an agent method cannot use these
+   * names.
+   */
+  val ReservedRemoteMemberNames: Set[String] = Set("withDefaultScopeCard", "withoutDefaultScopeCard")
+
+  /**
+   * The nested scoped-call class of every generated method class. A bare type
+   * of this name in a method signature would resolve to the nested class, so
+   * signatures cannot use it.
+   */
+  val ScopedCallClassName: String = "GolemScopeCardCall"
+
+  private val ScopedCallClassReference = ("(?<![\\w.$])" + ScopedCallClassName + "(?![\\w$])").r
+
+  /**
+   * Backticks quote an identifier without changing it, so they are removed
+   * first.
+   */
+  private def usesScopedCallClassName(method: MethodSurface): Boolean =
+    (method.returnTypeExpr :: remoteParams(method).map(_.typeExpr))
+      .exists(typeExpr => ScopedCallClassReference.findFirstIn(typeExpr.replace("`", "")).isDefined)
 
   def generate(
     agents: List[AgentSurface],
@@ -56,6 +87,7 @@ object RpcCodegen {
   ): Result = {
     val warnings = List.newBuilder[Warning]
     val files    = List.newBuilder[GeneratedFile]
+    val errors   = List.newBuilder[Error]
 
     val existingByFqn: Set[String] = existingObjects.map { obj =>
       if (obj.pkg.isEmpty) obj.name else s"${obj.pkg}.${obj.name}"
@@ -67,10 +99,24 @@ object RpcCodegen {
         if (agent.packageName.isEmpty) clientName
         else s"${agent.packageName}.$clientName"
 
+      val generated = generatedMethods(agent)
+      val reserved  = generated.map(_.name).filter(ReservedRemoteMemberNames.contains)
+      val shadowed  = generated.filter(usesScopedCallClassName).map(_.name)
       if (existingByFqn.contains(clientFqn)) {
         warnings += Warning(
           s"Skipping RPC client generation for ${agent.traitFqn}: " +
             s"object $clientFqn already exists. Remove the handwritten client to enable codegen."
+        )
+      } else if (reserved.nonEmpty) {
+        errors += Error(
+          s"Agent ${agent.traitFqn} declares method(s) ${reserved.mkString(", ")}, which the generated RPC client " +
+            "reserves for its scope-card API. Rename the method(s)."
+        )
+      } else if (shadowed.nonEmpty) {
+        errors += Error(
+          s"Agent ${agent.traitFqn} method(s) ${shadowed.mkString(", ")} use the bare type name " +
+            s"$ScopedCallClassName, which the generated RPC client reserves for its scoped-call class. " +
+            "Rename the type or refer to it by its qualified name."
         )
       } else {
         val content     = generateCompanion(agent)
@@ -82,8 +128,12 @@ object RpcCodegen {
       }
     }
 
-    Result(files = files.result(), warnings = warnings.result())
+    Result(files = files.result(), warnings = warnings.result(), errors = errors.result())
   }
+
+  /** Methods that get a generated wrapper: those with valid principalParams. */
+  private def generatedMethods(agent: AgentSurface): List[MethodSurface] =
+    agent.methods.filter(m => m.principalParams.length == m.params.length)
 
   /** Filter out Principal parameters from a method surface. */
   private def remoteParams(method: MethodSurface): List[ParamSurface] =
@@ -130,10 +180,7 @@ object RpcCodegen {
 
     val constructorType = constructorTypeExpr(agent.constructor)
 
-    // Filter methods with valid principalParams
-    val remoteMethods = agent.methods.filter { m =>
-      m.principalParams.length == m.params.length
-    }
+    val remoteMethods = generatedMethods(agent)
 
     val sb = new StringBuilder
 
@@ -186,6 +233,11 @@ object RpcCodegen {
       val className = s"${capitalize(method.name)}RemoteMethod"
       sb.append(s"    val ${method.name}: $className\n")
     }
+    sb.append("\n")
+    sb.append("    /** A client whose awaited calls borrow `card` as the scope card unless a call sets its own. */\n")
+    sb.append(s"    def withDefaultScopeCard(card: $ScopeCardType): $remoteName\n\n")
+    sb.append("    /** A client whose awaited calls carry no default scope card. */\n")
+    sb.append(s"    def withoutDefaultScopeCard: $remoteName\n")
     sb.append(s"  }\n\n")
 
     // Private bindRemote
@@ -197,6 +249,10 @@ object RpcCodegen {
       val className = s"${capitalize(method.name)}RemoteMethod"
       sb.append(s"""      val ${method.name} = new $className(resolved)\n""")
     }
+    sb.append(s"      def withDefaultScopeCard(card: $ScopeCardType): $remoteName =\n")
+    sb.append("        bindRemote(resolved.withScopeCard(card))\n")
+    sb.append(s"      def withoutDefaultScopeCard: $remoteName =\n")
+    sb.append("        bindRemote(resolved.withoutScopeCard)\n")
     sb.append(s"    }\n\n")
 
     // Mode-aware constructors
@@ -273,8 +329,33 @@ object RpcCodegen {
       s"      ${if (ephemeral) "scheduleCancelableWithMetadata" else "scheduleCancelableWith"}($packExpr, when)\n\n"
     )
 
+    sb.append("    /** The awaited calls of this method, borrowing `card` as the scope card. */\n")
+    sb.append(s"    def withScopeCard(card: $ScopeCardType): $ScopedCallClassName =\n")
+    sb.append(s"      new $ScopedCallClassName(resolved.withScopeCard(card))\n\n")
+
+    sb.append(s"    final class $ScopedCallClassName private[$className] (\n")
+    sb.append(s"      scoped: _root_.golem.runtime.rpc.AgentClientRuntime.WireResolvedAgent[$simpleName]\n")
+    sb.append(
+      s"    ) extends _root_.golem.runtime.rpc.AbstractWireRemoteMethod[$simpleName, $packedInputType, $outputType](scoped, $methodNameLit) {\n"
+    )
+    sb.append(s"      def apply($paramDecls): _root_.scala.concurrent.Future[$awaitResultType] =\n")
+    sb.append(s"        ${if (ephemeral) "awaitWithMetadata" else "awaitWith"}($packExpr)\n\n")
+    if (ephemeral) {
+      sb.append(
+        s"      def cancelable($paramDecls): _root_.scala.concurrent.Future[_root_.golem.runtime.rpc.CancelableAsyncInvocation[$outputType]] =\n"
+      )
+      sb.append(s"        cancelableAwaitWithMetadata($packExpr)\n")
+    } else {
+      sb.append(
+        s"      def cancelable($paramDecls): (_root_.scala.concurrent.Future[$outputType], _root_.golem.runtime.rpc.CancellationToken) =\n"
+      )
+      sb.append(s"        cancelableAwaitWith($packExpr)\n")
+    }
+    sb.append("    }\n")
     sb.append(s"  }\n\n")
   }
+
+  private val ScopeCardType = "_root_.golem.host.PermissionsApi.ScopeCard"
 
   /**
    * Build the packed constructor input expression from unpacked param names.

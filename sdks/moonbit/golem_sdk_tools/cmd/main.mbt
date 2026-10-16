@@ -393,6 +393,9 @@ fn run_agents(project_root : String, component_dir : String) -> Unit raise {
       )
       required_pkg_imports.push(("golemcloud/golem_sdk/rpc", "@rpc"))
       required_pkg_imports.push(
+        ("golemcloud/golem_sdk/permissions", "@permissions"),
+      )
+      required_pkg_imports.push(
         ("golemcloud/golem_sdk/interface/golem/agent/host", "@agentHost"),
       )
       required_pkg_imports.push(

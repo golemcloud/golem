@@ -583,24 +583,42 @@ test "codec-bound producer forwards unread without running either item codec" {
 }
 
 ///|
-test "wire record failure releases fields beyond the failing encoder exactly once" {
+test "wire record failure keeps permission cards and a discard releases them" {
   reset_resource_drop_counts()
   let consumed = @model.GuestSecretHandle::new(@types.Secret::Secret(501))
   ignore(consumed.take())
   let quota = @model.GuestQuotaTokenHandle::new(
     @types.QuotaToken::QuotaToken(502),
   )
-  let card = @model.GuestPermissionCardHandle::new(
-    @types.PermissionCard::PermissionCard(503),
-  )
+  let card = @card.adopt(@types.PermissionCard::PermissionCard(503))
   try into_wire_record([quota, consumed, card, quota]) catch {
     WireError::Invalid(_) => ()
   } noraise {
     _ => fail("encoded an already transferred secret")
   }
   assert_false(quota.is_present())
-  assert_false(card.is_present())
+  // The host never took the card, so the caller keeps it.
+  assert_true(card.is_present())
   assert_eq(resource_drop_count(0), 0)
   assert_eq(resource_drop_count(1), 1)
+  assert_eq(resource_drop_count(2), 0)
+  // Discarding a value outside an input rollback releases the card.
+  release_wire(card)
+  assert_false(card.is_present())
+  assert_eq(resource_drop_count(2), 1)
+}
+
+///|
+test "a failed output payload encode releases its permission cards" {
+  reset_resource_drop_counts()
+  let consumed = @model.GuestSecretHandle::new(@types.Secret::Secret(641))
+  ignore(consumed.take())
+  let card = @card.adopt(@types.PermissionCard::PermissionCard(642))
+  run_agent_stream_async(async fn() {
+    let result = try? into_wire_payload_record_async([card, consumed])
+    assert_true(result is Err(_))
+  })
+  // Nothing owns a discarded payload, so its card is dropped.
+  assert_false(card.is_present())
   assert_eq(resource_drop_count(2), 1)
 }
