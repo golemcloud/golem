@@ -47,12 +47,52 @@ pub struct BuiltinArtifactSource {
 #[serde(default)]
 pub struct BuiltinArtifactsConfig {
     pub cache_dir: Option<PathBuf>,
-    /// Per-artifact source overrides. Production defaults come from the embedded release lock.
+    /// Per-artifact source overrides. Defaults use the release manifest or local inventory.
     pub source_overrides: BTreeMap<String, BuiltinArtifactSource>,
 }
 
 impl BuiltinArtifactsConfig {
     pub fn resolved_artifacts(&self) -> anyhow::Result<BTreeMap<String, BuiltinArtifactSource>> {
+        self.resolved_artifacts_from_manifest(include_str!(concat!(
+            env!("OUT_DIR"),
+            "/builtin-artifacts.release.json"
+        )))
+    }
+
+    fn resolved_artifacts_from_manifest(
+        &self,
+        manifest: &str,
+    ) -> anyhow::Result<BTreeMap<String, BuiltinArtifactSource>> {
+        if manifest.is_empty() {
+            #[derive(Deserialize)]
+            struct InventoryEntry {
+                path: PathBuf,
+            }
+            let inventory: BTreeMap<String, InventoryEntry> =
+                serde_json::from_str(include_str!("../../builtin-artifacts.json"))
+                    .context("failed to parse builtin-artifacts.json")?;
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .expect("registry crate has a source checkout parent");
+            let mut artifacts = inventory
+                .into_iter()
+                .map(|(id, entry)| {
+                    let path = root.join(entry.path);
+                    let url = url::Url::from_file_path(&path).map_err(|_| {
+                        anyhow::anyhow!("invalid built-in artifact path '{}'", path.display())
+                    })?;
+                    Ok((
+                        id,
+                        BuiltinArtifactSource {
+                            url: url.into(),
+                            sha256: None,
+                        },
+                    ))
+                })
+                .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+            artifacts.extend(self.source_overrides.clone());
+            return Ok(artifacts);
+        }
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Lock {
@@ -68,8 +108,8 @@ impl BuiltinArtifactsConfig {
             sha256: String,
         }
 
-        let lock: Lock = serde_json::from_str(include_str!("../../builtin-artifacts.lock.json"))
-            .context("failed to parse builtin-artifacts.lock.json")?;
+        let lock: Lock = serde_json::from_str(manifest)
+            .context("failed to parse builtin-artifacts.release.json")?;
         anyhow::ensure!(
             lock.schema_version == 1,
             "unsupported built-in artifact lock schema version {}",
@@ -952,13 +992,29 @@ mod tests {
     }
 
     #[test]
-    pub fn builtin_artifact_defaults_are_pinned() {
+    pub fn builtin_artifact_defaults_follow_embedded_manifest() {
         let config = BuiltinArtifactsConfig::default();
         assert!(config.source_overrides.is_empty());
         let artifacts = config.resolved_artifacts().unwrap();
         assert_eq!(artifacts.len(), 8);
         assert!(artifacts.contains_key("python"));
         for (artifact_id, source) in artifacts {
+            if include_str!(concat!(env!("OUT_DIR"), "/builtin-artifacts.release.json")).is_empty()
+            {
+                let path = url::Url::parse(&source.url)
+                    .unwrap()
+                    .to_file_path()
+                    .unwrap();
+                assert!(
+                    path.starts_with(
+                        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                            .parent()
+                            .unwrap()
+                    )
+                );
+                assert!(source.sha256.is_none());
+                continue;
+            }
             assert!(
                 source
                     .url
@@ -992,9 +1048,68 @@ mod tests {
         assert_eq!(artifacts.len(), 8);
         assert_eq!(artifacts["javascript_tools"].url, override_source.url);
         assert_eq!(artifacts["javascript_tools"].sha256, None);
-        assert!(artifacts["git_tool"].sha256.is_some());
-        assert!(artifacts["typescript_tools"].sha256.is_some());
-        assert!(artifacts["web_fetch"].sha256.is_some());
+        let defaults = BuiltinArtifactsConfig::default()
+            .resolved_artifacts()
+            .unwrap();
+        for id in ["git_tool", "typescript_tools", "web_fetch"] {
+            assert_eq!(artifacts[id].url, defaults[id].url);
+            assert_eq!(artifacts[id].sha256, defaults[id].sha256);
+        }
+    }
+
+    #[test]
+    fn builtin_artifact_release_manifest_is_strict() {
+        let config = BuiltinArtifactsConfig::default();
+        let manifest = serde_json::json!({
+            "schemaVersion": 1,
+            "repository": "golemcloud/golem-builtins",
+            "artifacts": { "python": {
+                "component": "python", "version": "1.2.3", "sha256": "ab".repeat(32)
+            }}
+        });
+        let sources = config
+            .resolved_artifacts_from_manifest(&manifest.to_string())
+            .unwrap();
+        assert_eq!(
+            sources["python"].url,
+            "https://github.com/golemcloud/golem-builtins/releases/download/python-v1.2.3/python.wasm"
+        );
+        assert_eq!(sources["python"].sha256, Some("ab".repeat(32)));
+        for (pointer, invalid) in [
+            ("/schemaVersion", serde_json::json!(2)),
+            ("/repository", serde_json::json!("other/repo")),
+            (
+                "/artifacts/python/component",
+                serde_json::json!("../python"),
+            ),
+            ("/artifacts/python/version", serde_json::json!("latest")),
+            (
+                "/artifacts/python/sha256",
+                serde_json::json!("AB".repeat(32)),
+            ),
+        ] {
+            let mut invalid_manifest = manifest.clone();
+            *invalid_manifest.pointer_mut(pointer).unwrap() = invalid;
+            assert!(
+                config
+                    .resolved_artifacts_from_manifest(&invalid_manifest.to_string())
+                    .is_err()
+            );
+        }
+        assert!(config.resolved_artifacts_from_manifest("not json").is_err());
+        let mut overrides = config;
+        overrides.source_overrides.insert(
+            "python".to_string(),
+            crate::config::BuiltinArtifactSource {
+                url: "file:///replacement.wasm".to_string(),
+                sha256: None,
+            },
+        );
+        let sources = overrides
+            .resolved_artifacts_from_manifest(&manifest.to_string())
+            .unwrap();
+        assert_eq!(sources["python"].url, "file:///replacement.wasm");
+        assert!(sources["python"].sha256.is_none());
     }
 
     #[test]
