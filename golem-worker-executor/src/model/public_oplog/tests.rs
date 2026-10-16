@@ -2187,13 +2187,7 @@ async fn oplog_search_pages_share_the_byte_budget_across_chunks_and_count_only_m
     let (oplog_service, owned_agent_id, oplog) = open_test_oplog("search-byte-budget").await;
     let mut matching = Vec::new();
     for _ in 0..3 {
-        oplog
-            .add(OplogEntry::NoOp {
-                timestamp: Timestamp::now_utc(),
-                entity_parent_start_index: None,
-            })
-            .await
-            .unwrap();
+        oplog.add(log_entry(0)).await.unwrap();
         oplog.add(log_entry(2000)).await.unwrap();
         matching.push(
             oplog
@@ -2258,10 +2252,7 @@ async fn component_revision_lookup_reads_past_its_batch_size() {
                 snapshot_assisted_details: None,
             }
         } else {
-            OplogEntry::NoOp {
-                timestamp: Timestamp::now_utc(),
-                entity_parent_start_index: None,
-            }
+            log_entry(0)
         };
         indices.push(oplog.add(entry).await.unwrap());
     }
