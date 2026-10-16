@@ -7,13 +7,16 @@ description: Publishes immutable built-in artifacts during manual tagged Golem r
 
 Read `BUILTIN_ARTIFACTS.md` for the release contract and recovery procedure.
 Source and build logic stay in `golem`; `golemcloud/golem-builtins` holds only
-immutable release assets. Never commit generated WASMs or embed them in binaries.
+immutable release assets. Never commit generated WASMs or embed them in published
+release binaries. Local install tasks opt into compressed embedding; source
+overrides still take precedence. Release mode rejects the embedding feature.
 
 Development and main CI build current sources with
 `cargo make ensure-builtin-artifacts`. Do not publish development artifacts or
 generate development tool versions. Exported tool versions differ from artifact
 versions. Bump changed tools in source, registry provisioning, and defaults during
-release preparation. This workflow does not require redeployment or database reset.
+release preparation. Replacing local bytes does not rebind published tool
+coordinates in an existing registry database.
 
 ## Manual release
 
@@ -36,4 +39,7 @@ The existing `cargo make publish-builtin-artifact` remains a manual packaging
 entry point with `BUILTIN_COMPONENT`, `BUILTIN_VERSION`, `BUILTIN_SKIP_BUILD=1`,
 and `BUILTIN_DRY_RUN=1` for packaging inspection. Preserve provenance, licenses,
 source archives, and applicable SPDX SBOMs. Never overwrite tags or assets.
+On partial failure, rerun from the same source. The publisher verifies existing
+assets, uploads only missing assets, and verifies the complete public set before
+the outer task creates the manifest. A conflicting asset stops publication.
 Never publish from CI or give CI write credentials for built-in releases.

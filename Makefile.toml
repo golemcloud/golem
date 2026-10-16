@@ -661,9 +661,17 @@ if is_path_exists ${manifest}
 end
 cp golem-registry-service/tests/builtin-artifacts.release.json ${manifest}
 set_env GOLEM_BUILTIN_RELEASE 1
+blocked = exec cargo test --profile ${PROFILE} -p golem-registry-service --lib --features embed-builtin-artifacts --no-run
 result = exec cargo test --profile ${PROFILE} -p golem-registry-service --lib -- builtin_artifact --report-time
 rm ${manifest}
 unset_env GOLEM_BUILTIN_RELEASE
+if equals ${blocked.code} 0
+    trigger_error "Release builds must reject embedded WASMs"
+end
+if not contains ${blocked.stderr} "Published release binaries must download built-ins"
+    echo ${blocked.stderr}
+    trigger_error "Release embedding check failed for an unexpected reason"
+end
 echo ${result.stdout}
 echo ${result.stderr}
 if not equals ${result.code} 0
@@ -1845,9 +1853,15 @@ exec --fail-on-error cargo install --debug --path cli/golem-cli --bin golem-cli 
 
 [tasks.install-golem-debug]
 description = "Install golem (debug)"
+dependencies = ["ensure-builtin-artifacts"]
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo install --debug --path cli/golem --bin golem --target-dir target --locked --offline
+features = set embed-builtin-artifacts
+release = get_env GOLEM_BUILTIN_RELEASE
+if not is_empty ${release}
+    features = set ""
+end
+exec --fail-on-error cargo install --debug --path cli/golem --bin golem --target-dir ${CARGO_MAKE_CRATE_TARGET_DIRECTORY} --locked --offline "--features=${features}"
 '''
 
 ## ** INSTALL - DEV RELEASE **
@@ -1867,10 +1881,16 @@ exec --fail-on-error cargo install --profile dev-release --path cli/golem-cli --
 # Requires lld to be installed, e.g., on macOS `brew install lld` can be used
 [tasks.install-golem-dev-release]
 description = "Install golem (dev-release)"
+dependencies = ["ensure-builtin-artifacts"]
 env = { GOLEM_BUILD_SKIP_SHADOW = 1, RUSTFLAGS = "-C link-arg=-fuse-ld=lld" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo install --profile dev-release --path cli/golem --bin golem --target-dir target --locked --offline
+features = set embed-builtin-artifacts
+release = get_env GOLEM_BUILTIN_RELEASE
+if not is_empty ${release}
+    features = set ""
+end
+exec --fail-on-error cargo install --profile dev-release --path cli/golem --bin golem --target-dir ${CARGO_MAKE_CRATE_TARGET_DIRECTORY} --locked --offline "--features=${features}"
 '''
 
 ## ** INSTALL - RELEASE **
@@ -1888,9 +1908,15 @@ exec --fail-on-error cargo install --path cli/golem-cli --bin golem-cli --target
 
 [tasks.install-golem-release]
 description = "Install golem (debug)"
+dependencies = ["ensure-builtin-artifacts"]
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo install --path cli/golem --bin golem --target-dir target --locked --offline
+features = set embed-builtin-artifacts
+release = get_env GOLEM_BUILTIN_RELEASE
+if not is_empty ${release}
+    features = set ""
+end
+exec --fail-on-error cargo install --path cli/golem --bin golem --target-dir ${CARGO_MAKE_CRATE_TARGET_DIRECTORY} --locked --offline "--features=${features}"
 '''
 
 ## ** APP MANIFEST SCHEMA **
@@ -1921,13 +1947,24 @@ end
 inventory = readfile builtin-artifacts.json
 artifacts = json_parse --collection ${inventory}
 ids = map_keys ${artifacts}
+selected = set ""
+separator = set ""
 for id in ${ids}
     entry = map_get ${artifacts} ${id}
     task = map_get ${entry} task
-    if equals ${task} ${CARGO_MAKE_CURRENT_TASK_NAME}
+    matches = equals ${task} ${CARGO_MAKE_CURRENT_TASK_NAME}
+    if equals ${CARGO_MAKE_CURRENT_TASK_NAME} build-javascript-typescript-tools
+        if equals ${id} javascript_tools
+            matches = set true
+        elif equals ${id} typescript_tools
+            matches = set true
+        end
+    end
+    if ${matches}
         output = map_get ${entry} path
+        stale = set false
         if not is_path_exists ${output}
-            exit 0
+            stale = set true
         end
         inputs = map_get ${entry} inputs
         common = array Cargo.toml Cargo.lock .cargo Makefile.toml builtin-artifacts.json wit cli/golem-cli golem-common golem-api-grpc golem-client golem-schema golem-schema-derive golem-mcp-import golem-openapi-client-generator golem-skills/skills
@@ -1935,19 +1972,30 @@ for id in ${ids}
             array_push ${inputs} ${input}
         end
         for input in ${inputs}
-            paths = gitignore_path_array --include-hidden ${input}
-            for path in ${paths}
-                if is_file ${path}
-                    if is_path_newer ${path} ${output}
-                        exit 0
+            if not ${stale}
+                if is_path_exists ${input}
+                    paths = gitignore_path_array --include-hidden ${input}
+                    for path in ${paths}
+                        if is_file ${path}
+                            if is_path_newer ${path} ${output}
+                                stale = set true
+                            end
+                        end
                     end
                 end
             end
         end
-        exit 1
+        if ${stale}
+            selected = concat ${selected} ${separator} ${id}
+            separator = set ","
+        end
     end
 end
-trigger_error "No built-in inventory entry for ${CARGO_MAKE_CURRENT_TASK_NAME}"
+if is_empty ${selected}
+    exit 1
+end
+set_env GOLEM_BUILTIN_ARTIFACT_IDS ${selected}
+exit 0
 '''
 
 [tasks.build-otlp-exporter]
@@ -2109,9 +2157,8 @@ exec --fail-on-error cargo deny check sources
 cd ../..
 '''
 
-[tasks.build-javascript-typescript-tools]
-dependencies = ["wit"]
-description = "Builds the bundled, Wizer-preinitialized JavaScript and TypeScript tool components"
+[tasks.builtin-javascript-typescript-build]
+private = true
 script_runner = "@duckscript"
 script = '''
 set_env CARGO_TARGET_DIR ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}
@@ -2133,10 +2180,7 @@ exec --fail-on-error npm run smoke:embedded
 exec --fail-on-error npm run test:runtime
 exec --fail-on-error npm run typecheck
 exec --fail-on-error ${golem} build -P optimized --force-build --yes
-requested = get_env GOLEM_BUILTIN_ARTIFACT_ID
-if is_empty ${requested}
-    requested = set "javascript_tools,typescript_tools"
-end
+requested = get_env GOLEM_BUILTIN_ARTIFACT_IDS
 ids = split ${requested} ,
 for id in ${ids}
     if equals ${id} javascript_tools
@@ -2148,28 +2192,29 @@ end
 cd ../..
 '''
 
+[tasks.build-javascript-typescript-tools]
+extend = "builtin-artifact-build"
+private = false
+dependencies = ["wit"]
+description = "Builds stale JavaScript and TypeScript outputs in one shared pipeline"
+run_task = "builtin-javascript-typescript-build"
+
 [tasks.build-javascript-tools]
 extend = "builtin-artifact-build"
 private = false
+dependencies = ["wit"]
 description = "Builds the built-in JavaScript tool component"
-script_runner = "@duckscript"
-script = '''
-set_env GOLEM_BUILTIN_ARTIFACT_ID javascript_tools
-cm_run_task build-javascript-typescript-tools
-'''
+run_task = "builtin-javascript-typescript-build"
 
 [tasks.build-typescript-tools]
 extend = "builtin-artifact-build"
 private = false
+dependencies = ["wit"]
 description = "Builds the built-in TypeScript tool component"
-script_runner = "@duckscript"
-script = '''
-set_env GOLEM_BUILTIN_ARTIFACT_ID typescript_tools
-cm_run_task build-javascript-typescript-tools
-'''
+run_task = "builtin-javascript-typescript-build"
 
 [tasks.build-builtin-tools]
-dependencies = ["build-filesystem-tools", "build-git-tool", "build-javascript-tools", "build-typescript-tools", "build-web-fetch", "build-bash-tool", "build-python-tool"]
+dependencies = ["build-filesystem-tools", "build-git-tool", "build-javascript-typescript-tools", "build-web-fetch", "build-bash-tool", "build-python-tool"]
 description = "Builds all built-in tool components"
 
 [tasks.ensure-builtin-artifacts]
@@ -2268,10 +2313,7 @@ for id in ${ids}
     component = map_get ${entry} component
     output = map_get ${entry} path
     set_env BUILTIN_COMPONENT ${component}
-    existing = exec gh release view "${component}-v${version}" --repo golemcloud/golem-builtins
-    if not equals ${existing.code} 0
-        cm_run_task publish-builtin-artifact
-    end
+    cm_run_task publish-builtin-artifact
     sha = sha256sum ${output}
     if not equals ${dry_run} 1
         url = set "https://github.com/golemcloud/golem-builtins/releases/download/${component}-v${version}/${component}.wasm"
@@ -2414,30 +2456,17 @@ writefile "${staged_wasm}.sha256" "${sha256}  ${asset_name}\n"
 
 source_commit_result = exec git rev-parse HEAD
 source_commit = trim ${source_commit_result.stdout}
-source_ref_result = exec git rev-parse --abbrev-ref HEAD
-source_ref = trim ${source_ref_result.stdout}
+source_ref = set ${source_commit}
 source_status_result = exec git status --porcelain
 source_status = trim ${source_status_result.stdout}
 provenance = set "{\n  \"schemaVersion\": 1,\n  \"artifact\": {\"component\": \"${component}\", \"version\": \"${version}\", \"asset\": \"${asset_name}\", \"sha256\": \"${sha256}\", \"size\": ${size}, \"exports\": ${exports_json}},\n  \"source\": {\"repository\": \"https://github.com/golemcloud/golem\", \"commit\": \"${source_commit}\", \"ref\": \"${source_ref}\"},\n  \"build\": {\"task\": \"cargo make ${build_task}\"}\n}\n"
 writefile "${staging}/provenance.json" ${provenance}
 
-license_dir = set "${staging}/licenses"
 if equals ${licenses} LICENSE
-    mkdir ${license_dir}
-    cp LICENSE "${license_dir}/LICENSE"
-elif equals ${component} bash
-    mkdir ${license_dir}
-    cp ${licenses} "${license_dir}/LICENSE"
-    cp ${source_notice} "${license_dir}/NOTICE"
-elif equals ${component} web-fetch
-    mkdir ${license_dir}
-    cp ${licenses} "${license_dir}/THIRD_PARTY_LICENSES.html"
-    cp ${source_notice} "${license_dir}/LICENSE"
+    exec --fail-on-error git archive --format=tar.gz "--output=${staging}/${component}-licenses.tar.gz" HEAD LICENSE
 else
-    cp ${licenses} ${license_dir}
-    cp ${source_notice} "${license_dir}/SOURCE.md"
+    exec --fail-on-error git archive --format=tar.gz "--output=${staging}/${component}-licenses.tar.gz" HEAD ${licenses} ${source_notice}
 end
-exec --fail-on-error tar -czf "${staging}/${component}-licenses.tar.gz" -C ${license_dir} .
 if not is_empty ${sbom}
     cp ${sbom} "${staging}/${component}.spdx.json"
 end
@@ -2460,21 +2489,64 @@ if not is_empty ${source_status}
     trigger_error "refusing to publish from a dirty source tree; commit the exact source first"
 end
 existing = exec gh release view ${tag} --repo ${repository}
-if equals ${existing.code} 0
-    trigger_error "immutable built-in release already exists: ${repository}@${tag}"
-end
 notes = set "Built from [golem@${source_commit}](https://github.com/golemcloud/golem/commit/${source_commit}).\n\nSHA-256: `${sha256}`\n\nThe source and build tooling for this artifact live in the golem repository.\n"
 if equals ${component} python
     notes = concat ${notes} "\nThe Python component statically links the LGPL-3.0-only Malachite libraries. The attached python-source.tar.gz contains their corresponding source, the application source and locked dependencies, and offline rebuild/relinking instructions in builtin-tools/python/SOURCE.md. Each source retains its own license; the Golem license does not replace the library licenses.\n"
 end
 notes_path = set "${staging}/release-notes.md"
 writefile ${notes_path} ${notes}
+assets = array ${staged_wasm} "${staged_wasm}.sha256" "${staging}/provenance.json" "${staging}/${component}-licenses.tar.gz"
 if equals ${component} python
-    exec --fail-on-error gh release create ${tag} --repo ${repository} --title ${tag} --notes-file ${notes_path} ${staged_wasm} "${staged_wasm}.sha256" "${staging}/provenance.json" "${staging}/${component}-licenses.tar.gz" "${staging}/python-source.tar.gz" "${staging}/python-source.tar.gz.sha256"
-elif is_empty ${sbom}
-    exec --fail-on-error gh release create ${tag} --repo ${repository} --title ${tag} --notes-file ${notes_path} ${staged_wasm} "${staged_wasm}.sha256" "${staging}/provenance.json" "${staging}/${component}-licenses.tar.gz"
-else
-    exec --fail-on-error gh release create ${tag} --repo ${repository} --title ${tag} --notes-file ${notes_path} ${staged_wasm} "${staged_wasm}.sha256" "${staging}/provenance.json" "${staging}/${component}-licenses.tar.gz" "${staging}/${component}.spdx.json"
+    array_push ${assets} "${staging}/python-source.tar.gz"
+    array_push ${assets} "${staging}/python-source.tar.gz.sha256"
+elif not is_empty ${sbom}
+    array_push ${assets} "${staging}/${component}.spdx.json"
+end
+if not equals ${existing.code} 0
+    exec --fail-on-error gh release create ${tag} --repo ${repository} --title ${tag} --notes-file ${notes_path}
+end
+published = exec --fail-on-error gh release view ${tag} --repo ${repository} --json assets
+published = json_parse --collection ${published.stdout}
+published = map_get ${published} assets
+missing = array
+mkdir "${staging}/public"
+# Verify every existing asset before repairing any missing uploads.
+for asset in ${assets}
+    name = basename ${asset}
+    found = set false
+    for remote in ${published}
+        remote_name = map_get ${remote} name
+        if equals ${remote_name} ${name}
+            found = set true
+        end
+    end
+    if ${found}
+        exec --fail-on-error gh release download ${tag} --repo ${repository} --pattern ${name} --dir "${staging}/public"
+        expected = sha256sum ${asset}
+        actual = sha256sum "${staging}/public/${name}"
+        if not equals ${expected} ${actual}
+            trigger_error "Conflicting immutable asset ${repository}@${tag}/${name}; no assets were replaced"
+        end
+    else
+        array_push ${missing} ${asset}
+    end
+end
+for asset in ${missing}
+    exec --fail-on-error gh release upload ${tag} ${asset} --repo ${repository}
+end
+# Check the complete public set, including uploads from this invocation.
+for asset in ${assets}
+    name = basename ${asset}
+    verified = set "${staging}/public/${name}"
+    if is_path_exists ${verified}
+        rm ${verified}
+    end
+    exec --fail-on-error gh release download ${tag} --repo ${repository} --pattern ${name} --dir "${staging}/public"
+    expected = sha256sum ${asset}
+    actual = sha256sum ${verified}
+    if not equals ${expected} ${actual}
+        trigger_error "Public asset verification failed for ${repository}@${tag}/${name}"
+    end
 end
 '''
 

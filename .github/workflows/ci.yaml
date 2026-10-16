@@ -94,7 +94,7 @@ jobs:
           stat -c 'Native archive bytes=%s' golem-binaries.tar.zst
           printf 'run-id=%s\nsource-sha=%s\ndisk-key=%s\n' "$GITHUB_RUN_ID" "$SOURCE_SHA" "$DISK_KEY" > PUBLICATION
 
-      - name: Test embedded built-in release defaults
+      - name: Test download-and-cache release defaults and reject release embedding
         run: cargo make --profile ci builtin-artifacts-release-tests
 
   check-clippy-and-format:
@@ -249,6 +249,8 @@ jobs:
             test -s "$path"
             wasm-tools validate --features all "$path"
           done < <(jq -r '.[].path' builtin-artifacts.json)
+      - name: Test embedded local-install defaults and source overrides
+        run: cargo test --profile dev-ci -p golem-registry-service --lib --features embed-builtin-artifacts -- builtin_artifact --report-time
       - name: Identify built-in publication
         id: publication-key
         run: echo "key=${GITHUB_REPOSITORY}-builtin-artifacts-${GITHUB_RUN_ID}-producer-attempt${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"

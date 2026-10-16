@@ -7,6 +7,10 @@ Git-ignored build directories. `cargo make ensure-builtin-artifacts` builds miss
 outputs. The `cargo make build`, `build-golem`, and `build-golem-cli` entry points
 ensure these outputs first. Plain `cargo build` does not prebuild them.
 
+When both JavaScript and TypeScript outputs are stale, preparation runs their
+shared build pipeline once. It copies only the stale outputs, so a fresh manual
+replacement of the other output remains unchanged.
+
 The warm check starts no component build,
 Docker container, npm install, or Wizer process. It preserves manually replaced
 WASMs until their source inputs change. There is no separate build executable,
@@ -32,8 +36,24 @@ set `GOLEM_BUILTIN_ARTIFACTS_PREBUILT=1` when running cargo-make. This skips all
 component builds and requires all eight outputs to exist. A source override at a
 different path does not need this switch.
 
-There are no generated development versions and no required redeployment or
-database reset for this build workflow.
+There are no generated development versions. Replacing a WASM changes what the
+artifact resolver reads; it does not rebind published tool coordinates in an
+existing registry database. Those coordinates remain immutable.
+
+## Local installation
+
+`cargo make install-debug`, `install-dev-release`, and `install-release` prepare
+the tools and install `golem` with compressed WASMs through the opt-in
+`embed-builtin-artifacts` feature. The installed binary works outside the checkout
+and does not need the original WASM files. Reinstall it to update its embedded
+defaults. `builtin_artifacts.source_overrides` still takes precedence, so a local
+file override can change without rebuilding the binary. The standalone
+`golem-cli` does not provision built-ins and needs no embedded artifacts.
+
+Published release binaries do not enable this feature. They use the generated
+release manifest and download-and-cache resolver. Setting `GOLEM_BUILTIN_RELEASE`
+and enabling `embed-builtin-artifacts` together fails compilation. The install
+tasks omit the feature when `GOLEM_BUILTIN_RELEASE` is set.
 
 ## Release registry coverage
 
@@ -43,7 +63,10 @@ embedded HTTPS sources and checksum-pinned cache instead of development file
 defaults. Existing download tests cover fetch, checksum rejection, and cache
 recovery. CI runs this check after packaging the normal development test binaries.
 The task removes its temporary manifest even if the test command fails. It refuses
-to overwrite an existing release manifest.
+to overwrite an existing release manifest. It also checks that release mode rejects
+WASM embedding. The built-in artifact CI job separately tests embedded local-install
+defaults and source overrides with the current WASMs. Release builds validate that
+the manifest has exactly the inventory IDs and the correct component mapping.
 
 ## Manual tagged release preparation
 
@@ -85,7 +108,7 @@ The existing publisher retains validation, provenance, licenses, source archives
 and applicable SPDX SBOM packaging. Component releases use immutable
 `<component>-v<version>` tags. Never replace assets or move tags.
 
-The task verifies public WASM bytes against local hashes
+The task verifies every component's full public asset set against the local package
 before it writes the schema-version-1 `builtin-artifacts.release.json`. It uploads
 that manifest to the Golem release with `gh release upload`, without `--clobber`.
 Release CI must download this manifest before compilation and use its pinned
@@ -97,8 +120,12 @@ This explicit switch prevents a leftover release manifest from pinning developme
 builds. Source archives must include the manifest for reproducible release builds.
 
 Publication is not transactional. On partial failure, fix the cause and rerun
-from the same source; matching public assets are verified and reused, never
-overwritten. A mismatch stops the release. If only manifest upload failed, retain
+from the same source. The publisher verifies all existing assets before uploading
+missing assets, including licenses, provenance, source archives, and applicable
+SBOMs. It then downloads and verifies the complete asset set. Matching assets are
+reused, never overwritten. License and Python source archives are deterministic
+so packaging retries do not change their bytes. A mismatch stops the release.
+If only manifest upload failed, retain
 the verified local manifest and retry `gh release upload <tag>
 builtin-artifacts.release.json --repo golemcloud/golem` without `--clobber`.
 Inspect existing release assets before retrying an upload with an uncertain

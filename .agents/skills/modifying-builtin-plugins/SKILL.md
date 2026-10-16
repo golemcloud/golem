@@ -5,7 +5,7 @@ description: Builds and modifies built-in plugins and their descriptor-driven re
 
 # Modifying Built-in Plugins
 
-Built-in plugin sources are standalone Golem applications under `plugins/`. `builtin-artifacts.json` lists their build tasks, source inputs, and local outputs. Development uses those files. Tagged releases publish immutable assets in `golemcloud/golem-builtins` and generate `builtin-artifacts.release.json` with versions and checksums. Never commit a generated plugin WASM or add `include_bytes!` for one.
+Built-in plugin sources are standalone Golem applications under `plugins/`. `builtin-artifacts.json` lists their build tasks, source inputs, and local outputs. Development uses those files. Tagged releases publish immutable assets in `golemcloud/golem-builtins` and generate `builtin-artifacts.release.json` with versions and checksums. Never commit a generated plugin WASM. Only local install tasks opt into compressed embedding; published release binaries must download and cache artifacts.
 
 ## Source and SDK Changes
 
@@ -32,7 +32,7 @@ wasm-tools validate --features all plugins/otlp-exporter.wasm
 
 ## Provisioning Changes
 
-`BuiltinPluginsConfig` is only the tagged `Enabled`/`Disabled` switch. Plugin metadata and artifact IDs belong in `BuiltinPluginDescriptor`/`BUILTIN_PLUGINS`; production component versions and SHA-256 values belong in the shared release lock. `BuiltinArtifactsConfig` contains only the cache directory and explicit source overrides. Do not add per-plugin path fields or embed bytes.
+`BuiltinPluginsConfig` is only the tagged `Enabled`/`Disabled` switch. Plugin metadata and artifact IDs belong in `BuiltinPluginDescriptor`/`BUILTIN_PLUGINS`; production component versions and SHA-256 values belong in the shared release lock. `BuiltinArtifactsConfig` contains only the cache directory and explicit source overrides. Do not add per-plugin path fields or bypass the shared artifact resolver.
 
 When enabled, startup creates/finds the built-in owner's system app/environment, hash-updates descriptor components, deploys the environment once, then idempotently registers each descriptor. New environments transactionally receive grants for all plugins owned by the built-in-plugin owner; those grants cannot be deleted. Provisioning does not backfill by iterating existing environments.
 
