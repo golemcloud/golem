@@ -4571,6 +4571,7 @@ dependencies = [
  "golem-service-base",
  "golem-test-framework",
  "golem-worker-executor-test-utils",
+ "golem-xfs-quotad",
  "governor",
  "half",
  "heck",
@@ -4661,6 +4662,7 @@ dependencies = [
  "golem-service-base",
  "golem-test-framework",
  "golem-worker-executor",
+ "golem-xfs-quotad",
  "prometheus",
  "regex",
  "rustls",
@@ -4770,6 +4772,18 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+]
+
+[[package]]
+name = "golem-xfs-quotad"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "assert2",
+ "libc",
+ "rustix 1.1.4",
+ "tempfile",
+ "test-r",
 ]
 
 [[package]]

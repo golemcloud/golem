@@ -159,7 +159,13 @@ export async function runCli(
     if (options.npmExit && !exitRequested && !executeFailed) {
       throw new Error('npm CLI returned without an exit request');
     }
-    return Number(process.exitCode ?? 0);
+    let status = Number(process.exitCode ?? 0);
+    if (!Number.isFinite(status) || !Number.isInteger(status)) {
+      process.stderr.write('Process exit status must be a finite integer\n');
+      status = 1;
+      await stderr.drain();
+    }
+    return ((status % 256) + 256) % 256;
   } finally {
     stdout.release();
     stderr.release();

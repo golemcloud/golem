@@ -1058,6 +1058,19 @@ function drainCapabilityHandles(value: SchemaValue): void {
 
 export function relinquishSchemaValueCapabilities(value: SchemaValue): void {
   switch (value.tag) {
+    case 'stream': {
+      const endpoint = value.handle.take();
+      // Wrapped endpoints remain with the wire owner, just like raw capability
+      // handles below. Native streams have no wire owner to close their source.
+      if (endpoint?.kind === 'native') {
+        void Promise.resolve()
+          .then(() => endpoint.value[Symbol.asyncIterator]().return?.())
+          .catch(() => {
+            // Cleanup must not replace the conversion failure.
+          });
+      }
+      return;
+    }
     case 'secret':
       releaseGuestSecretHandle(SECRET_INTERNAL, value.handle);
       return;

@@ -38,6 +38,7 @@ const transport: ToolTransport = {
         ? Effect.fail(rejected)
         : Effect.succeed({ result: success }),
       cancel: Effect.void,
+      detach: Effect.void,
     }),
 }
 const definition = () =>
@@ -106,6 +107,7 @@ describe("tool client codec preparation", () => {
               }),
               stdout: (async function* () {})(),
               cancel: Effect.void,
+              detach: Effect.void,
             })
           },
         },

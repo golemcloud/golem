@@ -34,8 +34,8 @@ use super::fault::{
 use super::files::{LateWrites, SnapshotFiles, lands_by, later};
 use super::priority::LowPriority;
 use super::prune::{
-    Percent, PrunePolicy, belongs_to_ledger, due_prune, read_ledger, record_freed, refresh_period,
-    remove_freed, remove_old_claims, remove_older_ledgers, write_ledger,
+    DueCheck, Percent, PrunePolicy, belongs_to_ledger, due_prune, read_ledger, record_freed,
+    refresh_period, remove_freed, remove_old_claims, remove_older_ledgers, write_ledger,
 };
 use super::publish::{
     PublishBound, Published, SnapshotStage, StagedSnapshot, backup_end, index_read_bound, publish,
@@ -59,6 +59,9 @@ use crate::filesystem_snapshot::{
     AgentSnapshots, CallError, ChangeDetection, FilesystemSnapshotStore, ReadError, RestoreFailure,
     RunSlots, SaveError, SnapshotInfo, SnapshotName, Unlimited, Withdrawal, newest_first,
     snapshot_time,
+};
+use crate::metrics::filesystem_snapshots::{
+    self, PruneOutcome, PruneSkip, RemovedSource, StoredSource,
 };
 use crate::sandbox_filesystem::{NativeOperation, NativeStorageProfile, execute_native};
 use crate::services::golem_config::FilesystemSnapshotStoreConfig;
@@ -529,11 +532,12 @@ impl RusticSnapshotStore {
         });
     }
 
-    /// Prunes the repository when a prune is due, and gives the failure of a prune that did not
-    /// end. The records of freed bytes stay until a prune succeeds, so a later prune counts them
-    /// again. It lists the packs only when their size can make a prune due. The claim protocol
-    /// makes one try of each blob call, because a try that lost its answer can still land, and the
-    /// protocol counts each such landing.
+    /// Prunes the repository when a prune is due, and tells whether the prune ran or why it did
+    /// not. It gives the failure of a prune that did not end. The records of freed bytes stay
+    /// until a prune succeeds, so a later prune counts them again. It lists the packs only when
+    /// their size can make a prune due. The claim protocol makes one try of each blob call,
+    /// because a try that lost its answer can still land, and the protocol counts each such
+    /// landing.
     ///
     /// A due prune runs only after the delete takes a claim of its ledger, and only when a second
     /// read of the ledger after the claim finds the time of the last prune of the first read. When
@@ -549,11 +553,13 @@ impl RusticSnapshotStore {
         work: &OperationWork,
         scope: &AgentSnapshots,
         token: &CancellationToken,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<PruneRan> {
         let files = self.files(work, scope, token).once();
         let policy = self.prune_policy();
-        let Some(due) = due_prune(&files, &*self.clock, &policy).await? else {
-            return Ok(());
+        let due = match due_prune(&files, &*self.clock, &policy).await? {
+            DueCheck::Due(due) => due,
+            DueCheck::NotDue => return Ok(PruneRan::Skipped(PruneSkip::NotDue)),
+            DueCheck::Held => return Ok(PruneRan::Skipped(PruneSkip::ClaimedElsewhere)),
         };
         // The token of the tracker comes before the check of the cancel, so either the delete sees
         // a shut down and makes no more storage calls, or `shut_down` waits for the claim and for
@@ -573,7 +579,7 @@ impl RusticSnapshotStore {
         )
         .await?
         else {
-            return Ok(());
+            return Ok(PruneRan::Skipped(PruneSkip::ClaimedElsewhere));
         };
         // Before the prune starts, an error releases the claim, so the next delete prunes again.
         // When the second read of the ledger finds another time of the last prune than the first
@@ -583,7 +589,7 @@ impl RusticSnapshotStore {
             Ok(Some(backend)) => backend,
             other => {
                 claim.release().await;
-                return other.map(|_| ());
+                return other.map(|_| PruneRan::Skipped(PruneSkip::ClaimedElsewhere));
             }
         };
         // No attempt of a prune that found a snapshot file gone changed the repository, so no
@@ -595,23 +601,24 @@ impl RusticSnapshotStore {
                     "a concurrent delete removed a snapshot file at each attempt of the prune"
                 );
             }
-            other => other.map(|marked| marked.unwrap_or_default()),
+            other => other.map(|report| report.flatten().unwrap_or_default()),
         };
         // The final marker holds the claim for the hold from the end of this prune, also when the
         // prune or its ledger write fails. It goes through the files of the claim, which no cancel
         // ends, so a prune that a shut down stopped also gets it.
         claim.finish().await;
-        let marked_packs = pruned?;
+        let report = pruned?;
+        filesystem_snapshots::record_removed_bytes(RemovedSource::Prune, report.bytes_removed);
         let ended = self.clock.now();
         // The lease fences the ledger write as it fences the calls of rustic. A write that would
         // start after the lease ran out is not sent, and a write that starts before is bounded by
         // the time left, so the entry never lands after another delete can take the claim over.
         // A prune whose ledger write the lease skipped keeps its claim and runs no cleanup.
-        write_ledger(&claim.leased(&files), ended, marked_packs).await?;
+        write_ledger(&claim.leased(&files), ended, leaves_marked_packs(&report)).await?;
         remove_older_ledgers(&files, ended).await;
         remove_freed(&files, &due.records).await;
         remove_old_claims(&files, ended).await;
-        Ok(())
+        Ok(PruneRan::Pruned)
     }
 
     /// Checks the ledger again and builds the backend of the prune. It gives `None` when the second
@@ -628,18 +635,22 @@ impl RusticSnapshotStore {
         if !belongs_to_ledger(claim.directory(), &again) {
             return Ok(None);
         }
-        Ok(Some(Arc::new(self.backend(claim.leased(files))?)))
+        Ok(Some(Arc::new(
+            self.backend(claim.leased(files))?
+                .storing(StoredSource::Prune),
+        )))
     }
 
-    /// Runs the prune with a new marker of the claim at each refresh period, and tells whether the
-    /// prune leaves marked packs. It gives `None` when each attempt found a snapshot file gone.
+    /// Runs the prune with a new marker of the claim at each refresh period, and gives its report.
+    /// A scope without a repository gives `Some(None)`. It gives `None` when each attempt found a
+    /// snapshot file gone.
     async fn run_prune(
         &self,
         work: &OperationWork,
         backend: Arc<BlobBackend>,
         files: &SnapshotFiles,
         claim: &Claim,
-    ) -> anyhow::Result<Option<bool>> {
+    ) -> anyhow::Result<Option<Option<PruneReport>>> {
         let key = self.key.clone();
         let settings = self.policy.prune;
         let low_priority = self.low_priority;
@@ -677,9 +688,7 @@ impl RusticSnapshotStore {
                 }
             })
             .await?;
-        attempts
-            .map(|report| report.map(|report| report.as_ref().is_some_and(leaves_marked_packs)))
-            .transpose()
+        attempts.transpose()
     }
 
     /// One run of a save: the backup, then the publish of its snapshot file. A backup that has not
@@ -709,7 +718,11 @@ impl RusticSnapshotStore {
             .recording(backend_late.clone())
             .held_by(run_calls.token());
         let backend = match self.backend(backend_files) {
-            Ok(backend) => Arc::new(backend.staging_in(stage.clone())),
+            Ok(backend) => Arc::new(
+                backend
+                    .staging_in(stage.clone())
+                    .storing(StoredSource::Save),
+            ),
             Err(error) => return Ran::Ended(Ended::new(RunEnd::Permanent, error)),
         };
         let key = self.key.clone();
@@ -1015,18 +1028,26 @@ impl RusticSnapshotStore {
         {
             return Ran::Ended(ended_by(error));
         }
-        if let Err(error) = self.prune_when_due(work, scope, &token).await {
-            warn!(
-                snapshots = ?scope,
-                error = %format!("{error:#}"),
-                "A prune of the filesystem snapshots of an agent failed; the next delete prunes again"
-            );
-            crate::metrics::filesystem_snapshots::record_failed_space_reclaim();
-            #[cfg(test)]
-            self.failed_prunes
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(error);
+        filesystem_snapshots::record_released_bytes(freed);
+        let started = Instant::now();
+        match self.prune_when_due(work, scope, &token).await {
+            Ok(PruneRan::Pruned) => {
+                filesystem_snapshots::record_prune(PruneOutcome::Pruned, started.elapsed());
+            }
+            Ok(PruneRan::Skipped(reason)) => filesystem_snapshots::record_prune_skipped(reason),
+            Err(error) => {
+                warn!(
+                    snapshots = ?scope,
+                    error = %format!("{error:#}"),
+                    "A prune of the filesystem snapshots of an agent failed; the next delete prunes again"
+                );
+                filesystem_snapshots::record_prune(PruneOutcome::Failed, started.elapsed());
+                #[cfg(test)]
+                self.failed_prunes
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(error);
+            }
         }
         Ran::Answered(Ok(()))
     }
@@ -2050,6 +2071,14 @@ fn leaves_marked_packs(report: &PruneReport) -> bool {
         || report.packs_repacked > 0
         || report.packs_unindexed > 0
         || report.marked_packs_kept > 0
+}
+
+/// What a delete did about a prune.
+enum PruneRan {
+    /// The prune ran and wrote its ledger.
+    Pruned,
+    /// No prune ran, for this reason.
+    Skipped(PruneSkip),
 }
 
 /// Gives the packed bytes that the save of the snapshot added to the repository.

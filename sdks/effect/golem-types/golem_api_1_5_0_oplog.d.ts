@@ -439,6 +439,22 @@ declare module 'golem:api/oplog@1.5.0' {
     payload: TypedSchemaValue;
   };
   /**
+   * A consumed attachment read with inline observation metadata.
+   */
+  export type ToolAttachmentReadParameters = {
+    timestamp: Datetime;
+    observation: TypedSchemaValue;
+    payload?: Uint8Array;
+  };
+  /**
+   * An effective attachment control transition without a byte payload.
+   */
+  export type ToolAttachmentControlParameters = {
+    timestamp: Datetime;
+    attachment: TypedSchemaValue;
+    transition: TypedSchemaValue;
+  };
+  /**
    * A public durable-stream producer record rendered as a typed schema value.
    */
   export type DurableStreamRecordParameters = {
@@ -861,6 +877,24 @@ declare module 'golem:api/oplog@1.5.0' {
     kind: HostStreamKind;
     payload: OplogPayload;
   };
+  /**
+   * A consumed attachment read; only original data observations own payloads.
+   */
+  export type RawToolAttachmentReadParameters = {
+    timestamp: Datetime;
+    entityParentStartIndex?: OplogIndex;
+    observation: TypedSchemaValue;
+    payload?: OplogPayload;
+  };
+  /**
+   * An effective attachment control transition without a byte payload.
+   */
+  export type RawToolAttachmentControlParameters = {
+    timestamp: Datetime;
+    entityParentStartIndex?: OplogIndex;
+    attachment: TypedSchemaValue;
+    transition: TypedSchemaValue;
+  };
   export type DurableStreamOutcome = "success" | "error";
   export type DurableStreamEventSummary =
   {
@@ -1265,6 +1299,14 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'host-stream-frame'
     val: RawHostStreamFrameParameters
   } |
+  {
+    tag: 'tool-attachment-read'
+    val: RawToolAttachmentReadParameters
+  } |
+  {
+    tag: 'tool-attachment-control'
+    val: RawToolAttachmentControlParameters
+  } |
   /** Registers a durable stream before exposing its handle */
   {
     tag: 'stream-registered'
@@ -1556,6 +1598,14 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'host-stream-frame'
     val: HostStreamFrameParameters
+  } |
+  {
+    tag: 'tool-attachment-read'
+    val: ToolAttachmentReadParameters
+  } |
+  {
+    tag: 'tool-attachment-control'
+    val: ToolAttachmentControlParameters
   } |
   /** Registers a durable stream before exposing its handle */
   {

@@ -24,6 +24,7 @@ use super::{
     retention, store_name,
 };
 use crate::filesystem_snapshot::{ChangeDetection, Failed, SaveError, SnapshotInfo, SnapshotName};
+use crate::metrics::filesystem_snapshots::RetentionOutcome;
 use golem_common::model::oplog::FilesystemSnapshotName;
 use std::sync::Arc;
 use std::time::Instant;
@@ -285,7 +286,7 @@ pub(super) async fn delete_older_snapshots(
             Ok(listing) => listing,
             Err(error) => {
                 tracing::warn!(error = %error, "Failed to list the filesystem snapshots for retention");
-                return;
+                return RetentionOutcome::ListFailed;
             }
         };
         let keep = match kind {
@@ -295,26 +296,32 @@ pub(super) async fn delete_older_snapshots(
         let victims: Arc<[SnapshotName]> =
             retention::victims(&listing, own, info, keep.get(), kept).into();
         if victims.is_empty() {
-            return;
+            return RetentionOutcome::NothingToDelete;
         }
-        if let Deleted::Leaked(error) = core
+        match core
             .calls
             .delete(agent, Arc::clone(&victims), ticket.deletes_stopped())
             .await
         {
-            tracing::warn!(
-                error = %error,
-                agent = ?agent,
-                names = ?victims,
-                "Failed to delete old filesystem snapshots; the next retention tries again"
-            );
+            Deleted::Deleted => RetentionOutcome::Deleted,
+            Deleted::Stopped => RetentionOutcome::Stopped,
+            Deleted::Leaked(error) => {
+                tracing::warn!(
+                    error = %error,
+                    agent = ?agent,
+                    names = ?victims,
+                    "Failed to delete old filesystem snapshots; the next retention tries again"
+                );
+                RetentionOutcome::Leaked
+            }
         }
     };
-    tokio::select! {
+    let outcome = tokio::select! {
         biased;
-        () = ticket.deletes_stopped() => {}
-        () = retention => {}
-    }
+        () = ticket.deletes_stopped() => RetentionOutcome::Stopped,
+        outcome = retention => outcome,
+    };
+    crate::metrics::filesystem_snapshots::record_retention_run(outcome);
 }
 
 /// Deletes the snapshot `own` of the job, which no confirmation record names, with its own slots

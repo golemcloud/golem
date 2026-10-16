@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::future::{Future, poll_fn};
 use std::pin::Pin;
 use std::rc::Rc;
@@ -26,6 +26,7 @@ enum State<T> {
     Initial(Option<ResultFactory<T>>),
     Polling(ResultFuture<T>),
     Ready(T),
+    Disposed,
 }
 
 #[derive(Default)]
@@ -65,19 +66,50 @@ pub(crate) struct InvocationResultDriver<T> {
     state: RefCell<State<T>>,
     wake: Arc<ResultWake>,
     source_waker: Waker,
+    detached: Cell<bool>,
+    dispose: RefCell<Option<Box<dyn FnOnce()>>>,
 }
 
 impl<T: Clone> InvocationResultDriver<T> {
     pub(crate) fn new(factory: impl FnOnce() -> ResultFuture<T> + 'static) -> Self {
+        Self::with_disposal(factory, || {})
+    }
+
+    pub(crate) fn with_disposal(
+        factory: impl FnOnce() -> ResultFuture<T> + 'static,
+        dispose: impl FnOnce() + 'static,
+    ) -> Self {
         let wake = Arc::new(ResultWake::default());
         Self {
             state: RefCell::new(State::Initial(Some(Box::new(factory)))),
             source_waker: Waker::from(Arc::clone(&wake)),
             wake,
+            detached: Cell::new(false),
+            dispose: RefCell::new(Some(Box::new(dispose))),
         }
     }
 
-    pub(crate) fn poll(&self, cx: &mut Context<'_>) -> Poll<T> {
+    pub(crate) fn detach(&self) -> bool {
+        if self.detached.replace(true) {
+            return false;
+        }
+        let mut state = self.state.borrow_mut();
+        if matches!(*state, State::Ready(_)) {
+            *state = State::Disposed;
+            drop(state);
+            self.dispose();
+        }
+        self.wake.wake_waiters();
+        true
+    }
+
+    fn dispose(&self) {
+        if let Some(dispose) = self.dispose.borrow_mut().take() {
+            dispose();
+        }
+    }
+
+    fn poll_progress(&self, cx: &mut Context<'_>) -> Poll<()> {
         loop {
             let mut state = self.state.borrow_mut();
             match &mut *state {
@@ -94,18 +126,43 @@ impl<T: Clone> InvocationResultDriver<T> {
                     let Poll::Ready(result) = future.as_mut().poll(&mut source_context) else {
                         return Poll::Pending;
                     };
-                    let result_for_caller = result.clone();
-                    *state = State::Ready(result);
+                    if self.detached.get() {
+                        drop(result);
+                        *state = State::Disposed;
+                    } else {
+                        *state = State::Ready(result);
+                    }
                     drop(state);
+                    if self.detached.get() {
+                        self.dispose();
+                    }
                     self.wake.wake_waiters();
-                    return Poll::Ready(result_for_caller);
+                    return Poll::Ready(());
                 }
-                State::Ready(result) => return Poll::Ready(result.clone()),
+                State::Ready(_) | State::Disposed => return Poll::Ready(()),
             }
         }
     }
 
+    pub(crate) async fn drive(self: Rc<Self>) {
+        poll_fn(|cx| self.poll_progress(cx)).await
+    }
+
+    pub(crate) async fn delivery(self: Rc<Self>) -> Option<T> {
+        poll_fn(|cx| {
+            if self.detached.get() {
+                return Poll::Ready(None);
+            }
+            self.poll_progress(cx)
+                .map(|()| match &*self.state.borrow() {
+                    State::Ready(result) => Some(result.clone()),
+                    _ => None,
+                })
+        })
+        .await
+    }
+
     pub(crate) async fn wait(self: Rc<Self>) -> T {
-        poll_fn(|cx| self.poll(cx)).await
+        self.delivery().await.expect("result observer is attached")
     }
 }

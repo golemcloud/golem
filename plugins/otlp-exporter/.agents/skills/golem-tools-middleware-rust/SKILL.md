@@ -33,4 +33,4 @@ impl EchoMiddleware for EchoPolicy {
 For an adapter, implement `PresentedMiddleware<ExpectedUnderlying>` and translate inputs, outputs,
 and custom errors explicitly. The supplied underlying handle is invocation-scoped: do not store it,
 return it, or use it after the middleware method finishes. Forward affine permission cards and
-streams exactly once.
+streams exactly once. Golem checks each underlying call against the calling agent's tool permissions, using the command and arguments the next layer receives, so an adapter that changes them needs the agent to hold grants for both forms.

@@ -15,20 +15,24 @@ components:
     dependencies:
       tools:
       - golem-it:tool-streaming-go-provider/matrix-core
+      - golem-it:tool-streaming-go-provider/stdin-probe
 
 tools:
   matrix-core: {}
+  stdin-probe: {}
 
 agents:
   GoToolStreamingCaller:
     tools:
       matrix-core: {}
+      stdin-probe: {}
 
 bridge:
   go:
     internal:
       tools:
       - matrix-core
+      - stdin-probe
 
 environments:
   local:

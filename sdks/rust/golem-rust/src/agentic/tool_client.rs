@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(test)]
 use std::cell::RefCell;
 use std::convert::Infallible;
 use std::error::Error;
@@ -890,6 +889,8 @@ impl ToolInvocationOutput {
         output
     }
 
+    /// Permanently closes only this output. Later reads return `None`.
+    /// Dropping a pending `next()` future does not promise resumable delivery.
     pub fn close(&mut self) {
         self.stream = None;
     }
@@ -900,8 +901,9 @@ impl ToolInvocationOutput {
 pub struct ToolInvocation<T, E> {
     pub stdout: Option<ToolInvocationOutput>,
     pub stderr: Option<ToolInvocationOutput>,
-    future: Rc<agentic_host_api::FutureInvokeResult>,
+    future: Rc<RefCell<Option<Rc<agentic_host_api::FutureInvokeResult>>>>,
     result: Completion<Result<T, ToolError<E>>>,
+    detach: Rc<dyn Fn()>,
 }
 
 impl<T, E> ToolInvocation<T, E> {
@@ -911,8 +913,18 @@ impl<T, E> ToolInvocation<T, E> {
         (self.result)()
     }
 
+    /// Permanently stops structured delivery without cancelling the invocation
+    /// or closing outputs. Pending and future observers return a protocol error
+    /// with the message `tool result delivery is detached`, not `Cancelled`.
+    /// Already delivered capabilities remain owned by their recipients.
+    pub fn detach_result(&self) {
+        (self.detach)();
+    }
+
     pub fn cancel(&self) {
-        self.future.cancel();
+        if let Some(future) = &*self.future.borrow() {
+            future.cancel();
+        }
     }
 
     /// Drives both outputs and structured completion concurrently.
@@ -1000,18 +1012,27 @@ pub async fn start_tool_invocation<T: 'static, E: 'static>(
     };
     let future =
         rpc.async_invoke_and_await_tool(command_path, input, stdin, stdout_target, stderr_target);
-    let future = Rc::new(future);
-    let result = Rc::new(InvocationResultDriver::new({
-        let future = Rc::clone(&future);
-        move || {
-            Box::pin(async move {
-                let result = future.get().await.map_err(|error| {
-                    map_rpc_error(error, &|_, _| Ok::<Option<TypedSchemaValue>, String>(None))
-                })?;
-                decode_wire_invocation_result(result)
-            })
-        }
-    }));
+    let future = Rc::new(RefCell::new(Some(Rc::new(future))));
+    let result = Rc::new(InvocationResultDriver::with_disposal(
+        {
+            let future = Rc::clone(&future);
+            move || {
+                let future = Rc::clone(future.borrow().as_ref().expect("result is attached"));
+                Box::pin(async move {
+                    let result = future.get().await.map_err(|error| {
+                        map_rpc_error(error, &|_, _| Ok::<Option<TypedSchemaValue>, String>(None))
+                    })?;
+                    decode_wire_invocation_result(result)
+                })
+            }
+        },
+        {
+            let future = Rc::clone(&future);
+            move || {
+                future.borrow_mut().take();
+            }
+        },
+    ));
     let stdout_drive = Rc::clone(&result);
     let stderr_drive = Rc::clone(&result);
     let decode = Rc::new(decode);
@@ -1022,7 +1043,7 @@ pub async fn start_tool_invocation<T: 'static, E: 'static>(
             result: Rc::new(move || {
                 let drive = Rc::clone(&stdout_drive);
                 Box::pin(async move {
-                    let _ = drive.wait().await;
+                    drive.drive().await;
                 })
             }),
         }),
@@ -1031,17 +1052,30 @@ pub async fn start_tool_invocation<T: 'static, E: 'static>(
             result: Rc::new(move || {
                 let drive = Rc::clone(&stderr_drive);
                 Box::pin(async move {
-                    let _ = drive.wait().await;
+                    drive.drive().await;
                 })
             }),
         }),
         future,
+        detach: Rc::new({
+            let result = Rc::clone(&result);
+            move || {
+                if result.detach() {
+                    let result = Rc::clone(&result);
+                    crate::agentic::spawn_local(async move { result.drive().await });
+                }
+            }
+        }),
         result: Rc::new(move || {
             let result = Rc::clone(&result);
             let decode = Rc::clone(&decode);
             let decode_error = Rc::clone(&decode_error);
             Box::pin(async move {
-                match result.wait().await {
+                match result
+                    .delivery()
+                    .await
+                    .ok_or_else(|| tool_protocol_error("tool result delivery is detached"))?
+                {
                     Ok(value) => decode(value),
                     Err(ToolError::Rpc(error)) => Err(ToolError::Rpc(error)),
                     Err(ToolError::RemoteTool(error)) => Err(ToolError::RemoteTool(error)),
@@ -1104,21 +1138,30 @@ pub async fn start_tool_invocation_direct_input<T: 'static, E: 'static>(
     };
     let future =
         rpc.async_invoke_and_await_tool(command_path, input, stdin, stdout_target, stderr_target);
-    let future = Rc::new(future);
-    let result = Rc::new(crate::tool::invocation_result::InvocationResultDriver::new(
-        {
-            let future = Rc::clone(&future);
-            move || {
-                Box::pin(async move {
-                    let result = future
-                        .get()
-                        .await
-                        .map_err(|error| cache_direct_error(error, recognizes_error))?;
-                    decode_direct_wire_invocation_result(result)
-                })
-            }
-        },
-    ));
+    let future = Rc::new(RefCell::new(Some(Rc::new(future))));
+    let result = Rc::new(
+        crate::tool::invocation_result::InvocationResultDriver::with_disposal(
+            {
+                let future = Rc::clone(&future);
+                move || {
+                    let future = Rc::clone(future.borrow().as_ref().expect("result is attached"));
+                    Box::pin(async move {
+                        let result = future
+                            .get()
+                            .await
+                            .map_err(|error| cache_direct_error(error, recognizes_error))?;
+                        decode_direct_wire_invocation_result(result)
+                    })
+                }
+            },
+            {
+                let future = Rc::clone(&future);
+                move || {
+                    future.borrow_mut().take();
+                }
+            },
+        ),
+    );
     let stdout_drive = Rc::clone(&result);
     let stderr_drive = Rc::clone(&result);
     let decode = Rc::new(decode);
@@ -1129,7 +1172,7 @@ pub async fn start_tool_invocation_direct_input<T: 'static, E: 'static>(
             result: Rc::new(move || {
                 let drive = Rc::clone(&stdout_drive);
                 Box::pin(async move {
-                    let _ = drive.wait().await;
+                    drive.drive().await;
                 })
             }),
         }),
@@ -1138,17 +1181,30 @@ pub async fn start_tool_invocation_direct_input<T: 'static, E: 'static>(
             result: Rc::new(move || {
                 let drive = Rc::clone(&stderr_drive);
                 Box::pin(async move {
-                    let _ = drive.wait().await;
+                    drive.drive().await;
                 })
             }),
         }),
         future,
+        detach: Rc::new({
+            let result = Rc::clone(&result);
+            move || {
+                if result.detach() {
+                    let result = Rc::clone(&result);
+                    crate::agentic::spawn_local(async move { result.drive().await });
+                }
+            }
+        }),
         result: Rc::new(move || {
             let result = Rc::clone(&result);
             let decode = Rc::clone(&decode);
             let decode_error = Rc::clone(&decode_error);
             Box::pin(async move {
-                match result.wait().await {
+                match result
+                    .delivery()
+                    .await
+                    .ok_or_else(|| tool_protocol_error("tool result delivery is detached"))?
+                {
                     Ok(value) => decode(value),
                     Err(error) => Err(decode_cached_direct_error(error, &*decode_error)),
                 }
@@ -1640,6 +1696,101 @@ mod tests {
             2,
             "cached observers do not poll the host future"
         );
+    }
+
+    #[test]
+    async fn result_detach_releases_cached_ownership_but_not_delivered_values() {
+        let capability = Rc::new(());
+        let weak = Rc::downgrade(&capability);
+        let disposed = Rc::new(Cell::new(0));
+        let driver = Rc::new(
+            crate::tool::invocation_result::InvocationResultDriver::with_disposal(
+                move || Box::pin(async move { capability }),
+                {
+                    let disposed = Rc::clone(&disposed);
+                    move || disposed.set(disposed.get() + 1)
+                },
+            ),
+        );
+        // Output-only progress must not claim or clone the cached capability.
+        Rc::clone(&driver).drive().await;
+        let delivered = Rc::clone(&driver).delivery().await.unwrap();
+        assert_eq!(Rc::strong_count(&delivered), 2);
+        assert!(driver.detach());
+        assert!(!driver.detach());
+        assert!(Rc::clone(&driver).delivery().await.is_none());
+        assert_eq!(disposed.get(), 1);
+        assert_eq!(Rc::strong_count(&delivered), 1);
+        assert!(weak.upgrade().is_some());
+        drop(delivered);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    async fn result_detach_discards_late_capability_and_keeps_progress_alive() {
+        let capability = Rc::new(());
+        let weak = Rc::downgrade(&capability);
+        let ready = Rc::new(Cell::new(false));
+        let disposed = Rc::new(Cell::new(false));
+        let driver = Rc::new(
+            crate::tool::invocation_result::InvocationResultDriver::with_disposal(
+                {
+                    let ready = Rc::clone(&ready);
+                    move || {
+                        let mut capability = Some(capability);
+                        Box::pin(poll_fn(move |_| {
+                            if ready.get() {
+                                Poll::Ready(capability.take().unwrap())
+                            } else {
+                                Poll::Pending
+                            }
+                        }))
+                    }
+                },
+                {
+                    let disposed = Rc::clone(&disposed);
+                    move || disposed.set(true)
+                },
+            ),
+        );
+        let mut delivery = Box::pin(Rc::clone(&driver).delivery());
+        let mut progress = Box::pin(Rc::clone(&driver).drive());
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(delivery.as_mut().poll(&mut cx).is_pending());
+        assert!(progress.as_mut().poll(&mut cx).is_pending());
+        driver.detach();
+        assert!(matches!(delivery.as_mut().poll(&mut cx), Poll::Ready(None)));
+        assert!(!disposed.get(), "an active get retains its host resource");
+        assert!(weak.upgrade().is_some());
+        ready.set(true);
+        progress.await;
+        assert!(disposed.get());
+        assert!(weak.upgrade().is_none(), "late capabilities are not cached");
+        assert!(Rc::clone(&driver).delivery().await.is_none());
+        Rc::clone(&driver).drive().await;
+    }
+
+    #[test]
+    async fn direct_result_detach_discards_unclaimed_wire_snapshot() {
+        use crate::schema::wit::direct;
+        let snapshot = Rc::new(direct::WireSnapshot::new(
+            direct::encode(&83u32).unwrap().value_nodes,
+        ));
+        let weak = Rc::downgrade(&snapshot);
+        let driver = Rc::new(crate::tool::invocation_result::InvocationResultDriver::new(
+            move || {
+                Box::pin(async move {
+                    DirectInvocationResult {
+                        snapshot,
+                        root: Some(0),
+                    }
+                })
+            },
+        ));
+        driver.detach();
+        Rc::clone(&driver).drive().await;
+        assert!(weak.upgrade().is_none());
+        assert!(Rc::clone(&driver).delivery().await.is_none());
     }
 
     struct CountingWake(AtomicUsize);

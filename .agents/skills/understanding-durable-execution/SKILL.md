@@ -27,7 +27,8 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
    order — but replay reproduces the guest-visible completion order from the recorded
    `CompletionDelivered` markers, so the guest sees the same inputs in the same order.
    Owner: `durable_host/replay_state/claims.rs` (a missing `Start` match while replay is active
-   is a strict divergence error, except for entries deleted by a `Jump`). The axiom is about
+   is a strict divergence error, except for entries deleted by a `Jump` and for a crash prefix
+   whose remaining history belongs to other owners; see "Entry ownership"). The axiom is about
    replaying the *same* execution contract; replaying old history against a changed component
    during an `Automatic` update may legitimately diverge, and that is reported as `FailedUpdate`,
    not tolerated.
@@ -211,7 +212,12 @@ each recorded invocation in `InvocationMode::Replay`, and when there is no furth
 `AgentInitialization`, and only when their resolved owner is a typed agent. Component-baseline
 tool owners instantiate the deployed component but never queue or replay an agent constructor.
 Replay starts from the chosen snapshot baseline
-(see Snapshots and updates), not necessarily from `OplogIndex::INITIAL`. Interruption kinds
+(see Snapshots and updates), not necessarily from `OplogIndex::INITIAL`. A new replay generation
+scans the replayed range for recovery metadata (delivery markers, guest stream observations and
+tool attachment indexes) before it resolves any call. A snapshot start scans only the entries
+after the snapshot (`replay_state/cursor.rs::recovery_metadata_floor`): no durable construct
+spans a snapshot, so nothing after it refers to metadata before it. A start without a snapshot
+replays the whole history and scans it. Interruption kinds
 (`Worker::set_interrupting`): `Interrupt` stays interrupted, `Restart` is a simulated crash with
 automatic recovery, `Suspend` unloads and resumes on demand — each of these three reconstructs on
 this same executor. `ShardLost` does not: it means this executor lost the agent's shard (a
@@ -777,9 +783,26 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   the head's body still waits, because that entity is another Store.
   A waiting claim is `Blocked(BlockedOn::ActiveBody)` and runs again on cursor progress or a
   change of the active-body set. The rule applies to ordinary, request-matching, scope and custom
-  invocation claims. A body that settles without consuming the head, a top-level sibling `Start`
-  at the head, and a claim issued by the body that encloses the head stay strict divergence at
-  once. The path where a claim finds its `Start` does not change.
+  invocation claims. A body that settles without consuming the head and a claim issued by the
+  body that encloses the head stay strict divergence at once. The path where a claim finds its
+  `Start` does not change.
+- An ordinary claim that still finds no match (`CursorTx::decide_missing_start`) is a reader
+  that must make progress. A crash prefix can hold the `Start` of one concurrent guest call and
+  not the `Start` of its sibling, because ids are reserved in guest call order but `Start`s are
+  appended in host scheduling order, so the sibling's unclaimed `Start` at the head is not
+  divergence. The claim treats each record at the head as its owner would once it claimed its
+  own records (`sibling_record_at_head`), so the verdict does not depend on how far the sibling
+  got: it retains a top-level `Start` with an invocation id, a `Start` under a retained or
+  claimed `Start` with the same invocation id (the call of a scope, the child of a host call, a
+  tool invocation of the dispatching import), and a record in the subtree of a retained custom
+  invocation (adopted when that invocation is claimed). It waits at a record of the body of a retained
+  entity invocation, as at an active body's entry or a delivery boundary. It then decides
+  against the entry the cursor stops at: the replay target is `ReplayEnded`, and anything else
+  (including the call of a settled body, or a foreign id under an ordinary call) is
+  divergence. An unclaimed `Start` with the claim's own invocation id was recorded by the
+  claiming guest call itself and is divergence before the cursor moves. Tests:
+  `replay_state/tests.rs::missing_start_claim_*`,
+  `tests/websocket.rs::websocket_report_loss_recovers_a_crash_prefix_with_one_sibling_start`.
 - Retained `Start`s that survive to the invocation boundary fold into the abandoned-record
   tolerance (`AbandonedStarts`); only `can_drain` kinds are retained at all. When a live primary
   invocation finishes, retained `Start`s that are closed by a recorded `End`/`Cancelled` are
@@ -1314,8 +1337,8 @@ run at the same time: a save call starts a run only while it holds the save mark
 save call whose periodic job an admission replaced while the call only waited for its late writes
 runs on as a tail that starts no run and no write, and the next save of the agent runs beside
 it. The metrics are
-`filesystem_snapshot_cleanups_pending`, `filesystem_snapshot_copy_seconds` and
-`filesystem_snapshot_failed_space_reclaims_total`. `upload_now` answers `Stopped` after a lost
+`filesystem_snapshot_cleanups_pending`, `filesystem_snapshot_copy_seconds`,
+`filesystem_snapshot_delete_seconds` and `filesystem_snapshot_prune_seconds`. `upload_now` answers `Stopped` after a lost
 shard, a shutdown or `delete_all_snapshots`, unless the save had already finished; ephemeral
 agents make no store call.
 
@@ -1391,8 +1414,10 @@ source revision of a manual update counts as an install, not a restore of saved 
 (`RestoreTree::gives_saved_times`), so the check after it can still find a tree of initial files.
 
 `SnapshotBoundaryConditions` lists what blocks taking a snapshot: replaying, open atomic region,
-open durable scope, snapshotting already, in-flight live host call. Automatic snapshots are
-revision-scoped and ignored once the revision changes.
+open durable scope, snapshotting already, in-flight live host call, and open registered tool
+attachments. Attachment producers, consumers, guest stdin-closure watchers and pending output
+regeneration need the history that a snapshot would skip. Internal observers alone do not block
+a snapshot. Automatic snapshots are revision-scoped and ignored once the revision changes.
 
 Resetting a cursor is not recreating an instance: component metadata, revision and plugin context
 come from instance creation. When history or provenance changes, go through the outer loop.
@@ -1674,7 +1699,13 @@ cursor (`OwnerExecution`, `worker/instance.rs`).
   context before the body runs; keep this reconstruction boundary covered.
 - Every live admission, ambient or underlying, authorizes the command and arguments its layer
   receives, after replay claims and boundary projection; entity Stores authorize with the owner's
-  wallet and the caller's inherited invocation scope. The root `Start` records the pinned
+  generation-bound canonical live wallet and the caller's inherited invocation scope. Stores retain
+  scopes and derived surfaces, not independent live membership. Accepted wallet commits publish
+  through the status actor even if their producer is cancelled; owner-wide interest is the union
+  of wallet, scope and admission-candidate contributions. Historical bodies retain recorded wallets
+  and pins until their own live transition, never borrowing the latest live snapshot. Adjacent
+  unrecorded wallet observations still lack an exact historical association; this ownership model
+  does not change observation recording. The root `Start` records the pinned
   chain plan; descendants record root plus position, and every occurrence retains the original
   calling principal and typed static installation parameters. Component and host leaves use the
   same dispatch path.

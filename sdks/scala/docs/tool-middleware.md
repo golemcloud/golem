@@ -148,6 +148,32 @@ The handles follow the same invocation ownership:
 
 The guest ABI supplies independent stdout and stderr writers for commands that declare them. The SDK copies each selected final output into its matching writer while the structured result is pending, calls `finish` after clean EOF, and calls `fail` if forwarding fails. Middleware receives only the transfer-oriented handles above; it must not finish or fail the host writers itself.
 
+## Ordinary tool invocation lifetimes
+
+Generated ordinary clients return a `ToolInvocation` for output-bearing calls.
+The wire, model, reflected, and dynamic invocation handles expose `detach()` as
+well as `cancel()`:
+
+- `cancel()` requests invocation cancellation. It does not close local outputs.
+- `detach()` stops structured result delivery. It does not cancel the invocation,
+  stdin pumping, stdout, or stderr. A pending result Future fails with an
+  `IllegalStateException`. Ignoring a Future does not detach its observer.
+- The SDK releases the host result observer when observation settles. Detach
+  during an active `get` defers physical release until that `get` settles. Late
+  result capabilities are released instead of delivered. Already delivered
+  resources remain caller-owned. Cancellation after physical release is a no-op.
+- `stdout.get.cancel()` permanently closes that output. It does not close stderr
+  or cancel the invocation. There is no resumable pending-read guarantee.
+
+Ordinary handlers finish and release both writers independently on normal return,
+including returned declared errors and invalid outcomes. Implicit finish or
+release errors do not replace the structured outcome. Explicitly selected finish
+or failure terminals remain selected. An unhandled failed handler Future remains
+a trap; it fails open writers rather than finishing them normally. Malformed
+returned values and undeclared named errors are `invalid-result`, not traps.
+Explicit write/finish/fail errors and real cancellation are not silently turned
+into successful handler results.
+
 ## Component template
 
 Use the `scala` component template for ordinary agents and tools, standalone middleware, and

@@ -108,6 +108,7 @@ pub struct GolemConfig {
     pub http_client: HttpClientConfig,
     pub mcp_transport: golem_mcp_import::transport::Limits,
     pub max_websocket_connections: usize,
+    pub agent_sockets: AgentSocketsConfig,
     /// The address every listener of this service binds to. `0.0.0.0` accepts IPv4 only; `::`
     /// accepts both IPv6 and IPv4.
     pub bind_address: IpAddr,
@@ -365,6 +366,12 @@ impl SafeDisplay for GolemConfig {
             "max websocket connections: {}",
             self.max_websocket_connections
         );
+        let _ = writeln!(&mut result, "agent sockets:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.agent_sockets.to_safe_string_indented()
+        );
         let _ = writeln!(&mut result, "bind address: {}", self.bind_address);
         let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
 
@@ -426,6 +433,7 @@ impl Default for GolemConfig {
             http_client: HttpClientConfig::default(),
             mcp_transport: golem_mcp_import::transport::Limits::default(),
             max_websocket_connections: 100,
+            agent_sockets: AgentSocketsConfig::default(),
             bind_address: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             http_port: 8082,
             runtime_metrics_sampling_interval: Duration::from_secs(5),
@@ -804,6 +812,29 @@ impl SafeDisplay for ActiveAgentsConfig {
         let mut result = String::new();
         let _ = writeln!(&mut result, "drop when full: {}", self.drop_when_full);
         let _ = writeln!(&mut result, "ttl: {:?}", self.ttl);
+        result
+    }
+}
+
+/// Access of agent code to `wasi:sockets` (TCP, UDP and IP name lookup, P2 and P3).
+///
+/// When `enabled` is `false`, every socket connect and bind fails with `access-denied` and every
+/// name lookup fails with `permanent-resolver-failure`. The host-side clients that agents use
+/// through `wasi:http`, `golem:websocket`, `golem:rdbms`, durable streams and MCP do not depend
+/// on this setting.
+///
+/// When `enabled` is `true`, agent code can connect to any address that the executor can reach,
+/// including loopback and private addresses of the deployment. The `network` permission of the
+/// agent's cards matches host strings only and does not restrict address ranges.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct AgentSocketsConfig {
+    pub enabled: bool,
+}
+
+impl SafeDisplay for AgentSocketsConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "enabled: {}", self.enabled);
         result
     }
 }
@@ -2249,7 +2280,13 @@ pub enum FilesystemStorageMode {
     Directory { root: Box<Path> },
     /// XFS with project quotas, at the root of a dedicated XFS filesystem. Each agent filesystem
     /// is a project, which enforces its disk limits and measures its usage. Copies are reflinks.
-    ManagedXfs { root: Box<Path> },
+    ///
+    /// The quota calls go to `xfs-quotad`, which listens on `xfs_quotad_socket`: a separate
+    /// process that holds `CAP_SYS_ADMIN`, so that the executor needs no capability.
+    ManagedXfs {
+        root: Box<Path>,
+        xfs_quotad_socket: Box<Path>,
+    },
     /// XFS with reflink and without project quotas, at the root of a dedicated XFS filesystem.
     /// Copies are reflinks. The executor enforces no per-agent disk limit and measures no
     /// per-agent usage.
@@ -2286,7 +2323,14 @@ impl SafeDisplay for FilesystemStorageMode {
         match self {
             Self::Temporary => "temporary directories".to_string(),
             Self::Directory { root } => format!("directory at {}", root.display()),
-            Self::ManagedXfs { root } => format!("managed XFS at {}", root.display()),
+            Self::ManagedXfs {
+                root,
+                xfs_quotad_socket: socket,
+            } => format!(
+                "managed XFS at {}, with xfs-quotad at {}",
+                root.display(),
+                socket.display()
+            ),
             Self::ReflinkXfs { root } => format!("reflink XFS at {}", root.display()),
             Self::Apfs { root } => format!("APFS for local development at {}", root.display()),
         }
@@ -3372,7 +3416,12 @@ mod tests {
             [
                 super::FilesystemStorageMode::Temporary,
                 super::FilesystemStorageMode::Directory { root: root() },
-                super::FilesystemStorageMode::ManagedXfs { root: root() },
+                super::FilesystemStorageMode::ManagedXfs {
+                    root: root(),
+                    xfs_quotad_socket: Box::from(std::path::Path::new(
+                        "/run/golem-quota/xfs-quotad.sock"
+                    )),
+                },
                 super::FilesystemStorageMode::ReflinkXfs { root: root() },
                 super::FilesystemStorageMode::Apfs { root: root() },
             ]
@@ -3380,7 +3429,8 @@ mod tests {
             [
                 "temporary directories",
                 "directory at /var/lib/golem/agents",
-                "managed XFS at /var/lib/golem/agents",
+                "managed XFS at /var/lib/golem/agents, with xfs-quotad at \
+                 /run/golem-quota/xfs-quotad.sock",
                 "reflink XFS at /var/lib/golem/agents",
                 "APFS for local development at /var/lib/golem/agents",
             ]
@@ -3734,7 +3784,10 @@ mod tests {
         [
             FilesystemStorageMode::Temporary,
             FilesystemStorageMode::Directory { root: root.clone() },
-            FilesystemStorageMode::ManagedXfs { root: root.clone() },
+            FilesystemStorageMode::ManagedXfs {
+                root: root.clone(),
+                xfs_quotad_socket: root.clone(),
+            },
             FilesystemStorageMode::ReflinkXfs { root: root.clone() },
             FilesystemStorageMode::Apfs { root },
         ]
