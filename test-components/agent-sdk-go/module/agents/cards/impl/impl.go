@@ -58,7 +58,7 @@ func moved(card interface{ ID() golem.CardID }) (isMoved bool) {
 
 // inspectGrant finds the wallet card granting card inspection, and that
 // grant, releasing the other wallet cards.
-func inspectGrant() (golem.PolymorphicPermissionCard, golem.PatternGrant, bool) {
+func inspectGrant() (golem.WalletCard, golem.PatternGrant, bool) {
 	wallet := golem.Wallet()
 	for i, c := range wallet {
 		view, err := c.Inspect()
@@ -73,7 +73,31 @@ func inspectGrant() (golem.PolymorphicPermissionCard, golem.PatternGrant, bool) 
 		}
 	}
 	golem.ReleaseCards(wallet...)
-	return golem.PolymorphicPermissionCard{}, golem.PatternGrant{}, false
+	return golem.WalletCard{}, golem.PatternGrant{}, false
+}
+
+// walletKinds lists the kind of each wallet card, sorted, with the scope
+// card's expiry.
+func walletKinds() []string {
+	wallet := golem.Wallet()
+	defer golem.ReleaseCards(wallet...)
+	out := make([]string, len(wallet))
+	for i, c := range wallet {
+		out[i] = c.Kind().String()
+		if s, ok := c.Scope(); ok {
+			out[i] += "@" + expiry(s.ExpiresAt())
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+func expiry(at golem.Option[time.Time]) string {
+	t, ok := at.Get()
+	if !ok {
+		return "none"
+	}
+	return t.UTC().Format(time.RFC3339Nano)
 }
 
 // observe reports what the receiver's wallet lets it do.
@@ -101,6 +125,7 @@ func init() {
 		if !found {
 			return out
 		}
+		note("wallet-kinds", strings.Join(walletKinds(), ","))
 		only := golem.Bounds{LowerPositive: []golem.PatternGrant{grant}}
 
 		// 1. Derive a card from the wallet, and 2. inspect it.
@@ -129,6 +154,7 @@ func init() {
 		empty := golem.MustDeriveScope(golem.Bounds{}, scope)
 		note("scope-parent-is-source", slices.Equal(scope.Parents(), []golem.CardID{source.ID()}))
 		note("receiver-with-scope", cards.Observe.WithScopeCard(scope).MustCall(recv, golem.Unit{}))
+		note("receiver-wallet-with-scope", strings.Join(cards.WalletKinds.WithScopeCard(scope).MustCall(recv, golem.Unit{}), ","))
 		note("receiver-with-default-scope", cards.Observe.CallAsync(recv.WithScopeCard(scope), golem.Unit{}).MustGet())
 		note("receiver-call-scope-over-default", cards.Observe.WithScopeCard(empty).MustCall(recv.WithScopeCard(scope), golem.Unit{}))
 		note("receiver-call-scope-over-empty-default", cards.Observe.WithScopeCard(scope).MustCall(recv.WithScopeCard(empty), golem.Unit{}))
@@ -187,6 +213,7 @@ func init() {
 		note("install", errorKind(child.Install(target)))
 		note("child-moved-by-install", moved(child))
 		note("receiver-after-install", cards.Observe.MustCall(recv, golem.Unit{}))
+		note("receiver-wallet-after-install", strings.Join(cards.WalletKinds.MustCall(recv, golem.Unit{}), ","))
 
 		// 6. Revoke the wallet-derived card, and with it both children: the
 		// receiver loses the authority of the installed one.
@@ -221,6 +248,9 @@ func init() {
 
 	receiver.Handle(cards.Observe, func(_ *golem.Context[receiverState], _ golem.Unit) string {
 		return observe()
+	})
+	receiver.Handle(cards.WalletKinds, func(_ *golem.Context[receiverState], _ golem.Unit) []string {
+		return walletKinds()
 	})
 	receiver.Handle(cards.Record, func(ctx *golem.Context[receiverState], _ golem.Unit) golem.Unit {
 		ctx.State.log = append(ctx.State.log, observe())

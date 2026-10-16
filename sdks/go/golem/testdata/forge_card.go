@@ -42,4 +42,11 @@ func main() {
 	_, _ = scope.Revoke()
 	_ = scope.Install(golem.Holder{})
 	var _ golem.AnyPermissionCard = scope
+
+	w := golem.Wallet()[0]
+	_ = golem.PermissionCard(w)
+	_ = golem.PolymorphicPermissionCard(w)
+	_ = golem.ScopeCard(w)
+	_ = golem.WalletCard{kind: golem.WalletCardScope}
+	var _ golem.AnyPermissionCard = w
 }

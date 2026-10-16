@@ -15,7 +15,7 @@
 //! Permission-card management through the Go SDK: a `CardIssuer` derives cards
 //! from its wallet, inspects them, lends a scope card to awaited calls,
 //! installs a card on a `CardReceiver` and revokes it, and the receiver reports
-//! the authority it holds after each step.
+//! the authority it holds, and the kinds of its wallet cards, after each step.
 
 use crate::Tracing;
 use async_trait::async_trait;
@@ -560,6 +560,7 @@ async fn go_permission_cards_derive_lend_install_and_revoke(
         report,
         [
             "wallet-grants-inspect=true",
+            "wallet-kinds=template",
             "from-wallet-parents=1",
             "from-wallet-grants=1/0/0/0",
             "from-wallet-grant-is-requested=true",
@@ -569,6 +570,7 @@ async fn go_permission_cards_derive_lend_install_and_revoke(
             "receiver-before=not-permitted",
             "scope-parent-is-source=true",
             "receiver-with-scope=ok",
+            "receiver-wallet-with-scope=scope@none,template",
             "receiver-with-default-scope=ok",
             "receiver-call-scope-over-default=not-permitted",
             "receiver-call-scope-over-empty-default=ok",
@@ -582,6 +584,7 @@ async fn go_permission_cards_derive_lend_install_and_revoke(
             "install=ok",
             "child-moved-by-install=true",
             "receiver-after-install=ok",
+            "receiver-wallet-after-install=concrete,template",
             "revoke=ok",
             "revoked-count=3",
             "from-wallet-moved-by-revoke=true",

@@ -254,6 +254,57 @@ func MakePermissionErrorInvalidRecipient(value string) PermissionError {
 	return PermissionError{PermissionErrorInvalidRecipient, value}
 }
 
+const (
+	// A concrete card: every grant names concrete owners and resources.
+	WalletCardConcrete uint8 = 0
+	// A template card: its grants may contain slot variables (`?agent`,
+	// `?env`, ...), which resolve for each holder.
+	WalletCardTemplate uint8 = 1
+	// The scope card lent to the current invocation. It can be inspected
+	// and attached to awaited calls, and is retired at the end of the
+	// invocation.
+	WalletCardScope uint8 = 2
+)
+
+// A card in the caller's wallet, labelled with its kind.
+type WalletCard struct {
+	tag   uint8
+	value any
+}
+
+func (self WalletCard) Tag() uint8 {
+	return self.tag
+}
+
+func (self WalletCard) Concrete() *golem_core_types.PermissionCard {
+	if self.tag != WalletCardConcrete {
+		panic("tag mismatch")
+	}
+	return self.value.(*golem_core_types.PermissionCard)
+}
+func (self WalletCard) Template() *golem_core_types.PermissionCard {
+	if self.tag != WalletCardTemplate {
+		panic("tag mismatch")
+	}
+	return self.value.(*golem_core_types.PermissionCard)
+}
+func (self WalletCard) Scope() *golem_core_types.PermissionCard {
+	if self.tag != WalletCardScope {
+		panic("tag mismatch")
+	}
+	return self.value.(*golem_core_types.PermissionCard)
+}
+
+func MakeWalletCardConcrete(value *golem_core_types.PermissionCard) WalletCard {
+	return WalletCard{WalletCardConcrete, value}
+}
+func MakeWalletCardTemplate(value *golem_core_types.PermissionCard) WalletCard {
+	return WalletCard{WalletCardTemplate, value}
+}
+func MakeWalletCardScope(value *golem_core_types.PermissionCard) WalletCard {
+	return WalletCard{WalletCardScope, value}
+}
+
 //go:wasmimport golem:permissions/types@0.1.0 id
 func wasm_import_id(arg0 int32, arg1 uintptr)
 

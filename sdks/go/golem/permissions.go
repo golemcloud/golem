@@ -88,9 +88,9 @@ type AnyPermissionCard interface {
 }
 
 // ScopeParent is a card [DeriveScope] accepts as a parent: a
-// [PermissionCard], a [PolymorphicPermissionCard] or a [ScopeCard], or a
-// struct that embeds one, which stands for the embedded card. Nothing outside
-// the package can implement it otherwise.
+// [PermissionCard], a [PolymorphicPermissionCard], a [ScopeCard] or a
+// [WalletCard], or a struct that embeds one, which stands for the embedded
+// card. Nothing outside the package can implement it otherwise.
 type ScopeParent interface {
 	cardState() *permissionCardState
 }
@@ -507,7 +507,7 @@ type permissionsHost struct {
 	deriveScope      func(parents []*types.PermissionCard, lp, ln, up, un []perm.PatternGrant) witTypes.Result[*types.PermissionCard, perm.PermissionError]
 	revoke           func(c *types.PermissionCard) witTypes.Result[uint32, perm.PermissionError]
 	install          func(c *types.PermissionCard, target perm.Holder) witTypes.Result[witTypes.Unit, perm.PermissionError]
-	wallet           func() []*types.PermissionCard
+	wallet           func() []perm.WalletCard
 	walletVersion    func() perm.WalletVersionToken
 	listModules      func() []KernelModule
 	validateGrant    func(g perm.PatternGrant) witTypes.Result[witTypes.Unit, perm.PermissionError]
@@ -696,19 +696,140 @@ func (c PolymorphicPermissionCard) Install(target Holder) error { return c.pst.i
 // afterwards. Releasing a moved card does nothing.
 func (c PolymorphicPermissionCard) Release() { c.pst.release() }
 
-// Wallet returns the cards installed in the agent's wallet, and the
-// invocation's scope card when it has one and the agent holds card:inspect. A wallet card may be a template, so
-// each is a [PolymorphicPermissionCard]; send one only where a
-// PolymorphicPermissionCard is expected. To hand on a [PermissionCard], derive
-// a concrete child with [PolymorphicPermissionCard.Derive]. The host refuses
-// to send, install or revoke the scope card among them. Each is a fresh
-// handle: release the ones you do not keep with
-// [PolymorphicPermissionCard.Release] or [ReleaseCards].
-func Wallet() []PolymorphicPermissionCard {
-	hs := permissionsHostOps.wallet()
-	out := make([]PolymorphicPermissionCard, len(hs))
-	for i, h := range hs {
-		out[i] = PolymorphicPermissionCard{pst: &permissionCardState{h: h}}
+// WalletCardKind tells which card a [WalletCard] holds.
+type WalletCardKind uint8
+
+const (
+	// WalletCardConcrete is a [PermissionCard]: every grant names concrete
+	// owners and resources.
+	WalletCardConcrete WalletCardKind = iota + 1
+	// WalletCardTemplate is a [PolymorphicPermissionCard]: its grants may
+	// contain slot variables (?agent, ?env, ...), which resolve for each
+	// holder.
+	WalletCardTemplate
+	// WalletCardScope is the [ScopeCard] lent to the current invocation.
+	WalletCardScope
+)
+
+// String returns the kind's name.
+func (k WalletCardKind) String() string {
+	switch k {
+	case WalletCardConcrete:
+		return "concrete"
+	case WalletCardTemplate:
+		return "template"
+	case WalletCardScope:
+		return "scope"
+	default:
+		return "WalletCardKind(" + strconv.Itoa(int(k)) + ")"
+	}
+}
+
+// WalletCard is a card from [Wallet], labelled with its kind. Exactly one of
+// Concrete, Template and Scope gives the card, as the type of its kind; the
+// others report false. ID, Parents, ExpiresAt and Inspect work for every kind.
+// The card and the WalletCard share the host handle: moving or releasing one
+// moves the other. The zero WalletCard holds no card. A WalletCard cannot be
+// sent; send the PermissionCard from Concrete or the PolymorphicPermissionCard
+// from Template.
+//
+//	for _, w := range golem.Wallet() {
+//	    switch w.Kind() {
+//	    case golem.WalletCardConcrete:
+//	        card, _ := w.Concrete()
+//	        …
+//	    case golem.WalletCardTemplate:
+//	        card, _ := w.Template()
+//	        …
+//	    case golem.WalletCardScope:
+//	        card, _ := w.Scope()
+//	        …
+//	    }
+//	}
+type WalletCard struct {
+	kind WalletCardKind
+	wst  *permissionCardState
+}
+
+var _ ScopeParent = WalletCard{}
+
+// Kind returns which card the WalletCard holds, or 0 for the zero WalletCard.
+func (w WalletCard) Kind() WalletCardKind { return w.kind }
+
+// Concrete returns the card when it is a concrete card.
+func (w WalletCard) Concrete() (PermissionCard, bool) {
+	if w.kind != WalletCardConcrete {
+		return PermissionCard{}, false
+	}
+	return PermissionCard{st: w.wst}, true
+}
+
+// Template returns the card when it is a template card.
+func (w WalletCard) Template() (PolymorphicPermissionCard, bool) {
+	if w.kind != WalletCardTemplate {
+		return PolymorphicPermissionCard{}, false
+	}
+	return PolymorphicPermissionCard{pst: w.wst}, true
+}
+
+// Scope returns the card when it is the invocation's scope card.
+func (w WalletCard) Scope() (ScopeCard, bool) {
+	if w.kind != WalletCardScope {
+		return ScopeCard{}, false
+	}
+	return ScopeCard{sst: w.wst}, true
+}
+
+// ID returns the card's identifier. It traps when the host no longer knows the
+// card.
+func (w WalletCard) ID() CardID { return w.wst.id() }
+
+// Parents returns the identifiers of the cards this card was derived from. It
+// traps when the host no longer knows the card.
+func (w WalletCard) Parents() []CardID { return w.wst.parents() }
+
+// ExpiresAt returns when the card expires, or None for a card without a
+// bounded lifespan; for the scope card, see [ScopeCard.ExpiresAt]. It traps
+// when the host no longer knows the card.
+func (w WalletCard) ExpiresAt() Option[time.Time] { return w.wst.expiresAt() }
+
+// Inspect returns the card's grants. It needs the card:inspect verb.
+func (w WalletCard) Inspect() (CardView, error) { return w.wst.inspect() }
+
+// MustInspect is [WalletCard.Inspect] that panics on a refusal.
+func (w WalletCard) MustInspect() CardView { return Must(w.wst.inspect()) }
+
+// Release gives the card's handle back to the host; the card is moved
+// afterwards. Releasing a moved card does nothing.
+func (w WalletCard) Release() { w.wst.release() }
+
+func (w WalletCard) cardState() *permissionCardState { return w.wst }
+
+func walletCardFromWit(c perm.WalletCard) WalletCard {
+	switch c.Tag() {
+	case perm.WalletCardConcrete:
+		return WalletCard{kind: WalletCardConcrete, wst: &permissionCardState{h: c.Concrete()}}
+	case perm.WalletCardTemplate:
+		return WalletCard{kind: WalletCardTemplate, wst: &permissionCardState{h: c.Template()}}
+	case perm.WalletCardScope:
+		return WalletCard{kind: WalletCardScope, wst: &permissionCardState{h: c.Scope()}}
+	default:
+		panic(fmt.Errorf("golem: unknown wallet card kind %d", c.Tag()))
+	}
+}
+
+// Wallet returns the cards installed in the agent's wallet, each labelled with
+// its kind: a concrete card is a [PermissionCard] and a template card a
+// [PolymorphicPermissionCard]. During an invocation that received a scope
+// card, the list also holds that [ScopeCard] when the agent holds
+// card:inspect; like a scope card from [DeriveScope], it is retired when the
+// invocation ends. Each is a fresh handle: release the ones you do not keep
+// with [WalletCard.Release] or [ReleaseCards].
+func Wallet() []WalletCard {
+	ws := permissionsHostOps.wallet()
+	out := make([]WalletCard, len(ws))
+	for i, w := range ws {
+		out[i] = walletCardFromWit(w)
 	}
 	return out
 }
@@ -780,8 +901,8 @@ func (c ScopeCard) ID() CardID { return c.sst.id() }
 // from.
 func (c ScopeCard) Parents() []CardID { return c.sst.parents() }
 
-// ExpiresAt returns when the scope card expires, or None for a card without a
-// bounded lifespan.
+// ExpiresAt returns the earliest expiry of the root cards of this scope card,
+// or None when no root card expires. The scope card stops authorizing then.
 func (c ScopeCard) ExpiresAt() Option[time.Time] { return c.sst.expiresAt() }
 
 // Inspect returns the scope card's grants. It needs the card:inspect verb.

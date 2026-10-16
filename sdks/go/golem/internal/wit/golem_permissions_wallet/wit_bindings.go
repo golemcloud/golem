@@ -45,21 +45,39 @@ type PermissionCard = golem_core_types.PermissionCard
 type PermissionError = golem_permissions_types.PermissionError
 type WalletVersionToken = golem_permissions_types.WalletVersionToken
 type Holder = golem_permissions_types.Holder
+type WalletCard = golem_permissions_types.WalletCard
 
 //go:wasmimport golem:permissions/wallet@0.1.0 self-wallet
 func wasm_import_self_wallet(arg0 uintptr)
 
-func SelfWallet() []*golem_core_types.PermissionCard {
+func SelfWallet() []golem_permissions_types.WalletCard {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (2 * 4), 4))
 	wasm_import_self_wallet(returnArea)
-	result := make([]*golem_core_types.PermissionCard, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
+	result := make([]golem_permissions_types.WalletCard, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))); index++ {
-		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0)))), index*4)
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0)))), index*8)
+		var variant golem_permissions_types.WalletCard
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
+		case 0:
 
-		result = append(result, golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 0))))))
+			variant = golem_permissions_types.MakeWalletCardConcrete(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 4))))))
+
+		case 1:
+
+			variant = golem_permissions_types.MakeWalletCardTemplate(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 4))))))
+
+		case 2:
+
+			variant = golem_permissions_types.MakeWalletCardScope(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 4))))))
+
+		default:
+			panic("unreachable")
+		}
+
+		result = append(result, variant)
 	}
 
 	result0 := result

@@ -36,6 +36,10 @@ var (
 	// Observe inspects every wallet card: "ok" when an inspection succeeds,
 	// otherwise the error kind of the last refusal.
 	Observe = Receiver.Method[golem.Unit, string]("observe", golem.Description("Report whether the receiver may inspect cards"))
+	// WalletKinds lists the kind of each card in the receiver's wallet, sorted.
+	// The scope card's entry carries its expiry: scope@<RFC 3339 time>, or
+	// scope@none.
+	WalletKinds = Receiver.Method[golem.Unit, []string]("wallet-kinds", golem.Description("List the kinds of the receiver's wallet cards"))
 	// Record appends what Observe reports to the receiver's log.
 	Record = Receiver.Method[golem.Unit, golem.Unit]("record", golem.Description("Log whether the receiver may inspect cards"))
 	// Log returns the observations Record logged.

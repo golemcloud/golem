@@ -38,9 +38,11 @@ import (
 //	    return Accept.MustCall(Receiver.Get(ReceiverID{Name: "target"}), AcceptIn{Card: in.Card})
 //	})
 //
-// The two card types are not convertible into each other: a card travels as
-// the type it was received or derived as. A [ScopeCard] is not a permission
-// card at all: it cannot be sent, only attached to awaited calls.
+// The card types are not convertible into each other. A receiver decodes a
+// card, from a call or a [TypedValue], as the type its parameter or Go type
+// declares: the kind is schema metadata, and the host does not check it. A
+// [ScopeCard] is not a permission card at all: it cannot be sent, only
+// attached to awaited calls.
 
 // ErrPermissionCardMoved reports a card used after it was handed on.
 var ErrPermissionCardMoved = errors.New("golem: the permission card was moved")
@@ -52,9 +54,10 @@ type PermissionCard struct{ st *permissionCardState }
 // resource id open, to be filled in where it is used.
 type PolymorphicPermissionCard struct{ pst *permissionCardState }
 
-// ScopeCard is a card from [DeriveScope]. It is valid only during the
-// invocation that derived it, and it cannot be sent, installed or revoked:
-// attach it to awaited calls to lend its grants to the callees.
+// ScopeCard is a card from [DeriveScope], or the scope card lent to the
+// current invocation, listed by [Wallet]. It is valid only during that
+// invocation, and it cannot be sent, installed or revoked: attach it to
+// awaited calls to lend its grants to the callees.
 type ScopeCard struct{ sst *permissionCardState }
 
 type permissionCardState struct{ h *types.PermissionCard }
@@ -81,6 +84,12 @@ func (ScopeCard) MarshalJSON() ([]byte, error) { return nil, errPermissionCardJS
 // UnmarshalJSON refuses: no data turns into a card.
 func (*ScopeCard) UnmarshalJSON([]byte) error { return errPermissionCardJSON }
 
+// MarshalJSON refuses: a card is a host handle, not data.
+func (WalletCard) MarshalJSON() ([]byte, error) { return nil, errPermissionCardJSON }
+
+// UnmarshalJSON refuses: no data turns into a card.
+func (*WalletCard) UnmarshalJSON([]byte) error { return errPermissionCardJSON }
+
 func (c PermissionCard) cardState() *permissionCardState            { return c.st }
 func (c PermissionCard) polymorphic() bool                          { return false }
 func (c PolymorphicPermissionCard) cardState() *permissionCardState { return c.pst }
@@ -93,9 +102,10 @@ const errScopeCardNotSendable = "golem.ScopeCard cannot be sent: it is valid onl
 
 // Definition errors of the card-management types that have no schema.
 const (
-	errCardIDNotSendable   = "golem.CardID cannot be sent: it is an opaque identifier with no wire form; compare it within the component that read it"
-	errHolderNotSendable   = "golem.Holder cannot be sent: it has no wire form; send the AgentID, account or application id and build the Holder where it is used"
-	errLifespanNotSendable = "golem.Lifespan cannot be sent: it has no wire form; send a time.Duration or the ISO-8601 text and build the Lifespan where it is used"
+	errCardIDNotSendable     = "golem.CardID cannot be sent: it is an opaque identifier with no wire form; compare it within the component that read it"
+	errHolderNotSendable     = "golem.Holder cannot be sent: it has no wire form; send the AgentID, account or application id and build the Holder where it is used"
+	errLifespanNotSendable   = "golem.Lifespan cannot be sent: it has no wire form; send a time.Duration or the ISO-8601 text and build the Lifespan where it is used"
+	errWalletCardNotSendable = "golem.WalletCard cannot be sent: send the PermissionCard from Concrete or the PolymorphicPermissionCard from Template"
 )
 
 // markScopeCardInvalid makes ScopeCard a definition error.

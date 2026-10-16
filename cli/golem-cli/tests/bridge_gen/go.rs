@@ -51,7 +51,7 @@ use golem_common::model::agent::{
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::schema_type::{
     DiscriminatorRule, NumericBound, NumericRestrictions, PathDirection, PathKind, PathSpec,
-    QuantitySpec, ResultSpec, TextRestrictions, UnionBranch, UnionSpec,
+    PermissionCardSpec, QuantitySpec, ResultSpec, TextRestrictions, UnionBranch, UnionSpec,
 };
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::schema::tool::{
@@ -528,6 +528,37 @@ fn go_guest_reserves_the_agent_level_names(env: &GoEnv) {
     let client = generated.read("client.go");
     assert!(
         client.contains("func (c CounterAgentClient) WithScopeCard2() error {"),
+        "{client}"
+    );
+}
+
+/// A card parameter or result is typed by its schema's polymorphic flag: a
+/// concrete card is a golem.PermissionCard and a template card a
+/// golem.PolymorphicPermissionCard, which the SDK does not convert into each
+/// other.
+#[test]
+fn go_guest_client_types_permission_cards_by_kind(env: &GoEnv) {
+    let card = |polymorphic| SchemaType::permission_card(PermissionCardSpec { polymorphic });
+    let delegate = agent(
+        "Delegate",
+        "go",
+        vec![field("name", SchemaType::string())],
+        vec![method(
+            "forward",
+            vec![field("card", card(false)), field("template", card(true))],
+            Some(card(true)),
+        )],
+        vec![],
+        AgentMode::Durable,
+    );
+    let generated = GeneratedGo::guest(env, delegate);
+    generated.assert_gofmt_clean(env);
+    generated.assert_vets_for_wasip1(env);
+    let client = generated.read("client.go");
+    assert!(
+        client.contains(
+            "func (c DelegateClient) Forward(card golem.PermissionCard, template golem.PolymorphicPermissionCard) (golem.PolymorphicPermissionCard, error) {"
+        ),
         "{client}"
     );
 }

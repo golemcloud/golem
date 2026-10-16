@@ -48,6 +48,7 @@ type fakeCards struct {
 	target   perm.Holder
 	err      witTypes.Option[perm.PermissionError]
 	next     *types.PermissionCard
+	wallet   []perm.WalletCard
 }
 
 func newFakeCards(t *testing.T) *fakeCards {
@@ -55,6 +56,11 @@ func newFakeCards(t *testing.T) *fakeCards {
 		ids:     map[*types.PermissionCard]types.CardId{},
 		parents: map[*types.PermissionCard][]types.CardId{},
 		err:     witTypes.None[perm.PermissionError](),
+		wallet: []perm.WalletCard{
+			perm.MakeWalletCardConcrete(&types.PermissionCard{}),
+			perm.MakeWalletCardTemplate(&types.PermissionCard{}),
+			perm.MakeWalletCardScope(&types.PermissionCard{}),
+		},
 	}
 	prev := permissionsHostOps
 	t.Cleanup(func() { permissionsHostOps = prev })
@@ -110,9 +116,7 @@ func newFakeCards(t *testing.T) *fakeCards {
 			}
 			return witTypes.Ok[witTypes.Unit, perm.PermissionError](witTypes.Unit{})
 		},
-		wallet: func() []*types.PermissionCard {
-			return []*types.PermissionCard{{}, {}}
-		},
+		wallet: func() []perm.WalletCard { return f.wallet },
 		walletVersion: func() perm.WalletVersionToken {
 			return perm.WalletVersionToken{WalletIdHash: []uint8{1, 2}, Generation: 7}
 		},
@@ -328,6 +332,14 @@ func TestRevokeAndInstallMoveTheCardEvenWhenRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustPanicMoved(t, "Derive", func() { _, _ = open.Derive(Bounds{}, None[Lifespan]()) })
+
+	f.fail(perm.MakePermissionErrorInstallRecipientMismatch("no recipient matches"))
+	open = PolymorphicPermissionCard{pst: &permissionCardState{h: &types.PermissionCard{}}}
+	h = open.pst.h
+	if err := open.Install(AgentHolder(target)); !errors.As(err, &pe) || pe.Kind != PermissionInstallRecipientMismatch || f.consumed[len(f.consumed)-1] != h {
+		t.Fatalf("a mismatched install of a polymorphic card gave %v", err)
+	}
+	mustPanicMoved(t, "Inspect after a refused install", func() { _, _ = open.Inspect() })
 }
 
 func TestAZeroHolderIsRefusedBeforeTheCardMoves(t *testing.T) {
@@ -349,26 +361,63 @@ func TestAZeroHolderIsRefusedBeforeTheCardMoves(t *testing.T) {
 	}
 }
 
-func TestWalletHandlesAreReleasedOnce(t *testing.T) {
+// Each wallet card comes back as the type of its kind and as no other, and
+// shares its handle with the WalletCard.
+func TestWalletLabelsEachCardWithItsKind(t *testing.T) {
 	f := newFakeCards(t)
 	cards := Wallet()
-	if len(cards) != 2 {
+	if len(cards) != 3 {
 		t.Fatalf("wallet gave %d cards", len(cards))
 	}
-	kept := cards[0]
-	ReleaseCards(cards[1:]...)
-	cards[1].Release()
-	if len(f.released) != 1 || f.released[0] == kept.pst.h {
-		t.Fatalf("released %v", f.released)
+	concrete, template, scope := cards[0], cards[1], cards[2]
+	if concrete.Kind() != WalletCardConcrete || template.Kind() != WalletCardTemplate || scope.Kind() != WalletCardScope {
+		t.Fatalf("kinds %v %v %v", concrete.Kind(), template.Kind(), scope.Kind())
 	}
-	mustPanicMoved(t, "ID", func() { cards[1].ID() })
-	if kept.pst.h == nil {
-		t.Error("releasing one card moved another")
+	if c, ok := concrete.Concrete(); !ok || c.st.h != f.wallet[0].Concrete() {
+		t.Error("a concrete card is not a PermissionCard of its handle")
 	}
+	if c, ok := template.Template(); !ok || c.pst.h != f.wallet[1].Template() {
+		t.Error("a template card is not a PolymorphicPermissionCard of its handle")
+	}
+	if c, ok := scope.Scope(); !ok || c.sst.h != f.wallet[2].Scope() {
+		t.Error("the lent scope card is not a ScopeCard of its handle")
+	}
+	for name, ok := range map[string]bool{
+		"concrete as template": second(concrete.Template()), "concrete as scope": second(concrete.Scope()),
+		"template as concrete": second(template.Concrete()), "template as scope": second(template.Scope()),
+		"scope as concrete": second(scope.Concrete()), "scope as template": second(scope.Template()),
+		"zero as concrete": second(WalletCard{}.Concrete()), "zero as template": second(WalletCard{}.Template()),
+		"zero as scope": second(WalletCard{}.Scope()),
+	} {
+		if ok {
+			t.Errorf("the wallet gave %s", name)
+		}
+	}
+	if s := []string{concrete.Kind().String(), template.Kind().String(), scope.Kind().String()}; !reflect.DeepEqual(s, []string{"concrete", "template", "scope"}) {
+		t.Errorf("kind names %v", s)
+	}
+
+	if at, ok := scope.ExpiresAt().Get(); !ok || !at.Equal(time.Unix(1_700_000_000, 5)) || scope.MustInspect().LowerPositive[0].ResourceID != "a" {
+		t.Error("a wallet card does not read its card")
+	}
+	mustPanicMoved(t, "ID of the zero WalletCard", func() { WalletCard{}.ID() })
+	poly, _ := template.Template()
+	poly.Release()
+	mustPanicMoved(t, "ID after the accessor's card was released", func() { template.ID() })
+	ReleaseCards(cards...)
+	if !reflect.DeepEqual(f.released, []*types.PermissionCard{f.wallet[1].Template(), f.wallet[0].Concrete(), f.wallet[2].Scope()}) {
+		t.Errorf("released %v", f.released)
+	}
+	if c, _ := concrete.Concrete(); c.st.h != nil {
+		t.Error("releasing the WalletCard left its card usable")
+	}
+	WalletCard{}.Release()
 	if v := WalletVersion(); v.Generation != 7 || !reflect.DeepEqual(v.WalletIDHash, []byte{1, 2}) {
 		t.Errorf("wallet version %+v", v)
 	}
 }
+
+func second[A any](_ A, ok bool) bool { return ok }
 
 func TestDeriveScopeBorrowsItsParents(t *testing.T) {
 	f := newFakeCards(t)
@@ -496,6 +545,17 @@ func TestAFailedEncodeGivesTheMovedCardsBack(t *testing.T) {
 	if first.st.h == nil {
 		t.Error("a failed EncodeTypedValue kept a moved card")
 	}
+	open := PolymorphicPermissionCard{pst: &permissionCardState{h: &types.PermissionCard{}}}
+	func() {
+		defer func() { _ = recover() }()
+		EncodeTypedValue(struct {
+			Open   PolymorphicPermissionCard
+			Second PermissionCard
+		}{open, second})
+	}()
+	if open.pst.h == nil {
+		t.Error("a failed EncodeTypedValue kept a moved polymorphic card")
+	}
 }
 
 type cardThenText struct {
@@ -533,30 +593,33 @@ func TestDecodingACardTakesItOutOfTheValue(t *testing.T) {
 	}
 }
 
-// A scope card, a card id, a holder and a lifespan cannot be sent: a type
-// that holds one is a definition error, and encoding one through a type
-// nobody validated fails.
+// A scope card, a card id, a holder, a lifespan and a wallet card cannot be
+// sent: a type that holds one is a definition error, and encoding one through
+// a type nobody validated fails.
 func TestCardManagementValuesHaveNoSchema(t *testing.T) {
 	type holds struct {
 		Scope    ScopeCard
 		ID       CardID
 		Holder   Holder
 		Lifespan Lifespan
+		Wallet   WalletCard
 	}
 	g := engine.GraphBuilder{E: defs.Engine}
 	g.Node(defs.Compile(reflect.TypeFor[holds]()))
 	for typ, name := range map[reflect.Type]string{
 		reflect.TypeFor[ScopeCard](): "golem.ScopeCard", reflect.TypeFor[CardID](): "golem.CardID",
 		reflect.TypeFor[Holder](): "golem.Holder", reflect.TypeFor[Lifespan](): "golem.Lifespan",
+		reflect.TypeFor[WalletCard](): "golem.WalletCard",
 	} {
 		if why := g.Invalids[typ]; !strings.HasPrefix(why, name+" cannot be sent") {
 			t.Errorf("a field of type %s compiled: %q", name, why)
 		}
 	}
 	for name, v := range map[string]any{
-		"CardID":   struct{ ID CardID }{},
-		"Holder":   struct{ H Holder }{AgentHolder(AgentID{AgentID: "a"})},
-		"Lifespan": struct{ L Lifespan }{LifespanOf(time.Hour)},
+		"CardID":     struct{ ID CardID }{},
+		"Holder":     struct{ H Holder }{AgentHolder(AgentID{AgentID: "a"})},
+		"Lifespan":   struct{ L Lifespan }{LifespanOf(time.Hour)},
+		"WalletCard": struct{ W WalletCard }{WalletCard{kind: WalletCardConcrete, wst: &permissionCardState{h: &types.PermissionCard{}}}},
 	} {
 		func() {
 			defer func() {
@@ -640,7 +703,7 @@ func TestCardsCannotBeForgedOrSerialized(t *testing.T) {
 	card := f.card(1, 2)
 	poly := PolymorphicPermissionCard{pst: &permissionCardState{h: &types.PermissionCard{}}}
 	scope := ScopeCard{sst: &permissionCardState{h: &types.PermissionCard{}}}
-	for _, v := range []any{card, poly, scope, struct{ C PermissionCard }{card}} {
+	for _, v := range []any{card, poly, scope, struct{ C PermissionCard }{card}, Wallet()[0]} {
 		if out, err := json.Marshal(v); err == nil {
 			t.Errorf("a card serialized as %s", out)
 		}
@@ -657,7 +720,11 @@ func TestCardsCannotBeForgedOrSerialized(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{}`), &intoScope); err == nil || intoScope.sst != nil {
 		t.Error("JSON built a scope card")
 	}
-	for _, typ := range []reflect.Type{reflect.TypeFor[PermissionCard](), reflect.TypeFor[PolymorphicPermissionCard](), reflect.TypeFor[ScopeCard](), reflect.TypeFor[CardID](), reflect.TypeFor[Holder](), reflect.TypeFor[Lifespan]()} {
+	var intoWallet WalletCard
+	if err := json.Unmarshal([]byte(`{}`), &intoWallet); err == nil || intoWallet.wst != nil || intoWallet.kind != 0 {
+		t.Error("JSON built a wallet card")
+	}
+	for _, typ := range []reflect.Type{reflect.TypeFor[PermissionCard](), reflect.TypeFor[PolymorphicPermissionCard](), reflect.TypeFor[ScopeCard](), reflect.TypeFor[CardID](), reflect.TypeFor[Holder](), reflect.TypeFor[Lifespan](), reflect.TypeFor[WalletCard]()} {
 		for i := range typ.NumField() {
 			if typ.Field(i).IsExported() {
 				t.Errorf("%s exports field %s", typ, typ.Field(i).Name)
@@ -781,17 +848,17 @@ func TestEncodingAScopeCardFailsAndGivesTheCardsBack(t *testing.T) {
 // to the host: the ones it adopted and the ones it did not reach.
 func TestAFailedDecodeOfAReceivedValueReleasesItsCards(t *testing.T) {
 	f := newFakeCards(t)
-	first, second := f.card(1, 1), f.card(2, 2)
-	h1, h2 := first.st.h, second.st.h
+	first, second := f.card(1, 1), PolymorphicPermissionCard{pst: &permissionCardState{h: &types.PermissionCard{}}}
+	h1, h2 := first.st.h, second.pst.h
 	tree := witTypes.Some(EncodeTypedValue(struct {
 		First  PermissionCard
 		Text   string
-		Second PermissionCard
+		Second PolymorphicPermissionCard
 	}{first, "t", second}).wit.Value)
 	type wrong struct {
 		First  PermissionCard
 		Number uint32
-		Second PermissionCard
+		Second PolymorphicPermissionCard
 	}
 	if _, err := decodeOutput[wrong]("target", "m", tree); err == nil {
 		t.Fatal("a mismatched result decoded")

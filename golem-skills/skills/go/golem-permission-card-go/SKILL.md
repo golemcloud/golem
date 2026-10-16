@@ -21,7 +21,7 @@ var _ = agent.Handle(Forward, func(_ *golem.Context[state], in ForwardIn) golem.
 })
 ```
 
-In a tool, bind it like any other argument (`s.Positional(&a.Card)`) or return it. Use `golem.PolymorphicPermissionCard` when the card's grants may leave the owner or resource id open (a template card). The two card types do not convert into each other: send a card as the type you received or derived it as.
+In a tool, bind it like any other argument (`s.Positional(&a.Card)`) or return it. Use `golem.PolymorphicPermissionCard` when the card's grants may leave the owner or resource id open (a template card). The card types do not convert into each other. A receiver decodes a card as the type its parameter declares; the kind is schema metadata, and the host does not check it.
 
 ## Managing cards
 
@@ -49,7 +49,25 @@ n, err := card.Revoke() // n counts the revoked cards
 - `golem.Bounds` holds the four grant lists. For `card.Derive`, the positive lists name the parent's grants the child keeps and the negative lists the denials it adds. For `golem.DeriveFromWallet` and `golem.DeriveScope` the four lists are the child's complete lattice. The host rejects a lattice the parents do not cover.
 - Requested grants must be concrete. A grant with a slot variable such as `?agent` or `?env`, for example one that `Inspect` returned for a template wallet card, fails with `golem.PermissionInvalidPattern`; deriving a template card is not supported yet.
 - `golem.LifespanOf(d)` takes a positive `time.Duration`. `golem.ParseLifespan("P1DT12H")` takes ISO-8601 text of days, hours, minutes and seconds (`PnDTnHnMnS`). Years, months and weeks have no fixed length, and the host rejects them. A zero lifespan is refused.
-- `golem.Wallet()` returns the wallet's cards as `golem.PolymorphicPermissionCard` (a wallet card may be a template). Send one only where a `PolymorphicPermissionCard` is expected; to hand on a `golem.PermissionCard`, derive a concrete child with `Derive`. Each is a fresh handle: call `Release()` on the ones you do not keep, or `golem.ReleaseCards(cards...)`. During an invocation that received a scope card, the list also contains that scope card if the agent holds `card:inspect`; the host refuses to revoke, install or persist it.
+- `golem.Wallet()` returns the wallet's cards as `golem.WalletCard` values, each labelled with its kind. `w.Kind()` is `golem.WalletCardConcrete`, `golem.WalletCardTemplate` or `golem.WalletCardScope`, and exactly one accessor gives the card as the type of its kind: `w.Concrete()` a `golem.PermissionCard`, `w.Template()` a `golem.PolymorphicPermissionCard` (its grants may contain slot variables such as `?agent`), `w.Scope()` a `golem.ScopeCard`. The other accessors return `false`, and the card types do not convert into each other. `ID`, `Parents`, `ExpiresAt` and `Inspect` work on a `WalletCard` of every kind, and it can be a `DeriveScope` parent. A `WalletCard` cannot be sent; send the `PermissionCard` from `Concrete()` or the `PolymorphicPermissionCard` from `Template()`. Each is a fresh handle: call `Release()` on the ones you do not keep, or `golem.ReleaseCards(cards...)`.
+- During an invocation that received a scope card, the list also contains that scope card as a `WalletCardScope` entry if the agent holds `card:inspect`. Like a scope card from `DeriveScope`, it is retired when the invocation ends.
+
+```go
+for _, w := range golem.Wallet() {
+    switch w.Kind() {
+    case golem.WalletCardConcrete:
+        card, _ := w.Concrete() // golem.PermissionCard: send, install, revoke or derive
+        _ = card
+    case golem.WalletCardTemplate:
+        card, _ := w.Template() // golem.PolymorphicPermissionCard
+        _ = card
+    case golem.WalletCardScope:
+        scope, _ := w.Scope() // golem.ScopeCard: attach to awaited calls
+        _ = scope
+    }
+}
+```
+
 - Deriving from a template card resolves it for the calling agent; the card must be in the agent's wallet.
 - `golem.AgentHolder` is the only install target the host accepts today; `golem.AccountHolder` and `golem.AppHolder` return `PermissionNotPermitted`.
 - `card.ID()` returns an opaque `golem.CardID`: compare it with `card.Parents()` or use it as a map key. It has no other use, and nothing turns it back into a card. Printing or serializing it shows a placeholder, never the identifier. `ID`, `Parents` and `ExpiresAt` trap when the host no longer knows the card.
@@ -74,7 +92,7 @@ out, err = Lookup.Call(scoped, LookupIn{Key: "k"})
 
 - A scope card is valid only during the invocation that derived it. Do not keep it, or a client that carries it, in the agent's state for a later invocation: when the invocation ends the host retires it, denies the awaited calls that carry it with a `*golem.RemoteCallError` of kind `golem.RemoteDenied`, and refuses it as a `DeriveScope` parent with `golem.PermissionNotPermitted`. `Release()` on a retired scope card is safe.
 - Only `Call`, `MustCall` and `CallAsync` carry a scope card; `Trigger` and `Schedule` never do. A card attached to the call takes precedence over the client's default.
-- Only a `golem.ScopeCard` attaches: passing a `PermissionCard` or a wallet card does not compile. A `ScopeCard` has `ID`, `Parents`, `ExpiresAt`, `Inspect` and `Release`. It cannot be sent, installed, revoked or derived from with `Derive`; a method or tool input that holds one is a definition error. It can be a parent of another `DeriveScope`.
+- Only a `golem.ScopeCard` attaches: passing a `PermissionCard` or a `WalletCard` does not compile. A `ScopeCard` has `ID`, `Parents`, `ExpiresAt`, `Inspect` and `Release`. `ExpiresAt` returns the earliest expiry of the scope card's root cards, or `None` when no root card expires; the scope card stops authorizing then. A callee that lists the lent scope card in its wallet sees the same expiry. It cannot be sent, installed, revoked or derived from with `Derive`; a method or tool input that holds one is a definition error. It can be a parent of another `DeriveScope`.
 - Attaching a card lends it: the caller keeps it. A released scope card panics with `golem.ErrPermissionCardMoved` before the call encodes its input, so no input card moves.
 - A generated guest client has the same `WithScopeCard` method. The `reflection` clients have `WithScopeCard` too, and take a per-call card as `reflection.CallScopeCard(scope)`.
 

@@ -56,7 +56,7 @@ func hostValue[T any](t *testing.T, build func(card func() golem.PermissionCard)
 
 // held reports whether card still holds its handle. It moves the card, so it
 // is a test's last use of it.
-func held(card golem.PermissionCard) (ok bool) {
+func held[C any](card C) (ok bool) {
 	defer func() { ok = recover() == nil }()
 	golem.EncodeTypedValue(card)
 	return true
@@ -134,6 +134,53 @@ func TestAToolCallThatFailsToStartGivesItsCardsBack(t *testing.T) {
 		t.Fatal("the call started")
 	}
 	if !held(args.Card) {
+		t.Error("the card stayed moved after the call failed to start")
+	}
+}
+
+type OpenKeysArgs struct {
+	Card golem.PolymorphicPermissionCard
+}
+
+// A polymorphic card in the arguments goes back to the caller too.
+func TestAToolCallThatFailsToStartGivesItsPolymorphicCardBack(t *testing.T) {
+	r, d := newToolRegistry(), newDefinitions()
+	def := defineToolInto[Keys](r, d, "keys", Spec{Version: "1.0.0"}, false)
+	cmd := def.Body[OpenKeysArgs, golem.Unit](func(a *OpenKeysArgs, s *CommandSpec) { s.Positional(&a.Card) })
+	_ = cmd.Handle(func(*Context, OpenKeysArgs) (golem.Unit, error) { return golem.Unit{}, nil })
+	if _, ok := r.discover(d); !ok {
+		t.Fatalf("tool discovery failed: %s", engine.AllErrors(d.Errs))
+	}
+	prev := startToolCall
+	t.Cleanup(func() { startToolCall = prev })
+	var sent types.TypedSchemaValue
+	startToolCall = func(_ string, _ []string, args types.TypedSchemaValue, _ io.Reader, _ Streams) (toolCall, error) {
+		sent = args
+		return toolCall{}, errors.New("no such tool")
+	}
+	g := engine.GraphBuilder{E: link.Engine}
+	root := g.Node(link.Engine.Compile(reflect.TypeFor[golem.PolymorphicPermissionCard]()))
+	graph := g.Build()
+	graph.Root = root
+	card, err := golem.DecodeTypedValue[golem.PolymorphicPermissionCard](link.TypedValue(types.TypedSchemaValue{Graph: graph, Value: types.SchemaValueTree{
+		ValueNodes: []types.SchemaValueNode{types.MakeSchemaValueNodePermissionCardHandle(&types.PermissionCard{})},
+	}}).(golem.TypedValue))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cmd.Call(func(a *OpenKeysArgs) { a.Card = card }); err == nil {
+		t.Fatal("the call started")
+	}
+	polymorphic := false
+	for _, n := range sent.Graph.TypeNodes {
+		if n.Body.Tag() == types.SchemaTypeBodyPermissionCardType {
+			polymorphic = n.Body.PermissionCardType().Polymorphic
+		}
+	}
+	if !polymorphic {
+		t.Error("the arguments did not declare a polymorphic card")
+	}
+	if !held(card) {
 		t.Error("the card stayed moved after the call failed to start")
 	}
 }

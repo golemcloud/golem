@@ -47,7 +47,7 @@ var permissionsHostOps = permissionsHost{
 	install: func(*types.PermissionCard, perm.Holder) witTypes.Result[witTypes.Unit, perm.PermissionError] {
 		panic(ErrPermissionsOutsideComponent)
 	},
-	wallet:        func() []*types.PermissionCard { panic(ErrPermissionsOutsideComponent) },
+	wallet:        func() []perm.WalletCard { panic(ErrPermissionsOutsideComponent) },
 	walletVersion: func() perm.WalletVersionToken { panic(ErrPermissionsOutsideComponent) },
 	listModules:   func() []KernelModule { panic(ErrPermissionsOutsideComponent) },
 	validateGrant: func(perm.PatternGrant) witTypes.Result[witTypes.Unit, perm.PermissionError] {
