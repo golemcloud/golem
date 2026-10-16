@@ -214,15 +214,6 @@ fn rust_dependency_requirements(overrides: &SdkOverrides) -> Vec<CargoDependency
             matcher: CargoDependencyMatcher::Exact,
             presence: Optional,
         },
-        CargoDependencyRequirement {
-            name: "wstd",
-            expected_spec: DependencySpec::Version {
-                version: versions::rust_dep::WSTD.to_string(),
-                features: vec!["default".to_string(), "json".to_string()],
-            },
-            matcher: CargoDependencyMatcher::Exact,
-            presence: Optional,
-        },
     ];
 
     let golem_rust_expected_spec = match &golem_rust_expected {
