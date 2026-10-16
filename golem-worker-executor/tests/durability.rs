@@ -857,18 +857,8 @@ async fn custom_durability_recovers_with_one_completed_and_one_suspended_sibling
         .expect("release request has started");
     assert_eq!(release_send.1.observational_owner, None);
     assert_eq!(release_send.1.invocation_id.unwrap().ordinal, 2);
-    let release_scope = release_send
-        .1
-        .parent_start_index
-        .expect("POST send belongs to a batched-write scope");
-    assert!(before.iter().any(|entry| {
-        entry.oplog_index == release_scope
-            && matches!(&entry.entry, PublicOplogEntry::Start(params)
-                if params.function_name == "<scope:batched-write>"
-                    && params.parent_start_index.is_none()
-                    && params.observational_owner.is_none()
-                    && params.invocation_id == release_send.1.invocation_id)
-    }));
+    assert_eq!(release_send.1.parent_start_index, None);
+    assert_eq!(ends(&before, release_send.0), 0);
 
     executor.simulated_crash(&worker_id).await?;
     // Closing the gate also releases requests from the discarded Store, if still connected.
@@ -893,18 +883,14 @@ async fn custom_durability_recovers_with_one_completed_and_one_suspended_sibling
                 && params.observational_owner == Some(*start) && params.invocation_id.is_none()
         )));
     }
-    let jumps: Vec<_> = recovered
-        .iter()
-        .filter_map(|entry| match &entry.entry {
-            PublicOplogEntry::Jump(params) => Some(&params.jump),
-            _ => None,
-        })
-        .collect();
-    assert!(jumps.iter().any(|jump| jump.contains(release_send.0)));
-    assert!(!jumps.iter().any(|jump| jump.contains(release_scope)));
+    assert!(
+        recovered
+            .iter()
+            .all(|entry| !matches!(&entry.entry, PublicOplogEntry::Jump(_))),
+        "call-local recovery must not roll back sibling history"
+    );
     let root_sends: Vec<_> = recovered
         .iter()
-        .filter(|entry| !jumps.iter().any(|jump| jump.contains(entry.oplog_index)))
         .filter_map(|entry| match &entry.entry {
             PublicOplogEntry::Start(params)
                 if params.function_name == "http::client::send"
@@ -918,11 +904,11 @@ async fn custom_durability_recovers_with_one_completed_and_one_suspended_sibling
     assert_eq!(
         root_sends.len(),
         1,
-        "exactly one release request remains in effective history"
+        "the release request completes under its original Start"
     );
-    assert_ne!(root_sends[0].0, release_send.0);
+    assert_eq!(root_sends[0].0, release_send.0);
     assert_eq!(root_sends[0].1.observational_owner, None);
-    assert_eq!(root_sends[0].1.parent_start_index, Some(release_scope));
+    assert_eq!(root_sends[0].1.parent_start_index, None);
     assert_eq!(root_sends[0].1.invocation_id, release_send.1.invocation_id);
     assert_eq!(ends(&recovered, root_sends[0].0), 1);
     server.abort();

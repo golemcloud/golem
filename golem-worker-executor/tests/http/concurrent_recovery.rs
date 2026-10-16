@@ -203,6 +203,9 @@ async fn wait_for_oplog(
 ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
+        // A pending chunk's Start can follow the sibling's last commit. Flush the resident
+        // buffer so this checkpoint observes a durable prefix, not the commit race.
+        executor.commit_oplog(worker_id).await?;
         let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
         if predicate(&oplog) {
             return Ok(oplog);
