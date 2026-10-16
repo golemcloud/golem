@@ -11794,9 +11794,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-rquickjs"
-version = "0.4.12"
+version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d907b8cac1d3a330fe22135c1b225c5e880adacd382b33b8b1ac3be145220e04"
+checksum = "a21c42d3a380a4bd9bcc436686f1f0f682dd6268397077d6f5c27a8c3a2adfee"
 dependencies = [
  "anyhow",
  "camino",
@@ -11806,6 +11806,7 @@ dependencies = [
  "prettier-please",
  "proc-macro2",
  "quote",
+ "rand 0.10.2",
  "syn 2.0.119",
  "tokio",
  "toml_edit 0.22.27",
