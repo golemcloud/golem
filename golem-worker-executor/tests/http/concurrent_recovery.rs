@@ -1087,8 +1087,11 @@ async fn parent_only_response_repair_reports_loss_after_delivered_eof(
         })
         .unwrap();
     executor.set_oplog_download_corruption(&worker, payload);
-    executor.simulated_crash(&worker).await?;
+    // The Store cannot unwind while the consume-body task waits for the gated End receipt.
+    // Signal the crash first, so the refused End is observed as process loss, not as a trap.
+    let crashed = executor.signal_simulated_crash(&worker).await?;
     release_end.send(()).unwrap();
+    timeout(Duration::from_secs(20), crashed).await??;
     let result = timeout(
         Duration::from_secs(30),
         executor.invoke_and_await_agent_with_key(&component, &agent, &key, method, data_value!()),

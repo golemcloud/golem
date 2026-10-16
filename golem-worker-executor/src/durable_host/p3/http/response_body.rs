@@ -1513,7 +1513,7 @@ where
                     let mut frame = tokio::select! {
                         biased;
                         () = cancelled => {
-                            cancel_ack = read_cancel_ack;
+                            cancel_ack = read_cancel_ack.take();
                             HttpBodyFrame::Cancelled
                         }
                         frame = read_frame => match frame {
@@ -1536,6 +1536,10 @@ where
                             return Err(wasmtime::Error::from_anyhow(kind.into()));
                         }
                     };
+                    // A frame read without cancellation releases a later cancel-read at once.
+                    // The frame reaches the guest or is discarded through the child's delivery
+                    // token, so cancel-read must not wait for the child's durable terminal.
+                    drop(read_cancel_ack.take());
 
                     if let Some(error) = _rebuild_io_guard
                         .as_ref()

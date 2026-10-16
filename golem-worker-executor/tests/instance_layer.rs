@@ -1740,6 +1740,10 @@ async fn retry_decisions_replay_jitter_and_typed_errors(
         activation.clone(),
         principal.clone(),
     );
+    let selector_fallback = RetryPolicy::CountBox {
+        max_retries: 3,
+        inner: Box::new(RetryPolicy::Periodic(Duration::from_secs(2))),
+    };
     let mut live_result = None;
     for replay in [false, true] {
         let primary = lane.enter_primary(parent_start)?.acquire().await?;
@@ -1767,6 +1771,7 @@ async fn retry_decisions_replay_jitter_and_typed_errors(
         } else {
             scope.clone()
         };
+        let selector_fallback_policy = selector_fallback.clone();
         let result = active
             .start_entity_invocation(
                 parent_id.clone(),
@@ -1780,9 +1785,9 @@ async fn retry_decisions_replay_jitter_and_typed_errors(
                             ctx,
                             NamedRetryPolicy {
                                 name: "selector-fallback".into(),
-                                priority: 0,
+                                priority: 1,
                                 predicate: Predicate::True,
-                                policy: RetryPolicy::Never,
+                                policy: selector_fallback_policy,
                             }
                             .into(),
                         )
@@ -1801,25 +1806,28 @@ async fn retry_decisions_replay_jitter_and_typed_errors(
                             .into(),
                         )
                         .await?;
-                        let mut selector_errors = Vec::new();
-                        for properties in [
+                        let missing_selector = RetryHost::resolve_retry_policy(
+                            ctx,
+                            "saga".into(),
+                            "test:retry".into(),
                             vec![],
+                        )
+                        .await?
+                        .map_err(anyhow::Error::msg)?
+                        .map(RetryPolicy::try_from)
+                        .transpose()
+                        .map_err(anyhow::Error::msg)?;
+                        let selector_error = RetryHost::resolve_retry_policy(
+                            ctx,
+                            "saga".into(),
+                            "test:retry".into(),
                             vec![(
                                 "selector-attempt".into(),
                                 PredicateValue::Text("invalid".into()).into(),
                             )],
-                        ] {
-                            selector_errors.push(
-                                RetryHost::resolve_retry_policy(
-                                    ctx,
-                                    "saga".into(),
-                                    "test:retry".into(),
-                                    properties,
-                                )
-                                .await?
-                                .expect_err("strict selector error must be typed"),
-                            );
-                        }
+                        )
+                        .await?
+                        .expect_err("a mistyped selector property must be a typed error");
                         let policy = RetryPolicy::CountBox {
                             max_retries: 1,
                             inner: Box::new(RetryPolicy::Jitter {
@@ -1849,7 +1857,13 @@ async fn retry_decisions_replay_jitter_and_typed_errors(
                         )
                         .await?
                         .expect_err("unbounded saga must return a typed error");
-                        Ok((decision.state, decision.delay, error, selector_errors))
+                        Ok((
+                            decision.state,
+                            decision.delay,
+                            error,
+                            selector_error,
+                            missing_selector,
+                        ))
                     })
                 },
                 std::future::ready,
@@ -1870,12 +1884,8 @@ async fn retry_decisions_replay_jitter_and_typed_errors(
         } else {
             assert!(result.1.is_some());
             assert!(result.2.contains("finite"));
-            assert!(
-                result
-                    .3
-                    .iter()
-                    .all(|error| error.contains("selector-attempt"))
-            );
+            assert!(result.3.contains("selector-attempt"));
+            assert_eq!(result.4.as_ref(), Some(&selector_fallback));
             live_result = Some(result);
             finish_entity_boundary(&active, entity_start).await?;
             drop(primary);
