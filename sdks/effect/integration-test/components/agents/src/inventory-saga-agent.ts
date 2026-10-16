@@ -2,38 +2,8 @@
  * InventorySaga — exercises `Saga.infallibleTransaction` end-to-end
  * inside a real Golem runtime.
  *
- * The agent simulates a "reserve → commit → settle" workflow on top
- * of the infallible saga combinator. Because the host's oplog
- * machinery makes `Effect.fail` deterministic across replays, an
- * agent body that fails on the first attempt would also fail on
- * every subsequent replay — yielding an infinite loop. That is the
- * **correct** infallible-saga semantic ("retry until the failure
- * stops"), but to keep the integration drill bounded we expose two
- * methods:
- *
- * - `runOnceOk()` — happy-path workflow. Verifies the wire layout:
- *   each step opens its own atomic region, no `JUMP` entries are
- *   emitted, and the body returns its value.
- * - `runOnceAndJump()` — drives a deliberate first-attempt failure.
- *   Observable via `golem agent oplog`: each step emits a balanced
- *   `BEGIN ATOMIC REGION` / `END ATOMIC REGION` pair, compensations
- *   run in reverse order, and a `JUMP` entry from the current oplog
- *   tip back to the captured checkpoint is recorded — exactly what
- *   `set-oplog-index` produces. The replayed body fails again and
- *   issues another JUMP, so the agent loops forever; **interrupt
- *   the agent manually after inspecting the oplog**:
- *
- *   ```
- *   golem -L agent invoke -n 'InventorySaga("demo")' runOnceAndJump &
- *   sleep 2 && golem -L agent oplog 'InventorySaga("demo")'
- *   golem -L agent interrupt 'InventorySaga("demo")'
- *   golem -L -Y agent delete 'InventorySaga("demo")'
- *   ```
- *
- * The unit test suite (`test/saga.test.ts`) covers the rewind+park
- * protocol comprehensively against host mocks; this integration agent
- * is here to confirm that the wire-level oplog layout is bit-compatible
- * with the official `golem-ts-sdk`.
+ * `runOnceOk` exercises success; `runWithRetries` compensates two failed
+ * attempts before succeeding. All attempts remain in the oplog.
  */
 import { Effect, Ref, Schema } from "effect"
 import { defineAgent, method, Saga, Snapshot } from "@golemcloud/effect-golem"
@@ -46,7 +16,7 @@ const RunResult = Schema.Struct({
 
 const InventorySagaSpec = defineAgent({
   name: "InventorySaga",
-  description: "Inventory saga that exercises Saga.infallibleTransaction (rewind-on-failure)",
+  description: "Inventory saga with compensation and guest-side retries",
   mode: "durable",
   id: { name: Schema.String },
   snapshotting: Snapshot.define({
@@ -59,16 +29,15 @@ const InventorySagaSpec = defineAgent({
       success: RunResult,
       description: "Happy-path infallible saga; returns the body's value.",
     }),
-    runOnceAndJump: method({
+    runWithRetries: method({
       input: {},
-      success: Schema.Void,
-      description:
-        "Drives a deliberate first-attempt failure to emit a JUMP oplog entry. Loops forever; interrupt manually.",
+      success: RunResult,
+      description: "Compensates two failed attempts and succeeds on the third.",
     }),
     totalAttempts: method({
       input: {},
       success: Schema.Number,
-      description: "Total method invocations (incl. host-driven replays after a JUMP).",
+      description: "Total saga attempts.",
     }),
   },
 })
@@ -108,20 +77,6 @@ const inventoryMethods = ({ name, attempts: state }: InventoryState) => {
       Effect.logInfo("settle.comp").pipe(Effect.annotateLogs({ agent: name })),
   )
 
-  // Step 3 always fails. The surrounding infallibleTransaction
-  // drains comps and issues setOplogIndex(checkpoint), causing the
-  // host to rewind. On replay the same path runs and fails again
-  // (the failure is deterministic), so this method loops forever
-  // by design — it exists purely to exercise the wire protocol.
-  const failingSettleStep = Saga.withCompensation(
-    Effect.gen(function* () {
-      yield* Effect.logInfo("settle.exec.fail").pipe(Effect.annotateLogs({ agent: name }))
-      return yield* Effect.fail("settle-failed-by-design" as const)
-    }),
-    (_out: { settled: boolean }) =>
-      Effect.logInfo("settle.comp").pipe(Effect.annotateLogs({ agent: name })),
-  )
-
   return {
     runOnceOk: () =>
       Effect.gen(function* () {
@@ -142,17 +97,20 @@ const inventoryMethods = ({ name, attempts: state }: InventoryState) => {
         }
       }).pipe(Effect.withSpan("InventorySaga.runOnceOk")),
 
-    runOnceAndJump: () =>
+    runWithRetries: () =>
       Effect.gen(function* () {
-        yield* Ref.update(state, (s) => ({ totalAttempts: s.totalAttempts + 1 }))
-        yield* Saga.infallibleTransaction(
+        let attempts = 0
+        return yield* Saga.infallibleTransaction(
           Effect.gen(function* () {
+            attempts++
+            yield* Ref.update(state, (s) => ({ totalAttempts: s.totalAttempts + 1 }))
             const r = yield* reserveStep({ qty: 3 })
-            yield* commitStep({ qty: r.reserved })
-            yield* failingSettleStep
-          }) as Effect.Effect<void, never, never>,
+            const c = yield* commitStep({ qty: r.reserved })
+            if (attempts < 3) return yield* Effect.fail("settle-failed-by-design")
+            return { reserved: r.reserved, committed: c.committed, totalAttempts: attempts }
+          }),
         )
-      }).pipe(Effect.withSpan("InventorySaga.runOnceAndJump")),
+      }).pipe(Effect.withSpan("InventorySaga.runWithRetries")),
 
     totalAttempts: () => Ref.get(state).pipe(Effect.map((s) => s.totalAttempts)),
   }

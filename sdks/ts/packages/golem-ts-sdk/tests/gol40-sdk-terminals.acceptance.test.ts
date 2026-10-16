@@ -15,7 +15,7 @@ import {
   startedToolInvocation,
   type ToolRpcError,
 } from '../src/bridge/tool';
-import { secretHandleFromSchemaValue } from '../src/bridge/schema';
+import { permissionCardFromSchemaValue, secretHandleFromSchemaValue } from '../src/bridge/schema';
 import { ToolRegistry } from '../src/internal/registry/toolRegistry';
 import {
   GuestSchemaValueStreamHandle,
@@ -30,7 +30,9 @@ import {
   type SettledToolResult,
 } from '../src/internal/tool/startedToolInvocation';
 import { encodeTool } from '../src/internal/tool';
-import { getExtendedToolDefinition } from '../src/tool';
+import { getExtendedToolDefinition, withWireValueOwnership } from '../src/tool';
+import type { PermissionCard } from '../src/host/permissions';
+import { fakeRawCard } from './permissionCardTestSupport';
 import { ToolType } from '../src/toolReflection';
 import { relinquishSchemaValueCapabilities } from '../src/schema/codec';
 
@@ -630,6 +632,56 @@ describe('GOL-40 TypeScript SDK terminal acceptance', () => {
       }
       expect(future[Symbol.dispose]).toHaveBeenCalledOnce();
       await expect(invocation.result).rejects.toThrow('observer is detached');
+    },
+  );
+
+  it.each(['inside', 'after'] as const)(
+    'disposes a result card lifted by a mapper that fails %s its decoder once and moves it',
+    async (failure) => {
+      const dispose = vi.fn();
+      const permission = fakeRawCard({ [Symbol.dispose]: dispose });
+      const future = {
+        get: vi.fn(async () => ({
+          result: {
+            graph: schemaGraphToWit({
+              defs: new Map(),
+              root: t.permissionCard({ polymorphic: false }),
+            }),
+            value: { root: 0, valueNodes: [{ tag: 'permission-card-handle', val: permission }] },
+          } as unknown as TypedSchemaValue,
+        })),
+        cancel: vi.fn(),
+        [Symbol.dispose]: vi.fn(),
+      };
+      vi.mocked(ToolRpc).mockImplementationOnce(
+        () => ({ asyncInvokeAndAwait: () => future }) as unknown as ToolRpc,
+      );
+      const raw = createToolClientTransport('card-owner').start(
+        [],
+        emptyInput(),
+        undefined,
+        false,
+        false,
+      );
+      let card: PermissionCard | undefined;
+      // The decoder and the result observer both reject the card when the decoder fails; when
+      // the mapper fails after decoding, only the observer does.
+      const mapped = mapSettledToolResult(raw.settledResult, (value) => {
+        card = withWireValueOwnership(value.result!, (lift) => {
+          const lifted = permissionCardFromSchemaValue(lift().value);
+          if (failure === 'inside') {
+            card = lifted;
+            throw new Error('mapping failed');
+          }
+          return lifted;
+        }) as PermissionCard;
+        throw new Error('mapping failed');
+      });
+      const invocation = startedToolInvocation(raw.stdout, raw.stderr, mapped, () => raw.cancel());
+      await expect(invocation.result).rejects.toThrow('mapping failed');
+      await flush();
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(card?.isMoved()).toBe(true);
     },
   );
 

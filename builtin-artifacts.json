@@ -1,0 +1,50 @@
+{
+  "bash": {
+    "component": "bash",
+    "path": "builtin-tools/bash.wasm",
+    "task": "build-bash-tool",
+    "inputs": ["builtin-tools/bash", "sdks/rust", "golem-schema", "golem-schema-derive", "golem-tool-metadata", "golem-rust-macro"]
+  },
+  "filesystem_tools": {
+    "component": "filesystem-tools",
+    "path": "builtin-tools/filesystem-tools.wasm",
+    "task": "build-filesystem-tools",
+    "inputs": ["builtin-tools/filesystem-tools", "sdks/rust", "golem-schema", "golem-schema-derive", "golem-tool-metadata", "golem-rust-macro"]
+  },
+  "git_tool": {
+    "component": "git-tool",
+    "path": "builtin-tools/git-tool.wasm",
+    "task": "build-git-tool",
+    "inputs": ["builtin-tools/git", "sdks/ts"]
+  },
+  "javascript_tools": {
+    "component": "javascript-tools",
+    "path": "builtin-tools/javascript-tools.wasm",
+    "task": "build-javascript-tools",
+    "inputs": ["builtin-tools/js-ts-tools", "sdks/ts"]
+  },
+  "otlp_exporter": {
+    "component": "otlp-exporter",
+    "path": "plugins/otlp-exporter.wasm",
+    "task": "build-otlp-exporter",
+    "inputs": ["plugins/otlp-exporter", "sdks/rust", "golem-schema", "golem-schema-derive", "golem-tool-metadata", "golem-rust-macro"]
+  },
+  "python": {
+    "component": "python",
+    "path": "builtin-tools/python.wasm",
+    "task": "build-python-tool",
+    "inputs": ["builtin-tools/python", "sdks/rust", "golem-schema", "golem-schema-derive", "golem-tool-metadata", "golem-rust-macro"]
+  },
+  "typescript_tools": {
+    "component": "typescript-tools",
+    "path": "builtin-tools/typescript-tools.wasm",
+    "task": "build-typescript-tools",
+    "inputs": ["builtin-tools/js-ts-tools", "sdks/ts"]
+  },
+  "web_fetch": {
+    "component": "web-fetch",
+    "path": "builtin-tools/web-fetch.wasm",
+    "task": "build-web-fetch",
+    "inputs": ["builtin-tools/web-fetch", "sdks/rust", "golem-schema", "golem-schema-derive", "golem-tool-metadata", "golem-rust-macro"]
+  }
+}

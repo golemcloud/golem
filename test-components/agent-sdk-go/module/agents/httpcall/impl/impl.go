@@ -17,7 +17,6 @@ import (
 	"agent-sdk-go/agents/httpcall"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
-	"github.com/golemcloud/golem/sdks/go/golem/durability"
 	"github.com/golemcloud/golem/sdks/go/golem/invocation"
 	"github.com/golemcloud/golem/sdks/go/golem/retry"
 	"github.com/golemcloud/golem/sdks/go/golem/transaction"
@@ -112,15 +111,6 @@ func init() {
 	agent.Handle(httpcall.ScheduleAttempts, func(ctx *golem.Context[state], _ golem.Unit) uint32 {
 		return ctx.State.scheduleAttempts
 	})
-	agent.Handle(httpcall.AtomicTimedCallback, func(_ *golem.Context[state], in httpcall.CallbackIn) string {
-		var body string
-		durability.Atomically(func() {
-			started := time.Now()
-			body = fetch(in.Payload)
-			_ = time.Since(started)
-		})
-		return body
-	})
 	agent.Handle(httpcall.RunParallel, func(_ *golem.Context[state], in httpcall.RunParallelIn) []string {
 		bodies := make([]string, in.N)
 		var wg sync.WaitGroup
@@ -191,10 +181,5 @@ func init() {
 			return "body error: " + err.Error()
 		}
 		return "response: " + string(body)
-	})
-	agent.Handle(httpcall.AtomicCallback, func(_ *golem.Context[state], in httpcall.CallbackIn) string {
-		var body string
-		durability.Atomically(func() { body = fetch(in.Payload) })
-		return body
 	})
 }

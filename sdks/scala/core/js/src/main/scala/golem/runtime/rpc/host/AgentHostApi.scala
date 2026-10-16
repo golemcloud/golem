@@ -145,29 +145,11 @@ object AgentHostApi {
   def getConfigValue(key: List[String], expected: JsSchemaGraph): JsSchemaValueTree =
     AgentRegistryModule.getConfigValue(js.Array(key*), expected)
 
-  def getOplogIndex(): OplogIndex =
-    HostModule.getOplogIndex()
-
-  def setOplogIndex(index: OplogIndex): Unit =
-    HostModule.setOplogIndex(index)
-
-  def markBeginOperation(): OplogIndex =
-    HostModule.markBeginOperation()
-
-  def markEndOperation(begin: OplogIndex): Unit =
-    HostModule.markEndOperation(begin)
-
   def trap(reason: String): Unit =
     HostModule.trap(reason)
 
   def oplogCommit(replicas: Int): Unit =
     HostModule.oplogCommit(replicas)
-
-  def getIdempotenceMode(): Boolean =
-    HostModule.getIdempotenceMode()
-
-  def setIdempotenceMode(flag: Boolean): Unit =
-    HostModule.setIdempotenceMode(flag)
 
   def generateIdempotencyKey(): UuidLiteral =
     HostModule.generateIdempotencyKey()
@@ -357,21 +339,9 @@ object AgentHostApi {
 
     def completePromise(promiseId: PromiseIdLiteral, data: Uint8Array): Boolean = js.native
 
-    def getOplogIndex(): OplogIndex = js.native
-
-    def setOplogIndex(index: OplogIndex): Unit = js.native
-
-    def markBeginOperation(): OplogIndex = js.native
-
-    def markEndOperation(begin: OplogIndex): Unit = js.native
-
     def trap(reason: String): Unit = js.native
 
     def oplogCommit(replicas: Int): Unit = js.native
-
-    def getIdempotenceMode(): Boolean = js.native
-
-    def setIdempotenceMode(flag: Boolean): Unit = js.native
 
     def generateIdempotencyKey(): UuidLiteral = js.native
 

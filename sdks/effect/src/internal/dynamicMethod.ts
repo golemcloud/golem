@@ -11,8 +11,8 @@ const snapshotInvocationMetadata = <
 
 export const dynamicMethod = (rpc: RpcConnection, name: string): DynamicMethod => ({
   name,
-  invoke: (input) =>
-    awaitInvocation(rpc, name, input).pipe(
+  invoke: (input, options) =>
+    awaitInvocation(rpc, name, Effect.succeed(input), options?.scopeCard, false).pipe(
       Effect.map(({ metadata, result }) => ({ metadata, value: result })),
     ),
   trigger: (input) =>

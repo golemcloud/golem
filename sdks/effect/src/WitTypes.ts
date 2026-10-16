@@ -18,7 +18,7 @@ import { quotaTokenSchema } from "./Quota.js"
 import { WIT_QUOTA_TOKEN_ANNOTATION_KEY } from "./internal/schema-model/annotations.js"
 import {
   type GuestPermissionCardHandle,
-  isGuestPermissionCardHandle,
+  isGuestPermissionCardHandleOfKind,
 } from "./internal/schema-model/permissionCardHandle.js"
 import { GuestSecretHandle, isGuestSecretHandle } from "./internal/schema-model/secretHandle.js"
 
@@ -434,12 +434,32 @@ export const Secret = <S extends Schema.Top>(
         : Effect.fail(new SchemaIssue.InvalidType(ast, Option.some(u))),
   ).pipe(Schema.annotate({ [witSchemaNodeAnnotationKey]: { tag: "secret", ...options } }))
 
-/** Opaque permission-card capability schema. @since 1.6.0 @category schemas */
-export const PermissionCard = (spec: PermissionCardSpec) =>
-  native((u): u is GuestPermissionCardHandle => isGuestPermissionCardHandle(u), {
-    tag: "permission-card",
-    spec,
-  })
+/**
+ * Opaque concrete permission-card capability schema (`permission-card { polymorphic: false }`).
+ * It accepts only concrete cards, and decodes a received card as a concrete card.
+ *
+ * @since 1.6.0
+ * @category schemas
+ */
+export const PermissionCard = native(
+  (u): u is GuestPermissionCardHandle<"concrete"> =>
+    isGuestPermissionCardHandleOfKind(u, "concrete"),
+  { tag: "permission-card", spec: { polymorphic: false } },
+)
+
+/**
+ * Opaque template permission-card capability schema (`permission-card { polymorphic: true }`).
+ * It accepts only template cards, and decodes a received card as a template card. The host refuses
+ * an agent call input or output whose card does not match the declared kind.
+ *
+ * @since 1.6.0
+ * @category schemas
+ */
+export const PolymorphicPermissionCard = native(
+  (u): u is GuestPermissionCardHandle<"template"> =>
+    isGuestPermissionCardHandleOfKind(u, "template"),
+  { tag: "permission-card", spec: { polymorphic: true } },
+)
 
 /** Agent stream capability schema. @since 1.6.0 @category schemas */
 export const AgentStream = <S extends Schema.Top>(element: S) =>

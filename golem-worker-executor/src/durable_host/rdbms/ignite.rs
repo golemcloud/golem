@@ -106,18 +106,14 @@ impl<Ctx: WorkerCtx> HostDbResultStream for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<DbResultStreamEntry>,
     ) -> anyhow::Result<Result<Vec<DbColumn>, Error>> {
-        let cols: anyhow::Result<Vec<DbColumn>> =
-            db_result_stream_durable_get_columns(self, &self_).await;
-        cols.map(Ok)
+        db_result_stream_durable_get_columns(self, &self_).await
     }
 
     async fn get_next(
         &mut self,
         self_: Resource<DbResultStreamEntry>,
     ) -> anyhow::Result<Result<Option<Vec<DbRow>>, Error>> {
-        let rows: anyhow::Result<Option<Vec<DbRow>>> =
-            db_result_stream_durable_get_next(self, &self_).await;
-        rows.map(Ok)
+        db_result_stream_durable_get_next(self, &self_).await
     }
 
     async fn drop(&mut self, rep: Resource<DbResultStreamEntry>) -> anyhow::Result<()> {
@@ -211,6 +207,7 @@ impl From<crate::services::rdbms::RdbmsError> for Error {
                 Self::QueryResponseFailure(v)
             }
             crate::services::rdbms::RdbmsError::Other(v) => Self::Other(v),
+            crate::services::rdbms::RdbmsError::ResourceLost(v) => Self::ResourceLost(v),
         }
     }
 }

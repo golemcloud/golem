@@ -32,8 +32,12 @@ import {
 } from "./internal/schema-model/wit.js"
 import { freezeSchemaGraph, SchemaRef, type JsonValue } from "./SchemaRef.js"
 import { SchemaRenderError } from "./internal/reflection/schemaRender.js"
+import { attachJsonFieldDefaults } from "./internal/reflection/jsonFieldDefaults.js"
 
 const EMPTY_TUPLE_GRAPH: SchemaGraph = { defs: new Map(), root: t.tuple([]) }
+
+/** Values that canonical JSON input supplies for omitted scalar options, fixed positionals, and flags. */
+const omittedJsonDefaults = new WeakMap<ToolArgument, SchemaValue>()
 
 /** A local schema, metadata, or remote output failure. @since 1.6.0 @category errors */
 export class ToolReflectionError {
@@ -42,6 +46,14 @@ export class ToolReflectionError {
     readonly phase: "discovery" | "schema" | "input" | "invoke" | "output",
     readonly cause: unknown,
   ) {}
+
+  /** A readable description of the failure cause. @since 1.6.0 */
+  get message(): string {
+    const cause = this.cause
+    return cause instanceof Error || cause instanceof ToolReflectionError
+      ? cause.message
+      : String(cause)
+  }
 }
 
 /** One declared argument in the effective command input. @since 1.6.0 @category models */
@@ -142,7 +154,7 @@ export class ToolCommand {
               positional.default_ === undefined
                 ? undefined
                 : schemaValueFromWit(positional.default_)
-            return Object.freeze({
+            const argument: ToolArgument = Object.freeze({
               kind: "positional" as const,
               name: positional.name,
               aliases: [] as ReadonlyArray<string>,
@@ -155,6 +167,8 @@ export class ToolCommand {
                 defaultValue === undefined ? undefined : canonicalDefault(schema, defaultValue),
               schema,
             })
+            if (defaultValue !== undefined) omittedJsonDefaults.set(argument, defaultValue)
+            return argument
           }),
           ...(body.positionals.tail
             ? [
@@ -207,6 +221,15 @@ export class ToolCommand {
       this.inputSchema = SchemaRef.fromImmutableGraph(
         graph,
         t.record(this.arguments.map((argument) => field(argument.name, argument.schema.root))),
+      )
+      attachJsonFieldDefaults(
+        this.inputSchema,
+        new Map(
+          this.arguments.flatMap((argument) => {
+            const value = omittedJsonDefaults.get(argument)
+            return value === undefined ? [] : [[argument.name, value] as const]
+          }),
+        ),
       )
       this.wireGraph = this.inputSchema.graph
     }
@@ -815,7 +838,7 @@ function optionArgument(
         : !option.required && option.shape.tag === "repeatable-map"
           ? v.map([])
           : undefined
-  return Object.freeze({
+  const argument: ToolArgument = Object.freeze({
     kind: "option",
     name: option.long,
     aliases: Object.freeze([...option.aliases]),
@@ -827,6 +850,12 @@ function optionArgument(
     defaultJson: defaultValue === undefined ? undefined : canonicalDefault(schema, defaultValue),
     schema,
   })
+  if (
+    option.default_ !== undefined &&
+    (option.shape.tag === "scalar" || option.shape.tag === "optional-scalar")
+  )
+    omittedJsonDefaults.set(argument, defaultValue!)
+  return argument
 }
 
 function optionalRoot(graph: SchemaGraph, root: SchemaType): SchemaType {
@@ -849,7 +878,7 @@ function flagArgument(flag: Common.FlagSpec, graph: SchemaGraph): ToolArgument {
     graph,
     flag.shape.tag === "bool-flag" ? t.bool() : t.u32(),
   )
-  return Object.freeze({
+  const argument: ToolArgument = Object.freeze({
     kind: "flag",
     name: flag.long,
     aliases: Object.freeze([...flag.aliases]),
@@ -858,6 +887,8 @@ function flagArgument(flag: Common.FlagSpec, graph: SchemaGraph): ToolArgument {
     defaultJson: freezeJson(schema.unpackJson(schemaValueToWit(defaultValue))),
     schema,
   })
+  omittedJsonDefaults.set(argument, defaultValue)
+  return argument
 }
 
 function valuePresent(value: SchemaValue, defaultValue?: SchemaValue, flag = false): boolean {

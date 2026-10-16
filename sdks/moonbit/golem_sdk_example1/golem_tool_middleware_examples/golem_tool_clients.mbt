@@ -46,7 +46,7 @@ pub async fn MessagesClient::send(
     ]),
   ) catch {
     error => {
-      @schema.release_wire_fields(__golem_values)
+      @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
@@ -117,7 +117,7 @@ pub async fn PublicFilesClient::read(
     ]),
   ) catch {
     error => {
-      @schema.release_wire_fields(__golem_values)
+      @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
@@ -188,7 +188,7 @@ pub async fn StorageClient::fetch(
     ]),
   ) catch {
     error => {
-      @schema.release_wire_fields(__golem_values)
+      @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }

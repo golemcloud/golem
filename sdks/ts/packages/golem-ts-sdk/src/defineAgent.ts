@@ -254,6 +254,7 @@ export interface FullAgentClientDefinition<
   [bindAgentClient](
     agentId: ParsedAgentId,
     config?: import('./client').ConfigOverrides<Config>,
+    options?: import('./client').RemoteClientOptions,
   ): import('./client').RemoteClient<Methods, Mode>;
 }
 

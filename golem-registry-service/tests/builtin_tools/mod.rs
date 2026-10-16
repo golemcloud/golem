@@ -716,7 +716,7 @@ async fn shared_and_distinct_artifacts_preserve_export_validation() {
         component_name: "web-fetch",
         artifact_id: "web",
         export_name: "web-fetch",
-        release_version: "0.1.1",
+        release_version: "0.1.2",
         kind: BuiltinExportKind::Tool,
     };
     let initial_tools = services

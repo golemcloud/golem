@@ -13,7 +13,7 @@ package golem.reflection
 import golem.schema._
 import golem.schema.SchemaTypeBody._
 import golem.schema.SchemaValue._
-import golem.schema.validation.ValueValidation
+import golem.schema.validation.{ValuePath, ValuePathSegment, ValueValidation}
 import zio.blocks.schema.json.Json
 
 import scala.collection.immutable.ListMap
@@ -21,14 +21,24 @@ import scala.util.control.NonFatal
 
 final case class SchemaIssue(message: String, path: List[String] = Nil)
 
-final class SchemaRef private (val graph: SchemaGraph, val root: SchemaType) {
+/**
+ * A schema root in a schema graph. A schema whose root is a record may carry
+ * JSON defaults for root fields: its JSON surface (JSON packing, JSON
+ * validation and JSON Schema rendering) uses a default when the JSON object
+ * omits that field, while its value surface keeps the record unchanged.
+ */
+final class SchemaRef private (
+  val graph: SchemaGraph,
+  val root: SchemaType,
+  private[reflection] val jsonDefaults: ListMap[String, SchemaValue]
+) {
   def containsStream: Boolean = SchemaGraph(graph.defs, root).containsStream
 
   def validateValue(value: SchemaValue): Either[List[SchemaIssue], SchemaValue] =
     ValueValidation
       .validateValue(graph, root, value)
       .left
-      .map(_.map(error => SchemaIssue(error.message)))
+      .map(_.map(error => SchemaIssue(error.message, CanonicalJson.jsonPath(graph, root, value, error.path))))
       .map(_ => value)
 
   def validateJson(value: Json): Either[List[SchemaIssue], SchemaValue] =
@@ -41,17 +51,29 @@ final class SchemaRef private (val graph: SchemaGraph, val root: SchemaType) {
     validateValue(value).left.map(_.head).flatMap(_ => CanonicalJson.unpack(graph, root, value))
 
   def toJsonSchema(includeDraftMarker: Boolean = true): Json =
-    CanonicalJson.jsonSchema(graph, root, includeDraftMarker)
+    CanonicalJson.jsonSchema(graph, root, includeDraftMarker, jsonDefaults)
+
+  private[reflection] def withJsonDefaults(defaults: ListMap[String, SchemaValue]): SchemaRef = {
+    root.body match {
+      case RecordType(fields) =>
+        defaults.keys
+          .find(name => !fields.exists(_.name == name))
+          .foreach(name => throw new IllegalArgumentException(s"JSON default for unknown field '$name'"))
+      case _ if defaults.nonEmpty => throw new IllegalArgumentException("JSON defaults require a record root")
+      case _                      => ()
+    }
+    new SchemaRef(graph, root, defaults)
+  }
 
   private def packAndValidateJson(value: Json): Either[List[SchemaIssue], SchemaValue] =
-    CanonicalJson.pack(graph, root, value).left.map(error => List(error)).flatMap(validateValue)
+    CanonicalJson.pack(graph, root, value, jsonDefaults).left.map(error => List(error)).flatMap(validateValue)
 }
 
 object SchemaRef {
-  def apply(graph: SchemaGraph): SchemaRef = new SchemaRef(graph, graph.root)
+  def apply(graph: SchemaGraph): SchemaRef = new SchemaRef(graph, graph.root, ListMap.empty)
 
   def apply(graph: SchemaGraph, root: SchemaType): SchemaRef =
-    new SchemaRef(SchemaGraph(graph.defs, root), root)
+    new SchemaRef(SchemaGraph(graph.defs, root), root, ListMap.empty)
 }
 
 private[reflection] object CanonicalJson {
@@ -60,14 +82,24 @@ private[reflection] object CanonicalJson {
   private val MimeTypePattern        = "^[A-Za-z0-9!#$&^_.+\\-]+\\/[A-Za-z0-9!#$&^_.+\\-]+$".r
   private val U64Max                 = (BigInt(1) << 64) - 1
 
-  def pack(graph: SchemaGraph, schema: SchemaType, json: Json): Either[SchemaIssue, SchemaValue] =
-    attempt(packUnsafe(graph, resolve(graph, schema), json))
+  def pack(
+    graph: SchemaGraph,
+    schema: SchemaType,
+    json: Json,
+    rootDefaults: Map[String, SchemaValue] = Map.empty
+  ): Either[SchemaIssue, SchemaValue] =
+    attempt(packUnsafe(graph, resolve(graph, schema), json, rootDefaults))
 
   def unpack(graph: SchemaGraph, schema: SchemaType, value: SchemaValue): Either[SchemaIssue, Json] =
     attempt(unpackUnsafe(graph, resolve(graph, schema), value))
 
-  def jsonSchema(graph: SchemaGraph, schema: SchemaType, includeDraftMarker: Boolean): Json = {
-    val root        = schemaJson(graph, schema)
+  def jsonSchema(
+    graph: SchemaGraph,
+    schema: SchemaType,
+    includeDraftMarker: Boolean,
+    rootDefaults: Map[String, SchemaValue] = Map.empty
+  ): Json = {
+    val root        = withRootDefaults(graph, schema, schemaJson(graph, schema), rootDefaults)
     val definitions = Json.Object(graph.defs.toList.map { case (id, definition) =>
       id -> schemaJson(graph, definition.body)
     }: _*)
@@ -78,9 +110,106 @@ private[reflection] object CanonicalJson {
     Json.Object(rootFields: _*)
   }
 
+  private def withRootDefaults(
+    graph: SchemaGraph,
+    schema: SchemaType,
+    rendered: Json,
+    rootDefaults: Map[String, SchemaValue]
+  ): Json =
+    (schema.body, rendered) match {
+      case (RecordType(recordFields), Json.Object(entries)) if rootDefaults.nonEmpty =>
+        Json.Object(entries.map {
+          case ("required", Json.Array(names)) =>
+            "required" -> Json.Array(names.filterNot {
+              case name: Json.String => rootDefaults.contains(name.value)
+              case _                 => false
+            })
+          case ("properties", Json.Object(properties)) =>
+            "properties" -> Json.Object(properties.map { case (name, property) =>
+              val default = for {
+                value <- rootDefaults.get(name)
+                field <- recordFields.find(_.name == name)
+                json  <- unpack(graph, field.body, value).toOption
+              } yield json
+              (property, default) match {
+                case (Json.Object(values), Some(json)) => name -> Json.Object((values :+ ("default" -> json)): _*)
+                case _                                 => name -> property
+              }
+            }: _*)
+          case other => other
+        }: _*)
+      case _ => rendered
+    }
+
+  /**
+   * Converts a value-validation path into the JSON path of the canonical JSON
+   * form of `value`: record fields by name, sequence elements by index, variant
+   * payloads by case name and result payloads by `ok` or `err`.
+   */
+  def jsonPath(graph: SchemaGraph, schema: SchemaType, value: SchemaValue, path: ValuePath): List[String] = {
+    def walk(schema: SchemaType, value: SchemaValue, segments: List[ValuePathSegment]): List[String] =
+      segments match {
+        case Nil             => Nil
+        case segment :: rest =>
+          val resolved =
+            try Some(resolve(graph, schema).body)
+            catch { case NonFatal(_) => None }
+          (segment, resolved, value) match {
+            case (ValuePathSegment.Field(name), Some(RecordType(fields)), RecordValue(values)) =>
+              val index = fields.indexWhere(_.name == name)
+              name :: (if (index >= 0 && values.isDefinedAt(index)) walk(fields(index).body, values(index), rest)
+                       else Nil)
+            case (ValuePathSegment.Index(index), Some(TupleType(elements)), TupleValue(values))
+                if elements.isDefinedAt(index) && values.isDefinedAt(index) =>
+              index.toString :: walk(elements(index), values(index), rest)
+            case (ValuePathSegment.Index(index), Some(ListType(element)), ListValue(values))
+                if values.isDefinedAt(index) =>
+              index.toString :: walk(element, values(index), rest)
+            case (ValuePathSegment.Index(index), Some(FixedListType(element, _)), FixedListValue(values))
+                if values.isDefinedAt(index) =>
+              index.toString :: walk(element, values(index), rest)
+            case (ValuePathSegment.MapKey(index), Some(MapType(key, _)), MapValue(entries))
+                if entries.isDefinedAt(index) =>
+              index.toString :: "0" :: walk(key, entries(index).key, rest)
+            case (ValuePathSegment.MapValue(index), Some(MapType(_, item)), MapValue(entries))
+                if entries.isDefinedAt(index) =>
+              index.toString :: "1" :: walk(item, entries(index).value, rest)
+            case (ValuePathSegment.VariantPayload, Some(VariantType(cases)), VariantValue(index, Some(payload)))
+                if cases.isDefinedAt(index) =>
+              cases(index).name :: cases(index).payload.fold(List.empty[String])(walk(_, payload, rest))
+            case (ValuePathSegment.OptionInner, Some(OptionType(element)), OptionValue(Some(inner))) =>
+              walk(element, inner, rest)
+            case (ValuePathSegment.ResultOk, Some(ResultType(ok, _)), ResultValue(SchemaResult.Ok(payload))) =>
+              "ok" :: ok.zip(payload).fold(List.empty[String]) { case (body, inner) => walk(body, inner, rest) }
+            case (ValuePathSegment.ResultErr, Some(ResultType(_, err)), ResultValue(SchemaResult.Err(payload))) =>
+              "err" :: err.zip(payload).fold(List.empty[String]) { case (body, inner) => walk(body, inner, rest) }
+            case (ValuePathSegment.UnionBody, Some(UnionType(branches)), UnionValue(tag, body)) =>
+              branches.find(_.tag == tag).fold(List.empty[String])(branch => walk(branch.body, body, rest))
+            case _ => Nil
+          }
+      }
+    walk(schema, value, path.segments)
+  }
+
+  private final class JsonPathFailure(val issue: SchemaIssue) extends RuntimeException(issue.message)
+
+  private def messageOf(error: Throwable): String = Option(error.getMessage).getOrElse(error.toString)
+
   private def attempt[A](value: => A): Either[SchemaIssue, A] =
     try Right(value)
-    catch { case NonFatal(error) => Left(SchemaIssue(error.getMessage)) }
+    catch {
+      case failure: JsonPathFailure => Left(failure.issue)
+      case NonFatal(error)          => Left(SchemaIssue(messageOf(error)))
+    }
+
+  /** Evaluates `value` one JSON path segment below the current position. */
+  private def at[A](segment: String)(value: => A): A =
+    try value
+    catch {
+      case failure: JsonPathFailure =>
+        throw new JsonPathFailure(failure.issue.copy(path = segment :: failure.issue.path))
+      case NonFatal(error) => throw new JsonPathFailure(SchemaIssue(messageOf(error), List(segment)))
+    }
 
   private def fail(message: String): Nothing = throw new IllegalArgumentException(message)
 
@@ -367,7 +496,12 @@ private[reflection] object CanonicalJson {
     value.toLong
   }
 
-  private def packUnsafe(graph: SchemaGraph, schema: SchemaType, json: Json): SchemaValue =
+  private def packUnsafe(
+    graph: SchemaGraph,
+    schema: SchemaType,
+    json: Json,
+    recordDefaults: Map[String, SchemaValue] = Map.empty
+  ): SchemaValue =
     schema.body match {
       case BoolType   => BoolValue(bool(json))
       case S8Type(_)  => S8Value(integral(json, -128, 127).toByte)
@@ -393,17 +527,25 @@ private[reflection] object CanonicalJson {
       case StringType           => StringValue(string(json))
       case RecordType(expected) =>
         val jsonFields = fields(json)
-        jsonFields.keys.find(name => !expected.exists(_.name == name)).foreach(name => fail(s"unknown field '$name'"))
+        jsonFields.keys
+          .find(name => !expected.exists(_.name == name))
+          .foreach(name => at(name)(fail(s"unknown field '$name'")))
         RecordValue(
           expected.map { field =>
-            val resolved = resolve(graph, field.body)
-            jsonFields.get(field.name) match {
-              case Some(value) => packUnsafe(graph, resolved, value)
-              case None        =>
-                resolved.body match {
-                  case OptionType(_) => OptionValue(None)
-                  case _             => fail(s"missing field '${field.name}'")
-                }
+            at(field.name) {
+              val resolved = resolve(graph, field.body)
+              jsonFields.get(field.name) match {
+                case Some(value) => packUnsafe(graph, resolved, value)
+                case None        =>
+                  recordDefaults.get(field.name) match {
+                    case Some(default) => default
+                    case None          =>
+                      resolved.body match {
+                        case OptionType(_) => OptionValue(None)
+                        case _             => fail(s"missing field '${field.name}'")
+                      }
+                  }
+              }
             }
           }
         )
@@ -419,7 +561,7 @@ private[reflection] object CanonicalJson {
             val (name, payload) = jsonFields.head
             val index           = cases.indexWhere(_.name == name)
             if (index < 0 || cases(index).payload.isEmpty) fail(s"unknown payload variant case '$name'")
-            VariantValue(index, Some(packUnsafe(graph, resolve(graph, cases(index).payload.get), payload)))
+            VariantValue(index, Some(at(name)(packUnsafe(graph, resolve(graph, cases(index).payload.get), payload))))
         }
       case EnumType(cases) =>
         val name  = string(json)
@@ -427,28 +569,40 @@ private[reflection] object CanonicalJson {
         if (index < 0) fail(s"unknown enum case '$name'")
         EnumValue(index)
       case FlagsType(names) =>
-        val selected = array(json).map(string)
-        selected.find(!names.contains(_)).foreach(name => fail(s"unknown flag '$name'"))
-        if (selected.distinct.size != selected.size) fail("duplicate flag")
+        val selected = array(json).zipWithIndex.map { case (entry, index) => at(index.toString)(string(entry)) }
+        selected.zipWithIndex.foreach { case (name, index) =>
+          if (!names.contains(name)) at(index.toString)(fail(s"unknown flag '$name'"))
+        }
+        selected.zipWithIndex.foreach { case (name, index) =>
+          if (selected.indexOf(name) != index) at(index.toString)(fail("duplicate flag"))
+        }
         FlagsValue(names.map(selected.contains))
       case TupleType(elements) =>
         val values = array(json)
         if (values.size != elements.size) fail(s"expected ${elements.size} tuple elements")
-        TupleValue(elements.zip(values).map { case (entry, value) => packUnsafe(graph, resolve(graph, entry), value) })
+        TupleValue(elements.zip(values).zipWithIndex.map { case ((entry, value), index) =>
+          at(index.toString)(packUnsafe(graph, resolve(graph, entry), value))
+        })
       case ListType(element) =>
-        ListValue(array(json).map(value => packUnsafe(graph, resolve(graph, element), value)))
+        ListValue(array(json).zipWithIndex.map { case (value, index) =>
+          at(index.toString)(packUnsafe(graph, resolve(graph, element), value))
+        })
       case FixedListType(element, length) =>
         val values = array(json)
         if (values.size != length) fail(s"expected $length elements")
-        FixedListValue(values.map(value => packUnsafe(graph, resolve(graph, element), value)))
+        FixedListValue(values.zipWithIndex.map { case (value, index) =>
+          at(index.toString)(packUnsafe(graph, resolve(graph, element), value))
+        })
       case MapType(key, value) =>
-        MapValue(array(json).map { entry =>
-          val pair = array(entry)
-          if (pair.size != 2) fail("expected a two-element map entry")
-          SchemaMapEntry(
-            packUnsafe(graph, resolve(graph, key), pair.head),
-            packUnsafe(graph, resolve(graph, value), pair(1))
-          )
+        MapValue(array(json).zipWithIndex.map { case (entry, index) =>
+          at(index.toString) {
+            val pair = array(entry)
+            if (pair.size != 2) fail("expected a two-element map entry")
+            SchemaMapEntry(
+              at("0")(packUnsafe(graph, resolve(graph, key), pair.head)),
+              at("1")(packUnsafe(graph, resolve(graph, value), pair(1)))
+            )
+          }
         })
       case OptionType(element) =>
         json match {
@@ -460,26 +614,33 @@ private[reflection] object CanonicalJson {
         if (jsonFields.size != 1 || !Set("ok", "err")(jsonFields.head._1)) fail("expected {'ok': ...} or {'err': ...}")
         val (side, payload) = jsonFields.head
         val expected        = if (side == "ok") ok else err
-        val packed          = expected match {
-          case None if payload == Json.Null => None
-          case None                         => fail("expected null unit payload")
-          case Some(value)                  => Some(packUnsafe(graph, resolve(graph, value), payload))
+        val packed          = at(side) {
+          expected match {
+            case None if payload == Json.Null => None
+            case None                         => fail("expected null unit payload")
+            case Some(value)                  => Some(packUnsafe(graph, resolve(graph, value), payload))
+          }
         }
         ResultValue(if (side == "ok") SchemaResult.Ok(packed) else SchemaResult.Err(packed))
       case TextType(_) =>
         val jsonFields = fields(json)
         if (!jsonFields.keySet.subsetOf(Set("text", "language"))) fail("text JSON contains unknown fields")
         TextValue(
-          string(jsonFields.getOrElse("text", fail("missing field 'text'"))),
-          jsonFields.get("language").map(string)
+          at("text")(string(jsonFields.getOrElse("text", fail("missing field 'text'")))),
+          jsonFields.get("language").map(value => at("language")(string(value)))
         )
       case BinaryType(_) =>
         val jsonFields = fields(json)
         if (!jsonFields.keySet.subsetOf(Set("bytes", "mimeType"))) fail("binary JSON contains unknown fields")
-        val mimeType = jsonFields.get("mimeType").map(string)
-        mimeType.foreach(value => if (!MimeTypePattern.pattern.matcher(value).matches()) fail("invalid MIME type"))
+        val mimeType = jsonFields.get("mimeType").map { value =>
+          at("mimeType") {
+            val text = string(value)
+            if (!MimeTypePattern.pattern.matcher(text).matches()) fail("invalid MIME type")
+            text
+          }
+        }
         BinaryValue(
-          decodeBase64Url(string(jsonFields.getOrElse("bytes", fail("missing field 'bytes'")))),
+          at("bytes")(decodeBase64Url(string(jsonFields.getOrElse("bytes", fail("missing field 'bytes'"))))),
           mimeType
         )
       case PathType(_) => PathValue(string(json))
@@ -492,16 +653,16 @@ private[reflection] object CanonicalJson {
       case DurationType =>
         val jsonFields = fields(json)
         if (jsonFields.keySet != Set("nanoseconds")) fail("duration JSON requires only 'nanoseconds'")
-        DurationValue(canonicalLong(jsonFields("nanoseconds"), unsigned = false))
+        DurationValue(at("nanoseconds")(canonicalLong(jsonFields("nanoseconds"), unsigned = false)))
       case QuantityType(_) =>
         val jsonFields = fields(json)
         if (jsonFields.keySet != Set("mantissa", "scale", "unit"))
           fail("quantity JSON requires exactly 'mantissa', 'scale', and 'unit'")
         QuantityValueNode(
           QuantityValue(
-            canonicalLong(jsonFields("mantissa"), unsigned = false),
-            integral(jsonFields("scale"), Int.MinValue, Int.MaxValue).toInt,
-            string(jsonFields("unit"))
+            at("mantissa")(canonicalLong(jsonFields("mantissa"), unsigned = false)),
+            at("scale")(integral(jsonFields("scale"), Int.MinValue, Int.MaxValue).toInt),
+            at("unit")(string(jsonFields("unit")))
           )
         )
       case UnionType(branches) =>

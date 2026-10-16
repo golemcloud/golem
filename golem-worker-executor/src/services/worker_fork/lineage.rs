@@ -684,14 +684,7 @@ pub(crate) mod tests {
         for matching in [None, Some(false), Some(true)] {
             let fixture = ServiceFixture::new(&identity, fingerprint).await;
             for _ in 2..=3 {
-                fixture
-                    .oplog
-                    .add(OplogEntry::NoOp {
-                        timestamp: Timestamp::now_utc(),
-                        entity_parent_start_index: None,
-                    })
-                    .await
-                    .unwrap();
+                fixture.oplog.add(OplogEntry::grow_memory(0)).await.unwrap();
             }
             if let Some(matching) = matching {
                 fixture
@@ -702,14 +695,7 @@ pub(crate) mod tests {
                     .await
                     .unwrap();
             } else {
-                fixture
-                    .oplog
-                    .add(OplogEntry::NoOp {
-                        timestamp: Timestamp::now_utc(),
-                        entity_parent_start_index: None,
-                    })
-                    .await
-                    .unwrap();
+                fixture.oplog.add(OplogEntry::grow_memory(0)).await.unwrap();
             }
             let marker = StreamSessionRecord::ForkCut(self_revert(3));
             fixture
@@ -861,10 +847,7 @@ pub(crate) mod tests {
                             .unwrap(),
                     }
                 }
-                _ => OplogEntry::NoOp {
-                    timestamp: Timestamp::now_utc(),
-                    entity_parent_start_index: None,
-                },
+                _ => OplogEntry::grow_memory(0),
             };
             fixture.oplog.add(entry).await.unwrap();
         }
@@ -955,10 +938,7 @@ pub(crate) mod tests {
                         .await
                         .unwrap(),
                 },
-                _ => OplogEntry::NoOp {
-                    timestamp: Timestamp::now_utc(),
-                    entity_parent_start_index: None,
-                },
+                _ => OplogEntry::grow_memory(0),
             };
             oplog.add(entry).await.unwrap();
         }
@@ -1033,10 +1013,7 @@ pub(crate) mod tests {
                         record: oplog.upload_payload(&session).await.unwrap(),
                     }
                 } else {
-                    OplogEntry::NoOp {
-                        timestamp: Timestamp::now_utc(),
-                        entity_parent_start_index: None,
-                    }
+                    OplogEntry::grow_memory(0)
                 };
                 oplog.add(entry).await.unwrap();
             }
@@ -1088,10 +1065,7 @@ pub(crate) mod tests {
                         .await
                         .unwrap(),
                 },
-                _ => OplogEntry::NoOp {
-                    timestamp: Timestamp::now_utc(),
-                    entity_parent_start_index: None,
-                },
+                _ => OplogEntry::grow_memory(0),
             };
             assert_eq!(
                 fixture.oplog.add(entry).await.unwrap(),
@@ -1136,14 +1110,7 @@ pub(crate) mod tests {
         let fixture = ServiceFixture::new(&target, fingerprint).await;
         for index in 2..=1024 {
             assert_eq!(
-                fixture
-                    .oplog
-                    .add(OplogEntry::NoOp {
-                        timestamp: Timestamp::now_utc(),
-                        entity_parent_start_index: None,
-                    })
-                    .await
-                    .unwrap(),
+                fixture.oplog.add(OplogEntry::grow_memory(0)).await.unwrap(),
                 OplogIndex::from_u64(index)
             );
         }

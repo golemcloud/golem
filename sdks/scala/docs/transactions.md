@@ -21,31 +21,40 @@ Transactions group a sequence of operations where:
 
 1. Each operation has an **execute** step and a **compensate** step
 2. When an operation returns a domain error, previous compensations run in reverse order
-3. An infallible transaction resets the oplog index and retries; a fallible transaction returns the error with rollback status
+3. An infallible transaction starts a fresh attempt; a fallible transaction returns the error with rollback status
 
 ### Transaction Types
 
 | Type           | Behavior on Failure               | Return Type                                        |
 |----------------|-----------------------------------|----------------------------------------------------|
-| **Infallible** | Auto-retry until success          | `Future[A]`                                        |
+| **Infallible** | Retry within the host policy     | `Future[Either[TransactionFailure[Any], A]]`         |
 | **Fallible**   | Return error with rollback status | `Future[Either[TransactionFailure[Err], A]]`       |
 
 ---
 
 ## Infallible Transactions
 
-Use `infallibleTransaction` when operations must eventually succeed. When an operation returns `Left`, compensations
-execute and the entire transaction retries automatically.
+Use `infallibleTransaction` to retry fully compensated failures within the host retry policy.
+Returned operation errors and catchable thrown failures (including interruption) trigger compensation.
 
-Both transaction runners create an atomic region. An unexpected failed `Future` traps without running compensations;
-the region is retried according to the applicable retry policy. If the policy gives up, the agent becomes failed.
-Outside an atomic region, an uncaught exception or failed `Future` fails the agent without retry.
+These helpers implement sagas, not atomic regions. Attempts and compensations append to the oplog.
+They do not rewind execution or undo concurrent work. Successful steps compensate in reverse order.
+Partial compensation stops the saga without another attempt and retains both failures.
+After each fully compensated failure, the helper resolves the policy with verb `saga`, the agent
+URI, and properties `attempt` (1 for the first failure) and `error-kind` (`operation-error`,
+`exception`, or `interrupted`). `namedInfallibleTransaction(Some("checkout"))` also supplies
+`transaction-name`. The host evaluator receives the identical context and the previous opaque
+continuation. No matching policy uses `config.retry`. Policy changes and policies without a finite
+count, time, or never bound return `RetryEvaluationFailed`; exhaustion returns `RetryExhausted`.
+The host records decisions, jitter, and evaluation errors for replay. Durable monotonic time starts
+before the first attempt and includes work, compensation, and durable waits. The helper uses the
+host delay, not a local policy evaluator or JavaScript timer.
 
 ```scala
 import golem.Transactions
 import scala.concurrent.Future
 
-val result: Future[Int] = Transactions.infallibleTransaction { tx =>
+val result: Future[Either[Transactions.TransactionFailure[Any], Int]] = Transactions.infallibleTransaction { tx =>
   // Define an operation with its compensation
   val createResource = Transactions.operation[Unit, Int, String](
     // Execute: create the resource, return its ID
@@ -67,13 +76,13 @@ val result: Future[Int] = Transactions.infallibleTransaction { tx =>
 
 ### How Infallible Transactions Work
 
-1. Transaction begins, oplog index is recorded
+1. A fresh transaction context is created
 2. Each `tx.execute` runs the operation
 3. On success, compensation is registered
 4. On failure:
     - All compensations run in reverse order
-    - Oplog resets to original index
-    - Transaction retries from the beginning
+    - Transaction retries from the beginning with a fresh context
+    - Prior attempts and compensations remain in the oplog
 
 ---
 
@@ -117,6 +126,12 @@ result.foreach {
 
   case Left(TransactionFailure.FailedAndRolledBackPartially(err, compErr)) =>
     println(s"Failed with partial rollback: $err, compensation error: $compErr")
+
+  case Left(TransactionFailure.RetryExhausted(err)) =>
+    println(s"Retry policy exhausted after compensation: $err")
+
+  case Left(TransactionFailure.RetryEvaluationFailed(err, reason)) =>
+    println(s"Retry policy evaluation failed after compensation: $err, $reason")
 }
 ```
 
@@ -126,6 +141,11 @@ result.foreach {
 |----------------------------------------------------------|--------------------------------|
 | `FailedAndRolledBackCompletely(error)`                   | All compensations succeeded    |
 | `FailedAndRolledBackPartially(error, compensationError)` | Some compensations also failed |
+| `RetryExhausted(error)`                                 | Fully compensated; host policy exhausted |
+| `RetryEvaluationFailed(error, reason)`                  | Fully compensated; host could not evaluate the policy |
+
+The two retry variants apply to infallible transactions. Partial compensation evidence can be
+a returned domain error or a caught exception, including an interruption.
 
 ---
 
@@ -168,14 +188,14 @@ trait Operation[-In, Out, Err] {
 
 ### In Infallible Transactions
 
-Compensation failures throw `IllegalStateException`:
+Compensation failures return `FailedAndRolledBackPartially`, including thrown compensation causes:
 
 ```scala
 Transactions.infallibleTransaction { tx =>
   val op = Transactions.operation[Unit, Int, String](
     _ => Future.successful(Right(42))
   )(
-    (_, _) => Future.successful(Left("Compensation failed!")) // Throws on failure
+    (_, _) => Future.successful(Left("Compensation failed!"))
   )
 
   tx.execute(op, ())
@@ -192,6 +212,10 @@ Transactions.fallibleTransaction[Int, String] { tx =>
   ???
 }
 ```
+
+A catchable thrown body or operation failure runs compensation. Complete rollback rethrows the
+original cause. Partial rollback throws `PartialRollbackException` with required `originalFailure`
+and `compensationFailure` fields. A compensation interruption is not treated as successful rollback.
 
 ---
 
@@ -245,11 +269,11 @@ Transactions.fallibleTransaction[Unit, String] { tx =>
 
 ### 3. Use Infallible for Critical Paths
 
-When an operation *must* succeed (like cleanup), use infallible:
+Use infallible for cleanup that can be retried, and handle policy exhaustion explicitly:
 
 ```scala
 Transactions.infallibleTransaction { tx =>
-  // Will retry until cleanup completes
+  // Retries only while the host policy permits it
   tx.execute(cleanupResources, ())
 }
 ```
@@ -272,10 +296,6 @@ Transactions.fallibleTransaction[Int, String] { tx =>
 
 ## Integration with Host
 
-Both helpers manage the host's atomic markers:
-
-- `markBeginOperation` / `markEndOperation`
-- `setOplogIndex` for retry positioning
-
-Use these transaction helpers whenever you need higher-level control over oplog retries without writing boilerplate in
-every agent.
+Both helpers use ordinary durable host calls. Each retry appends fresh operations after the
+compensations of the previous attempt. Operations must provide their own compensation semantics;
+the helpers do not provide isolation from concurrent invocations.

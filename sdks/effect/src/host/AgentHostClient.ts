@@ -104,9 +104,8 @@ export interface AgentHostClientShape {
    * Mirrors `golem:api/host.trap`. Unconditionally surfaces as an
    * uncatchable wasm trap on the host side; from JavaScript's
    * perspective the call never returns and the surrounding fiber's
-   * frame is torn down by the runtime. Used by `Durability.atomically`
-   * and `Saga.{fallible,infallible}Transaction` to make a failure
-   * inside an atomic / transactional region uncatchable.
+   * frame is torn down by the runtime. Saga entry points use this for
+   * unexpected defects, not for recoverable typed failures.
    */
   readonly trap: (reason: string) => never
 }

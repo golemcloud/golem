@@ -15,6 +15,7 @@
 //!     PredicateValue::Integer(503),
 //! )];
 //! let raw = resolve_retry_policy("send", "email://welcome", &context)
+//!     .map_err(io::Error::other)?
 //!     .ok_or_else(|| io::Error::other("no matching retry policy"))?;
 //! let schedule = RetrySchedule::try_from(&raw)?;
 //!
@@ -55,11 +56,12 @@ pub fn get_retry_policy_by_name(name: &str) -> Option<NamedRetryPolicy> {
 /// Resolve the matching retry policy for a given operation context.
 /// Evaluates named policies in descending priority order; returns the
 /// policy from the first rule whose predicate matches, or none.
+/// Invalid predicates return an error without trapping the invocation.
 pub fn resolve_retry_policy(
     verb: &str,
     noun_uri: &str,
     properties: &[(String, PredicateValue)],
-) -> Option<RetryPolicy> {
+) -> Result<Option<RetryPolicy>, String> {
     let props: Vec<(String, PredicateValue)> = properties.to_vec();
     retry_api::resolve_retry_policy(verb, noun_uri, &props)
 }

@@ -78,9 +78,7 @@ use golem_common::model::entity::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::AgentConfigEntryDto;
-use golem_common::model::{
-    AgentFingerprint, AgentId, IdempotencyKey, OplogIndex, OwnedAgentId, Timestamp,
-};
+use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey, OwnedAgentId, Timestamp};
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
@@ -143,7 +141,6 @@ pub struct ActiveAgentEntityMetadata {
     pub slots: Vec<ActiveEntitySlotMetadata>,
     pub lane: crate::worker::owner_lane::OwnerLaneMetadata,
     pub tool_operations: crate::durable_host::tool::ToolOperationSetMetadata,
-    pub reached_oplog_marker: Option<OplogIndex>,
 }
 
 impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
@@ -241,7 +238,6 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
             slots,
             lane: self.execution().lane().metadata(),
             tool_operations: self.execution().tool_operation_metadata(),
-            reached_oplog_marker: self.execution().reached_oplog_marker(),
         }
     }
 

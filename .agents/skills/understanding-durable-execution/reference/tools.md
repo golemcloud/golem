@@ -196,7 +196,7 @@ validates the frozen projection against its binding and runs it through the exec
 transport.
 
 The remote `tools/call` is a `WriteRemote` durable call. It consumes the ordinary derived
-idempotency-key position, including normal atomic-region semantics. The encoded remote response is
+idempotency key derived from its own `Start`. The encoded remote response is
 committed before projection, stdout publication, or best-effort 401 authorization feedback.
 Consequently completed replay is offline: it decodes and projects the recorded response without
 MCP, registry credential lookup, or transport use.
@@ -208,7 +208,7 @@ select that attachment terminal from its durable response before finishing the w
 Because MCP `-32602` is ambiguous, projection performs a separate durable `ReadRemote` presence
 observation after the committed call. It forces refresh of the exact admitted deployment/import
 source. A crash or quota suspension can repair this read without resending the committed call;
-ordinary atomic rollback can still roll back both. Observed absence maps to `InvalidToolName`;
+completed calls remain recorded. Observed absence maps to `InvalidToolName`;
 presence or a missing observation maps to `InvalidInput`. MCP `isError` response content projects
 to a custom tool error. Fixed discovery exact-rehydrates the recorded deployment revision, whereas
 dynamic invocation uses the exact source and projection frozen at admission.
@@ -307,15 +307,11 @@ belonging to one owner": entity Stores clone the primary's `ReplayState`, which 
 rather than opening a second cursor over the same oplog, and `HostedInstance::invoke_scoped` runs
 one entity export and then destroys the body `Store`.
 
-Admission reserves the caller's ordinary physical/atomic logical position on both live and replay
-and derives an entity seed from the active caller key. `EntityInvocationRequest` records the
-caller's `assume_idempotence`; `EntityInvocationScope` installs this policy and seed in the body
-context. A child admitted under a logical caller uses its own counter starting at `INITIAL` so
-atomic rollback can move physical Starts without changing child keys. This counter is Store-local
-derivation state, not a copied or shared atomic lease. Every derived-key call consumes its slot on
-completed replay too, including `generate_idempotency_key` before its live-only closure.
+Admission derives an entity seed from the active caller key and the call's physical `Start`.
+`EntityInvocationScope` installs the seed in the body context. Reconstruction
+retains call identity rather than assigning new positions to completed calls.
 
-Tests: `tool_discovery::dynamic_tool_crash_obeys_caller_atomic_and_non_idempotent_policy` and
+Tests: tool-discovery crash recovery and
 `tool_streaming::entity_generated_key_replay_reserves_position_for_incomplete_http_retry` use real
 reconstruction and count upstream effects as well as attempts.
 
@@ -443,7 +439,7 @@ An admission refusal records its exact demand in `SerializableToolOperationTermi
 of the returned tool error. The demand is a typed Start claim, a validated recorded-entry index,
 a positional request, a session input read, or an attachment disposal. Replay prefers recorded
 effects and reproduces a refusal only at the missing demand. Start probing and claiming share the
-cursor lock. Consumed NoOp markers reproduce refusal after the marker, not before consuming it.
+cursor lock. Positional demands reproduce refusal at their recorded observation boundary.
 Input tasks capture the session binding, read ordinal and observation class before spawning;
 recorded consumer observations bypass missing-source admission. Concurrent missing demands wait
 on the operation's existing watch channel without retaining the Store or cursor.
@@ -524,18 +520,13 @@ match its exact class, attempt, attribution and replay position. Hydrating an or
 not establish a surviving boundary: a zero-cancelled guest preparation can transfer to a host pipe
 without consuming a value ordinal. Both paths retain the ordinary observation receipt and cleanup.
 
-Before constructing any Store, `RunningWorker::create_instance` normalizes incomplete atomic
-regions against a fixed committed horizon and the effective snapshot/skipped prefix. It preserves
-the earliest unmatched Begin and deletes the complete suffix, moving the boundary backward across
-crossing atomic regions whose Ends would otherwise disappear. It commits one Jump and restarts
-initialization to reload status and snapshot selection. No entity body claims history before this
-cut. Entity admission only classifies the surviving Start as completed or incomplete.
-
-Ownership is not causal isolation: raw stdout can influence sibling work before the producer's
-atomic region completes. That sibling's records must disappear with the abandoned suffix too.
-Transaction commits within the suffix may execute again; rollback does not undo external effects.
-Existing durable RPC and peer idempotency contracts still apply. Recovery/lifecycle markers alone
-do not trigger another Jump, but stream data and completion markers do count as new attempt work.
+Entity admission classifies a recorded `Start` as completed or incomplete without changing
+history. Recovery repairs an eligible incomplete call at that `Start` and preserves completed
+sibling work. A nonresumable handle reports typed loss instead of silently replaying unsafe
+session traffic. Application code explicitly opens and initializes a new session; loss does not
+prove an earlier write was undelivered. SDK sagas compensate and loop in guest code, retaining
+earlier attempts and compensations. External operator revert/fork uses validated cuts and does
+not undo effects at a remote peer.
 
 `AcceptedToolCall::attachment_counterparty` separates two attachment protocols. A guest
 counterparty shares the body's causal lane: filesystem-capable guest tools retain EOF stdin

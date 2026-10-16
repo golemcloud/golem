@@ -195,10 +195,6 @@ describe('retry host helpers', () => {
     }));
     vi.doMock('golem:api/host@1.5.0', () => ({
       trap: trapMock,
-      getIdempotenceMode: vi.fn(),
-      setIdempotenceMode: vi.fn(),
-      markBeginOperation: vi.fn(),
-      markEndOperation: vi.fn(),
     }));
 
     return import('../src/host/retry');

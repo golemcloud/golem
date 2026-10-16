@@ -69,6 +69,10 @@ pub struct Services {
 impl Services {
     pub async fn new(config: &WorkerServiceConfig) -> anyhow::Result<Self> {
         config.http_session.validate().map_err(anyhow::Error::msg)?;
+        config
+            .worker_executor
+            .validate()
+            .map_err(anyhow::Error::msg)?;
         config.blob_storage.validate()?;
         let blob_storage: Arc<dyn BlobStorage> = match &config.blob_storage {
             BlobStorageConfig::S3(config) => Arc::new(S3BlobStorage::new(config.clone()).await),
@@ -128,6 +132,7 @@ impl Services {
             worker_executor_clients.clone(),
             config.worker_executor.retries.clone(),
             routing_table_service.clone(),
+            config.worker_executor.max_concurrent_oplog_entry_reads,
         ));
 
         let agent_resolution_cache = Arc::new(AgentResolutionCache::new(
