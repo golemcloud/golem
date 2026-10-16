@@ -1241,6 +1241,172 @@ async fn invoke_cli_tool(
         .into_typed()
 }
 
+async fn exercise_npm_lifecycle_completion(
+    executor: &TestWorkerExecutor,
+    caller_component: &golem_common::model::component::ComponentDto,
+) -> anyhow::Result<()> {
+    for (name, extension, source, expected_code, expected_stdout, expected_stderr) in [
+        (
+            "missing-ts",
+            "ts",
+            "import './normalizeWhitespace.test.ts';",
+            1,
+            "",
+            "ERR_MODULE_NOT_FOUND",
+        ),
+        (
+            "missing-cjs",
+            "cjs",
+            "require('./normalizeWhitespace.test.cjs');",
+            1,
+            "",
+            "MODULE_NOT_FOUND",
+        ),
+        (
+            "missing-esm",
+            "mjs",
+            "import './normalizeWhitespace.test.mjs';",
+            1,
+            "",
+            "ERR_MODULE_NOT_FOUND",
+        ),
+        (
+            "throw",
+            "cjs",
+            "throw new Error('controlled child failure');",
+            1,
+            "",
+            "controlled child failure",
+        ),
+        (
+            "exit-seven",
+            "cjs",
+            "process.stdout.write('before exit\\n'); process.exit(7);",
+            7,
+            "before exit\n",
+            "",
+        ),
+        (
+            "exit-code-seven",
+            "cjs",
+            "process.stderr.write('diagnostic\\n'); process.exitCode = 7;",
+            7,
+            "",
+            "diagnostic\n",
+        ),
+        (
+            "success",
+            "cjs",
+            "process.stdout.write('child success\\n');",
+            0,
+            "child success\n",
+            "",
+        ),
+        (
+            "warning",
+            "cjs",
+            "process.stderr.write('successful warning\\n');",
+            0,
+            "",
+            "successful warning\n",
+        ),
+    ] {
+        let owner = format!("npm-lifecycle-{name}");
+        let fixture = serde_json::json!({ "extension": extension, "source": source });
+        let setup = format!(
+            r##"
+const fs = require('node:fs');
+const fixture = {fixture};
+fs.mkdirSync('tests', {{ recursive: true }});
+fs.writeFileSync('tests/run.' + fixture.extension, fixture.source);
+fs.writeFileSync('package.json', JSON.stringify({{
+  name: 'npm-status-fixture', version: '1.0.0', private: true, type: 'module',
+  scripts: {{
+    test: 'node tests/run.' + fixture.extension,
+    posttest: `node -e "require('node:fs').writeFileSync('posttest-ran', 'yes')"`
+  }}
+}}));
+"##
+        );
+        let setup_result = invoke_cli_tool(
+            executor,
+            caller_component,
+            &owner,
+            "node",
+            "/workspace",
+            vec!["-e", &setup],
+        )
+        .await?;
+        assert_eq!(setup_result.exit_code, 0, "{name}: {setup_result:?}");
+        assert!(setup_result.stdout.is_empty());
+        assert!(setup_result.stderr.is_empty());
+
+        let result = invoke_cli_tool(
+            executor,
+            caller_component,
+            &owner,
+            "npm",
+            "/workspace",
+            vec!["test"],
+        )
+        .await?;
+        let stdout = String::from_utf8(result.stdout)?;
+        let stderr = String::from_utf8(result.stderr)?;
+        assert_eq!(
+            result.exit_code, expected_code,
+            "{name}: stdout={stdout}; stderr={stderr}"
+        );
+        if !expected_stdout.is_empty() {
+            assert!(stdout.contains(expected_stdout), "{name}: {stdout}");
+        }
+        if expected_stderr.is_empty() {
+            assert!(stderr.is_empty(), "{name}: {stderr}");
+        } else {
+            assert!(stderr.contains(expected_stderr), "{name}: {stderr}");
+        }
+
+        // Check the lifecycle effect separately from the command's return value.
+        let posttest = invoke_cli_tool(
+            executor,
+            caller_component,
+            &owner,
+            "node",
+            "/workspace",
+            vec![
+                "-e",
+                "console.log(require('node:fs').existsSync('posttest-ran'))",
+            ],
+        )
+        .await?;
+        assert_eq!(posttest.exit_code, 0, "{name}: {posttest:?}");
+        assert_eq!(
+            posttest.stdout,
+            if expected_code == 0 {
+                b"true\n".as_slice()
+            } else {
+                b"false\n".as_slice()
+            },
+            "{name}"
+        );
+        assert!(posttest.stderr.is_empty());
+
+        // A failed child must not poison the next tool invocation on the same owner.
+        let followup = invoke_cli_tool(
+            executor,
+            caller_component,
+            &owner,
+            "npm",
+            "/workspace",
+            vec!["--version"],
+        )
+        .await?;
+        assert_eq!(followup.exit_code, 0, "{name}: {followup:?}");
+        assert_eq!(followup.stdout, b"10.9.9\n", "{name}");
+        assert!(followup.stderr.is_empty());
+    }
+    Ok(())
+}
+
 async fn invoke_git_tool_success(
     executor: &TestWorkerExecutor,
     worker_id: &golem_common::model::AgentId,
@@ -13786,6 +13952,8 @@ fs.writeFileSync('invalid.ts', 'const value: number = "wrong";\n');
     .await?;
     assert_eq!(npm_invalid.exit_code, 1);
     assert!(String::from_utf8(npm_invalid.stdout)?.contains("Unknown command"));
+
+    exercise_npm_lifecycle_completion(&executor, &caller_component).await?;
 
     let npx = invoke_cli_tool(
         &executor,
