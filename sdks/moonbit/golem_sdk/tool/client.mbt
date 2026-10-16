@@ -61,32 +61,60 @@ priv struct ToolInvocationObserver[E] {
   future : @toolHost.FutureInvokeResult
   decode_error : (String, @types.TypedSchemaValue) -> Result[E, String]?
   result_lock : @async-core.Mutex
-  cached_result : Ref[Result[@toolCommon.InvocationResult, ToolError[E]]?]
+  cached_result : Ref[
+    Result[@toolCommon.InvocationResult, @types.ToolRpcError]?,
+  ]
+  delivered_result : Ref[Result[@toolCommon.InvocationResult, ToolError[E]]?]
   drive_started : Ref[Bool]
   detached : Ref[Bool]
+  observing : Ref[Bool]
+  disposed : Ref[Bool]
 }
 
 ///|
 async fn[E] ToolInvocationObserver::get(
   self : ToolInvocationObserver[E],
 ) -> Result[@toolCommon.InvocationResult, ToolError[E]] {
+  self.observe()
   if self.detached.val {
     return Err(tool_protocol_error("result observer was detached"))
+  }
+  if self.delivered_result.val is Some(result) {
+    return result
+  }
+  let result = match self.cached_result.val.unwrap() {
+    Ok(result) => Ok(result)
+    Err(error) => Err(map_wire_rpc_error(error, self.decode_error))
+  }
+  self.delivered_result.val = Some(result)
+  result
+}
+
+///|
+async fn[E] ToolInvocationObserver::observe(
+  self : ToolInvocationObserver[E],
+) -> Unit {
+  if self.detached.val {
+    return
   }
   self.drive_started.val = true
   self.result_lock.acquire()
   defer self.result_lock.release()
-  if self.cached_result.val is Some(result) {
-    return result
+  if self.detached.val {
+    return
   }
-  @async-core.protect_from_cancel(async fn() {
-    let result = match self.future.get() {
-      Ok(result) => Ok(result)
-      Err(error) => Err(map_wire_rpc_error(error, self.decode_error))
+  self.observing.val = true
+  defer {
+    self.observing.val = false
+    if self.detached.val {
+      self.dispose()
     }
-    self.cached_result.val = Some(result)
-    result
-  })
+  }
+  if self.cached_result.val is None {
+    @async-core.protect_from_cancel(async fn() {
+      self.cached_result.val = Some(self.future.get())
+    })
+  }
 }
 
 ///|
@@ -95,13 +123,43 @@ fn[E] ToolInvocationObserver::drive(self : ToolInvocationObserver[E]) -> Unit {
     return
   }
   self.drive_started.val = true
-  @async-core.spawn_component_task_current(async fn() { ignore(self.get()) })
+  @async-core.spawn_component_task_current(async fn() { self.observe() })
 }
 
 ///|
 fn[E] ToolInvocationObserver::detach(self : ToolInvocationObserver[E]) -> Unit {
   if !self.detached.val {
     self.detached.val = true
+    if !self.observing.val {
+      self.dispose()
+    }
+  }
+}
+
+///|
+fn[E] ToolInvocationObserver::dispose(self : ToolInvocationObserver[E]) -> Unit {
+  if !self.disposed.val {
+    self.disposed.val = true
+    if self.delivered_result.val is None {
+      match self.cached_result.val {
+        Some(Ok(result)) => {
+          if result.result is Some(payload) {
+            @model.drop_wit_capabilities(payload.value)
+          }
+          if result.stdout is Some(stream) {
+            stream.drop_sync()
+          }
+          if result.stderr is Some(stream) {
+            stream.drop_sync()
+          }
+        }
+        Some(Err(@types.RemoteToolError(@types.CustomError(error)))) =>
+          @model.drop_wit_capabilities(error.payload.value)
+        _ => ()
+      }
+    }
+    self.cached_result.val = None
+    self.delivered_result.val = None
     self.future.drop()
   }
 }
@@ -186,7 +244,7 @@ pub async fn[T, E] TypedToolInvocation::collect(
 
 ///|
 pub fn[E] ToolInvocation::cancel(self : ToolInvocation[E]) -> Unit {
-  if !self.observer.detached.val {
+  if !self.observer.disposed.val {
     self.observer.future.cancel()
   }
 }
@@ -391,8 +449,11 @@ pub fn[E] ToolClient::start(
     decode_error,
     result_lock: @async-core.Mutex(),
     cached_result: Ref(None),
+    delivered_result: Ref(None),
     drive_started: Ref(false),
     detached: Ref(false),
+    observing: Ref(false),
+    disposed: Ref(false),
   }
   let output = stdout_source.map(stream => {
     invocation_stdout(stream, () => observer.drive())

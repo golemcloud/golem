@@ -280,7 +280,7 @@ impl BlobStorageBackend for HoldingBlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<Option<u64>> {
         self.answer(
             op_label,
             path,

@@ -143,13 +143,16 @@ private[golem] object ToolCollectionFailures {
 
 /**
  * A started output-bearing invocation. Streams and result have independent
- * lifetimes.
+ * lifetimes. `detach()` stops result delivery without cancelling the invocation
+ * or either output. Resources already delivered through `result` remain owned
+ * by the caller. Ignoring the result Future does not detach it.
  */
 final case class ToolInvocation[+E, +A](
   stdout: Option[ToolInputStream],
   stderr: Option[ToolInputStream],
   result: Future[Either[ToolError[E], A]],
-  cancel: () => Unit
+  cancel: () => Unit,
+  detach: () => Unit = () => ()
 ) {
 
   /**
@@ -166,6 +169,8 @@ final case class ToolInvocation[+E, +A](
         CollectedToolInvocation(result, stdout, stderr)
       }
 }
+
+private[golem] final class ToolResultDetached extends IllegalStateException("tool result observer detached")
 
 final case class CollectedToolInvocation[+E, +A](
   result: Either[ToolError[E], A],

@@ -10,10 +10,11 @@ fn run_tool_client_stream_async(body : async () -> Unit) -> Unit raise {
     if steps > 1000 {
       fail("tool client stream async test did not complete")
     }
-    if (callback & 0xf) != 1 {
-      fail("tool client stream async test unexpectedly waited on a host event")
+    if (callback & 0xf) == 1 {
+      callback = @async-core.cb(0, 0, 0)
+    } else {
+      callback = @async-core.cb(1, settle_tool_client_result(), 2)
     }
-    callback = @async-core.cb(0, 0, 0)
   }
 }
 
@@ -28,6 +29,35 @@ extern "wasm" fn set_tool_client_stream_host_mode(mode : Int) = "golem:test" "se
 
 ///|
 extern "wasm" fn set_tool_client_host_mode(mode : Int) = "golem:test" "set-tool-host-mode"
+
+///|
+extern "wasm" fn settle_tool_client_result() -> Int = "golem:test" "settle-tool-result"
+
+///|
+#owned(bytes)
+extern "wasm" fn tool_client_bytes_pointer(bytes : Bytes) -> Int =
+  #|(func (param i32) (result i32) local.get 0)
+
+///|
+extern "wasm" fn set_tool_client_result_node(
+  pointer : Int,
+  types : Int,
+  defs : Int,
+  name : Int,
+) = "golem:test" "tool-result-node"
+
+///|
+fn tool_client_reply_secret() -> Unit {
+  let node = Array::make(32, b'\x00')
+  node[0] = b'\x20'
+  node[8] = b'\x2a'
+  set_tool_client_result_node(
+    tool_client_bytes_pointer(Bytes::from_array(node)),
+    tool_client_bytes_pointer(b""),
+    tool_client_bytes_pointer(b""),
+    tool_client_bytes_pointer(b""),
+  )
+}
 
 ///|
 fn empty_tool_input() -> @types.TypedSchemaValue raise {
@@ -309,4 +339,202 @@ test "cancelling a blocked output read preserves the result observer" {
     invocation.drop()
   })
   assert_eq(tool_client_resource_drop_count(4), 1)
+}
+
+///|
+test "detach during get rejects late delivery and disposes only after the host borrow settles" {
+  for custom in [false, true] {
+    for cancelled in [false, true] {
+      reset_tool_client_resource_drop_counts()
+      set_tool_client_host_mode(if custom { 5 } else { 4 })
+      defer set_tool_client_host_mode(0)
+      tool_client_reply_secret()
+      run_tool_client_stream_async(() => {
+        let client = ToolClient::new("terminal-test")
+        defer client.drop()
+        let invocation = start_output_invocation(client)
+        @async-core.with_task_group(group => {
+          let get = group.spawn(() => invocation.get())
+          let (turn, next) = @async-core.Future::new()
+          group.spawn_bg(() => ignore(next.complete(())))
+          turn.get()
+          assert_true(get.try_wait() is None)
+          let queued_get = group.spawn(() => invocation.get())
+          let (queued_turn, queued_next) = @async-core.Future::new()
+          group.spawn_bg(() => ignore(queued_next.complete(())))
+          queued_turn.get()
+          invocation.detach_result_observer()
+          invocation.detach_result_observer()
+          assert_eq(tool_client_resource_drop_count(4), 0)
+          assert_eq(tool_client_resource_drop_count(0), 0)
+          assert_eq(tool_client_resource_drop_count(6), 0)
+          if cancelled {
+            get.cancel()
+            invocation.cancel()
+            assert_eq(tool_client_resource_drop_count(5), 1)
+          }
+          try get.wait() catch {
+            @async-core.Cancelled::Cancelled => assert_true(cancelled)
+            error => fail("unexpected result error: \{repr(error)}")
+          } noraise {
+            result => {
+              assert_false(cancelled)
+              assert_true(
+                result is Err(Rpc(Protocol("result observer was detached"))),
+              )
+            }
+          }
+          assert_true(
+            queued_get.wait()
+            is Err(Rpc(Protocol("result observer was detached"))),
+          )
+        })
+        assert_eq(tool_client_resource_drop_count(0), 1)
+        assert_eq(tool_client_resource_drop_count(4), 1)
+        invocation.cancel()
+        assert_eq(
+          tool_client_resource_drop_count(5),
+          if cancelled {
+            1
+          } else {
+            0
+          },
+        )
+        invocation.drop()
+      })
+      assert_eq(tool_client_resource_drop_count(0), 1)
+      assert_eq(tool_client_resource_drop_count(6), 1)
+    }
+  }
+}
+
+///|
+test "detach releases unclaimed cached capabilities but not delivered capabilities" {
+  for custom in [false, true] {
+    for delivered in [false, true] {
+      reset_tool_client_resource_drop_counts()
+      set_tool_client_host_mode(if custom { 7 } else { 6 })
+      defer set_tool_client_host_mode(0)
+      tool_client_reply_secret()
+      run_tool_client_stream_async(() => {
+        let client = ToolClient::new("terminal-test")
+        defer client.drop()
+        let invocation = start_output_invocation(client)
+        if delivered {
+          match invocation.get() {
+            Ok(result) => {
+              assert_false(custom)
+              @model.drop_wit_capabilities(result.result.unwrap().value)
+            }
+            Err(UnknownToolError(_, payload)) => {
+              assert_true(custom)
+              @model.drop_wit_capabilities(payload.value)
+            }
+            _ => fail("unexpected delivered result")
+          }
+          assert_eq(tool_client_resource_drop_count(0), 1)
+        } else {
+          // Reading output drives the result but does not claim its payload.
+          assert_true(invocation.stdout.unwrap().read(1) is None)
+          let (turn, next) = @async-core.Future::new()
+          @async-core.with_task_group(group => {
+            group.spawn_bg(() => ignore(next.complete(())))
+            turn.get()
+          })
+          assert_eq(tool_client_resource_drop_count(0), 0)
+        }
+        invocation.detach_result_observer()
+        invocation.drop()
+        assert_eq(tool_client_resource_drop_count(0), 1)
+        assert_eq(tool_client_resource_drop_count(4), 1)
+      })
+    }
+  }
+}
+
+///|
+test "permanent output close and result detach leave sibling bytes and invocation independent" {
+  for detach in [false, true] {
+    reset_tool_client_resource_drop_counts()
+    set_tool_client_host_mode(8)
+    defer set_tool_client_host_mode(0)
+    set_tool_client_result_node(tool_client_bytes_pointer(b"ok"), 0, 0, 0)
+    run_tool_client_stream_async(() => {
+      let client = ToolClient::new("terminal-test")
+      defer client.drop()
+      let invocation : ToolInvocation[NoToolError] = match
+        client.start(["stream"], empty_tool_input(), None, true, true, fn(
+          _,
+          _,
+        ) {
+          None
+        }) {
+        Ok(invocation) => invocation
+        _ => fail("failed to start invocation with both outputs")
+      }
+      invocation.stdout.unwrap().drop_sync()
+      if detach {
+        invocation.detach_result_observer()
+      }
+      assert_eq(tool_client_resource_drop_count(5), 0)
+      assert_eq(tool_client_resource_drop_count(6), 1)
+      assert_eq(collect_tool_output(invocation.stderr), Ok(Some(b"ok")))
+      assert_true(invocation.stdout.unwrap().read(1) is None)
+      if !detach {
+        assert_true(invocation.get() is Ok(_))
+        invocation.cancel()
+        assert_eq(tool_client_resource_drop_count(5), 1)
+      }
+      invocation.drop()
+    })
+    assert_eq(tool_client_resource_drop_count(4), 1)
+    assert_eq(tool_client_resource_drop_count(6), 2)
+  }
+}
+
+///|
+test "background observation leaves custom error decoding and ownership for delivery" {
+  for delivered in [false, true] {
+    reset_tool_client_resource_drop_counts()
+    set_tool_client_host_mode(7)
+    defer set_tool_client_host_mode(0)
+    tool_client_reply_secret()
+    run_tool_client_stream_async(() => {
+      let decoded = Ref(0)
+      let client = ToolClient::new("terminal-test")
+      defer client.drop()
+      let invocation = match
+        client.start(["stream"], empty_tool_input(), None, true, false, fn(
+          _,
+          payload,
+        ) {
+          decoded.val += 1
+          Some(Ok(payload))
+        }) {
+        Ok(invocation) => invocation
+        _ => fail("failed to start custom error invocation")
+      }
+      assert_true(invocation.stdout.unwrap().read(1) is None)
+      let (turn, next) = @async-core.Future::new()
+      @async-core.with_task_group(group => {
+        group.spawn_bg(() => ignore(next.complete(())))
+        turn.get()
+      })
+      assert_eq(decoded.val, 0)
+      if delivered {
+        guard invocation.get() is Err(Tool(payload)) else {
+          fail("custom error was not delivered")
+        }
+        assert_true(invocation.get() is Err(Tool(_)))
+        assert_eq(decoded.val, 1)
+        invocation.detach_result_observer()
+        assert_eq(tool_client_resource_drop_count(0), 0)
+        @model.drop_wit_capabilities(payload.value)
+      }
+      invocation.drop()
+      assert_eq(decoded.val, if delivered { 1 } else { 0 })
+      assert_eq(tool_client_resource_drop_count(0), 1)
+      assert_eq(tool_client_resource_drop_count(4), 1)
+    })
+  }
 }

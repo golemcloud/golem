@@ -4,7 +4,6 @@ export { toolGuest } from "./internal/tool/runtime.js"
 
 import type * as Common from "golem:tool/common@0.1.0"
 import type * as Host from "golem:tool/host@0.1.0"
-import type * as Core from "golem:core/types@2.0.0"
 import { Cause, Context, Deferred, Duration, Effect, Exit, Schema, Scope, Stream } from "effect"
 import { AbortableStreamIterable } from "./internal/abortableStreamIterable.js"
 import { ToolClient } from "./host/ToolClient.js"
@@ -18,10 +17,8 @@ import {
 import { compile } from "./WitCodec.js"
 import { withCapabilityTransaction } from "./internal/schema-model/capabilityTransaction.js"
 import { schemaValueFromWit } from "./internal/schema-model/wit.js"
-import { abandonGuestQuotaTokenWireHandle } from "./internal/schema-model/quotaTokenHandle.js"
-import { QUOTA_INTERNAL } from "./internal/schema-model/quotaInternal.js"
-import { abandonGuestPermissionCardWireHandle } from "./internal/schema-model/permissionCardHandle.js"
-import { PERMISSION_CARD_INTERNAL } from "./internal/schema-model/permissionCardInternal.js"
+import { discardRejectedPayload } from "./internal/tool/discardRejectedPayload.js"
+import { makeResultObserver, wholeToolCall } from "./internal/tool/resultObserver.js"
 
 export { ToolClient } from "./host/ToolClient.js"
 
@@ -47,6 +44,7 @@ export interface TransportInvocation {
   readonly stdout?: AsyncIterable<Host.ByteStreamItem>
   readonly stderr?: AsyncIterable<Host.ByteStreamItem>
   readonly cancel: Effect.Effect<void>
+  readonly detach: Effect.Effect<void>
 }
 
 /** Injectable low-level transport used by local typed clients. @since 1.6.0 @category models */
@@ -168,11 +166,19 @@ export const liveToolStart = (
         ).pipe(Effect.ignoreCause),
       )
     }
+    const observer = yield* makeResultObserver(future, async (result, error) => {
+      const remote = remoteToolError(error)
+      const payload =
+        result?.result ?? (remote?.tag === "custom-error" ? remote.val.payload : undefined)
+      await Effect.runPromise(discardRejectedPayload(payload, Effect.fail(undefined))).catch(
+        () => undefined,
+      )
+    })
+    yield* Effect.addFinalizer(() => observer.detach.pipe(Effect.ignoreCause))
     return {
-      result: Effect.tryPromise({ try: () => future.get(), catch: (cause) => cause }),
+      ...observer,
       stdout: stdout?.[1],
       stderr: stderr?.[1],
-      cancel: Effect.sync(() => future.cancel()),
     }
   })
 
@@ -235,63 +241,6 @@ interface CompiledToolCommand {
   readonly errors: readonly { name: string; codec: Effect.Effect<ClientWireCodec, unknown, any> }[]
 }
 
-function discardRejectedPayload<A, E, R>(
-  payload: Common.TypedSchemaValue | undefined,
-  decode: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R> {
-  return Effect.onExit(decode, (exit) =>
-    Exit.isFailure(exit) && payload
-      ? Effect.promise(async () => {
-          const seen = new Set<object>()
-          const cleanups: Promise<void>[] = []
-          const nodes = payload.value?.valueNodes
-          if (!Array.isArray(nodes)) return
-          for (const node of nodes) {
-            if (
-              node?.tag !== "secret-value" &&
-              node?.tag !== "quota-token-handle" &&
-              node?.tag !== "permission-card-handle" &&
-              node?.tag !== "stream-value"
-            )
-              continue
-            const raw = node.val
-            ;(node as { val: unknown }).val = undefined
-            if (!raw || seen.has(raw)) continue
-            seen.add(raw)
-            cleanups.push(
-              (async () => {
-                try {
-                  if (node.tag === "quota-token-handle")
-                    abandonGuestQuotaTokenWireHandle(QUOTA_INTERNAL, raw as Core.QuotaToken, node)
-                  else if (node.tag === "permission-card-handle")
-                    abandonGuestPermissionCardWireHandle(
-                      PERMISSION_CARD_INTERNAL,
-                      raw as Core.PermissionCard,
-                      node,
-                    )
-                  if (node.tag === "stream-value") {
-                    const { SchemaValueStream } = await import("golem:core/types@2.0.0")
-                    const source = await SchemaValueStream.unwrap(raw as Core.SchemaValueStream)
-                    await source[Symbol.asyncIterator]().return?.()
-                  }
-                } catch {
-                  // Continue releasing siblings if a handle is malformed or a stream cannot close.
-                } finally {
-                  try {
-                    ;(raw as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.()
-                  } catch {
-                    // Preserve the rejection and release the remaining resources.
-                  }
-                }
-              })(),
-            )
-          }
-          await Promise.all(cleanups)
-        })
-      : Effect.void,
-  )
-}
-
 function clientCompiled(
   name: string,
   commands: readonly CompiledToolCommand[],
@@ -325,153 +274,203 @@ function clientCompiled(
           ? new AbortableStreamIterable(streamItems(streams.stdin), yield* Effect.context<never>())
           : undefined
         if (stdin) yield* Effect.addFinalizer(() => Effect.promise(() => stdin.close()))
-        const started = yield* start(
-          options.lookupName ?? name,
-          command.path,
-          { graph: codec.schemaGraph, value },
-          stdin,
-          command.stdout,
-          command.stderr,
-        ).pipe(Effect.mapError((cause) => new ToolClientError("invoke", cause)))
-        yield* Effect.addFinalizer(() => started.cancel)
-        if (command.stdout && !started.stdout)
-          return yield* Effect.fail(new ToolClientError("stream", "required stdout is missing"))
-        if (command.stderr && !started.stderr)
-          return yield* Effect.fail(new ToolClientError("stream", "required stderr is missing"))
-        const stdoutIterator = started.stdout?.[Symbol.asyncIterator]()
-        const stdout = stdoutIterator ? { [Symbol.asyncIterator]: () => stdoutIterator } : undefined
-        const stderrIterator = started.stderr?.[Symbol.asyncIterator]()
-        const stderr = stderrIterator ? { [Symbol.asyncIterator]: () => stderrIterator } : undefined
-        const consumeOutput = (
-          output: AsyncIterable<Host.ByteStreamItem> | undefined,
-          consume: Streams["stdout"] | Streams["stderr"],
-        ) =>
-          output
-            ? consume
-              ? consume(decodeByteStream(output)).pipe(
-                  Effect.catchCause((cause) =>
-                    cause.reasons.some(Cause.isInterruptReason)
-                      ? Effect.failCause(cause)
-                      : drainByteStream(output).pipe(
-                          Effect.ignore,
-                          Effect.andThen(Effect.failCause(cause)),
-                        ),
-                  ),
+        return yield* wholeToolCall(
+          start(
+            options.lookupName ?? name,
+            command.path,
+            { graph: codec.schemaGraph, value },
+            stdin,
+            command.stdout,
+            command.stderr,
+          ).pipe(Effect.mapError((cause) => new ToolClientError("invoke", cause))),
+          (started) =>
+            Effect.gen(function* () {
+              yield* Effect.addFinalizer(() => started.detach.pipe(Effect.ignoreCause))
+              if (command.stdout && !started.stdout)
+                return yield* Effect.fail(
+                  new ToolClientError("stream", "required stdout is missing"),
                 )
-              : drainByteStream(output)
-            : Effect.void
-        const consumed = yield* Deferred.make<readonly Exit.Exit<void, unknown>[]>()
-        const consume = Effect.all(
-          [consumeOutput(stdout, streams?.stdout), consumeOutput(stderr, streams?.stderr)].map(
-            (output) =>
-              Effect.exit(
-                output.pipe(
-                  Effect.mapError((cause) =>
-                    cause instanceof ToolClientError ? cause : new ToolClientError("stream", cause),
+              if (command.stderr && !started.stderr)
+                return yield* Effect.fail(
+                  new ToolClientError("stream", "required stderr is missing"),
+                )
+              const stdoutIterator = started.stdout?.[Symbol.asyncIterator]()
+              const stdout = stdoutIterator
+                ? { [Symbol.asyncIterator]: () => stdoutIterator }
+                : undefined
+              const stderrIterator = started.stderr?.[Symbol.asyncIterator]()
+              const stderr = stderrIterator
+                ? { [Symbol.asyncIterator]: () => stderrIterator }
+                : undefined
+              const consumeOutput = (
+                output: AsyncIterable<Host.ByteStreamItem> | undefined,
+                consume: Streams["stdout"] | Streams["stderr"],
+              ) =>
+                output
+                  ? consume
+                    ? consume(decodeByteStream(output)).pipe(
+                        Effect.catchCause((cause) =>
+                          cause.reasons.some(Cause.isInterruptReason)
+                            ? Effect.failCause(cause)
+                            : drainByteStream(output).pipe(
+                                Effect.ignore,
+                                Effect.andThen(Effect.failCause(cause)),
+                              ),
+                        ),
+                      )
+                    : drainByteStream(output)
+                  : Effect.void
+              const consumed = yield* Deferred.make<readonly Exit.Exit<void, unknown>[]>()
+              const consume = Effect.all(
+                [
+                  consumeOutput(stdout, streams?.stdout),
+                  consumeOutput(stderr, streams?.stderr),
+                ].map((output) =>
+                  Effect.exit(
+                    output.pipe(
+                      Effect.mapError((cause) =>
+                        cause instanceof ToolClientError
+                          ? cause
+                          : new ToolClientError("stream", cause),
+                      ),
+                    ),
                   ),
                 ),
-              ),
-          ),
-          { concurrency: "unbounded" },
-        ).pipe(Effect.tap((exits) => Deferred.succeed(consumed, exits)))
-        const consumeSucceeded = Deferred.await(consumed).pipe(
-          Effect.flatMap((exits) => {
-            const failure = exits.find(Exit.isFailure)
-            return failure && Exit.isFailure(failure)
-              ? Effect.failCause(failure.cause)
-              : Effect.void
-          }),
-        )
-        const invocationResult = started.result.pipe(
-          Effect.catchIf(
-            (): boolean => true,
-            (cause: unknown) => {
-              const toolError = remoteToolError(cause)
-              if (toolError?.tag === "custom-error") {
-                const declared = command.errors.find((entry) => entry.name === toolError.val.name)
-                if (!declared)
-                  return Effect.fail(
-                    new ToolClientError("declared-error", {
-                      tag: "unknown-error",
-                      name: toolError.val.name,
-                      payload: toolError.val.payload,
-                    }),
-                  )
-                return discardRejectedPayload(
-                  toolError.val.payload,
-                  Effect.gen(function* () {
-                    const codec = yield* declared.codec.pipe(
-                      Effect.mapError((error) => new ToolClientError("declared-error", error)),
-                    )
-                    if (!sameWireGraph(codec.schemaGraph, toolError.val.payload.graph))
-                      return yield* Effect.fail(
-                        new ToolClientError(
-                          "declared-error",
-                          `custom error '${declared.name}' schema does not match`,
+                { concurrency: "unbounded" },
+              ).pipe(Effect.tap((exits) => Deferred.succeed(consumed, exits)))
+              const consumeSucceeded = Deferred.await(consumed).pipe(
+                Effect.flatMap((exits) => {
+                  const failure = exits.find(Exit.isFailure)
+                  return failure && Exit.isFailure(failure)
+                    ? Effect.failCause(failure.cause)
+                    : Effect.void
+                }),
+              )
+              const invocationResult = started.result.pipe(
+                Effect.catchIf(
+                  (): boolean => true,
+                  (cause: unknown) => {
+                    const toolError = remoteToolError(cause)
+                    if (toolError?.tag === "custom-error") {
+                      const declared = command.errors.find(
+                        (entry) => entry.name === toolError.val.name,
+                      )
+                      if (!declared)
+                        return discardRejectedPayload(
+                          toolError.val.payload,
+                          Deferred.await(consumed),
+                        ).pipe(
+                          Effect.andThen(
+                            Effect.fail(
+                              new ToolClientError("declared-error", {
+                                tag: "unknown-error",
+                                name: toolError.val.name,
+                                payload: toolError.val.payload,
+                              }),
+                            ),
+                          ),
+                        )
+                      return discardRejectedPayload(
+                        toolError.val.payload,
+                        Effect.gen(function* () {
+                          const codec = yield* declared.codec.pipe(
+                            Effect.mapError(
+                              (error) => new ToolClientError("declared-error", error),
+                            ),
+                          )
+                          if (!sameWireGraph(codec.schemaGraph, toolError.val.payload.graph))
+                            return yield* Effect.fail(
+                              new ToolClientError(
+                                "declared-error",
+                                `custom error '${declared.name}' schema does not match`,
+                              ),
+                            )
+                          return yield* withCapabilityTransaction((transaction) =>
+                            Effect.gen(function* () {
+                              const model = yield* Effect.try(() =>
+                                schemaValueFromWit(toolError.val.payload.value, transaction),
+                              ).pipe(
+                                Effect.mapError(
+                                  (error) => new ToolClientError("declared-error", error),
+                                ),
+                              )
+                              const decoded = yield* codec
+                                .decodeModel(model)
+                                .pipe(
+                                  Effect.mapError(
+                                    (error) => new ToolClientError("declared-error", error),
+                                  ),
+                                )
+                              yield* Deferred.await(consumed)
+                              return decoded
+                            }),
+                          )
+                        }),
+                      ).pipe(
+                        Effect.flatMap((value) =>
+                          Effect.fail({
+                            _tag: "ToolFailure",
+                            name: declared.name,
+                            value,
+                          } as const),
                         ),
                       )
-                    return yield* codec
-                      .decode(toolError.val.payload.value)
-                      .pipe(
-                        Effect.mapError((error) => new ToolClientError("declared-error", error)),
+                    }
+                    return Effect.fail(new ToolClientError("invoke", cause))
+                  },
+                ),
+              )
+              const decodedResult = invocationResult.pipe(
+                Effect.flatMap((result) =>
+                  discardRejectedPayload(
+                    result.result,
+                    Effect.gen(function* () {
+                      if (result.stdout !== undefined || result.stderr !== undefined)
+                        return yield* Effect.fail(
+                          new ToolClientError(
+                            "result",
+                            "tool returned output attachments in its result",
+                          ),
+                        )
+                      if (!command.output) {
+                        if (result.result !== undefined)
+                          return yield* Effect.fail(
+                            new ToolClientError("result", "unexpected remote result"),
+                          )
+                        return yield* consumeSucceeded
+                      }
+                      if (!result.result)
+                        return yield* Effect.fail(new ToolClientError("result", "missing result"))
+                      const output = yield* command.output.pipe(
+                        Effect.mapError((cause) => new ToolClientError("result", cause)),
                       )
-                  }),
-                ).pipe(
-                  Effect.flatMap((value) =>
-                    Effect.fail({
-                      _tag: "ToolFailure",
-                      name: declared.name,
-                      value,
-                    } as const),
+                      return yield* withCapabilityTransaction((transaction) =>
+                        Effect.gen(function* () {
+                          const model = yield* Effect.try(() =>
+                            schemaValueFromWit(result.result!.value, transaction),
+                          ).pipe(Effect.mapError((cause) => new ToolClientError("result", cause)))
+                          const decoded = yield* output
+                            .decodeModel(model)
+                            .pipe(Effect.mapError((cause) => new ToolClientError("result", cause)))
+                          yield* consumeSucceeded
+                          return decoded
+                        }),
+                      )
+                    }),
                   ),
-                )
+                ),
+              )
+              const [, resultExit] = yield* Effect.all(
+                [consume, Effect.exit(decodedResult)] as const,
+                { concurrency: "unbounded" },
+              )
+              if (Exit.isFailure(resultExit)) {
+                yield* started.cancel
+                return yield* Effect.failCause(resultExit.cause)
               }
-              return Effect.fail(new ToolClientError("invoke", cause))
-            },
-          ),
+              return resultExit.value
+            }),
         )
-        const decodedResult = invocationResult.pipe(
-          Effect.flatMap((result) =>
-            discardRejectedPayload(
-              result.result,
-              Effect.gen(function* () {
-                if (result.stdout !== undefined || result.stderr !== undefined)
-                  return yield* Effect.fail(
-                    new ToolClientError("result", "tool returned output attachments in its result"),
-                  )
-                if (!command.output) {
-                  if (result.result !== undefined)
-                    return yield* Effect.fail(
-                      new ToolClientError("result", "unexpected remote result"),
-                    )
-                  return yield* consumeSucceeded
-                }
-                if (!result.result)
-                  return yield* Effect.fail(new ToolClientError("result", "missing result"))
-                const output = yield* command.output.pipe(
-                  Effect.mapError((cause) => new ToolClientError("result", cause)),
-                )
-                return yield* withCapabilityTransaction((transaction) =>
-                  Effect.gen(function* () {
-                    const model = yield* Effect.try(() =>
-                      schemaValueFromWit(result.result!.value, transaction),
-                    ).pipe(Effect.mapError((cause) => new ToolClientError("result", cause)))
-                    const decoded = yield* output
-                      .decodeModel(model)
-                      .pipe(Effect.mapError((cause) => new ToolClientError("result", cause)))
-                    yield* consumeSucceeded
-                    return decoded
-                  }),
-                )
-              }),
-            ),
-          ),
-        )
-        const [, resultExit] = yield* Effect.all([consume, Effect.exit(decodedResult)] as const, {
-          concurrency: "unbounded",
-        })
-        if (Exit.isFailure(resultExit)) return yield* Effect.failCause(resultExit.cause)
-        return resultExit.value
       }),
     )
 

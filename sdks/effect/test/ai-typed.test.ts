@@ -61,6 +61,7 @@ describe("typed Effect AI tool adapter", () => {
             },
           }),
           cancel: Effect.void,
+          detach: Effect.void,
         }
       }),
     )
@@ -181,6 +182,7 @@ describe("typed Effect AI tool adapter", () => {
             },
           }),
           cancel: Effect.void,
+          detach: Effect.void,
         }),
     }
     const toolkit = await Effect.runPromise(
@@ -230,6 +232,7 @@ describe("typed Effect AI tool adapter", () => {
               },
             }),
             cancel: Effect.void,
+            detach: Effect.void,
           }
         }),
     }
@@ -291,6 +294,7 @@ describe("typed Effect AI tool adapter", () => {
                 : {},
             ),
             cancel: Effect.void,
+            detach: Effect.void,
           }),
       }
       const toolkit = await Effect.runPromise(typedToolkit(definition, [command()], { transport }))
@@ -333,6 +337,7 @@ describe("typed Effect AI tool adapter", () => {
             },
           }),
           cancel: Effect.void,
+          detach: Effect.void,
         }),
     }
     const toolkit = await Effect.runPromise(typedToolkit(definition, [command()], { transport }))
@@ -368,6 +373,7 @@ describe("typed Effect AI tool adapter", () => {
             },
           }),
           cancel: Effect.void,
+          detach: Effect.void,
         }),
     }
     const toolkit = await Effect.runPromise(
@@ -400,7 +406,7 @@ describe("typed Effect AI tool adapter", () => {
             })
             observed.push(bytes)
           }
-          return { result: Effect.succeed({}), cancel: Effect.void }
+          return { result: Effect.succeed({}), cancel: Effect.void, detach: Effect.void }
         }),
     }
     const optionalToolkit = await Effect.runPromise(
@@ -439,7 +445,7 @@ describe("typed Effect AI tool adapter", () => {
     const start = vi.fn<ToolTransport["start"]>((_tool, _path, input) =>
       Effect.gen(function* () {
         expect(yield* encodedInput.decode(input.value)).toEqual({})
-        return { result: Effect.succeed({}), cancel: Effect.void }
+        return { result: Effect.succeed({}), cancel: Effect.void, detach: Effect.void }
       }),
     )
     const toolkit = await Effect.runPromise(
@@ -484,7 +490,7 @@ describe("typed Effect AI tool adapter", () => {
           labels: new Map(),
           verbose: false,
         })
-        return { result: Effect.succeed({}), cancel: Effect.void }
+        return { result: Effect.succeed({}), cancel: Effect.void, detach: Effect.void }
       }),
     )
     const toolkit = await Effect.runPromise(
@@ -507,7 +513,7 @@ describe("typed Effect AI tool adapter", () => {
     const defaultStart: ToolTransport["start"] = (_tool, _path, input) =>
       Effect.gen(function* () {
         observed.push((yield* defaultCodec.decode(input.value)).constructor)
-        return { result: Effect.succeed({}), cancel: Effect.void }
+        return { result: Effect.succeed({}), cancel: Effect.void, detach: Effect.void }
       })
     const defaultToolkit = await Effect.runPromise(
       typedToolkit(withDefault, [command()], { transport: { start: defaultStart } }),
@@ -529,7 +535,7 @@ describe("typed Effect AI tool adapter", () => {
     const optionalStart: ToolTransport["start"] = (_tool, _path, input) =>
       Effect.gen(function* () {
         observed.push((yield* optionalCodec.decode(input.value)).constructor)
-        return { result: Effect.succeed({}), cancel: Effect.void }
+        return { result: Effect.succeed({}), cancel: Effect.void, detach: Effect.void }
       })
     const optionalToolkit = await Effect.runPromise(
       typedToolkit(optional, [command()], { transport: { start: optionalStart } }),
@@ -544,7 +550,7 @@ describe("typed Effect AI tool adapter", () => {
   it("rejects malformed parameter roots without invoking transport", async () => {
     const definition = toolDefinition("object-only").body((body) => body.input({ required: false }))
     const start = vi.fn<ToolTransport["start"]>(() =>
-      Effect.succeed({ result: Effect.succeed({}), cancel: Effect.void }),
+      Effect.succeed({ result: Effect.succeed({}), cancel: Effect.void, detach: Effect.void }),
     )
     const toolkit = await Effect.runPromise(
       typedToolkit(definition, [command()], { transport: { start } }),
@@ -570,6 +576,7 @@ describe("typed Effect AI tool adapter", () => {
           stdout: (async function* () {})(),
           result: Effect.succeed({}),
           cancel: Effect.void,
+          detach: Effect.void,
         }),
     }
     const toolkit = await Effect.runPromise(
@@ -598,6 +605,7 @@ describe("typed Effect AI tool adapter", () => {
           })(),
           result: Effect.succeed({}),
           cancel: Effect.void,
+          detach: Effect.void,
         }),
     }
     const toolkit = await Effect.runPromise(
@@ -630,6 +638,7 @@ describe("typed Effect AI tool adapter", () => {
           })(),
           result: Effect.succeed({}),
           cancel: Effect.void,
+          detach: Effect.void,
         }),
     }
     const toolkit = await Effect.runPromise(
@@ -659,6 +668,7 @@ describe("typed Effect AI tool adapter", () => {
           })(),
           result: Effect.succeed({}),
           cancel: Effect.void,
+          detach: Effect.void,
         }),
     }
     const toolkit = await Effect.runPromise(
@@ -678,7 +688,7 @@ describe("typed Effect AI tool adapter", () => {
   it("rejects malformed base64 stdin before invoking transport", async () => {
     const definition = toolDefinition("base64-input").body((body) => body.input())
     const start = vi.fn<ToolTransport["start"]>(() =>
-      Effect.succeed({ result: Effect.succeed({}), cancel: Effect.void }),
+      Effect.succeed({ result: Effect.succeed({}), cancel: Effect.void, detach: Effect.void }),
     )
     const toolkit = await Effect.runPromise(
       typedToolkit(definition, [command()], { transport: { start } }),
@@ -711,7 +721,7 @@ describe("typed Effect AI tool adapter", () => {
               for await (const item of stdin) if (item.tag === "ok") bytes.push(...item.val)
             })
           observed.push(bytes)
-          return { result: Effect.succeed({}), cancel: Effect.void }
+          return { result: Effect.succeed({}), cancel: Effect.void, detach: Effect.void }
         }),
     }
     const toolkit = await Effect.runPromise(typedToolkit(definition, [command()], { transport }))
@@ -742,6 +752,7 @@ describe("typed Effect AI tool adapter", () => {
         Effect.succeed({
           result: Effect.never,
           cancel: Effect.sync(cancel),
+          detach: Effect.void,
         }),
     }
     const toolkit = await Effect.runPromise(typedToolkit(definition, [command()], { transport }))

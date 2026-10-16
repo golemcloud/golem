@@ -22,6 +22,7 @@
 use super::fault::{BlobCallFailed, ConfigExists, FileMissing};
 use super::files::SnapshotFiles;
 use super::publish::{SnapshotStage, StagedSnapshot};
+use crate::metrics::filesystem_snapshots::{self, StoredSource};
 use bytes::Bytes;
 use futures::StreamExt as _;
 use golem_service_base::storage::blob::{BlobRangeError, PutIfAbsent};
@@ -102,6 +103,8 @@ pub(super) struct BlobBackend {
     files: SnapshotFiles,
     runtime: Handle,
     stage: Option<Arc<SnapshotStage>>,
+    /// The source in the metric of the stored bytes, for the files that the backend writes.
+    stored: Option<StoredSource>,
     /// Counts the backend as work of a tracker, until the last owner drops the backend.
     _tracked: Option<TaskTrackerToken>,
     /// The packs of tree blobs that the operation of the backend read.
@@ -123,6 +126,7 @@ impl BlobBackend {
             files,
             runtime,
             stage: None,
+            stored: None,
             _tracked: None,
             kept: KeptPacks::new(kept_limit),
             read_ahead: Mutex::default(),
@@ -203,6 +207,22 @@ impl BlobBackend {
         Self {
             stage: Some(stage),
             ..self
+        }
+    }
+
+    /// Gives the backend that counts the bytes of each file that it writes in the metric of the
+    /// stored bytes, as `source`.
+    pub(super) fn storing(self, source: StoredSource) -> Self {
+        Self {
+            stored: Some(source),
+            ..self
+        }
+    }
+
+    /// Records `bytes` that the backend wrote in the metric of the stored bytes.
+    fn record_stored(&self, bytes: usize) {
+        if let Some(source) = self.stored {
+            filesystem_snapshots::record_stored_bytes(source, bytes as u64);
         }
     }
 
@@ -370,17 +390,29 @@ impl WriteBackend for BlobBackend {
                 })
                 .map_err(|staged| second_snapshot(&staged.path)),
             (FileType::Config, _) => match self.write_if_absent(&path, &content)? {
-                PutIfAbsent::Written => Ok(()),
+                PutIfAbsent::Written => {
+                    self.record_stored(content.len());
+                    Ok(())
+                }
                 PutIfAbsent::AlreadyExists => Err(config_exists(&path)),
             },
             // The name of an index file is the hash of its content, so a blob at the path holds
             // the same content.
-            (FileType::Index, _) => self.write_if_absent(&path, &content).map(|_| ()),
-            _ => self.request(
-                StorageCall::Write,
-                &path,
-                self.files.put(StorageCall::Write.label(), &path, &content),
-            ),
+            (FileType::Index, _) => {
+                if self.write_if_absent(&path, &content)? == PutIfAbsent::Written {
+                    self.record_stored(content.len());
+                }
+                Ok(())
+            }
+            _ => {
+                self.request(
+                    StorageCall::Write,
+                    &path,
+                    self.files.put(StorageCall::Write.label(), &path, &content),
+                )?;
+                self.record_stored(content.len());
+                Ok(())
+            }
         }
     }
 
