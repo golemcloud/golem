@@ -19,6 +19,7 @@ import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
 import { AgentHostClient } from "./host/AgentHostClient.js"
 import { RpcClient, RpcHostError, type RpcConnection } from "./host/RpcClient.js"
 import { awaitInvocation, scheduleCancelableInvocation, wrapHostThrow } from "./internal/rpc.js"
+import type { GuestScopeCard } from "./internal/scopeCard.js"
 import {
   compileCallerParamBindings,
   compileMethodSpec,
@@ -41,6 +42,7 @@ export type RemoteCallError =
   | { readonly _tag: "RpcCallError"; readonly cause: RpcError }
   | { readonly _tag: "InvalidUuidError"; readonly value: string; readonly reason: string }
   | { readonly _tag: "RemoteResponseError"; readonly reason: string }
+  | { readonly _tag: "ScopeCardUnavailableError"; readonly reason: string }
 
 const responseError = (reason: string): RemoteCallError => ({ _tag: "RemoteResponseError", reason })
 
@@ -62,6 +64,14 @@ export interface RemoteMethod<
   E extends Schema.Top,
 > {
   (input: CallerInput<P>): Effect.Effect<MethodSuccessType<S>, RemoteCallError | E["Type"]>
+  /**
+   * The awaited call with `card` attached as its scope card. The card is borrowed for the call
+   * and stays usable; it replaces the client's default scope card. A released card fails the
+   * call with `ScopeCardUnavailableError` before the input is encoded.
+   */
+  readonly withScopeCard: (
+    card: GuestScopeCard,
+  ) => (input: CallerInput<P>) => Effect.Effect<MethodSuccessType<S>, RemoteCallError | E["Type"]>
   readonly trigger: (input: CallerInput<P>) => Effect.Effect<void, RemoteCallError>
   readonly schedule: (
     at: Datetime.Input,
@@ -80,6 +90,16 @@ export interface EphemeralRemoteMethod<
   (
     input: CallerInput<P>,
   ): Effect.Effect<EphemeralInvocationResult<MethodSuccessType<S>>, RemoteCallError | E["Type"]>
+  /**
+   * The awaited call with `card` attached as its scope card. The card is borrowed for the call
+   * and stays usable; it replaces the client's default scope card. A released card fails the
+   * call with `ScopeCardUnavailableError` before the input is encoded.
+   */
+  readonly withScopeCard: (
+    card: GuestScopeCard,
+  ) => (
+    input: CallerInput<P>,
+  ) => Effect.Effect<EphemeralInvocationResult<MethodSuccessType<S>>, RemoteCallError | E["Type"]>
   readonly trigger: (input: CallerInput<P>) => Effect.Effect<InvocationMetadata, RemoteCallError>
   readonly schedule: (
     at: Datetime.Input,
@@ -103,7 +123,17 @@ export type EphemeralRemoteAgent<Methods extends Record<string, AnyMethodSpec>> 
 export type PhantomRemoteAgent<Methods extends Record<string, AnyMethodSpec>> =
   RemoteAgent<Methods> & { readonly phantomId: string }
 
-export interface GetOptions<F extends ConfigFields = never> {
+export interface ScopeCardOptions {
+  /**
+   * Default scope card for every awaited call of the client. Each call borrows the card. A scope
+   * card is valid only during the invocation that derived it: a released card fails the call
+   * with `ScopeCardUnavailableError`, and a card kept for a later invocation makes the host deny
+   * the call (`RpcCallError` with a `denied` cause). Triggers and schedules never carry a scope
+   * card.
+   */
+  readonly scopeCard?: GuestScopeCard
+}
+export interface GetOptions<F extends ConfigFields = never> extends ScopeCardOptions {
   readonly overrides?: [F] extends [never]
     ? never
     : F extends ConfigFields
@@ -192,6 +222,7 @@ export interface MethodOnlyClient<
   readonly bindWithEntries: (
     identity: Identity,
     entries: ReadonlyArray<AgentCommon.TypedAgentConfigValue>,
+    options?: ScopeCardOptions,
   ) => Effect.Effect<
     RemoteAgent<Methods>,
     RemoteCallError | UnsupportedSchemaError | ClientBindingError,
@@ -334,6 +365,7 @@ const buildRemote = (
   rpc: RpcConnection,
   compiled: Pick<CompiledClient, "methods">,
   ephemeral: boolean,
+  defaultScopeCard: GuestScopeCard | undefined,
 ) => {
   const remote: Record<string, unknown> = {}
   for (const [name, mc] of compiled.methods) {
@@ -344,9 +376,8 @@ const buildRemote = (
       Effect.mapError(mc.inputCodec.encodeAsync(input), (e) =>
         responseError(`${name}: failed to encode input: ${String(e)}`),
       )
-    const call = (input: Record<string, unknown>) =>
-      encode(input).pipe(
-        Effect.flatMap((tree) => awaitInvocation(rpc, name, tree)),
+    const awaited = (input: Record<string, unknown>, scopeCard: GuestScopeCard | undefined) =>
+      awaitInvocation(rpc, name, encode(input), scopeCard).pipe(
         Effect.flatMap(({ metadata, result }) =>
           decodeOutput(mc, result).pipe(
             Effect.flatMap((value) => finishOutput(mc, value)),
@@ -376,7 +407,10 @@ const buildRemote = (
         }),
       )
     }
-    remote[name] = Object.assign(call, { trigger, schedule })
+    const call = (input: Record<string, unknown>) => awaited(input, defaultScopeCard)
+    const withScopeCard = (card: GuestScopeCard) => (input: Record<string, unknown>) =>
+      awaited(input, card)
+    remote[name] = Object.assign(call, { trigger, schedule, withScopeCard })
   }
   return remote
 }
@@ -390,6 +424,7 @@ const bindingForDefinition = <Methods extends Record<string, AnyMethodSpec>>(def
   readonly bindWithEntries: (
     identity: Identity,
     entries: ReadonlyArray<AgentCommon.TypedAgentConfigValue>,
+    options?: ScopeCardOptions,
   ) => Effect.Effect<
     RemoteAgent<Methods>,
     RemoteCallError | UnsupportedSchemaError | ClientBindingError,
@@ -431,6 +466,7 @@ const bindingForDefinition = <Methods extends Record<string, AnyMethodSpec>>(def
   const bindWithEntries = (
     identity: Identity,
     entries: ReadonlyArray<AgentCommon.TypedAgentConfigValue>,
+    options?: ScopeCardOptions,
   ) =>
     Effect.gen(function* () {
       if (definition.mode === "ephemeral") {
@@ -473,7 +509,7 @@ const bindingForDefinition = <Methods extends Record<string, AnyMethodSpec>>(def
           .pipe(Effect.mapError((error) => wrapHostThrow(error.cause))),
         (connection) => Effect.sync(() => connection.drop()),
       )
-      return buildRemote(rpc, compiled, false) as RemoteAgent<Methods>
+      return buildRemote(rpc, compiled, false, options?.scopeCard) as RemoteAgent<Methods>
     })
   return {
     [bindIdentity]: (identity) => bindWithEntries(identity, []),
@@ -572,7 +608,7 @@ export function defineAgentClient(definition: {
           ),
         )
       }
-      return yield* binding.bindWithEntries(identity, entries)
+      return yield* binding.bindWithEntries(identity, entries, options)
     })
   let identityCodec: CompiledInputCodec | undefined
   const agentId = (input: CallerInput<MethodParams>, phantomId?: string) =>
@@ -723,11 +759,14 @@ const clientForCompiled = <
         ),
         (connection) => Effect.sync(() => connection.drop()),
       )
-      return { rpc, codecs }
+      return { rpc, codecs, scopeCard: options?.scopeCard }
     })
   const get = (input: CallerInput<C>, options?: GetOptions<F>) =>
     construct(input, undefined, options).pipe(
-      Effect.map(({ rpc, codecs }) => buildRemote(rpc, codecs, false) as RemoteAgent<Methods>),
+      Effect.map(
+        ({ rpc, codecs, scopeCard }) =>
+          buildRemote(rpc, codecs, false, scopeCard) as RemoteAgent<Methods>,
+      ),
     )
   const getPhantom = (input: CallerInput<C>, id: string, options?: GetOptions<F>) =>
     Effect.try({
@@ -735,21 +774,24 @@ const clientForCompiled = <
       catch: (e): RemoteCallError => ({ _tag: "InvalidUuidError", value: id, reason: String(e) }),
     }).pipe(
       Effect.flatMap((uuid) => construct(input, uuid, options)),
-      Effect.map(({ rpc, codecs }) => buildRemote(rpc, codecs, false) as RemoteAgent<Methods>),
+      Effect.map(
+        ({ rpc, codecs, scopeCard }) =>
+          buildRemote(rpc, codecs, false, scopeCard) as RemoteAgent<Methods>,
+      ),
     )
   const newPhantom = (input: CallerInput<C>, options?: GetOptions<F>) =>
     Effect.gen(function* () {
       if ((def.mode ?? "durable") === "ephemeral") {
-        const { rpc, codecs } = yield* construct(input, undefined, options)
-        return buildRemote(rpc, codecs, true) as EphemeralRemoteAgent<Methods>
+        const { rpc, codecs, scopeCard } = yield* construct(input, undefined, options)
+        return buildRemote(rpc, codecs, true, scopeCard) as EphemeralRemoteAgent<Methods>
       }
       const dm = yield* DurabilityModeClient
       const uuid = yield* Effect.try({
         try: () => dm.generateIdempotencyKey(),
         catch: wrapHostThrow,
       })
-      const { rpc, codecs } = yield* construct(input, uuid, options)
-      return Object.assign(buildRemote(rpc, codecs, false), {
+      const { rpc, codecs, scopeCard } = yield* construct(input, uuid, options)
+      return Object.assign(buildRemote(rpc, codecs, false, scopeCard), {
         phantomId: uuidToString(uuid),
       }) as PhantomRemoteAgent<Methods>
     })
@@ -767,8 +809,8 @@ const clientForCompiled = <
             }).pipe(
               Effect.flatMap((uuid) => construct(input, uuid, options)),
               Effect.map(
-                ({ rpc, codecs }) =>
-                  buildRemote(rpc, codecs, true) as EphemeralRemoteAgent<Methods>,
+                ({ rpc, codecs, scopeCard }) =>
+                  buildRemote(rpc, codecs, true, scopeCard) as EphemeralRemoteAgent<Methods>,
               ),
             ),
           newPhantom,

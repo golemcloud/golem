@@ -24,6 +24,7 @@ pub mod http;
 pub mod invocation;
 pub mod keyvalue;
 pub mod logging;
+pub mod permissions;
 pub mod promise;
 pub mod rdbms;
 pub mod retry;

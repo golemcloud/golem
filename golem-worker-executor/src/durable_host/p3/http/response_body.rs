@@ -925,31 +925,41 @@ pub(super) async fn read_http_body_frame(
     }
 }
 
-/// Why skipping the already-delivered prefix of a re-sent full response failed.
+/// Why the already-delivered prefix of a re-sent full response could not be skipped.
 pub(super) enum SkipBodyPrefixError {
     /// The fresh body ended before the prefix was fully skipped: the resource
     /// shrank since the original response, so the delivered bytes cannot be
     /// continued.
     BodyTooShort,
+    /// The fresh body's prefix differs from the bytes already delivered to the
+    /// guest: the re-sent response is a different response (a nondeterministic
+    /// producer, or a resource that changed), so continuing it would splice two
+    /// responses together.
+    Mismatch,
     /// Reading the fresh body failed while skipping.
     Read(ErrorCode),
 }
 
-/// Reads and discards the first `prefix` bytes of a fresh body (count-only, no
-/// content verification — P2 parity), returning the remainder of a data frame
-/// that straddled the prefix boundary, if any.
+/// Reads and discards the first `prefix` bytes of a fresh body, verifying that
+/// they are exactly the bytes already delivered to the guest (whose digest the
+/// consume-body task accumulates in `delivered`), and returns the remainder of
+/// a data frame that straddled the prefix boundary, if any.
 pub(super) async fn skip_body_prefix(
     body: &mut UnsyncBoxBody<Bytes, ErrorCode>,
     prefix: u64,
+    delivered: &blake3::Hasher,
 ) -> Result<Option<Bytes>, SkipBodyPrefixError> {
     let mut remaining = prefix;
+    let mut fresh = blake3::Hasher::new();
+    let mut leftover = None;
     while remaining > 0 {
         match read_http_body_frame(body).await {
             HttpBodyFrame::Data(mut data) => {
                 if (data.len() as u64) > remaining {
-                    return Ok(Some(data.split_off(remaining as usize)));
+                    leftover = Some(data.split_off(remaining as usize));
                 }
                 remaining -= data.len() as u64;
+                fresh.update(&data);
             }
             HttpBodyFrame::End(_) => return Err(SkipBodyPrefixError::BodyTooShort),
             HttpBodyFrame::Error(code) => return Err(SkipBodyPrefixError::Read(code)),
@@ -958,7 +968,135 @@ pub(super) async fn skip_body_prefix(
             }
         }
     }
-    Ok(None)
+    if fresh.finalize() != delivered.finalize() {
+        return Err(SkipBodyPrefixError::Mismatch);
+    }
+    Ok(leftover)
+}
+
+/// How a replayed response whose body the guest already partly observed continues after a
+/// restart.
+pub(super) enum ResumeOutcome {
+    /// The fresh response continues the delivered prefix; stream its body from here on.
+    Resumed {
+        body: UnsyncBoxBody<Bytes, ErrorCode>,
+        io_guard: AbortOnDropIoTask,
+        /// The remainder of a data frame that straddled the prefix boundary.
+        leftover: Option<Bytes>,
+    },
+    /// The resend failed on conversion or on the network; classified for worker-level retry
+    /// like any live body failure.
+    Failed(ErrorCode),
+    /// The delivered prefix cannot be continued: the request cannot be resent, the provider
+    /// neither honours the range nor reproduces the response, or the response changed. The body
+    /// stream ends with an explicit incomplete-response error after the bytes the guest already
+    /// observed; it is deterministic for this history, never retry-routed.
+    Interrupted(String),
+}
+
+/// Continues a response body whose `delivered` byte prefix the guest observed before a
+/// restart, by resending the recorded request with a `Range` header. A `206` continuing at the
+/// delivered offset resumes directly; a full response with the original status is accepted
+/// only when its prefix is byte-identical to the delivered bytes. A request that carries a
+/// guest-set `Range` header is resent unchanged (composing a resume range with the guest's own
+/// range is not supported), and any successful response is accepted only through the same
+/// prefix verification. Everything else is an interrupted response: silently combining two
+/// different responses is never an option.
+pub(super) async fn resume_recorded_response<Ctx: WorkerCtx, U: 'static>(
+    accessor: &Accessor<U, DurableP3<Ctx>>,
+    resend: &P3HttpSendRebuild,
+    delivered_bytes: u64,
+    delivered: &blake3::Hasher,
+) -> ResumeOutcome {
+    let guest_range = has_guest_range_header(resend.request.headers.keys().map(String::as_str));
+    let range_headers = if guest_range {
+        Vec::new()
+    } else {
+        resume_range_headers(delivered_bytes)
+    };
+    match resend_recorded_request::<Ctx, U>(accessor, resend, &range_headers).await {
+        ResendOutcome::Refused(reason) => ResumeOutcome::Interrupted(reason),
+        ResendOutcome::Failed(code) => ResumeOutcome::Failed(code),
+        ResendOutcome::Sent { response, io_guard } if guest_range => {
+            let status = response.status().as_u16();
+            if !(200..300).contains(&status) {
+                return ResumeOutcome::Interrupted(format!(
+                    "the re-sent request with the guest's own Range header returned status \
+                     {status}, which cannot continue the delivered prefix"
+                ));
+            }
+            let mut body = response.into_body();
+            match skip_body_prefix(&mut body, delivered_bytes, delivered).await {
+                Ok(leftover) => ResumeOutcome::Resumed {
+                    body,
+                    io_guard,
+                    leftover,
+                },
+                Err(SkipBodyPrefixError::BodyTooShort) => ResumeOutcome::Interrupted(
+                    "the re-sent response body is shorter than the bytes already delivered to \
+                     the guest"
+                        .to_string(),
+                ),
+                Err(SkipBodyPrefixError::Mismatch) => ResumeOutcome::Interrupted(
+                    "the re-sent response body differs from the bytes already delivered to the \
+                     guest"
+                        .to_string(),
+                ),
+                Err(SkipBodyPrefixError::Read(code)) => ResumeOutcome::Failed(code),
+            }
+        }
+        ResendOutcome::Sent { response, io_guard } => {
+            let status = response.status().as_u16();
+            let content_range_start = response
+                .headers()
+                .get("content-range")
+                .and_then(|value| value.to_str().ok())
+                .and_then(parse_content_range_start);
+            match classify_resume_response(
+                status,
+                content_range_start,
+                delivered_bytes,
+                Some(resend.recorded_status),
+            ) {
+                ResumeResponseAction::Resume => ResumeOutcome::Resumed {
+                    body: response.into_body(),
+                    io_guard,
+                    leftover: None,
+                },
+                ResumeResponseAction::RangeNotSatisfiable => ResumeOutcome::Interrupted(
+                    "the server returned 416 Range Not Satisfiable for the delivered prefix"
+                        .to_string(),
+                ),
+                ResumeResponseAction::SkipPrefix => {
+                    let mut body = response.into_body();
+                    match skip_body_prefix(&mut body, delivered_bytes, delivered).await {
+                        Ok(leftover) => ResumeOutcome::Resumed {
+                            body,
+                            io_guard,
+                            leftover,
+                        },
+                        Err(SkipBodyPrefixError::BodyTooShort) => ResumeOutcome::Interrupted(
+                            "the re-sent response body is shorter than the bytes already \
+                             delivered to the guest"
+                                .to_string(),
+                        ),
+                        Err(SkipBodyPrefixError::Mismatch) => ResumeOutcome::Interrupted(
+                            "the re-sent response body differs from the bytes already \
+                             delivered to the guest"
+                                .to_string(),
+                        ),
+                        Err(SkipBodyPrefixError::Read(code)) => ResumeOutcome::Failed(code),
+                    }
+                }
+                ResumeResponseAction::Fallback => ResumeOutcome::Interrupted(format!(
+                    "the re-sent request returned status {status} (recorded status {}, \
+                     content-range start {content_range_start:?}), which cannot continue the \
+                     delivered prefix",
+                    resend.recorded_status
+                )),
+            }
+        }
+    }
 }
 
 /// Durable driver for a `consume-body` response stream.
@@ -1103,8 +1241,10 @@ where
         let mut resume_semantic_override = None;
         let mut resume_retry_ctx: Option<TaskRetryContext<Ctx>> = None;
         // Bytes delivered to the guest-facing stream so far (replayed chunks +
-        // live frames): the resume offset for `Range` requests.
+        // live frames): the resume offset for `Range` requests, and their digest, which a
+        // re-sent full response must reproduce before its remainder may continue the stream.
         let mut delivered_bytes: u64 = 0;
+        let mut delivered_digest = blake3::Hasher::new();
 
         // Open the parent batched scope. Children nest under its begin index. Concurrently
         // consumed response bodies are told apart by the invocation id of each `consume-body`.
@@ -1255,13 +1395,51 @@ where
                             // the durable consume-body scope was either missing entirely
                             // (the crash happened before its `Start` was committed, so a
                             // synthetic scope was recovered live) or incomplete (the
-                            // original run was interrupted mid-body-stream, so the scope
-                            // claim jumped to live), and the placeholder carries no data.
+                            // original run was interrupted mid-body-stream; its recorded
+                            // chunks replayed and the scope continues live under its
+                            // recorded `Start`), and the placeholder carries no data.
                             // Re-issue the recorded request now and stream the fresh body
                             // instead. This only fires on a real guest demand: a dropped
-                            // stream or a cleanly replaying scope never re-issues.
+                            // stream or a cleanly replaying scope never re-issues. Chunks the
+                            // guest already observed are never re-delivered: the fresh body
+                            // must continue them (`resume_recorded_response`) or the stream
+                            // ends with an explicit incomplete-response error.
                             pending_reissue = false;
                             match resend.as_ref() {
+                                Some(resend) if delivered_bytes > 0 => {
+                                    match resume_recorded_response::<Ctx, U>(
+                                        accessor,
+                                        resend,
+                                        delivered_bytes,
+                                        &delivered_digest,
+                                    )
+                                    .await
+                                    {
+                                        ResumeOutcome::Resumed {
+                                            body: fresh_body,
+                                            io_guard,
+                                            leftover,
+                                        } => {
+                                            body = fresh_body;
+                                            _rebuild_io_guard = Some(io_guard);
+                                            match leftover {
+                                                Some(bytes) => HttpBodyFrame::Data(bytes),
+                                                None => read_http_body_frame(&mut body).await,
+                                            }
+                                        }
+                                        ResumeOutcome::Failed(code) => HttpBodyFrame::Error(code),
+                                        ResumeOutcome::Interrupted(reason) => {
+                                            tracing::warn!(
+                                                delivered_bytes,
+                                                %reason,
+                                                "p3 HTTP response body cannot continue after a \
+                                                 restart; the guest observes an incomplete response"
+                                            );
+                                            retry_exempt = true;
+                                            HttpBodyFrame::Error(ErrorCode::HttpResponseIncomplete)
+                                        }
+                                    }
+                                }
                                 Some(resend) => {
                                     match reissue_recorded_request::<Ctx, U>(accessor, resend).await
                                     {
@@ -1444,12 +1622,16 @@ where
                                     ResumeResponseAction::SkipPrefix => {
                                         // The server ignored the range and re-sent the
                                         // full response with the original status: skip
-                                        // the already-delivered prefix (count-only, no
-                                        // content verification — P2 parity) and continue
-                                        // from there.
+                                        // the already-delivered prefix, which must be
+                                        // byte-identical to what the guest observed, and
+                                        // continue from there.
                                         let mut fresh_body = response.into_body();
-                                        match skip_body_prefix(&mut fresh_body, delivered_bytes)
-                                            .await
+                                        match skip_body_prefix(
+                                            &mut fresh_body,
+                                            delivered_bytes,
+                                            &delivered_digest,
+                                        )
+                                        .await
                                         {
                                             Ok(leftover) => {
                                                 body = fresh_body;
@@ -1465,6 +1647,18 @@ where
                                                     ErrorCode::InternalError(Some(
                                                         "response-body resume failed: the re-sent \
                                                      response body is shorter than the bytes \
+                                                     already delivered to the guest"
+                                                            .to_string(),
+                                                    )),
+                                                );
+                                                break;
+                                            }
+                                            Err(SkipBodyPrefixError::Mismatch) => {
+                                                retry_exempt = true;
+                                                frame = HttpBodyFrame::Error(
+                                                    ErrorCode::InternalError(Some(
+                                                        "response-body resume failed: the re-sent \
+                                                     response body differs from the bytes \
                                                      already delivered to the guest"
                                                             .to_string(),
                                                     )),
@@ -1497,9 +1691,12 @@ where
                     // error raises a retry trap here — before anything about this
                     // frame is persisted or delivered, so the guest never observes
                     // a truncated stream — leaving the parent `Start` incomplete.
-                    // The retry's replay then jumps the scope and re-issues the
-                    // recorded request (see `reissue_recorded_request`), re-reading
-                    // the body from a fresh response. Permanent errors — and
+                    // The retry's replay repairs that parent in place and re-issues
+                    // the recorded request (see `reissue_recorded_request`),
+                    // resuming the body from a fresh response. The parent is live
+                    // here on both the first attempt and a repaired tail (the
+                    // demand stream repairs it together with its first incomplete
+                    // child), which the retry routing requires. Permanent errors — and
                     // transient ones whose retry budget is exhausted — fall through
                     // and are recorded as the terminal, which is also what a
                     // recorded terminal replays as. A retry-exempt failure (refused
@@ -1539,10 +1736,11 @@ where
                         };
                         if let Some(error) = trap {
                             // The retry trap tears the invocation down after the
-                            // parent handle has been abandoned. The child `Start` is persisted but the
-                            // jumped scope discards it on replay; abandon the handle
-                            // so its drop does not record a `Cancelled`. The span is
-                            // deliberately left open — the retry's replay reconstructs it.
+                            // parent handle has been abandoned. The child `Start` is
+                            // persisted and the retry's replay completes it as the
+                            // repaired tail; abandon the handle so its drop does not
+                            // record a `Cancelled`. The span is deliberately left
+                            // open — the retry's replay reconstructs it.
                             child.abandon_for_trap();
                             let _ = demand.send(HttpBodyChunkReply::Failed {
                                 message: error.to_string(),
@@ -1632,6 +1830,7 @@ where
             match produced {
                 ProducedChunk::Data(bytes) => {
                     let chunk_len = bytes.len() as u64;
+                    delivered_digest.update(&bytes);
                     match deliver_http_body_reply(&activity, demand, delivery, |delivery| {
                         HttpBodyChunkReply::Data { bytes, delivery }
                     })

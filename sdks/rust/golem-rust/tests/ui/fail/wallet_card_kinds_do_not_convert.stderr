@@ -1,0 +1,92 @@
+error[E0308]: mismatched types
+  --> tests/ui/fail/wallet_card_kinds_do_not_convert.rs:47:26
+   |
+47 |         .with_scope_card(card)
+   |          --------------- ^^^^ expected `&ScopeCard`, found `&PolymorphicPermissionCard`
+   |          |
+   |          arguments to this method are incorrect
+   |
+   = note: expected reference `&ScopeCard`
+              found reference `&PolymorphicPermissionCard`
+note: method defined here
+  --> tests/ui/fail/wallet_card_kinds_do_not_convert.rs:4:1
+   |
+ 4 | #[agent_definition]
+   | ^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `agent_definition` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `golem_rust::permissions::PermissionCard: From<PolymorphicPermissionCard>` is not satisfied
+  --> tests/ui/fail/wallet_card_kinds_do_not_convert.rs:22:10
+   |
+22 |     card.into()
+   |          ^^^^ the trait `From<PolymorphicPermissionCard>` is not implemented for `golem_rust::permissions::PermissionCard`
+   |
+   = note: required for `PolymorphicPermissionCard` to implement `Into<golem_rust::permissions::PermissionCard>`
+
+error[E0308]: mismatched types
+  --> tests/ui/fail/wallet_card_kinds_do_not_convert.rs:26:37
+   |
+25 | fn concrete_as_template(card: PermissionCard) -> PolymorphicPermissionCard {
+   |                                                  ------------------------- this return type influences the call expression's return type
+26 |     PolymorphicPermissionCard::from(card)
+   |     ------------------------------- ^^^^ expected `PolymorphicPermissionCard`, found `PermissionCard`
+   |     |
+   |     arguments to this function are incorrect
+   |
+note: associated function defined here
+  --> $RUST/core/src/convert/mod.rs
+
+error[E0277]: the trait bound `golem_rust::permissions::PermissionCard: From<ScopeCard>` is not satisfied
+  --> tests/ui/fail/wallet_card_kinds_do_not_convert.rs:30:10
+   |
+30 |     card.into()
+   |          ^^^^ the trait `From<ScopeCard>` is not implemented for `golem_rust::permissions::PermissionCard`
+   |
+   = note: required for `ScopeCard` to implement `Into<golem_rust::permissions::PermissionCard>`
+
+error[E0277]: the trait bound `ScopeCard: From<golem_rust::permissions::PermissionCard>` is not satisfied
+  --> tests/ui/fail/wallet_card_kinds_do_not_convert.rs:34:10
+   |
+34 |     card.into()
+   |          ^^^^ the trait `From<golem_rust::permissions::PermissionCard>` is not implemented for `ScopeCard`
+   |
+   = note: required for `golem_rust::permissions::PermissionCard` to implement `Into<ScopeCard>`
+
+error[E0308]: mismatched types
+  --> tests/ui/fail/wallet_card_kinds_do_not_convert.rs:38:26
+   |
+38 |     WalletCard::Concrete(card)
+   |     -------------------- ^^^^ expected `PermissionCard`, found `PolymorphicPermissionCard`
+   |     |
+   |     arguments to this enum variant are incorrect
+   |
+note: tuple variant defined here
+  --> src/permissions.rs
+   |
+   |     Concrete(PermissionCard),
+   |     ^^^^^^^^
+
+error[E0277]: the trait bound `golem_rust::permissions::PermissionCard: From<WalletCard>` is not satisfied
+  --> tests/ui/fail/wallet_card_kinds_do_not_convert.rs:42:10
+   |
+42 |     card.into()
+   |          ^^^^ the trait `From<WalletCard>` is not implemented for `golem_rust::permissions::PermissionCard`
+   |
+   = note: required for `WalletCard` to implement `Into<golem_rust::permissions::PermissionCard>`
+
+error[E0308]: mismatched types
+  --> tests/ui/fail/wallet_card_kinds_do_not_convert.rs:54:35
+   |
+54 |     client.set_default_scope_card(card);
+   |            ---------------------- ^^^^ expected `&ScopeCard`, found `&PolymorphicPermissionCard`
+   |            |
+   |            arguments to this method are incorrect
+   |
+   = note: expected reference `&ScopeCard`
+              found reference `&PolymorphicPermissionCard`
+note: method defined here
+  --> tests/ui/fail/wallet_card_kinds_do_not_convert.rs:4:1
+   |
+ 4 | #[agent_definition]
+   | ^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `agent_definition` (in Nightly builds, run with -Z macro-backtrace for more info)

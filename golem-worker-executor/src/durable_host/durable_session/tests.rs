@@ -2648,7 +2648,7 @@ async fn routed_attached_reads_retry_only_unavailable_without_changing_the_curso
     let source = RoutedAttachedStreamSegmentSource::new(
         rpc.clone(),
         mapping.clone(),
-        AuthCtx::System,
+        Arc::new(AuthCtx::System),
         producer,
     );
     let after = Some(StreamOffset::new(OplogIndex::from_u64(41), 3));
@@ -3429,7 +3429,7 @@ async fn foreign_cancellation_recovery_applies_persisted_intent_without_delete_r
         .await
         .unwrap();
         let streams = StreamSession::new(producer, oplog, session_reference, [])
-            .with_auth_ctx(AuthCtx::System)
+            .with_auth_ctx(Arc::new(AuthCtx::System))
             .with_rpc(Arc::new(AttachedProducerRpc {
                 producer: remote_producer,
                 cancellation_owner: None,
@@ -3616,7 +3616,7 @@ async fn a_fenced_oplog_refuses_a_foreign_mapping_and_releases_the_session() {
         pending_read: Mutex::default(),
         read_requests: Mutex::default(),
     }))
-    .with_auth_ctx(AuthCtx::System);
+    .with_auth_ctx(Arc::new(AuthCtx::System));
 
     let committed_before = oplog.committed_length();
     // Both halves of what a real fenced oplog does: the latch every reader consults, and the
@@ -3746,7 +3746,7 @@ async fn retirement_from_foreign_rpc(prepare: bool) {
         pending_read: Mutex::default(),
         read_requests: Mutex::default(),
     }))
-    .with_auth_ctx(AuthCtx::System);
+    .with_auth_ctx(Arc::new(AuthCtx::System));
     if prepare {
         let error = tokio::time::timeout(
             Duration::from_secs(5),
@@ -6957,7 +6957,7 @@ async fn reverted_caller_reestablishes_foreign_reader_without_repeating_invocati
         .with_consumer_invocation(consumer.invocation.clone())
         .with_consumer_journal(Arc::new(TestConsumerJournal(oplog)))
         .with_rpc(rpc.clone())
-        .with_auth_ctx(AuthCtx::System);
+        .with_auth_ctx(Arc::new(AuthCtx::System));
         streams.recover_session_mappings().await.unwrap();
         assert_eq!(streams.attachment_epoch, 8);
         let reader_id = streams
@@ -7110,7 +7110,7 @@ async fn detached_continuation_activates_prepared_and_new_foreign_inputs() {
         )
         .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())))
         .with_rpc(rpc.clone())
-        .with_auth_ctx(AuthCtx::System)
+        .with_auth_ctx(Arc::new(AuthCtx::System))
         .with_attachment(1, attempt_id);
         streams
             .prepare_foreign_mapping(
@@ -7178,7 +7178,7 @@ async fn detached_continuation_activates_prepared_and_new_foreign_inputs() {
         )
         .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())))
         .with_rpc(rpc.clone())
-        .with_auth_ctx(AuthCtx::System);
+        .with_auth_ctx(Arc::new(AuthCtx::System));
         let pinned = streams.clone().with_attachment(1, attempt_id);
         assert!(pinned.ensure_current_attachment().await.is_err());
         let topologies = streams
@@ -7262,7 +7262,7 @@ async fn detached_continuation_activates_prepared_and_new_foreign_inputs() {
         )
         .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())))
         .with_rpc(rpc.clone())
-        .with_auth_ctx(AuthCtx::System);
+        .with_auth_ctx(Arc::new(AuthCtx::System));
         recovered.recover_session_mappings().await.unwrap();
         let mut nested = recovered
             .stream_reader(
@@ -8778,7 +8778,7 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
         pending_read: Mutex::default(),
         read_requests: Mutex::default(),
     }))
-    .with_auth_ctx(AuthCtx::System);
+    .with_auth_ctx(Arc::new(AuthCtx::System));
     let attachment = StreamAttachmentKey {
         attachment_id: AttachmentId::primary(
             consumer.environment_id,
@@ -10285,7 +10285,7 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
         pending_read: Mutex::default(),
         read_requests: Mutex::default(),
     }))
-    .with_auth_ctx(AuthCtx::System);
+    .with_auth_ctx(Arc::new(AuthCtx::System));
     streams
         .append_record(
             None,
@@ -11846,7 +11846,7 @@ async fn nested_forwarding_respects_recovery_and_concurrent_terminal_fences() {
         let destination = StreamSession::new(producer.clone(), oplog.clone(), reference, [])
             .with_consumer_invocation(owner.invocation.clone())
             .with_consumer_journal(journal)
-            .with_auth_ctx(AuthCtx::System)
+            .with_auth_ctx(Arc::new(AuthCtx::System))
             .with_rpc(Arc::new(AttachedProducerRpc {
                 producer: source.clone(),
                 cancellation_owner: (mode == "terminal_failure").then(|| producer.clone()),
@@ -12056,7 +12056,7 @@ async fn nested_forwarding_respects_recovery_and_concurrent_terminal_fences() {
             )
             .with_consumer_invocation(owner.invocation.clone())
             .with_consumer_journal(Arc::new(TestConsumerJournal(oplog)))
-            .with_auth_ctx(AuthCtx::System)
+            .with_auth_ctx(Arc::new(AuthCtx::System))
             .with_rpc(destination.rpc.clone().unwrap());
             destination.recover_session_mappings().await.unwrap();
             assert_eq!(

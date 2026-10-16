@@ -40,8 +40,10 @@ func TestReleaseRawTreeIncludesUnreachableCapabilities(t *testing.T) {
 		types.MakeSchemaValueNodeStringValue("plain"),
 		types.MakeSchemaValueNodeSecretValue(nil),
 		types.MakeSchemaValueNodeQuotaTokenHandle(nil),
-		types.MakeSchemaValueNodePermissionCardHandle(nil),
+		types.MakeSchemaValueNodePermissionCardHandle(&types.PermissionCard{}),
 		types.MakeSchemaValueNodeStreamValue(nil),
+		// A card node a decode or a send took holds no handle.
+		types.MakeSchemaValueNodePermissionCardHandle(nil),
 	}})
 	want := []uint8{types.SchemaValueNodeSecretValue, types.SchemaValueNodeQuotaTokenHandle, types.SchemaValueNodePermissionCardHandle, types.SchemaValueNodeStreamValue}
 	if len(tags) != len(want) {

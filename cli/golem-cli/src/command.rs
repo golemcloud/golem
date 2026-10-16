@@ -1837,6 +1837,12 @@ pub mod worker {
                 verbatim_doc_comment,
             )]
             query: Option<String>,
+            /// Show the entries that oplog pages omit only by their type, timestamp and size.
+            /// Oplog pages omit an entry whose encoded form is larger than a server limit (1 MiB by
+            /// default), for example an entry with a large snapshot, invocation input or host call
+            /// response. By default the CLI reads each omitted entry in full.
+            #[arg(long)]
+            omit_payloads: bool,
             #[command(flatten)]
             viewer: OplogViewerArgs,
         },

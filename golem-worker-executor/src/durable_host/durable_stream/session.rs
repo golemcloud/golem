@@ -60,7 +60,7 @@ impl PreparedConsumerObservation {
                                 owner.producer_fingerprint,
                             );
                             drop(owner.index_for(keys).await?);
-                            owner.commit(&context).await?;
+                            owner.commit_through(&context, index).await?;
                             owner.notify_session_records_changed(Some(&context));
                             Ok::<_, StreamStoreError>(())
                         })
@@ -126,12 +126,16 @@ impl DurableStreamStore {
                 "invalid consumer observation".into(),
             ));
         }
-        Self::validate_consumer_reobservation(
-            self.oplog.as_ref(),
-            self.oplog.current_oplog_index().await.next(),
-            &record,
-        )
-        .await?;
+        // The oplog index only bounds a re-observation. Asking for it queues behind the oplog's
+        // pending commits, which would hold every guest read behind the previous read's commit.
+        if record.reobserves().is_some() {
+            Self::validate_consumer_reobservation(
+                self.oplog.as_ref(),
+                self.oplog.current_oplog_index().await.next(),
+                &record,
+            )
+            .await?;
+        }
         let memory = golem_common::serialization::serialize(&record)
             .map_err(StreamStoreError::Oplog)?
             .len();

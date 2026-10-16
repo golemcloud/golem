@@ -1457,7 +1457,7 @@ pub(crate) fn attachment_key(
     }
 }
 
-fn consumer_item_record(
+pub(crate) fn consumer_item_record(
     session_key: StreamRegistrationInvocation,
     reader_id: LocalStreamReaderId,
     source_offset: StreamOffset,
@@ -1622,6 +1622,97 @@ fn consumer_journal_validates_terminal_order_and_duplicate_overlay_ordinal() {
             identity.fingerprint,
         ),
         Err(StreamStoreError::ConsumerJournalAdvanced)
+    );
+}
+
+#[test]
+#[timeout("30s")]
+async fn consumer_observation_commits_only_past_the_published_horizon() {
+    let owner = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let commits = Arc::new(Semaphore::new(0));
+    let commit: DurableStreamCommit = Arc::new({
+        let oplog = oplog.clone();
+        let commits = commits.clone();
+        move |receipt| {
+            let oplog = oplog.clone();
+            let commits = commits.clone();
+            Box::pin(async move {
+                commits.acquire().await.unwrap().forget();
+                oplog.commit(CommitLevel::Always).await.unwrap();
+                if let Some(receipt) = receipt {
+                    receipt.send(Ok(())).unwrap();
+                }
+            })
+        }
+    });
+    let producer = DurableStreamStore::load_with_commit(
+        oplog.clone(),
+        owner.environment_id,
+        owner.agent_id.clone(),
+        owner.fingerprint,
+        None,
+        commit,
+    )
+    .await
+    .unwrap();
+    let published = Arc::new(std::sync::Mutex::new(None::<OplogIndex>));
+    producer.set_published_horizon(Arc::new({
+        let published = published.clone();
+        move || *published.lock().unwrap()
+    }));
+    let session_key = StreamRegistrationInvocation::Local(owner.invocation.idempotency_key.clone());
+    let reader = LocalStreamReaderId {
+        introducing_oplog_index: OplogIndex::from_u64(5),
+        binding_slot: 0,
+    };
+    let observe = |ordinal: u64| {
+        let producer = producer.clone();
+        let record = consumer_item_record(
+            session_key.clone(),
+            reader,
+            StreamOffset::new(OplogIndex::from_u64(31), ordinal as u32),
+            ordinal,
+            vec![ordinal as u8],
+            false,
+        );
+        async move {
+            producer
+                .prepare_consumer_observation(None, record)
+                .await
+                .unwrap()
+                .enqueue(None)
+        }
+    };
+
+    // An earlier commit already published the entry, so its receipt needs no commit.
+    let index = oplog.current_oplog_index().await.next();
+    *published.lock().unwrap() = Some(index);
+    let receipt = observe(0).await.unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), receipt)
+            .await
+            .expect("a published observation must not wait for a commit")
+            .unwrap(),
+        index
+    );
+
+    // One entry past the published horizon, and with no horizon, the observation commits.
+    for (ordinal, horizon) in [(1, Some(index)), (2, None)] {
+        *published.lock().unwrap() = horizon;
+        let index = oplog.current_oplog_index().await.next();
+        let mut receipt = observe(ordinal).await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), &mut receipt)
+                .await
+                .is_err()
+        );
+        commits.add_permits(1);
+        assert_eq!(receipt.await.unwrap(), index);
+    }
+    assert_eq!(
+        oplog.committed_length(),
+        oplog.current_oplog_index().await.as_u64()
     );
 }
 

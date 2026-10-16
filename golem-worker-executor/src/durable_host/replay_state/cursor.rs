@@ -1128,7 +1128,9 @@ impl CursorTx<'_> {
         claim: &StartClaim,
     ) -> Result<MissingStart, WorkerExecutorError> {
         if let Some(invocation_id) = claim.expected_invocation_id()
-            && self.unclaimed_start_with_invocation_id(invocation_id).await
+            && self
+                .unclaimed_start_with_invocation_id(invocation_id)
+                .await?
         {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
                 claim.expected_description(),
@@ -1146,7 +1148,7 @@ impl CursorTx<'_> {
             if self.blocked_on_completion_delivery {
                 return Ok(MissingStart::Blocked(BlockedOn::CursorProgress));
             }
-            match self.sibling_record_at_head().await {
+            match self.sibling_record_at_head().await? {
                 SiblingRecord::Retain(index, entry) => {
                     self.retain_start(index, entry.clone());
                     self.commit_retained_entry(index, &entry).await?;
@@ -1183,13 +1185,13 @@ impl CursorTx<'_> {
     /// - a record of the body of a retained entity invocation waits: that body consumes it once
     ///   its invocation is claimed;
     /// - anything else is not a sibling's record.
-    async fn sibling_record_at_head(&self) -> SiblingRecord {
+    async fn sibling_record_at_head(&self) -> Result<SiblingRecord, UnreadableOplog> {
         let next = self.cursor.last_replayed_index().next();
         let Some((index, entry)) = self.st.replay_buffer.front() else {
-            return SiblingRecord::None;
+            return Ok(SiblingRecord::None);
         };
         if *index != next || self.st.claimed_starts.contains(index) {
-            return SiblingRecord::None;
+            return Ok(SiblingRecord::None);
         }
         let retained = |index: &OplogIndex| self.st.retained_starts.get(index).map(|r| &r.entry);
         let owner = match head_owner(entry) {
@@ -1200,10 +1202,10 @@ impl CursorTx<'_> {
             .and_then(|owner| retained(&owner))
             .is_some_and(is_entity_invocation_start)
         {
-            return SiblingRecord::BodyOfRetainedInvocation;
+            return Ok(SiblingRecord::BodyOfRetainedInvocation);
         }
         if !Self::is_retainable_start(entry) {
-            return SiblingRecord::None;
+            return Ok(SiblingRecord::None);
         }
         let OplogEntry::Start {
             invocation_id,
@@ -1212,7 +1214,7 @@ impl CursorTx<'_> {
             ..
         } = entry
         else {
-            return SiblingRecord::None;
+            return Ok(SiblingRecord::None);
         };
         let retain =
             if self.under_retained_custom_invocation(*parent_start_index, *observational_owner) {
@@ -1229,7 +1231,7 @@ impl CursorTx<'_> {
                         None => {
                             invocation_id.is_some()
                                 && self.st.concurrent_resolver.has_claim(*parent)
-                                && start_invocation_id(&self.cursor.oplog.read(*parent).await)
+                                && start_invocation_id(&self.cursor.oplog.read(*parent).await?)
                                     == *invocation_id
                         }
                     },
@@ -1237,9 +1239,9 @@ impl CursorTx<'_> {
                 }
             };
         if retain {
-            SiblingRecord::Retain(*index, entry.clone())
+            Ok(SiblingRecord::Retain(*index, entry.clone()))
         } else {
-            SiblingRecord::None
+            Ok(SiblingRecord::None)
         }
     }
 
@@ -1278,7 +1280,10 @@ impl CursorTx<'_> {
 
     /// Whether a `Start` nobody has claimed yet carries `invocation_id`: a retained one, or one
     /// between the cursor and the replay target.
-    async fn unclaimed_start_with_invocation_id(&self, invocation_id: DurableInvocationId) -> bool {
+    async fn unclaimed_start_with_invocation_id(
+        &self,
+        invocation_id: DurableInvocationId,
+    ) -> Result<bool, UnreadableOplog> {
         let carries_id = |entry: &OplogEntry| match entry {
             OplogEntry::Start {
                 invocation_id: Some(recorded),
@@ -1292,11 +1297,11 @@ impl CursorTx<'_> {
             .values()
             .any(|retained| carries_id(&retained.entry))
         {
-            return true;
+            return Ok(true);
         }
         let start = self.cursor.last_replayed_index().next();
         let claimed = &self.st.claimed_starts;
-        matches!(
+        Ok(matches!(
             self.cursor
                 .scan_oplog(
                     start,
@@ -1309,9 +1314,9 @@ impl CursorTx<'_> {
                     OplogIndex::NONE,
                     |_, index, state| *state = index,
                 )
-                .await,
+                .await?,
             OplogEntryLookupResult::Found { .. }
-        )
+        ))
     }
 
     /// Whether `entry` is an `End`/`Cancelled` whose `start_index` currently has a registered

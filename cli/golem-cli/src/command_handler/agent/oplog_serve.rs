@@ -23,7 +23,7 @@ use crate::error::service::MapServiceError;
 use crate::log::{LogColorize, log_action, log_warn};
 use crate::model::agent::oplog::AgentOplogEntryView;
 use golem_client::api::WorkerClient;
-use golem_common::model::oplog::OplogCursor;
+use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
 use poem::http::StatusCode;
 use poem::listener::{Acceptor, Listener, TcpListener};
 use poem::web::{Data, Html, Json, Query};
@@ -40,6 +40,49 @@ pub struct OplogViewerServer {
     pub page: String,
     /// Number of entries the viewer requests per page by default.
     pub page_size: u64,
+    /// Show the entries that oplog pages omit in their omitted form instead of reading them.
+    pub omit_payloads: bool,
+}
+
+/// The output view of an oplog page entry. Unless `omit_payloads` is set, an entry that the page
+/// omitted is read in full. When that read fails, the view keeps the omitted form and the CLI
+/// logs a warning, so that one entry does not hide the rest of the oplog.
+pub async fn oplog_page_entry_view(
+    ctx: &Context,
+    component_id: &Uuid,
+    agent_name: &str,
+    page_entry: PublicOplogPageEntry,
+    omit_payloads: bool,
+) -> anyhow::Result<AgentOplogEntryView> {
+    let omitted = match page_entry {
+        PublicOplogPageEntry::Included(entry) => return Ok(entry.into()),
+        PublicOplogPageEntry::Omitted(omitted) => omitted,
+    };
+    if omit_payloads {
+        return Ok(omitted.into());
+    }
+
+    let clients = ctx.golem_clients().await?;
+    match clients
+        .worker
+        .get_oplog_entry(
+            component_id,
+            agent_name,
+            omitted.oplog_index.as_u64(),
+            Some(omitted.component_revision.into()),
+        )
+        .await
+        .map_service_error()
+    {
+        Ok(entry) => Ok(entry.into()),
+        Err(error) => {
+            log_warn(format!(
+                "Failed to read oplog entry {} ({}, {} bytes), it stays omitted: {error:#}",
+                omitted.oplog_index, omitted.entry_type, omitted.size
+            ));
+            Ok(omitted.into())
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,16 +140,23 @@ async fn oplog_page(
         .map_service_error()
         .map_err(upstream_error)?;
 
+    let mut entries = Vec::with_capacity(result.entries.len());
+    for page_entry in result.entries {
+        entries.push(
+            oplog_page_entry_view(
+                &server.ctx,
+                &server.component_id,
+                &server.agent_id,
+                page_entry,
+                server.omit_payloads,
+            )
+            .await
+            .map_err(upstream_error)?,
+        );
+    }
+
     Ok(Json(OplogPageResponse {
-        entries: result
-            .entries
-            .into_iter()
-            .map(|entry| AgentOplogEntryView {
-                index: entry.oplog_index.as_u64(),
-                attribution: entry.attribution,
-                entry: entry.entry,
-            })
-            .collect(),
+        entries,
         next: result.next,
     }))
 }

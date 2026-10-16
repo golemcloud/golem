@@ -58,8 +58,11 @@ pub fn get_remote_client_for_type(
     let remote_client_type_name = format_ident!("{}Client", item_trait.ident);
     let constructor_schema_type_name = format_ident!("__{}Constructor", item_trait.ident);
 
+    let remote_client_with_scope_card_type_name =
+        format_ident!("{}ClientWithScopeCard", item_trait.ident);
     let RemoteAgentMethodsInfo {
         methods_impl,
+        scoped_methods_impl,
         mut method_names,
     } = get_remote_agent_methods_info(
         item_trait,
@@ -90,6 +93,9 @@ pub fn get_remote_client_for_type(
         agent_is_durable.then(|| method_names.fresh_ident("get_agent_id"));
     let agent_id_helper_ident = method_names.fresh_ident("agent_id");
     let bind_helper_ident = agent_is_durable.then(|| method_names.fresh_ident("bind"));
+    let with_scope_card_ident = method_names.fresh_ident("with_scope_card");
+    let set_default_scope_card_ident = method_names.fresh_ident("set_default_scope_card");
+    let clear_default_scope_card_ident = method_names.fresh_ident("clear_default_scope_card");
     let constructor_param_idents = constructor_data_value_param_idents
         .iter()
         .chain(constructor_agent_config_param_idents)
@@ -180,6 +186,7 @@ pub fn get_remote_client_for_type(
                         agent_id: #agent_id_ident,
                         phantom_id: #phantom_struct,
                         wasm_rpc,
+                        __golem_default_scope_card: ::core::default::Default::default(),
                     })
                 }
             } else {
@@ -207,6 +214,7 @@ pub fn get_remote_client_for_type(
                         agent_id: #agent_id_ident,
                         phantom_id: #phantom_struct,
                         wasm_rpc,
+                        __golem_default_scope_card: ::core::default::Default::default(),
                     }
                 }
             }
@@ -420,6 +428,7 @@ pub fn get_remote_client_for_type(
                     agent_id: agent_id.as_str().to_string(),
                     phantom_id: parts.phantom_id,
                     wasm_rpc,
+                    __golem_default_scope_card: ::core::default::Default::default(),
                 })
             }
         }
@@ -439,6 +448,7 @@ pub fn get_remote_client_for_type(
         pub struct #remote_client_type_name {
             #durable_fields
             wasm_rpc: golem_rust::golem_agentic::golem::agent::host::WasmRpc,
+            __golem_default_scope_card: golem_rust::permissions::__DefaultScopeCard,
         }
 
         impl #remote_client_type_name {
@@ -463,7 +473,54 @@ pub fn get_remote_client_for_type(
 
             #accessors
 
+            /// Returns a view of this client whose awaited method calls lend
+            /// `scope_card` to the callee for the duration of each invocation.
+            ///
+            /// The card is borrowed, never consumed. Trigger and scheduled
+            /// invocations do not accept a scope card.
+            pub fn #with_scope_card_ident<'a>(
+                &'a self,
+                scope_card: &'a golem_rust::permissions::ScopeCard,
+            ) -> #remote_client_with_scope_card_type_name<'a> {
+                #remote_client_with_scope_card_type_name {
+                    client: self,
+                    scope_card,
+                }
+            }
+
+            /// Lends `scope_card` to the callee of every awaited method call
+            /// of this client that does not use its own scope card.
+            ///
+            /// A scope card is valid only during the invocation that derived it.
+            /// Clear the default, or drop the client, before that invocation ends;
+            /// a later awaited call with the retired default fails with `denied`.
+            ///
+            /// The default is a weak borrow: it does not keep the scope card alive, and an
+            /// awaited call panics once the scope card is dropped.
+            pub fn #set_default_scope_card_ident(
+                &mut self,
+                scope_card: &golem_rust::permissions::ScopeCard,
+            ) {
+                self.__golem_default_scope_card.set(scope_card);
+            }
+
+            /// Stops lending the client's default scope card.
+            pub fn #clear_default_scope_card_ident(&mut self) {
+                self.__golem_default_scope_card.clear();
+            }
+
             #methods_impl
+        }
+
+        /// A view of an agent client whose awaited method calls lend a scope
+        /// card to the callee.
+        pub struct #remote_client_with_scope_card_type_name<'a> {
+            client: &'a #remote_client_type_name,
+            scope_card: &'a golem_rust::permissions::ScopeCard,
+        }
+
+        impl<'a> #remote_client_with_scope_card_type_name<'a> {
+            #scoped_methods_impl
         }
     }
 }
@@ -489,7 +546,7 @@ fn build_ephemeral_constructor_body(
                 #config,
             )
             .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)?;
-            Ok(#client { wasm_rpc })
+            Ok(#client { wasm_rpc, __golem_default_scope_card: ::core::default::Default::default() })
         }
     } else {
         quote! {
@@ -501,7 +558,7 @@ fn build_ephemeral_constructor_body(
                 #config,
             )
             .unwrap_or_else(|error| panic!("Internal Error: Agent type not registered: {error:?}"));
-            #client { wasm_rpc }
+            #client { wasm_rpc, __golem_default_scope_card: ::core::default::Default::default() }
         }
     }
 }
@@ -598,18 +655,17 @@ fn get_remote_agent_methods_info(
 
             if let Some(violation) = find_generic_param_in_return(&method.sig, type_parameter_names)
             {
-                return Some(generic_type_in_agent_return_type_error(
-                    violation.span,
-                    &violation.type_name,
+                return Some(GeneratedMethod::error(
+                    generic_type_in_agent_return_type_error(violation.span, &violation.type_name),
                 ));
             }
 
             if let Some(violation) = find_generic_param_in_inputs(&method.sig, type_parameter_names)
             {
-                return Some(generic_type_in_agent_method_error(
+                return Some(GeneratedMethod::error(generic_type_in_agent_method_error(
                     violation.span,
                     &violation.type_name,
-                ));
+                )));
             }
 
             let keep = |pat_type: &syn::PatType| !is_principal_param(pat_type);
@@ -625,9 +681,19 @@ fn get_remote_agent_methods_info(
             let schedule_name = agent_method_names.fresh_ident(format!("schedule_{method_name}"));
             let schedule_cancelable_name =
                 agent_method_names.fresh_ident(format!("schedule_cancelable_{method_name}"));
+            let awaited = AwaitedMethod {
+                method_name,
+                impl_name: agent_method_names
+                    .fresh_ident(format!("__golem_{method_name}_with_scope_card")),
+                pending_impl_name: agent_method_names
+                    .fresh_ident(format!("__golem_pending_{method_name}_with_scope_card")),
+                input_defs: &input_defs,
+                input_idents: &input_idents,
+                scope_card_param: fresh_param_ident(&input_idents, "__golem_scope_card"),
+            };
 
             Some(generate_method_code(
-                method_name,
+                &awaited,
                 &trigger_name,
                 &pending_name,
                 &schedule_name,
@@ -641,8 +707,11 @@ fn get_remote_agent_methods_info(
         })
         .collect::<Vec<_>>();
 
-    let code = quote! { #(#method_impls)* };
-    RemoteAgentMethodsInfo::new(code, agent_method_names)
+    let client_impls = method_impls.iter().map(|method| &method.client);
+    let scoped_impls = method_impls.iter().map(|method| &method.scoped);
+    let code = quote! { #(#client_impls)* };
+    let scoped_code = quote! { #(#scoped_impls)* };
+    RemoteAgentMethodsInfo::new(code, scoped_code, agent_method_names)
 }
 
 fn extract_method(item: &syn::TraitItem) -> Option<&syn::TraitItemFn> {
@@ -654,7 +723,7 @@ fn extract_method(item: &syn::TraitItem) -> Option<&syn::TraitItemFn> {
 }
 
 fn generate_method_code(
-    method_name: &syn::Ident,
+    awaited: &AwaitedMethod,
     trigger_name: &syn::Ident,
     pending_name: &syn::Ident,
     schedule_name: &syn::Ident,
@@ -664,10 +733,11 @@ fn generate_method_code(
     sig: &syn::Signature,
     agent_is_durable: bool,
     fallible: bool,
-) -> proc_macro2::TokenStream {
+) -> GeneratedMethod {
+    let method_name = awaited.method_name;
     if !fallible {
         return generate_direct_method_code(
-            method_name,
+            awaited,
             trigger_name,
             schedule_name,
             schedule_cancelable_name,
@@ -803,23 +873,38 @@ fn generate_method_code(
             let input = golem_rust::encode_schema_value(&input_value)
                 .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string()))?;
         };
+        let invoke = awaited.invoke(&remote_token);
+        let scope_card_param = &awaited.scope_card_param;
+        let GeneratedMethod {
+            client: pending_client,
+            scoped: pending_scoped,
+        } = awaited.generate_pending(
+            pending_name,
+            quote! { Result<golem_rust::CallerPendingInvocation<#return_type>, golem_rust::GolemReflectError> },
+            quote! {
+                #reject_non_awaited_stream_invocation
+                let input_value = #input_record;
+                golem_rust::agentic::reflection::start_caller_pending(
+                    &self.wasm_rpc,
+                    #remote_token,
+                    input_value,
+                    #scope_card_param.as_ref(),
+                    #pending_decode,
+                )
+            },
+        );
         if agent_is_durable {
-            return quote! {
-                pub async fn #method_name(#(#input_defs),*)
-                    -> Result<#return_type, golem_rust::GolemReflectError>
-                {
+            return awaited.generate(
+                quote! { Result<#return_type, golem_rust::GolemReflectError> },
+                quote! {
                     #encode_input_async
-                    let rpc_result_future = self.wasm_rpc.async_invoke_and_await(
-                        #remote_token,
-                        input,
-                        None,
-                    ).future;
+                    let rpc_result_future = #invoke.future;
                     let rpc_result_ok = golem_rust::agentic::await_invoke_schema_value_result(rpc_result_future)
                         .await
                         .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)?;
                     Ok({ #decode_value })
-                }
-
+                },
+                quote! {
                 pub fn #trigger_name(#(#input_defs),*)
                     -> Result<(), golem_rust::GolemReflectError>
                 {
@@ -830,18 +915,7 @@ fn generate_method_code(
                         .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)
                 }
 
-                pub fn #pending_name(#(#input_defs),*)
-                    -> Result<golem_rust::CallerPendingInvocation<#return_type>, golem_rust::GolemReflectError>
-                {
-                    #reject_non_awaited_stream_invocation
-                    let input_value = #input_record;
-                    golem_rust::agentic::reflection::start_caller_pending(
-                        &self.wasm_rpc,
-                        #remote_token,
-                        input_value,
-                        #pending_decode,
-                    )
-                }
+                #pending_client
 
                 pub fn #schedule_name(
                     #(#input_defs,)*
@@ -874,22 +948,24 @@ fn generate_method_code(
                     .map(|receipt| receipt.cancellation_token)
                     .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)
                 }
-            };
+                },
+            )
+            .with_scoped(pending_scoped);
         }
 
-        return quote! {
-            pub async fn #method_name(#(#input_defs),*)
-                -> Result<golem_rust::agentic::EphemeralInvocationResult<#return_type>, golem_rust::GolemReflectError>
-            {
+        return awaited.generate(
+            quote! { Result<golem_rust::agentic::EphemeralInvocationResult<#return_type>, golem_rust::GolemReflectError> },
+            quote! {
                 #encode_input_async
-                let invocation = self.wasm_rpc.async_invoke_and_await(#remote_token, input, None);
+                let invocation = #invoke;
                 let metadata = invocation.metadata;
                 let rpc_result_ok = golem_rust::agentic::await_invoke_schema_value_result(invocation.future)
                     .await
                     .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)?;
                 let value = { #decode_value };
                 Ok(golem_rust::agentic::EphemeralInvocationResult { metadata, value })
-            }
+            },
+            quote! {
 
             pub fn #trigger_name(#(#input_defs),*)
                 -> Result<golem_rust::golem_agentic::golem::agent::host::InvocationMetadata, golem_rust::GolemReflectError>
@@ -900,18 +976,7 @@ fn generate_method_code(
                     .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)
             }
 
-            pub fn #pending_name(#(#input_defs),*)
-                -> Result<golem_rust::CallerPendingInvocation<#return_type>, golem_rust::GolemReflectError>
-            {
-                #reject_non_awaited_stream_invocation
-                let input_value = #input_record;
-                golem_rust::agentic::reflection::start_caller_pending(
-                    &self.wasm_rpc,
-                    #remote_token,
-                    input_value,
-                    #pending_decode,
-                )
-            }
+            #pending_client
 
             pub fn #schedule_name(
                 #(#input_defs,)*
@@ -933,18 +998,18 @@ fn generate_method_code(
                 self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #remote_token, input, None)
                     .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)
             }
-        };
+            },
+        )
+        .with_scoped(pending_scoped);
     }
+    let invoke = awaited.invoke(&remote_token);
     if agent_is_durable {
-        return quote! {
-        pub async fn #method_name(#(#input_defs),*) -> #return_type {
+        return awaited.generate(
+            quote! { #return_type },
+            quote! {
             #encode_input_async
 
-            let rpc_result_future = self.wasm_rpc.async_invoke_and_await(
-                #remote_token,
-                input,
-                None
-            ).future;
+            let rpc_result_future = #invoke.future;
 
             let rpc_result: Result<Option<golem_rust::SchemaValue>, golem_rust::golem_agentic::golem::agent::host::RpcError> =
                 golem_rust::agentic::await_invoke_schema_value_result(rpc_result_future).await;
@@ -953,7 +1018,8 @@ fn generate_method_code(
                 rpc_result.unwrap_or_else(|e| panic!("rpc call to {} failed: {:?}", #remote_token, e));
 
             #process_invoke_result
-        }
+            },
+            quote! {
 
         pub fn #trigger_name(#(#input_defs),*) {
             #reject_non_awaited_stream_invocation
@@ -988,20 +1054,23 @@ fn generate_method_code(
                 None
             ).map(|receipt| receipt.cancellation_token)
         }
-        };
+            },
+        );
     }
 
-    quote! {
-        pub async fn #method_name(#(#input_defs),*) -> golem_rust::agentic::EphemeralInvocationResult<#return_type> {
+    awaited.generate(
+        quote! { golem_rust::agentic::EphemeralInvocationResult<#return_type> },
+        quote! {
             #encode_input_async
-            let invocation = self.wasm_rpc.async_invoke_and_await(#remote_token, input, None);
+            let invocation = #invoke;
             let metadata = invocation.metadata;
             let rpc_result: Result<Option<golem_rust::SchemaValue>, golem_rust::golem_agentic::golem::agent::host::RpcError> =
                 golem_rust::agentic::await_invoke_schema_value_result(invocation.future).await;
             let rpc_result_ok = rpc_result.unwrap_or_else(|e| panic!("rpc call to {} failed: {:?}", #remote_token, e));
             let value = { #process_invoke_result };
             golem_rust::agentic::EphemeralInvocationResult { metadata, value }
-        }
+        },
+        quote! {
 
         pub fn #trigger_name(#(#input_defs),*) -> golem_rust::golem_agentic::golem::agent::host::InvocationMetadata {
             #reject_non_awaited_stream_invocation
@@ -1022,11 +1091,12 @@ fn generate_method_code(
             #encode_input
             self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #remote_token, input, None)
         }
-    }
+        },
+    )
 }
 
 fn generate_direct_method_code(
-    method_name: &syn::Ident,
+    awaited: &AwaitedMethod,
     trigger_name: &syn::Ident,
     schedule_name: &syn::Ident,
     schedule_cancelable_name: &syn::Ident,
@@ -1034,8 +1104,8 @@ fn generate_direct_method_code(
     input_idents: &[syn::Ident],
     sig: &syn::Signature,
     agent_is_durable: bool,
-) -> proc_macro2::TokenStream {
-    let remote_method_name = method_name.to_string();
+) -> GeneratedMethod {
+    let remote_method_name = awaited.method_name.to_string();
     let remote_token = quote! { #remote_method_name };
     let return_type = match &sig.output {
         syn::ReturnType::Type(_, ty) => quote! { #ty },
@@ -1070,16 +1140,14 @@ fn generate_direct_method_code(
     let encoded_input_async = encode_parameters(input_idents, true, false);
     let encode_input_async = quote! { let input = #encoded_input_async; };
     let scheduled_time_param = fresh_param_ident(input_idents, "scheduled_time");
+    let invoke = awaited.invoke(&remote_token);
     if agent_is_durable {
-        return quote! {
-        pub async fn #method_name(#(#input_defs),*) -> #return_type {
+        return awaited.generate(
+            quote! { #return_type },
+            quote! {
             #encode_input_async
 
-            let rpc_result_future = self.wasm_rpc.async_invoke_and_await(
-                #remote_token,
-                input,
-                None
-            ).future;
+            let rpc_result_future = #invoke.future;
 
             let rpc_result = rpc_result_future.get().await;
 
@@ -1087,7 +1155,8 @@ fn generate_direct_method_code(
                 rpc_result.unwrap_or_else(|e| panic!("rpc call to {} failed: {:?}", #remote_token, e));
 
             #process_invoke_result
-        }
+            },
+            quote! {
 
         pub fn #trigger_name(#(#input_defs),*) {
             #reject_non_awaited_stream_invocation
@@ -1122,19 +1191,22 @@ fn generate_direct_method_code(
                 None
             ).map(|receipt| receipt.cancellation_token)
         }
-        };
+            },
+        );
     }
 
-    quote! {
-        pub async fn #method_name(#(#input_defs),*) -> golem_rust::agentic::EphemeralInvocationResult<#return_type> {
+    awaited.generate(
+        quote! { golem_rust::agentic::EphemeralInvocationResult<#return_type> },
+        quote! {
             #encode_input_async
-            let invocation = self.wasm_rpc.async_invoke_and_await(#remote_token, input, None);
+            let invocation = #invoke;
             let metadata = invocation.metadata;
             let rpc_result = invocation.future.get().await;
             let rpc_result_ok = rpc_result.unwrap_or_else(|e| panic!("rpc call to {} failed: {:?}", #remote_token, e));
             let value = { #process_invoke_result };
             golem_rust::agentic::EphemeralInvocationResult { metadata, value }
-        }
+        },
+        quote! {
 
         pub fn #trigger_name(#(#input_defs),*) -> golem_rust::golem_agentic::golem::agent::host::InvocationMetadata {
             #reject_non_awaited_stream_invocation
@@ -1155,7 +1227,8 @@ fn generate_direct_method_code(
             #encode_input
             self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #remote_token, input, None)
         }
-    }
+        },
+    )
 }
 
 fn fresh_param_ident(occupied: &[syn::Ident], preferred_name: &str) -> syn::Ident {
@@ -1179,14 +1252,158 @@ fn fresh_param_ident(occupied: &[syn::Ident], preferred_name: &str) -> syn::Iden
 
 struct RemoteAgentMethodsInfo {
     methods_impl: proc_macro2::TokenStream,
+    scoped_methods_impl: proc_macro2::TokenStream,
     method_names: AgentClientMethodNames,
 }
 
 impl RemoteAgentMethodsInfo {
-    fn new(methods_impl: proc_macro2::TokenStream, method_names: AgentClientMethodNames) -> Self {
+    fn new(
+        methods_impl: proc_macro2::TokenStream,
+        scoped_methods_impl: proc_macro2::TokenStream,
+        method_names: AgentClientMethodNames,
+    ) -> Self {
         Self {
             methods_impl,
+            scoped_methods_impl,
             method_names,
+        }
+    }
+}
+
+/// The client code generated for one agent method, and the awaited method of
+/// the scope-card view of the client.
+struct GeneratedMethod {
+    client: proc_macro2::TokenStream,
+    scoped: proc_macro2::TokenStream,
+}
+
+impl GeneratedMethod {
+    fn error(error: proc_macro2::TokenStream) -> Self {
+        Self {
+            client: error,
+            scoped: quote! {},
+        }
+    }
+
+    fn with_scoped(mut self, scoped: proc_macro2::TokenStream) -> Self {
+        self.scoped.extend(scoped);
+        self
+    }
+}
+
+/// The awaited invocation of an agent method. It is the only invocation that
+/// accepts a scope card, either per call through the client's scope-card view
+/// or as the client's default scope card.
+struct AwaitedMethod<'a> {
+    method_name: &'a syn::Ident,
+    impl_name: syn::Ident,
+    pending_impl_name: syn::Ident,
+    input_defs: &'a [&'a syn::FnArg],
+    input_idents: &'a [syn::Ident],
+    scope_card_param: syn::Ident,
+}
+
+impl AwaitedMethod<'_> {
+    /// The `pending_*` form of the awaited invocation, which also accepts a
+    /// scope card.
+    fn generate_pending(
+        &self,
+        pending_name: &syn::Ident,
+        return_type: proc_macro2::TokenStream,
+        body: proc_macro2::TokenStream,
+    ) -> GeneratedMethod {
+        let Self {
+            pending_impl_name,
+            input_defs,
+            input_idents,
+            scope_card_param,
+            ..
+        } = self;
+        let typed_input_defs = input_defs
+            .iter()
+            .filter(|arg| matches!(arg, syn::FnArg::Typed(_)))
+            .collect::<Vec<_>>();
+        GeneratedMethod {
+            client: quote! {
+                fn #pending_impl_name(
+                    &self,
+                    #(#typed_input_defs,)*
+                    #scope_card_param: Option<&golem_rust::permissions::ScopeCard>,
+                ) -> #return_type {
+                    // Resolved before the input is encoded, so that a dropped
+                    // default scope card fails before any argument card moves.
+                    let #scope_card_param = self.__golem_default_scope_card.resolve(#scope_card_param);
+                    #body
+                }
+
+                pub fn #pending_name(#(#input_defs),*) -> #return_type {
+                    self.#pending_impl_name(#(#input_idents,)* None)
+                }
+            },
+            scoped: quote! {
+                pub fn #pending_name(&self, #(#typed_input_defs),*) -> #return_type {
+                    self.client.#pending_impl_name(#(#input_idents,)* Some(self.scope_card))
+                }
+            },
+        }
+    }
+
+    fn invoke(&self, remote_token: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+        let scope_card_param = &self.scope_card_param;
+        quote! {
+            golem_rust::permissions::__async_invoke_and_await(
+                &self.wasm_rpc,
+                #remote_token,
+                input,
+                #scope_card_param.as_ref(),
+            )
+        }
+    }
+
+    fn generate(
+        &self,
+        return_type: proc_macro2::TokenStream,
+        body: proc_macro2::TokenStream,
+        rest: proc_macro2::TokenStream,
+    ) -> GeneratedMethod {
+        let Self {
+            method_name,
+            impl_name,
+            pending_impl_name: _,
+            input_defs,
+            input_idents,
+            scope_card_param,
+        } = self;
+        // The receiver of the user method may be `&mut self`; the shared
+        // implementation and the view need only `&self`.
+        let typed_input_defs = input_defs
+            .iter()
+            .filter(|arg| matches!(arg, syn::FnArg::Typed(_)))
+            .collect::<Vec<_>>();
+        GeneratedMethod {
+            client: quote! {
+                async fn #impl_name(
+                    &self,
+                    #(#typed_input_defs,)*
+                    #scope_card_param: Option<&golem_rust::permissions::ScopeCard>,
+                ) -> #return_type {
+                    // Resolved before the input is encoded, so that a dropped
+                    // default scope card fails before any argument card moves.
+                    let #scope_card_param = self.__golem_default_scope_card.resolve(#scope_card_param);
+                    #body
+                }
+
+                pub async fn #method_name(#(#input_defs),*) -> #return_type {
+                    self.#impl_name(#(#input_idents,)* None).await
+                }
+
+                #rest
+            },
+            scoped: quote! {
+                pub async fn #method_name(&self, #(#typed_input_defs),*) -> #return_type {
+                    self.client.#impl_name(#(#input_idents,)* Some(self.scope_card)).await
+                }
+            },
         }
     }
 }

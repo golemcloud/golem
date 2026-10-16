@@ -700,9 +700,37 @@ initiation) keeps using the custom parent.
 *existing* `Start` — no second `Start` is appended — if `can_reexecute_on_incomplete_replay`
 (`durability.rs`): `ReadLocal`, `ReadRemote`, `WriteLocal` always; `WriteRemote` only while the
 guest's idempotence mode is on (`assume_idempotence`, default `true`);
-`WriteRemoteBatched`/`WriteRemoteTransaction` never. Otherwise the session
+`WriteRemoteBatched`/`WriteRemoteTransaction` never, except a batched child of a scope whose
+owner re-executes the scope's effect call-locally (`ScopeReplayRecovery::Reexecute`, set by the
+owner through `AccessClaimOptions::incomplete_repair_authorized_by_scope`). Otherwise the session
 hard-errors and the enclosing durable scope's `ScopeReplayRecovery` decides whether recovery is
 possible; a hard error by itself is not a recovery.
+
+**P3 HTTP recovery is call-local for effectively idempotent requests.** `client::send` records
+`WriteRemote` for an idempotent method or for any method while `assume_idempotence` is on, and
+`WriteRemoteBatched(None)` only for a request that is not re-executable at all
+(`p3/http/send.rs`). A crash before the response headers therefore completes the recorded send
+`Start` in place (same index, same derived idempotency key, the deterministic guest re-produces
+the request body) and keeps every operation recorded next to it. The response body's
+`<scope:batched-write:consume-body>` scope opens with `ScopeReplayRecovery::Reexecute` for such a
+request; on replay an incomplete scope is retained instead of scanned and Jumped
+(`execute_access_scope_start`), its recorded chunks replay to the guest, and the first live
+demand continues the body (`response_body.rs::resume_recorded_response`). The demand stream
+repairs the scope `Start` together with its first incomplete child
+(`DurableDemandStream::incomplete_child`, `repair_incomplete_parent_access`): the owner writes the
+scope terminal last, so an incomplete child proves the scope has none, and the parent must be live
+before the tail routes a transient body error to the scope's retry point. Nothing delivered means
+a fresh re-issue of the recorded request; a delivered prefix means a re-send with
+`Range: bytes=<delivered>-`, accepted as a `206` continuing at that offset or as a full response
+whose prefix is byte-identical to the delivered bytes (a blake3 digest accumulated over delivered
+chunks, on both the replay and the live path). A request that carries a guest-set `Range`
+header is re-sent unchanged and any successful response is accepted only through the same
+prefix verification. Anything else ends the body with
+`ErrorCode::HttpResponseIncomplete` after the prefix the guest observed: a different response is
+never spliced after bytes the guest already saw, and the outcome is retry-exempt. The same
+prefix verification applies to the in-session `Range` resume after a transient mid-stream
+failure. Non-idempotent requests keep the batched scope, the foreign-write scan and the suffix
+Jump. Tests: `tests/http/concurrent_recovery.rs`.
 
 Host completion time and guest observation time are different facts. Only the second is a guest
 input, and only the second must recur exactly; the first may vary between runs.
@@ -1630,6 +1658,12 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
   own oplog in ordinal order. Replay performs no source RPC, authorization, or attachment; only
   the live suffix reads the source after the last journaled offset. An unread input may be
   forwarded as its original foreign handle without first attaching or consuming it.
+- **A guest observation commits only past the published horizon.** Its owned write calls
+  `DurableStreamStore::commit_through` with the reserved index. Every commit flushes the whole
+  oplog buffer, so a durable agent's attached published status at or above that index proves an
+  earlier commit made the record durable and folded it; the write returns its receipt without a
+  commit. Ephemeral status (weaker levels fold without storage) and detached status prove nothing,
+  so those writes always commit. The receipt still means durable and folded.
 - **RPC result and stream draining are separate.** The caller's durable call completes with the
   result *stripped of streams*, so the RPC `End` may be recorded while items still flow.
   Streaming keys follow the RPC identity rule above. Terminals finalize once; protocol terminals fence
@@ -1842,7 +1876,8 @@ A failed durable call has two recovery paths (`durable_host/durability.rs`):
   `InFunctionRetryState::decide_retry_with_properties` allows it only when the function type is
   `is_eligible_for_internal_retry` (`ReadLocal`/`ReadRemote`/`WriteLocal`; `WriteRemote` only
   with `assume_idempotence`; batched/transaction writes never — the same set as
-  `can_reexecute_on_incomplete_replay`), the call is not inside an atomic region, the resolved
+  `can_reexecute_on_incomplete_replay`, minus the scope-authorized batched child described
+  above), the call is not inside an atomic region, the resolved
   `NamedRetryPolicy` still permits an attempt, and the delay is ≤ `max_in_function_retry_delay`.
   Each attempt appends and commits an `OplogEntry::Error { retry_from, .. }` hint.
 - **Trap-based retry** is the fallback (`FallBackToTrap`/`Exhausted` →

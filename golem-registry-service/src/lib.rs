@@ -14,6 +14,8 @@
 
 pub mod api;
 pub mod bootstrap;
+#[cfg(any(not(feature = "embed-builtin-artifacts"), test))]
+mod builtin_manifest;
 pub mod config;
 pub mod grpc;
 pub mod metrics;

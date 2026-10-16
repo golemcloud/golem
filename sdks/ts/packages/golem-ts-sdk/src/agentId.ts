@@ -17,13 +17,24 @@ import { Uuid } from './uuid';
 import { Uuid as RawUuid, type SchemaValueTree } from 'golem:core/types@2.0.0';
 import { SchemaValue, schemaValueFromWit, schemaValueToWit } from './internal/schema-model';
 import { DynamicAgentClient, type DynamicAgentClientSurface } from './dynamicClient';
+import type { ScopeCard } from './host/permissions';
 
 /** @internal Protocol implemented by typed client definitions and reflected agent types. */
 export const bindAgentClient = '__golemBindAgentClient' as const;
 
+/** Options for a client bound to an existing agent identity. */
+export interface AgentClientBindOptions {
+  /** The default scope card for every awaited call of the bound client. */
+  readonly scopeCard?: ScopeCard;
+}
+
 /** @internal A value that can bind itself to an existing agent identity. */
 export interface AgentClientBinding<Client, Config = never> {
-  [bindAgentClient](agentId: ParsedAgentId, config?: Config): Client;
+  [bindAgentClient](
+    agentId: ParsedAgentId,
+    config?: Config,
+    options?: AgentClientBindOptions,
+  ): Client;
 }
 
 /** Explicit parts used to construct a {@link ParsedAgentId}. */
@@ -108,13 +119,20 @@ export class ParsedAgentId {
     return { typeName, constructorValue, phantomId };
   }
 
-  /** Bind a method-only, full, or reflected client to this identity. Config overrides apply only if this creates the worker. */
-  client<Client, Config>(binding: AgentClientBinding<Client, Config>, config?: Config): Client {
+  /**
+   * Bind a method-only, full, or reflected client to this identity. Config overrides apply only
+   * if this creates the worker. `options.scopeCard` is the client's default scope card.
+   */
+  client<Client, Config>(
+    binding: AgentClientBinding<Client, Config>,
+    config?: Config,
+    options?: AgentClientBindOptions,
+  ): Client {
     const bind = binding[bindAgentClient];
     if (typeof bind !== 'function') {
       throw new TypeError('Expected an agent client definition or reflected agent type');
     }
-    return bind.call(binding, this, config);
+    return bind.call(binding, this, config, options);
   }
 
   /** Invoke this identity with schema values and no discovery or typed client definition. */

@@ -27,10 +27,11 @@ use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
     DeleteWorkerRequest, ForkWorkerRequest, GetAgentMetadataRequest, GetFileContentsRequest,
-    GetFileSystemNodeRequest, GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
-    InterruptWorkerRequest, ResolveRevertLastInvocationsRequest, ResumeWorkerRequest,
-    RevertWorkerRequest, SearchOplogRequest, UpdateWorkerRequest, cancel_invocation_response,
-    complete_promise_response, create_worker_response, delete_worker_response, get_oplog_response,
+    GetFileSystemNodeRequest, GetOplogEntryRequest, GetWorkersMetadataRequest,
+    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, ResolveRevertLastInvocationsRequest,
+    ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest, UpdateWorkerRequest,
+    cancel_invocation_response, complete_promise_response, create_worker_response,
+    delete_worker_response, get_oplog_entry_response, get_oplog_response,
     get_workers_metadata_response, interrupt_worker_response,
     resolve_revert_last_invocations_response, resume_worker_response, revert_worker_response,
     search_oplog_response, update_worker_response,
@@ -48,7 +49,7 @@ use golem_common::model::component::{
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::filesystem::{FileByteSelection, FileReadExtent, FileReadHead};
-use golem_common::model::oplog::PublicOplogEntryWithIndex;
+use golem_common::model::oplog::{PublicOplogEntryWithIndex, PublicOplogPageEntry};
 use golem_common::model::tool::{ToolBindingInput, ToolName};
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget,
@@ -95,6 +96,73 @@ fn invocation_agent_id(
 }
 
 impl TestWorkerExecutor {
+    /// Converts the entries of an oplog page, and reads each entry that the page omitted in
+    /// full. Tests then see the full oplog, like `golem agent oplog` without `--omit-payloads`.
+    async fn full_oplog_entries(
+        &self,
+        agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        page_entries: Vec<golem_api_grpc::proto::golem::worker::OplogPageEntry>,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        let mut result = Vec::with_capacity(page_entries.len());
+        for page_entry in page_entries {
+            let page_entry = PublicOplogPageEntry::try_from(page_entry)
+                .map_err(|err| anyhow!("Failed to convert oplog entry: {err}"))?;
+            match page_entry {
+                PublicOplogPageEntry::Included(entry) => result.push(entry),
+                PublicOplogPageEntry::Omitted(omitted) => result.push(
+                    self.get_oplog_entry(
+                        agent_id,
+                        environment_id,
+                        omitted.oplog_index,
+                        Some(omitted.component_revision),
+                    )
+                    .await?,
+                ),
+            }
+        }
+        Ok(result)
+    }
+
+    /// Reads one oplog entry in full through the streaming `GetOplogEntry` call.
+    pub async fn get_oplog_entry(
+        &self,
+        agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        oplog_index: OplogIndex,
+        component_revision: Option<ComponentRevision>,
+    ) -> anyhow::Result<PublicOplogEntryWithIndex> {
+        let mut stream = self
+            .client
+            .clone()
+            .get_oplog_entry(GetOplogEntryRequest {
+                agent_id: Some(agent_id.clone().into()),
+                environment_id: Some(environment_id.into()),
+                auth_ctx: Some(self.auth_ctx().into()),
+                oplog_index: oplog_index.into(),
+                component_revision: component_revision.map(Into::into),
+            })
+            .await?
+            .into_inner();
+
+        let mut encoded = Vec::new();
+        while let Some(response) = stream.message().await? {
+            match response.result {
+                Some(get_oplog_entry_response::Result::Chunk(chunk)) => encoded.extend(chunk),
+                Some(get_oplog_entry_response::Result::Failure(error)) => {
+                    return Err(anyhow!(
+                        "Failed to get oplog entry {oplog_index}: {error:?}"
+                    ));
+                }
+                None => return Err(anyhow!("Empty oplog entry response")),
+            }
+        }
+        let entry: golem_api_grpc::proto::golem::worker::OplogEntryWithIndex =
+            prost::Message::decode(encoded.as_slice())?;
+        PublicOplogEntryWithIndex::try_from(entry)
+            .map_err(|err| anyhow!("Failed to convert oplog entry {oplog_index}: {err}"))
+    }
+
     pub async fn invoke_agent_session(
         &self,
         start: InvocationStart,
@@ -728,14 +796,12 @@ impl TestDsl for TestWorkerExecutor {
                             break;
                         } else {
                             result.extend(
-                                chunk
-                                    .entries
-                                    .into_iter()
-                                    .map(PublicOplogEntryWithIndex::try_from)
-                                    .collect::<Result<Vec<_>, _>>()
-                                    .map_err(|err| {
-                                        anyhow!("Failed to convert oplog entry: {err}")
-                                    })?,
+                                self.full_oplog_entries(
+                                    agent_id,
+                                    latest_version.environment_id,
+                                    chunk.entries,
+                                )
+                                .await?,
                             );
                             cursor = chunk.next;
                         }
@@ -787,14 +853,12 @@ impl TestDsl for TestWorkerExecutor {
                             break;
                         } else {
                             result.extend(
-                                chunk
-                                    .entries
-                                    .into_iter()
-                                    .map(|entry| entry.try_into())
-                                    .collect::<Result<Vec<_>, _>>()
-                                    .map_err(|err| {
-                                        anyhow!("Failed to convert oplog entry: {err}")
-                                    })?,
+                                self.full_oplog_entries(
+                                    agent_id,
+                                    latest_version.environment_id,
+                                    chunk.entries,
+                                )
+                                .await?,
                             );
                             cursor = chunk.next;
                         }

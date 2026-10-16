@@ -43,6 +43,7 @@ environments:
     componentPresets: optimized
 
 customCommands:
-  copy:
+  copy-javascript:
     - command: cp golem-temp/agents/golem_javascript_tools.wasm ../javascript-tools.wasm
+  copy-typescript:
     - command: cp golem-temp/agents/golem_typescript_tools.wasm ../typescript-tools.wasm

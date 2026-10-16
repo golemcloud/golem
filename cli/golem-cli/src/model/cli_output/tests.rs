@@ -1375,7 +1375,8 @@ fn agent_oplog_structured_output_exposes_secret_metadata_without_stdout_bytes() 
             request: Some(request),
             durable_function_type: PublicDurableFunctionType::WriteLocal(Empty {}),
             span_started: None,
-        }),
+        })
+        .into(),
     })
     .expect("agent.oplog should serialize");
 
@@ -1439,7 +1440,8 @@ fn cli_output_schema_validates_schema_native_component_and_agent_outputs() {
             entry: sample_public_oplog_entries()
                 .into_iter()
                 .next()
-                .expect("sample oplog entries should not be empty"),
+                .expect("sample oplog entries should not be empty")
+                .into(),
         })
         .expect("agent.oplog should serialize"),
     ];
@@ -3407,8 +3409,17 @@ fn arb_agent_oplog_result() -> OutputDocumentStrategy {
             arb_small_u64(),
             arb_public_oplog_entry_attribution(),
             prop_oneof![
-                proptest::sample::select(sample_public_oplog_entries()),
-                arb_typed_value_oplog_entry(),
+                proptest::sample::select(sample_public_oplog_entries()).prop_map(Into::into),
+                arb_typed_value_oplog_entry().prop_map(Into::into),
+                (arb_small_u64(), "[A-Za-z]{1,24}").prop_map(|(size, entry_type)| {
+                    crate::model::agent::oplog::AgentOplogEntryContent::Omitted(
+                        crate::model::agent::oplog::OmittedOplogEntryContent::Omitted {
+                            entry_type,
+                            timestamp: golem_common::model::Timestamp::from(1_700_000_000_000),
+                            size,
+                        },
+                    )
+                }),
             ],
         )
             .prop_map(|(index, attribution, entry)| {

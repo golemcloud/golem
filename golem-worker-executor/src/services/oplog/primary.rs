@@ -1462,6 +1462,9 @@ struct PrimaryOplog {
     /// The epoch the actor's state asserts on every append, copied here so that reading it does
     /// not have to go through the actor. Fixed for the oplog's lifetime.
     shard_epoch: Option<ShardEpoch>,
+    /// The inline payload threshold of the actor's state, copied here so that an inline upload
+    /// does not wait behind the actor's queued commits. Fixed for the oplog's lifetime.
+    max_payload_size: usize,
     /// The refusal the actor's state has latched, shared so the handle can report it.
     fence: Arc<std::sync::OnceLock<OplogFence>>,
     stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
@@ -1907,6 +1910,7 @@ impl PrimaryOplog {
             agent_mode,
             fingerprint,
             shard_epoch,
+            max_payload_size,
             fence,
             stream_session_index,
             close: Mutex::new(Some(close)),
@@ -2694,6 +2698,10 @@ impl Oplog for PrimaryOplog {
     }
 
     async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {
+        // A retired oplog still takes the actor path, which reports the terminated actor.
+        if data.len() <= self.max_payload_size && !self.is_retired() {
+            return Ok(RawOplogPayload::SerializedInline(data));
+        }
         let ctx = self.run_job(|done| OplogJob::BlobContext { done }).await;
         let data_len = data.len() as u64;
         let result = PrimaryOplogService::upload_raw_payload(

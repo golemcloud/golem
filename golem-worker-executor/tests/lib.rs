@@ -33,6 +33,7 @@ pub mod compatibility;
 pub mod concurrent_delivery_order;
 pub mod concurrent_runtime_events;
 pub mod durability;
+pub mod effect_permissions;
 pub mod external_durable_stream;
 pub mod filesystem_inspection;
 pub mod filesystem_snapshots;
@@ -55,6 +56,7 @@ pub mod oplog_metrics;
 pub mod oplog_sweep;
 pub mod oplog_unreadable;
 pub mod owner_tool_isolation;
+pub mod permission_cards_scala;
 pub mod rdbms;
 pub mod rdbms_service;
 pub mod readonly;
@@ -133,6 +135,8 @@ tag_suite!(agent_sdk_ts, group4);
 tag_suite!(agent_sdk_go, group4);
 tag_suite!(durability, group4);
 tag_suite!(scope_cards, group4);
+tag_suite!(effect_permissions, group4);
+tag_suite!(permission_cards_scala, group4);
 tag_suite!(scalability, group4);
 tag_suite!(readonly, group4);
 
@@ -360,6 +364,12 @@ test_component!(
     "tool_streaming_go_caller",
     "golem_it_tool_streaming_go_caller",
     "golem-it:tool-streaming-go-caller"
+);
+test_component!(
+    permissions_effect,
+    "permissions_effect",
+    "golem_it_permissions_effect",
+    "golem-it:permissions-effect"
 );
 test_component!(
     snapshot_sqlite_effect,

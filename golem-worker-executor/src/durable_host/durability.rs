@@ -2337,6 +2337,11 @@ pub struct InFunctionRetryController {
     retry_state: InFunctionRetryState,
     /// Fully-qualified host-function name used as the retry decision's function label.
     function_label: &'static str,
+    /// Set for a child of a durable scope whose owner may re-execute the scope's effect under its
+    /// recorded `Start` (a re-issuable HTTP response body). Such a child may complete an incomplete
+    /// `Start` live although its own function type is not re-executable; the scope owner, not the
+    /// child's type, decides that the effect may repeat. It never widens in-function retry.
+    incomplete_repair_authorized_by_scope: bool,
 }
 
 impl InFunctionRetryController {
@@ -2350,11 +2355,21 @@ impl InFunctionRetryController {
             durable_execution_state,
             retry_state: InFunctionRetryState::new(),
             function_label,
+            incomplete_repair_authorized_by_scope: false,
         }
     }
 
     pub fn function_type(&self) -> &DurableFunctionType {
         &self.function_type
+    }
+
+    pub fn with_incomplete_repair_authorized_by_scope(mut self, authorized: bool) -> Self {
+        self.incomplete_repair_authorized_by_scope = authorized;
+        self
+    }
+
+    pub fn incomplete_repair_authorized_by_scope(&self) -> bool {
+        self.incomplete_repair_authorized_by_scope
     }
 
     pub fn durable_execution_state(&self) -> &DurableExecutionState {
@@ -2548,12 +2563,14 @@ impl InFunctionRetryController {
 
     /// Whether a call of this function type may be safely re-executed when replay finds its
     /// host-call `Start` committed but its `End` missing (see
-    /// [`crate::durable_host::concurrent::CallReplayOutcome::Incomplete`]). This is exactly the set
-    /// that is eligible for in-function retry: reads and local/idempotent writes can be re-run
-    /// without duplicating an external side effect; non-idempotent / batched / transaction writes
-    /// cannot, and rely on durable-scope recovery instead.
+    /// [`crate::durable_host::concurrent::CallReplayOutcome::Incomplete`]). This is the set that
+    /// is eligible for in-function retry: reads and local/idempotent writes can be re-run without
+    /// duplicating an external side effect; non-idempotent / batched / transaction writes cannot,
+    /// and rely on durable-scope recovery instead. A batched child of a scope whose owner
+    /// re-executes the scope's effect call-locally is the one addition: the owner authorizes the
+    /// repair ([`Self::with_incomplete_repair_authorized_by_scope`]).
     pub fn can_reexecute_on_incomplete_replay(&self) -> bool {
-        self.is_eligible_for_internal_retry()
+        self.is_eligible_for_internal_retry() || self.incomplete_repair_authorized_by_scope
     }
 }
 

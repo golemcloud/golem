@@ -797,6 +797,10 @@ pub(crate) type DurableStreamCommit = Arc<
         + Sync,
 >;
 
+/// Returns the oplog index through which the owner's entries are committed and folded into its
+/// published status, or `None` when no such index is known.
+pub(crate) type DurableStreamPublishedHorizon = Arc<dyn Fn() -> Option<OplogIndex> + Send + Sync>;
+
 /// Owns one agent's persisted stream journal, indexes, and disposable live publication state.
 /// Session-specific transport and consumer behavior belongs to `StreamSession` instead.
 pub struct DurableStreamStore {
@@ -805,6 +809,7 @@ pub struct DurableStreamStore {
     pub(crate) fork_lineage: Arc<StreamForkLineage>,
     applied_fork_cuts: BTreeMap<OplogIndex, Arc<HashSet<StreamId>>>,
     commit: DurableStreamCommit,
+    published_horizon: std::sync::OnceLock<DurableStreamPublishedHorizon>,
     worker_tasks: std::sync::OnceLock<crate::worker::tasks::WorkerTasks>,
     control_metadata_provider:
         std::sync::OnceLock<(Arc<dyn WorkerService>, AgentMode, AgentFingerprint)>,
@@ -873,6 +878,12 @@ impl DurableStreamStore {
 
     pub(crate) fn set_worker_tasks(&self, tasks: crate::worker::tasks::WorkerTasks) {
         assert!(self.worker_tasks.set(tasks).is_ok());
+    }
+
+    /// Installs the owner's published commit horizon, which lets a write skip a commit that an
+    /// earlier commit already made durable and published.
+    pub(crate) fn set_published_horizon(&self, horizon: DurableStreamPublishedHorizon) {
+        assert!(self.published_horizon.set(horizon).is_ok());
     }
 
     pub(crate) fn tasks(&self) -> &crate::worker::tasks::WorkerTasks {
@@ -1224,6 +1235,7 @@ impl DurableStreamStore {
             fork_lineage,
             applied_fork_cuts,
             commit,
+            published_horizon: std::sync::OnceLock::new(),
             worker_tasks: std::sync::OnceLock::new(),
             control_metadata_provider: std::sync::OnceLock::new(),
             environment_id,
