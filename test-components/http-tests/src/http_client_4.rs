@@ -100,6 +100,11 @@ pub trait HttpClient4 {
     /// recorded as a `Cancelled` oplog entry.
     async fn post_and_cancel_before_response(&self) -> String;
 
+    /// Like `post_and_cancel_before_response`, but after the cancellation it
+    /// waits for no time. A test that observes the start of that wait knows
+    /// that the guest dropped the pending response future.
+    async fn post_and_cancel_before_response_then_checkpoint(&self) -> String;
+
     /// Sends a GET request, reads one response-body chunk, then drops the body
     /// stream before EOF.
     async fn get_and_drop_body_after_first_chunk(&self) -> String;
@@ -320,6 +325,12 @@ impl HttpClient4 for HttpClient4Impl {
 
     async fn post_and_cancel_before_response(&self) -> String {
         do_post_and_cancel_before_response().await
+    }
+
+    async fn post_and_cancel_before_response_then_checkpoint(&self) -> String {
+        let result = do_post_and_cancel_before_response().await;
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(0).await;
+        result
     }
 
     async fn get_and_drop_body_after_first_chunk(&self) -> String {

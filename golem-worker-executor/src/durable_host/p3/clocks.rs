@@ -14,10 +14,10 @@
 
 use crate::durable_host::DurabilityHost;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, Cancellable, DeferredCallReplayOutcome, DurableCallSession, NotCancellable,
-    reserve_invocation_id_before_await,
+    AccessClaimOptions, CallReplayOutcome, Cancellable, DeferredCallReplayOutcome,
+    DurableCallSession, NotCancellable, reserve_invocation_id_before_await,
 };
-use crate::durable_host::p3::{DurableP3, DurableP3View, run_read_access};
+use crate::durable_host::p3::{DurableP3, DurableP3View};
 use crate::durable_host::suspendable_wait::{
     ParkOutcome, ephemeral_sleep_too_long_error, wait_for_ready,
 };
@@ -129,19 +129,34 @@ impl<U: Send + 'static, Ctx: WorkerCtx> monotonic_clock::HostWithStore<U> for Du
         when: monotonic_clock::Mark,
     ) -> wasmtime::Result<()> {
         reserve_invocation_id_before_await(store, super::durable_worker_ctx::<Ctx, U>)?;
+        // The call is started before the first await, so a guest that drops the wait at any
+        // point finds its `Start` recorded or claimed.
+        let wait = DurableCallSession::<P3MonotonicClockWaitUntil, Cancellable>::start_access(
+            store,
+            super::durable_worker_ctx::<Ctx, U>,
+            HostRequestMonotonicClockTimestamp { nanos: when },
+            DurableFunctionType::ReadLocal,
+        )
+        .await?;
         // A timer must return STARTED even when its deadline has passed. An inline live
         // delivery followed by a direct host call can deadlock replay when that call holds
         // the Store before the replayed timer reaches its guest-delivery boundary.
         tokio::task::yield_now().await;
-        run_read_access::<_, _, Ctx, P3MonotonicClockWaitUntil, _>(
-            store,
-            HostRequestMonotonicClockTimestamp { nanos: when },
-            DurableFunctionType::ReadLocal,
-            || async {
-                wait_until_live::<U, Ctx>(store, when).await?;
-                Ok(HostResponseP3MonotonicClockUnit {})
-            },
-        )
+        let wait = if wait.is_live() {
+            wait
+        } else {
+            match wait
+                .replay_access(store, super::durable_worker_ctx::<Ctx, U>)
+                .await?
+            {
+                CallReplayOutcome::Replayed(_) => return Ok(()),
+                CallReplayOutcome::Incomplete(wait) => wait,
+            }
+        };
+        wait.run_live_action_access(store, super::durable_worker_ctx::<Ctx, U>, async || {
+            wait_until_live::<U, Ctx>(store, when).await?;
+            Ok::<_, wasmtime::Error>(HostResponseP3MonotonicClockUnit {})
+        })
         .await
         .map(|_| ())
     }

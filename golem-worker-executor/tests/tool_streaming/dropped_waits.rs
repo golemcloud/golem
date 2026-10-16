@@ -296,13 +296,14 @@ async fn a_body_that_dropped_a_wait_after_its_clock_read_is_replayed_after_a_res
         .call_clock_tool("race-p3-sleeps", &[("secs", clock_seconds(&[1, 60]))])
         .await?;
     assert_eq!(winner, 1);
+    // The waits start in their own host tasks, so the oplog can hold their `Start`s in any order.
     let waits = owner.recorded_waits(WAIT_FOR).await?;
-    assert_eq!(
-        waits.last(),
-        Some(&RecordedWait {
+    assert!(
+        waits.contains(&RecordedWait {
             terminal: Some("Cancelled"),
             reads: vec![Some("End")],
-        })
+        }),
+        "the 60 s wait must be cancelled after its clock read: {waits:?}"
     );
 
     let owner = owner.restart_the_executor(deps).await?;
@@ -311,30 +312,40 @@ async fn a_body_that_dropped_a_wait_after_its_clock_read_is_replayed_after_a_res
 
 impl ClockToolOwner {
     /// A client's call of `command`, whose body starts a 60 s wait, lets the host run for many
-    /// turns, and returns while the wait is held at `stage` of the call named `function`.
+    /// turns, drops the wait while it is held at `stage` of the call named `function`, and then
+    /// makes a checkpoint call of `checkpoint`.
     async fn call_a_body_that_drops_a_wait_held_at(
         &self,
         command: &str,
         function: &str,
         stage: ReplayAdmissionStage,
+        checkpoint: &str,
     ) -> anyhow::Result<()> {
         let mut gate =
             self.executor
                 .gate_next_replay_access_admission(&self.worker_id, function, stage);
+        let mut checkpoint_gate = self.executor.gate_next_replay_access_admission(
+            &self.worker_id,
+            checkpoint,
+            ReplayAdmissionStage::BeforeLiveStart,
+        );
         let turns = 2_000;
         let input = [
             ("secs", SchemaValue::U64(60)),
             ("turns", SchemaValue::U64(turns)),
         ];
         let call = self.call_clock_tool(command, &input);
-        // The host work held at the gate may outlive the body that dropped the wait, and the call
-        // returns only after it ends. Release the gate once the body had time to return.
+        // The body makes its checkpoint call only after it dropped the wait, so the host work held
+        // at the gate continues after the drop.
         let hold = async {
             tokio::time::timeout(Duration::from_secs(60), gate.entered())
                 .await
                 .map_err(|_| anyhow::anyhow!("the wait did not reach {function} {stage:?}"))?;
-            tokio::time::sleep(Duration::from_secs(3)).await;
+            tokio::time::timeout(Duration::from_secs(60), checkpoint_gate.entered())
+                .await
+                .map_err(|_| anyhow::anyhow!("the body did not reach its {checkpoint} call"))?;
             gate.release();
+            checkpoint_gate.release();
             Ok::<_, anyhow::Error>(())
         };
         let (returned, held) = tokio::join!(call, hold);
@@ -369,6 +380,7 @@ async fn a_body_that_dropped_a_wait_before_its_start_is_replayed_after_a_restart
             "drop-p3-sleep-early",
             WAIT_FOR,
             ReplayAdmissionStage::BeforeLiveStart,
+            WAIT_UNTIL,
         )
         .await?;
     assert_eq!(
@@ -408,6 +420,7 @@ async fn a_body_that_dropped_a_wait_during_its_clock_read_is_replayed_after_a_re
             "drop-p3-sleep-early",
             "monotonic-clock::now",
             ReplayAdmissionStage::AfterDeferredStart,
+            WAIT_UNTIL,
         )
         .await?;
     assert_eq!(
@@ -448,8 +461,51 @@ async fn a_body_that_dropped_a_wait_until_before_its_start_is_replayed_after_a_r
             "drop-p3-sleep-until-early",
             WAIT_UNTIL,
             ReplayAdmissionStage::BeforeLiveStart,
+            WAIT_FOR,
         )
         .await?;
+    assert_eq!(
+        owner.recorded_waits(WAIT_UNTIL).await?,
+        [RecordedWait {
+            terminal: Some("Cancelled"),
+            reads: vec![],
+        }]
+    );
+
+    let owner = owner.restart_the_executor(deps).await?;
+    owner.the_next_call_runs_after_the_replay().await
+}
+
+/// The body drops a `wait-until` in the same turn as it calls it, before the host function makes
+/// any progress. The wait still records its `Start` and its `Cancelled`.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_body_that_dropped_a_wait_until_in_its_call_is_replayed_after_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let owner = ClockToolOwner::start(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "dropped-until-in-call",
+    )
+    .await?;
+    let turns = owner
+        .call_clock_tool(
+            "drop-p3-sleep-until-early",
+            &[
+                ("secs", SchemaValue::U64(60)),
+                ("turns", SchemaValue::U64(0)),
+            ],
+        )
+        .await?;
+    assert_eq!(turns, 0);
     assert_eq!(
         owner.recorded_waits(WAIT_UNTIL).await?,
         [RecordedWait {
