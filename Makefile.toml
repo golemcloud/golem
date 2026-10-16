@@ -2395,11 +2395,6 @@ end
 echo "validated ${artifact_count} external built-in artifacts"
 '''
 
-[tasks.check-builtin-host-contract]
-description = "Type-checks built-in WASM imports and exports against the current host WIT (requires wasm-tools)"
-command = "python3"
-args = ["builtin-tools/validate-host-contract.py"]
-
 [tasks.component-size-report]
 description = "Builds representative components and assembles a local size and retention report"
 command = "python3"

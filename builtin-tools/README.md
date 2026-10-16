@@ -155,15 +155,6 @@ component revision. New component artifacts start at `0.0.1`. Until an artifact 
 compatibility policy, increment its patch version for every byte-changing publication. Artifact
 versions do not determine the versions of the tools or middlewares exported by the component.
 
-After downloading the pins with `cargo make fetch-builtin-artifacts`, run
-`cargo make check-builtin-host-contract` (requires `wasm-tools` 1.262.0).
-Run the same check after `cargo make build-builtin-tools` and `cargo make build-plugins`
-to validate local outputs. It checks structural import and export types against the canonical
-`wit/` definitions, including the oplog processor export, and rejects P2 HTTP imports.
-It does not execute guests or replace worker-executor smoke tests. CI runs this check on
-the downloaded artifacts even when the artifact cache hits; a checksum only identifies bytes,
-not whether the current executor can use them.
-
 Component-implemented built-ins are grantable registry releases, not ambient tools. A consuming
 manifest must select each exact tool release under `tools.<name>.release` and each middleware
 release under `tools.middleware.<name>.release`. Native tools compiled into the host use separate

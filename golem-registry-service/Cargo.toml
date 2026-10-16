@@ -92,7 +92,6 @@ tracing = { workspace = true }
 tracing-futures = { workspace = true, features = ["futures-03"] }
 url = { workspace = true }
 uuid = { workspace = true }
-wasmparser = { workspace = true }
 
 [dev-dependencies]
 assert2 = { workspace = true }
@@ -104,4 +103,3 @@ testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 test-r = { workspace = true }
 tryhard = { workspace = true }
-wat = { workspace = true }
