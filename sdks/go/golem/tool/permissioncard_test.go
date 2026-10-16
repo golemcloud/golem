@@ -480,3 +480,37 @@ func TestAReturnedValueIsSentOnce(t *testing.T) {
 		t.Errorf("passing the error on again gave %+v", got)
 	}
 }
+
+// A result that fails to encode is an invalid result, and the cards the
+// encode already took go back to the host rather than to a value nobody
+// keeps.
+func TestAResultThatFailsToEncodeReleasesItsCards(t *testing.T) {
+	released := recordReleases(t)
+	r, d := newToolRegistry(), newDefinitions()
+	def := defineToolInto[Keys](r, d, "pair", Spec{Version: "1.0.0"}, false)
+	cmd := def.Command[golem.Unit, TwoCards]("pair", nil)
+	_ = cmd.Handle(func(*Context, golem.Unit) (TwoCards, error) { return TwoCards{}, nil })
+	if _, ok := r.discover(d); !ok {
+		t.Fatalf("tool discovery failed: %s", engine.AllErrors(d.Errs))
+	}
+	value := hostValue(t, func(card func() golem.PermissionCard) TwoCards { return TwoCards{A: card(), B: card()} })
+	var first *types.PermissionCard
+	for _, n := range witOf(value).Value.ValueNodes {
+		if n.Tag() == types.SchemaValueNodePermissionCardHandle && first == nil {
+			first = n.PermissionCardHandle()
+		}
+	}
+	pair, err := golem.DecodeTypedValue[TwoCards](value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	golem.EncodeTypedValue(pair.B)
+
+	res := d.encodeResult(cmd.ce, reflect.ValueOf(pair))
+	if res.IsOk() || res.Err().Tag() != types.ToolErrorInvalidResult {
+		t.Fatalf("a result with a moved card encoded as %+v", res)
+	}
+	if len(*released) != 1 || (*released)[0] != first {
+		t.Errorf("released %v, want the result's live card", *released)
+	}
+}

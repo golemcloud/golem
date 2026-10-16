@@ -1214,9 +1214,25 @@ func (d *definitions) encodeResult(ce *commandEntry, out reflect.Value) (result 
 		root := g.Node(c)
 		graph := g.Build()
 		graph.Root = root
-		res.Result = witTypes.Some(types.TypedSchemaValue{Graph: graph, Value: engine.EncodeWith(c, out)})
+		res.Result = witTypes.Some(types.TypedSchemaValue{Graph: graph, Value: encodeOwned(c, out)})
 	}
 	return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](res)
+}
+
+// encodeOwned encodes a value a handler handed to the host: a result or a
+// declared error's payload. The handler gave its cards up with it, so an
+// encode that fails releases the cards it already took instead of giving them
+// back to a value nobody keeps, and panics again.
+func encodeOwned(c *engine.Codec, v reflect.Value) types.SchemaValueTree {
+	var b engine.ValBuilder
+	defer func() {
+		if r := recover(); r != nil {
+			engine.ReleaseCardsIn(b.Nodes, link.ReleaseCard)
+			panic(r)
+		}
+	}()
+	root := c.Encode(&b, v)
+	return types.SchemaValueTree{ValueNodes: b.Nodes, Root: root}
 }
 
 // handlerError turns what a handler failed with into the wire error: a
@@ -1386,7 +1402,7 @@ func (d *definitions) declaredToolError(ce *commandEntry, raised *RaisedError) t
 		root := g.Node(c)
 		graph := g.Build()
 		graph.Root = root
-		payload = types.TypedSchemaValue{Graph: graph, Value: engine.EncodeWith(c, raised.payload)}
+		payload = types.TypedSchemaValue{Graph: graph, Value: encodeOwned(c, raised.payload)}
 	}
 	return types.MakeToolErrorCustomError(types.CustomToolError{Name: raised.info.name, Payload: payload})
 }
