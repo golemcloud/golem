@@ -78,6 +78,7 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
         limits.clone(),
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
+                config.agent_sockets.enabled = true;
                 config.resource_usage_metering = metering
             })),
             create_card_service: Some(Arc::new(|| Arc::new(TestCardService))),
@@ -189,7 +190,6 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
         principal.clone(),
         InvocationExecutionMode::Live,
         IdempotencyKey::fresh(),
-        true,
         false,
         IdempotencyKey::fresh(),
     )

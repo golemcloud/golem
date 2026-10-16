@@ -21,6 +21,7 @@ use super::model::{
 use super::persistence::{ExternalRevision, NO_REVISION, RoutingTablePersistence};
 use super::rebalancing::Rebalance;
 use super::worker_executor::{WorkerExecutorService, assign_shards, revoke_shards};
+use crate::metrics;
 use async_rwlock::RwLock;
 use chrono::Utc;
 use golem_common::base_model::shard_lease;
@@ -368,17 +369,22 @@ impl ShardManagement {
         // below cannot discard the reaping along with it. `remove_executor` puts the freed shards
         // on `pending_rebalance`. The no-op guard skips this write when nothing had lapsed, so the
         // common path still costs a single write.
-        self.persist_for_request(move |shard_state| {
-            for (expired_id, released) in shard_state.housekeep(now) {
-                warn!(
-                    executor_id = %expired_id,
-                    released_shards = released.len(),
-                    "Shard lease expired; releasing its shards"
-                );
-            }
-            Ok(())
-        })
-        .await?;
+        let (expired, _stored_at) = self
+            .persist_for_request(move |shard_state| {
+                let expired = shard_state.housekeep(now);
+                for (expired_id, released) in &expired {
+                    warn!(
+                        executor_id = %expired_id,
+                        released_shards = released.len(),
+                        "Shard lease expired; releasing its shards"
+                    );
+                }
+                Ok(expired.len())
+            })
+            .await?;
+        // Counted once the removal is stored: a write that fails leaves the lease in place, and
+        // the next pass reaps it again.
+        metrics::record_executor_leases_expired(expired);
 
         let (pending, stored_at) = self
             .persist_for_request(move |shard_state| {
@@ -553,12 +559,13 @@ impl ShardManagement {
             // The write lock is taken twice, for the plan and for its apply, and is free during the
             // fan-out, so a renewal is never queued behind the executor round trips.
             let now = Utc::now();
-            let (rebalance, full_assignment_executors) = self
+            let (rebalance, full_assignment_executors, expired) = self
                 .mutate_and_persist(|current_shard_state| {
                     // Every pass begins by reaping the leases that lapsed since the last one.
                     // Removing a lease drops its shard assignments, so the plan computed below
                     // sees those shards as unassigned and re-homes them.
-                    for (executor_id, released) in current_shard_state.housekeep(now) {
+                    let expired = current_shard_state.housekeep(now);
+                    for (executor_id, released) in &expired {
                         warn!(
                             executor_id = %executor_id,
                             released_shards = released.len(),
@@ -584,9 +591,10 @@ impl ShardManagement {
 
                     let rebalance = Rebalance::from_shard_state(current_shard_state, threshold);
 
-                    (rebalance, full_assignment_executors)
+                    (rebalance, full_assignment_executors, expired.len())
                 })
                 .await?;
+            metrics::record_executor_leases_expired(expired);
 
             debug!(rebalance=%rebalance, "Applying rebalance plan");
 

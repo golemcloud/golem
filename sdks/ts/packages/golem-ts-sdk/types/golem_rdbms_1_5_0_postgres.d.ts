@@ -9,7 +9,13 @@ declare module 'golem:rdbms/postgres@1.5.0' {
     get(): DbColumnType;
   }
   export class DbResultStream {
+    /**
+     * @throws Error
+     */
     getColumns(): DbColumn[];
+    /**
+     * @throws Error
+     */
     getNext(): DbRow[] | undefined;
   }
   export class DbConnection {
@@ -83,6 +89,14 @@ declare module 'golem:rdbms/postgres@1.5.0' {
   } |
   {
     tag: 'other'
+    val: string
+  } |
+  /**
+   * The resident transaction or result stream cannot be resumed. Recorded results
+   * remain valid; this does not prove that an earlier write failed.
+   */
+  {
+    tag: 'resource-lost'
     val: string
   };
   export type Interval = {

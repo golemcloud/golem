@@ -167,7 +167,7 @@ pub trait EphemeralNetworking {
         input_port: u16,
         output_port: u16,
     ) -> Result<u64, String>;
-    async fn udp_receive_p3(&self) -> Result<Vec<u8>, String>;
+    async fn udp_receive_wait_p3(&self) -> Result<Vec<u8>, String>;
 }
 
 pub struct EphemeralNetworkingImpl;
@@ -214,7 +214,7 @@ impl EphemeralNetworking for EphemeralNetworkingImpl {
         tcp_cross_socket_blocking_splice(input_port, output_port)
     }
 
-    async fn udp_receive_p3(&self) -> Result<Vec<u8>, String> {
+    async fn udp_receive_wait_p3(&self) -> Result<Vec<u8>, String> {
         udp_receive().await
     }
 }
@@ -239,7 +239,7 @@ pub trait Networking {
     fn tcp_input_block_p2(&self, port: u16) -> Result<bool, String>;
     fn tcp_blocking_read_p2(&self, port: u16) -> Result<Vec<u8>, String>;
     fn tcp_blocking_skip_p2(&self, port: u16) -> Result<u64, String>;
-    async fn udp_receive_p3(&self) -> Result<Vec<u8>, String>;
+    async fn udp_receive_wait_p3(&self) -> Result<Vec<u8>, String>;
     fn probe_p2(
         &self,
         operation: String,
@@ -259,6 +259,7 @@ pub trait Networking {
     async fn probe_udp_p3(&self, operation: String, port: u16, data: Vec<u8>)
     -> Result<(), String>;
     async fn udp_send_p3(&self, port: u16, data: Vec<u8>) -> Result<(), String>;
+    async fn udp_receive_p3(&self, port: u16, ready_port: u16) -> Result<String, String>;
 }
 
 pub struct NetworkingImpl {
@@ -331,7 +332,7 @@ impl Networking for NetworkingImpl {
         tcp_cross_socket_blocking_splice(input_port, output_port)
     }
 
-    async fn udp_receive_p3(&self) -> Result<Vec<u8>, String> {
+    async fn udp_receive_wait_p3(&self) -> Result<Vec<u8>, String> {
         udp_receive().await
     }
 
@@ -470,5 +471,35 @@ impl Networking for NetworkingImpl {
             )
             .await
             .map_err(|error| format!("{error:?}"))
+    }
+
+    async fn udp_receive_p3(&self, port: u16, ready_port: u16) -> Result<String, String> {
+        use golem_rust::wasip3::sockets::types::{
+            IpAddressFamily, IpSocketAddress, Ipv4SocketAddress, UdpSocket,
+        };
+
+        let socket =
+            UdpSocket::create(IpAddressFamily::Ipv4).map_err(|error| format!("{error:?}"))?;
+        socket
+            .bind(IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                address: (127, 0, 0, 1),
+                port,
+            }))
+            .map_err(|error| format!("{error:?}"))?;
+        socket
+            .send(
+                b"ready".to_vec(),
+                Some(IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                    address: (127, 0, 0, 1),
+                    port: ready_port,
+                })),
+            )
+            .await
+            .map_err(|error| format!("{error:?}"))?;
+        let (data, _) = socket
+            .receive()
+            .await
+            .map_err(|error| format!("{error:?}"))?;
+        Ok(String::from_utf8_lossy(&data).to_string())
     }
 }

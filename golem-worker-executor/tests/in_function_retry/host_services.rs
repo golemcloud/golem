@@ -209,7 +209,7 @@ async fn keyvalue_set_retries_inline_when_idempotent(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    // set should succeed after 2 in-function retries (assume_idempotence defaults to true)
+    // set should succeed after 2 in-function retries.
     executor
         .invoke_and_await_agent(
             &component,

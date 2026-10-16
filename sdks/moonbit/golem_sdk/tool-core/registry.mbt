@@ -156,7 +156,7 @@ fn release_wire_invocation_input(
       @types.SecretValue(raw) => (drops.drop_secret)(raw)
       @types.QuotaTokenHandle(raw) => (drops.drop_quota_token)(raw)
       @types.StreamValue(raw) => (drops.drop_stream)(raw)
-      @types.PermissionCardHandle(raw) => raw.drop()
+      @types.PermissionCardHandle(raw) => @card.drop_unless_held(raw)
       _ => ()
     }
   }).abort()

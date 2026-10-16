@@ -25,8 +25,7 @@ import (
 // An unrecovered panic makes the Go runtime exit with status 2, which Golem
 // records as a deliberate process exit. At the crash level the runtime aborts
 // through a wasm trap instead, which Golem treats as a failure: it fails the
-// agent, or retries the invocation inside an atomic region, as in Rust. This
-// covers panics on any goroutine.
+// agent, as in Rust. This covers panics on any goroutine.
 func init() { debug.SetTraceback("crash") }
 
 // trap reports an agent method's panic and traps the component. The report is
@@ -38,7 +37,7 @@ func trap(pe *panicError) {
 }
 
 // trapRegionPanic reports a panic recovered in a region that must not resume
-// (an atomic region, a transaction) and traps the component, so nothing above
+// (a durable operation or a transaction) and traps the component, so nothing above
 // can recover it and run on inside the region.
 func trapRegionPanic(region string, value any) {
 	_, _ = os.Stderr.WriteString("panic: " + region + ": " + fmt.Sprint(value) + "\n\n" + string(debug.Stack()))

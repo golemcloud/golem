@@ -16,12 +16,15 @@
 
 package golem.runtime.rpc
 
+import golem.host.PermissionsApi.{PermissionCard, PolymorphicPermissionCard, ScopeCard}
+import golem.host.js.JsPermissionCardResource
 import golem.host.js.schema.JsSchemaValueTree
 import golem.runtime.annotations.{DurabilityMode, agentDefinition}
 import golem.BaseAgent
 import golem.runtime.{AgentMethod, AgentType}
+import golem.runtime.rpc.AgentClientRuntime.WireResolvedAgent
 import golem.runtime.rpc.AgentClientRuntimeSpecFixtures._
-import golem.schema.{AgentStream, IntoSchema}
+import golem.schema.{AgentStream, GuestPermissionCardHandle, IntoSchema}
 import golem.schema.wire.ConcreteCodec
 import zio._
 import zio.test._
@@ -63,6 +66,119 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
         assertTrue(
           invoker.triggerCalls.headOption.exists(_._1 == method.functionName),
           invoker.scheduleCalls.nonEmpty
+        )
+      }
+    },
+    test("awaited calls carry the default scope card, a per-call card overrides it, and the card stays usable") {
+      val invoker   = new RecordingRpcInvoker
+      val wire      = WireResolvedAgent(rpcWireType, RemoteAgentClient("ScopeWireAgent", "agent-1", null, invoker))
+      val method    = wire.methodByName[SampleInput, SampleOutput]("rpcCall")
+      val default   = scopeCard("default")
+      val perCall   = scopeCard("per-call")
+      val defaulted = wire.withScopeCard(default)
+      invoker.enqueueInvokeResult(Right(encodeResult(SampleOutput("a"))))
+      invoker.enqueueInvokeResult(Right(encodeResult(SampleOutput("b"))))
+      invoker.enqueueInvokeResult(Right(encodeResult(SampleOutput("c"))))
+      invoker.enqueueInvokeResult(Right(encodeResult(SampleOutput("d"))))
+      ZIO.fromFuture { implicit ec =>
+        for {
+          _ <- defaulted.await(method, SampleInput("x", 1))
+          _ <- defaulted.withScopeCard(perCall).await(method, SampleInput("x", 2))
+          _ <- defaulted.withoutScopeCard.await(method, SampleInput("x", 3))
+          _ <- defaulted.cancelableAwait(method, SampleInput("x", 4))._1
+        } yield assertTrue(
+          invoker.scopeCardsSeen.toList.map(_.map(_.toString)) ==
+            List(Some(default.toString), Some(perCall.toString), None, Some(default.toString)),
+          invoker.scopeCardsSeen(0).exists(_ eq default),
+          invoker.scopeCardsSeen(1).exists(_ eq perCall),
+          invoker.scopeCardsSeen(3).exists(_ eq default),
+          default.isPresent,
+          perCall.isPresent,
+          wire.scopeCard.isEmpty
+        )
+      }
+    },
+    test("fire-and-forget and scheduled calls never carry the default scope card") {
+      val invoker = new RecordingRpcInvoker
+      val wire    = WireResolvedAgent(rpcWireType, RemoteAgentClient("ScopeWireAgent", "agent-1", null, invoker))
+        .withScopeCard(scopeCard("d"))
+      val method = wire.methodByName[String, Unit]("fireAndForget")
+      ZIO.fromFuture { implicit ec =>
+        for {
+          _ <- wire.trigger(method, "event")
+          _ <- wire.schedule(method, golem.Datetime.fromEpochMillis(1.0), "event")
+        } yield assertTrue(
+          invoker.triggerCalls.size == 1,
+          invoker.scheduleCalls.size == 1,
+          invoker.scopeCardsSeen.isEmpty
+        )
+      }
+    },
+    test("agent metadata declares a template card as polymorphic and a concrete card as not") {
+      val metadata                              = rpcWireType.metadata
+      def body(index: Int)                      = metadata.schema.typeNodes(index).body
+      def cardSpec(index: Int): Option[Boolean] = body(index) match {
+        case golem.schema.wire.WitSchemaTypeBody.PermissionCardType(spec) => Some(spec.polymorphic)
+        case _                                                            => None
+      }
+      val sendCard     = metadata.methods.find(_.name == "sendCard").get
+      val sendTemplate = metadata.methods.find(_.name == "sendTemplate").get
+      assertTrue(
+        sendCard.parameters.map(p => cardSpec(p.schema)) == List(Some(false)),
+        sendTemplate.parameters.map(p => cardSpec(p.schema)) == List(Some(true)),
+        sendTemplate.output.flatMap(cardSpec).contains(true)
+      )
+    },
+    test("a scope card moved before the call fails it without consuming an argument card") {
+      val invoker = new RecordingRpcInvoker
+      val scope   = scopeCard("moved-before")
+      val wire    = WireResolvedAgent(rpcWireType, RemoteAgentClient("ScopeWireAgent", "agent-1", null, invoker))
+        .withScopeCard(scope)
+      val method   = wire.methodByName[PermissionCard, Boolean]("sendCard")
+      val argument = permissionCard("argument")
+      scope.release()
+      ZIO.fromFuture(_ => wire.await(method, argument)).flip.map { error =>
+        assertTrue(
+          error.isInstanceOf[IllegalStateException],
+          argument.isPresent,
+          invoker.invokeCalls.isEmpty
+        )
+      }
+    },
+    test("a scope card moved while the input is lowered gives the argument card back") {
+      val invoker = new RecordingRpcInvoker
+      val scope   = scopeCard("moved-during")
+      val wire    = WireResolvedAgent(rpcWireType, RemoteAgentClient("ScopeWireAgent", "agent-1", null, invoker))
+        .withScopeCard(scope)
+      val method   = wire.methodByName[PermissionCard, Boolean]("sendCard")
+      val raw      = scala.scalajs.js.Dynamic.literal(name = "argument")
+      val argument = PermissionCard.fromRaw(raw.asInstanceOf[JsPermissionCardResource])
+      val call     = wire.await(method, argument)
+      scope.release()
+      ZIO.fromFuture(_ => call).flip.map { error =>
+        assertTrue(
+          error.isInstanceOf[IllegalStateException],
+          argument.isPresent,
+          argument.borrowRaw(_ eq raw),
+          invoker.invokeCalls.isEmpty
+        )
+      }
+    },
+    test("ResolvedAgent attaches the scope card to awaited calls only") {
+      val invoker  = new RecordingRpcInvoker
+      val card     = scopeCard("reflective")
+      val resolved = resolvedAgent(invoker).withScopeCard(card)
+      val method   = findMethod[RpcParityAgent, SampleInput, SampleOutput](rpcAgentType, "rpcCall")
+      val trigger  = findMethod[RpcParityAgent, String, Unit](rpcAgentType, "fireAndForget")
+      invoker.enqueueInvokeResult(Right(encodeResult(SampleOutput("ok"))))
+      ZIO.fromFuture { implicit ec =>
+        for {
+          _ <- resolved.await(method, SampleInput("x", 1))
+          _ <- resolved.trigger(trigger, "event")
+        } yield assertTrue(
+          invoker.scopeCardsSeen.toList.map(_.exists(_ eq card)) == List(true),
+          invoker.triggerCalls.size == 1,
+          card.isPresent
         )
       }
     },
@@ -142,6 +258,15 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
     }
   )
 
+  private def rpcWireType: golem.runtime.WireAgentClientType[ScopeWireAgent, ?] =
+    golem.runtime.macros.AgentClientMacro.wireType[ScopeWireAgent]
+
+  private def scopeCard(name: String): ScopeCard =
+    new ScopeCard(GuestPermissionCardHandle.fromRaw(scala.scalajs.js.Dynamic.literal(name = name)))
+
+  private def permissionCard(name: String): PermissionCard =
+    PermissionCard.fromRaw(scala.scalajs.js.Dynamic.literal(name = name).asInstanceOf[JsPermissionCardResource])
+
   private def rpcAgentType: AgentType[RpcParityAgent, Any] =
     AgentClient.agentType[RpcParityAgent].asInstanceOf[AgentType[RpcParityAgent, Any]]
 
@@ -175,9 +300,10 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
     }.getOrElse(throw new IllegalArgumentException(s"Method definition for $name not found"))
 
   private final class RecordingRpcInvoker extends RpcInvoker {
-    val invokeCalls   = mutable.ListBuffer.empty[(String, JsSchemaValueTree)]
-    val triggerCalls  = mutable.ListBuffer.empty[(String, JsSchemaValueTree)]
-    val scheduleCalls = mutable.ListBuffer.empty[(golem.Datetime, String, JsSchemaValueTree)]
+    val invokeCalls    = mutable.ListBuffer.empty[(String, JsSchemaValueTree)]
+    val scopeCardsSeen = mutable.ListBuffer.empty[Option[ScopeCard]]
+    val triggerCalls   = mutable.ListBuffer.empty[(String, JsSchemaValueTree)]
+    val scheduleCalls  = mutable.ListBuffer.empty[(golem.Datetime, String, JsSchemaValueTree)]
 
     private val invokeResults = mutable.Queue.empty[Either[String, Option[JsSchemaValueTree]]]
 
@@ -186,18 +312,22 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
 
     override def invokeAndAwait(
       functionName: String,
-      input: JsSchemaValueTree
+      input: JsSchemaValueTree,
+      scopeCard: Option[ScopeCard]
     ): Either[String, Option[JsSchemaValueTree]] = {
       invokeCalls += ((functionName, input))
+      scopeCardsSeen += scopeCard
       if (invokeResults.nonEmpty) invokeResults.dequeue()
       else Right(None)
     }
 
     override def asyncInvokeAndAwait(
       functionName: String,
-      input: JsSchemaValueTree
+      input: JsSchemaValueTree,
+      scopeCard: Option[ScopeCard]
     ): Future[Option[JsSchemaValueTree]] = {
       invokeCalls += ((functionName, input))
+      scopeCardsSeen += scopeCard
       if (invokeResults.nonEmpty) {
         invokeResults.dequeue() match {
           case Right(v)  => Future.successful(v)
@@ -208,9 +338,10 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
 
     override def cancelableAsyncInvokeAndAwait(
       functionName: String,
-      input: JsSchemaValueTree
+      input: JsSchemaValueTree,
+      scopeCard: Option[ScopeCard]
     ): (Future[Option[JsSchemaValueTree]], CancellationToken) =
-      (asyncInvokeAndAwait(functionName, input), CancellationToken.fromFunction(() => ()))
+      (asyncInvokeAndAwait(functionName, input, scopeCard), CancellationToken.fromFunction(() => ()))
 
     override def invoke(functionName: String, input: JsSchemaValueTree): Either[String, Unit] = {
       triggerCalls += ((functionName, input))
@@ -252,6 +383,19 @@ private object AgentClientRuntimeSpecFixtures {
     def fireAndForget(event: String): Unit
 
     def consumeStream(stream: AgentStream[String]): Unit
+  }
+
+  @agentDefinition(mode = DurabilityMode.Durable)
+  trait ScopeWireAgent extends BaseAgent {
+    class Id(val token: String)
+
+    def rpcCall(input: SampleInput): Future[SampleOutput]
+
+    def fireAndForget(event: String): Unit
+
+    def sendCard(card: PermissionCard): Future[Boolean]
+
+    def sendTemplate(card: PolymorphicPermissionCard): Future[PolymorphicPermissionCard]
   }
 
   final case class RpcCtor(token: String)

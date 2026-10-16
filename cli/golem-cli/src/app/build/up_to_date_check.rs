@@ -284,3 +284,63 @@ impl EmptyTaskUpToDateCheck {
 pub fn new_task_up_to_date_check(ctx: &BuildContext<'_>) -> EmptyTaskUpToDateCheck {
     EmptyTaskUpToDateCheck::empty(ctx)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::build::task_result_marker::ExtractComponentMetadataMarkerHash;
+    use crate::model::app::extracted_component_metadata_path;
+    use golem_common::model::component::ComponentName;
+    use test_r::test;
+
+    #[test]
+    fn component_metadata_version_switch_invalidates_every_cached_output_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let component = ComponentName("app:producer".into());
+        let first_wasm = dir.path().join("first.wasm");
+        let second_wasm = dir.path().join("second.wasm");
+        for wasm in [&first_wasm, &second_wasm] {
+            std::fs::write(wasm, b"unchanged wasm").unwrap();
+            std::fs::File::options()
+                .append(true)
+                .open(wasm)
+                .unwrap()
+                .set_modified(SystemTime::now() - std::time::Duration::from_secs(86400))
+                .unwrap();
+        }
+        let extract = |version: &str, wasm: &Path| {
+            let metadata = extracted_component_metadata_path(dir.path(), &component, wasm, version);
+            std::fs::create_dir_all(metadata.parent().unwrap()).unwrap();
+            let mut ran = false;
+            TaskUpToDateCheck {
+                marker_dir: dir.path().to_path_buf(),
+                skip_check: false,
+                task_result_marker: None,
+                sources: || vec![wasm],
+                targets: || vec![&metadata],
+            }
+            .with_task_result_marker(ExtractComponentMetadataMarkerHash {
+                component_name: &component,
+            })
+            .unwrap()
+            .run_or_skip(
+                || {
+                    ran = true;
+                    std::fs::write(&metadata, version)?;
+                    Ok(())
+                },
+                || {},
+            )
+            .unwrap();
+            (ran, std::fs::read_to_string(&metadata).unwrap())
+        };
+
+        assert_eq!(extract("1.6.0", &first_wasm), (true, "1.6.0".into()));
+        assert_eq!(extract("1.6.0", &first_wasm), (false, "1.6.0".into()));
+        assert_eq!(extract("1.6.1", &second_wasm), (true, "1.6.1".into()));
+        assert_eq!(extract("1.6.1", &second_wasm), (false, "1.6.1".into()));
+        assert_eq!(extract("1.6.1", &first_wasm), (true, "1.6.1".into()));
+        assert_eq!(extract("1.6.1", &first_wasm), (false, "1.6.1".into()));
+        assert_eq!(extract("1.6.0", &first_wasm), (false, "1.6.0".into()));
+    }
+}

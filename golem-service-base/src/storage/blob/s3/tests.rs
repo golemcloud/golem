@@ -672,6 +672,7 @@ async fn delete_dir_sends_at_most_1000_keys_in_each_request() {
         &keys.iter().map(|key| (key.clone(), 4)).collect::<Vec<_>>(),
         None,
     );
+    let listed_bytes = 4 * keys.len() as u64;
     let (storage, requests) = scripted_storage("", move |request, _| {
         if request.is_list_objects() {
             Answer::new(200, listing.clone())
@@ -695,7 +696,7 @@ async fn delete_dir_sends_at_most_1000_keys_in_each_request() {
                 .collect::<Vec<_>>()
         ),
         (
-            true,
+            Some(listed_bytes),
             vec![(true, 0), (false, 1000), (false, 1000), (false, 1)]
         )
     );
@@ -2164,8 +2165,8 @@ enum RootValue {
     Found(bool),
     /// A write, a delete, `create_dir`, a copy or a move ended with no error.
     Done,
-    /// Tells if `delete_dir` deleted a directory.
-    Deleted(bool),
+    /// The answer of `delete_dir`.
+    Deleted(Option<u64>),
     /// The answer of `exists`.
     Exists(ExistsResult),
     /// The answer of `put_raw_if_absent`.
@@ -2373,7 +2374,7 @@ async fn a_root_path_sends_no_request() {
             ("delete", Ok(RootValue::Done), 0),
             ("delete_many", Ok(RootValue::Done), 0),
             ("create_dir", Ok(RootValue::Done), 0),
-            ("delete_dir", Ok(RootValue::Deleted(false)), 0),
+            ("delete_dir", Ok(RootValue::Deleted(None)), 0),
             ("exists", Ok(RootValue::Exists(ExistsResult::Directory)), 0),
             ("copy from the root", no_name(), 0),
             ("copy to the root", no_name(), 0),
@@ -3380,6 +3381,190 @@ async fn an_oplog_payload_goes_to_the_key_of_its_agent_path_segment() {
                 Uuid::nil()
             )]
         )
+    );
+}
+
+/// The environment, the component, the agent and the incarnation of the namespaces of the layout
+/// tests. The agent name holds a `..` segment, which the rules of a key refuse.
+fn layout_ids() -> (EnvironmentId, ComponentId, AgentId, AgentFingerprint) {
+    let component_id = ComponentId(Uuid::from_u128(2));
+    (
+        EnvironmentId(Uuid::from_u128(1)),
+        component_id,
+        AgentId {
+            component_id,
+            agent_id: r#"counter("a/../b")"#.to_string(),
+        },
+        AgentFingerprint(Uuid::from_u128(3)),
+    )
+}
+
+/// One namespace of each kind, and the namespaces that differ from one of them only in the agent
+/// mode or in the level, all in one environment. Without namespace prefixes, the levels of a
+/// compressed oplog share a key prefix, and the namespaces of an environment id share it too.
+fn layout_namespaces() -> Vec<BlobStorageNamespace> {
+    let (environment_id, component_id, agent_id, fingerprint) = layout_ids();
+    let mut namespaces = vec![
+        BlobStorageNamespace::CompilationCache { environment_id },
+        BlobStorageNamespace::CustomStorage { environment_id },
+        BlobStorageNamespace::InitialAgentFiles { environment_id },
+        BlobStorageNamespace::Components { environment_id },
+        BlobStorageNamespace::FilesystemSnapshots {
+            environment_id,
+            agent_id: agent_id.clone(),
+            fingerprint,
+        },
+    ];
+    for agent_mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        namespaces.push(BlobStorageNamespace::OplogPayload {
+            environment_id,
+            agent_id: agent_id.clone(),
+            agent_mode,
+        });
+        for level in [0, 1] {
+            namespaces.push(BlobStorageNamespace::CompressedOplog {
+                environment_id,
+                component_id,
+                agent_mode,
+                level,
+            });
+        }
+    }
+    namespaces
+}
+
+/// Gives the path of the request that writes the blob `blob` in each of the namespaces of
+/// `layout_namespaces`, in that order. The path style of the client puts the bucket first.
+async fn layout_request_paths(
+    object_prefix: &str,
+    configure: impl Fn(&mut S3BlobStorageConfig),
+) -> Vec<String> {
+    let (mut storage, requests) = scripted_storage(object_prefix, |_, _| Answer::new(200, ""));
+    storage.config.compressed_oplog_buckets =
+        vec!["oplog-archive-1".to_string(), "oplog-archive-2".to_string()];
+    configure(&mut storage.config);
+    for namespace in layout_namespaces() {
+        storage
+            .put_raw("test", "put-raw", namespace, Path::new("blob"), b"x")
+            .await
+            .unwrap();
+    }
+    request_paths(&requests)
+}
+
+/// Gives the key prefix of each of the namespaces of `layout_namespaces`, in that order.
+fn layout_prefixes(namespace_prefixes: bool) -> Vec<String> {
+    let (mut storage, _) = scripted_storage("", |_, _| Answer::new(200, ""));
+    storage.config.namespace_prefixes = namespace_prefixes;
+    layout_namespaces()
+        .iter()
+        .map(|namespace| storage.prefix_of(namespace))
+        .collect()
+}
+
+fn one_bucket_with_namespace_prefixes(config: &mut S3BlobStorageConfig) {
+    let bucket = "golem".to_string();
+    config.namespace_prefixes = true;
+    config.compilation_cache_bucket = bucket.clone();
+    config.custom_data_bucket = bucket.clone();
+    config.oplog_payload_bucket = bucket.clone();
+    config.compressed_oplog_buckets = vec![bucket.clone(), bucket.clone()];
+    config.initial_agent_files_bucket = bucket.clone();
+    config.components_bucket = bucket.clone();
+    config.filesystem_snapshots_bucket = bucket;
+}
+
+#[test]
+async fn without_namespace_prefixes_each_namespace_has_the_keys_of_its_own_bucket() {
+    let (environment_id, component_id, agent_id, fingerprint) = layout_ids();
+    let fingerprint = fingerprint.0;
+    let agent = agent_path_segment(&agent_id);
+    let expected = |prefix: &str| {
+        let expected = [
+            format!("/golem-compiled-components/{prefix}{environment_id}/blob"),
+            format!("/custom-data/{prefix}{environment_id}/blob"),
+            format!("/golem-initial-agent-files/{prefix}{environment_id}/blob"),
+            format!("/component-store/{prefix}{environment_id}/blob"),
+            format!("/filesystem-snapshots/{prefix}{environment_id}/{agent}/{fingerprint}/blob"),
+            format!("/oplog-payload/{prefix}durable/{environment_id}/{agent}/blob"),
+            format!("/oplog-archive-1/{prefix}durable/{environment_id}/{component_id}/blob"),
+            format!("/oplog-archive-2/{prefix}durable/{environment_id}/{component_id}/blob"),
+            format!("/oplog-payload/{prefix}ephemeral/{environment_id}/{agent}/blob"),
+            format!("/oplog-archive-1/{prefix}ephemeral/{environment_id}/{component_id}/blob"),
+            format!("/oplog-archive-2/{prefix}ephemeral/{environment_id}/{component_id}/blob"),
+        ];
+        expected.to_vec()
+    };
+
+    let plain = layout_request_paths("", |_| {}).await;
+    let prefixed = layout_request_paths("prefix", |_| {}).await;
+
+    assert_eq!((plain, prefixed), (expected(""), expected("prefix/")));
+}
+
+#[test]
+async fn with_namespace_prefixes_each_namespace_is_below_the_segment_of_its_kind() {
+    let (environment_id, component_id, agent_id, fingerprint) = layout_ids();
+    let fingerprint = fingerprint.0;
+    let agent = agent_path_segment(&agent_id);
+    let expected = |prefix: &str| {
+        let expected = [
+            format!("/golem/{prefix}compilation_cache/{environment_id}/blob"),
+            format!("/golem/{prefix}custom_data/{environment_id}/blob"),
+            format!("/golem/{prefix}initial_agent_files/{environment_id}/blob"),
+            format!("/golem/{prefix}component_store/{environment_id}/blob"),
+            format!(
+                "/golem/{prefix}filesystem_snapshots/{environment_id}/{agent}/{fingerprint}/blob"
+            ),
+            format!("/golem/{prefix}oplog_payload/durable/{environment_id}/{agent}/blob"),
+            format!(
+                "/golem/{prefix}compressed_oplog/durable/{environment_id}/{component_id}/0/blob"
+            ),
+            format!(
+                "/golem/{prefix}compressed_oplog/durable/{environment_id}/{component_id}/1/blob"
+            ),
+            format!("/golem/{prefix}oplog_payload/ephemeral/{environment_id}/{agent}/blob"),
+            format!(
+                "/golem/{prefix}compressed_oplog/ephemeral/{environment_id}/{component_id}/0/blob"
+            ),
+            format!(
+                "/golem/{prefix}compressed_oplog/ephemeral/{environment_id}/{component_id}/1/blob"
+            ),
+        ];
+        expected.to_vec()
+    };
+
+    let plain = layout_request_paths("", one_bucket_with_namespace_prefixes).await;
+    let prefixed = layout_request_paths("prefix", one_bucket_with_namespace_prefixes).await;
+
+    assert_eq!((plain, prefixed), (expected(""), expected("prefix/")));
+}
+
+#[test]
+fn with_namespace_prefixes_no_namespace_is_below_another() {
+    // A listing and a delete below a namespace send its key prefix with a `/` at its end. So a
+    // namespace can reach the objects of another one in the same bucket when the prefix of the
+    // other one, with a `/` at its end, starts with that text.
+    let below_another = |prefixes: &[String]| {
+        let mut pairs = Vec::new();
+        for (index, prefix) in prefixes.iter().enumerate() {
+            for (other_index, other) in prefixes.iter().enumerate() {
+                if index != other_index && format!("{other}/").starts_with(&format!("{prefix}/")) {
+                    pairs.push((prefix.clone(), other.clone()));
+                }
+            }
+        }
+        pairs
+    };
+    let environment = layout_ids().0.to_string();
+
+    let with_prefixes = below_another(&layout_prefixes(true));
+    let without_prefixes = below_another(&layout_prefixes(false));
+
+    assert_eq!(with_prefixes, Vec::<(String, String)>::new());
+    assert!(
+        without_prefixes.contains(&(environment.clone(), environment.clone())),
+        "{without_prefixes:?}"
     );
 }
 

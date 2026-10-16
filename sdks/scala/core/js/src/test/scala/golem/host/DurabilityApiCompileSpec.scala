@@ -28,20 +28,14 @@ object DurabilityApiCompileSpec extends ZIOSpecDefault {
     DurableFunctionType.ReadLocal,
     DurableFunctionType.WriteLocal,
     DurableFunctionType.ReadRemote,
-    DurableFunctionType.WriteRemote,
-    DurableFunctionType.WriteRemoteBatched(None),
-    DurableFunctionType.WriteRemoteBatched(Some(BigInt(42))),
-    DurableFunctionType.WriteRemoteTransaction(None),
-    DurableFunctionType.WriteRemoteTransaction(Some(BigInt(100)))
+    DurableFunctionType.WriteRemote
   )
 
   private def describeFunctionType(ft: DurableFunctionType): String = ft match {
-    case DurableFunctionType.ReadLocal                 => s"read-local(${ft.tag})"
-    case DurableFunctionType.WriteLocal                => s"write-local(${ft.tag})"
-    case DurableFunctionType.ReadRemote                => s"read-remote(${ft.tag})"
-    case DurableFunctionType.WriteRemote               => s"write-remote(${ft.tag})"
-    case DurableFunctionType.WriteRemoteBatched(b)     => s"write-remote-batched($b,${ft.tag})"
-    case DurableFunctionType.WriteRemoteTransaction(b) => s"write-remote-transaction($b,${ft.tag})"
+    case DurableFunctionType.ReadLocal   => s"read-local(${ft.tag})"
+    case DurableFunctionType.WriteLocal  => s"write-local(${ft.tag})"
+    case DurableFunctionType.ReadRemote  => s"read-remote(${ft.tag})"
+    case DurableFunctionType.WriteRemote => s"write-remote(${ft.tag})"
   }
 
   private val entryVersions: List[OplogEntryVersion] =
@@ -77,7 +71,7 @@ object DurabilityApiCompileSpec extends ZIOSpecDefault {
 
   def spec = suite("DurabilityApiCompileSpec")(
     test("all DurableFunctionType variants constructed") {
-      assertTrue(allFunctionTypes.size == 8)
+      assertTrue(allFunctionTypes.size == 4)
     },
     test("exhaustive DurableFunctionType match compiles") {
       allFunctionTypes.foreach(ft => assertTrue(describeFunctionType(ft).nonEmpty))
@@ -99,10 +93,6 @@ object DurabilityApiCompileSpec extends ZIOSpecDefault {
         invocation.functionType == DurableFunctionType.ReadLocal,
         invocation.entryVersion == OplogEntryVersion.V1
       )
-    },
-    test("OplogIndex type alias") {
-      val idx: OplogIndex = BigInt(99)
-      assertTrue(idx == BigInt(99))
     }
   )
 }

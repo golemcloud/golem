@@ -1,6 +1,100 @@
 use super::*;
 use golem_schema::tool::*;
-use golem_schema::{SchemaGraph, SchemaType, SchemaValue};
+use golem_schema::{
+    IntoTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue, try_into_schema_graph,
+};
+
+#[test]
+fn successful_results_preserve_output_and_validate_exit_status() {
+    for status in [0, 7, 255] {
+        let typed = ProcessExitStatus { exit_code: status }
+            .into_typed_schema_value()
+            .unwrap();
+        let wire = || golem_rust::encode_typed_schema_value(&typed).unwrap();
+        let mut output = CommandOutput {
+            stdout: b"payload".to_vec(),
+            ..Default::default()
+        };
+        apply_result(&mut output, true, true, Some(wire()));
+        assert_eq!(output.stdout, b"payload");
+        assert_eq!(output.exit_code, status);
+        assert!(output.stderr.is_empty());
+        let mut output = CommandOutput::default();
+        apply_result(&mut output, false, true, Some(wire()));
+        assert_eq!(output.exit_code, status);
+        assert!(output.stdout.is_empty());
+        output.exit_code = 130;
+        output.stderr = b"cancelled\n".to_vec();
+        apply_result(&mut output, false, true, Some(wire()));
+        assert_eq!(output.exit_code, 130);
+        assert_eq!(output.stderr, b"cancelled\n");
+    }
+    for (type_, value, expected) in [
+        (SchemaType::s32(), SchemaValue::S32(7), "7\n"),
+        (
+            SchemaType::string(),
+            SchemaValue::String("text".into()),
+            "text",
+        ),
+        (SchemaType::bool(), SchemaValue::Bool(true), "true\n"),
+    ] {
+        let wire = golem_rust::encode_typed_schema_value(&TypedSchemaValue::new(
+            SchemaGraph::anonymous(type_),
+            value,
+        ))
+        .unwrap();
+        let mut output = CommandOutput::default();
+        apply_result(&mut output, false, false, Some(wire));
+        assert_eq!(output.stdout, expected.as_bytes());
+        assert_eq!(output.exit_code, 0);
+        assert!(output.stderr.is_empty());
+    }
+    let wire = golem_rust::encode_typed_schema_value(&TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::string()),
+        SchemaValue::String("text".into()),
+    ))
+    .unwrap();
+    let mut output = CommandOutput {
+        stdout: b"stream".to_vec(),
+        ..Default::default()
+    };
+    apply_result(&mut output, true, false, Some(wire));
+    assert_eq!(output.stdout, b"stream");
+    assert_eq!(output.exit_code, 0);
+    let wire = golem_rust::encode_typed_schema_value(&TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::string()),
+        SchemaValue::String("text".into()),
+    ))
+    .unwrap();
+    apply_result(&mut output, true, true, Some(wire));
+    assert_eq!(output.exit_code, 1);
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("expected named ProcessExitStatus")
+    );
+    let mut output = CommandOutput::default();
+    apply_result(&mut output, true, true, None);
+    assert_eq!(output.exit_code, 1);
+    let mut wire = golem_rust::encode_typed_schema_value(
+        &ProcessExitStatus { exit_code: 0 }
+            .into_typed_schema_value()
+            .unwrap(),
+    )
+    .unwrap();
+    wire.value.root = i32::MAX;
+    let mut output = CommandOutput {
+        stdout: b"partial".to_vec(),
+        stderr: b"provider\n".to_vec(),
+        ..Default::default()
+    };
+    apply_result(&mut output, true, true, Some(wire));
+    assert_eq!(output.exit_code, 1);
+    assert_eq!(output.stdout, b"partial");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.starts_with("provider\nresult:"));
+    assert!(stderr.len() > "provider\nresult:\n".len());
+}
 
 fn fixture() -> Tool {
     Tool {
@@ -43,7 +137,136 @@ fn fixture() -> Tool {
 }
 
 #[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn named_process_status_drives_shell_status_and_conditionals() {
+    struct Invoker(Catalog);
+    struct Prepared(Invocation);
+    impl CommandInvoker for Invoker {
+        fn prepare(
+            &self,
+            name: &str,
+            args: &[String],
+            variables: &HashMap<String, String>,
+        ) -> Result<Box<dyn PreparedCommand>, CommandOutput> {
+            self.0
+                .prepare_invocation(name, args, variables)
+                .map(|call| Box::new(Prepared(call)) as Box<dyn PreparedCommand>)
+        }
+    }
+    impl PreparedCommand for Prepared {
+        fn takes_stdin(&self) -> bool {
+            false
+        }
+        fn invoke(&self, _: Option<Vec<u8>>) -> CommandFuture<'_> {
+            Box::pin(async move {
+                let SchemaValue::Record { fields } = self.0.input.value() else {
+                    panic!()
+                };
+                let SchemaValue::String(status) = &fields[0] else {
+                    panic!()
+                };
+                let wire = golem_rust::encode_typed_schema_value(
+                    &ProcessExitStatus {
+                        exit_code: status.parse().unwrap(),
+                    }
+                    .into_typed_schema_value()
+                    .unwrap(),
+                )
+                .unwrap();
+                let mut output = CommandOutput {
+                    stdout: b"out\n".to_vec(),
+                    ..Default::default()
+                };
+                apply_result(
+                    &mut output,
+                    self.0.stdout,
+                    self.0.result_is_status,
+                    Some(wire),
+                );
+                output
+            })
+        }
+    }
+    let mut tool = fixture();
+    tool.schema = try_into_schema_graph::<ProcessExitStatus>().unwrap();
+    let body = tool.commands.nodes[0].body.as_mut().unwrap();
+    body.stdout = Some(StreamSpec {
+        doc: Doc::default(),
+        mime: vec![],
+        required: false,
+    });
+    body.result = Some(ResultSpec {
+        type_: tool.schema.root.clone(),
+        doc: Doc::default(),
+        formatters: vec![Formatter {
+            name: "json".into(),
+            doc: Doc::default(),
+        }],
+        default_formatter: "json".into(),
+    });
+    let catalog = Catalog::new(BTreeMap::from([("probe".into(), tool)])).unwrap();
+    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+        let mut shell = bash_shell::session::Session::new().await.unwrap();
+        shell.register_commands(vec![bash_shell::commands::CommandDescriptor {
+            name: "probe".into(), help: String::new(),
+        }], std::sync::Arc::new(Invoker(catalog))).unwrap();
+        let output = shell.run("probe 7").await;
+        assert_eq!(output.exit_code, 7);
+        assert_eq!(output.stdout, b"out\n");
+        assert!(output.stderr.is_empty());
+        let output = shell.run("probe 7; echo $?; probe 7 && echo wrong || echo failed; probe 0 && echo passed || echo wrong").await;
+        assert_eq!(output.stdout, b"out\n7\nout\nfailed\nout\npassed\n");
+        assert_eq!(output.exit_code, 0);
+        assert!(output.stderr.is_empty());
+    });
+}
+
+#[test]
 fn projection_uses_the_cli_parser_and_finishes_help_before_input() {
+    let status_graph = try_into_schema_graph::<ProcessExitStatus>().unwrap();
+    let anonymous = SchemaGraph::anonymous(status_graph.defs[0].body.clone());
+    let mut lookalike = status_graph.clone();
+    lookalike.defs[0].id = "example.Status".into();
+    lookalike.root = SchemaType::ref_to("example.Status".into());
+    for (graph, expected_status) in [
+        (status_graph.clone(), true),
+        (anonymous, false),
+        (lookalike, false),
+        (SchemaGraph::anonymous(SchemaType::s32()), false),
+    ] {
+        let mut tool = fixture();
+        tool.commands.nodes[0].body.as_mut().unwrap().result = Some(ResultSpec {
+            type_: graph.root.clone(),
+            doc: Doc::default(),
+            formatters: vec![Formatter {
+                name: "json".into(),
+                doc: Doc::default(),
+            }],
+            default_formatter: "json".into(),
+        });
+        tool.schema = graph;
+        let catalog = Catalog::new(BTreeMap::from([("probe".into(), tool)])).unwrap();
+        let call = catalog
+            .prepare_invocation("probe", &["hello".into()], &HashMap::new())
+            .unwrap_or_else(|output| panic!("{:?}", output.stderr));
+        assert_eq!(call.result_is_status, expected_status);
+    }
+    let mut malformed = fixture();
+    malformed.schema = status_graph;
+    let SchemaType::Record { fields, .. } = &mut malformed.schema.defs[0].body else {
+        panic!()
+    };
+    fields[0].body = SchemaType::s32();
+    malformed.commands.nodes[0].body.as_mut().unwrap().result = Some(ResultSpec {
+        type_: malformed.schema.root.clone(),
+        doc: Doc::default(),
+        formatters: vec![Formatter {
+            name: "json".into(),
+            doc: Doc::default(),
+        }],
+        default_formatter: "json".into(),
+    });
+    assert!(Catalog::new(BTreeMap::from([("probe".into(), malformed)])).is_err());
     let tool = fixture();
     let catalog = Catalog::new(BTreeMap::from([("renamed".into(), tool.clone())])).unwrap();
     let args = vec!["hello with spaces".into()];
@@ -236,5 +459,106 @@ fn an_option_gets_the_shell_directory_only_when_it_declares_the_variable() {
     assert_eq!(
         record(declared(), &[], &[("PWD", "/work/repo")]),
         vec![string("/work/repo")]
+    );
+}
+
+#[test]
+fn a_bound_tool_with_a_verbatim_dash_dash_tail_takes_it_without_the_separator() {
+    // The shape of `node`, `npm`, `npx` and `tsc`, under a name the shell does not know.
+    let mut tool = fixture();
+    tool.commands.nodes[0].name = "compile".into();
+    let body = tool.commands.nodes[0].body.as_mut().unwrap();
+    body.options = vec![option(
+        "cwd",
+        OptionShape::Scalar(SchemaType::string()),
+        Some(string("/workspace")),
+    )];
+    body.positionals = Positionals {
+        fixed: vec![],
+        tail: Some(TailPositional {
+            name: "args".into(),
+            doc: Doc::default(),
+            value_name: None,
+            item_type: SchemaType::string(),
+            min: 0,
+            max: None,
+            separator: Some("--".into()),
+            verbatim: true,
+            accepts_stdio: false,
+        }),
+    };
+    let catalog = Catalog::new(BTreeMap::from([("compile".into(), tool.clone())])).unwrap();
+    let list = |items: &[&str]| SchemaValue::List {
+        elements: items.iter().map(|item| string(item)).collect(),
+    };
+    for (args, tail, cwd) in [
+        (vec!["fib.ts"], vec!["fib.ts"], "/workspace"),
+        (
+            vec!["--noEmit", "fib.ts"],
+            vec!["--noEmit", "fib.ts"],
+            "/workspace",
+        ),
+        (
+            vec!["--cwd", "/workspace/project", "fib.ts", "--cwd", "x"],
+            vec!["fib.ts", "--cwd", "x"],
+            "/workspace/project",
+        ),
+        (vec!["--", "--cwd", "x"], vec!["--cwd", "x"], "/workspace"),
+    ] {
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let ParsedToolArguments::Invoke { input, .. } = argv::parse(&tool, &args).unwrap() else {
+            panic!("expected invocation")
+        };
+        let invocation = catalog
+            .prepare_invocation("compile", &args, &HashMap::new())
+            .unwrap_or_else(|output| panic!("{}", String::from_utf8_lossy(&output.stderr)));
+        assert_eq!(invocation.input, *input, "{args:?}");
+        assert_eq!(
+            invocation.input.value(),
+            &SchemaValue::Record {
+                fields: vec![list(&tail), string(cwd)],
+            },
+            "{args:?}"
+        );
+    }
+    let help = match catalog.prepare("compile", &["--help".into()], &HashMap::new()) {
+        Err(output) => String::from_utf8(output.stdout).unwrap(),
+        Ok(_) => panic!("help must not invoke"),
+    };
+    // The shape of `python`: the same tail, with a `--cwd` that declares `PWD`.
+    let mut tool = tool;
+    tool.commands.nodes[0].body.as_mut().unwrap().options[0].env_var = Some("PWD".into());
+    let catalog = Catalog::new(BTreeMap::from([("compile".into(), tool.clone())])).unwrap();
+    let variables = HashMap::from([("PWD".to_string(), "/work/app".to_string())]);
+    for (args, tail, cwd) in [
+        (vec!["fib.ts"], vec!["fib.ts"], "/work/app"),
+        (
+            vec!["fib.ts", "--cwd", "/x"],
+            vec!["fib.ts", "--cwd", "/x"],
+            "/work/app",
+        ),
+        (vec!["--cwd", "/x", "fib.ts"], vec!["fib.ts"], "/x"),
+    ] {
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let ParsedToolArguments::Invoke { input, .. } =
+            argv::parse_with_variables(&tool, &args, &variables).unwrap()
+        else {
+            panic!("expected invocation")
+        };
+        let invocation = catalog
+            .prepare_invocation("compile", &args, &variables)
+            .unwrap_or_else(|output| panic!("{}", String::from_utf8_lossy(&output.stderr)));
+        assert_eq!(invocation.input, *input, "{args:?}");
+        assert_eq!(
+            invocation.input.value(),
+            &SchemaValue::Record {
+                fields: vec![list(&tail), string(cwd)],
+            },
+            "{args:?}"
+        );
+    }
+    assert!(
+        help.starts_with("Usage: compile [OPTIONS] [--] [args]..."),
+        "{help}"
     );
 }

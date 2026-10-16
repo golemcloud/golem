@@ -46,14 +46,14 @@ inherit_test_dep!(
 
 const TEST_TTL: Duration = Duration::from_millis(50);
 
-struct ComponentLoadGate {
+pub(crate) struct ComponentLoadGate {
     armed: AtomicBool,
     entered: tokio::sync::Semaphore,
     release: tokio::sync::Semaphore,
 }
 
 impl ComponentLoadGate {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             armed: AtomicBool::new(false),
             entered: tokio::sync::Semaphore::new(0),
@@ -61,22 +61,22 @@ impl ComponentLoadGate {
         }
     }
 
-    fn arm(&self) {
+    pub(crate) fn arm(&self) {
         self.armed.store(true, Ordering::Release);
     }
 
-    async fn entered(&self) {
+    pub(crate) async fn entered(&self) {
         self.entered.acquire().await.unwrap().forget();
     }
 
-    fn release(&self) {
+    pub(crate) fn release(&self) {
         self.release.add_permits(1);
     }
 }
 
-struct GatedComponentService {
-    inner: Arc<dyn ComponentService>,
-    gate: Arc<ComponentLoadGate>,
+pub(crate) struct GatedComponentService {
+    pub(crate) inner: Arc<dyn ComponentService>,
+    pub(crate) gate: Arc<ComponentLoadGate>,
 }
 
 #[async_trait::async_trait]

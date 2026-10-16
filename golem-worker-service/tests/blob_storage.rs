@@ -34,6 +34,7 @@ use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, fs, m
 use golem_test_framework::components::s3::{DockerRustFs, S3Server};
 use pretty_assertions::assert_eq;
 use sqlx::sqlite::SqlitePoolOptions;
+use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -126,8 +127,12 @@ async fn fs() -> Arc<dyn GetBlobStorage + Send + Sync> {
     Arc::new(FsTest { dir, counter })
 }
 
+/// An S3 storage on a new RustFS container. With `shared_bucket`, every namespace has the same
+/// bucket and the keys hold namespace prefixes. Without it, each namespace has its own bucket, and
+/// each level of the compressed oplog too.
 struct S3Test {
     prefixed: Option<String>,
+    shared_bucket: bool,
 }
 
 impl Debug for S3Test {
@@ -141,7 +146,7 @@ impl GetBlobStorage for S3Test {
     async fn get_blob_storage(&self) -> TestStorage {
         let s3_server = DockerRustFs::new().await;
 
-        let config = S3BlobStorageConfig {
+        let mut config = S3BlobStorageConfig {
             retries: Default::default(),
             region: "us-east-1".to_string(),
             object_prefix: self.prefixed.clone().unwrap_or_default(),
@@ -152,8 +157,24 @@ impl GetBlobStorage for S3Test {
                 "test",
             )),
             aws_path_style: Some(true),
+            compressed_oplog_buckets: vec![
+                "oplog-archive-1".to_string(),
+                "oplog-archive-2".to_string(),
+            ],
             ..std::default::Default::default()
         };
+        if self.shared_bucket {
+            let bucket = "golem".to_string();
+            config.namespace_prefixes = true;
+            config.compilation_cache_bucket = bucket.clone();
+            config.custom_data_bucket = bucket.clone();
+            config.oplog_payload_bucket = bucket.clone();
+            config.compressed_oplog_buckets = vec![bucket.clone(), bucket.clone()];
+            config.initial_agent_files_bucket = bucket.clone();
+            config.components_bucket = bucket.clone();
+            config.filesystem_snapshots_bucket = bucket;
+        }
+        config.validate().unwrap();
         create_buckets(&s3_server, &config).await;
         TestStorage {
             storage: Arc::new(s3::S3BlobStorage::new(config).await),
@@ -183,50 +204,51 @@ async fn create_buckets(s3_server: &dyn S3Server, config: &S3BlobStorageConfig) 
             .force_path_style(true)
             .build(),
     );
-    client
-        .create_bucket()
-        .bucket(&config.compilation_cache_bucket)
-        .send()
-        .await
-        .unwrap();
-    client
-        .create_bucket()
-        .bucket(&config.custom_data_bucket)
-        .send()
-        .await
-        .unwrap();
-    client
-        .create_bucket()
-        .bucket(&config.oplog_payload_bucket)
-        .send()
-        .await
-        .unwrap();
-    client
-        .create_bucket()
-        .bucket(&config.initial_agent_files_bucket)
-        .send()
-        .await
-        .unwrap();
-    client
-        .create_bucket()
-        .bucket(&config.filesystem_snapshots_bucket)
-        .send()
-        .await
-        .unwrap();
-    for bucket in &config.compressed_oplog_buckets {
+    let buckets = [
+        &config.compilation_cache_bucket,
+        &config.custom_data_bucket,
+        &config.oplog_payload_bucket,
+        &config.initial_agent_files_bucket,
+        &config.components_bucket,
+        &config.filesystem_snapshots_bucket,
+    ]
+    .into_iter()
+    .chain(&config.compressed_oplog_buckets)
+    .collect::<BTreeSet<_>>();
+    for bucket in buckets {
         client.create_bucket().bucket(bucket).send().await.unwrap();
     }
 }
 
 #[test_dep(scope = PerWorker, tagged_as = "s3")]
 async fn s3() -> Arc<dyn GetBlobStorage + Send + Sync> {
-    Arc::new(S3Test { prefixed: None })
+    Arc::new(S3Test {
+        prefixed: None,
+        shared_bucket: false,
+    })
 }
 
 #[test_dep(scope = PerWorker, tagged_as = "s3_prefixed")]
 async fn s3_prefixed() -> Arc<dyn GetBlobStorage + Send + Sync> {
     Arc::new(S3Test {
         prefixed: Some("random-prefix".to_string()),
+        shared_bucket: false,
+    })
+}
+
+#[test_dep(scope = PerWorker, tagged_as = "s3_shared_bucket")]
+async fn s3_shared_bucket() -> Arc<dyn GetBlobStorage + Send + Sync> {
+    Arc::new(S3Test {
+        prefixed: None,
+        shared_bucket: true,
+    })
+}
+
+#[test_dep(scope = PerWorker, tagged_as = "s3_shared_bucket_prefixed")]
+async fn s3_shared_bucket_prefixed() -> Arc<dyn GetBlobStorage + Send + Sync> {
+    Arc::new(S3Test {
+        prefixed: Some("random-prefix".to_string()),
+        shared_bucket: true,
     })
 }
 
@@ -322,7 +344,10 @@ fn filesystem_snapshots_of(
 // its blobs on any of the backends, so every backend must give the same answer.
 define_matrix_dimension!(storage: Arc<dyn GetBlobStorage + Send + Sync> -> "in_memory", "fs", "s3", "s3_prefixed", "sqlite");
 define_matrix_dimension!(ns: BlobStorageNamespace -> "cc", "co", "cs");
-define_matrix_dimension!(s3_storage: Arc<dyn GetBlobStorage + Send + Sync> -> "s3", "s3_prefixed");
+define_matrix_dimension!(s3_storage: Arc<dyn GetBlobStorage + Send + Sync> -> "s3", "s3_prefixed", "s3_shared_bucket");
+// The separation of the namespaces must hold on every backend, and on S3 with a bucket of each
+// namespace and with one bucket of all namespaces.
+define_matrix_dimension!(layout_storage: Arc<dyn GetBlobStorage + Send + Sync> -> "in_memory", "fs", "s3", "s3_shared_bucket", "s3_shared_bucket_prefixed", "sqlite");
 
 /// The paths that are at the root of a namespace, because none of them has a name in it.
 const ROOT_PATHS: [&str; 4] = ["", ".", "./", "././"];
@@ -864,7 +889,8 @@ async fn create_delete_exists_dir(
             path,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .is_some();
     let result3 = storage
         .exists(
             "create_delete_exists_dir",
@@ -882,7 +908,8 @@ async fn create_delete_exists_dir(
             path,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .is_some();
 
     assert_eq!(result1, ExistsResult::DoesNotExist);
     assert_eq!(result2, ExistsResult::Directory);
@@ -1031,6 +1058,7 @@ async fn in_memory_prefix_sibling_does_not_hide_descendants(
             )
             .await
             .unwrap()
+            .is_some()
     );
     assert_eq!(
         storage
@@ -2289,7 +2317,8 @@ async fn delete_dir_does_not_delete_file_with_same_path(
             file_path,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .is_some();
 
     assert!(!deleted);
 
@@ -2422,7 +2451,8 @@ async fn delete_dir_root_path_is_safe_noop(
                 Path::new(root_path),
             )
             .await
-            .unwrap();
+            .unwrap()
+            .is_some();
 
         assert!(!deleted, "delete_dir({root_path:?}) deleted a directory");
 
@@ -2475,7 +2505,8 @@ async fn delete_dir_deletes_a_directory_that_only_holds_blobs(
             Path::new("only"),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .is_some();
 
     assert!(deleted);
 
@@ -2607,7 +2638,8 @@ async fn delete_dir_deletes_nested_descendants(
             Path::new("nested"),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .is_some();
 
     assert!(deleted);
     assert_eq!(get("get-direct", "nested/direct").await.unwrap(), None);
@@ -2663,7 +2695,8 @@ async fn delete_dir_keeps_blobs_of_other_namespaces(
             directory,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .is_some();
 
     let kept = storage
         .get_raw(
@@ -2850,6 +2883,203 @@ async fn list_blobs_below_stays_in_its_namespace(
     assert_eq!(other_listed_below_tree, listed_blobs(&other_blobs));
 }
 
+/// One namespace of each kind, and the namespaces that differ from one of them only in the agent
+/// mode or in the level, all in one environment. In one bucket without namespace prefixes, the
+/// levels of a compressed oplog would have the same keys, and the keys of the custom storage of
+/// the environment would hold the keys of the compilation cache, the initial agent files, the
+/// components and the filesystem snapshots of it.
+fn namespaces_of_one_environment() -> Vec<BlobStorageNamespace> {
+    let environment = "0b6f0a52-9d4e-4f0c-8a39-2d0f7f6a1c11";
+    let component = "7e0e4c9a-3c34-4d52-8d6f-0d2f6b6d3a11";
+    let environment_id = EnvironmentId(Uuid::parse_str(environment).unwrap());
+    let component_id = ComponentId(Uuid::parse_str(component).unwrap());
+    let agent_id = AgentId {
+        component_id,
+        agent_id: r#"counter("a/../b")"#.to_string(),
+    };
+    let mut namespaces = vec![
+        BlobStorageNamespace::CompilationCache { environment_id },
+        BlobStorageNamespace::CustomStorage { environment_id },
+        BlobStorageNamespace::InitialAgentFiles { environment_id },
+        BlobStorageNamespace::Components { environment_id },
+        filesystem_snapshots_of(
+            environment,
+            component,
+            &agent_id.agent_id,
+            "5f1d6a2b-0c3e-4a7b-9d1f-6e2a3b4c5d6e",
+        ),
+    ];
+    for agent_mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        namespaces.push(BlobStorageNamespace::OplogPayload {
+            environment_id,
+            agent_id: agent_id.clone(),
+            agent_mode,
+        });
+        for level in [0, 1] {
+            namespaces.push(BlobStorageNamespace::CompressedOplog {
+                environment_id,
+                component_id,
+                agent_mode,
+                level,
+            });
+        }
+    }
+    namespaces
+}
+
+/// Gives what each namespace holds: the content of the blob at each path, read one at a time,
+/// and the blobs that a listing of the root finds.
+async fn contents(
+    storage: &Arc<dyn BlobStorage + Send + Sync>,
+    namespaces: &[BlobStorageNamespace],
+    paths: &[&str],
+) -> Vec<(Vec<Option<Vec<u8>>>, Vec<ListedBlob>)> {
+    let mut contents = Vec::new();
+    for namespace in namespaces {
+        let mut blobs = Vec::new();
+        for path in paths {
+            blobs.push(
+                storage
+                    .get_raw("contents", "get", namespace.clone(), Path::new(path))
+                    .await
+                    .unwrap(),
+            );
+        }
+        contents.push((blobs, sorted_listing(storage, namespace, "").await));
+    }
+    contents
+}
+
+#[test]
+#[tracing::instrument]
+async fn each_namespace_of_an_environment_keeps_its_own_blobs(
+    #[dimension(layout_storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+) {
+    let storage = test.get_blob_storage().await;
+    let namespaces = namespaces_of_one_environment();
+    let paths = ["shared/blob", "shared/nested/blob"];
+    // The blobs of the namespace at `index` have `index + 1` bytes, so no two namespaces have a
+    // blob of the same size or content.
+    let blob_of = |index: usize| vec![index as u8; index + 1];
+    let expected = |index: usize| {
+        (
+            vec![Some(blob_of(index)); paths.len()],
+            listed_blobs(&paths.map(|path| (path, index + 1))),
+        )
+    };
+    let empty = || (vec![None; paths.len()], Vec::new());
+    for (index, namespace) in namespaces.iter().enumerate() {
+        for path in paths {
+            storage
+                .put_raw(
+                    "each_namespace_of_an_environment_keeps_its_own_blobs",
+                    "put",
+                    namespace.clone(),
+                    Path::new(path),
+                    &blob_of(index),
+                )
+                .await
+                .unwrap();
+        }
+    }
+
+    let written = contents(&storage, &namespaces, &paths).await;
+    let mut deleted = Vec::new();
+    for (index, namespace) in namespaces.iter().enumerate() {
+        storage
+            .delete_dir(
+                "each_namespace_of_an_environment_keeps_its_own_blobs",
+                "delete-dir",
+                namespace.clone(),
+                Path::new("shared"),
+            )
+            .await
+            .unwrap();
+        deleted.push((index, contents(&storage, &namespaces, &paths).await));
+    }
+
+    // After the delete in the namespace at `index`, that namespace and those before it are
+    // empty, and each namespace after it still holds its own blobs.
+    let expected_deleted = (0..namespaces.len())
+        .map(|index| {
+            let after = (0..namespaces.len())
+                .map(|other| {
+                    if other <= index {
+                        empty()
+                    } else {
+                        expected(other)
+                    }
+                })
+                .collect::<Vec<_>>();
+            (index, after)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        written,
+        (0..namespaces.len()).map(expected).collect::<Vec<_>>()
+    );
+    assert_eq!(deleted, expected_deleted);
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_delete_in_one_namespace_keeps_the_blob_at_the_same_path_of_the_others(
+    #[dimension(layout_storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+) {
+    let storage = test.get_blob_storage().await;
+    let namespaces = namespaces_of_one_environment();
+    let paths = ["blob", "other"];
+    for namespace in &namespaces {
+        for path in paths {
+            storage
+                .put_raw(
+                    "a_delete_in_one_namespace_keeps_the_blob_at_the_same_path_of_the_others",
+                    "put",
+                    namespace.clone(),
+                    Path::new(path),
+                    &Bytes::from("payload"),
+                )
+                .await
+                .unwrap();
+        }
+    }
+    let (deleted_namespace, kept_namespaces) = namespaces.split_first().unwrap();
+
+    storage
+        .delete(
+            "a_delete_in_one_namespace_keeps_the_blob_at_the_same_path_of_the_others",
+            "delete",
+            deleted_namespace.clone(),
+            Path::new("blob"),
+        )
+        .await
+        .unwrap();
+    storage
+        .delete_many(
+            "a_delete_in_one_namespace_keeps_the_blob_at_the_same_path_of_the_others",
+            "delete-many",
+            deleted_namespace.clone(),
+            &[PathBuf::from("other")],
+        )
+        .await
+        .unwrap();
+
+    let deleted = contents(&storage, std::slice::from_ref(deleted_namespace), &paths).await;
+    let kept = contents(&storage, kept_namespaces, &paths).await;
+
+    assert_eq!(deleted, vec![(vec![None, None], Vec::new())]);
+    assert_eq!(
+        kept,
+        vec![
+            (
+                vec![Some(b"payload".to_vec()), Some(b"payload".to_vec())],
+                listed_blobs(&[("blob", 7), ("other", 7)])
+            );
+            kept_namespaces.len()
+        ]
+    );
+}
+
 #[test]
 #[tracing::instrument]
 async fn get_raw_slice_uses_inclusive_ranges(
@@ -3004,7 +3234,8 @@ async fn delete_dir_deletes_more_than_1000_blobs(
             Path::new("bulk"),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .is_some();
 
     assert_eq!(
         (
@@ -3906,6 +4137,7 @@ async fn a_directory_of_blobs_goes_when_its_last_blob_goes(
             .delete_dir(label, "delete-only", namespace.clone(), Path::new("only"))
             .await
             .unwrap()
+            .is_some()
     );
 
     // A directory that create_dir made stays after its last blob goes.
@@ -3948,6 +4180,7 @@ async fn a_directory_of_blobs_goes_when_its_last_blob_goes(
             .delete_dir(label, "delete-kept", namespace.clone(), Path::new("kept"))
             .await
             .unwrap()
+            .is_some()
     );
 }
 
@@ -3978,6 +4211,7 @@ async fn delete_dir_deletes_a_directory_further_up_that_only_holds_blobs(
             .delete_dir(label, "delete-dir", namespace.clone(), Path::new("a"))
             .await
             .unwrap()
+            .is_some()
     );
 
     assert_eq!(

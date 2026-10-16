@@ -38,7 +38,10 @@ async fn pending_restart_publishes_only_elected_quota_cause(
             deps,
             &context,
             limits.clone(),
-            Arc::new(move |config| config.resource_usage_metering = metering),
+            Arc::new(move |config| {
+                config.agent_sockets.enabled = true;
+                config.resource_usage_metering = metering;
+            }),
         )
         .await?;
         let component = executor
@@ -178,7 +181,7 @@ async fn pending_restart_publishes_only_elected_quota_cause(
             limits.run_batch_for_test().await;
             executor.resume(&id, false).await?;
             let result = invocation.await??.into_typed::<Result<String, String>>()?;
-            assert_eq!(result, Err("ErrorCode::InvalidState".to_string()));
+            assert_eq!(result, Err("ErrorCode::ConnectionBroken".to_string()));
             let oplog = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             assert_eq!(
                 count_agent_invocation_pair_since(&oplog, OplogIndex::INITIAL),
@@ -656,6 +659,7 @@ async fn deadline_selection(
             &context,
             limits.clone(),
             Arc::new(move |config| {
+                config.agent_sockets.enabled = true;
                 config.resource_usage_metering = metering;
                 config.limits.max_invocation_duration = Some(Duration::from_secs(3600));
                 config.retry.max_attempts = 1;
@@ -921,7 +925,7 @@ async fn deadline_selection(
             limits.run_batch_for_test().await;
             executor.resume(&id, false).await?;
             let result = invocation.await??.into_typed::<Result<String, String>>()?;
-            assert_eq!(result, Err("ErrorCode::InvalidState".to_string()));
+            assert_eq!(result, Err("ErrorCode::ConnectionBroken".to_string()));
         } else {
             assert!(
                 matches!(errors.as_slice(), [AgentError::EphemeralCannotSuspend(_)]),

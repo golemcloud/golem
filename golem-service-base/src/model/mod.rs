@@ -31,7 +31,7 @@ use golem_common::model::component::{
     AgentFilePermissions, ComponentRevision, PluginInstallationAction,
 };
 use golem_common::model::filesystem::{FileReadError, FileReadHead};
-use golem_common::model::oplog::{OplogCursor, PublicOplogEntryWithIndex};
+use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
 use golem_common::model::worker::{AgentFileSystemNode, AgentFileSystemNodeKind, AgentUpdateMode};
 use golem_common::model::{AgentFilter, AgentId, OplogIndex, ScanCursor};
 use poem_openapi::Object;
@@ -105,7 +105,7 @@ pub struct CancelInvocationResponse {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct GetOplogResponse {
-    pub entries: Vec<PublicOplogEntryWithIndex>,
+    pub entries: Vec<PublicOplogPageEntry>,
     pub next: Option<OplogCursor>,
     pub first_index_in_chunk: u64,
     pub last_index: u64,

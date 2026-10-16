@@ -98,6 +98,8 @@ mod tests {
         config.filesystem_storage.mode =
             crate::services::golem_config::FilesystemStorageMode::ManagedXfs {
                 root: std::path::PathBuf::from("/managed-xfs").into_boxed_path(),
+                xfs_quotad_socket: std::path::PathBuf::from("/run/golem/xfs-quotad.sock")
+                    .into_boxed_path(),
             };
         assert_eq!(
             config.effective_resource_usage_metering(),

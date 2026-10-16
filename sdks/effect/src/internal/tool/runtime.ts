@@ -1,11 +1,20 @@
 import type * as Common from "golem:tool/common@0.1.0"
 import type * as Host from "golem:tool/host@0.1.0"
 import type * as Streams from "golem:tool/streams@0.1.0"
-import { Effect, Layer, Stream } from "effect"
+import { Cause, Effect, Layer, Stream } from "effect"
 import { HostLive } from "../../host/HostLive.js"
 import { findCommand, implementationAt, registeredTools, ToolInvokeError } from "./model.js"
 
 const asError = (cause: Common.ToolError) => new ToolInvokeError(cause)
+const encodeResult = <A, E, R>(encode: () => Effect.Effect<A, E, R>) =>
+  Effect.suspend(encode).pipe(
+    Effect.catchCause(
+      (cause): Effect.Effect<never, E | ToolInvokeError> =>
+        Cause.hasInterrupts(cause)
+          ? Effect.failCause(cause)
+          : Effect.fail(asError({ tag: "invalid-result", val: Cause.pretty(cause) })),
+    ),
+  )
 const bytes = (source: AsyncIterator<Host.ByteStreamItem> | undefined) =>
   source === undefined
     ? undefined
@@ -76,16 +85,15 @@ export async function invokeRegistered(
         return Promise.reject(cause)
       }
     }
-    const results = await Promise.allSettled([start(stdoutOutput), start(stderrOutput)])
-    return results.find((result): result is PromiseRejectedResult => result.status === "rejected")
+    await Promise.allSettled([start(stdoutOutput), start(stderrOutput)])
   }
   try {
     const registered = registeredTools().find((x) => x.definition.name === toolName)
-    if (!registered) throw { tag: "invalid-tool-name", val: toolName } satisfies Common.ToolError
+    if (!registered) throw asError({ tag: "invalid-tool-name", val: toolName })
     const body = findCommand(registered, path)
-    if (!body) throw { tag: "invalid-command-path", val: path } satisfies Common.ToolError
+    if (!body) throw asError({ tag: "invalid-command-path", val: path })
     const handler = implementationAt(registered.implementation, toolName, path)
-    if (!handler) throw { tag: "invalid-command-path", val: path } satisfies Common.ToolError
+    if (!handler) throw asError({ tag: "invalid-command-path", val: path })
 
     const encodeFailure = (failure: { readonly name: string; readonly value: unknown }) => {
       const declared = body.errors.find((x) => x.spec.name === failure.name)
@@ -93,16 +101,18 @@ export async function invokeRegistered(
         return Effect.fail(
           asError({ tag: "invalid-result", val: `undeclared error '${failure.name}'` }),
         )
-      return Effect.flatMap(declared.codec.encodeAsync(failure.value), (value) =>
-        Effect.fail(
-          asError({
-            tag: "custom-error",
-            val: {
-              name: declared.spec.name,
-              payload: { graph: declared.codec.schemaGraph, value },
-            },
-          }),
-        ),
+      return Effect.flatMap(
+        encodeResult(() => declared.codec.encodeAsync(failure.value)),
+        (value) =>
+          Effect.fail(
+            asError({
+              tag: "custom-error",
+              val: {
+                name: declared.spec.name,
+                payload: { graph: declared.codec.schemaGraph, value },
+              },
+            }),
+          ),
       )
     }
     const isFailure = (
@@ -167,8 +177,14 @@ export async function invokeRegistered(
       }).pipe(Effect.catchIf(isFailure, encodeFailure))
       const result = yield* invocation
       if (isFailure(result)) return yield* encodeFailure(result)
+      if (isSuccess(result) && !("value" in result))
+        return yield* Effect.fail(asError({ tag: "invalid-result", val: "malformed success" }))
       const value = isSuccess(result) ? result.value : result
-      const encoded = body.output ? yield* body.output.encodeAsync(value) : undefined
+      if (!body.output && value !== undefined)
+        return yield* Effect.fail(asError({ tag: "invalid-result", val: "unexpected result" }))
+      const encoded = body.output
+        ? yield* encodeResult(() => body.output!.encodeAsync(value))
+        : undefined
       return {
         result:
           body.output && encoded ? { graph: body.output.schemaGraph, value: encoded } : undefined,
@@ -184,15 +200,21 @@ export async function invokeRegistered(
         never
       >,
     )
-    const finishFailure = await settleOutputs("finish")
-    if (finishFailure) throw finishFailure.reason
+    await settleOutputs("finish")
     return result
   } catch (error) {
-    if (error instanceof ToolInvokeError || isToolError(error)) await settleOutputs("finish")
+    if (error instanceof ToolInvokeError) await settleOutputs("finish")
     else await settleOutputs("fail", error)
     if (error instanceof ToolInvokeError) throw error.cause
     throw error
   } finally {
+    for (const writer of [stdout, stderr]) {
+      try {
+        ;(writer as { [Symbol.dispose]?: () => void } | undefined)?.[Symbol.dispose]?.()
+      } catch {
+        // Release each output independently without replacing the structured outcome.
+      }
+    }
     try {
       await stdinIterator?.return?.()
     } catch {
@@ -200,9 +222,6 @@ export async function invokeRegistered(
     }
   }
 }
-
-const isToolError = (value: unknown): value is Common.ToolError =>
-  typeof value === "object" && value !== null && "tag" in value
 
 export const toolGuest = {
   discoverTools: (): Common.Tool[] => registeredTools().map((x) => x.wire),

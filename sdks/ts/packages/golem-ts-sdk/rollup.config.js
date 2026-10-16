@@ -14,6 +14,7 @@ import path from 'path';
 const external = (id) =>
   id === 'user' ||
   id === 'agent-guest' ||
+  id.startsWith('node:') ||
   id === 'node:sqlite' ||
   id === 'node:fs' ||
   id.startsWith('golem:') ||
@@ -94,7 +95,9 @@ export default (args) =>
           middleware: 'src/middleware.ts',
           'schema/public': 'src/schema/public.ts',
           reflection: 'src/reflection.ts',
-          'http-router': 'src/httpRouterContract.ts',
+          'http-router': 'src/httpRouter.ts',
+          nodeHttp: 'src/nodeHttp.ts',
+          'internal/http/nodeHttpRegistration': 'src/internal/http/nodeHttpRegistration.ts',
           toolClient: 'src/toolClient.ts',
         },
         output: {
@@ -118,16 +121,16 @@ export default (args) =>
           },
         ],
       },
-      javascript('src/httpRouterContract.ts', 'dist/http-router.mjs'),
+      javascript('src/httpRouter.ts', 'dist/http-router.mjs'),
       javascript('src/wrapper.ts', 'dist/wrapper.mjs'),
       javascript('src/schema/public.ts', 'dist/schema.mjs'),
       javascript('src/reflection.ts', 'dist/reflection.mjs'),
       javascript('src/middleware.ts', 'dist/middleware.mjs'),
       javascript('src/middlewareRuntime.ts', 'dist/middleware-runtime.mjs'),
       declarations('src/index.ts', 'dist/index.d.mts'),
-      declarations('src/httpRouterContract.ts', 'dist/http-router.d.mts'),
+      declarations('src/httpRouter.ts', 'dist/http-router.d.mts'),
       declarations('src/schema/public.ts', 'dist/schema.d.mts'),
       declarations('src/reflection.ts', 'dist/reflection.d.mts'),
       declarations('src/middleware.ts', 'dist/middleware.d.mts'),
-    ].filter((config) => !args.configHttpRouter || config.input === 'src/httpRouterContract.ts'),
+    ].filter((config) => !args.configHttpRouter || config.input === 'src/httpRouter.ts'),
   );

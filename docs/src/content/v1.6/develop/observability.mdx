@@ -33,7 +33,7 @@ With `agent-type`, `service.name` is the agent type only. Constructor parameters
 
 ### Custom spans
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         Create custom spans using the `golem:api/context` interface:
 
@@ -94,6 +94,17 @@ With `agent-type`, `service.name` is the agent type only. Constructor parameters
             span.set_attribute("step", "processing")
           },
         )
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Use `invocation.StartSpan` from `github.com/golemcloud/golem/sdks/go/golem/invocation`, and finish the span when the work is done:
+
+        ```go
+        span := invocation.StartSpan("my-operation")
+        defer span.Finish()
+        span.SetAttribute("env", "production")
+        // ... do work ...
+        span.SetAttribute("step", "processing")
         ```
     </Tabs.Tab>
 </Tabs>

@@ -14,10 +14,21 @@ import {
 } from "./internal/agentStream.js"
 import { awaitInvocation, scheduleCancelableInvocation, wrapHostThrow } from "./internal/rpc.js"
 import { withCapabilityAdoptionTransaction } from "./internal/schema-model/capabilityTransaction.js"
-import type { GuestPermissionCardHandle } from "./internal/schema-model/permissionCardHandle.js"
+import type { GuestScopeCard } from "./internal/scopeCard.js"
+import {
+  assignGuestPermissionCardHandleKind,
+  type GuestPermissionCardHandle,
+  isGuestPermissionCardHandle,
+  isGuestPermissionCardHandleOfKind,
+  type PermissionCardKind,
+} from "./internal/schema-model/permissionCardHandle.js"
+import { PERMISSION_CARD_INTERNAL } from "./internal/schema-model/permissionCardInternal.js"
+import { retainCapabilityAdoption } from "./internal/tool/collectionOwnership.js"
+import { discardSchemaValueTree } from "./internal/tool/discardRejectedPayload.js"
 import type { GuestSecretHandle } from "./internal/schema-model/secretHandle.js"
 import type { SchemaGraph, SchemaValue, TypedSchemaValue } from "./internal/schema-model/model.js"
 import {
+  restoreEncodedCapabilitiesOnAbort,
   schemaValueFromWit,
   schemaValueToWitAsync,
   typedSchemaValueToWit,
@@ -46,8 +57,27 @@ export interface SchemaCodec<T = any> {
 export type JsonResult<A, E> = { readonly ok: A } | { readonly err: E }
 /** Secret capability used in generated schemas. @since 1.6.0 @category capabilities */
 export type SecretHandle = GuestSecretHandle
-/** Permission-card capability used in generated schemas. @since 1.6.0 @category capabilities */
-export type PermissionCardHandle = GuestPermissionCardHandle
+/**
+ * Concrete permission-card capability used in generated schemas (`polymorphic: false`).
+ *
+ * @since 1.6.0
+ * @category capabilities
+ */
+export type PermissionCard = GuestPermissionCardHandle<"concrete">
+/**
+ * Template permission-card capability used in generated schemas (`polymorphic: true`).
+ *
+ * @since 1.6.0
+ * @category capabilities
+ */
+export type PolymorphicPermissionCard = GuestPermissionCardHandle<"template">
+/**
+ * Invocation-local scope card attached to awaited generated calls. It is not a schema value.
+ *
+ * @since 1.6.0
+ * @category capabilities
+ */
+export type ScopeCard = GuestScopeCard
 /** Quota capability used in generated schemas. @since 1.6.0 @category capabilities */
 export type { QuotaToken }
 /** Schema text payload alias emitted by the generator. @since 1.6.0 @category models */
@@ -246,17 +276,63 @@ export const secretHandleFromSchemaValue = (value: SchemaValue): SecretHandle =>
   if (value.tag !== "secret") throw new Error(`Expected secret, received ${value.tag}`)
   return value.handle
 }
-/** Encode a permission card as a schema capability. @since 1.6.0 @category conversions */
-export const permissionCardHandleToSchemaValue = (handle: PermissionCardHandle): SchemaValue => ({
-  tag: "permission-card",
-  handle,
-})
-/** Decode a permission card from a schema capability. @since 1.6.0 @category conversions */
-export const permissionCardHandleFromSchemaValue = (value: SchemaValue): PermissionCardHandle => {
+const cardToSchemaValue = (card: unknown, kind: PermissionCardKind): SchemaValue => {
+  if (!isGuestPermissionCardHandleOfKind(card, kind))
+    throw new Error(
+      kind === "concrete"
+        ? "Expected a concrete permission card"
+        : "Expected a polymorphic permission card",
+    )
+  return { tag: "permission-card", handle: card }
+}
+const cardFromSchemaValue = <K extends PermissionCardKind>(
+  value: SchemaValue,
+  kind: K,
+): GuestPermissionCardHandle<K> => {
   if (value.tag !== "permission-card")
     throw new Error(`Expected permission-card, received ${value.tag}`)
-  return value.handle
+  if (!isGuestPermissionCardHandle(value.handle))
+    throw new Error("permission-card value does not carry a permission card")
+  return assignGuestPermissionCardHandleKind(PERMISSION_CARD_INTERNAL, value.handle, kind)
 }
+/**
+ * Encode a concrete permission card as a schema capability. A template card is rejected.
+ *
+ * @since 1.6.0
+ * @category conversions
+ */
+export const permissionCardToSchemaValue = (card: PermissionCard): SchemaValue =>
+  cardToSchemaValue(card, "concrete")
+/**
+ * Decode a concrete permission card from a schema capability. The value must carry a card that
+ * the SDK lifted from a host value; any other object is rejected. A received card becomes a
+ * concrete card; a template card is rejected. The result is the same card object, not a copy.
+ *
+ * @since 1.6.0
+ * @category conversions
+ */
+export const permissionCardFromSchemaValue = (value: SchemaValue): PermissionCard =>
+  cardFromSchemaValue(value, "concrete")
+/**
+ * Encode a template permission card as a schema capability. A concrete card is rejected.
+ *
+ * @since 1.6.0
+ * @category conversions
+ */
+export const polymorphicPermissionCardToSchemaValue = (
+  card: PolymorphicPermissionCard,
+): SchemaValue => cardToSchemaValue(card, "template")
+/**
+ * Decode a template permission card from a schema capability. The value must carry a card that
+ * the SDK lifted from a host value; any other object is rejected. A received card becomes a
+ * template card; a concrete card is rejected. The result is the same card object, not a copy.
+ *
+ * @since 1.6.0
+ * @category conversions
+ */
+export const polymorphicPermissionCardFromSchemaValue = (
+  value: SchemaValue,
+): PolymorphicPermissionCard => cardFromSchemaValue(value, "template")
 
 /** Config override shape consumed by generated constructors. @since 1.6.0 @category models */
 export interface AgentConfigEntry {
@@ -268,6 +344,17 @@ export interface RemoteInvocationResult<A> {
   readonly metadata: AgentHost.InvocationMetadata
   readonly value: A
 }
+/**
+ * Scope-card option for awaited bridge calls. The card is borrowed for each call and stays
+ * usable. A released card fails the call with `ScopeCardUnavailableError` before the input is
+ * encoded; a card kept from an earlier invocation makes the host deny the call.
+ *
+ * @since 1.6.0
+ * @category models
+ */
+export interface ScopeCardOptions {
+  readonly scopeCard?: ScopeCard | undefined
+}
 /** Definition-independent generated guest RPC handle. @since 1.6.0 @category clients */
 export interface RemoteAgentHandle {
   readonly agentId: string
@@ -275,11 +362,13 @@ export interface RemoteAgentHandle {
     name: string,
     input: SchemaValue,
     decode: (value: SchemaValue | undefined) => A,
+    options?: ScopeCardOptions,
   ) => Effect.Effect<A, RemoteCallError>
   readonly invokeAndAwaitWithMetadata: <A>(
     name: string,
     input: SchemaValue,
     decode: (value: SchemaValue | undefined) => A,
+    options?: ScopeCardOptions,
   ) => Effect.Effect<RemoteInvocationResult<A>, RemoteCallError>
   readonly invoke: (name: string, input: SchemaValue) => Effect.Effect<void, RemoteCallError>
   readonly invokeWithMetadata: (
@@ -315,7 +404,11 @@ export const attempt = <A>(body: () => A): Effect.Effect<A, RemoteCallError> =>
   Effect.try({ try: () => withCapabilityAdoptionTransaction(body), catch: wrapHostThrow })
 
 const encode = (value: SchemaValue) =>
-  Effect.tryPromise({ try: (signal) => schemaValueToWitAsync(value, signal), catch: wrapHostThrow })
+  Effect.tryPromise({
+    try: (signal) =>
+      restoreEncodedCapabilitiesOnAbort(signal, schemaValueToWitAsync(value, signal)),
+    catch: wrapHostThrow,
+  })
 
 /** Lift and decode a wire result under one capability transaction. @since 1.6.0 @category codecs */
 export const decodeWire = <A>(
@@ -323,20 +416,13 @@ export const decodeWire = <A>(
   decode: (value: SchemaValue | undefined) => A,
 ): A => {
   try {
-    return withCapabilityAdoptionTransaction((transaction) =>
-      decode(value === undefined ? undefined : schemaValueFromWit(value, transaction)),
+    return withCapabilityAdoptionTransaction(
+      (transaction) =>
+        decode(value === undefined ? undefined : schemaValueFromWit(value, transaction)),
+      value === undefined ? undefined : (rollback) => retainCapabilityAdoption(value, rollback),
     )
   } catch (error) {
-    for (const node of value?.valueNodes ?? []) {
-      if (node.tag === "stream-value" && node.val !== undefined) {
-        const stream = node.val as { [Symbol.dispose]?: () => void }
-        try {
-          stream[Symbol.dispose]?.()
-        } finally {
-          node.val = undefined as never
-        }
-      }
-    }
+    if (value) void discardSchemaValueTree(value).catch(() => {})
     throw error
   }
 }
@@ -346,9 +432,9 @@ const remote = (rpc: RpcConnection, agentId: string): RemoteAgentHandle => {
     name: string,
     input: SchemaValue,
     decode: (value: SchemaValue | undefined) => A,
+    options?: ScopeCardOptions,
   ) =>
-    encode(input).pipe(
-      Effect.flatMap((tree) => awaitInvocation(rpc, name, tree)),
+    awaitInvocation(rpc, name, encode(input), options?.scopeCard).pipe(
       Effect.flatMap(({ metadata, result }) =>
         Effect.try({
           try: () => ({
@@ -372,8 +458,8 @@ const remote = (rpc: RpcConnection, agentId: string): RemoteAgentHandle => {
     )
   return {
     agentId,
-    invokeAndAwait: (name, input, decode) =>
-      Effect.map(awaitWithMetadata(name, input, decode), ({ value }) => value),
+    invokeAndAwait: (name, input, decode, options) =>
+      Effect.map(awaitWithMetadata(name, input, decode, options), ({ value }) => value),
     invokeAndAwaitWithMetadata: awaitWithMetadata,
     invoke: (name, input) => Effect.asVoid(invokeWithMetadata(name, input)),
     invokeWithMetadata,

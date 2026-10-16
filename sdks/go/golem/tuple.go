@@ -21,6 +21,9 @@ import (
 // Tuples are positional, unnamed groups, lowering to the WIT tuple type. The
 // types live in the shared core module; see [values.Tuple2].
 
+// Tuple1 is a 1-element tuple.
+type Tuple1[A any] = values.Tuple1[A]
+
 // Tuple2 is a 2-element tuple.
 type Tuple2[A, B any] = values.Tuple2[A, B]
 

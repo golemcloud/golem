@@ -72,7 +72,10 @@ async fn pending_scripted_storage(
         deps,
         &context,
         limits.clone(),
-        Arc::new(move |config| config.resource_usage_metering = metering),
+        Arc::new(move |config| {
+            config.agent_sockets.enabled = true;
+            config.resource_usage_metering = metering;
+        }),
     )
     .await?;
     let component = executor
@@ -325,7 +328,7 @@ async fn pending_scripted_storage(
         let result = tokio::time::timeout(Duration::from_secs(30), invocation)
             .await???
             .into_typed::<Result<String, String>>()?;
-        assert_eq!(result, Err("ErrorCode::InvalidState".to_string()));
+        assert_eq!(result, Err("ErrorCode::ConnectionBroken".to_string()));
         let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         assert_eq!(
             count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL),

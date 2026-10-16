@@ -19,7 +19,7 @@ feedback tracker; older investigation notes are history, not the current status.
 | Plan/grant precedence proposal | Deferred by user decision; existing replacement precedence unchanged |
 | Delivery of the repairs | Checkpoint records completed local work; full feedback resolution and review replies remain pending |
 
-The completed executor scope passed the selected body/native checks, 593 affected library checks,
+Before upstream integration, the completed executor scope passed the selected body/native checks, 593 affected library checks,
 278 integration checks, strict Clippy and the normal build without `test-utils`. The aligned
 walkthrough passed offline browser checks. The later CLI handler reorganization passes the same
 17 focused tests before/after and strict lint for all CLI targets with server-command support.
@@ -42,14 +42,32 @@ those contracts and excludes further repairs to the P2 HTTP ownership chain, ato
 and suffix-rollback machinery being removed. Host P3 HTTP retry, transaction settlement and
 non-HTTP P2 support still require their surviving guarantees.
 
-The user has authorized independent implementation before #4207 lands, without importing that
-branch or resuming obsolete recovery repairs. The surviving success boundary is now locally
+The user first authorized independent implementation before #4207 lands. The surviving success boundary is locally
 validated, including unchanged native assertions and strict lint. A stale background build record
 was not accepted as evidence; a fresh foreground build and explicit test executions supplied the
 results. Direct inspection of #4207 confirms the boundary and commit-before-notify still exist.
 These receipts cover their original branch trees, not the #4207 port. Local integration is now
 authorized; push, review replies and tracker changes remain unauthorized. Grant precedence stays
 unchanged and deferred.
+
+The authorized local merge is now in progress against the pinned head in the delivery plan.
+Source conflicts are resolved and the selected combined runtime, lifecycle and CLI scopes pass.
+Final strict lint passes. The local merge checkpoint is blocked because the normal Git commit
+cannot execute the shared `prepare-commit-msg` hook; no merge commit exists. The earlier one-command
+checkpoint bypass is consumed and does not authorize another bypass.
+The merge keeps #4212's consumer and producer cancellation branches. Removed P2 HTTP producers
+and their dedicated tests are retired together. Non-HTTP P2 support and P3 HTTP retry remain.
+Monthly HTTP/TCP expectations now use the original Starts, exact typed results and full raw-prefix
+checks instead of suffix repair. The canonical wallet installer resets the owner generation once;
+the early tool-admission reset is removed. Generic stop publication and progress remain open A1 work.
+
+The combined library scope and native P2/P3 socket and P3 HTTP cases now pass. Raw-socket fixtures
+explicitly opt into main's new socket setting; the production security default is unchanged. The
+permission-denial library test runs without root's DAC-bypass capabilities and keeps its original
+backend assertion. Lifecycle composition, accounting/stream checks, production compilation without
+`test-utils`, strict CLI lint and account checks pass too. The remaining TCP expectations require
+exact ConnectionBroken rather than the removed InvalidState fallback. This preserves the typed-loss
+contract without accepting arbitrary errors or weakening identity, history or cleanup assertions.
 
 ## Additional posted requests
 

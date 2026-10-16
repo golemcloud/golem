@@ -53,6 +53,7 @@ async fn completion_and_history(
         &context,
         limits.clone(),
         Arc::new(move |config| {
+            config.agent_sockets.enabled = true;
             config.resource_usage_metering = metering;
         }),
     )

@@ -277,13 +277,26 @@ type AgentClient struct {
 	agentType AgentType
 	agentID   string
 	rpc       agentRPC
+	scopeCard any // a golem.ScopeCard, or nil
+}
+
+// WithScopeCard returns a copy of the client whose awaited calls — Call and
+// CallAsync — carry card as their scope card, unless the call passes its own
+// with [CallScopeCard], as [golem.Client.WithScopeCard] does for a typed
+// client. Trigger and Schedule never carry one. The card is lent, not moved,
+// and is valid only in the invocation that derived it. It panics on the zero
+// ScopeCard.
+func (c *AgentClient) WithScopeCard(card golem.ScopeCard) *AgentClient {
+	scoped := *c
+	scoped.scopeCard = mustScopeCard(c.agentType.Name(), card)
+	return &scoped
 }
 
 // agentRPC is the host connection a reflected or dynamic agent client invokes
 // through. The interface keeps packing, validation and decoding testable
 // without a host.
 type agentRPC interface {
-	start(method string, input types.SchemaValueTree) (pendingRPC, error)
+	start(method string, input types.SchemaValueTree, scopeCard witTypes.Option[*types.PermissionCard]) (pendingRPC, error)
 	trigger(method string, input types.SchemaValueTree) (golem.InvocationID, error)
 	schedule(at time.Time, method string, input types.SchemaValueTree) (*golem.ScheduledInvocation, error)
 }
@@ -359,8 +372,8 @@ func (c *AgentClient) pack(method string, args map[string]any) (Method, types.Sc
 // Call invokes a method with named arguments and waits for its result, as
 // canonical JSON (nil when the method returns nothing), together with the
 // invocation's identity.
-func (c *AgentClient) Call(method string, args map[string]any) (any, golem.InvocationID, error) {
-	p, err := c.CallAsync(method, args)
+func (c *AgentClient) Call(method string, args map[string]any, opts ...CallOpt) (any, golem.InvocationID, error) {
+	p, err := c.CallAsync(method, args, opts...)
 	if err != nil {
 		return nil, golem.InvocationID{}, err
 	}
@@ -370,12 +383,13 @@ func (c *AgentClient) Call(method string, args map[string]any) (any, golem.Invoc
 
 // CallAsync invokes a method with named arguments and returns at once; the
 // result is read, as for Call, with the pending call's Wait.
-func (c *AgentClient) CallAsync(method string, args map[string]any) (*PendingCall[any], error) {
+func (c *AgentClient) CallAsync(method string, args map[string]any, opts ...CallOpt) (*PendingCall[any], error) {
+	scope := scopeCardOf(c.scopeCard, opts)
 	m, input, err := c.pack(method, args)
 	if err != nil {
 		return nil, err
 	}
-	p, err := c.rpc.start(method, input)
+	p, err := c.rpc.start(method, input, scope)
 	if err != nil {
 		return nil, err
 	}

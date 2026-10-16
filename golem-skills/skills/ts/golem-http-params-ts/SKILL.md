@@ -93,7 +93,7 @@ Only scalar schemas can be used for inputs bound to path/query/header variables 
 
 ## POST Request Body Mapping
 
-For `POST`/`PUT`/`DELETE`/`PATCH` endpoints, any method input **not** bound to a path variable, query parameter, or header is populated from the JSON request body:
+User-supplied method inputs **not** bound to a path variable, query parameter, or header are body parameters. Ordinary structured inputs are populated from the JSON request body:
 
 ```typescript
 updateItem: method({
@@ -106,9 +106,11 @@ updateItem: method({
 // → id from path, name and count from body
 ```
 
-Each unbound input becomes a top-level field in the expected JSON body object. Field names use the input key names.
+Each ordinary structured body input becomes a top-level field in the expected JSON body object. Field names use the input key names.
 
-> **⚠️ Important:** The request body is **always** a JSON object with input keys as fields — even when there is only a single body parameter. For example, a method with `input: { decision: z.string() }` expects `{"decision": "approved"}`, **never** a bare string like `"approved"`. Sending a non-object JSON value or plain text will fail with `REQUEST_JSON_BODY_PARSING_FAILED`.
+> **⚠️ Important:** Ordinary structured bodies use a JSON object with **body input keys only** as fields, even for one parameter. `input: { decision: z.string() }` expects `{"decision": "approved"}`, not a bare string. A single object input named `payload` also needs wrapping: `{"payload": {"name": "Widget", "count": 5}}`, not `{"name": "Widget", "count": 5}`. Do not include path/query/header inputs. Unstructured text and binary inputs instead consume the raw body; see below.
+
+CLI positional invocation is different: pass one argument per user-supplied `input` field in declaration order, including inputs bound to path/query/header values over HTTP. Skip host-injected `Principal` fields without a principal value or placeholder. Use TypeScript native literals for each value, not one object wrapping the full input. A single object input is one object literal without the HTTP `payload` wrapper. Load `golem-invoke-agent-ts` for CLI examples and caller-only input rules.
 
 ## Binary Request and Response Bodies
 

@@ -77,6 +77,16 @@ The user approved independent implementation before #4207 merges, then explicitl
 local integration of merged main and a pinned #4207 revision. Keep #4212's merged stdin fixes.
 This does not authorize changing grants, pushing, review replies or tracker mutations.
 
+The local merge is in progress. Source conflicts are resolved. The selected combined library,
+native socket/HTTP, lifecycle, metering and CLI scopes pass, and current fixtures rebuild and
+validate. Production compilation without `test-utils`, strict executor/CLI lint and account checks
+pass. The normal merge commit cannot execute the shared `prepare-commit-msg` hook. Restore hook
+access or obtain fresh one-command authorization before completing the local merge checkpoint.
+The earlier checkpoint bypass is consumed. No remote publication has occurred.
+The canonical wallet installer now owns the one replay-generation reset. Startup provenance follows
+successful installation, not the earlier attempt counter. Stop publication and progress still need
+restoration to the existing establishment owner; this intermediate merge does not close A1.
+
 - Complete the surviving success-boundary simplification as one coherent candidate, not as a new
   recovery repair. The current #4207 implementation retains the same ordinary boundary and
   commit-before-notify contract. Its establishment owner remains the later integration target.

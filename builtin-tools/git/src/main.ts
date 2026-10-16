@@ -8,7 +8,6 @@ import {
   ok,
   s,
   toolDefinition,
-  withIdempotenceMode,
 } from "@golemcloud/golem-ts-sdk";
 import {
   compileSchema,
@@ -129,7 +128,7 @@ function credentials(handle: Secret | undefined): Credentials | undefined {
 }
 
 const definition = toolDefinition("git", { requiresFilesystem: true })
-  .version("0.1.13")
+  .version("0.1.15")
   .doc({
     summary: "Run local and HTTP(S) remote Git workflows.",
     description:
@@ -1073,26 +1072,23 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
       atomic,
       authentication: handle,
     }) =>
-      // A lost receive-pack response may follow a successful remote update.
-      withIdempotenceMode(false, () =>
-        withAuthentication(handle, async (auth) =>
-          pushCommand(
-            await repository(workingDirectory ?? [], cwd),
-            remote,
-            refspecs,
-            {
-              setUpstream,
-              delete: deleting,
-              tags,
-              all,
-              force,
-              forceWithLease,
-              lease,
-              atomic,
-            },
-            wasiHttp,
-            auth,
-          ),
+      withAuthentication(handle, async (auth) =>
+        pushCommand(
+          await repository(workingDirectory ?? [], cwd),
+          remote,
+          refspecs,
+          {
+            setUpstream,
+            delete: deleting,
+            tags,
+            all,
+            force,
+            forceWithLease,
+            lease,
+            atomic,
+          },
+          wasiHttp,
+          auth,
         ),
       ),
     clone: async ({
@@ -1402,7 +1398,14 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
         const oid = await createCommit(repo, message, author, allowEmpty);
         return { oid, summary: message[0] ?? "" };
       }),
-    checkout: async ({ cwd, workingDirectory, newBranch, detach, ref, paths }) =>
+    checkout: async ({
+      cwd,
+      workingDirectory,
+      newBranch,
+      detach,
+      ref,
+      paths,
+    }) =>
       guard(async () => {
         const repo = await repository(workingDirectory ?? [], cwd);
         const tracking =

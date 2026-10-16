@@ -44,26 +44,13 @@ impl NativeIoWait {
             kind = self.interrupt => Err(kind),
         }
     }
-
-    pub(crate) async fn wait_ready_first<T>(
-        self,
-        native: impl Future<Output = T>,
-    ) -> Result<T, InterruptKind> {
-        tokio::select! {
-            biased;
-            result = native => Ok(result),
-            kind = self.interrupt => Err(kind),
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::durable_host::io::poll::wait_tcp_connect;
-    use crate::durable_host::io::streams::{
-        interruptible_http_body_input, interruptible_tcp_input,
-    };
+    use crate::durable_host::io::streams::interruptible_tcp_input;
     use crate::durable_host::tool::operation::OwnerToolOperations;
     use crate::model::ExecutionStatus;
     use golem_common::model::Timestamp;
@@ -225,6 +212,7 @@ mod tests {
             std::io::empty(),
             |duration| wasmtime::Error::from(crate::durable_host::SuspendForSleep(duration)),
             None,
+            true,
         )
         .unwrap();
         let parent = table.push(PendingReadiness).unwrap();
@@ -306,6 +294,7 @@ mod tests {
                         wasmtime::Error::from(crate::durable_host::SuspendForSleep(duration))
                     },
                     None,
+                    true,
                 )
                 .unwrap();
                 let observed = Arc::new(ReadinessObserved::default());
@@ -442,120 +431,24 @@ mod tests {
         }
     }
 
-    async fn check_ready_first_native_pollable(native_ready: bool) {
-        let sources = Sources::running();
-        let (_, mut io_ctx, mut table) = crate::wasi_host::create_context(
-            &[] as &[&str],
-            std::io::empty(),
-            std::io::empty(),
-            std::io::empty(),
-            |duration| wasmtime::Error::from(crate::durable_host::SuspendForSleep(duration)),
-            None,
-        )
-        .unwrap();
-        let observed = Arc::new(ReadinessObserved::default());
-        let (ready, receive) = tokio::sync::oneshot::channel();
-        let native = table
-            .push(ControlledReadiness {
-                ready: receive,
-                observed: observed.clone(),
-            })
-            .unwrap();
-        let native_rep = native.rep();
-        let pollable = wasmtime_wasi::subscribe(
-            &mut table,
-            Resource::<ControlledReadiness>::new_borrow(native_rep),
-            None,
-        )
-        .unwrap();
-        let mut io = wasmtime_wasi::IoData {
-            table: &mut table,
-            io_ctx: &mut io_ctx,
-        };
-        let mut native = Box::pin(HostPollable::block(
-            &mut io,
-            Resource::new_borrow(pollable.rep()),
-        ));
-        assert!(futures::poll!(native.as_mut()).is_pending());
-        assert!(observed.pending.load(Ordering::SeqCst) > 0);
-        assert_eq!(observed.completed.load(Ordering::SeqCst), 0);
-        assert_eq!(observed.dropped.load(Ordering::SeqCst), 0);
-        let expected = sources.trigger(Source::Lifecycle).unwrap();
-        if native_ready {
-            ready.send(()).unwrap();
-        }
-        let mut wait = Box::pin(NativeIoWait::new(sources.borrow()).wait_ready_first(native));
-        let std::task::Poll::Ready(result) = futures::poll!(wait.as_mut()) else {
-            panic!("native ready-first wait missed its selected event");
-        };
-        drop(wait);
-        if native_ready {
-            result.unwrap().unwrap();
-            assert_eq!(observed.completed.load(Ordering::SeqCst), 1);
-        } else {
-            assert_eq!(result.unwrap_err(), expected);
-            assert_eq!(observed.completed.load(Ordering::SeqCst), 0);
-        }
-        assert_eq!(observed.dropped.load(Ordering::SeqCst), 1);
-        assert!(matches!(
-            io.table
-                .delete(Resource::<ControlledReadiness>::new_own(native_rep)),
-            Err(wasmtime::component::ResourceTableError::HasChildren)
-        ));
-        HostPollable::drop(&mut io, Resource::new_own(pollable.rep())).unwrap();
-        table
-            .delete(Resource::<ControlledReadiness>::new_own(native_rep))
-            .unwrap();
-    }
-
-    #[test]
-    async fn native_ready_first_observes_lifecycle_before_constructor_while_pending() {
-        check_ready_first_native_pollable(false).await;
-    }
-
-    #[test]
-    async fn native_ready_first_pollable_wins_latched_lifecycle_tie() {
-        check_ready_first_native_pollable(true).await;
-    }
-
-    enum InputObservation {
-        Tcp(Result<u64, StreamError>),
-        Http(Result<Result<u64, StreamError>, InterruptKind>),
-    }
-
     async fn observe_input(
         table: &mut ResourceTable,
         rep: u32,
         read: bool,
-        http: bool,
         wait: NativeIoWait,
-    ) -> InputObservation {
+    ) -> Result<u64, StreamError> {
         if read {
             let native = HostInputStream::blocking_read(table, Resource::new_borrow(rep), 3);
-            if http {
-                InputObservation::Http(
-                    interruptible_http_body_input(native, wait)
-                        .await
-                        .map(|result| result.map(|bytes| bytes.len() as u64)),
-                )
-            } else {
-                InputObservation::Tcp(
-                    interruptible_tcp_input(native, wait)
-                        .await
-                        .map(|bytes| bytes.len() as u64),
-                )
-            }
+            interruptible_tcp_input(native, wait)
+                .await
+                .map(|bytes| bytes.len() as u64)
         } else {
             let native = HostInputStream::blocking_skip(table, Resource::new_borrow(rep), 3);
-            if http {
-                InputObservation::Http(interruptible_http_body_input(native, wait).await)
-            } else {
-                InputObservation::Tcp(interruptible_tcp_input(native, wait).await)
-            }
+            interruptible_tcp_input(native, wait).await
         }
     }
 
-    async fn check_input(source: Source, order: Order, http: bool) {
+    async fn check_input(source: Source, order: Order) {
         for read in [false, true] {
             let sources = Sources::running();
             let (reader, peer) = tokio::io::duplex(8);
@@ -572,7 +465,6 @@ mod tests {
                 &mut table,
                 input.rep(),
                 read,
-                http,
                 NativeIoWait::new(borrowed),
             ));
             if matches!(order, Order::DuringWait) {
@@ -583,31 +475,17 @@ mod tests {
                 panic!("native input missed cancellation");
             };
             drop(wait);
-            match result {
-                InputObservation::Tcp(result) => {
-                    let StreamError::Trap(error) = result.unwrap_err() else {
-                        panic!("raw input must return a typed interruption trap");
-                    };
-                    if matches!(order, Order::DuringWait) || matches!(source, Source::Lifecycle) {
-                        if let Some(expected) = expected {
-                            assert_eq!(error.downcast_ref::<InterruptKind>(), Some(&expected));
-                        } else {
-                            assert_interrupt(Err(error));
-                        }
-                    } else {
-                        assert_interrupt(Err(error));
-                    }
+            let StreamError::Trap(error) = result.unwrap_err() else {
+                panic!("raw input must return a typed interruption trap");
+            };
+            if matches!(order, Order::DuringWait) || matches!(source, Source::Lifecycle) {
+                if let Some(expected) = expected {
+                    assert_eq!(error.downcast_ref::<InterruptKind>(), Some(&expected));
+                } else {
+                    assert_interrupt(Err(error));
                 }
-                InputObservation::Http(result) => {
-                    let kind = result.unwrap_err();
-                    if (matches!(order, Order::DuringWait) || matches!(source, Source::Lifecycle))
-                        && expected.is_some()
-                    {
-                        assert_eq!(Some(kind), expected);
-                    } else {
-                        assert!(matches!(kind, InterruptKind::Interrupt(_)));
-                    }
-                }
+            } else {
+                assert_interrupt(Err(error));
             }
             if !matches!(source, Source::Lifecycle) {
                 assert!(sources.status.read().unwrap().is_running());
@@ -625,79 +503,22 @@ mod tests {
 
     #[test]
     async fn native_raw_input_observes_deadline_before_subscription() {
-        check_input(Source::InvocationDeadline, Order::BeforeSubscription, false).await;
+        check_input(Source::InvocationDeadline, Order::BeforeSubscription).await;
     }
 
     #[test]
     async fn native_raw_input_observes_entity_cancellation_before_subscription() {
-        check_input(Source::EntityCancellation, Order::BeforeSubscription, false).await;
+        check_input(Source::EntityCancellation, Order::BeforeSubscription).await;
     }
 
     #[test]
     async fn native_raw_input_interrupts_pending_deadline() {
-        check_input(Source::InvocationDeadline, Order::DuringWait, false).await;
+        check_input(Source::InvocationDeadline, Order::DuringWait).await;
     }
 
     #[test]
     async fn native_raw_input_interrupts_pending_entity_cancellation() {
-        check_input(Source::EntityCancellation, Order::DuringWait, false).await;
-    }
-
-    #[test]
-    async fn native_http_input_observes_deadline_before_subscription() {
-        check_input(Source::InvocationDeadline, Order::BeforeSubscription, true).await;
-    }
-
-    #[test]
-    async fn native_http_input_observes_entity_cancellation_before_subscription() {
-        check_input(Source::EntityCancellation, Order::BeforeSubscription, true).await;
-    }
-
-    #[test]
-    async fn native_http_input_observes_lifecycle_before_subscription() {
-        check_input(Source::Lifecycle, Order::BeforeSubscription, true).await;
-    }
-
-    #[test]
-    async fn native_http_input_interrupts_pending_deadline() {
-        check_input(Source::InvocationDeadline, Order::DuringWait, true).await;
-    }
-
-    #[test]
-    async fn native_http_input_interrupts_pending_entity_cancellation() {
-        check_input(Source::EntityCancellation, Order::DuringWait, true).await;
-    }
-
-    #[test]
-    async fn native_http_input_preserves_ready_first_deadline_and_cancellation() {
-        for read in [false, true] {
-            for source in [
-                Source::InvocationDeadline,
-                Source::EntityCancellation,
-                Source::Lifecycle,
-            ] {
-                let sources = Sources::running();
-                sources.trigger(source);
-                let mut table = ResourceTable::new();
-                let input: InputStream = Box::new(MemoryInputPipe::new("abc"));
-                let input = table.push(input).unwrap();
-                let InputObservation::Http(result) = observe_input(
-                    &mut table,
-                    input.rep(),
-                    read,
-                    true,
-                    NativeIoWait::new(sources.borrow()),
-                )
-                .await
-                else {
-                    unreachable!();
-                };
-                assert_eq!(result.unwrap().unwrap(), 3);
-                HostInputStream::drop(&mut table, Resource::new_own(input.rep()))
-                    .await
-                    .unwrap();
-            }
-        }
+        check_input(Source::EntityCancellation, Order::DuringWait).await;
     }
 
     async fn check_splice(source: Source, order: Order) {
@@ -837,17 +658,13 @@ mod tests {
                 let mut table = ResourceTable::new();
                 let input: InputStream = Box::new(MemoryInputPipe::new("abc"));
                 let input = table.push(input).unwrap();
-                let InputObservation::Tcp(result) = observe_input(
+                let result = observe_input(
                     &mut table,
                     input.rep(),
                     read,
-                    false,
                     NativeIoWait::new(sources.borrow()),
                 )
-                .await
-                else {
-                    unreachable!();
-                };
+                .await;
                 assert_eq!(result.unwrap(), 3);
                 assert_eq!(sources.signal.receiver_count(), 0);
                 sources.trigger(source);

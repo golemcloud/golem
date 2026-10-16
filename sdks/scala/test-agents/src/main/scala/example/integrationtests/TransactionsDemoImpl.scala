@@ -65,6 +65,9 @@ final class TransactionsDemoImpl(@unused private val name: String) extends Trans
           sb.result()
         }
       }
+    }.map {
+      case Right(result) => result
+      case Left(failure) => s"transaction failed: $failure"
     }
   }
 
@@ -150,6 +153,7 @@ final class TransactionsDemoImpl(@unused private val name: String) extends Trans
           case Left(TransactionFailure.FailedAndRolledBackCompletely(err))         => s"FailedAndRolledBackCompletely($err)"
           case Left(TransactionFailure.FailedAndRolledBackPartially(err, compErr)) =>
             s"FailedAndRolledBackPartially($err, $compErr)"
+          case Left(failure) => s"$failure"
         }
 
         sb.append(s"transaction result=$resultStr\n")

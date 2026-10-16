@@ -26,21 +26,8 @@ pub(super) struct Peer {
 
 impl Peer {
     pub async fn start() -> anyhow::Result<Self> {
-        Self::start_with_body_wait(false).await
-    }
-
-    pub async fn start_body_wait() -> anyhow::Result<Self> {
-        Self::start_with_body_wait(true).await
-    }
-
-    async fn start_with_body_wait(body_wait: bool) -> anyhow::Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
-        let path = if body_wait {
-            "/body-wait"
-        } else {
-            "/header-wait"
-        };
-        let url = format!("http://{}{path}", listener.local_addr()?);
+        let url = format!("http://{}/header-wait", listener.local_addr()?);
         let (request_tx, requests) = mpsc::unbounded_channel();
         let (closed_tx, closed) = mpsc::unbounded_channel();
         let connections = Arc::new(AtomicUsize::new(0));
@@ -62,7 +49,7 @@ impl Peer {
                             let closed_tx = closed_tx.clone();
                             let request_count = request_count.clone();
                             handlers.spawn(async move {
-                                if let Err(error) = serve(stream, number, body_wait, &request_tx, &closed_tx, &request_count).await {
+                                if let Err(error) = serve(stream, number, &request_tx, &closed_tx, &request_count).await {
                                     let _ = request_tx.send(Err(error));
                                 }
                             });
@@ -151,7 +138,6 @@ impl Drop for Peer {
 async fn serve(
     mut stream: TcpStream,
     number: usize,
-    body_wait: bool,
     requests: &mpsc::UnboundedSender<anyhow::Result<Request>>,
     closed: &mpsc::UnboundedSender<anyhow::Result<usize>>,
     request_count: &AtomicUsize,
@@ -163,13 +149,8 @@ async fn serve(
         headers.push(stream.read_u8().await?);
     }
     let headers = String::from_utf8(headers)?;
-    let path = if body_wait {
-        "/body-wait"
-    } else {
-        "/header-wait"
-    };
     ensure!(
-        headers.starts_with(&format!("GET {path} HTTP/1.1\r\n")),
+        headers.starts_with("GET /header-wait HTTP/1.1\r\n"),
         "unexpected request: {headers}"
     );
     let keys: Vec<_> = headers
@@ -191,21 +172,11 @@ async fn serve(
         idempotency_key: keys[0].clone(),
         respond,
     }))?;
-    if body_wait {
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nh")
-            .await?;
-        stream.flush().await?;
-    }
     tokio::select! {
         result = response => {
             result.context("response gate dropped")?;
-            if body_wait {
-                stream.write_all(b"i").await?;
-            } else {
-                // Body bytes are required for mandatory body and transmission finalization.
-                stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nhi").await?;
-            }
+            // Body bytes are required for mandatory body and transmission finalization.
+            stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nhi").await?;
             stream.shutdown().await?;
         }
         result = async {

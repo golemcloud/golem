@@ -516,6 +516,20 @@ impl WorkerClient for RecordingWorkerClient {
         unimplemented!()
     }
 
+    async fn get_oplog_entry(
+        &self,
+        _: &AgentId,
+        _: OplogIndex,
+        _: Option<golem_common::model::component::ComponentRevision>,
+        _: EnvironmentId,
+        _: AuthCtx,
+    ) -> Result<
+        golem_common::model::oplog::PublicOplogEntryWithIndex,
+        crate::service::worker::WorkerServiceError,
+    > {
+        unimplemented!()
+    }
+
     async fn get_file_system_node(
         &self,
         _: &AgentId,

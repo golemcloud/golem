@@ -27,6 +27,7 @@ async fn durable_p3_udp_receive_completion_before_quota_stop(
         &context,
         limits.clone(),
         Arc::new(move |config| {
+            config.agent_sockets.enabled = true;
             config.resource_usage_metering = metering;
         }),
     )
@@ -67,7 +68,7 @@ async fn durable_p3_udp_receive_completion_before_quota_stop(
                     &component,
                     &name,
                     &key,
-                    "udp_receive_p3",
+                    "udp_receive_wait_p3",
                     data_value!(),
                 )
                 .await
@@ -125,7 +126,7 @@ async fn durable_p3_udp_receive_completion_before_quota_stop(
         assert_settled_history(&completed)?;
         assert_invocation(&completed, &key, 1)?;
         ensure!(count_agent_invocation_pair_since(&completed, OplogIndex::INITIAL) == (2, 2));
-        let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, "udp_receive_p3", data_value!()).await?;
+        let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, "udp_receive_wait_p3", data_value!()).await?;
         ensure!(cached.into_typed::<Result<Vec<u8>, String>>()? == Ok(b"completed".to_vec()));
         ensure!(phases.try_recv().is_err());
         info!(%key, %start, ?phase, datagrams_sent = 1,

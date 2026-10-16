@@ -253,7 +253,7 @@ async fn pending_headers(
                     &component,
                     &name,
                     &key,
-                    "get_for_header_wait",
+                    "get_for_quota_wait",
                     data_value!(url),
                 )
                 .await
@@ -275,6 +275,7 @@ async fn pending_headers(
                 tokio::task::yield_now().await;
             }
         }).await.context("committed open send under unfinished method")??;
+        let committed_prefix = executor.stored_oplog(&id).await;
         tokio::time::timeout(Duration::from_secs(10), polls.recv())
             .await?
             .context("timer closed")?;
@@ -518,15 +519,18 @@ async fn pending_headers(
             second.respond.send(()).map_err(|_| anyhow::anyhow!("second HTTP response gate closed"))?;
             let resumed = tokio::time::timeout(Duration::from_secs(15), &mut invocation)
                 .await.context("retained HTTP invocation continuation and tail finalization")???;
-            ensure!(resumed.into_typed::<String>()? == "200 hi");
+            ensure!(resumed.into_typed::<Result<String, String>>()? == Ok("200 hi".to_string()));
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let raw_recovered = executor.stored_oplog(&id).await;
+            ensure!(raw_recovered.len() >= committed_prefix.len());
+            ensure!(&raw_recovered[..committed_prefix.len()] == committed_prefix.as_slice(), "complete committed prefix must survive repair");
             info!(?recovered, "HTTP recovery oplog after body and request finalization");
             ensure!(self::send_start(&recovered, 1)? == send_start);
             assert_settled_history(&recovered)?;
             assert_invocation(&recovered, &key, 1)?;
             ensure!(count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));
-            let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, "get_for_header_wait", data_value!(peer.url.clone())).await?;
-            ensure!(cached.into_typed::<String>()? == "200 hi");
+            let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, "get_for_quota_wait", data_value!(peer.url.clone())).await?;
+            ensure!(cached.into_typed::<Result<String, String>>()? == Ok("200 hi".to_string()));
             peer.assert_counts(2)?;
             info!(?resource, %key, %send_start, ?reconstructed, requests = 2,
                 "Original HTTP send repaired under same Start and HTTP key; one method Finished; second external request observed");
@@ -541,7 +545,7 @@ async fn pending_headers(
             tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
             tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
             let fresh_key = IdempotencyKey::fresh();
-            let fresh = executor.invoke_and_await_agent_with_key(&component, &name, &fresh_key, "get_for_header_wait", data_value!(peer.url.clone()));
+            let fresh = executor.invoke_and_await_agent_with_key(&component, &name, &fresh_key, "get_for_quota_wait", data_value!(peer.url.clone()));
             let response = async {
                 let third = peer.request().await?;
                 ensure!(third.number == 3);
@@ -550,7 +554,7 @@ async fn pending_headers(
                 Ok::<_, anyhow::Error>(())
             };
             let (fresh, ()) = tokio::time::timeout(Duration::from_secs(15), async { tokio::try_join!(fresh, response) }).await??;
-            ensure!(fresh.into_typed::<String>()? == "200 hi");
+            ensure!(fresh.into_typed::<Result<String, String>>()? == Ok("200 hi".to_string()));
             peer.assert_counts(3)?;
             let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(count_agent_invocation_pair_since(&history, OplogIndex::INITIAL) == (3, 3));
@@ -574,7 +578,7 @@ async fn pending_headers(
             applied_refresh(&limits, &registry, context.account_id).await?.await?;
             let probe_name = agent_id!("HttpClient4");
             let probe_key = IdempotencyKey::fresh();
-            let probe = executor.invoke_and_await_agent_with_key(&component, &probe_name, &probe_key, "get_for_header_wait", data_value!(peer.url.clone()));
+            let probe = executor.invoke_and_await_agent_with_key(&component, &probe_name, &probe_key, "get_for_quota_wait", data_value!(peer.url.clone()));
             let response = async {
                 let second = peer.request().await?;
                 ensure!(second.number == 2);
@@ -583,7 +587,7 @@ async fn pending_headers(
                 Ok::<_, anyhow::Error>(())
             };
             let (probe, ()) = tokio::time::timeout(Duration::from_secs(15), async { tokio::try_join!(probe, response) }).await??;
-            ensure!(probe.into_typed::<String>()? == "200 hi");
+            ensure!(probe.into_typed::<Result<String, String>>()? == Ok("200 hi".to_string()));
             let failed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(self::send_start(&failed, 0)? == send_start);
             assert_invocation(&failed, &key, 0)?;

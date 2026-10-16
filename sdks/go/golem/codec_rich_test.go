@@ -51,6 +51,7 @@ func TestRichScalarsLowerToTheirOwnWitTypes(t *testing.T) {
 		{"Binary", reflect.TypeFor[Binary](), types.SchemaTypeBodyBinaryType},
 		{"Path", reflect.TypeFor[Path](), types.SchemaTypeBodyPathType},
 		{"Quantity", reflect.TypeFor[Quantity[Bytes]](), types.SchemaTypeBodyQuantityType},
+		{"Tuple1", reflect.TypeFor[Tuple1[bool]](), types.SchemaTypeBodyTupleType},
 		{"Tuple2", reflect.TypeFor[Tuple2[string, int64]](), types.SchemaTypeBodyTupleType},
 		{"Perms", reflect.TypeFor[Perms](), types.SchemaTypeBodyFlagsType},
 	} {
@@ -99,6 +100,7 @@ func TestQuantitySpecComesFromTheUnitMarker(t *testing.T) {
 }
 
 func TestTupleRoundTripsPositionally(t *testing.T) {
+	assertRoundTrip(t, "tuple1", Tuple1[string]{A: "x"})
 	assertRoundTrip(t, "tuple2", Tuple2[string, int64]{A: "x", B: 7})
 	assertRoundTrip(t, "tuple3", Tuple3[bool, Text, []int32]{A: true, B: "t", C: []int32{1, 2}})
 	assertRoundTrip(t, "nested", Tuple2[Tuple2[int32, int32], Option[string]]{

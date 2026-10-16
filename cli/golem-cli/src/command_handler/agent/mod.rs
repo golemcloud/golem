@@ -24,7 +24,7 @@ use crate::command::shared_args::{
 use crate::command::worker::{AgentSubcommand, InvocationStdinFormat, InvocationStdoutFormat};
 use crate::command_handler::Handlers;
 use crate::command_handler::agent::oplog_serve::{
-    OplogViewerServer, open_in_browser, serve_oplog_viewer,
+    OplogViewerServer, open_in_browser, oplog_page_entry_view, serve_oplog_viewer,
 };
 use crate::command_handler::agent::stream::AgentConnection;
 use crate::context::Context;
@@ -33,9 +33,9 @@ use crate::error::service::{MapServiceError, ServiceError};
 use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
-    LogColorize, LogIndent, LogOutput, Output as LogOutputTarget, error_message_for_output,
-    log_action, log_error, log_error_action, log_failed_to, log_warn, log_warn_action, logln,
-    message_for_output,
+    LogColorize, LogIndent, LogOutput, Output as LogOutputTarget, end_for_closed_output,
+    error_message_for_output, is_closed_pipe, log_action, log_error, log_error_action,
+    log_failed_to, log_warn, log_warn_action, logln, message_for_output, try_print_bytes,
 };
 use crate::model::agent::action_result::{
     AgentCancelInvocationResult, AgentDeleteView, AgentFileContentsResult, AgentInterruptResult,
@@ -82,7 +82,7 @@ use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::{ParsedFunctionName, ParsedFunctionSite};
 use golem_common::model::environment::EnvironmentName;
-use golem_common::model::oplog::{OplogCursor, PublicOplogEntryWithIndex};
+use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
 use golem_common::model::worker::{
     AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
 };
@@ -263,8 +263,12 @@ impl AgentCommandHandler {
                     agent_id,
                     from,
                     query,
+                    omit_payloads,
                     viewer,
-                } => self.cmd_oplog(agent_id, from, query, viewer).await,
+                } => {
+                    self.cmd_oplog(agent_id, from, query, omit_payloads, viewer)
+                        .await
+                }
                 AgentSubcommand::Revert {
                     agent_id,
                     last_oplog_index,
@@ -826,6 +830,7 @@ impl AgentCommandHandler {
         agent_id: AgentIdArgs,
         from: Option<u64>,
         query: Option<String>,
+        omit_payloads: bool,
         viewer: OplogViewerArgs,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
@@ -856,6 +861,7 @@ impl AgentCommandHandler {
                     agent_id: agent_id.0.clone(),
                     page,
                     page_size: batch_size,
+                    omit_payloads,
                 },
                 viewer.port,
                 !viewer.no_open,
@@ -869,7 +875,7 @@ impl AgentCommandHandler {
         let print_entries = html.is_none() || self.ctx.format().is_structured();
         let mut collected_entries = Vec::<AgentOplogEntryView>::new();
         loop {
-            let mut entries = Vec::<PublicOplogEntryWithIndex>::new();
+            let mut entries = Vec::<PublicOplogPageEntry>::new();
             cursor = {
                 let clients = self.ctx.golem_clients().await?;
 
@@ -893,11 +899,14 @@ impl AgentCommandHandler {
             if !entries.is_empty() {
                 had_entries = true;
                 for entry in entries {
-                    let view = AgentOplogEntryView {
-                        index: entry.oplog_index.as_u64(),
-                        attribution: entry.attribution,
-                        entry: entry.entry,
-                    };
+                    let view = oplog_page_entry_view(
+                        &self.ctx,
+                        &component.id.0,
+                        &agent_id.0,
+                        entry,
+                        omit_payloads,
+                    )
+                    .await?;
                     if html.is_some() {
                         collected_entries.push(view.clone());
                     }
@@ -1135,7 +1144,18 @@ impl AgentCommandHandler {
         interval_ms: u64,
     ) -> anyhow::Result<()> {
         let duration = Duration::from_millis(interval_ms);
-        let mut screen = AlternateScreenGuard::enter()?;
+        let mut screen = match AlternateScreenGuard::enter() {
+            Ok(screen) => screen,
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(is_closed_pipe) =>
+            {
+                end_for_closed_output();
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
         let result: anyhow::Result<()> = async {
             loop {
                 let term_height = terminal_size()
@@ -1162,9 +1182,19 @@ impl AgentCommandHandler {
                     .unwrap_or_else(|e| format!("Error: {e:#}"));
 
                 // Clear and write in one buffered flush — no blank-screen gap
-                queue!(screen.stdout_mut(), MoveTo(0, 0), Clear(ClearType::All))?;
-                write!(screen.stdout_mut(), "{output}")?;
-                screen.stdout_mut().flush()?;
+                let drawn = (|| {
+                    queue!(screen.stdout_mut(), MoveTo(0, 0), Clear(ClearType::All))?;
+                    write!(screen.stdout_mut(), "{output}")?;
+                    screen.stdout_mut().flush()
+                })();
+                match drawn {
+                    Ok(()) => {}
+                    Err(error) if is_closed_pipe(&error) => {
+                        end_for_closed_output();
+                        return Ok(());
+                    }
+                    Err(error) => return Err(error.into()),
+                }
 
                 tokio::select! {
                     _ = sleep(duration) => {}
@@ -1173,7 +1203,16 @@ impl AgentCommandHandler {
             }
         }
         .await;
-        screen.leave()?;
+        match screen.leave() {
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(is_closed_pipe) =>
+            {
+                end_for_closed_output()
+            }
+            other => other?,
+        }
         result
     }
 
@@ -1768,9 +1807,7 @@ impl AgentCommandHandler {
         };
 
         if stream_to_stdout {
-            let mut stdout = std::io::stdout().lock();
-            stdout.write_all(&file_contents)?;
-            stdout.flush()?;
+            try_print_bytes(&file_contents)?;
             return Ok(());
         }
 
@@ -3556,7 +3593,8 @@ mod tests {
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::{Empty, IdempotencyKey, OplogIndex};
     use golem_common::schema::agent::{
-        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, AutoInjectedKind, InputSchema,
+        NamedField, OutputSchema,
     };
     use golem_common::schema::graph::TypedSchemaValue;
     use golem_common::schema::schema_type::{NamedFieldType, VariantCaseType};
@@ -3776,6 +3814,51 @@ mod tests {
             SchemaValue::Record {
                 fields: vec![SchemaValue::S64(5)]
             }
+        );
+    }
+
+    #[test]
+    fn method_arguments_omit_host_injected_fields() {
+        let mut agent_type = test_agent_type_schema(AgentMode::Durable);
+        let principal = NamedField::auto_injected(
+            "principal",
+            AutoInjectedKind::Principal,
+            SchemaType::string(),
+        );
+        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![
+            NamedField::user_supplied("name", SchemaType::string()),
+            principal.clone(),
+            NamedField::user_supplied("count", SchemaType::u32()),
+        ]);
+        for language in [
+            SourceLanguage::TypeScript,
+            SourceLanguage::Rust,
+            SourceLanguage::Scala,
+            SourceLanguage::MoonBit,
+            SourceLanguage::Go,
+        ] {
+            let arguments = ["\"alice\"", "7"].map(str::to_string).to_vec();
+            assert_eq!(
+                parse_method_parameters_with_error_table(&agent_type, "run", arguments, &language)
+                    .unwrap(),
+                SchemaValue::Record {
+                    fields: vec![
+                        SchemaValue::String("alice".to_string()),
+                        SchemaValue::U32(7)
+                    ],
+                },
+            );
+        }
+        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![principal]);
+        assert_eq!(
+            parse_method_parameters_with_error_table(
+                &agent_type,
+                "run",
+                vec![],
+                &SourceLanguage::TypeScript,
+            )
+            .unwrap(),
+            SchemaValue::Record { fields: vec![] },
         );
     }
 

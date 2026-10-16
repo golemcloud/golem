@@ -10,6 +10,9 @@ tracing_file_name_with_port = true
 drop_when_full = 0.25
 ttl = "8h"
 
+[agent_sockets]
+enabled = false
+
 [agent_status_checkpoint]
 enabled = true
 min_oplog_delta = 1000
@@ -186,8 +189,11 @@ fuel_to_borrow = 10000
 invocation_result_broadcast_capacity = 100000
 live_stream_event_broadcast_capacity = 32
 max_active_agents = 1024
+max_concurrent_oplog_entry_reads = 4
 max_concurrent_streams = 1024
+max_inline_oplog_entry_size = 1048576
 max_invocation_context_stack_depth = 1024
+max_oplog_query_page_bytes = 8388608
 max_oplog_query_pages_size = 100
 max_tool_attachment_bytes = 16777216
 tail_work_settle_timeout = "30s"
@@ -453,6 +459,9 @@ without_time = false
 # drop_when_full = 0.25
 # ttl = "8h"
 #
+# [agent_sockets]
+# enabled = false
+#
 # [agent_status_checkpoint]
 # enabled = true
 # min_oplog_delta = 1000
@@ -482,6 +491,7 @@ without_time = false
 # custom_data_bucket = "custom-data"
 # filesystem_snapshots_bucket = "filesystem-snapshots"
 # initial_agent_files_bucket = "golem-initial-agent-files"
+# namespace_prefixes = false
 # object_prefix = ""
 # oplog_payload_bucket = "oplog-payload"
 # region = "us-east-1"
@@ -630,8 +640,11 @@ without_time = false
 # invocation_result_broadcast_capacity = 100000
 # live_stream_event_broadcast_capacity = 32
 # max_active_agents = 1024
+# max_concurrent_oplog_entry_reads = 4
 # max_concurrent_streams = 1024
+# max_inline_oplog_entry_size = 1048576
 # max_invocation_context_stack_depth = 1024
+# max_oplog_query_page_bytes = 8388608
 # max_oplog_query_pages_size = 100
 # max_tool_attachment_bytes = 16777216
 # tail_work_settle_timeout = "30s"
@@ -897,6 +910,9 @@ without_time = false
 # drop_when_full = 0.25
 # ttl = "8h"
 #
+# [agent_sockets]
+# enabled = false
+#
 # [agent_status_checkpoint]
 # enabled = true
 # min_oplog_delta = 1000
@@ -1074,8 +1090,11 @@ without_time = false
 # invocation_result_broadcast_capacity = 100000
 # live_stream_event_broadcast_capacity = 32
 # max_active_agents = 1024
+# max_concurrent_oplog_entry_reads = 4
 # max_concurrent_streams = 1024
+# max_inline_oplog_entry_size = 1048576
 # max_invocation_context_stack_depth = 1024
+# max_oplog_query_page_bytes = 8388608
 # max_oplog_query_pages_size = 100
 # max_tool_attachment_bytes = 16777216
 # tail_work_settle_timeout = "30s"
@@ -1341,6 +1360,9 @@ without_time = false
 # drop_when_full = 0.25
 # ttl = "8h"
 #
+# [agent_sockets]
+# enabled = false
+#
 # [agent_status_checkpoint]
 # enabled = true
 # min_oplog_delta = 1000
@@ -1488,8 +1510,11 @@ without_time = false
 # invocation_result_broadcast_capacity = 100000
 # live_stream_event_broadcast_capacity = 32
 # max_active_agents = 1024
+# max_concurrent_oplog_entry_reads = 4
 # max_concurrent_streams = 1024
+# max_inline_oplog_entry_size = 1048576
 # max_invocation_context_stack_depth = 1024
+# max_oplog_query_page_bytes = 8388608
 # max_oplog_query_pages_size = 100
 # max_tool_attachment_bytes = 16777216
 # tail_work_settle_timeout = "30s"

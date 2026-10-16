@@ -14,7 +14,7 @@ import zio.test._
 
 object DurableStreamSpec extends ZIOSpecDefault {
   private implicit val ec: ExecutionContext = ExecutionContext.parasitic
-  private val noRetry                       = DurableStreamRetry(budgetMs = 0)
+  private val noRetry                       = DurableStreamRetry(maxRetries = 0)
   private val transient                     = DurableStreamError(DurableStreamErrorKind.Transport, "connection lost")
   private val producer                      = DurableStreamProducer("producer-a", 7, 3)
 
@@ -24,9 +24,7 @@ object DurableStreamSpec extends ZIOSpecDefault {
     val batches                                                                   = mutable.Queue.empty[Future[DurableStreamBatch]]
     val receipts                                                                  = mutable.Queue.empty[Future[DurableStreamReceipt]]
     val sleeps                                                                    = mutable.ArrayBuffer.empty[Long]
-    var time                                                                      = BigInt(12000)
-    var waitFor: Long => Future[Unit]                                             = ms => { time += ms; Future.successful(()) }
-    def nowMs(): BigInt                                                           = time
+    var waitFor: Long => Future[Unit]                                             = _ => Future.successful(())
     def sleep(ms: Long): Future[Unit]                                             = { sleeps += ms; waitFor(ms) }
     def dispose(): Future[Unit]                                                   = Future.successful(())
     def read(request: DurableStreamReadRequest): Future[DurableStreamBatch]       = { reads += request; batches.dequeue() }
@@ -125,20 +123,20 @@ object DurableStreamSpec extends ZIOSpecDefault {
           )
       }
     },
-    test("reconstructed retries exhaust the same budget") {
+    test("reconstructed retries exhaust the same retry count") {
       ZIO.fromFuture { _ =>
         def run() = {
           val host = new Host
-          host.batches.enqueue(Future.failed(transient), Future.failed(transient), Future.failed(transient))
-          reader(host, DurableStreamReadOptions(retry = DurableStreamRetry(250, 100, 100)))
+          host.batches.enqueueAll(Vector.fill(10)(Future.failed(transient)))
+          reader(host, DurableStreamReadOptions(retry = DurableStreamRetry()))
             .pull()
             .failed
             .map(error => (error, host.reads.toVector, host.sleeps.toVector))
         }
         for { first <- run(); replay <- run() } yield assertTrue(
           first == replay,
-          first._2.size == 3,
-          first._3 == Vector(100L, 100L)
+          first._2.size == 9,
+          first._3 == Vector(100L, 200L, 400L, 800L, 1600L, 3200L, 6400L, 12800L)
         )
       }
     },

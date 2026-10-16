@@ -284,17 +284,18 @@ pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
 
     /// Deletes the directory at the path and all the entries below it, at any depth.
     ///
-    /// A root path changes nothing and returns false. A path is at the root when it has no
+    /// A root path changes nothing and returns `None`. A path is at the root when it has no
     /// name in it, for example an empty path or `.`. A directory that only holds blobs
-    /// exists. A blob at the path itself is not below the path, so it stays. Returns true if the
-    /// path had a directory. Returns false if the path had no directory.
+    /// exists. A blob at the path itself is not below the path, so it stays. Returns the sum of
+    /// the sizes of the deleted blobs if the path had a directory. Returns `None` if the path had
+    /// no directory.
     async fn delete_dir(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<bool, Error>;
+    ) -> Result<Option<u64>, Error>;
 
     /// Tells what the path has.
     ///
@@ -558,14 +559,15 @@ pub trait BlobStorageBackend: Debug + Send + Sync {
     ) -> Result<Box<[ListedBlob]>, Error>;
 
     /// Deletes the directory at the path and all the entries below it, at any depth. Returns
-    /// true if the path had a directory.
+    /// the sum of the sizes of the deleted blobs if the path had a directory, and `None` if it
+    /// had no directory.
     async fn delete_dir_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
-    ) -> Result<bool, Error>;
+    ) -> Result<Option<u64>, Error>;
 
     /// Tells what the path has.
     async fn exists_at(
@@ -845,13 +847,13 @@ impl<B: BlobStorageBackend> BlobStorage for B {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<bool, Error> {
+    ) -> Result<Option<u64>, Error> {
         match blob_path(path)? {
             Some(path) => {
                 self.delete_dir_at(target_label, op_label, namespace, &path)
                     .await
             }
-            None => Ok(false),
+            None => Ok(None),
         }
     }
 
@@ -1138,7 +1140,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         &self,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<bool, Error> {
+    ) -> Result<Option<u64>, Error> {
         self.record("delete_dir");
         self.storage
             .delete_dir(self.svc_name, self.api_name, namespace, path)
@@ -1285,6 +1287,69 @@ pub fn agent_path_segment(agent_id: &AgentId) -> String {
     }
 
     format!("{sanitized_prefix}-{digest}")
+}
+
+/// Gives the segments of the location of a namespace in a backend that keeps all namespaces in
+/// one tree: the name of the kind of the namespace, then the segments that tell one namespace of
+/// that kind from another.
+///
+/// The first segment is different for each kind, and all namespaces of one kind have the same
+/// number of segments. No segment is empty, holds a `/` or a `\`, or is `.` or `..`: each is a
+/// fixed name, an id, an agent path segment ([`agent_path_segment`]) or a number. So the
+/// location of one namespace is never below the location of another, and a backend that lists or
+/// deletes below the location of a namespace touches no blob of another namespace.
+pub(crate) fn namespace_segments(namespace: &BlobStorageNamespace) -> Vec<String> {
+    match namespace {
+        BlobStorageNamespace::CompilationCache { environment_id } => {
+            vec!["compilation_cache".to_string(), environment_id.to_string()]
+        }
+        BlobStorageNamespace::CustomStorage { environment_id } => {
+            vec!["custom_data".to_string(), environment_id.to_string()]
+        }
+        BlobStorageNamespace::OplogPayload {
+            environment_id,
+            agent_id,
+            agent_mode,
+        } => vec![
+            "oplog_payload".to_string(),
+            agent_mode_prefix(*agent_mode).to_string(),
+            environment_id.to_string(),
+            // A bounded segment of the agent, because an agent id can be longer than a file
+            // name, and it can hold `/`, `\` and `.` segments.
+            agent_path_segment(agent_id),
+        ],
+        BlobStorageNamespace::CompressedOplog {
+            environment_id,
+            component_id,
+            agent_mode,
+            level,
+        } => vec![
+            "compressed_oplog".to_string(),
+            agent_mode_prefix(*agent_mode).to_string(),
+            environment_id.to_string(),
+            component_id.to_string(),
+            level.to_string(),
+        ],
+        BlobStorageNamespace::InitialAgentFiles { environment_id } => {
+            vec![
+                "initial_agent_files".to_string(),
+                environment_id.to_string(),
+            ]
+        }
+        BlobStorageNamespace::Components { environment_id } => {
+            vec!["component_store".to_string(), environment_id.to_string()]
+        }
+        BlobStorageNamespace::FilesystemSnapshots {
+            environment_id,
+            agent_id,
+            fingerprint,
+        } => vec![
+            "filesystem_snapshots".to_string(),
+            environment_id.to_string(),
+            agent_path_segment(agent_id),
+            fingerprint.0.to_string(),
+        ],
+    }
 }
 
 /// Returns the symmetric per-mode prefix used by all blob-storage backends for oplog data.

@@ -347,7 +347,7 @@ impl BlobStorageBackend for FailOnceListBlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
-    ) -> Result<bool, Error> {
+    ) -> Result<Option<u64>, Error> {
         self.inner
             .delete_dir(target_label, op_label, namespace, path)
             .await

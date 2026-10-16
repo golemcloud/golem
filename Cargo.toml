@@ -17,6 +17,7 @@ members = [
     "golem-worker-executor",
     "golem-worker-executor-test-utils",
     "golem-worker-service",
+    "golem-xfs-quotad",
     "integration-tests",
     "golem-schema",
     "golem-schema-derive",
@@ -31,6 +32,10 @@ exclude = [
     "sdks/golem-rust",
     "dev-tools"
 ]
+
+[workspace.lints.clippy]
+print_stdout = "deny"
+print_stderr = "deny"
 
 [workspace.metadata]
 license-file = "LICENSE"
@@ -57,6 +62,7 @@ golem-tool-metadata = { version = "=0.0.0", path = "golem-tool-metadata", defaul
 golem-worker-executor = { version = "=0.0.0", path = "golem-worker-executor" }
 golem-worker-executor-test-utils = { version = "=0.0.0", path = "golem-worker-executor-test-utils" }
 golem-worker-service = { path = "golem-worker-service" }
+golem-xfs-quotad = { version = "=0.0.0", path = "golem-xfs-quotad" }
 
 
 anyhow = "1.0.97"
@@ -283,7 +289,6 @@ time = { version = "0.3.41", features = ["default", "macros"] }
 tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "sync", "io-std", "net", "tracing", "process", "signal"] }
 tokio-metrics = { version = "0.5.0", features = ["metrics-rs-integration"] }
 tokio-postgres = "0.7.13"
-tokio-rustls = { version = "0.26.2" }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-tungstenite = { version = "0.27.0", features = ["rustls-tls-webpki-roots"] }
 tokio-util = { version = "0.7.13", features = ["rt"] }

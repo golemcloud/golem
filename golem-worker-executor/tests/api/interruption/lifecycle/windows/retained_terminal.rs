@@ -429,7 +429,7 @@ async fn retained_terminal(
         .await??;
         assert_eq!(signal.recv().await?, first);
         assert_eq!(worker.resident_generation_for_test(), generation);
-        // Admission is still held before begin_resident_generation. No loop can consume
+        // Admission is still held before begin_resident_attempt. No loop can consume
         // this stop yet, and the previous resident writer cannot claim it during publish.
         assert_eq!(worker.pending_stop_for_test().await, Some(first));
         assert!(

@@ -188,7 +188,7 @@ impl BlobStorageBackend for MutationStorage {
         op: &'static str,
         ns: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<Option<u64>> {
         self.inner.delete_dir_at(target, op, ns, path).await
     }
 

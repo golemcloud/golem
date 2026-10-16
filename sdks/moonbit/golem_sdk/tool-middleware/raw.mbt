@@ -49,7 +49,7 @@ fn raw_resource_candidates(
         let @types.PermissionCard(raw_index) = card
         candidates.push(
           resource_candidate(ResourceKind::PermissionCard, raw_index, () => {
-            card.drop()
+            @card.drop_unless_held(card)
           }),
         )
       }

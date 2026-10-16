@@ -181,6 +181,7 @@ async fn pending_receive(
         &context,
         limits.clone(),
         Arc::new(move |config| {
+            config.agent_sockets.enabled = true;
             config.resource_usage_metering = metering;
             config.limits.fuel_to_borrow = FUEL_BUDGET;
         }),
@@ -267,7 +268,7 @@ async fn pending_receive(
                     &component,
                     &name,
                     &key,
-                    "udp_receive_p3",
+                    "udp_receive_wait_p3",
                     data_value!(),
                 )
                 .await
@@ -515,7 +516,7 @@ async fn pending_receive(
             assert_settled_history(&recovered)?;
             assert_invocation(&recovered, &key, 1)?;
             ensure!(count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));
-            let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, "udp_receive_p3", data_value!()).await?;
+            let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, "udp_receive_wait_p3", data_value!()).await?;
             ensure!(cached.into_typed::<Result<Vec<u8>, String>>()? == Ok(b"recovered".to_vec()));
             ensure!(phases.try_recv().is_err(), "cached lookup must not receive natively");
             drop(sender);
@@ -536,7 +537,7 @@ async fn pending_receive(
             drop(tokio::net::UdpSocket::bind(reconstructed.local_address()).await?);
             let before_history = worker.permit_acquisitions_for_test();
             let fresh_key = IdempotencyKey::fresh();
-            let fresh = executor.invoke_and_await_agent_with_key(&component, &name, &fresh_key, "udp_receive_p3", data_value!());
+            let fresh = executor.invoke_and_await_agent_with_key(&component, &name, &fresh_key, "udp_receive_wait_p3", data_value!());
             let release_fresh = async {
                 // The first native receive must belong to fresh work, not completed history.
                 let fresh_phase = pending_phase(&mut phases, &fresh_key).await?;

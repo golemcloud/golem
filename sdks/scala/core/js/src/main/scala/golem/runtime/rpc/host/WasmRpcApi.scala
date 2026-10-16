@@ -126,18 +126,24 @@ private[golem] object WasmRpcApi {
     private def metadata(raw: RawInvocationMetadata): InvocationMetadata =
       InvocationMetadata(raw.agentId, raw.idempotencyKey)
 
+    /**
+     * `scopeCard` is a raw `permission-card` resource that the host borrows for
+     * the duration of this call, or `js.undefined`.
+     */
     def invokeAndAwait(
       functionName: String,
-      input: JsSchemaValueTree
+      input: JsSchemaValueTree,
+      scopeCard: js.Any
     ): Either[RpcError, js.UndefOr[JsSchemaValueTree]] =
-      invokeAndAwaitWithMetadata(functionName, input).map(_.value)
+      invokeAndAwaitWithMetadata(functionName, input, scopeCard).map(_.value)
 
     def invokeAndAwaitWithMetadata(
       functionName: String,
-      input: JsSchemaValueTree
+      input: JsSchemaValueTree,
+      scopeCard: js.Any
     ): Either[RpcError, InvocationResult[js.UndefOr[JsSchemaValueTree]]] =
       try {
-        val value = raw.invokeAndAwait(functionName, input, js.undefined)
+        val value = raw.invokeAndAwait(functionName, input, scopeCard)
         Right(InvocationResult(metadata(value.metadata), value.result))
       } catch { case js.JavaScriptException(e) => Left(decodeRpcError(e)) }
 
@@ -148,15 +154,20 @@ private[golem] object WasmRpcApi {
       try Right(metadata(raw.invoke(functionName, input, js.undefined)))
       catch { case js.JavaScriptException(e) => Left(decodeRpcError(e)) }
 
-    def asyncInvokeAndAwait(functionName: String, input: JsSchemaValueTree): Either[RpcError, RawFutureInvokeResult] =
-      asyncInvokeAndAwaitWithMetadata(functionName, input).map(_._2)
+    def asyncInvokeAndAwait(
+      functionName: String,
+      input: JsSchemaValueTree,
+      scopeCard: js.Any
+    ): Either[RpcError, RawFutureInvokeResult] =
+      asyncInvokeAndAwaitWithMetadata(functionName, input, scopeCard).map(_._2)
 
     def asyncInvokeAndAwaitWithMetadata(
       functionName: String,
-      input: JsSchemaValueTree
+      input: JsSchemaValueTree,
+      scopeCard: js.Any
     ): Either[RpcError, (InvocationMetadata, RawFutureInvokeResult)] =
       try {
-        val value = raw.asyncInvokeAndAwait(functionName, input, js.undefined)
+        val value = raw.asyncInvokeAndAwait(functionName, input, scopeCard)
         Right((metadata(value.metadata), value.future))
       } catch { case js.JavaScriptException(e) => Left(decodeRpcError(e)) }
 

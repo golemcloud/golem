@@ -291,8 +291,6 @@ async fn monthly_supersedes_restart_without_reclassifying_an_already_observed_de
         let trap = TrapType::Error {
             error: AgentError::InternalError("invocation timer elapsed".into()),
             retry_from: golem_common::model::OplogIndex::INITIAL,
-            in_atomic_region: false,
-            atomic_region_had_side_effects: false,
             semantic_trap_retry_override: None,
         };
         let config = crate::services::golem_config::GolemConfig::default();
@@ -303,8 +301,6 @@ async fn monthly_supersedes_restart_without_reclassifying_an_already_observed_de
             TrapType::Error {
                 error: AgentError::InternalError(message),
                 retry_from,
-                in_atomic_region: false,
-                atomic_region_had_side_effects: false,
                 semantic_trap_retry_override: None,
             } if message == "invocation timer elapsed"
                 && retry_from == golem_common::model::OplogIndex::INITIAL));
@@ -915,7 +911,6 @@ async fn published_stop_retains_window_until_real_entity_drain_completes() {
         principal.clone(),
         InvocationExecutionMode::Live,
         IdempotencyKey::fresh(),
-        false,
         false,
         IdempotencyKey::fresh(),
     )

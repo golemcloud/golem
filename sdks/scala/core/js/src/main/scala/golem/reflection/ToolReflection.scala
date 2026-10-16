@@ -21,6 +21,7 @@ import golem.tool._
 import golem.tool.wire._
 import zio.blocks.schema.json.Json
 
+import scala.collection.immutable.ListMap
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.control.NonFatal
 
@@ -35,7 +36,10 @@ private[reflection] object ToolReflectionFailures {
   def recover[A](future: Future[Either[ToolError[NamedToolError], A]])(implicit
     ec: ExecutionContext
   ): Future[Either[ToolError[NamedToolError], A]] =
-    ToolCollectionFailures.result(future)
+    future.transformWith {
+      case scala.util.Failure(error: ToolResultDetached) => Future.failed(error)
+      case outcome                                       => ToolCollectionFailures.result(Future.fromTry(outcome))
+    }
 
   def collect[A](
     stdout: Option[ToolInputStream],
@@ -99,11 +103,12 @@ final class ToolType private[reflection] (
     case WitOptionShape.RepeatableMap(item) => schemaAt(item.mapType)
   }
 
-  private def argument(option: WitOptionSpec): ToolArgument = {
-    val repeatable = option.shape match {
-      case WitOptionShape.RepeatableList(_) | WitOptionShape.RepeatableMap(_) => true
-      case _                                                                  => false
-    }
+  private def isRepeatable(option: WitOptionSpec): Boolean = option.shape match {
+    case WitOptionShape.RepeatableList(_) | WitOptionShape.RepeatableMap(_) => true
+    case _                                                                  => false
+  }
+
+  private def argument(option: WitOptionSpec): ToolArgument =
     ToolArgument(
       "option",
       option.long,
@@ -112,9 +117,8 @@ final class ToolType private[reflection] (
       option.required,
       option.default.map(SchemaWire.schemaValueFromWit),
       optionSchema(option.shape),
-      !option.required && option.default.isEmpty && !repeatable
+      !option.required && option.default.isEmpty && !isRepeatable(option)
     )
-  }
 
   private def argument(flag: FlagSpec): ToolArgument = {
     val root = flag.shape match {
@@ -136,6 +140,22 @@ final class ToolType private[reflection] (
     )
   }
 
+  /**
+   * Each selected input is paired with the value JSON packing uses when the
+   * input object omits it: the declared default of a scalar option or fixed
+   * positional, and the implicit default of every flag. Repeatable options and
+   * tails have none.
+   */
+  private def optionInput(option: WitOptionSpec): (ToolArgument, Option[SchemaValue]) = {
+    val selected = argument(option)
+    selected -> (if (isRepeatable(option)) None else selected.default)
+  }
+
+  private def flagInput(flag: FlagSpec): (ToolArgument, Option[SchemaValue]) = {
+    val selected = argument(flag)
+    selected -> selected.default
+  }
+
   /** The root path is empty; aliases resolve to the canonical path. */
   def command(path: List[String]): Either[GolemReflectError, ToolCommand] = {
     val nodes    = definition.commands.nodes
@@ -148,27 +168,28 @@ final class ToolType private[reflection] (
     }
     resolved match {
       case Some((index, indices)) =>
-        val body      = nodes(index).body
-        val arguments = body.toList.flatMap { callable =>
+        val body     = nodes(index).body
+        val selected = body.toList.flatMap { callable =>
           val localNames = (callable.positionals.fixed.map(_.name) ++ callable.positionals.tail.map(_.name) ++
             callable.options.flatMap(o => o.long :: o.aliases) ++ callable.flags.flatMap(f =>
               f.long :: f.aliases
             )).toSet
           val globals = (0 :: indices).flatMap { nodeIndex =>
             val node = nodes(nodeIndex)
-            node.globals.options.map(argument) ++ node.globals.flags.map(argument)
-          }.filterNot(arg => (arg.name :: arg.aliases).exists(localNames.contains))
+            node.globals.options.map(optionInput) ++ node.globals.flags.map(flagInput)
+          }.filterNot { case (arg, _) => (arg.name :: arg.aliases).exists(localNames.contains) }
           val positionals = callable.positionals.fixed.map { item =>
+            val default = item.default.map(SchemaWire.schemaValueFromWit)
             ToolArgument(
               "positional",
               item.name,
               Nil,
               None,
               item.required,
-              item.default.map(SchemaWire.schemaValueFromWit),
+              default,
               schemaAt(item.tpe),
               !item.required && item.default.isEmpty
-            )
+            ) -> default
           }
           val tail = callable.positionals.tail.toList.map { item =>
             val inner = schemaAt(item.itemType)
@@ -181,13 +202,15 @@ final class ToolType private[reflection] (
               None,
               SchemaRef(inner.graph, SchemaType(ListType(inner.root))),
               optionalCarrier = false
-            )
+            ) -> None
           }
-          globals ++ positionals ++ tail ++ callable.options.map(argument) ++ callable.flags.map(argument)
+          globals ++ positionals ++ tail ++ callable.options.map(optionInput) ++ callable.flags.map(flagInput)
         }
+        val arguments = selected.map(_._1)
         val inputRoot = record(arguments.map { arg =>
           arg.name -> (if (arg.optionalCarrier) SchemaType(OptionType(arg.schema.root)) else arg.schema.root)
         })
+        val jsonDefaults  = ListMap(selected.flatMap { case (arg, default) => default.map(arg.name -> _) }: _*)
         val canonicalPath = indices.map(nodes(_).name)
         Right(
           new ToolCommand(
@@ -196,7 +219,7 @@ final class ToolType private[reflection] (
             body,
             nodes(index).subcommands.map(nodes(_).name),
             arguments,
-            SchemaRef(SchemaGraph(graph.defs, inputRoot)),
+            SchemaRef(SchemaGraph(graph.defs, inputRoot)).withJsonDefaults(jsonDefaults),
             SchemaGraph(graph.defs, inputRoot)
           )
         )
@@ -440,7 +463,8 @@ final class ToolCommand private[reflection] (
         started.stdout,
         started.stderr,
         ToolReflectionFailures.recover(started.result.map(_.left.map(mapFailure).flatMap(decodeResult))),
-        started.cancel
+        started.cancel,
+        started.detach
       )
   }
 
@@ -457,7 +481,8 @@ final class ToolCommand private[reflection] (
           case Some(output) =>
             result.get.unpackJson(output).left.map(issue => ToolError.MalformedRemoteOutput(issue.message)).map(Some(_))
         })),
-        started.cancel
+        started.cancel,
+        started.detach
       )
     }
 
@@ -485,7 +510,8 @@ final case class ReflectedToolInvocation(
   stdout: Option[ToolInputStream],
   stderr: Option[ToolInputStream],
   result: Future[Either[ToolError[NamedToolError], Option[SchemaValue]]],
-  cancel: () => Unit
+  cancel: () => Unit,
+  detach: () => Unit = () => ()
 ) {
   def collect()(implicit
     ec: ExecutionContext
@@ -497,7 +523,8 @@ final case class ReflectedToolJsonInvocation(
   stdout: Option[ToolInputStream],
   stderr: Option[ToolInputStream],
   result: Future[Either[ToolError[NamedToolError], Option[Json]]],
-  cancel: () => Unit
+  cancel: () => Unit,
+  detach: () => Unit = () => ()
 ) {
   def collect()(implicit
     ec: ExecutionContext
@@ -549,7 +576,8 @@ final class DynamicToolClient(val toolName: String) {
         started.stdout,
         started.stderr,
         ToolReflectionFailures.recover(started.result.map(_.left.map(mapFailure))),
-        started.cancel
+        started.cancel,
+        started.detach
       )
     )
 
@@ -565,7 +593,8 @@ final case class DynamicToolInvocation(
   stdout: Option[ToolInputStream],
   stderr: Option[ToolInputStream],
   result: Future[Either[ToolError[NamedToolError], ToolInvokeResult]],
-  cancel: () => Unit
+  cancel: () => Unit,
+  detach: () => Unit = () => ()
 ) {
   def collect()(implicit
     ec: ExecutionContext

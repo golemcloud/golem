@@ -258,8 +258,7 @@ func (a *AgentDefinition[Id, Cfg]) ImplementConfigured[S any](
 //
 // A handler returns only its output value. There is no error return: a failed
 // invocation is signalled by panicking, which traps the component, as in Rust —
-// the worker fails, or, inside an atomic region, the region is retried. Reserve
-// panic for genuine failures; model expected, typed outcomes as a [Result] in
+// the worker fails. Reserve panic for genuine failures; model expected, typed outcomes as a [Result] in
 // the output. Use [Must] to turn an inner (value, error) call into a
 // panic-on-error.
 func (i *AgentImpl[Id, S, Cfg]) Handle[In any, Out any](
@@ -410,8 +409,7 @@ func bindMethodInto[Id any, S any, In any, Out any](
 
 	me.invoke = func(inst *instance, principal Principal, tree types.SchemaValueTree) (out *types.SchemaValueTree, err error) {
 		// A panic traps the component, as in Rust: the executor fails the
-		// agent, or retries the invocation inside an atomic region. The stage
-		// attributes it, so an SDK bug is not reported as if it were the agent's
+		// agent. The stage attributes it, so an SDK bug is not reported as if it were the agent's
 		// fault.
 		stage := stageDecode
 		defer func() {

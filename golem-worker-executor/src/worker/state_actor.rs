@@ -49,6 +49,7 @@
 //! (`last_known_status`, an `ArcSwap`) and its `detached` flag; every other component reads them
 //! lock-free.
 
+use super::owner_wallet::{CardEventBoundary, OwnerWallet, WalletCommit, WalletPublicationFailure};
 use super::status::{StatusOplogReader, calculate_status_with_reader, fold_committed_status};
 use super::status_flusher::{AgentStatusFlusher, FlushReason};
 use super::{
@@ -218,8 +219,10 @@ enum StatusJob {
     AppendAndCommitAttached {
         entry: Box<OplogEntry>,
         _worker_keepalive: Arc<dyn Any + Send + Sync>,
-        _instance_guard: OwnedMutexGuard<WorkerInstance>,
+        _instance_guard: Option<OwnedMutexGuard<WorkerInstance>>,
         _card_event_boundary_guard: Option<OwnedMutexGuard<()>>,
+        wallet_commit: Option<Box<WalletCommit>>,
+        wallet_recovery: Option<Box<dyn FnOnce() + Send>>,
         done: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
     AppendInvocationIfVersion {
@@ -261,6 +264,9 @@ enum LifecycleJob<Ctx: WorkerCtx> {
     },
     /// Wakes the invocation loop after a commit changed the published status.
     NotifyStatusChanged,
+    RecoverWalletPublication {
+        worker: Arc<Worker<Ctx>>,
+    },
     /// Records a `GrowMemory` oplog hint after a guest growth has committed.
     GrowMemory {
         worker: Arc<Worker<Ctx>>,
@@ -269,7 +275,9 @@ enum LifecycleJob<Ctx: WorkerCtx> {
     OrderedOplogEntry {
         worker: Arc<Worker<Ctx>>,
         entry: Box<OplogEntry>,
-        done: oneshot::Sender<Result<(), OplogError>>,
+        wallet: Arc<OwnerWallet>,
+        boundary: BoxFuture<'static, Result<Arc<CardEventBoundary>, WorkerExecutorError>>,
+        done: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
     MemoryLimitExceeded {
         worker: Arc<Worker<Ctx>>,
@@ -421,32 +429,51 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                         _worker_keepalive,
                         _instance_guard,
                         _card_event_boundary_guard,
+                        wallet_commit,
+                        wallet_recovery,
                         done,
                     } => {
-                        complete_status_job(
-                            async {
-                                match state.oplog.add(*entry).await {
-                                    Ok(_) => {
-                                        if let Err(fence) = state
-                                            .commit_and_update_state(CommitLevel::Always, None)
-                                            .await
-                                        {
-                                            return Err(fenced_error(&fence));
-                                        }
-                                        Ok(())
+                        let mut publication_failed = false;
+                        let result = async {
+                            if let Some(wallet) = &wallet_commit {
+                                wallet.validate_before_append()?;
+                            }
+                            match state.oplog.add(*entry).await {
+                                Ok(_) => {
+                                    let outcome = state
+                                        .commit_and_update_state_with_wallet(
+                                            CommitLevel::Always,
+                                            None,
+                                            wallet_commit.as_deref(),
+                                        )
+                                        .await
+                                        .map_err(|fence| fenced_error(&fence))?;
+                                    if let Err(failure) = outcome.wallet_publication {
+                                        publication_failed = true;
+                                        return Err(WorkerExecutorError::recovery_required(format!(
+                                            "Committed owner wallet publication failed: {failure:?}"
+                                        )));
                                     }
-                                    // The shard has a new owner: give the agent up and leave no
-                                    // further trace in an oplog that is no longer ours.
-                                    Err(OplogError::Fenced(fence)) => {
-                                        state.retire_fenced_agent(fence.clone());
-                                        Err(fenced_error(&fence))
-                                    }
-                                    Err(error) => panic!("oplog write: {error}"),
+                                    Ok(())
                                 }
-                            },
-                            done,
-                        )
+                                // The shard has a new owner: give the agent up and leave no
+                                // further trace in an oplog that is no longer ours.
+                                Err(OplogError::Fenced(fence)) => {
+                                    state.retire_fenced_agent(fence.clone());
+                                    Err(fenced_error(&fence))
+                                }
+                                Err(error) => panic!("oplog write: {error}"),
+                            }
+                        }
                         .await;
+                        drop(wallet_commit);
+                        drop(_card_event_boundary_guard);
+                        drop(_instance_guard);
+                        drop(_worker_keepalive);
+                        if publication_failed {
+                            wallet_recovery.expect("wallet commit owns its recovery action")();
+                        }
+                        let _ = done.send(result);
                     }
                     StatusJob::AppendInvocationIfVersion {
                         entry,
@@ -530,15 +557,32 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                             let _ = running.sender.send(WorkerCommand::InternalStatusChanged);
                         }
                     }
+                    LifecycleJob::RecoverWalletPublication { worker } => {
+                        // Establish interruption, but never join teardown from its lifecycle queue.
+                        if let Err(error) = worker.set_interrupting(InterruptKind::Restart).await {
+                            tracing::error!(
+                                agent_id = %worker.owned_agent_id,
+                                %error,
+                                "Failed to establish committed wallet recovery"
+                            );
+                        }
+                    }
                     LifecycleJob::GrowMemory { worker, growth } => {
                         worker.persist_pending_memory_growth(growth).await;
                     }
                     LifecycleJob::OrderedOplogEntry {
                         worker,
                         entry,
+                        wallet,
+                        boundary,
                         done,
                     } => {
-                        let _ = done.send(worker.add_and_commit_oplog(*entry).await.map(|_| ()));
+                        let result = async {
+                            let boundary = boundary.await?;
+                            wallet.commit(&worker, boundary, *entry).await
+                        }
+                        .await;
+                        let _ = done.send(result);
                     }
                     LifecycleJob::MonthlyCapacityExhausted {
                         worker,
@@ -674,11 +718,57 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             .run_status_job(|done| StatusJob::AppendAndCommitAttached {
                 entry: Box::new(entry),
                 _worker_keepalive: worker_keepalive,
-                _instance_guard: instance_guard,
+                _instance_guard: Some(instance_guard),
                 _card_event_boundary_guard: card_event_boundary_guard,
+                wallet_commit: None,
+                wallet_recovery: None,
                 done,
             })
             .await
+    }
+
+    pub(crate) async fn append_and_commit_wallet(
+        &self,
+        worker: Arc<Worker<Ctx>>,
+        wallet_commit: WalletCommit,
+    ) -> Result<(), WorkerExecutorError> {
+        let recovery_worker = worker.clone();
+        let lifecycle_jobs = self.lifecycle_jobs.clone();
+        let wallet_recovery = Box::new(move || {
+            if lifecycle_jobs
+                .send(LifecycleJob::RecoverWalletPublication {
+                    worker: recovery_worker.clone(),
+                })
+                .is_err()
+                && !recovery_worker.tasks.actors_stopping()
+            {
+                panic!("lifecycle actor stopped before committed wallet recovery");
+            }
+        });
+        let worker_keepalive: Arc<dyn Any + Send + Sync> = worker;
+        self.commit
+            .run_status_job(|done| StatusJob::AppendAndCommitAttached {
+                entry: Box::new(wallet_commit.entry()),
+                _worker_keepalive: worker_keepalive,
+                _instance_guard: None,
+                _card_event_boundary_guard: None,
+                wallet_commit: Some(Box::new(wallet_commit)),
+                wallet_recovery: Some(wallet_recovery),
+                done,
+            })
+            .await
+    }
+
+    pub(crate) fn recover_wallet_generation(&self, worker: Arc<Worker<Ctx>>) {
+        let stopping = worker.tasks.actors_stopping();
+        if self
+            .lifecycle_jobs
+            .send(LifecycleJob::RecoverWalletPublication { worker })
+            .is_err()
+            && !stopping
+        {
+            panic!("lifecycle actor stopped before wallet generation recovery");
+        }
     }
 
     pub async fn append_invocation_if_version(
@@ -800,13 +890,17 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         &self,
         worker: Arc<Worker<Ctx>>,
         entry: OplogEntry,
-    ) -> oneshot::Receiver<Result<(), OplogError>> {
+        wallet: Arc<OwnerWallet>,
+        boundary: BoxFuture<'static, Result<Arc<CardEventBoundary>, WorkerExecutorError>>,
+    ) -> oneshot::Receiver<Result<(), WorkerExecutorError>> {
         let (done, done_rx) = oneshot::channel();
         if self
             .lifecycle_jobs
             .send(LifecycleJob::OrderedOplogEntry {
                 worker,
                 entry: Box::new(entry),
+                wallet,
+                boundary,
                 done,
             })
             .is_err()
@@ -1061,6 +1155,17 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         commit_level: CommitLevel,
         committed: Option<CommitReceipt>,
     ) -> Result<bool, OplogFence> {
+        self.commit_and_update_state_with_wallet(commit_level, committed, None)
+            .await
+            .map(|outcome| outcome.changed)
+    }
+
+    async fn commit_and_update_state_with_wallet(
+        &self,
+        commit_level: CommitLevel,
+        committed: Option<CommitReceipt>,
+        wallet_commit: Option<&WalletCommit>,
+    ) -> Result<CommittedOutcome, OplogFence> {
         // Sample before committing: a later sample could include new, uncommitted appends.
         // Reading the index is not a write, so a fenced oplog still answers it; the sample is
         // only consumed on the path where the commit below succeeded.
@@ -1156,6 +1261,14 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             false
         };
 
+        let wallet_publication = wallet_commit.map_or(Ok(()), |wallet| wallet.publish());
+        if wallet_publication.is_err()
+            || wallet_commit
+                .is_some_and(|wallet| matches!(wallet.entry(), OplogEntry::SuccessfulUpdate { .. }))
+        {
+            authority_change_count = authority_change_count.max(1);
+        }
+
         // This release-publish is deliberately owned by the cancellation-proof
         // status actor and happens only after the committed entries were folded
         // or reconstructed. A producer cannot report success
@@ -1166,7 +1279,10 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                 .fetch_add(authority_change_count, Ordering::Release);
         }
 
-        Ok(changed)
+        Ok(CommittedOutcome {
+            changed,
+            wallet_publication,
+        })
     }
 
     /// Publishes a new status and hands the (previous, new) pair to the flusher, which updates
@@ -1234,6 +1350,11 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                 .await;
         }
     }
+}
+
+struct CommittedOutcome {
+    changed: bool,
+    wallet_publication: Result<(), WalletPublicationFailure>,
 }
 
 fn is_authority_state_entry(entry: &OplogEntry) -> bool {

@@ -15,7 +15,9 @@
 use crate::app::build::check::{
     create_claude_symlink_if_needed, plan_dependency_fixes, resolve_claude_skills_context,
 };
-use crate::app::context::{BuildContext, ResolvedEnvironmentTools, ResolvedMcpDiagnostic};
+use crate::app::context::{
+    BuildContext, BuildMetadataRequired, ResolvedEnvironmentTools, ResolvedMcpDiagnostic,
+};
 use crate::app::error::CustomCommandError;
 use crate::app::template::AppTemplateName;
 use crate::app::template::TemplateDescription;
@@ -1108,7 +1110,7 @@ impl AppCommandHandler {
             .map_err(DeployError::PrepareError)?;
 
         let mut tool_middleware_grant_plan = self
-            .plan_tool_middleware_grant_reconciliation(&environment)
+            .plan_tool_middleware_grant_reconciliation(&environment, None)
             .await
             .map_err(DeployError::PrepareError)?;
 
@@ -1125,7 +1127,7 @@ impl AppCommandHandler {
             .map_err(DeployError::PrepareError)?;
 
         let mut tool_grant_plan = self
-            .plan_tool_grant_reconciliation(&environment, Some(&native_default_tools))
+            .plan_tool_grant_reconciliation(&environment, Some(&native_default_tools), None)
             .await
             .map_err(DeployError::PrepareError)?;
         let default_tool_references = self
@@ -2151,12 +2153,14 @@ impl AppCommandHandler {
         environment: &ResolvedEnvironmentIdentity,
         // The default tools that need no grant; `None` for a run that uses no default tool.
         default_tools_left_out: Option<&BTreeSet<ToolName>>,
+        demanded_names: Option<&BTreeSet<ToolName>>,
     ) -> anyhow::Result<ToolGrantReconciliationPlan> {
         let desired = {
             let app_ctx = self.ctx.app_context_lock().await;
             let application = app_ctx.some_or_err()?.application();
             application
                 .remote_release_references()
+                .filter(|(name, _)| demanded_names.is_none_or(|names| names.contains(*name)))
                 .chain(
                     application
                         .default_tool_release_references()
@@ -2286,7 +2290,7 @@ impl AppCommandHandler {
         let imports = imports
             .into_iter()
             .enumerate()
-            .map(|(index, import)| resolve_mcp_import_env_vars(import, index))
+            .map(|(index, import)| resolve_mcp_import_env_vars(import.import, index))
             .collect::<anyhow::Result<Vec<_>>>()?;
         // The imports that can supply a reserved name by their prefix and filters. They decide
         // what occurs when the tools of the imports cannot be read.
@@ -2373,6 +2377,7 @@ impl AppCommandHandler {
     async fn plan_tool_middleware_grant_reconciliation(
         &self,
         environment: &ResolvedEnvironmentIdentity,
+        demanded_names: Option<&BTreeSet<ToolMiddlewareName>>,
     ) -> anyhow::Result<ToolMiddlewareGrantPlan> {
         let desired = {
             let app_ctx = self.ctx.app_context_lock().await;
@@ -2380,6 +2385,7 @@ impl AppCommandHandler {
                 .some_or_err()?
                 .application()
                 .remote_tool_middleware_release_references()
+                .filter(|(name, _)| demanded_names.is_none_or(|names| names.contains(*name)))
                 .map(|(_, reference)| reference.to_release_reference().map_err(anyhow::Error::msg))
                 .collect::<anyhow::Result<BTreeSet<_>>>()?
                 .into_iter()
@@ -3224,7 +3230,37 @@ impl AppCommandHandler {
             }
         }
 
+        // A domain may hold an HTTP API deployment or an MCP deployment, not both. Deletions of
+        // both kinds are staged first, so a domain can move from one kind to the other.
         for (domain, http_api_deployment_diff) in &diff_stage.http_api_deployments {
+            if !matches!(http_api_deployment_diff, diff::BTreeMapDiffValue::Delete) {
+                continue;
+            }
+            approve(staging_operation(http_api_deployment_diff), domain)?;
+            http_api_deployment_handler
+                .delete_staged_http_api_deployment(
+                    deploy_diff.staged_http_api_deployment_identity(&Domain(domain.to_string())),
+                )
+                .await?;
+        }
+
+        for (domain, mcp_deployment_diff) in &diff_stage.mcp_deployments {
+            if !matches!(mcp_deployment_diff, diff::BTreeMapDiffValue::Delete) {
+                continue;
+            }
+            approve(staging_operation(mcp_deployment_diff), domain)?;
+            self.ctx
+                .api_deployment_handler()
+                .delete_staged_mcp_deployment(
+                    deploy_diff.staged_mcp_deployment_identity(&Domain(domain.to_string())),
+                )
+                .await?;
+        }
+
+        for (domain, http_api_deployment_diff) in &diff_stage.http_api_deployments {
+            if matches!(http_api_deployment_diff, diff::BTreeMapDiffValue::Delete) {
+                continue;
+            }
             approve(staging_operation(http_api_deployment_diff), domain)?;
 
             let domain = Domain(domain.to_string());
@@ -3239,13 +3275,7 @@ impl AppCommandHandler {
                         )
                         .await?
                 }
-                diff::BTreeMapDiffValue::Delete => {
-                    http_api_deployment_handler
-                        .delete_staged_http_api_deployment(
-                            deploy_diff.staged_http_api_deployment_identity(&domain),
-                        )
-                        .await?
-                }
+                diff::BTreeMapDiffValue::Delete => {}
                 diff::BTreeMapDiffValue::Update(http_api_definition_diff) => {
                     http_api_deployment_handler
                         .update_staged_http_api_deployment(
@@ -3259,6 +3289,9 @@ impl AppCommandHandler {
         }
 
         for (domain, mcp_deployment_diff) in &diff_stage.mcp_deployments {
+            if matches!(mcp_deployment_diff, diff::BTreeMapDiffValue::Delete) {
+                continue;
+            }
             approve(staging_operation(mcp_deployment_diff), domain)?;
 
             let domain = Domain(domain.to_string());
@@ -3274,14 +3307,7 @@ impl AppCommandHandler {
                         )
                         .await?
                 }
-                diff::BTreeMapDiffValue::Delete => {
-                    let mcp_deployment_handler = self.ctx.api_deployment_handler();
-                    mcp_deployment_handler
-                        .delete_staged_mcp_deployment(
-                            deploy_diff.staged_mcp_deployment_identity(&domain),
-                        )
-                        .await?
-                }
+                diff::BTreeMapDiffValue::Delete => {}
                 diff::BTreeMapDiffValue::Update(mcp_deployment_diff) => {
                     let mcp_deployment_handler = self.ctx.api_deployment_handler();
                     let mcp_deployment = deploy_diff.deployable_manifest_mcp_deployment(&domain);
@@ -3733,92 +3759,108 @@ impl AppCommandHandler {
     ) -> anyhow::Result<()> {
         self.must_select_components(component_names, default_component_select_mode)
             .await?;
-        let requires_remote_release_metadata = {
-            let app_ctx = self.ctx.app_context_lock().await;
-            app_ctx
-                .some_or_err()?
-                .application()
-                .requires_remote_release_bridge_metadata()
-        };
-        let resolved_tool_grants = if requires_remote_release_metadata {
-            log_action(
-                "Preparing",
-                "remote tool bridge access through the selected environment",
-            );
-            let environment = self
-                .ctx
-                .environment_handler()
-                .resolve_environment(EnvironmentResolveMode::ManifestOnly)
-                .await?;
-            // A build does not use the default tools.
-            let mut plan = self
-                .plan_tool_grant_reconciliation(&environment, None)
-                .await?;
-            plan.retain_access_changes();
-            self.validate_tool_grant_reconciliation(&environment, &plan)
-                .await?;
-            if plan.has_changes() {
-                log_action("Planning", "environment tool grants required by the build");
-                let _indent = self.ctx.log_handler().decorated_indent_primary();
-                self.ctx.log_handler().log_output(plan.view.clone())?;
-                if !self
+        let mut demanded_tools = BTreeSet::new();
+        let mut demanded_middlewares = BTreeSet::new();
+        let mut environment_tool_names = BTreeSet::new();
+        loop {
+            let resolved_tool_grants = if !demanded_tools.is_empty() {
+                log_action(
+                    "Preparing",
+                    "remote tool bridge access through the selected environment",
+                );
+                let environment = self
                     .ctx
-                    .interactive_handler()
-                    .confirm_tool_grant_plan_apply()?
-                {
-                    bail!(NonSuccessfulExit);
-                }
-                self.apply_tool_grant_reconciliation(&environment, &mut plan)
+                    .environment_handler()
+                    .resolve_environment(EnvironmentResolveMode::ManifestOnly)
                     .await?;
-            }
-            plan.resolved_grants
-        } else {
-            ResolvedToolGrants::default()
-        };
+                // A build does not use the default tools.
+                let mut plan = self
+                    .plan_tool_grant_reconciliation(&environment, None, Some(&demanded_tools))
+                    .await?;
+                plan.retain_access_changes();
+                self.validate_tool_grant_reconciliation(&environment, &plan)
+                    .await?;
+                if plan.has_changes() {
+                    log_action("Planning", "environment tool grants required by the build");
+                    let _indent = self.ctx.log_handler().decorated_indent_primary();
+                    self.ctx.log_handler().log_output(plan.view.clone())?;
+                    if !self
+                        .ctx
+                        .interactive_handler()
+                        .confirm_tool_grant_plan_apply()?
+                    {
+                        bail!(NonSuccessfulExit);
+                    }
+                    self.apply_tool_grant_reconciliation(&environment, &mut plan)
+                        .await?;
+                }
+                plan.resolved_grants
+            } else {
+                ResolvedToolGrants::default()
+            };
 
-        let requires_middleware_metadata = {
-            let app_ctx = self.ctx.app_context_lock().await;
-            app_ctx
-                .some_or_err()?
-                .application()
-                .remote_tool_middleware_release_references()
-                .next()
-                .is_some()
-        };
-        let resolved_middleware_grants = if requires_middleware_metadata {
-            let environment = self
-                .ctx
-                .environment_handler()
-                .resolve_environment(EnvironmentResolveMode::ManifestOnly)
-                .await?;
-            let mut plan = self
-                .plan_tool_middleware_grant_reconciliation(&environment)
-                .await?;
-            // A build needs release access, not removal of other environment grants.
-            plan.deletions.clear();
-            self.validate_tool_middleware_grant_reconciliation(&environment, &plan)
-                .await?;
-            if plan.has_changes() {
-                if !self
+            let resolved_middleware_grants = if !demanded_middlewares.is_empty() {
+                let environment = self
                     .ctx
-                    .interactive_handler()
-                    .confirm_tool_grant_plan_apply()?
-                {
-                    bail!(NonSuccessfulExit);
-                }
-                self.apply_tool_middleware_grant_reconciliation(&environment, &mut plan)
+                    .environment_handler()
+                    .resolve_environment(EnvironmentResolveMode::ManifestOnly)
                     .await?;
+                let mut plan = self
+                    .plan_tool_middleware_grant_reconciliation(
+                        &environment,
+                        Some(&demanded_middlewares),
+                    )
+                    .await?;
+                // A build needs release access, not removal of other environment grants.
+                plan.deletions.clear();
+                self.validate_tool_middleware_grant_reconciliation(&environment, &plan)
+                    .await?;
+                if plan.has_changes() {
+                    if !self
+                        .ctx
+                        .interactive_handler()
+                        .confirm_tool_grant_plan_apply()?
+                    {
+                        bail!(NonSuccessfulExit);
+                    }
+                    self.apply_tool_middleware_grant_reconciliation(&environment, &mut plan)
+                        .await?;
+                }
+                plan.resolved
+            } else {
+                ResolvedToolMiddlewareGrants::default()
+            };
+            let result = self
+                .build_selected(
+                    build_config,
+                    &resolved_tool_grants,
+                    &resolved_middleware_grants,
+                    Some(&environment_tool_names),
+                )
+                .await;
+            match result {
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    // Compilation can reveal owner bindings and middleware dependencies.
+                    // Resume preparation only for a new requirement, never for a repeated failure.
+                    let added = match error.downcast_ref::<BuildMetadataRequired>() {
+                        Some(BuildMetadataRequired::Tool(name)) => {
+                            demanded_tools.insert(name.clone())
+                        }
+                        Some(BuildMetadataRequired::Middleware(name)) => {
+                            demanded_middlewares.insert(name.clone())
+                        }
+                        Some(BuildMetadataRequired::EnvironmentTool(name)) => {
+                            environment_tool_names.insert(name.as_str().to_string())
+                        }
+                        None => false,
+                    };
+                    if !added {
+                        return Err(error);
+                    }
+                }
             }
-            plan.resolved
-        } else {
-            ResolvedToolMiddlewareGrants::default()
-        };
-        self.build_selected(
-            build_config,
-            &resolved_tool_grants,
-            &resolved_middleware_grants,
-        )
-        .await
+        }
     }
 
     async fn build_with_resolved_tool_grants(
@@ -3835,6 +3877,7 @@ impl AppCommandHandler {
             build_config,
             resolved_tool_grants,
             resolved_tool_middleware_grants,
+            None,
         )
         .await
     }
@@ -3844,8 +3887,11 @@ impl AppCommandHandler {
         build_config: &BuildConfig,
         resolved_tool_grants: &ResolvedToolGrants,
         resolved_tool_middleware_grants: &ResolvedToolMiddlewareGrants,
+        environment_tool_names: Option<&BTreeSet<String>>,
     ) -> anyhow::Result<()> {
-        let environment_tools = self.resolve_build_environment_tools(build_config).await?;
+        let environment_tools = self
+            .resolve_build_environment_tools(build_config, environment_tool_names)
+            .await?;
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
 
@@ -3868,6 +3914,7 @@ impl AppCommandHandler {
     async fn resolve_build_environment_tools(
         &self,
         build_config: &BuildConfig,
+        environment_tool_names: Option<&BTreeSet<String>>,
     ) -> anyhow::Result<Option<ResolvedEnvironmentTools>> {
         if !build_config.should_run_step(AppBuildStep::GenBridge) {
             return Ok(None);
@@ -3876,10 +3923,13 @@ impl AppCommandHandler {
             let app_ctx = self.ctx.app_context_lock().await;
             let app_ctx = app_ctx.some_or_err()?;
             let app = app_ctx.application();
-            let requests = app.environment_tool_bridge_requests(
+            let mut requests = app.environment_tool_bridge_requests(
                 app_ctx.selected_component_names(),
                 build_config.custom_bridge_sdk_target.is_none(),
             );
+            requests
+                .names
+                .extend(environment_tool_names.into_iter().flatten().cloned());
             if !requests.wildcard && requests.names.is_empty() {
                 return Ok(None);
             }
@@ -3926,7 +3976,7 @@ impl AppCommandHandler {
         let imports = imports
             .into_iter()
             .enumerate()
-            .map(|(index, import)| resolve_mcp_import_env_vars(import, index))
+            .map(|(index, import)| resolve_mcp_import_env_vars(import.import, index))
             .collect::<anyhow::Result<Vec<_>>>()?;
         let import_prefixes = imports
             .iter()

@@ -90,6 +90,7 @@ async fn pending_multi_poll(
         &context,
         limits.clone(),
         Arc::new(move |config| {
+            config.agent_sockets.enabled = true;
             config.resource_usage_metering = metering;
             config.limits.fuel_to_borrow = FUEL_BUDGET;
         }),

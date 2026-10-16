@@ -232,9 +232,7 @@ test "wire encoding preflights aliases before transferring any capability" {
   let quota = @model.GuestQuotaTokenHandle::new(
     @types.QuotaToken::QuotaToken(12),
   )
-  let card = @model.GuestPermissionCardHandle::new(
-    @types.PermissionCard::PermissionCard(13),
-  )
+  let card = @card.adopt(@types.PermissionCard::PermissionCard(13))
   try @schema.into_wire((secret, quota, [card, card])) catch {
     @schema.WireError::Invalid(_) => ()
   } noraise {
@@ -326,9 +324,7 @@ test "wire resource identities include the resource kind" {
   let quota = @model.GuestQuotaTokenHandle::new(
     @types.QuotaToken::QuotaToken(91),
   )
-  let card = @model.GuestPermissionCardHandle::new(
-    @types.PermissionCard::PermissionCard(91),
-  )
+  let card = @card.adopt(@types.PermissionCard::PermissionCard(91))
   let stream = @model.GuestSchemaValueStreamHandle::from_wrapped(
     @types.SchemaValueStream::SchemaValueStream(91),
   )

@@ -14,7 +14,6 @@ const CHUNK: &str = "http::types::response::consume-body-chunk";
 pub(super) struct PendingBody {
     invocation: OplogIndex,
     send: OplogIndex,
-    scope: OplogIndex,
     parent: OplogIndex,
     first: OplogIndex,
     next: OplogIndex,
@@ -168,32 +167,24 @@ fn inspect_pending(
     ensure!(sends.len() == 1);
     let send = sends[0];
     let parent = parents[0];
-    let scope =
-        start_parent(entries, parent)?.context("consume-body must nest under its batched scope")?;
-    ensure!(
-        invocation < send
-            && send < scope
-            && scope < parent
-            && parent < chunks[0]
-            && chunks[0] < chunks[1]
-    );
+    ensure!(invocation < send && send < parent && parent < chunks[0] && chunks[0] < chunks[1]);
     ensure!(start_parent(entries, send)?.is_none());
-    ensure!(start_parent(entries, scope)?.is_none());
+    ensure!(start_parent(entries, parent)?.is_none());
     for child in &chunks {
         ensure!(
-            start_parent(entries, *child)? == Some(scope),
-            "body children must share the parent batched scope"
+            start_parent(entries, *child)? == Some(parent),
+            "body chunks must name the consume-body call as their parent"
         );
     }
-    let scope_entry = entries
+    let parent_entry = entries
         .iter()
-        .find(|entry| entry.oplog_index == scope)
+        .find(|entry| entry.oplog_index == parent)
         .unwrap();
     ensure!(
-        matches!(&scope_entry.entry, PublicOplogEntry::Start(start)
-        if start.function_name == "<scope:batched-write:consume-body>" && start.request.is_none()
-        && matches!(&start.durable_function_type, PublicDurableFunctionType::WriteRemoteBatched(p) if p.index.is_none())),
-        "wrong consume-body scope: {scope_entry:?}"
+        matches!(&parent_entry.entry, PublicOplogEntry::Start(start)
+        if start.function_name == BODY && start.request.is_some()
+        && matches!(&start.durable_function_type, PublicDurableFunctionType::WriteRemote(_))),
+        "wrong consume-body parent: {parent_entry:?}"
     );
     let (_, send_delivery) = end_and_delivery(entries, send)?;
     ensure!(send_delivery < chunks[0]);
@@ -207,18 +198,17 @@ fn inspect_pending(
     let pending = PendingBody {
         invocation,
         send,
-        scope,
         parent,
         first: chunks[0],
         next: chunks[1],
     };
-    for open in [pending.scope, pending.parent, pending.next] {
+    for open in [pending.parent, pending.next] {
         assert_open(entries, open)?;
     }
     for entry in entries {
         match &entry.entry {
             PublicOplogEntry::Start(_)
-                if ![pending.scope, pending.parent, pending.next].contains(&entry.oplog_index) =>
+                if ![pending.parent, pending.next].contains(&entry.oplog_index) =>
             {
                 ensure!(
                     terminal_count(entries, entry.oplog_index) == 1,
@@ -247,38 +237,17 @@ pub(super) fn pending_body(
     inspect_pending(entries, key)
 }
 
-fn assert_abandoned(
+fn assert_retained(
     entries: &[PublicOplogEntryWithIndex],
     original: PendingBody,
 ) -> anyhow::Result<()> {
-    let jumps: Vec<_> = entries
-        .iter()
-        .filter_map(|entry| match &entry.entry {
-            PublicOplogEntry::Jump(jump) => Some((entry.oplog_index, &jump.jump)),
-            _ => None,
-        })
-        .collect();
     ensure!(
-        jumps.len() == 1,
-        "one incomplete-body recovery Jump expected: {jumps:?}"
+        !entries.iter().any(|entry| matches!(
+            entry.entry,
+            PublicOplogEntry::Jump(_) | PublicOplogEntry::Revert(_)
+        )),
+        "body recovery must preserve neighboring history"
     );
-    // Batched recovery retains the enclosing scope Start, jumping only its abandoned
-    // contents. The consume-body host parent and chunk children get fresh Starts.
-    for index in [original.parent, original.first, original.next] {
-        ensure!(
-            jumps[0].1.contains(index) && index < jumps[0].0,
-            "abandoned body entry {index} must be in the Jump"
-        );
-    }
-    ensure!(
-        !jumps[0].1.contains(original.send)
-            && !jumps[0].1.contains(original.invocation)
-            && !jumps[0].1.contains(original.scope)
-    );
-    ensure!(jumps[0].1.start == original.scope.next());
-    for open in [original.parent, original.next] {
-        assert_open(entries, open)?;
-    }
     end_and_delivery(entries, original.first)?;
     chunk_response(
         entries,
@@ -289,34 +258,17 @@ fn assert_abandoned(
     Ok(())
 }
 
-fn visible(entries: &[PublicOplogEntryWithIndex]) -> Vec<PublicOplogEntryWithIndex> {
-    entries
-        .iter()
-        .filter(|candidate| {
-            !entries.iter().any(|entry| {
-                matches!(&entry.entry,
-                    PublicOplogEntry::Jump(jump) if jump.jump.contains(candidate.oplog_index)
-                )
-            })
-        })
-        .cloned()
-        .collect()
-}
-
-pub(super) fn reissued_pending(
+pub(super) fn retained_pending(
     entries: &[PublicOplogEntryWithIndex],
     key: &IdempotencyKey,
     original: PendingBody,
 ) -> anyhow::Result<Option<PendingBody>> {
-    assert_abandoned(entries, original)?;
-    let pending = inspect_pending(&visible(entries), key)?;
-    if let Some(fresh) = pending {
-        ensure!(fresh.invocation == original.invocation && fresh.send == original.send);
-        ensure!(fresh.scope == original.scope);
+    assert_retained(entries, original)?;
+    let pending = inspect_pending(entries, key)?;
+    if let Some(retained) = pending {
         ensure!(
-            fresh.parent > original.next
-                && fresh.first > original.next
-                && fresh.next > original.next
+            retained == original,
+            "body repair must retain every recorded Start"
         );
         ensure!(
             starts(entries, SEND) == vec![original.send],
@@ -330,26 +282,26 @@ pub(super) fn recovered_body(
     entries: &[PublicOplogEntryWithIndex],
     key: &IdempotencyKey,
     original: PendingBody,
-    fresh: PendingBody,
+    retained: PendingBody,
 ) -> anyhow::Result<()> {
-    assert_abandoned(entries, original)?;
-    let visible = visible(entries);
-    ensure!(starts(&visible, SEND) == vec![original.send]);
-    ensure!(starts(&visible, BODY) == vec![fresh.parent]);
-    ensure!(assert_invocation(&visible, key, 1)? == original.invocation);
+    assert_retained(entries, original)?;
+    ensure!(retained == original);
+    ensure!(starts(entries, SEND) == vec![original.send]);
+    ensure!(starts(entries, BODY) == vec![original.parent]);
+    ensure!(assert_invocation(entries, key, 1)? == original.invocation);
     chunk_response(
-        &visible,
-        fresh.first,
+        entries,
+        original.first,
         SerializableP3HttpBodyChunk::Data(peer::FIRST.to_vec()),
     )?;
-    let children = starts(&visible, CHUNK);
+    let children = starts(entries, CHUNK);
     ensure!(
-        children.len() >= 3 && children[..2] == [fresh.first, fresh.next],
+        children.len() >= 3 && children[..2] == [original.first, original.next],
         "first byte, remaining data and EOF: {children:?}"
     );
     let mut body = Vec::new();
     for (position, child) in children.iter().enumerate() {
-        let response = visible
+        let response = entries
             .iter()
             .find_map(|entry| match &entry.entry {
                 PublicOplogEntry::End(end) if end.start_index == *child => end.response.as_ref(),
@@ -373,33 +325,22 @@ pub(super) fn recovered_body(
         "exactly one resulting body, independent of native frame boundaries"
     );
     chunk_response(
-        &visible,
+        entries,
         *children.last().unwrap(),
         SerializableP3HttpBodyChunk::End,
     )?;
-    let parent_end = visible
+    let parent_end = entries
         .iter()
         .find_map(|entry| match &entry.entry {
-            PublicOplogEntry::End(end) if end.start_index == fresh.parent => {
+            PublicOplogEntry::End(end) if end.start_index == original.parent => {
                 Some(entry.oplog_index)
             }
             _ => None,
         })
         .context("missing body parent End")?;
-    let scope_end = visible
-        .iter()
-        .find_map(|entry| match &entry.entry {
-            PublicOplogEntry::End(end) if end.start_index == fresh.scope => Some(entry.oplog_index),
-            _ => None,
-        })
-        .context("missing retained batched scope End")?;
-    ensure!(
-        parent_end < scope_end,
-        "batched scope must close after its host parent"
-    );
     for child in children {
-        ensure!(start_parent(&visible, child)? == Some(fresh.scope));
-        let (_, delivered) = end_and_delivery(&visible, child)?;
+        ensure!(start_parent(entries, child)? == Some(original.parent));
+        let (_, delivered) = end_and_delivery(entries, child)?;
         ensure!(
             delivered < parent_end,
             "parent finalization must follow child delivery"
@@ -412,19 +353,18 @@ pub(super) fn assert_settled_history(
     entries: &[PublicOplogEntryWithIndex],
     original: PendingBody,
 ) -> anyhow::Result<()> {
-    assert_abandoned(entries, original)?;
-    let visible = visible(entries);
-    let last_finished = visible
+    assert_retained(entries, original)?;
+    let last_finished = entries
         .iter()
         .rev()
         .find(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
         .context("missing invocation Finished")?
         .oplog_index;
-    for entry in &visible {
+    for entry in entries {
         match &entry.entry {
             PublicOplogEntry::Start(_) => {
                 ensure!(
-                    terminal_count(&visible, entry.oplog_index) == 1,
+                    terminal_count(entries, entry.oplog_index) == 1,
                     "unsettled/duplicate visible Start: {entry:?}"
                 );
                 ensure!(entry.oplog_index < last_finished);

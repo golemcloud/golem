@@ -108,6 +108,7 @@ async fn cross_socket_pending(
         &context,
         limits.clone(),
         Arc::new(move |config| {
+            config.agent_sockets.enabled = true;
             config.resource_usage_metering = metering;
             config.limits.fuel_to_borrow = FUEL_BUDGET;
         }),

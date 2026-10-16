@@ -68,13 +68,7 @@ pub(super) fn monthly_failure<Ctx: WorkerCtx>(
     match trap {
         TrapType::Interrupt(kind) => {
             monthly_interrupt_error(*kind, mode, accepted, config).map(|error| {
-                TrapType::from_worker_executor_error::<Ctx>(
-                    error,
-                    OplogIndex::INITIAL,
-                    false,
-                    false,
-                    mode,
-                )
+                TrapType::from_worker_executor_error::<Ctx>(error, OplogIndex::INITIAL, mode)
             })
         }
         _ => None,

@@ -40,10 +40,25 @@ type Client[Id any] struct {
 	agentType string
 	agentID   string
 	phantomID Option[UUID]
+	scopeCard ScopeCard
 }
 
 // AgentID returns the target's agent id, as resolved by the host.
 func (c Client[Id]) AgentID() string { return c.agentID }
+
+// WithScopeCard returns a copy of the client whose awaited calls — Call,
+// MustCall and CallAsync — carry card as their scope card, unless the call
+// attaches its own with [MethodDef.WithScopeCard]. Trigger and Schedule never
+// carry one. The card is lent, not moved: it must stay unreleased while the
+// copy is used. It panics on the zero ScopeCard.
+//
+// A scope card is valid only in the invocation that derived it: use the copy
+// within that invocation, and do not keep it for a later one, whose awaited
+// calls the host would deny.
+func (c Client[Id]) WithScopeCard(card ScopeCard) Client[Id] {
+	c.scopeCard = mustScopeCard(c.agentType, card)
+	return c
+}
 
 // PhantomID returns the phantom instance id this client addresses, or None for a
 // durable client. A [AgentDefinition.NewPhantom] client carries the freshly allocated id here

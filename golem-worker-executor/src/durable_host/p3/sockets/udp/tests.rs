@@ -36,11 +36,10 @@ fn assert_interrupt(result: wasmtime::Result<SocketResult<Vec<u8>>>, expected: I
         error.into(),
         DurableCallTrapContext {
             retry_from: OplogIndex::from_u64(12),
-            in_atomic_region: false,
         },
     );
     assert!(matches!(TrapType::from_error::<Context>(
-        &marked, OplogIndex::INITIAL, false, false, AgentMode::Durable,
+        &marked, OplogIndex::INITIAL, AgentMode::Durable,
     ), TrapType::Interrupt(kind) if kind == expected));
 }
 

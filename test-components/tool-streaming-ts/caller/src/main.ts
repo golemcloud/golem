@@ -4,6 +4,7 @@ import {
   client,
   defineAgent,
   method,
+  processExitStatusSchema,
   Result,
   s,
   toolDefinition,
@@ -21,14 +22,14 @@ import { rm } from 'node:fs/promises';
 
 const TscClient = client(
   toolDefinition('tsc', { requiresFilesystem: true })
-    .version('5.9.2+golem.6')
+    .version('5.9.2+golem.8')
     .body((body) =>
       body
         .option('cwd', z.string(), { default: '/workspace' })
         .tail('args', z.string(), { separator: '--', verbatim: true })
         .stdout({ required: true })
         .stderr({ required: true })
-        .returns(s.s32()),
+        .returns(processExitStatusSchema),
     ),
 );
 
@@ -388,14 +389,14 @@ Caller.implement({
             'src/nested/value.ts',
           ],
         });
-        const [exitCode, stdout, stderr] = await Promise.all([
+        const [status, stdout, stderr] = await Promise.all([
           invocation.result,
           collect(invocation.stdout!.getReader()),
           collect(invocation.stderr!.getReader()),
         ]);
-        if (exitCode !== 0 || stdout.length !== 0 || stderr.length !== 0) {
+        if (status.exit_code !== 0 || stdout.length !== 0 || stderr.length !== 0) {
           throw new Error(
-            `tsc: ${exitCode}: ${new TextDecoder().decode(stdout)} ${new TextDecoder().decode(stderr)}`,
+            `tsc: ${status.exit_code}: ${new TextDecoder().decode(stdout)} ${new TextDecoder().decode(stderr)}`,
           );
         }
         if (

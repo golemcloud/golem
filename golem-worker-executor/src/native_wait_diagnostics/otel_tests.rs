@@ -252,10 +252,8 @@ async fn check_native_export(cancel: bool) {
             Some(diagnostic),
             HostInputStream::blocking_read(&mut table, Resource::new_borrow(input.rep()), 1),
         );
-        let mut wait = Box::pin(
-            NativeIoWait::with_signal(async move { stopped.await.unwrap() })
-                .wait_ready_first(native),
-        );
+        let mut wait =
+            Box::pin(NativeIoWait::with_signal(async move { stopped.await.unwrap() }).wait(native));
         assert!(
             futures::poll!(wait.as_mut()).is_pending(),
             "the actual Wasmtime input must be Pending before observing exports"

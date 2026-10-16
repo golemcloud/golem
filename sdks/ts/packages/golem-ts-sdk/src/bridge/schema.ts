@@ -1,11 +1,7 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1
 
-import type {
-  Datetime,
-  PermissionCard as RawPermissionCard,
-  Secret as RawSecret,
-} from 'golem:core/types@2.0.0';
+import type { Datetime, Secret as RawSecret } from 'golem:core/types@2.0.0';
 import {
   schemaGraphsEquivalent,
   type SchemaGraph,
@@ -14,11 +10,6 @@ import {
   v,
 } from '../internal/schema-model';
 import { PERMISSION_CARD_INTERNAL } from '../internal/schema-model/permissionCardInternal';
-import {
-  GuestPermissionCardHandle,
-  adoptGuestPermissionCardHandle,
-  releaseGuestPermissionCardHandle,
-} from '../internal/schema-model/permissionCardHandle';
 import { QUOTA_INTERNAL } from '../internal/schema-model/quotaInternal';
 import { SECRET_INTERNAL } from '../internal/schema-model/secretInternal';
 import {
@@ -31,10 +22,17 @@ import {
   quotaTokenToSchemaValueInternal,
   QuotaToken,
 } from '../host/quota';
+import {
+  PermissionCard,
+  permissionCardFromSchemaHandleInternal,
+  permissionCardToSchemaValueInternal,
+  PolymorphicPermissionCard,
+  polymorphicPermissionCardFromSchemaHandleInternal,
+} from '../host/permissions';
 
 export type SecretHandle = RawSecret;
-export type PermissionCardHandle = RawPermissionCard | GuestPermissionCardHandle;
-export { QuotaToken };
+export { PermissionCard, PolymorphicPermissionCard, QuotaToken };
+export { ScopeCard } from '../host/permissions';
 
 export function secretHandleToSchemaValue(value: SecretHandle): SchemaValue {
   return v.secret(adoptGuestSecretHandle(SECRET_INTERNAL, value));
@@ -59,25 +57,38 @@ export function quotaTokenFromSchemaValue(value: SchemaValue): QuotaToken {
   return quotaTokenFromSchemaValueInternal(QUOTA_INTERNAL, value);
 }
 
-export function permissionCardHandleToSchemaValue(value: PermissionCardHandle): SchemaValue {
-  return v.permissionCard(
-    value instanceof GuestPermissionCardHandle
-      ? value
-      : adoptGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value),
-  );
+export function permissionCardToSchemaValue(value: PermissionCard): SchemaValue {
+  if (!(value instanceof PermissionCard)) {
+    throw new TypeError('Expected a PermissionCard for WIT permission-card { polymorphic: false }');
+  }
+  return permissionCardToSchemaValueInternal(PERMISSION_CARD_INTERNAL, value);
 }
 
-export function permissionCardHandleFromSchemaValue(value: SchemaValue): PermissionCardHandle {
+export function permissionCardFromSchemaValue(value: SchemaValue): PermissionCard {
   if (value.tag !== 'permission-card') {
     throw new Error(`Expected a permission-card schema value, got '${value.tag}'`);
   }
-  const raw = releaseGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value.handle);
-  if (raw === undefined) {
-    throw new Error(
-      'permission-card handle was already consumed; an owned permission-card can only be decoded once',
+  return permissionCardFromSchemaHandleInternal(PERMISSION_CARD_INTERNAL, value.handle);
+}
+
+export function polymorphicPermissionCardToSchemaValue(
+  value: PolymorphicPermissionCard,
+): SchemaValue {
+  if (!(value instanceof PolymorphicPermissionCard)) {
+    throw new TypeError(
+      'Expected a PolymorphicPermissionCard for WIT permission-card { polymorphic: true }',
     );
   }
-  return raw;
+  return permissionCardToSchemaValueInternal(PERMISSION_CARD_INTERNAL, value);
+}
+
+export function polymorphicPermissionCardFromSchemaValue(
+  value: SchemaValue,
+): PolymorphicPermissionCard {
+  if (value.tag !== 'permission-card') {
+    throw new Error(`Expected a permission-card schema value, got '${value.tag}'`);
+  }
+  return polymorphicPermissionCardFromSchemaHandleInternal(PERMISSION_CARD_INTERNAL, value.handle);
 }
 
 export function typedSchemaValueConforms(

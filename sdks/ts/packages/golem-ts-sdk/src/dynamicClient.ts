@@ -12,6 +12,7 @@ import { resolveRemoteAgentFallibly, type RemoteAgentHandle } from './bridge/age
 import { schemaValueFromWit, type SchemaValue } from './internal/schema-model';
 import type { ParsedAgentId } from './agentId';
 import { Uuid } from './uuid';
+import type { ScopeCard } from './host/permissions';
 
 export interface DynamicInvocation<T> {
   readonly metadata: InvocationMetadata;
@@ -25,7 +26,12 @@ export interface DynamicAgentClientSurface {
 
 export interface DynamicAgentMethodSurface {
   readonly name: string;
-  invokeValue(input: SchemaValue, signal?: AbortSignal): Promise<DynamicInvocation<SchemaValue>>;
+  /** Invoke and await. A `scopeCard` is borrowed for the call. */
+  invokeValue(
+    input: SchemaValue,
+    signal?: AbortSignal,
+    scopeCard?: ScopeCard,
+  ): Promise<DynamicInvocation<SchemaValue>>;
   triggerValue(input: SchemaValue): InvocationMetadata;
   scheduleValue(at: Datetime, input: SchemaValue): CancelableScheduledInvocationReceipt;
 }
@@ -55,8 +61,12 @@ export class DynamicAgentMethod implements DynamicAgentMethodSurface {
     private readonly remote: RemoteAgentHandle,
   ) {}
 
-  invokeValue(input: SchemaValue, signal?: AbortSignal): Promise<DynamicInvocation<SchemaValue>> {
-    return this.remote.invokeAndAwaitWithMetadata(this.name, input, signal);
+  invokeValue(
+    input: SchemaValue,
+    signal?: AbortSignal,
+    scopeCard?: ScopeCard,
+  ): Promise<DynamicInvocation<SchemaValue>> {
+    return this.remote.invokeAndAwaitWithMetadata(this.name, input, signal, scopeCard);
   }
 
   triggerValue(input: SchemaValue): InvocationMetadata {

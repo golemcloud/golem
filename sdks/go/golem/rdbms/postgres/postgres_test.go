@@ -321,6 +321,7 @@ func TestErrorMapping(t *testing.T) {
 		{pg.MakeErrorQueryExecutionFailure("e"), QueryExecutionFailure, "e"},
 		{pg.MakeErrorQueryResponseFailure("r"), QueryResponseFailure, "r"},
 		{pg.MakeErrorOther("o"), Other, "o"},
+		{pg.MakeErrorResourceLost("lost"), ResourceLost, "lost"},
 	}
 	for _, c := range cases {
 		err := pgError(c.raw).(*Error)

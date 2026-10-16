@@ -1,0 +1,47 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/internal/permission_card"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn adopt(@types.PermissionCard) -> GuestPermissionCardHandle
+
+pub fn adopt_scope(@types.PermissionCard) -> ScopeCardHandle
+
+pub fn borrow(GuestPermissionCardHandle) -> @types.PermissionCard?
+
+pub fn borrow_scope(ScopeCardHandle) -> @types.PermissionCard?
+
+pub fn claim_kind(GuestPermissionCardHandle, Bool) -> Bool
+
+pub fn drop_unless_held(@types.PermissionCard) -> Unit
+
+pub fn is_held(@types.PermissionCard) -> Bool
+
+pub fn lift(@types.PermissionCard) -> GuestPermissionCardHandle?
+
+pub fn take(GuestPermissionCardHandle) -> @types.PermissionCard?
+
+pub fn take_scope(ScopeCardHandle) -> @types.PermissionCard?
+
+// Errors
+
+// Types and methods
+pub struct GuestPermissionCardHandle {
+  // private fields
+}
+pub fn GuestPermissionCardHandle::is_present(Self) -> Bool
+pub impl Eq for GuestPermissionCardHandle
+pub impl @debug.Debug for GuestPermissionCardHandle
+
+pub struct ScopeCardHandle {
+  // private fields
+}
+pub fn ScopeCardHandle::is_present(Self) -> Bool
+
+// Type aliases
+
+// Traits

@@ -4258,6 +4258,7 @@ dependencies = [
  "tryhard",
  "url",
  "uuid",
+ "zstd",
 ]
 
 [[package]]
@@ -4571,6 +4572,7 @@ dependencies = [
  "golem-service-base",
  "golem-test-framework",
  "golem-worker-executor-test-utils",
+ "golem-xfs-quotad",
  "governor",
  "half",
  "heck",
@@ -4580,7 +4582,6 @@ dependencies = [
  "http-body-util",
  "humansize",
  "humantime-serde",
- "hyper",
  "ignite-v2-client",
  "include_dir",
  "itertools 0.14.0",
@@ -4664,7 +4665,9 @@ dependencies = [
  "golem-service-base",
  "golem-test-framework",
  "golem-worker-executor",
+ "golem-xfs-quotad",
  "prometheus",
+ "prost",
  "regex",
  "rustls",
  "scc",
@@ -4773,6 +4776,18 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+]
+
+[[package]]
+name = "golem-xfs-quotad"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "assert2",
+ "libc",
+ "rustix 1.1.4",
+ "tempfile",
+ "test-r",
 ]
 
 [[package]]

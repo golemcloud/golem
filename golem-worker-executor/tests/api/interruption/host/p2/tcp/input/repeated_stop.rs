@@ -99,7 +99,10 @@ async fn repeated_stop(
         deps,
         &context,
         limits.clone(),
-        Arc::new(move |config| config.resource_usage_metering = metering),
+        Arc::new(move |config| {
+            config.agent_sockets.enabled = true;
+            config.resource_usage_metering = metering;
+        }),
     )
     .await?;
     let component = executor

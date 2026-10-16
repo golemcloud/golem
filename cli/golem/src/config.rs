@@ -38,6 +38,7 @@ use golem_common::model::Empty;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::account_usage::MonthlyPlanAmounts;
 use golem_common::model::auth::{AccountRole, TokenSecret};
+use golem_common::model::domain_registration::Domain;
 use golem_common::model::plan::{PlanId, PlanName};
 use golem_common::model::tool::BUILTIN_TOOL_OWNER_ACCOUNT_EMAIL;
 use golem_component_compilation_service::config::ServerConfig as ComponentCompilationServiceConfig;
@@ -89,6 +90,9 @@ pub const WORKER_EXECUTOR_SCHEDULER_POSTGRES_SCHEMA: &str = "golem_worker_execut
 /// The plan limit that the local development plan uses for every quota. It is the registry's
 /// unlimited value, which TOML can represent, unlike `u64::MAX`.
 pub const UNLIMITED: u64 = 1_000_000_000_000_000_000;
+
+/// The bucket of the S3 blob storage in the Postgres and S3 example.
+const EXAMPLE_S3_BUCKET: &str = "golem";
 
 /// The data directory used for the generated reference config files.
 pub const REFERENCE_DATA_DIR: &str = "/var/lib/golem";
@@ -151,9 +155,15 @@ pub struct GolemServerConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RouterConfig {
-    /// IPv4 address to bind.
+    /// IP address to bind. An IPv6 address binds both IPv6 and IPv4, so `::` accepts every
+    /// connection.
     pub address: String,
     pub port: u16,
+    /// Host of the management API. Without it, every request is a management API request. With
+    /// it, only requests for this host reach the management API, and requests for every other
+    /// host reach the HTTP API and MCP deployments, like on `worker_service.custom_request_port`.
+    /// The registry reserves this host, so no environment can register it as a domain.
+    pub management_host: Option<String>,
 }
 
 impl GolemServerConfig {
@@ -177,6 +187,7 @@ impl GolemServerConfig {
             router: RouterConfig {
                 address: DEFAULT_LOCAL_ROUTER_ADDR.to_string(),
                 port: DEFAULT_LOCAL_ROUTER_PORT,
+                management_host: None,
             },
             registry_service: RegistryServiceConfig {
                 bind_address: INTERNAL_BIND_ADDRESS,
@@ -345,14 +356,14 @@ impl GolemServerConfig {
     }
 
     /// An example that keeps the state of every service in one Postgres database, with the
-    /// schemas of the per-service deployment, and the blobs in S3.
+    /// schemas of the per-service deployment, and the blobs in one S3 bucket.
     pub fn postgres_s3_example(data_dir: &Path) -> anyhow::Result<Self> {
         let mut config = Self::for_data_dir(data_dir)?;
         let postgres = |schema: &str| DbPostgresConfig {
             schema: Some(schema.to_string()),
             ..example_postgres()
         };
-        let blob_storage = BlobStorageConfig::S3(S3BlobStorageConfig::default());
+        let blob_storage = BlobStorageConfig::S3(example_s3());
 
         config.registry_service.db = DbConfig::Postgres(postgres(REGISTRY_SERVICE_POSTGRES_SCHEMA));
         config.registry_service.blob_storage = blob_storage.clone();
@@ -380,6 +391,20 @@ impl GolemServerConfig {
         config.worker_executor.blob_storage = blob_storage.clone();
         config.component_compilation_service.blob_storage = blob_storage;
         Ok(config)
+    }
+
+    /// The domains that no environment may register: `registry_service.domain_registration.
+    /// reserved_domains`, and the management host of the router.
+    pub fn reserved_domains(&self) -> Vec<String> {
+        let mut reserved_domains = self
+            .registry_service
+            .domain_registration
+            .reserved_domains
+            .clone();
+        if let Some(management_host) = &self.router.management_host {
+            reserved_domains.push(management_host.clone());
+        }
+        reserved_domains
     }
 
     /// Whether the registry database is the SQLite file in the data directory, which carries the
@@ -579,6 +604,22 @@ fn example_postgres() -> DbPostgresConfig {
         max_connections: 10,
         schema: None,
         acquire_timeout: None,
+    }
+}
+
+/// S3 blob storage that keeps the blobs of every namespace in one bucket.
+fn example_s3() -> S3BlobStorageConfig {
+    let bucket = EXAMPLE_S3_BUCKET.to_string();
+    S3BlobStorageConfig {
+        namespace_prefixes: true,
+        compilation_cache_bucket: bucket.clone(),
+        custom_data_bucket: bucket.clone(),
+        oplog_payload_bucket: bucket.clone(),
+        compressed_oplog_buckets: vec![bucket.clone()],
+        initial_agent_files_bucket: bucket.clone(),
+        components_bucket: bucket.clone(),
+        filesystem_snapshots_bucket: bucket,
+        ..S3BlobStorageConfig::default()
     }
 }
 
@@ -1148,6 +1189,11 @@ fn validate_resource_policy(config: &GolemServerConfig, layers: &[Dict]) -> anyh
 
 /// Checks the rules that span services.
 fn validate(config: &GolemServerConfig) -> anyhow::Result<()> {
+    if let Some(management_host) = &config.router.management_host {
+        Domain::parse_host(management_host)
+            .map_err(|err| anyhow!("Invalid `router.management_host`: {err}"))?;
+    }
+
     // The store, its database and the schema it uses when the database sets none.
     let mut postgres: Vec<(&str, &DbPostgresConfig, &str)> = Vec::new();
     if let DbConfig::Postgres(db) = &config.registry_service.db {
@@ -2222,7 +2268,21 @@ mod tests {
             &config.worker_executor.blob_storage,
             &config.component_compilation_service.blob_storage,
         ] {
-            assert!(matches!(blob_storage, BlobStorageConfig::S3(_)));
+            let BlobStorageConfig::S3(s3) = blob_storage else {
+                panic!("expected S3 blob storage")
+            };
+            assert!(s3.namespace_prefixes);
+            s3.validate().unwrap();
+            let mut buckets = vec![
+                &s3.compilation_cache_bucket,
+                &s3.custom_data_bucket,
+                &s3.oplog_payload_bucket,
+                &s3.initial_agent_files_bucket,
+                &s3.components_bucket,
+                &s3.filesystem_snapshots_bucket,
+            ];
+            buckets.extend(&s3.compressed_oplog_buckets);
+            assert!(buckets.iter().all(|bucket| *bucket == EXAMPLE_S3_BUCKET));
         }
         assert!(!config.uses_local_registry_db());
     }
@@ -2438,6 +2498,43 @@ mod tests {
                 error.contains("worker_executor.agent_webhooks_service.hmac_key"),
                 "{error}"
             );
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn the_management_host_is_reserved() {
+        Jail::expect_with(|jail| {
+            jail.set_env(
+                "GOLEM__REGISTRY_SERVICE__DOMAIN_REGISTRATION__RESERVED_DOMAINS",
+                r#"["status.golem.example.com"]"#,
+            );
+            jail.set_env("GOLEM__ROUTER__MANAGEMENT_HOST", "api.golem.example.com");
+            let config = load(None, &run_args_with_data_dir("/data")).unwrap();
+            assert_eq!(
+                config.router.management_host.as_deref(),
+                Some("api.golem.example.com")
+            );
+            assert_eq!(
+                config.reserved_domains(),
+                ["status.golem.example.com", "api.golem.example.com"]
+            );
+            Ok(())
+        });
+
+        let config = GolemServerConfig::for_data_dir(Path::new("/data")).unwrap();
+        assert!(config.reserved_domains().is_empty());
+    }
+
+    #[test]
+    fn invalid_management_host_is_rejected() {
+        Jail::expect_with(|jail| {
+            jail.set_env(
+                "GOLEM__ROUTER__MANAGEMENT_HOST",
+                "https://api.golem.example.com",
+            );
+            let error = jail_error(load(None, &run_args_with_data_dir("/data")));
+            assert!(error.contains("router.management_host"), "{error}");
             Ok(())
         });
     }

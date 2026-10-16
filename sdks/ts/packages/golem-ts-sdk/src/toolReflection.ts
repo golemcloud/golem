@@ -36,15 +36,18 @@ import {
   type TypedSchemaValue,
   v,
 } from './internal/schema-model';
-import { SchemaRef, type JsonValue } from './schema/ref';
-import { fromCanonicalJson } from './schema/render';
+import { SchemaRef, SchemaRenderError, type JsonValue } from './schema/ref';
+import { fromCanonicalJson, type RecordFieldDefaults } from './schema/render';
 import { ComponentId } from './ids';
+import {
+  awaitToolInvocationResult,
+  mapStartedToolInvocation,
+} from './internal/tool/startedToolInvocation';
 import {
   createToolClientRuntime,
   createToolClientTransport,
   isRpcError,
   mapSettledToolResult,
-  resultFromSettledToolResult,
   startedToolInvocation,
   type StartedToolInvocation,
   type ToolClientRuntime,
@@ -94,6 +97,7 @@ export class ToolCommand {
   readonly errors: readonly { readonly name: string; readonly payload?: SchemaRef }[];
   readonly children: readonly ToolCommand[];
   private readonly wireInputGraph?: SchemaGraph;
+  private readonly omittedDefaults: RecordFieldDefaults;
 
   constructor(
     readonly toolName: string,
@@ -126,7 +130,7 @@ export class ToolCommand {
                   : optionalRoot(graph, typeAt(item.type));
               const defaultValue =
                 item.default_ === undefined ? undefined : schemaValueFromWit(item.default_);
-              return Object.freeze({
+              return withOmittedDefault(defaultValue, {
                 kind: 'positional',
                 name: item.name,
                 aliases: [],
@@ -180,20 +184,36 @@ export class ToolCommand {
         }),
       ),
     );
+    this.omittedDefaults = new Map(
+      this.arguments.flatMap((arg) => {
+        const value = omittedDefaults.get(arg);
+        return value === undefined ? [] : [[arg.name, value] as const];
+      }),
+    );
     this.inputSchema = body
       ? SchemaRef.fromImmutableGraph(
           graph,
           t.record(this.arguments.map((arg) => field(arg.name, arg.schema.root))),
+          this.omittedDefaults,
         )
       : undefined;
     this.wireInputGraph = this.inputSchema?.graph;
     Object.freeze(this);
   }
 
-  /** Validate and pack canonical JSON input before opening a tool RPC. */
+  /**
+   * Validate and pack canonical JSON input before opening a tool RPC. Omitted scalar options,
+   * positionals and flags take their declared defaults.
+   */
   packJson(input: JsonValue): SchemaValue {
     if (!this.inputSchema) throw new TypeError(`Command '${this.path.join(' ')}' has no body`);
-    const value = fromCanonicalJson(this.inputSchema.graph, this.inputSchema.root, input);
+    const value = fromCanonicalJson(
+      this.inputSchema.graph,
+      this.inputSchema.root,
+      input,
+      [],
+      this.omittedDefaults,
+    );
     if (!this.inputSchema.validateValue(value).success) throw new TypeError('Invalid tool input');
     this.validateConstraints(value);
     return value;
@@ -206,7 +226,12 @@ export class ToolCommand {
     } catch (error) {
       return {
         success: false,
-        issues: [{ path: [], message: error instanceof Error ? error.message : String(error) }],
+        issues: [
+          {
+            path: error instanceof SchemaRenderError ? error.path : [],
+            message: error instanceof Error ? error.message : String(error),
+          },
+        ],
       };
     }
   }
@@ -319,22 +344,7 @@ export class ToolCommand {
     const started = this.startValue(this.packJson(input), stdin);
     const unpackResult = (value: SchemaValue | undefined) =>
       value === undefined ? undefined : this.unpackResult(value);
-    return {
-      stdout: started.stdout,
-      stderr: started.stderr,
-      get result() {
-        return started.result.then(unpackResult);
-      },
-      cancel: () => started.cancel(),
-      collect: async () => {
-        const collected = await started.collect();
-        return {
-          result: await mapSettledToolResult(collected.result, unpackResult),
-          stdout: collected.stdout,
-          stderr: collected.stderr,
-        };
-      },
-    };
+    return mapStartedToolInvocation(started, unpackResult);
   }
 
   /** Await a structured schema-native result. */
@@ -343,19 +353,14 @@ export class ToolCommand {
       return Promise.reject(
         new TypeError('Command requires caller-readable output; use startValue'),
       );
-    const started = this.startValue(input, stdin);
-    return started.collect().then(async (collected) => {
-      const result = await resultFromSettledToolResult(collected.result);
-      await resultFromSettledToolResult(collected.stdout);
-      await resultFromSettledToolResult(collected.stderr);
-      return result;
-    });
+    return awaitToolInvocationResult(this.startValue(input, stdin));
   }
 
   /** Await a structured canonical JSON result. */
   async invokeJson(input: JsonValue, stdin?: ToolInputStream): Promise<JsonValue | undefined> {
-    const value = await this.invokeValue(this.packJson(input), stdin);
-    return value === undefined ? undefined : this.unpackResult(value);
+    if (this.stdout?.required || this.stderr?.required)
+      throw new TypeError('Command requires caller-readable output; use startValue');
+    return awaitToolInvocationResult(this.startJson(input, stdin));
   }
 
   /** Admit a fire-and-forget invocation without output attachments. */
@@ -394,30 +399,26 @@ export class ToolCommand {
         name: custom.name,
         payload: custom.payload,
       });
-    try {
-      const payload = typedSchemaValueFromWit(custom.payload);
-      if (!declared.payload) {
-        if (payload.value.tag !== 'tuple' || payload.value.elements.length !== 0) {
-          throw new ToolRemoteOutputError('Custom error has an unexpected payload');
-        }
-        return new ToolCallError({ tag: 'tool', error: { name: custom.name } });
+    const payload = typedSchemaValueFromWit(custom.payload);
+    if (!declared.payload) {
+      if (payload.value.tag !== 'tuple' || payload.value.elements.length !== 0) {
+        throw new ToolRemoteOutputError('Custom error has an unexpected payload');
       }
-      if (
-        !schemaShapesMatch(declared.payload.graph, payload.graph) ||
-        !declared.payload.validateValue(payload.value).success
-      ) {
-        throw new ToolRemoteOutputError('Custom error payload does not match its declaration');
-      }
-      return new ToolCallError({
-        tag: 'tool',
-        error: {
-          name: custom.name,
-          value: declared.payload.unpackJson(payload.value),
-        },
-      });
-    } catch (cause) {
-      return cause;
+      return new ToolCallError({ tag: 'tool', error: { name: custom.name } });
     }
+    if (
+      !schemaShapesMatch(declared.payload.graph, payload.graph) ||
+      !declared.payload.validateValue(payload.value).success
+    ) {
+      throw new ToolRemoteOutputError('Custom error payload does not match its declaration');
+    }
+    return new ToolCallError({
+      tag: 'tool',
+      error: {
+        name: custom.name,
+        value: declared.payload.unpackJson(payload.value),
+      },
+    });
   }
 }
 
@@ -584,14 +585,12 @@ function optionArgument(
       : option.shape.tag === 'repeatable-map'
         ? typeAt(option.shape.val.mapType)
         : typeAt(option.shape.val);
-  const optional =
-    !option.required &&
-    option.default_ === undefined &&
-    option.shape.tag !== 'repeatable-list' &&
-    option.shape.tag !== 'repeatable-map';
+  const repeatable =
+    option.shape.tag === 'repeatable-list' || option.shape.tag === 'repeatable-map';
+  const optional = !option.required && option.default_ === undefined && !repeatable;
   const defaultValue =
     option.default_ === undefined ? undefined : schemaValueFromWit(option.default_);
-  return Object.freeze({
+  return withOmittedDefault(repeatable ? undefined : defaultValue, {
     kind: 'option',
     name: option.long,
     aliases: Object.freeze([...option.aliases]),
@@ -603,6 +602,18 @@ function optionArgument(
     optionalCarrier: optional ? (true as const) : undefined,
     schema: SchemaRef.fromImmutableGraph(graph, optional ? optionalRoot(graph, root) : root),
   });
+}
+
+/** Values that canonical JSON input may omit, keyed by the argument that declares them. */
+const omittedDefaults = new WeakMap<ToolArgument, SchemaValue>();
+
+function withOmittedDefault(
+  defaultValue: SchemaValue | undefined,
+  argument: ToolArgument,
+): ToolArgument {
+  const frozen = Object.freeze(argument);
+  if (defaultValue !== undefined) omittedDefaults.set(frozen, cloneSchemaValue(defaultValue));
+  return frozen;
 }
 
 function optionalRoot(graph: SchemaGraph, root: SchemaType): SchemaType {
@@ -623,13 +634,14 @@ function flagArgument(
   flag: CommandNode['globals']['flags'][number],
   graph: SchemaGraph,
 ): ToolArgument {
-  return Object.freeze({
+  const defaultValue = flag.shape.tag === 'bool-flag' ? v.bool(flag.shape.val.default_) : v.u32(0);
+  return withOmittedDefault(defaultValue, {
     kind: 'flag',
     name: flag.long,
     aliases: Object.freeze([...flag.aliases]),
     short: flag.short,
     required: false,
-    default: flag.shape.tag === 'bool-flag' ? v.bool(flag.shape.val.default_) : v.u32(0),
+    default: defaultValue,
     schema: SchemaRef.fromImmutableGraph(
       graph,
       flag.shape.tag === 'bool-flag' ? t.bool() : t.u32(),

@@ -101,7 +101,6 @@ impl WaitReceipt {
 #[derive(Clone, Copy, PartialEq)]
 enum InterestKind {
     Input,
-    InputWithRetryDelay,
     Poll,
     RpcResult,
     UdpReceive,
@@ -124,7 +123,6 @@ impl Interest {
             "poll" => InterestKind::Poll,
             "rpc_result_wait" => InterestKind::RpcResult,
             "p3_udp_receive" => InterestKind::UdpReceive,
-            "http_body_retry_delay_sleep" => InterestKind::InputWithRetryDelay,
             "websocket_handshake_initial"
             | "websocket_handshake_accessor_reconnect"
             | "websocket_handshake_direct_reconnect" => InterestKind::WebSocketHandshake,
@@ -136,9 +134,7 @@ impl Interest {
             "websocket_timed_reader_lock" => InterestKind::WebSocketTimedReaderLock,
             _ => InterestKind::Input,
         };
-        self.fingerprint == receipt.runtime.fingerprint
-            && (self.kind == kind
-                || self.kind == InterestKind::InputWithRetryDelay && kind == InterestKind::Input)
+        self.fingerprint == receipt.runtime.fingerprint && self.kind == kind
     }
 }
 
@@ -230,10 +226,6 @@ impl Collector {
 
 pub fn input(fingerprint: AgentFingerprint) -> WaitSubscription {
     collector().subscribe(fingerprint, InterestKind::Input)
-}
-
-pub fn input_with_retry_delay(fingerprint: AgentFingerprint) -> WaitSubscription {
-    collector().subscribe(fingerprint, InterestKind::InputWithRetryDelay)
 }
 
 pub fn poll(fingerprint: AgentFingerprint) -> WaitSubscription {
@@ -813,12 +805,14 @@ fn unregistered_receipts_keep_later_terminal_and_actual_window_close_state(_trac
 }
 
 #[test]
-fn subscription_kind_filters_keep_the_explicit_retry_sleep_contract(_tracing: &Tracing) {
+fn subscription_kind_filters_route_current_operations(_tracing: &Tracing) {
     let collector = Collector::default();
     tracing::dispatcher::with_default(&local_dispatch(&collector), || {
         for operation in [
             "unanticipated_native_stage",
-            "http_body_retry_delay_sleep",
+            "blocking_read",
+            "blocking_skip",
+            "blocking_splice",
             "poll",
             "rpc_result_wait",
             "p3_udp_receive",
@@ -835,8 +829,6 @@ fn subscription_kind_filters_keep_the_explicit_retry_sleep_contract(_tracing: &T
             let source = FixtureSource::new();
             let window = source.window();
             let mut input = collector.subscribe(source.fingerprint, InterestKind::Input);
-            let mut retry =
-                collector.subscribe(source.fingerprint, InterestKind::InputWithRetryDelay);
             let mut poll = collector.subscribe(source.fingerprint, InterestKind::Poll);
             let mut rpc = collector.subscribe(source.fingerprint, InterestKind::RpcResult);
             let mut udp = collector.subscribe(source.fingerprint, InterestKind::UdpReceive);
@@ -856,16 +848,11 @@ fn subscription_kind_filters_keep_the_explicit_retry_sleep_contract(_tracing: &T
                 input.try_recv().is_ok(),
                 matches!(
                     operation,
-                    "unanticipated_native_stage" | "websocket_unanticipated_stage"
-                )
-            );
-            assert_eq!(
-                retry.try_recv().is_ok(),
-                matches!(
-                    operation,
                     "unanticipated_native_stage"
                         | "websocket_unanticipated_stage"
-                        | "http_body_retry_delay_sleep"
+                        | "blocking_read"
+                        | "blocking_skip"
+                        | "blocking_splice"
                 )
             );
             assert_eq!(poll.try_recv().is_ok(), operation == "poll");
@@ -892,7 +879,6 @@ fn subscription_kind_filters_keep_the_explicit_retry_sleep_contract(_tracing: &T
             drop(native);
             drop((
                 input,
-                retry,
                 poll,
                 rpc,
                 udp,

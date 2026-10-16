@@ -35,7 +35,10 @@ async fn silent_tcp_monitor_controls(
         deps,
         &context,
         limits.clone(),
-        Arc::new(move |config| config.resource_usage_metering = metering),
+        Arc::new(move |config| {
+            config.agent_sockets.enabled = true;
+            config.resource_usage_metering = metering;
+        }),
     )
     .await?;
     if stale {
@@ -309,7 +312,10 @@ mod retries {
             deps,
             &context,
             limits.clone(),
-            Arc::new(move |config| config.resource_usage_metering = metering),
+            Arc::new(move |config| {
+                config.agent_sockets.enabled = true;
+                config.resource_usage_metering = metering;
+            }),
         )
         .await?;
         let component = executor
@@ -600,7 +606,7 @@ mod retries {
             tokio::time::timeout(Duration::from_secs(10), invocation)
                 .await???
                 .into_typed::<Result<String, String>>()?,
-            Err("ErrorCode::InvalidState".to_string())
+            Err("ErrorCode::ConnectionBroken".to_string())
         );
         tokio::time::timeout(Duration::from_secs(10), async {
             while worker.concurrent_agent_permit_is_held().await {

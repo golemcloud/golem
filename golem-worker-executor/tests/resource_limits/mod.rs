@@ -600,7 +600,13 @@ async fn released_window_late_stop_cancels_real_permit_reacquisition(
     use tokio::io::AsyncReadExt;
 
     let context = TestContext::new(last_unique_id);
-    let executor = start_with_concurrent_agent_limit(deps, &context, 1).await?;
+    let executor = start_with_concurrent_agent_limit_and_overrides(
+        deps,
+        &context,
+        1,
+        TestExecutorOverrides::agent_sockets_enabled(),
+    )
+    .await?;
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()

@@ -882,10 +882,7 @@ pub struct Application {
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<HttpApiDeploymentDeployProperties>>>,
     mcp_deployments:
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
-    mcp_imports: BTreeMap<
-        EnvironmentName,
-        WithSource<Vec<golem_common::model::mcp_import::McpImportDeployment>>,
-    >,
+    mcp_imports: BTreeMap<EnvironmentName, WithSource<Vec<app_raw::McpImport>>>,
     agent_secrets_defaults: BTreeMap<EnvironmentName, WithSource<app_raw::JsonObject>>,
     retry_policy_defaults:
         BTreeMap<EnvironmentName, BTreeMap<String, WithSource<DeploymentRetryPolicyDefault>>>,
@@ -1996,10 +1993,7 @@ impl Application {
         self.mcp_deployments.get(environment)
     }
 
-    pub fn mcp_imports(
-        &self,
-        environment: &EnvironmentName,
-    ) -> Option<&Vec<golem_common::model::mcp_import::McpImportDeployment>> {
+    pub fn mcp_imports(&self, environment: &EnvironmentName) -> Option<&Vec<app_raw::McpImport>> {
         self.mcp_imports
             .get(environment)
             .map(|imports| &imports.value)
@@ -2461,35 +2455,41 @@ impl Layer for ComponentLayer {
         selector: &Self::Selector,
         value: &mut Self::Value,
     ) -> Result<(), Self::ApplyError> {
-        let (property_layers_to_apply, selection): (
-            Vec<&ComponentLayerProperties>,
-            Option<Self::AppliedSelection>,
-        ) = match &self.properties {
+        let (property_layers_to_apply, selection) = match &self.properties {
             ComponentLayerPropertiesKind::Empty => (vec![], None),
-            ComponentLayerPropertiesKind::Common(properties) => (vec![properties], None),
+            ComponentLayerPropertiesKind::Common(properties) => {
+                (vec![(properties.as_ref(), None)], None)
+            }
             ComponentLayerPropertiesKind::Presets {
                 presets,
                 default_preset,
             } => {
-                let select_default_preset = || -> Result<(
-                    Vec<&ComponentLayerProperties>,
-                    Option<Self::AppliedSelection>,
-                ), String>{
-                    Ok((
-                        vec![presets.get(default_preset).ok_or_else(|| {
-                            format!(
-                                "Default preset '{}' for component layer '{}' not found!",
-                                default_preset.log_color_highlight(),
-                                self.id.to_string().log_color_highlight(),
-                            )
-                        })?],
+                let select_default_preset = || {
+                    let properties = presets.get(default_preset).ok_or_else(|| {
+                        format!(
+                            "Default preset '{}' for component layer '{}' not found!",
+                            default_preset.log_color_highlight(),
+                            self.id.to_string().log_color_highlight(),
+                        )
+                    })?;
+                    Ok::<_, String>((
+                        vec![(properties, Some(default_preset.clone()))],
                         Some(default_preset.clone()),
                     ))
                 };
 
                 if self.id.is_environment_preset() {
                     (
-                        presets.get(&selector.environment.0).into_iter().collect(),
+                        presets
+                            .get(&selector.environment.0)
+                            .into_iter()
+                            .map(|properties| {
+                                (
+                                    properties,
+                                    Some(format!("app-env:{}", selector.environment.0)),
+                                )
+                            })
+                            .collect(),
                         Some(format!("app-env:{}", selector.environment.0)),
                     )
                 } else if selector.presets.is_empty() {
@@ -2500,7 +2500,7 @@ impl Layer for ComponentLayer {
                     for preset in &selector.presets {
                         if let Some(properties) = presets.get(&preset.0) {
                             selected_presets.push(preset);
-                            selected_properties.push(properties);
+                            selected_properties.push((properties, Some(preset.0.clone())));
                         }
                     }
 
@@ -2522,7 +2522,7 @@ impl Layer for ComponentLayer {
             value.applied_layers.push((id.clone(), selection.cloned()))
         }
 
-        for properties in property_layers_to_apply {
+        for (properties, preset) in property_layers_to_apply {
             let template_env = ctx.template_env();
             let template_ctx = self.id.is_template().then(|| ctx.template_context());
             let template_ctx = template_ctx.as_ref();
@@ -2644,6 +2644,15 @@ impl Layer for ComponentLayer {
                 selection,
                 properties.config_schema.value().clone(),
             );
+
+            value.node_http_routers.apply_layer(
+                id,
+                selection,
+                properties.node_http_routers.value().clone(),
+            );
+            if properties.node_http_routers.value().is_some() {
+                value.node_http_routers_origin = Some((self.source.clone(), id.clone(), preset));
+            }
 
             value
                 .config
@@ -2868,7 +2877,12 @@ impl<'a> Component<'a> {
 
     /// File for storing extracted component metadata (agent types and tools)
     pub fn extracted_component_metadata(&self, source_wasm_path: &Path) -> PathBuf {
-        extracted_component_metadata_path(self.temp_dir, self.component_name, source_wasm_path)
+        extracted_component_metadata_path(
+            self.temp_dir,
+            self.component_name,
+            source_wasm_path,
+            crate::version(),
+        )
     }
 
     pub fn env(&self) -> &BTreeMap<String, String> {
@@ -2927,11 +2941,14 @@ pub fn extracted_component_metadata_path(
     temp_dir: &Path,
     component_name: &ComponentName,
     source_wasm_path: &Path,
+    cli_version: &str,
 ) -> PathBuf {
+    let cache_key = serde_json::to_string(&(source_wasm_path.display().to_string(), cli_version))
+        .expect("metadata cache key must be serializable");
     temp_dir.join("extracted-component-metadata").join(format!(
         "{}-{}.json",
         component_name.as_str(),
-        blake3::hash(source_wasm_path.display().to_string().as_bytes()).to_hex()
+        blake3::hash(cache_key.as_bytes()).to_hex()
     ))
 }
 
@@ -2955,6 +2972,10 @@ pub struct ComponentLayerProperties {
     pub custom_commands: MapProperty<ComponentLayer, String, Vec<app_raw::ExternalCommand>>,
     pub clean: VecProperty<ComponentLayer, String>,
     pub config_schema: OptionalProperty<ComponentLayer, ComponentConfigSchema>,
+    pub node_http_routers:
+        OptionalProperty<ComponentLayer, IndexMap<String, app_raw::NodeHttpRouter>>,
+    #[serde(skip)]
+    node_http_routers_origin: Option<(PathBuf, ComponentLayerId, Option<String>)>,
     pub config: JsonProperty<ComponentLayer>,
     pub initial_card: OptionalProperty<ComponentLayer, app_raw::ManifestInitialCard>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2995,6 +3016,8 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             custom_commands: value.custom_commands.into(),
             clean: value.clean.into(),
             config_schema: value.config_schema.into(),
+            node_http_routers: value.node_http_routers.into(),
+            node_http_routers_origin: None,
             config: value.agent_properties.config.into(),
             initial_card: value.agent_properties.initial_card.into(),
             env_merge_mode: value.agent_properties.env_merge_mode,
@@ -3011,6 +3034,53 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
 }
 
 impl ComponentLayerProperties {
+    fn validated_node_http_routers(
+        &self,
+        validation: &mut ValidationBuilder,
+    ) -> Option<IndexMap<String, NodeHttpRouter>> {
+        let routers = self.node_http_routers.value().as_ref()?;
+        let (source, layer, preset) = self
+            .node_http_routers_origin
+            .as_ref()
+            .expect("resolved router table has a defining layer");
+        let mut context = vec![
+            ("router source", source.display().to_string()),
+            ("layer", layer.to_string()),
+        ];
+        if let Some(preset) = preset {
+            context.push(("preset", preset.clone()));
+        }
+        Some(validation.with_context_returning(context, |validation| {
+            let mut names = BTreeMap::new();
+            routers
+                .iter()
+                .filter_map(|(port, raw)| {
+                    validation.with_context_returning(
+                        vec![("nodeHttpRouters port", port.clone())],
+                        |validation| match NodeHttpRouter::from_raw(raw) {
+                            Ok(router) => {
+                                if let Some(first_port) = names.get(&router.name) {
+                                    validation.add_error(format!(
+                                        "nodeHttpRouters.name '{}' is also used at port {first_port}; router names must be unique within the effective table",
+                                        router.name
+                                    ));
+                                    None
+                                } else {
+                                    names.insert(router.name.clone(), port.clone());
+                                    Some((port.clone(), router))
+                                }
+                            }
+                            Err((field, error)) => {
+                                validation.add_error(format!("nodeHttpRouters.{field}: {error}"));
+                                None
+                            }
+                        },
+                    ).0
+                })
+                .collect()
+        }).0)
+    }
+
     pub fn compact_traces(&mut self) {
         self.guest_language.compact_trace();
         self.component_wasm.compact_trace();
@@ -3021,6 +3091,7 @@ impl ComponentLayerProperties {
         self.custom_commands.compact_trace();
         self.clean.compact_trace();
         self.config_schema.compact_trace();
+        self.node_http_routers.compact_trace();
         self.config.compact_trace();
         self.initial_card.compact_trace();
         self.env.compact_trace();
@@ -3643,6 +3714,55 @@ impl AgentProperties {
     }
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeHttpRouter {
+    name: String,
+    mount: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auth: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cors: Option<Vec<String>>,
+}
+
+impl NodeHttpRouter {
+    fn from_raw(raw: &app_raw::NodeHttpRouter) -> Result<Self, (&'static str, String)> {
+        if !raw.name.split(['_', '-']).all(|segment| {
+            segment
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphabetic)
+                && segment.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        }) {
+            return Err(("name", "must contain ASCII alphanumeric segments starting with a letter, separated by a single '_' or '-'".into()));
+        }
+        if raw.mount.contains(['*', '$', '?', '#']) {
+            return Err((
+                "mount",
+                "must be a literal absolute URI path without raw '*', '$', '?', or '#'".into(),
+            ));
+        }
+        let target = golem_schema::http::HttpRequestTarget::parse(&raw.mount).map_err(|error| {
+            (
+                "mount",
+                format!("must be a safe absolute URI path ({error})"),
+            )
+        })?;
+        if target.trailing_slash() {
+            return Err((
+                "mount",
+                "must not have a trailing slash except for '/'".into(),
+            ));
+        }
+        Ok(Self {
+            name: raw.name.clone(),
+            mount: raw.mount.clone(),
+            auth: raw.auth,
+            cors: raw.cors.clone(),
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ComponentProperties {
     pub dir: Option<PathBuf>, // Relative path starting from the defining golem.yaml
@@ -3668,11 +3788,25 @@ impl ComponentProperties {
         dir: Option<PathBuf>,
         component_dir: PathBuf,
         merged: &ComponentLayerProperties,
+        node_http_routers: Option<IndexMap<String, NodeHttpRouter>>,
     ) -> Self {
         let files =
             InitialComponentFile::from_raw_vec(validation, source, merged.files.value().clone());
         let plugins =
             PluginInstallation::from_raw_vec(validation, source, merged.plugins.value().clone());
+
+        let routers = node_http_routers.unwrap_or_default();
+        let routers =
+            serde_json::to_string(&routers).expect("router configuration is serializable");
+        let mut build = merged.build.value().clone();
+        for command in &mut build {
+            if let app_raw::BuildCommand::External(command) = command {
+                // A reserved build input, not an environment variable of deployed agents.
+                command
+                    .env
+                    .insert("GOLEM_NODE_HTTP_ROUTERS".to_string(), routers.clone());
+            }
+        }
 
         let properties = Self {
             dir,
@@ -3684,7 +3818,7 @@ impl ComponentProperties {
                 merged.dependency_agents.value(),
                 merged.dependency_tools.value(),
             ),
-            build: merged.build.value().clone(),
+            build,
             custom_commands: merged
                 .custom_commands
                 .value()
@@ -4050,8 +4184,10 @@ mod app_builder {
     };
     use crate::model::app_raw;
     use crate::model::cascade::error::StoreGetValueError;
+    use crate::model::cascade::property::Property;
     use crate::model::cascade::store::Store;
     use crate::model::http_api::HttpApiDeploymentDeployProperties;
+    use crate::model::language::GuestLanguage;
     use crate::model::mcp::{McpDeploymentAgentOptions, McpDeploymentDeployProperties};
     use crate::validation::{ValidatedResult, ValidationBuilder};
     use crate::{fs, fuzzy};
@@ -4314,8 +4450,29 @@ mod app_builder {
     ) -> Option<Domain> {
         match (domain, subdomain) {
             (Some(domain), None) => {
-                let raw = domain.as_str();
-                Some(Domain(raw.to_string()))
+                let domain = Domain(domain.as_str().to_string());
+                match domain.canonical() {
+                    Ok(canonical) if canonical == domain => Some(domain),
+                    Ok(canonical) => {
+                        validation.add_error(format!(
+                            "{} deployment domain {} in {} must be written in its canonical spelling: {}",
+                            deployment_kind,
+                            domain.0.log_color_highlight(),
+                            source.display().to_string().log_color_highlight(),
+                            canonical.0.log_color_highlight(),
+                        ));
+                        None
+                    }
+                    Err(_) => {
+                        validation.add_error(format!(
+                            "{} deployment domain {} in {} is not a valid domain",
+                            deployment_kind,
+                            domain.0.log_color_highlight(),
+                            source.display().to_string().log_color_highlight(),
+                        ));
+                        None
+                    }
+                }
             }
             (None, Some(subdomain)) => {
                 let label = subdomain.as_str();
@@ -4459,10 +4616,7 @@ mod app_builder {
 
         mcp_deployments:
             BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
-        mcp_imports: BTreeMap<
-            EnvironmentName,
-            WithSource<Vec<golem_common::model::mcp_import::McpImportDeployment>>,
-        >,
+        mcp_imports: BTreeMap<EnvironmentName, WithSource<Vec<app_raw::McpImport>>>,
 
         bridge_sdks: WithSource<BridgeSdks>,
 
@@ -4534,6 +4688,7 @@ mod app_builder {
             builder.validate_unique_sources(&mut validation);
             builder.validate_tool_release_configuration(&mut validation);
             builder.validate_http_api_deployments(&mut validation, &environments);
+            builder.validate_deployment_domain_kinds(&mut validation);
             builder.validate_mcp_imports(&mut validation, &environments);
 
             validation.build(Application {
@@ -5780,12 +5935,26 @@ mod app_builder {
                 &ctx,
             ) {
                 Ok(component_layer_properties) => {
+                    if component_layer_properties
+                        .node_http_routers
+                        .value()
+                        .is_some()
+                        && *component_layer_properties.guest_language.value()
+                            != Some(GuestLanguage::TypeScript)
+                    {
+                        validation.add_error(format!(
+                            "Component {component_name}: nodeHttpRouters requires TypeScript. Set guestLanguage: ts on the component template or remove nodeHttpRouters."
+                        ));
+                    }
+                    let node_http_routers =
+                        component_layer_properties.validated_node_http_routers(validation);
                     let component_properties = ComponentProperties::from_merged(
                         validation,
                         &source,
                         dir,
                         component_dir,
                         &component_layer_properties,
+                        node_http_routers,
                     );
                     Self::validate_unique_file_targets(validation, &component_properties);
                     self.validate_component_dependencies(
@@ -5900,12 +6069,39 @@ mod app_builder {
             }
         }
 
+        fn validate_deployment_domain_kinds(&self, validation: &mut ValidationBuilder) {
+            for (environment, api_deployments) in &self.http_api_deployments {
+                let Some(mcp_deployments) = self.mcp_deployments.get(environment) else {
+                    continue;
+                };
+                for domain in api_deployments.keys() {
+                    if mcp_deployments.contains_key(domain) {
+                        validation.add_error(format!(
+                            "Domain {} in environment {} has both an HTTP API deployment and an MCP deployment. A domain may hold an HTTP API deployment or an MCP deployment, not both.",
+                            domain.0.log_color_highlight(),
+                            environment.0.log_color_highlight(),
+                        ));
+                    }
+                }
+            }
+        }
+
         fn validate_mcp_imports(
             &self,
             validation: &mut ValidationBuilder,
             environments: &BTreeMap<EnvironmentName, app_raw::Environment>,
         ) {
-            for environment in self.mcp_imports.keys() {
+            for (environment, imports) in &self.mcp_imports {
+                let mut names = BTreeSet::new();
+                for import in &imports.value {
+                    if let Some(name) = &import.name
+                        && !names.insert(name)
+                    {
+                        validation.add_error(format!(
+                            "Duplicate MCP import name '{name}' in environment '{environment}'; use distinct names"
+                        ));
+                    }
+                }
                 if !environments.contains_key(environment) {
                     validation.add_warn(format!(
                         "Unknown environment in manifest: {}\n\n{}",
@@ -6189,6 +6385,395 @@ mod test {
                 "app:main[debug]".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn node_http_routers_require_resolved_typescript_language() {
+        for language in [
+            None,
+            Some("ts"),
+            Some("rust"),
+            Some("scala"),
+            Some("moonbit"),
+            Some("effect"),
+        ] {
+            for location in [
+                "absent",
+                "component",
+                "template",
+                "component-preset",
+                "template-preset",
+            ] {
+                for routers in [json!({}), json!({"3000": {"name": "Web", "mount": "/"}})] {
+                    let mut manifest = json!({
+                        "app": "hello-app",
+                        "environments": {"local": {"server": "local", "componentPresets": "selected"}},
+                        "componentTemplates": {"base": {
+                            "componentWasm": "main.wasm", "presets": {"selected": {}}
+                        }},
+                        "components": {"app:main": {"templates": "base", "presets": {"selected": {}}}}
+                    });
+                    if let Some(language) = language {
+                        manifest["componentTemplates"]["base"]["guestLanguage"] = json!(language);
+                    }
+                    match location {
+                        "component" => {
+                            manifest["components"]["app:main"]["nodeHttpRouters"] = routers
+                        }
+                        "template" => {
+                            manifest["componentTemplates"]["base"]["nodeHttpRouters"] = routers
+                        }
+                        "component-preset" => {
+                            manifest["components"]["app:main"]["presets"]["selected"]["nodeHttpRouters"] =
+                                routers
+                        }
+                        "template-preset" => {
+                            manifest["componentTemplates"]["base"]["presets"]["selected"]["nodeHttpRouters"] =
+                                routers
+                        }
+                        "absent" => (),
+                        _ => unreachable!(),
+                    }
+                    let errors = load_app_errors(&serde_yaml::to_string(&manifest).unwrap());
+                    if location == "absent" || language == Some("ts") {
+                        assert!(errors.is_empty(), "{language:?}/{location}: {errors:#?}");
+                    } else {
+                        assert_eq!(errors.len(), 1, "{language:?}/{location}: {errors:#?}");
+                        assert!(errors[0].contains("app:main"), "{errors:#?}");
+                        assert!(
+                            errors[0].contains("nodeHttpRouters requires TypeScript"),
+                            "{errors:#?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn node_http_router_names_mounts_and_serialization() {
+        let mut manifest = json!({
+            "app": "hello-app",
+            "environments": {"local": {"server": "local"}},
+            "componentTemplates": {"base": {"guestLanguage": "ts"}},
+            "components": {"app:main": {
+                "templates": "base", "componentWasm": "main.wasm",
+                "build": [{"command": "npx rollup -c"}]
+            }}
+        });
+        for (field, value, valid) in [
+            ("name", "Web", true),
+            ("name", "Web_API", true),
+            ("name", "Web-Api2", true),
+            ("name", "Web_Api-V2", true),
+            ("name", "Web-1", false),
+            ("name", "Web__API", false),
+            ("name", "Web--API", false),
+            ("name", "Web_-API", false),
+            ("name", "Web-_API", false),
+            ("name", "_Web", false),
+            ("name", "Web-", false),
+            ("name", "Wéb", false),
+            ("name", "", false),
+            ("mount", "/", true),
+            ("mount", "/%2A", true),
+            ("mount", "/%241", true),
+            ("mount", "/%7Bid%7D", true),
+            ("mount", "/%252f", true),
+            ("mount", "/caf%C3%A9", true),
+            ("mount", "/v1/a-._~!&'()+,;=:@", true),
+            ("mount", "/%", false),
+            ("mount", "/%GG", false),
+            ("mount", "/%C3%28", false),
+            ("mount", "/%ED%A0%80", false),
+            ("mount", "/%FF", false),
+            ("mount", "/.", false),
+            ("mount", "/a/%2e%2e", false),
+            ("mount", "/a%2Fb", false),
+            ("mount", "/a%5Cb", false),
+            ("mount", "/%00", false),
+            ("mount", "/%1F", false),
+            ("mount", "/%7F", false),
+            ("mount", "/café", false),
+            ("mount", "/*", false),
+            ("mount", "/$1", false),
+            ("mount", "/?q=1", false),
+            ("mount", "/#fragment", false),
+            ("mount", "/v1/", false),
+            ("mount", "//", false),
+            ("mount", "/a//b", false),
+            ("mount", "relative", false),
+        ] {
+            let mut router =
+                json!({"name": "Web", "mount": "/", "auth": false, "cors": ["*", "custom-origin"]});
+            router[field] = json!(value);
+            let table = json!({"3000": router});
+            manifest["components"]["app:main"]["nodeHttpRouters"] = table.clone();
+            let yaml = serde_yaml::to_string(&manifest).unwrap();
+            let errors = load_app_errors(&yaml);
+            if valid {
+                assert!(errors.is_empty(), "{field}={value:?}: {errors:#?}");
+                let (app, _dir) = load_app_for_env(&yaml, "local", &[]);
+                let name = parse_component_name("app:main");
+                let component = app.component(&name);
+                let app_raw::BuildCommand::External(command) = &component.build_commands()[0]
+                else {
+                    panic!("external command expected")
+                };
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(
+                        &command.env["GOLEM_NODE_HTTP_ROUTERS"]
+                    )
+                    .unwrap(),
+                    table
+                );
+            } else {
+                assert_eq!(errors.len(), 1, "{field}={value:?}: {errors:#?}");
+                for expected in [
+                    "app:main",
+                    "golem.yaml",
+                    "3000",
+                    &format!("nodeHttpRouters.{field}"),
+                ] {
+                    assert!(errors[0].contains(expected), "{errors:#?}");
+                }
+            }
+        }
+        for (second_name, valid) in [("Web", false), ("web", true)] {
+            manifest["components"]["app:main"]["nodeHttpRouters"] = json!({
+                "3000": {"name": "Web", "mount": "/"},
+                "3001": {"name": second_name, "mount": "/other"}
+            });
+            let errors = load_app_errors(&serde_yaml::to_string(&manifest).unwrap());
+            assert_eq!(errors.is_empty(), valid, "{errors:#?}");
+            if !valid {
+                assert_eq!(errors.len(), 1);
+                for expected in ["nodeHttpRouters.name", "Web", "3000", "3001"] {
+                    assert!(errors[0].contains(expected), "{errors:#?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn node_http_router_effective_table_validation_preserves_raw_history() {
+        let source = indoc! { r#"
+            app: hello-app
+            environments:
+              local: { server: local }
+            componentTemplates:
+              unused:
+                nodeHttpRouters:
+                  "9000": { name: Bad-1, mount: /* }
+              base:
+                guestLanguage: ts
+                nodeHttpRouters:
+                  "3000": { name: Web, mount: /* }
+                  "3001": { name: Web, mount: / }
+                presets:
+                  broken: {}
+                  replaced:
+                    nodeHttpRouters:
+                      "3002": { name: Web, mount: /%252f }
+                  cleared: { nodeHttpRouters: {} }
+                  unused:
+                    nodeHttpRouters:
+                      "3003": { name: Bad-1, mount: /* }
+            components:
+              app:main:
+                templates: base
+                componentWasm: main.wasm
+                build: [{ command: npx rollup -c }]
+              app:other:
+                templates: base
+                componentWasm: other.wasm
+        "# };
+        assert!(!load_app_errors_with_selector(source, &selector("local", &["broken"])).is_empty());
+        for (preset, expected) in [
+            (
+                "replaced",
+                json!({"3002": {"name": "Web", "mount": "/%252f"}}),
+            ),
+            ("cleared", json!({})),
+        ] {
+            let (app, _dir) = load_app_for_env(source, "local", &[preset]);
+            let name = parse_component_name("app:main");
+            let component = app.component(&name);
+            let trace = serde_json::to_value(component.layer_properties()).unwrap();
+            assert_eq!(trace["nodeHttpRouters"]["value"], expected);
+            let overrides: Vec<_> = trace["nodeHttpRouters"]["trace"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|entry| entry["type"] == "override")
+                .collect();
+            assert_eq!(overrides.len(), 2);
+            assert_eq!(overrides[0]["value"]["3000"]["mount"], "/*");
+            assert_eq!(overrides[0]["value"]["3001"]["name"], "Web");
+            assert_eq!(overrides[1]["selection"], preset);
+            assert_eq!(overrides[1]["value"], expected);
+            assert!(trace.get("nodeHttpRoutersOrigin").is_none());
+            let app_raw::BuildCommand::External(command) = &component.build_commands()[0] else {
+                panic!("external command expected")
+            };
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&command.env["GOLEM_NODE_HTTP_ROUTERS"])
+                    .unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn node_http_router_errors_identify_defining_file_layer_and_preset() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let root = tmp_dir.path().join("components.yaml");
+        let template = tmp_dir.path().join("templates.yaml");
+        fs::write(
+            &root,
+            indoc! { r#"
+            app: hello-app
+            environments:
+              local: { server: local }
+            components:
+              app:main:
+                templates: base
+                componentWasm: main.wasm
+        "# },
+        )
+        .unwrap();
+        for (preset, defining_preset) in [
+            (vec!["first", "second", "skip"], "second"),
+            (vec!["second", "first", "skip"], "first"),
+            (vec!["skip"], "app-env:local"),
+            (vec![], "first"),
+            (vec!["unmatched"], "first"),
+        ] {
+            fs::write(
+                &template,
+                indoc! { r#"
+                componentTemplates:
+                  base:
+                    guestLanguage: ts
+                    nodeHttpRouters:
+                      "3000": { name: Bad-1, mount: / }
+                    presets:
+                      app-env:local:
+                        nodeHttpRouters:
+                          "3000": { name: Bad-1, mount: / }
+                      first:
+                        nodeHttpRouters:
+                          "3000": { name: Bad-1, mount: / }
+                      second:
+                        nodeHttpRouters:
+                          "3000": { name: Bad-1, mount: / }
+                      skip: {}
+                  unused:
+                    presets:
+                      unmatched: {}
+            "# },
+            )
+            .unwrap();
+            let raw_apps = vec![
+                app_raw::ApplicationWithSource::from_yaml_file(&root).unwrap(),
+                app_raw::ApplicationWithSource::from_yaml_file(&template).unwrap(),
+            ];
+            let (preload, warns, errors) =
+                Application::preload_from_raw_apps(&raw_apps).into_product();
+            assert!(warns.is_empty() && errors.is_empty());
+            let preload = preload.unwrap();
+            let (_, _, errors) = Application::from_raw_apps(
+                tmp_dir.path().to_path_buf(),
+                preload.application_name,
+                preload.environments,
+                preload.local_server,
+                selector("local", &preset),
+                raw_apps,
+            )
+            .into_product();
+            assert_eq!(errors.len(), 1, "{errors:#?}");
+            for expected in [
+                "templates.yaml",
+                "base",
+                "app:main",
+                defining_preset,
+                "3000",
+                "nodeHttpRouters.name",
+            ] {
+                assert!(errors[0].contains(expected), "{errors:#?}");
+            }
+            let source_context = errors[0]
+                .lines()
+                .find(|line| line.trim_start().starts_with("router source:"))
+                .unwrap();
+            assert!(
+                source_context.trim_end().ends_with("templates.yaml"),
+                "{errors:#?}"
+            );
+            let preset_context = errors[0]
+                .lines()
+                .find(|line| line.trim_start().starts_with("preset:"))
+                .unwrap();
+            assert!(
+                preset_context.trim_end().ends_with(defining_preset),
+                "{errors:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn node_http_router_layers_replace_clear_and_reserve_build_configuration() {
+        let source = indoc! { r#"
+            app: hello-app
+            environments:
+              local:
+                server: local
+            componentTemplates:
+              base:
+                guestLanguage: ts
+                nodeHttpRouters:
+                  "3000": { name: Template, mount: /template }
+                build:
+                  - command: npx rollup -c
+                    env: { GOLEM_NODE_HTTP_ROUTERS: authored, OTHER: retained }
+                presets:
+                  inherited: {}
+                  debug:
+                    nodeHttpRouters:
+                      "3001": { name: Preset, mount: /preset, auth: true }
+                  cleared:
+                    nodeHttpRouters: {}
+            components:
+              app:main:
+                templates: base
+                componentWasm: main.wasm
+        "# };
+        for (preset, expected) in [
+            (
+                None,
+                serde_json::json!({"3000": {"name": "Template", "mount": "/template"}}),
+            ),
+            (
+                Some("debug"),
+                serde_json::json!({"3001": {"name": "Preset", "mount": "/preset", "auth": true}}),
+            ),
+            (Some("cleared"), serde_json::json!({})),
+        ] {
+            let selected = preset.into_iter().collect::<Vec<_>>();
+            let (app, _) = load_app_for_env(source, "local", &selected);
+            let name = parse_component_name("app:main");
+            let component = app.component(&name);
+            let app_raw::BuildCommand::External(command) = &component.build_commands()[0] else {
+                panic!("external command expected")
+            };
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&command.env["GOLEM_NODE_HTTP_ROUTERS"])
+                    .unwrap(),
+                expected
+            );
+            assert_eq!(command.env["OTHER"], "retained");
+            assert!(!component.env().contains_key("GOLEM_NODE_HTTP_ROUTERS"));
+        }
     }
 
     #[test]
@@ -6638,7 +7223,7 @@ mod test {
             app.mcp_imports(&EnvironmentName("local".into()))
                 .unwrap()
                 .iter()
-                .map(|import| import.url.as_str())
+                .map(|import| import.import.url.as_str())
                 .collect::<Vec<_>>(),
             ["https://z.example/mcp", "https://a.example/mcp"]
         );
@@ -6668,6 +7253,34 @@ mod test {
         .into_product();
         assert!(
             errors.iter().any(|error| error.contains("mcp.imports")),
+            "{errors:?}"
+        );
+
+        let duplicate_names = source.replace("- url:", "- name: same\n        url:");
+        let apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_string(
+                dir.path().join("golem.yaml"),
+                &duplicate_names,
+            )
+            .unwrap(),
+        ];
+        let preload = Application::preload_from_raw_apps(&apps)
+            .into_product()
+            .0
+            .unwrap();
+        let (_, _, errors) = Application::from_raw_apps(
+            dir.path().to_path_buf(),
+            preload.application_name,
+            preload.environments,
+            preload.local_server,
+            selector("local", &[]),
+            apps,
+        )
+        .into_product();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Duplicate MCP import name 'same'")),
             "{errors:?}"
         );
     }
@@ -9314,6 +9927,80 @@ bridge:
             app.mcp_deployments(&EnvironmentName("local".to_string()))
                 .unwrap()
                 .contains_key(&Domain("mcp.example.com".to_string()))
+        );
+    }
+
+    #[test]
+    fn deployment_domains_must_be_canonical() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            httpApi:
+              deployments:
+                local:
+                  - domain: API.example.com
+
+            mcp:
+              deployments:
+                local:
+                  - domain: mcp.example.com.
+                    agents:
+                      Echo: {}
+        "# };
+
+        let errors = load_app_errors(source);
+
+        assert_eq!(errors.len(), 2, "\n{}", errors.join("\n\n"));
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("API.example.com") && error.contains("api.example.com")),
+            "\n{}",
+            errors.join("\n\n")
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("mcp.example.com.")),
+            "\n{}",
+            errors.join("\n\n")
+        );
+    }
+
+    #[test]
+    fn a_domain_cannot_hold_both_an_http_api_and_an_mcp_deployment() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            httpApi:
+              deployments:
+                local:
+                  - domain: shared.example.com
+
+            mcp:
+              deployments:
+                local:
+                  - domain: shared.example.com
+                    agents:
+                      Echo: {}
+        "# };
+
+        let errors = load_app_errors(source);
+
+        assert_eq!(errors.len(), 1, "\n{}", errors.join("\n\n"));
+        assert!(
+            errors[0].contains("shared.example.com")
+                && errors[0].contains("both an HTTP API deployment and an MCP deployment"),
+            "{}",
+            errors[0]
         );
     }
 

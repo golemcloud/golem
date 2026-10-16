@@ -143,7 +143,7 @@ use golem_worker_executor::services::golem_config::{
 use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValueService};
 use golem_worker_executor::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
-    OplogService, OrderedOplogStart, RawOplogPayloadDownloadError,
+    OplogService, OrderedOplogStart, RawOplogPayloadDownloadError, ReservedRawStartBuilder,
 };
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::quota::QuotaService;
@@ -589,6 +589,13 @@ mod hosted_descriptor_tests {
     }
 }
 
+type PrimaryContextProbe = Box<
+    dyn for<'a> FnOnce(
+            &'a mut DurableWorkerCtx<TestWorkerCtx>,
+        ) -> futures::future::BoxFuture<'a, Result<(), WorkerExecutorError>>
+        + Send,
+>;
+
 #[derive(Clone)]
 pub struct TestWorkerExecutor {
     _join_set: Arc<JoinSet<anyhow::Result<()>>>,
@@ -935,6 +942,90 @@ impl TestWorkerExecutor {
         )
     }
 
+    pub fn gate_next_oplog_function_end(
+        &self,
+        agent_id: &AgentId,
+        function: HostFunctionName,
+        fail: bool,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        self.additional_test_deps
+            .oplog_end_gates
+            .lock()
+            .unwrap()
+            .insert(
+                agent_id.clone(),
+                (
+                    function,
+                    None,
+                    fail,
+                    OplogReadGate {
+                        entered_tx,
+                        release_rx,
+                    },
+                ),
+            );
+        (entered_rx, release_tx)
+    }
+
+    /// Holds the receipt of the next stdin terminal selection, after ordinary enqueue admission.
+    pub fn gate_next_stdin_terminal_receipt(
+        &self,
+        agent_id: &AgentId,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        self.additional_test_deps
+            .stdin_terminal_receipt_gates
+            .lock()
+            .unwrap()
+            .insert(
+                agent_id.clone(),
+                OplogReadGate {
+                    entered_tx,
+                    release_rx,
+                },
+            );
+        (entered_rx, release_tx)
+    }
+
+    /// Observes the first mutable host-context access after the selected entity's guest settlement.
+    /// This uses the test context's fuel-accounting boundary, without adding a production hook.
+    pub fn probe_entity_settlement_access(
+        &self,
+        agent_id: &AgentId,
+        entity_start: OplogIndex,
+    ) -> tokio::sync::oneshot::Receiver<()> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        self.additional_test_deps
+            .entity_settlement_access
+            .lock()
+            .unwrap()
+            .insert((agent_id.clone(), Some(entity_start)), (false, sender));
+        receiver
+    }
+
+    /// Observes primary guest settlement before the tool-child settlement barrier.
+    pub fn probe_primary_settlement_access(
+        &self,
+        agent_id: &AgentId,
+    ) -> tokio::sync::oneshot::Receiver<()> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        self.additional_test_deps
+            .entity_settlement_access
+            .lock()
+            .unwrap()
+            .insert((agent_id.clone(), None), (false, sender));
+        receiver
+    }
+
     /// Stores the automatic snapshot entries at `indexes` as rejected for the incarnation of the
     /// agent, as a start that could not load them does. A later start of the agent selects none
     /// of them.
@@ -999,6 +1090,40 @@ impl TestWorkerExecutor {
         self.additional_test_deps.instance_load_count(agent_id)
     }
 
+    /// Runs once after the next primary durable context is constructed, before its guest instance.
+    pub fn probe_next_primary_context(
+        &self,
+        agent_id: &AgentId,
+        probe: impl for<'a> FnOnce(
+            &'a mut DurableWorkerCtx<TestWorkerCtx>,
+        )
+            -> futures::future::BoxFuture<'a, Result<(), WorkerExecutorError>>
+        + Send
+        + 'static,
+    ) -> tokio::sync::oneshot::Receiver<Result<(), WorkerExecutorError>> {
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let mut probes = self
+            .additional_test_deps
+            .primary_context_probes
+            .lock()
+            .unwrap();
+        assert!(
+            !probes.contains_key(agent_id),
+            "primary context probe already armed"
+        );
+        probes.insert(
+            agent_id.clone(),
+            Box::new(move |ctx| {
+                Box::pin(async move {
+                    let result = probe(ctx).await;
+                    let _ = send.send(result.clone());
+                    result
+                })
+            }),
+        );
+        receive
+    }
+
     pub fn probe_runtime_disposal(
         &self,
         agent_id: &AgentId,
@@ -1006,19 +1131,6 @@ impl TestWorkerExecutor {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
         self.additional_test_deps
             .runtime_disposal_probes
-            .lock()
-            .unwrap()
-            .insert(agent_id.clone(), sender);
-        receiver
-    }
-
-    pub fn probe_http_body_read_starts(
-        &self,
-        agent_id: &AgentId,
-    ) -> tokio::sync::mpsc::UnboundedReceiver<OplogIndex> {
-        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-        self.additional_test_deps
-            .http_body_read_start_probes
             .lock()
             .unwrap()
             .insert(agent_id.clone(), sender);
@@ -1207,17 +1319,14 @@ impl TestWorkerExecutor {
         Ok(())
     }
 
-    pub fn return_no_op_after_oplog_reads(
+    pub fn return_non_snapshot_after_oplog_reads(
         &self,
         agent_id: &AgentId,
         oplog_index: OplogIndex,
         reads_to_skip: usize,
     ) {
-        self.additional_test_deps.return_no_op_after_oplog_reads(
-            agent_id.clone(),
-            oplog_index,
-            reads_to_skip,
-        );
+        self.additional_test_deps
+            .return_non_snapshot_after_oplog_reads(agent_id.clone(), oplog_index, reads_to_skip);
     }
 
     /// Pauses one `Oplog::read` or `read_exact` starting at the given index before accessing storage.
@@ -1238,6 +1347,63 @@ impl TestWorkerExecutor {
             .unwrap()
             .insert(
                 (agent_id.clone(), oplog_index),
+                OplogReadGate {
+                    entered_tx,
+                    release_rx,
+                },
+            );
+        (entered_rx, release_tx)
+    }
+
+    /// Pauses a runtime-card audit lookup only in the task that claimed its real Start.
+    pub fn gate_next_runtime_card_audit_lookup(
+        &self,
+        agent_id: &AgentId,
+        start: OplogIndex,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let previous = self
+            .additional_test_deps
+            .runtime_card_audit_gates
+            .lock()
+            .unwrap()
+            .insert(
+                (agent_id.clone(), start),
+                RuntimeCardAuditGate {
+                    pause: OplogReadGate {
+                        entered_tx,
+                        release_rx,
+                    },
+                    issuing_task: None,
+                },
+            );
+        assert!(
+            previous.is_none(),
+            "runtime-card audit gate is already armed"
+        );
+        (entered_rx, release_tx)
+    }
+
+    /// Pauses after a card install commits to storage, before the status owner can publish it.
+    pub fn gate_next_wallet_install_commit(
+        &self,
+        agent_id: &AgentId,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        self.additional_test_deps
+            .wallet_install_commit_gates
+            .lock()
+            .unwrap()
+            .insert(
+                agent_id.clone(),
                 OplogReadGate {
                     entered_tx,
                     release_rx,
@@ -1330,6 +1496,28 @@ impl TestWorkerExecutor {
         Ok(())
     }
 
+    /// Signals a simulated crash of the loaded worker, as `simulated_crash` does, but returns as
+    /// soon as the running Store has been signalled. The returned future waits for the Store to
+    /// unwind; release any test gate the Store is blocked on before awaiting it.
+    pub async fn signal_simulated_crash(
+        &self,
+        agent_id: &AgentId,
+    ) -> anyhow::Result<impl Future<Output = anyhow::Result<()>> + use<>> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(&owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
+        let receiver = worker.set_interrupting(InterruptKind::Restart).await?;
+        Ok(async move {
+            if let Some(mut receiver) = receiver {
+                receiver.recv().await?;
+            }
+            Ok(())
+        })
+    }
+
     pub async fn queue_card_revocation(
         &self,
         agent_id: &AgentId,
@@ -1365,6 +1553,15 @@ impl TestWorkerExecutor {
             ))
             .await?;
         Ok(())
+    }
+
+    /// Returns the real interest-routing service for executor instance-layer tests.
+    pub fn active_agents(&self) -> Arc<ActiveAgents<TestWorkerCtx>> {
+        self.additional_test_deps
+            .active_agents
+            .get()
+            .unwrap()
+            .clone()
     }
 
     /// Returns the owner-keyed active-agent group for executor instance-layer tests.
@@ -1777,7 +1974,17 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
     ) -> AgentInvocationSuccessGateHandle {
         self.additional_test_deps
-            .gate_next_agent_invocation_success(agent_id.clone())
+            .gate_next_agent_invocation_success(agent_id.clone(), None)
+    }
+
+    /// Selects one function so earlier replayed successes do not consume the gate.
+    pub fn gate_next_agent_function_success(
+        &self,
+        agent_id: &AgentId,
+        function: &str,
+    ) -> AgentInvocationSuccessGateHandle {
+        self.additional_test_deps
+            .gate_next_agent_invocation_success(agent_id.clone(), Some(function.to_string()))
     }
 
     /// Pauses the next entity body immediately before invoking its guest export.
@@ -1831,6 +2038,20 @@ impl TestWorkerExecutor {
     ) -> IndexedExecutionGateHandle {
         self.additional_test_deps
             .gate_next_entity_reconstruction_claim(agent_id.clone())
+    }
+
+    /// Leaves earlier claims alone and pauses reconstruction of the exact recorded entity Start.
+    pub fn gate_entity_reconstruction_claim_at(
+        &self,
+        agent_id: &AgentId,
+        start: OplogIndex,
+    ) -> IndexedExecutionGateHandle {
+        let handle = self.gate_next_entity_reconstruction_claim(agent_id);
+        handle
+            .gate
+            .expected_index
+            .store(u64::from(start), Ordering::Release);
+        handle
     }
 
     /// Pauses the given agent's next replayed accessor-call admission whose function name ends
@@ -2276,6 +2497,7 @@ pub struct TestExecutorOverrides {
     /// Replaces configured account limits for the `TestWorkerCtx` bootstrap.
     pub resource_limits: Option<Arc<dyn ResourceLimits>>,
     pub native_tool_metadata: Option<golem_common::schema::tool::Tool>,
+    pub native_replay_upgrade_probe: Option<Arc<NativeReplayUpgradeProbe>>,
     /// Named retry policies that the executor's `EnvironmentStateService`
     /// should expose to running agents (mirrors `retryPolicyDefaults` in
     /// `golem.yaml`).  When `None`, an empty policy list is used.
@@ -2287,6 +2509,27 @@ pub struct TestExecutorOverrides {
         golem_worker_executor::filesystem_snapshot_testing::TestFilesystemSnapshotStore,
         golem_worker_executor::services::golem_config::FilesystemSnapshotUploadConfig,
     )>,
+}
+
+impl TestExecutorOverrides {
+    /// Overrides that turn on `wasi:sockets` for agents, which the executor refuses by default.
+    pub fn agent_sockets_enabled() -> Self {
+        Self::default().with_agent_sockets()
+    }
+
+    /// Turns on `wasi:sockets` for agents after any `configure` already set.
+    pub fn with_agent_sockets(self) -> Self {
+        let configure = self.configure.clone();
+        Self {
+            configure: Some(Arc::new(move |config| {
+                if let Some(configure) = &configure {
+                    configure(config);
+                }
+                config.agent_sockets.enabled = true;
+            })),
+            ..self
+        }
+    }
 }
 
 fn make_base_test_config(deps: &WorkerExecutorTestDependencies) -> GolemConfig {
@@ -2648,17 +2891,19 @@ impl Drop for RuntimeDisposalReceipt {
     }
 }
 
+type NativeTestContext = golem_worker_executor::native_tool::NativeToolContext<TestWorkerCtx>;
+
 #[golem_native_tool::tool_definition(version = "1.0.0")]
 trait NativeDurableHelper {
-    async fn touch(&self, context: &mut TestWorkerCtx) -> golem_native_tool::HostResult<()>;
+    async fn touch(&self, context: &mut NativeTestContext) -> golem_native_tool::HostResult<()>;
 }
 
 struct NativeDurableHelperImpl(Arc<AtomicUsize>);
 
 #[golem_native_tool::tool_implementation]
 impl NativeDurableHelper for NativeDurableHelperImpl {
-    async fn touch(&self, ctx: &mut TestWorkerCtx) -> golem_native_tool::HostResult<()> {
-        wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(ctx).await?;
+    async fn touch(&self, ctx: &mut NativeTestContext) -> golem_native_tool::HostResult<()> {
+        ctx.get_environment().await?;
         if ctx.is_live() {
             self.0.fetch_add(1, Ordering::SeqCst);
         }
@@ -2671,28 +2916,37 @@ trait NativeTestTool {
     #[arg(stderr, channel = "stderr")]
     async fn run(
         &self,
-        context: &mut TestWorkerCtx,
+        context: &mut NativeTestContext,
         mode: String,
         cancellation: golem_native_tool::NativeToolCancellation,
-        stdin: Option<golem_native_tool::NativeToolStdin>,
-        stdout: Option<golem_native_tool::NativeToolOutput>,
-        stderr: Option<golem_native_tool::NativeToolOutput>,
+        stdin: Option<golem_native_tool::NativeToolStdin<NativeTestContext>>,
+        stdout: Option<golem_native_tool::NativeToolOutput<NativeTestContext>>,
+        stderr: Option<golem_native_tool::NativeToolOutput<NativeTestContext>>,
         principal: golem_native_tool::Principal,
     ) -> golem_native_tool::HostResult<()>;
 }
 
-struct NativeTestToolImpl(Arc<AtomicUsize>);
+#[derive(Default)]
+pub struct NativeReplayUpgradeProbe {
+    pub original_ready: tokio::sync::Notify,
+    pub replay_ready: tokio::sync::Notify,
+    pub release_replay: tokio::sync::Notify,
+    pub reconstructed_prefixes: AtomicUsize,
+    replay_gate_taken: std::sync::atomic::AtomicBool,
+}
+
+struct NativeTestToolImpl(Arc<AtomicUsize>, Option<Arc<NativeReplayUpgradeProbe>>);
 
 #[golem_native_tool::tool_implementation]
 impl NativeTestTool for NativeTestToolImpl {
     async fn run(
         &self,
-        ctx: &mut TestWorkerCtx,
+        ctx: &mut NativeTestContext,
         mode: String,
         cancellation: golem_native_tool::NativeToolCancellation,
-        mut stdin: Option<golem_native_tool::NativeToolStdin>,
-        mut stdout: Option<golem_native_tool::NativeToolOutput>,
-        mut stderr: Option<golem_native_tool::NativeToolOutput>,
+        mut stdin: Option<golem_native_tool::NativeToolStdin<NativeTestContext>>,
+        mut stdout: Option<golem_native_tool::NativeToolOutput<NativeTestContext>>,
+        mut stderr: Option<golem_native_tool::NativeToolOutput<NativeTestContext>>,
         _principal: golem_native_tool::Principal,
     ) -> golem_native_tool::HostResult<()> {
         let wait_for_count = mode
@@ -2707,6 +2961,31 @@ impl NativeTestTool for NativeTestToolImpl {
             self.0.fetch_add(1, Ordering::SeqCst);
         }
 
+        if mode == "upgrade-pressure" {
+            let probe = self.1.as_ref().expect("native upgrade probe configured");
+            if !is_live && !probe.replay_gate_taken.swap(true, Ordering::SeqCst) {
+                probe.replay_ready.notify_one();
+                probe.release_replay.notified().await;
+            }
+            let stdout = stdout.as_mut().expect("native upgrade stdout");
+            let stderr = stderr.as_mut().expect("native upgrade stderr");
+            stdout
+                .write(ctx, vec![b'o'; 8 * 1024 * 1024])
+                .await
+                .map_err(anyhow::Error::msg)?;
+            stderr
+                .write(ctx, vec![b'e'; 8 * 1024 * 1024])
+                .await
+                .map_err(anyhow::Error::msg)?;
+            if is_live {
+                probe.original_ready.notify_one();
+                std::future::pending::<()>().await;
+            }
+            probe.reconstructed_prefixes.fetch_add(1, Ordering::SeqCst);
+            stdout.finish(ctx).await.map_err(anyhow::Error::msg)?;
+            anyhow::bail!("native upgrade unexpectedly admitted its finish");
+        }
+
         if let Some(key) = mode.strip_prefix("config:") {
             let expected = golem_schema::schema::wit::encode_graph(
                 &golem_common::schema::SchemaGraph::anonymous(
@@ -2715,12 +2994,8 @@ impl NativeTestTool for NativeTestToolImpl {
                     ),
                 ),
             )?;
-            let value =
-                golem_worker_executor::preview2::golem::agent::host::Host::get_config_value(
-                    ctx.durable_ctx_mut(),
-                    vec![key.to_string()],
-                    expected,
-                )
+            let value = ctx
+                .get_config_value(vec![key.to_string()], expected)
                 .await?;
             let evidence = match value {
                 Ok(value) => match golem_schema::schema::wit::decode_value(&value)? {
@@ -2739,10 +3014,10 @@ impl NativeTestTool for NativeTestToolImpl {
             };
             if let Some(mut stdout) = stdout {
                 stdout
-                    .write(evidence.into_bytes())
+                    .write(ctx, evidence.into_bytes())
                     .await
                     .map_err(anyhow::Error::msg)?;
-                stdout.finish().map_err(anyhow::Error::msg)?;
+                stdout.finish(ctx).await.map_err(anyhow::Error::msg)?;
             }
             return Ok(());
         }
@@ -2760,13 +3035,13 @@ impl NativeTestTool for NativeTestToolImpl {
         if mode == "wait-cancel" {
             if let Some(stdout) = &mut stdout {
                 stdout
-                    .write(b"native:started".to_vec())
+                    .write(ctx, b"native:started".to_vec())
                     .await
                     .map_err(anyhow::Error::msg)?;
             }
             if let Some(stderr) = &mut stderr {
                 stderr
-                    .write(b"diagnostic:started".to_vec())
+                    .write(ctx, b"diagnostic:started".to_vec())
                     .await
                     .map_err(anyhow::Error::msg)?;
             }
@@ -2776,34 +3051,34 @@ impl NativeTestTool for NativeTestToolImpl {
 
         if let Some(mut stderr) = stderr {
             stderr
-                .write(format!("diagnostic:{mode}").into_bytes())
+                .write(ctx, format!("diagnostic:{mode}").into_bytes())
                 .await
                 .map_err(anyhow::Error::msg)?;
-            stderr.finish().map_err(anyhow::Error::msg)?;
+            stderr.finish(ctx).await.map_err(anyhow::Error::msg)?;
         }
 
         if let Some(mut stdout) = stdout {
             if reads_counter {
                 let count = wait_for_count.unwrap_or_else(|| self.0.load(Ordering::SeqCst));
                 stdout
-                    .write(count.to_string().into_bytes())
+                    .write(ctx, count.to_string().into_bytes())
                     .await
                     .map_err(anyhow::Error::msg)?;
             } else {
                 stdout
-                    .write(b"native:".to_vec())
+                    .write(ctx, b"native:".to_vec())
                     .await
                     .map_err(anyhow::Error::msg)?;
                 if let Some(stdin) = &mut stdin {
-                    while let Some(item) = stdin.read().await {
+                    while let Some(item) = stdin.read(ctx).await {
                         stdout
-                            .write(item.map_err(anyhow::Error::msg)?)
+                            .write(ctx, item.map_err(anyhow::Error::msg)?)
                             .await
                             .map_err(anyhow::Error::msg)?;
                     }
                 }
             }
-            stdout.finish().map_err(anyhow::Error::msg)?;
+            stdout.finish(ctx).await.map_err(anyhow::Error::msg)?;
         }
 
         Ok(())
@@ -2819,7 +3094,7 @@ pub fn native_test_tool_metadata() -> golem_common::schema::tool::Tool {
 
 pub fn native_streaming_tool_metadata() -> golem_common::schema::tool::Tool {
     use golem_native_tool::NativeToolInvoker;
-    NativeTestToolImpl(Arc::new(AtomicUsize::new(0)))
+    NativeTestToolImpl(Arc::new(AtomicUsize::new(0)), None)
         .native_tool_invoker()
         .metadata()
 }
@@ -2840,6 +3115,23 @@ impl DurableWorkerCtxView<TestWorkerCtx> for TestWorkerCtx {
     }
 
     fn durable_ctx_mut(&mut self) -> &mut DurableWorkerCtx<TestWorkerCtx> {
+        {
+            let key = (
+                self.agent_id.clone(),
+                self.durable_ctx
+                    .entity_invocation_scope()
+                    .map(|scope| scope.invocation_id().start_index()),
+            );
+            let mut probes = self
+                .additional_test_deps
+                .entity_settlement_access
+                .lock()
+                .unwrap();
+            if probes.get(&key).is_some_and(|(settled, _)| *settled) {
+                let (_, sender) = probes.remove(&key).unwrap();
+                let _ = sender.send(());
+            }
+        }
         &mut self.durable_ctx
     }
 }
@@ -2878,6 +3170,20 @@ impl FuelManagement for TestWorkerCtx {
         false
     }
     fn fuel_metering_enabled(&self) -> bool {
+        if let Some((settled, _)) = self
+            .additional_test_deps
+            .entity_settlement_access
+            .lock()
+            .unwrap()
+            .get_mut(&(
+                self.agent_id.clone(),
+                self.durable_ctx
+                    .entity_invocation_scope()
+                    .map(|scope| scope.invocation_id().start_index()),
+            ))
+        {
+            *settled = true;
+        }
         false
     }
 
@@ -3029,7 +3335,7 @@ impl InvocationHooks for TestWorkerCtx {
     ) -> Result<(), WorkerExecutorError> {
         if let Some(gate) = self
             .additional_test_deps
-            .take_agent_invocation_success_gate(&self.agent_id)
+            .take_agent_invocation_success_gate(&self.agent_id, full_function_name)
         {
             self.get_public_state()
                 .worker()
@@ -3055,14 +3361,6 @@ impl InvocationHooks for TestWorkerCtx {
 
     async fn get_current_retry_point(&self) -> OplogIndex {
         self.durable_ctx.get_current_retry_point().await
-    }
-
-    fn current_in_atomic_region(&self) -> bool {
-        self.durable_ctx.current_in_atomic_region()
-    }
-
-    fn current_atomic_region_had_side_effects(&self) -> bool {
-        self.durable_ctx.current_atomic_region_had_side_effects()
     }
 
     fn enter_read_only_mode(&mut self, method_name: String) {
@@ -3233,6 +3531,7 @@ impl WorkerCtx for TestWorkerCtx {
         // exercise pool saturation for any worker on this executor.
         extra_deps.set_websocket_connection_pool(websocket_connection_pool.clone());
         let worker_agent_id = owned_agent_id.agent_id.clone();
+        let primary = matches!(runtime, OwnerRuntime::Agent);
         let runtime_generation = entity_execution_mode
             .is_none()
             .then(|| extra_deps.record_instance_load(&worker_agent_id));
@@ -3247,7 +3546,7 @@ impl WorkerCtx for TestWorkerCtx {
         }
         let account_resource_limits = owner_resources.resource_limits();
 
-        let durable_ctx = DurableWorkerCtx::create(
+        let mut durable_ctx = DurableWorkerCtx::create(
             owned_agent_id,
             owner_context,
             promise_service,
@@ -3296,6 +3595,16 @@ impl WorkerCtx for TestWorkerCtx {
             entity_activation,
         )
         .await?;
+        if primary {
+            let probe = extra_deps
+                .primary_context_probes
+                .lock()
+                .unwrap()
+                .remove(&worker_agent_id);
+            if let Some(probe) = probe {
+                probe(&mut durable_ctx).await?;
+            }
+        }
         let runtime_disposal = RuntimeDisposalReceipt(runtime_generation.and_then(|generation| {
             extra_deps
                 .runtime_disposal_probes
@@ -3316,10 +3625,6 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn as_wasi_view(&mut self) -> impl WasiView {
         self.durable_ctx.as_wasi_view()
-    }
-
-    fn as_wasi_http_view(&mut self) -> wasmtime_wasi_http::p2::WasiHttpCtxView<'_> {
-        self.durable_ctx.as_wasi_http_view()
     }
 
     fn get_public_state(&self) -> &Self::PublicState {
@@ -3641,8 +3946,10 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             handler: Arc::new(NativeToolAdapter(helper.native_tool_invoker())),
         }];
         if let Some(metadata) = &self.overrides.native_tool_metadata {
-            let native_test_tool =
-                NativeTestToolImpl(self.additional_test_deps.native_test_effects.clone());
+            let native_test_tool = NativeTestToolImpl(
+                self.additional_test_deps.native_test_effects.clone(),
+                self.overrides.native_replay_upgrade_probe.clone(),
+            );
             registrations.push(NativeToolRegistration {
                 definition: golem_native_tool::NativeToolDefinition::new(
                     "executor-native-test",
@@ -4724,6 +5031,10 @@ pub async fn start_with_filesystem_snapshots_on_managed_xfs(
     filesystem_snapshots: golem_worker_executor::services::golem_config::FilesystemSnapshotsConfig,
 ) -> anyhow::Result<TestWorkerExecutor> {
     let managed_xfs_root: Box<Path> = managed_xfs_root.into_boxed_path();
+    // The test process runs no separate xfs-quotad: it holds CAP_SYS_ADMIN itself and serves the
+    // quota calls on a thread.
+    let xfs_quotad_socket: Box<Path> =
+        golem_xfs_quotad::start_in_process(&managed_xfs_root)?.into_boxed_path();
     run_production_context_bootstrap(
         deps,
         context,
@@ -4734,6 +5045,7 @@ pub async fn start_with_filesystem_snapshots_on_managed_xfs(
             configure: Some(Arc::new(move |config| {
                 config.filesystem_storage.mode = FilesystemStorageMode::ManagedXfs {
                     root: managed_xfs_root.clone(),
+                    xfs_quotad_socket: xfs_quotad_socket.clone(),
                 };
                 config.filesystem_snapshots = filesystem_snapshots.clone();
                 config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
@@ -4974,6 +5286,10 @@ async fn start_with_agent_storage_quota_and_pressure_and_metering_on_managed_xfs
     metering: ResourceUsageMeteringConfig,
 ) -> anyhow::Result<TestWorkerExecutor> {
     let managed_xfs_root: Box<Path> = managed_xfs_root.into_boxed_path();
+    // The test process runs no separate xfs-quotad: it holds CAP_SYS_ADMIN itself and serves the
+    // quota calls on a thread.
+    let xfs_quotad_socket: Box<Path> =
+        golem_xfs_quotad::start_in_process(&managed_xfs_root)?.into_boxed_path();
     run_production_context_bootstrap(
         deps,
         context,
@@ -4984,6 +5300,7 @@ async fn start_with_agent_storage_quota_and_pressure_and_metering_on_managed_xfs
             configure: Some(Arc::new(move |config| {
                 config.filesystem_storage.mode = FilesystemStorageMode::ManagedXfs {
                     root: managed_xfs_root.clone(),
+                    xfs_quotad_socket: xfs_quotad_socket.clone(),
                 };
                 config.filesystem_storage.pressure = pressure.clone();
                 config.resource_usage_metering = metering;
@@ -5048,6 +5365,10 @@ async fn start_with_mutable_agent_storage_quota_and_metering_on_managed_xfs(
         u64::MAX,
     ));
     let managed_xfs_root: Box<Path> = managed_xfs_root.into_boxed_path();
+    // The test process runs no separate xfs-quotad: it holds CAP_SYS_ADMIN itself and serves the
+    // quota calls on a thread.
+    let xfs_quotad_socket: Box<Path> =
+        golem_xfs_quotad::start_in_process(&managed_xfs_root)?.into_boxed_path();
     let executor = run_production_context_bootstrap(
         deps,
         context,
@@ -5058,6 +5379,7 @@ async fn start_with_mutable_agent_storage_quota_and_metering_on_managed_xfs(
             configure: Some(Arc::new(move |config| {
                 config.filesystem_storage.mode = FilesystemStorageMode::ManagedXfs {
                     root: managed_xfs_root.clone(),
+                    xfs_quotad_socket: xfs_quotad_socket.clone(),
                 };
                 config.resource_usage_metering = metering;
                 config.filesystem_storage.filesystem_object_limit_policy =
@@ -5250,25 +5572,6 @@ impl TestOplog {
         }
     }
 
-    fn observe_http_body_read_start(&self, index: OplogIndex, entry: &OplogEntry) {
-        if matches!(
-            entry,
-            OplogEntry::Start {
-                function_name: HostFunctionName::HttpTypesIncomingBodyStreamRead
-                    | HostFunctionName::HttpTypesIncomingBodyStreamBlockingRead,
-                ..
-            }
-        ) && let Some(sender) = self
-            .additional_test_deps
-            .http_body_read_start_probes
-            .lock()
-            .unwrap()
-            .get(&self.owned_agent_id.agent_id)
-        {
-            let _ = sender.send(index);
-        }
-    }
-
     fn new(
         owned_agent_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
@@ -5423,10 +5726,13 @@ impl TestOplog {
     }
 
     fn is_consume_body_scope_start(entry: &OplogEntry) -> bool {
-        matches!(entry, OplogEntry::Start {
-            function_name: HostFunctionName::Custom(function_name),
-            ..
-        } if function_name == "<scope:batched-write:consume-body>")
+        matches!(
+            entry,
+            OplogEntry::Start {
+                function_name: HostFunctionName::P3HttpClientConsumeBody,
+                ..
+            }
+        )
     }
 
     async fn pause_before_consume_body_scope_start(&self) -> bool {
@@ -5440,6 +5746,12 @@ impl TestOplog {
         if !gate.armed.swap(false, Ordering::SeqCst) {
             return false;
         }
+        Self::hold_at_consume_body_scope_start_gate(&gate).await
+    }
+
+    /// Signals that the gated scope `Start` was reached, waits for the test to release the gate
+    /// and returns whether the append must be aborted.
+    async fn hold_at_consume_body_scope_start_gate(gate: &ConsumeBodyScopeStartGate) -> bool {
         if let Some(reached_tx) = gate.reached_tx.lock().unwrap().take() {
             let _ = reached_tx.send(());
         }
@@ -5450,6 +5762,67 @@ impl TestOplog {
             .expect("the consume-body scope Start gate semaphore was closed");
         permit.forget();
         gate.abort_append.load(Ordering::SeqCst)
+    }
+
+    /// Wraps a reserved `Start` builder so that an armed consume-body scope `Start` gate refuses
+    /// the scope `Start` inside the leaf's ordering step. The leaf then appends nothing, and
+    /// [`Self::hold_intercepted_consume_body_scope_start`] holds the append like the request-less
+    /// path of [`Self::add`] does.
+    fn intercept_consume_body_scope_start(
+        gate: Option<Arc<ConsumeBodyScopeStartGate>>,
+        intercepted: Arc<AtomicBool>,
+        build_start: ReservedRawStartBuilder,
+    ) -> ReservedRawStartBuilder {
+        let Some(gate) = gate else {
+            return build_start;
+        };
+        Box::new(move |raw| {
+            let entry = build_start(raw)?;
+            if Self::is_consume_body_scope_start(&entry) && gate.armed.swap(false, Ordering::SeqCst)
+            {
+                intercepted.store(true, Ordering::SeqCst);
+                return Err("the consume-body scope Start gate intercepted the append".into());
+            }
+            Ok(entry)
+        })
+    }
+
+    /// Holds a scope `Start` that [`Self::intercept_consume_body_scope_start`] refused. An aborted
+    /// gate holds the append until executor shutdown fences the oplog, so dropping the executor
+    /// simulates process loss before the scope `Start` became durable. The caller may hold the
+    /// owner boundary across this append, so the hold must end at shutdown for the executor's
+    /// tasks to exit. The refused `Start` cannot be appended after the fact, so releasing the
+    /// gate without aborting fails the append.
+    async fn hold_intercepted_consume_body_scope_start(
+        gate: Option<Arc<ConsumeBodyScopeStartGate>>,
+    ) -> Result<OrderedOplogStart, golem_worker_executor::services::oplog::OplogError> {
+        let gate = gate.expect("an intercepted consume-body scope Start has a gate");
+        if Self::hold_at_consume_body_scope_start_gate(&gate).await {
+            gate.shutdown.cancelled().await;
+            return Err(golem_worker_executor::services::oplog::OplogError::Payload(
+                "consume-body scope Start abandoned at executor shutdown".into(),
+            ));
+        }
+        Err(golem_worker_executor::services::oplog::OplogError::Payload(
+            "a payload-carrying consume-body scope Start gate supports only abort_append".into(),
+        ))
+    }
+
+    /// Tracks a consume-body scope `Start` appended through a reserved-payload path, so that the
+    /// scope `End` gate recognizes its `End`.
+    async fn track_reserved_consume_body_scope_start(&self, ordered: &OrderedOplogStart) {
+        if Self::is_consume_body_scope_start(&ordered.entry)
+            && self
+                .additional_test_deps
+                .consume_body_scope_end_gate(&self.owned_agent_id.agent_id)
+                .await
+                .is_some()
+        {
+            self.consume_body_scope_starts
+                .lock()
+                .unwrap()
+                .insert(ordered.index);
+        }
     }
 
     /// Recognizes the `End` of a tracked consume-body scope `Start`.
@@ -5491,7 +5864,44 @@ impl TestOplog {
         gate.abort_append.load(Ordering::SeqCst)
     }
 
+    fn take_targeted_end_gate(
+        &self,
+        entry: &OplogEntry,
+    ) -> Option<(OplogIndex, bool, OplogReadGate)> {
+        let mut gates = self.additional_test_deps.oplog_end_gates.lock().unwrap();
+        if let OplogEntry::End { start_index, .. } = entry
+            && gates
+                .get(&self.owned_agent_id.agent_id)
+                .is_some_and(|(_, start, _, _)| *start == Some(*start_index))
+        {
+            let (_, _, fail, gate) = gates.remove(&self.owned_agent_id.agent_id).unwrap();
+            return Some((*start_index, fail, gate));
+        }
+        None
+    }
+
+    fn observe_end_failure_target(&self, index: OplogIndex, function: &HostFunctionName) {
+        if let Some((target, start, _, _)) = self
+            .additional_test_deps
+            .oplog_end_gates
+            .lock()
+            .unwrap()
+            .get_mut(&self.owned_agent_id.agent_id)
+            && target == function
+            && start.is_none()
+        {
+            *start = Some(index);
+        }
+    }
+
     async fn check_oplog_add(&self, entry: &OplogEntry) -> Result<(), String> {
+        if let Some((start, fail, gate)) = self.take_targeted_end_gate(entry) {
+            let _ = gate.entered_tx.send(());
+            let _ = gate.release_rx.await;
+            if fail {
+                return Err(format!("injected End append failure for Start {start}"));
+            }
+        }
         let entry_name = match entry {
             OplogEntry::BeginRemoteTransaction { .. } => "BeginRemoteTransaction",
             OplogEntry::PreRollbackRemoteTransaction { .. } => "PreRollbackRemoteTransaction",
@@ -5563,6 +5973,12 @@ impl Oplog for TestOplog {
                 let _ = deps
                     .agent_initialization_enqueue_gates
                     .read_sync(&agent_id, |_, gate| gate.shutdown.cancel());
+                let _ = deps
+                    .consume_body_scope_start_gates
+                    .read_sync(&agent_id, |_, gate| gate.shutdown.cancel());
+                let _ = deps
+                    .consume_body_scope_end_gates
+                    .read_sync(&agent_id, |_, gate| gate.shutdown.cancel());
             },
             move || {
                 let close = close.clone();
@@ -5621,6 +6037,9 @@ impl Oplog for TestOplog {
         // A refused write never reaches storage, so the boundaries below stay unarmed and the
         // error propagates to the fence handling instead.
         let index = self.oplog.add(entry.clone()).await?;
+        if let OplogEntry::Start { function_name, .. } = &entry {
+            self.observe_end_failure_target(index, function_name);
+        }
         self.pause_at_test_append(&entry, true).await?;
         if matches!(entry, OplogEntry::AgentInvocationStarted { .. }) {
             IndexedExecutionGate::enter_and_wait(
@@ -5653,6 +6072,38 @@ impl Oplog for TestOplog {
     }
 
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
+        if matches!(&entry, OplogEntry::ToolAttachmentControl { attachment, transition, .. }
+            if attachment.slot == golem_common::model::oplog::attachment::ToolAttachmentSlot::Stdin
+                && matches!(transition, golem_common::model::oplog::attachment::ToolAttachmentControl::TerminalSelected(_)))
+        {
+            let gate = self
+                .additional_test_deps
+                .stdin_terminal_receipt_gates
+                .lock()
+                .unwrap()
+                .remove(&self.owned_agent_id.agent_id);
+            if let Some(gate) = gate {
+                let pending = self.oplog.enqueue_add(entry);
+                return Box::pin(async move {
+                    let _ = gate.entered_tx.send(());
+                    let _ = gate.release_rx.await;
+                    pending.await
+                });
+            }
+        }
+        if let Some((start, fail, gate)) = self.take_targeted_end_gate(&entry) {
+            let pending = (!fail).then(|| self.oplog.enqueue_add(entry));
+            return Box::pin(async move {
+                let _ = gate.entered_tx.send(());
+                let _ = gate.release_rx.await;
+                match pending {
+                    Some(pending) => pending.await,
+                    None => Err(golem_worker_executor::services::oplog::OplogError::Payload(
+                        format!("injected End append failure for Start {start}"),
+                    )),
+                }
+            });
+        }
         let call_end_gate = self
             .additional_test_deps
             .agent_initialization_enqueue_gates
@@ -5688,6 +6139,34 @@ impl Oplog for TestOplog {
                 })
             });
         }
+        if self.is_consume_body_scope_end(&entry) {
+            let scope_end_gate = self
+                .additional_test_deps
+                .consume_body_scope_end_gates
+                .read_sync(&self.owned_agent_id.agent_id, |_, gate| {
+                    gate.armed
+                        .swap(false, Ordering::SeqCst)
+                        .then(|| gate.clone())
+                })
+                .flatten();
+            if let Some(gate) = scope_end_gate {
+                // The scope `End` is never enqueued: a later release cannot restore its ordering
+                // position, so this path supports only `abort_append`, which simulates process
+                // loss before the `End` became durable and ends at the executor shutdown fence.
+                return Box::pin(async move {
+                    if let Some(reached_tx) = gate.reached_tx.lock().unwrap().take() {
+                        let _ = reached_tx.send(());
+                    }
+                    gate.release.acquire().await.unwrap().forget();
+                    if gate.abort_append.load(Ordering::SeqCst) {
+                        gate.shutdown.cancelled().await;
+                    }
+                    Err(golem_worker_executor::services::oplog::OplogError::Payload(
+                        "consume-body scope End abandoned by its test gate".into(),
+                    ))
+                });
+            }
+        }
         let gated = self.is_consume_body_chunk_data_end(&entry);
         let ended_start = match &entry {
             OplogEntry::End { start_index, .. } => Some(*start_index),
@@ -5695,6 +6174,10 @@ impl Oplog for TestOplog {
         };
         let delivered_start = match &entry {
             OplogEntry::CompletionDelivered { start_index, .. } => Some(*start_index),
+            _ => None,
+        };
+        let started_function = match &entry {
+            OplogEntry::Start { function_name, .. } => Some(function_name.clone()),
             _ => None,
         };
         let pending = self.oplog.enqueue_add(entry);
@@ -5707,6 +6190,9 @@ impl Oplog for TestOplog {
         Box::pin(async move {
             // A refused receipt means the entry never landed, so the end boundary stays unarmed.
             let index = pending.await?;
+            if let Some(function) = started_function {
+                this.observe_end_failure_target(index, &function);
+            }
             if let Some(start_index) = ended_start {
                 this.observe_rpc_memory_end(start_index);
             }
@@ -5737,6 +6223,22 @@ impl Oplog for TestOplog {
         self.additional_test_deps
             .record_oplog_call(&self.owned_agent_id, "commit");
         let committed = self.oplog.commit(level).await;
+        if committed.as_ref().is_ok_and(|entries| {
+            entries
+                .values()
+                .any(|entry| matches!(entry, OplogEntry::CardInstalled { .. }))
+        }) {
+            let gate = self
+                .additional_test_deps
+                .wallet_install_commit_gates
+                .lock()
+                .unwrap()
+                .remove(&self.owned_agent_id.agent_id);
+            if let Some(gate) = gate {
+                let _ = gate.entered_tx.send(());
+                let _ = gate.release_rx.await;
+            }
+        }
         if committed.as_ref().is_ok_and(|committed| {
             committed.values().any(|entry| {
                 matches!(
@@ -5796,21 +6298,20 @@ impl Oplog for TestOplog {
     }
 
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-        let gate = self
-            .additional_test_deps
-            .oplog_read_gates
-            .lock()
-            .unwrap()
-            .remove(&(self.owned_agent_id.agent_id.clone(), oplog_index));
+        let gate = {
+            let mut gates = self.additional_test_deps.oplog_read_gates.lock().unwrap();
+            let key = (self.owned_agent_id.agent_id.clone(), oplog_index);
+            gates.remove(&key)
+        };
         if let Some(gate) = gate {
             let _ = gate.entered_tx.send(());
             let _ = gate.release_rx.await;
         }
         if self
             .additional_test_deps
-            .take_no_op_oplog_read(&self.owned_agent_id.agent_id, oplog_index)
+            .take_non_snapshot_oplog_read(&self.owned_agent_id.agent_id, oplog_index)
         {
-            return OplogEntry::no_op(None);
+            return OplogEntry::grow_memory(0);
         }
         let mut entry = self.oplog.read(oplog_index).await;
         if matches!(entry, OplogEntry::Snapshot { .. }) {
@@ -5858,12 +6359,11 @@ impl Oplog for TestOplog {
         oplog_index: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        let gate = self
-            .additional_test_deps
-            .oplog_read_gates
-            .lock()
-            .unwrap()
-            .remove(&(self.owned_agent_id.agent_id.clone(), oplog_index));
+        let gate = {
+            let mut gates = self.additional_test_deps.oplog_read_gates.lock().unwrap();
+            let key = (self.owned_agent_id.agent_id.clone(), oplog_index);
+            gates.remove(&key)
+        };
         if let Some(gate) = gate {
             let _ = gate.entered_tx.send(());
             let _ = gate.release_rx.await;
@@ -5968,11 +6468,30 @@ impl Oplog for TestOplog {
         serialized_request: Vec<u8>,
         build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
     ) -> Result<OrderedOplogStart, golem_worker_executor::services::oplog::OplogError> {
-        let ordered = self
+        let gate = self
+            .additional_test_deps
+            .consume_body_scope_start_gate(&self.owned_agent_id.agent_id)
+            .await;
+        let intercepted = Arc::new(AtomicBool::new(false));
+        let build_start = Self::intercept_consume_body_scope_start(
+            gate.clone(),
+            intercepted.clone(),
+            build_start,
+        );
+        let ordered = match self
             .oplog
             .add_start_with_reserved_raw_payload(serialized_request, build_start)
-            .await?;
-        self.observe_http_body_read_start(ordered.index, &ordered.entry);
+            .await
+        {
+            Err(_) if intercepted.load(Ordering::SeqCst) => {
+                return Self::hold_intercepted_consume_body_scope_start(gate).await;
+            }
+            result => result?,
+        };
+        self.track_reserved_consume_body_scope_start(&ordered).await;
+        if let OplogEntry::Start { function_name, .. } = &ordered.entry {
+            self.observe_end_failure_target(ordered.index, function_name);
+        }
         self.observe_rpc_memory_boundary(ordered.index, &ordered.entry);
         self.pause_after_rpc_checkpoint(ordered.index, &ordered.entry)
             .await;
@@ -6000,11 +6519,36 @@ impl Oplog for TestOplog {
         &self,
         build_request: IndexedReservedStartBuilder,
     ) -> Result<OrderedOplogStart, golem_worker_executor::services::oplog::OplogError> {
-        let ordered = self
+        let gate = self
+            .additional_test_deps
+            .consume_body_scope_start_gate(&self.owned_agent_id.agent_id)
+            .await;
+        let intercepted = Arc::new(AtomicBool::new(false));
+        let build_request: IndexedReservedStartBuilder = {
+            let gate = gate.clone();
+            let intercepted = intercepted.clone();
+            Box::new(move |start_index| {
+                let (serialized_request, build_start) = build_request(start_index)?;
+                Ok((
+                    serialized_request,
+                    Self::intercept_consume_body_scope_start(gate, intercepted, build_start),
+                ))
+            })
+        };
+        let ordered = match self
             .oplog
             .add_start_with_indexed_reserved_raw_payload(build_request)
-            .await?;
-        self.observe_http_body_read_start(ordered.index, &ordered.entry);
+            .await
+        {
+            Err(_) if intercepted.load(Ordering::SeqCst) => {
+                return Self::hold_intercepted_consume_body_scope_start(gate).await;
+            }
+            result => result?,
+        };
+        self.track_reserved_consume_body_scope_start(&ordered).await;
+        if let OplogEntry::Start { function_name, .. } = &ordered.entry {
+            self.observe_end_failure_target(ordered.index, function_name);
+        }
         self.observe_rpc_memory_boundary(ordered.index, &ordered.entry);
         self.pause_after_rpc_checkpoint(ordered.index, &ordered.entry)
             .await;
@@ -6229,6 +6773,15 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
         agent_id: &AgentId,
         transaction_id: &TransactionId,
     ) -> Result<RdbmsTransactionStatus, rdbms::RdbmsError> {
+        self.check_rdbms_tx(agent_id, "GetTransactionStatusError")
+            .await?;
+        if self
+            .check_rdbms_tx(agent_id, "GetTransactionStatusInProgress")
+            .await
+            .is_err()
+        {
+            return Ok(RdbmsTransactionStatus::InProgress);
+        }
         let r = self
             .check_rdbms_tx(agent_id, "GetTransactionStatusNotFound")
             .await;
@@ -6302,12 +6855,24 @@ struct OplogReadGate {
     release_rx: tokio::sync::oneshot::Receiver<()>,
 }
 
+struct RuntimeCardAuditGate {
+    pause: OplogReadGate,
+    issuing_task: Option<tokio::task::Id>,
+}
+
+type OplogEndGates = HashMap<AgentId, (HostFunctionName, Option<OplogIndex>, bool, OplogReadGate)>;
+type EntitySettlementAccess =
+    HashMap<(AgentId, Option<OplogIndex>), (bool, tokio::sync::oneshot::Sender<()>)>;
+
 #[derive(Clone)]
 pub struct AdditionalTestDeps {
+    primary_context_probes: Arc<std::sync::Mutex<HashMap<AgentId, PrimaryContextProbe>>>,
     rpc_memory_failures: Arc<std::sync::Mutex<HashMap<AgentId, RpcMemoryFailure>>>,
     native_test_effects: Arc<AtomicUsize>,
     native_test_helper_effects: Arc<AtomicUsize>,
     oplog_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
+    stdin_terminal_receipt_gates: Arc<std::sync::Mutex<HashMap<AgentId, OplogReadGate>>>,
+    oplog_end_gates: Arc<std::sync::Mutex<OplogEndGates>>,
     oplog_call_counts: Arc<std::sync::Mutex<HashMap<(OwnedAgentId, &'static str), usize>>>,
     oplog_entries_read: Arc<std::sync::Mutex<HashMap<OwnedAgentId, u64>>>,
     oplog_download_failures: Arc<std::sync::Mutex<HashSet<AgentId>>>,
@@ -6318,12 +6883,13 @@ pub struct AdditionalTestDeps {
     instance_load_counts: Arc<std::sync::Mutex<HashMap<AgentId, usize>>>,
     runtime_disposal_probes:
         Arc<std::sync::Mutex<HashMap<AgentId, tokio::sync::mpsc::UnboundedSender<usize>>>>,
-    http_body_read_start_probes:
-        Arc<std::sync::Mutex<HashMap<AgentId, tokio::sync::mpsc::UnboundedSender<OplogIndex>>>>,
     snapshot_download_failures: Arc<std::sync::Mutex<SnapshotDownloadFailures>>,
     empty_snapshot_payloads: Arc<std::sync::Mutex<HashSet<(AgentId, OplogIndex)>>>,
-    no_op_oplog_reads: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), usize>>>,
+    non_snapshot_oplog_reads: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), usize>>>,
     oplog_read_gates: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), OplogReadGate>>>,
+    runtime_card_audit_gates:
+        Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), RuntimeCardAuditGate>>>,
+    wallet_install_commit_gates: Arc<std::sync::Mutex<HashMap<AgentId, OplogReadGate>>>,
     append_after_commit: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     rdbms_tx_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
     /// One-shot gates pausing the first consume-body chunk `End` append of an
@@ -6344,6 +6910,7 @@ pub struct AdditionalTestDeps {
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionBodyGate>>>>,
     entity_store_disposal_probes:
         Arc<std::sync::Mutex<HashMap<AgentId, tokio::sync::mpsc::UnboundedSender<OplogIndex>>>>,
+    entity_settlement_access: Arc<std::sync::Mutex<EntitySettlementAccess>>,
     divergent_entity_reconstructions: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     entity_reconstruction_claim_gates: IndexedExecutionGates,
     invocation_started_gates: IndexedExecutionGates,
@@ -6384,9 +6951,12 @@ impl AdditionalTestDeps {
         let oplog_failures = Arc::new(scc::HashMap::new());
         let rdbms_tx_failures = Arc::new(scc::HashMap::new());
         Self {
+            primary_context_probes: Arc::new(std::sync::Mutex::new(HashMap::new())),
             native_test_effects: Arc::new(AtomicUsize::new(0)),
             native_test_helper_effects: Arc::new(AtomicUsize::new(0)),
             oplog_failures,
+            stdin_terminal_receipt_gates: Arc::default(),
+            oplog_end_gates: Arc::default(),
             rpc_memory_failures: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_call_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_entries_read: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -6397,11 +6967,12 @@ impl AdditionalTestDeps {
             oplog_download_outage_hits: Arc::new(std::sync::Mutex::new(HashMap::new())),
             instance_load_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
             runtime_disposal_probes: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            http_body_read_start_probes: Arc::new(std::sync::Mutex::new(HashMap::new())),
             snapshot_download_failures: Arc::new(std::sync::Mutex::new(HashMap::new())),
             empty_snapshot_payloads: Arc::new(std::sync::Mutex::new(HashSet::new())),
-            no_op_oplog_reads: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            non_snapshot_oplog_reads: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_read_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            runtime_card_audit_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            wallet_install_commit_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             append_after_commit: Arc::new(std::sync::Mutex::new(HashSet::new())),
             rdbms_tx_failures,
             consume_body_chunk_end_gates: Arc::new(scc::HashMap::new()),
@@ -6413,6 +6984,7 @@ impl AdditionalTestDeps {
             entity_reconstruction_body_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             entity_body_start_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             entity_store_disposal_probes: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            entity_settlement_access: Arc::default(),
             divergent_entity_reconstructions: Arc::new(std::sync::Mutex::new(HashSet::new())),
             entity_reconstruction_claim_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             invocation_started_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -6491,9 +7063,11 @@ impl AdditionalTestDeps {
     fn gate_next_agent_invocation_success(
         &self,
         agent_id: AgentId,
+        function: Option<String>,
     ) -> AgentInvocationSuccessGateHandle {
         let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
         let gate = Arc::new(AgentInvocationSuccessGate {
+            function,
             entered_tx: std::sync::Mutex::new(Some(entered_tx)),
             release: tokio::sync::Semaphore::new(0),
             abort_as_restart: AtomicBool::new(false),
@@ -6508,11 +7082,18 @@ impl AdditionalTestDeps {
     fn take_agent_invocation_success_gate(
         &self,
         agent_id: &AgentId,
+        function: &str,
     ) -> Option<Arc<AgentInvocationSuccessGate>> {
-        self.agent_invocation_success_gates
-            .lock()
-            .unwrap()
-            .remove(agent_id)
+        let mut gates = self.agent_invocation_success_gates.lock().unwrap();
+        if gates.get(agent_id).is_some_and(|gate| {
+            gate.function
+                .as_deref()
+                .is_none_or(|selected| selected == function)
+        }) {
+            gates.remove(agent_id)
+        } else {
+            None
+        }
     }
 
     fn gate_next_entity_body_start(&self, agent_id: AgentId) -> EntityReconstructionBodyGateHandle {
@@ -6635,6 +7216,7 @@ impl AdditionalTestDeps {
             agent_id,
             gates: self.replay_admission_gates.clone(),
             signals: self.direct_replay_wait_signals.clone(),
+            card_audits: self.runtime_card_audit_gates.clone(),
         })
             as Arc<
                 dyn golem_worker_executor::workerctx::ReplayAdmissionHook,
@@ -6744,6 +7326,7 @@ impl AdditionalTestDeps {
         let gate = Arc::new(ConsumeBodyScopeStartGate {
             armed: AtomicBool::new(true),
             abort_append: AtomicBool::new(false),
+            shutdown: tokio_util::sync::CancellationToken::new(),
             reached_tx: std::sync::Mutex::new(Some(reached_tx)),
             release: tokio::sync::Semaphore::new(0),
         });
@@ -6772,6 +7355,7 @@ impl AdditionalTestDeps {
         let gate = Arc::new(ConsumeBodyScopeEndGate {
             armed: AtomicBool::new(true),
             abort_append: AtomicBool::new(false),
+            shutdown: tokio_util::sync::CancellationToken::new(),
             reached_tx: std::sync::Mutex::new(Some(reached_tx)),
             release: tokio::sync::Semaphore::new(0),
         });
@@ -7010,21 +7594,21 @@ impl AdditionalTestDeps {
             .unwrap_or_default()
     }
 
-    fn return_no_op_after_oplog_reads(
+    fn return_non_snapshot_after_oplog_reads(
         &self,
         agent_id: AgentId,
         oplog_index: OplogIndex,
         reads_to_skip: usize,
     ) {
-        self.no_op_oplog_reads
+        self.non_snapshot_oplog_reads
             .lock()
             .unwrap()
             .insert((agent_id, oplog_index), reads_to_skip);
     }
 
-    fn take_no_op_oplog_read(&self, agent_id: &AgentId, oplog_index: OplogIndex) -> bool {
+    fn take_non_snapshot_oplog_read(&self, agent_id: &AgentId, oplog_index: OplogIndex) -> bool {
         let key = (agent_id.clone(), oplog_index);
-        let mut reads = self.no_op_oplog_reads.lock().unwrap();
+        let mut reads = self.non_snapshot_oplog_reads.lock().unwrap();
         match reads.get_mut(&key) {
             Some(0) => {
                 reads.remove(&key);
@@ -7225,6 +7809,7 @@ struct EntityReconstructionBodyGate {
 }
 
 struct AgentInvocationSuccessGate {
+    function: Option<String>,
     entered_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     release: tokio::sync::Semaphore,
     abort_as_restart: AtomicBool,
@@ -7233,6 +7818,7 @@ struct AgentInvocationSuccessGate {
 struct IndexedExecutionGate {
     entered_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<OplogIndex>>>,
     release: tokio::sync::Semaphore,
+    expected_index: AtomicU64,
 }
 
 /// One-shot execution gates, keyed by the agent whose next indexed boundary they hold.
@@ -7244,6 +7830,7 @@ impl IndexedExecutionGate {
         let gate = Arc::new(Self {
             entered_tx: std::sync::Mutex::new(Some(entered_tx)),
             release: tokio::sync::Semaphore::new(0),
+            expected_index: AtomicU64::new(0),
         });
         gates.lock().unwrap().insert(agent_id, gate.clone());
         IndexedExecutionGateHandle { entered_rx, gate }
@@ -7256,7 +7843,14 @@ impl IndexedExecutionGate {
         agent_id: &AgentId,
         start_index: OplogIndex,
     ) {
-        let gate = gates.lock().unwrap().remove(agent_id);
+        let gate = {
+            let mut gates = gates.lock().unwrap();
+            let matches = gates.get(agent_id).is_some_and(|gate| {
+                let expected = gate.expected_index.load(Ordering::Acquire);
+                expected == 0 || expected == u64::from(start_index)
+            });
+            matches.then(|| gates.remove(agent_id)).flatten()
+        };
         if let Some(gate) = gate {
             if let Some(entered_tx) = gate.entered_tx.lock().unwrap().take() {
                 let _ = entered_tx.send(start_index);
@@ -7406,6 +8000,7 @@ struct TestReplayAdmissionHook {
     agent_id: AgentId,
     gates: Arc<std::sync::Mutex<HashMap<AgentId, Vec<Arc<ReplayAdmissionGate>>>>>,
     signals: Arc<std::sync::Mutex<HashMap<AgentId, Arc<DirectReplayWaitSignal>>>>,
+    card_audits: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), RuntimeCardAuditGate>>>,
 }
 
 #[async_trait]
@@ -7444,7 +8039,35 @@ impl golem_worker_executor::workerctx::ReplayAdmissionHook for TestReplayAdmissi
     }
 
     fn before_direct_replay_wait(&self, function: &'static str, start_index: OplogIndex) {
+        if let Some(gate) = self
+            .card_audits
+            .lock()
+            .unwrap()
+            .get_mut(&(self.agent_id.clone(), start_index))
+            && function == "golem::permissions::derive::persist-derived-card"
+        {
+            assert!(
+                gate.issuing_task.is_none(),
+                "direct audit Start was claimed twice"
+            );
+            gate.issuing_task = Some(tokio::task::id());
+        }
         self.fire_direct_replay_wait(function, start_index);
+    }
+
+    async fn before_runtime_card_audit_lookup(&self, start_index: OplogIndex) {
+        let gate = {
+            let mut gates = self.card_audits.lock().unwrap();
+            let key = (self.agent_id.clone(), start_index);
+            let matches = gates.get(&key).is_some_and(|gate| {
+                gate.issuing_task.is_some() && gate.issuing_task == tokio::task::try_id()
+            });
+            matches.then(|| gates.remove(&key)).flatten()
+        };
+        if let Some(gate) = gate {
+            let _ = gate.pause.entered_tx.send(());
+            let _ = gate.pause.release_rx.await;
+        }
     }
 
     fn before_positional_replay_read(&self, expected: &str) {
@@ -7505,6 +8128,7 @@ mod replay_admission_gate_tests {
             agent_id,
             gates,
             signals,
+            card_audits: Default::default(),
         };
 
         tokio::join!(
@@ -7595,6 +8219,7 @@ impl EntityInvocationBodyHook for TestEntityInvocationBodyHook {
 struct ConsumeBodyScopeStartGate {
     armed: AtomicBool,
     abort_append: AtomicBool,
+    shutdown: tokio_util::sync::CancellationToken,
     reached_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     release: tokio::sync::Semaphore,
 }
@@ -7632,6 +8257,7 @@ impl Drop for ConsumeBodyScopeStartGateHandle {
 struct ConsumeBodyScopeEndGate {
     armed: AtomicBool,
     abort_append: AtomicBool,
+    shutdown: tokio_util::sync::CancellationToken,
     reached_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     release: tokio::sync::Semaphore,
 }

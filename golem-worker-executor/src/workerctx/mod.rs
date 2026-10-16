@@ -70,7 +70,6 @@ use uuid::Uuid;
 use wasmtime::component::Instance;
 use wasmtime::{ResourceLimiterAsync, Store};
 use wasmtime_wasi::WasiView;
-use wasmtime_wasi_http::p2::WasiHttpCtxView;
 use wasmtime_wasi_http::p3::WasiHttpView;
 
 /// Executable identity used to construct a worker context.
@@ -140,16 +139,18 @@ pub enum ReplayAdmissionStage {
     AfterScope,
     /// After the call claimed its own `Start`, before it resolves the recorded result.
     AfterStart,
+    /// After a live call built its request, before it appends its `Start`.
+    BeforeLiveStart,
     /// Before a deferred call is prepared, on both live execution and replay.
     BeforeDeferredStart,
     /// After the deferred call owns its `Start`, before resolution or live execution.
     AfterDeferredStart,
     /// After a live host-internal End, before its owning host continuation resumes.
     AfterHostInternalTerminal,
-    /// Before committing the Jump that abandons an incomplete batched attempt.
-    BeforeBatchedJump,
-    /// After that Jump is committed and registered, before continuing the scope.
-    AfterBatchedJump,
+    /// After a tool output write accepts its bytes, before returning to the guest.
+    AfterToolOutputAccepted,
+    /// After a failed attachment receipt, before its retained continuation elects an owner failure.
+    BeforeToolAttachmentFailureElection,
 }
 
 /// Test-harness coordination at the host-scheduling boundaries of durable call replay: where a
@@ -165,6 +166,9 @@ pub trait ReplayAdmissionHook: Send + Sync {
     /// Runs synchronously on the Store-holding direct call right before it waits for its
     /// recorded terminal.
     fn before_direct_replay_wait(&self, function: &'static str, start_index: OplogIndex);
+
+    /// Runs after normal card replay advancement, before consuming the owner's audit receipt.
+    async fn before_runtime_card_audit_lookup(&self, start_index: OplogIndex);
 
     /// Runs synchronously on the Store-holding direct path right before a positional replay
     /// read expecting the `expected` marker entry.
@@ -303,7 +307,6 @@ pub trait WorkerCtx:
     ) -> Result<Self, WorkerExecutorError>;
 
     fn as_wasi_view(&mut self) -> impl WasiView;
-    fn as_wasi_http_view(&mut self) -> WasiHttpCtxView<'_>;
 
     /// Get the public part of the worker context
     fn get_public_state(&self) -> &Self::PublicState;
@@ -522,15 +525,6 @@ pub trait InvocationHooks {
     /// by this information. The current oplog index is a good default.
     async fn get_current_retry_point(&self) -> OplogIndex;
 
-    /// Ambient fallback for trap classification: whether any atomic region is currently active.
-    /// Used only for traps that do not carry a call-owned `DurableCallTrapContext` (guest-originated
-    /// traps); durable-call traps carry their own membership.
-    fn current_in_atomic_region(&self) -> bool;
-
-    /// Ambient fallback for trap classification: whether the outermost active atomic region has
-    /// recorded side effects. Used only for traps that do not carry a call-owned context.
-    fn current_atomic_region_had_side_effects(&self) -> bool;
-
     /// Switches the invocation strictness mode to `ReadOnly` for the duration of a single agent
     /// method invocation. Under read-only strictness, outgoing HTTP and RPC host calls trap
     /// with `AgentError::ReadOnlyViolation` before any oplog entry is written.
@@ -552,8 +546,8 @@ pub trait UpdateManagement {
     ///
     /// A committed snapshot is a replay cut point: snapshot-based recovery and snapshot-based
     /// update skip every oplog entry before the snapshot. No durable construct may span that
-    /// cut, so this is `Some` while any durable host call is in flight or any durable scope or
-    /// atomic region is open. The returned blocker names the specific condition for diagnostics.
+    /// cut, so this is `Some` while any durable host call is in flight or any durable scope is
+    /// open. The returned blocker names the specific condition for diagnostics.
     fn snapshot_boundary_blocker(&self) -> Option<SnapshotBoundaryBlocker>;
 
     /// Marks the beginning of a snapshot function call. This can be used to disabled persistence

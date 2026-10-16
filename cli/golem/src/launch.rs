@@ -83,12 +83,14 @@ pub async fn launch_golem_services(
         preflight_registry_db_compat(&config.data_dir)
             .await
             .map_err(anyhow::Error::from)?;
+        write_registry_db_compat(&config.data_dir).await?;
     }
 
     let startup_progress = StartupProgress::default();
     let router = bind_router(
         &config.router.address,
         config.router.port,
+        config.router.management_host.as_deref(),
         startup_progress.clone(),
         &mut join_set,
     )
@@ -100,9 +102,6 @@ pub async fn launch_golem_services(
     );
 
     let started_components = start_components(config, &startup_progress, &mut join_set).await?;
-    if uses_local_registry_db {
-        write_registry_db_compat(&config.data_dir).await?;
-    }
 
     if accounts_with_well_known_token(config).is_empty()
         && revoke_well_known_token(&started_components.registry_service.endpoint).await?
@@ -198,7 +197,9 @@ fn registry_service_config(
     config: &GolemServerConfig,
     component_compilation_service: &golem_component_compilation_service::RunDetails,
 ) -> RegistryServiceConfig {
+    let reserved_domains = config.reserved_domains();
     let mut config = config.registry_service.clone();
+    config.domain_registration.reserved_domains = reserved_domains;
     if let ComponentCompilationConfig::Enabled(compilation) = &mut config.component_compilation {
         compilation.host = INTERNAL_HOST.to_string();
         compilation.port = component_compilation_service.grpc_port;

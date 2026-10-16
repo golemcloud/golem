@@ -28,6 +28,7 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
         &context,
         limits.clone(),
         Arc::new(move |config| {
+            config.agent_sockets.enabled = true;
             config.resource_usage_metering = metering;
         }),
     )

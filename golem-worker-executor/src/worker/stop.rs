@@ -566,7 +566,6 @@ pub(super) mod tests {
             InvocationExecutionMode::Live,
             IdempotencyKey::fresh(),
             false,
-            false,
             IdempotencyKey::fresh(),
         )
         .unwrap();

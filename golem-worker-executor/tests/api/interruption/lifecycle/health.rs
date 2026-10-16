@@ -85,7 +85,10 @@ async fn unavailable_registry_policy_stops_pending_tcp_as_infrastructure_failure
             deps,
             &context,
             limits.clone(),
-            Arc::new(move |config| config.resource_usage_metering = metering),
+            Arc::new(move |config| {
+                config.agent_sockets.enabled = true;
+                config.resource_usage_metering = metering;
+            }),
         )
         .await?;
         let component = executor
@@ -272,7 +275,10 @@ async fn storage_observation_timeout_stops_execution_but_retains_pending_read_an
             deps,
             &context,
             limits.clone(),
-            Arc::new(move |config| config.resource_usage_metering = metering),
+            Arc::new(move |config| {
+                config.agent_sockets.enabled = true;
+                config.resource_usage_metering = metering;
+            }),
         )
         .await?;
         let component = executor
@@ -834,7 +840,10 @@ async fn quota_monitor_failure_stops_pending_silent_tcp_without_reconstruction(
             deps,
             &context,
             limits.clone(),
-            Arc::new(move |config| config.resource_usage_metering = metering),
+            Arc::new(move |config| {
+                config.agent_sockets.enabled = true;
+                config.resource_usage_metering = metering;
+            }),
         )
         .await?;
         let component = executor

@@ -172,7 +172,7 @@ async fn pending_response_body(
                     &component,
                     &name,
                     &key,
-                    "get_for_body_wait",
+                    "get_for_quota_wait",
                     data_value!(url),
                 )
                 .await
@@ -181,6 +181,7 @@ async fn pending_response_body(
     let result = async {
         let first = peer.request().await?;
         ensure!(first.number == 1);
+        ensure!(first.range.is_none());
         let original = tokio::time::timeout(Duration::from_secs(15), async {
             loop {
                 executor.commit_oplog(&id).await?;
@@ -193,6 +194,7 @@ async fn pending_response_body(
                 tokio::task::yield_now().await;
             }
         }).await.context("committed delivered first chunk and open next child under unfinished method")??;
+        let committed_prefix = executor.stored_oplog(&id).await;
         tokio::time::timeout(Duration::from_secs(10), polls.recv())
             .await?
             .context("timer closed")?;
@@ -437,6 +439,7 @@ async fn pending_response_body(
             let second = peer.request().await?;
             ensure!(second.number == 2);
             ensure!(second.idempotency_key == first.idempotency_key);
+            ensure!(second.range.as_deref() == Some("bytes=1-"));
             let reconstructed = worker.current_monthly_proposal_for_test();
             ensure!(reconstructed.resident_generation > initial.resident_generation);
             ensure!(reconstructed.start_attempt != initial.start_attempt);
@@ -445,26 +448,29 @@ async fn pending_response_body(
                 loop {
                     executor.commit_oplog(&id).await?;
                     let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-                    if let Some(pending) = history::reissued_pending(&entries, &key, original)? {
+                    if let Some(pending) = history::retained_pending(&entries, &key, original)? {
                         ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
-                        info!(?entries, ?pending, "Replay jumped incomplete body scope contents; fresh parent and chunks under retained invocation");
+                        info!(?entries, ?pending, "Body repair retains the original parent and chunk Starts");
                         return Ok::<_, anyhow::Error>(pending);
                     }
                     tokio::task::yield_now().await;
                 }
-            }).await.context("fresh body parent and delivered first chunk after reissue")??;
+            }).await.context("original body parent and chunk identities after reissue")??;
             peer.assert_counts(2, 0, 1)?;
             second.finish_body.send(()).map_err(|_| anyhow::anyhow!("reissued HTTP body gate closed"))?;
             let resumed = tokio::time::timeout(Duration::from_secs(15), &mut invocation)
                 .await.context("retained HTTP body invocation and mandatory finalization")???;
-            ensure!(resumed.into_typed::<String>()? == "200 hello-body");
+            ensure!(resumed.into_typed::<Result<String, String>>()? == Ok("200 hello-body".to_string()));
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let raw_recovered = executor.stored_oplog(&id).await;
+            ensure!(raw_recovered.len() >= committed_prefix.len());
+            ensure!(&raw_recovered[..committed_prefix.len()] == committed_prefix.as_slice(), "complete committed prefix must survive body repair");
             info!(?recovered, "HTTP body recovery oplog after mandatory finalization");
             recovered_body(&recovered, &key, original, repaired_pending)?;
             assert_invocation(&recovered, &key, 1)?;
             ensure!(count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));
-            let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, "get_for_body_wait", data_value!(peer.url.clone())).await?;
-            ensure!(cached.into_typed::<String>()? == "200 hello-body");
+            let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, "get_for_quota_wait", data_value!(peer.url.clone())).await?;
+            ensure!(cached.into_typed::<Result<String, String>>()? == Ok("200 hello-body".to_string()));
             peer.assert_counts(2, 1, 1)?;
             info!(?resource, %key, ?original, ?repaired_pending, ?reconstructed, requests = 2,
                 "Retained method finished once with one body; stable HTTP key across two external requests, not external exactly-once");
@@ -486,16 +492,17 @@ async fn pending_response_body(
             ensure!(count_agent_invocation_pair_since(&completed_history, OplogIndex::INITIAL) == (3, 3));
 
             let fresh_key = IdempotencyKey::fresh();
-            let fresh = executor.invoke_and_await_agent_with_key(&component, &name, &fresh_key, "get_for_body_wait", data_value!(peer.url.clone()));
+            let fresh = executor.invoke_and_await_agent_with_key(&component, &name, &fresh_key, "get_for_quota_wait", data_value!(peer.url.clone()));
             let response = async {
                 let third = peer.request().await?;
                 ensure!(third.number == 3);
+                ensure!(third.range.is_none());
                 ensure!(third.idempotency_key != first.idempotency_key, "completed HTTP body history must not reissue a request");
                 third.finish_body.send(()).map_err(|_| anyhow::anyhow!("fresh HTTP body gate closed"))?;
                 Ok::<_, anyhow::Error>(())
             };
             let (fresh, ()) = tokio::time::timeout(Duration::from_secs(15), async { tokio::try_join!(fresh, response) }).await??;
-            ensure!(fresh.into_typed::<String>()? == "200 hello-body");
+            ensure!(fresh.into_typed::<Result<String, String>>()? == Ok("200 hello-body".to_string()));
             peer.assert_counts(3, 2, 1)?;
             let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(count_agent_invocation_pair_since(&history, OplogIndex::INITIAL) == (4, 4));
@@ -510,21 +517,22 @@ async fn pending_response_body(
             grant.available_ephemeral_storage_byte_seconds = u64::MAX;
             registry.set_policy(grant);
             applied_refresh(&limits, &registry, context.account_id).await?.await?;
-            ensure!(tokio::time::timeout(Duration::from_secs(10), executor.invoke_and_await_agent_with_key(&component, &name, &key, "get_for_body_wait", data_value!(peer.url.clone()))).await?.is_err());
+            ensure!(tokio::time::timeout(Duration::from_secs(10), executor.invoke_and_await_agent_with_key(&component, &name, &key, "get_for_quota_wait", data_value!(peer.url.clone()))).await?.is_err());
             peer.assert_counts(1, 0, 1)?;
             // Only an independent durable invocation may reuse the single HTTP pool slot.
             let probe_name = agent_id!("HttpClient4");
             let probe_key = IdempotencyKey::fresh();
-            let probe = executor.invoke_and_await_agent_with_key(&component, &probe_name, &probe_key, "get_for_body_wait", data_value!(peer.url.clone()));
+            let probe = executor.invoke_and_await_agent_with_key(&component, &probe_name, &probe_key, "get_for_quota_wait", data_value!(peer.url.clone()));
             let response = async {
                 let second = peer.request().await?;
                 ensure!(second.number == 2);
                 ensure!(second.idempotency_key != first.idempotency_key);
+                ensure!(second.range.is_none());
                 second.finish_body.send(()).map_err(|_| anyhow::anyhow!("pool probe body gate closed"))?;
                 Ok::<_, anyhow::Error>(())
             };
             let (probe, ()) = tokio::time::timeout(Duration::from_secs(15), async { tokio::try_join!(probe, response) }).await??;
-            ensure!(probe.into_typed::<String>()? == "200 hello-body");
+            ensure!(probe.into_typed::<Result<String, String>>()? == Ok("200 hello-body".to_string()));
             let failed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(pending_body(&failed, &key)? == Some(original));
             assert_invocation(&failed, &key, 0)?;

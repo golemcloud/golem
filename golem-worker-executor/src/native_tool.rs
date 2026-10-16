@@ -4,7 +4,11 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at http://license.golem.cloud/LICENSE
 
-use crate::durable_host::tool::attachment::{AttachmentConsumer, AttachmentRead, AttachmentWriter};
+use crate::durable_host::concurrent::SharedDurableContext;
+use crate::durable_host::tool::attachment::{AttachmentController, AttachmentWriter};
+use crate::durable_host::tool::durability::native_host_failure;
+use crate::durable_host::tool::input::NativeAttachmentInput;
+use crate::worker::tasks::NativeReconstructionSpawner;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::agent::Principal;
@@ -17,6 +21,44 @@ use golem_common::schema::TypedSchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+
+/// Native host access backed by the invocation's real context. Durable calls acquire only
+/// synchronous context windows; owned continuations can progress while the handler awaits.
+pub struct NativeToolContext<Ctx: WorkerCtx> {
+    pub(crate) shared: SharedDurableContext<Ctx>,
+}
+
+impl<Ctx: WorkerCtx> NativeToolContext<Ctx> {
+    pub(crate) fn new(
+        context: Ctx,
+        registration: crate::worker::entity_slot::EntitySlotRegistration,
+    ) -> Self {
+        Self {
+            shared: SharedDurableContext::new(context, None, registration),
+        }
+    }
+
+    pub fn is_live(&self) -> bool {
+        self.shared.with_ctx(|ctx| ctx.is_live())
+    }
+
+    pub async fn get_environment(&mut self) -> anyhow::Result<Vec<(String, String)>> {
+        self.shared.get_durable_environment().await
+    }
+
+    pub async fn get_config_value(
+        &mut self,
+        path: Vec<String>,
+        expected: golem_schema::schema::wit::wire::SchemaGraph,
+    ) -> anyhow::Result<
+        Result<
+            golem_schema::schema::wit::wire::SchemaValueTree,
+            crate::preview2::golem::agent::host::ConfigValueError,
+        >,
+    > {
+        self.shared.get_config_value(path, expected).await
+    }
+}
 
 /// The exact, deployment-pinned identity of a native implementation.
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -38,15 +80,22 @@ pub struct NativeToolInvocation {
 
 /// Safe native view of a tool input attachment.
 pub struct NativeToolStdin {
-    pub(crate) consumer: AttachmentConsumer,
+    pub(crate) input: NativeAttachmentInput,
+    pub(crate) controller: AttachmentController,
+    pub(crate) tasks: NativeReconstructionSpawner,
 }
 
 impl NativeToolStdin {
-    pub async fn read(&self) -> Option<Result<Vec<u8>, String>> {
-        match self.consumer.read_next().await {
-            AttachmentRead::Item(Ok(bytes)) => Some(Ok(bytes)),
-            AttachmentRead::Item(Err(error)) => Some(Err(format!("{error:?}"))),
-            AttachmentRead::End => None,
+    pub async fn read<Ctx: WorkerCtx>(
+        &mut self,
+        context: &mut NativeToolContext<Ctx>,
+    ) -> Option<Result<Vec<u8>, String>> {
+        match self.input.read(&mut context.shared).await {
+            Ok(item) => item.map(|item| item.map_err(|error| format!("{error:?}"))),
+            Err(error) => {
+                native_attachment_failure(&context.shared, &self.controller, &self.tasks, error)
+                    .await
+            }
         }
     }
 }
@@ -55,32 +104,92 @@ impl NativeToolStdin {
 #[derive(Clone)]
 pub struct NativeToolOutput {
     pub(crate) writer: AttachmentWriter,
+    pub(crate) tasks: NativeReconstructionSpawner,
 }
 
 impl NativeToolOutput {
-    pub async fn write(&self, bytes: Vec<u8>) -> Result<(), String> {
-        self.writer
-            .write(bytes)
-            .await
-            .map_err(|error| format!("{error:?}"))
+    pub async fn write<Ctx: WorkerCtx>(
+        &self,
+        context: &mut NativeToolContext<Ctx>,
+        bytes: Vec<u8>,
+    ) -> Result<(), String> {
+        let result = crate::durable_host::tool::durability::write_native(
+            &mut context.shared,
+            self.writer.clone(),
+            &self.tasks,
+            bytes,
+        )
+        .await;
+        match result {
+            Ok(result) => result.map_err(|error| format!("{error:?}")),
+            Err(error) => {
+                native_attachment_failure(
+                    &context.shared,
+                    &self.writer.controller(),
+                    &self.tasks,
+                    error,
+                )
+                .await
+            }
+        }
     }
 
-    pub fn finish(&self) -> Result<(), String> {
-        self.writer.finish().map_err(|error| format!("{error:?}"))
+    pub async fn finish<Ctx: WorkerCtx>(
+        &self,
+        context: &mut NativeToolContext<Ctx>,
+    ) -> Result<(), String> {
+        let result = crate::durable_host::tool::durability::finish_native(
+            &mut context.shared,
+            self.writer.clone(),
+        )
+        .await;
+        match result {
+            Ok(result) => result.map_err(|error| format!("{error:?}")),
+            Err(error) => {
+                native_attachment_failure(
+                    &context.shared,
+                    &self.writer.controller(),
+                    &self.tasks,
+                    error,
+                )
+                .await
+            }
+        }
     }
+}
+
+async fn native_attachment_failure<Ctx: WorkerCtx>(
+    context: &SharedDurableContext<Ctx>,
+    controller: &AttachmentController,
+    tasks: &NativeReconstructionSpawner,
+    error: anyhow::Error,
+) -> ! {
+    let admission_rejected = error.chain().any(|cause| {
+        cause
+            .downcast_ref::<WorkerExecutorError>()
+            .is_some_and(crate::durable_host::is_tool_attachment_live_admission_rejection)
+    });
+    if !admission_rejected {
+        controller.fence_owner();
+    }
+    let failure = context.with_ctx(|ctx| native_host_failure(ctx, error));
+    // Infrastructure failures belong to the body supervisor, never to a catchable SDK string.
+    // Ordinary admission rejection leaves attachments available for terminal publication.
+    let _ = tasks.report_body_failure(failure);
+    std::future::pending().await
 }
 
 pub type NativeToolResult = Result<SerializableToolStructuredResult, SerializableToolRpcError>;
 
 /// Executor-side contract generated for a native tool implementation.
 ///
-/// Implementations call the same host functions on `Ctx` that component imports call. Therefore
+/// Implementations call the same host functions through the facade that component imports call. Therefore
 /// durable effects, policy checks, and panic behavior are shared with executor host functions.
 #[async_trait]
 pub trait NativeToolHandler<Ctx: WorkerCtx>: Send + Sync + 'static {
     async fn invoke(
         &self,
-        ctx: &mut Ctx,
+        ctx: &mut NativeToolContext<Ctx>,
         invocation: NativeToolInvocation,
     ) -> Result<NativeToolResult, WorkerExecutorError>;
 }
@@ -113,22 +222,33 @@ impl golem_native_tool::NativeToolCancellationObserver for NativeToolCancellatio
     }
 }
 
-impl golem_native_tool::NativeToolStdinHandle for NativeToolStdin {
-    fn read<'a>(&'a mut self) -> golem_native_tool::NativeToolReadFuture<'a> {
-        Box::pin(NativeToolStdin::read(self))
+impl<Ctx: WorkerCtx> golem_native_tool::NativeToolStdinHandle<NativeToolContext<Ctx>>
+    for NativeToolStdin
+{
+    fn read<'a>(
+        &'a mut self,
+        context: &'a mut NativeToolContext<Ctx>,
+    ) -> golem_native_tool::NativeToolReadFuture<'a> {
+        Box::pin(NativeToolStdin::read(self, context))
     }
 }
 
-impl golem_native_tool::NativeToolOutputHandle for NativeToolOutput {
+impl<Ctx: WorkerCtx> golem_native_tool::NativeToolOutputHandle<NativeToolContext<Ctx>>
+    for NativeToolOutput
+{
     fn write<'a>(
         &'a mut self,
+        context: &'a mut NativeToolContext<Ctx>,
         bytes: Vec<u8>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
-        Box::pin(NativeToolOutput::write(self, bytes))
+        Box::pin(NativeToolOutput::write(self, context, bytes))
     }
 
-    fn finish(&mut self) -> Result<(), String> {
-        NativeToolOutput::finish(self)
+    fn finish<'a>(
+        &'a mut self,
+        context: &'a mut NativeToolContext<Ctx>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
+        Box::pin(NativeToolOutput::finish(self, context))
     }
 }
 
@@ -136,11 +256,11 @@ impl golem_native_tool::NativeToolOutputHandle for NativeToolOutput {
 impl<Ctx, T> NativeToolHandler<Ctx> for NativeToolAdapter<T>
 where
     Ctx: WorkerCtx,
-    T: golem_native_tool::NativeToolInvoker<Ctx, anyhow::Error>,
+    T: golem_native_tool::NativeToolInvoker<NativeToolContext<Ctx>, anyhow::Error>,
 {
     async fn invoke(
         &self,
-        ctx: &mut Ctx,
+        ctx: &mut NativeToolContext<Ctx>,
         invocation: NativeToolInvocation,
     ) -> Result<NativeToolResult, WorkerExecutorError> {
         let result = self
@@ -157,13 +277,16 @@ where
                     stderr: invocation.stderr.map(|output| Box::new(output) as _),
                 },
             )
-            .await
-            .map_err(|error| {
-                error
-                    .downcast_ref::<WorkerExecutorError>()
-                    .cloned()
-                    .unwrap_or_else(|| WorkerExecutorError::runtime(error.to_string()))
-            })?;
+            .await;
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => {
+                return Err(ctx
+                    .shared
+                    .with_ctx(|ctx| native_host_failure(ctx, error))
+                    .await);
+            }
+        };
         Ok(match result {
             Ok(value) => Ok(SerializableToolStructuredResult {
                 result: value

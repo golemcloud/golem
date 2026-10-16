@@ -36,6 +36,7 @@ use golem_worker_executor::storage::indexed::memory::InMemoryIndexedStorage;
 use golem_worker_executor::storage::indexed::redis::RedisIndexedStorage;
 use golem_worker_executor_test_utils::WorkerExecutorTestDependencies;
 use pretty_assertions::assert_eq;
+use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -75,9 +76,12 @@ fn in_memory() -> Arc<dyn GetBlobStorage + Send + Sync> {
 
 /// Spins up a fresh RustFS container per `get_blob_storage` call and keeps it
 /// alive for the lifetime of this per-worker dependency, so the returned S3
-/// blob storage remains usable for the whole test.
+/// blob storage remains usable for the whole test. With `shared_bucket`, the
+/// levels of the compressed oplog and the custom data share one bucket, and the
+/// keys hold namespace prefixes.
 pub(crate) struct S3Test {
     s3_servers: Mutex<Vec<DockerRustFs>>,
+    shared_bucket: bool,
 }
 
 impl Debug for S3Test {
@@ -95,11 +99,12 @@ impl GetBlobStorage for S3Test {
 
 impl S3Test {
     /// Gives an S3 blob storage on a new RustFS container, which this dependency keeps alive. The
-    /// container has the buckets of the compressed oplog and of the custom data of a guest.
+    /// container has the buckets of two levels of the compressed oplog and of the custom data of
+    /// a guest, or with `shared_bucket` one bucket for all of them.
     pub(crate) async fn s3_storage(&self) -> s3::S3BlobStorage {
         let s3_server = DockerRustFs::new().await;
 
-        let config = S3BlobStorageConfig {
+        let mut config = S3BlobStorageConfig {
             retries: Default::default(),
             region: "us-east-1".to_string(),
             object_prefix: String::new(),
@@ -110,8 +115,19 @@ impl S3Test {
                 "test",
             )),
             aws_path_style: Some(true),
+            compressed_oplog_buckets: vec![
+                "oplog-archive-1".to_string(),
+                "oplog-archive-2".to_string(),
+            ],
             ..std::default::Default::default()
         };
+        if self.shared_bucket {
+            let bucket = "golem".to_string();
+            config.namespace_prefixes = true;
+            config.compressed_oplog_buckets = vec![bucket.clone(), bucket.clone()];
+            config.custom_data_bucket = bucket;
+        }
+        config.validate().unwrap();
         create_buckets(&s3_server, &config).await;
         let storage = s3::S3BlobStorage::new(config).await;
 
@@ -141,11 +157,12 @@ async fn create_buckets(s3_server: &dyn S3Server, config: &S3BlobStorageConfig) 
             .force_path_style(true)
             .build(),
     );
-    for bucket in config
+    let buckets = config
         .compressed_oplog_buckets
         .iter()
         .chain([&config.custom_data_bucket])
-    {
+        .collect::<BTreeSet<_>>();
+    for bucket in buckets {
         client.create_bucket().bucket(bucket).send().await.unwrap();
     }
 }
@@ -153,6 +170,14 @@ async fn create_buckets(s3_server: &dyn S3Server, config: &S3BlobStorageConfig) 
 pub(crate) fn new_s3_test() -> S3Test {
     S3Test {
         s3_servers: Mutex::new(Vec::new()),
+        shared_bucket: false,
+    }
+}
+
+fn new_shared_bucket_s3_test() -> S3Test {
+    S3Test {
+        s3_servers: Mutex::new(Vec::new()),
+        shared_bucket: true,
     }
 }
 
@@ -161,7 +186,13 @@ fn s3() -> Arc<dyn GetBlobStorage + Send + Sync> {
     Arc::new(new_s3_test())
 }
 
+#[test_dep(scope = PerWorker, tagged_as = "s3_shared_bucket")]
+fn s3_shared_bucket() -> Arc<dyn GetBlobStorage + Send + Sync> {
+    Arc::new(new_shared_bucket_s3_test())
+}
+
 define_matrix_dimension!(storage: Arc<dyn GetBlobStorage + Send + Sync> -> "in_memory", "s3");
+define_matrix_dimension!(level_storage: Arc<dyn GetBlobStorage + Send + Sync> -> "in_memory", "s3", "s3_shared_bucket");
 
 async fn append_worker(
     service: &BlobOplogArchiveService,
@@ -670,7 +701,7 @@ impl<B: BlobStorageBackend> BlobStorageBackend for ReadCounting<B> {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<Option<u64>> {
         self.inner
             .delete_dir_at(target_label, op_label, namespace, path)
             .await
@@ -789,4 +820,109 @@ async fn an_unlisted_blob_object_is_never_read_on_s3() {
     // The chunk that the manifest names is read through the same storage, so the count of zero
     // above is a count of the reads of the archive.
     assert!(storage.reads.load(Ordering::SeqCst) > 0);
+}
+
+/// Gives the messages of the first `count` log entries of the durable agent in the archive. A read
+/// finds the chunk of its last index first, so `count` must not be larger than the number of
+/// entries in the archive.
+async fn durable_entries(
+    service: &BlobOplogArchiveService,
+    owned_agent_id: &OwnedAgentId,
+    count: u64,
+) -> Vec<String> {
+    service
+        .read_source(
+            owned_agent_id,
+            AgentMode::Durable,
+            OplogIndex::INITIAL,
+            count,
+        )
+        .await
+        .into_values()
+        .map(|entry| match entry {
+            OplogEntry::Log { message, .. } => message,
+            other => panic!("not a log entry: {other:?}"),
+        })
+        .collect()
+}
+
+/// Each level of the compressed oplog keeps the chunks of an agent apart from the other levels,
+/// also when the levels share a bucket, and a delete of the agent at one level keeps the chunks of
+/// the other level.
+#[test]
+async fn each_level_of_the_compressed_oplog_keeps_its_own_chunks(
+    #[dimension(level_storage)] storage: &Arc<dyn GetBlobStorage + Send + Sync>,
+) {
+    let blob_storage = storage.get_blob_storage().await;
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let level = |level| {
+        BlobOplogArchiveService::new(
+            blob_storage.clone(),
+            indexed_storage.clone(),
+            level,
+            RetryConfig::default(),
+        )
+    };
+    let (first, second) = (level(0), level(1));
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "levels".to_string(),
+        },
+    );
+    let log = |message: &str| {
+        OplogEntry::log(
+            None,
+            LogLevel::Debug,
+            "test".to_string(),
+            message.to_string(),
+            None,
+        )
+    };
+    first
+        .open(&owned_agent_id, AgentMode::Durable, None)
+        .await
+        .append(&[(OplogIndex::INITIAL, log("first"))])
+        .await
+        .unwrap();
+    second
+        .open(&owned_agent_id, AgentMode::Durable, None)
+        .await
+        .append(&[
+            (OplogIndex::INITIAL, log("second")),
+            (OplogIndex::from_u64(2), log("other")),
+        ])
+        .await
+        .unwrap();
+
+    let written = (
+        durable_entries(&first, &owned_agent_id, 1).await,
+        durable_entries(&second, &owned_agent_id, 2).await,
+    );
+    first
+        .delete(&owned_agent_id, AgentMode::Durable)
+        .await
+        .unwrap();
+    let after_delete = (
+        durable_entries(&first, &owned_agent_id, 1).await,
+        durable_entries(&second, &owned_agent_id, 2).await,
+        second.exists(&owned_agent_id, AgentMode::Durable).await,
+    );
+
+    assert_eq!(
+        written,
+        (
+            vec!["first".to_string()],
+            vec!["second".to_string(), "other".to_string()]
+        )
+    );
+    assert_eq!(
+        after_delete,
+        (
+            Vec::<String>::new(),
+            vec!["second".to_string(), "other".to_string()],
+            true
+        )
+    );
 }

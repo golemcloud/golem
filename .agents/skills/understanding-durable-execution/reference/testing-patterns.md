@@ -25,9 +25,8 @@ golem-worker-executor --test <file> -- <filter>`); build the required WASM fixtu
   - `TestExecutorOverrides::wrap_shard_service` — fake ownership changes.
   - `executor.oplog_service_call_count(&worker_id, "read_exact")` — prove a path did not scan
     the oplog.
-  - `probe_http_body_read_starts`, `external_end_payload_id`, the exact-payload download outage,
-    and `probe_runtime_disposal` — target an uncached p2 response-body recovery payload and prove
-    that each failed physical runtime is destroyed before replacement.
+  - For recovery-data outages, target an uncached recorded payload and prove that each failed
+    physical runtime is destroyed before replacement. HTTP tests must use Preview 3.
 - `golem-test-framework/src/dsl/mod.rs`
   - `simulated_crash(&agent_id)` — `InterruptKind::Restart`; the resident worker reconstructs
     immediately, or on its next wakeup if already unloaded.
@@ -60,10 +59,9 @@ Mistake caught: "same result, so probably deduped" and "new key on retry".
 Do: capture the idempotency key the target observes on each attempt (e.g. via `wrap_rpc`),
 assert the keys are equal, and assert one `AgentInvocationStarted` for that key in the target
 oplog. After an ordinary crash-retry the caller keeps a single `Start` (the incomplete call is
-repaired under the existing entry). A second physical `Start` for the same logical call appears
-under atomic-region rollback (`Jump`, both attempts carry the same key) and inside a custom
-durable invocation recovered incomplete (the nested calls are re-recorded with
-`observational_owner`, and the block author owns their idempotency).
+repaired under the existing entry). Inside a custom
+durable invocation recovered incomplete, nested calls are re-recorded with
+`observational_owner`, and the library author owns their idempotency.
 
 Copy: `tests/api/mod.rs::lost_card_transfer_response_converges_after_source_and_target_restart`.
 a wrapped `RecordingWorkerProxy` drops the RPC response; after both source and target restart,

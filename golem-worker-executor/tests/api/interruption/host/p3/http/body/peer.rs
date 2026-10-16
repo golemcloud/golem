@@ -14,6 +14,7 @@ pub(super) const BODY: &[u8] = b"hello-body";
 pub(super) struct Request {
     pub number: usize,
     pub idempotency_key: String,
+    pub range: Option<String>,
     pub finish_body: oneshot::Sender<()>,
 }
 
@@ -183,6 +184,15 @@ async fn serve(
         keys.len() == 1 && !keys[0].is_empty(),
         "missing/duplicate idempotency key"
     );
+    let ranges: Vec<_> = headers
+        .lines()
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("range")
+                .then(|| value.trim().to_owned())
+        })
+        .collect();
+    ensure!(ranges.len() <= 1, "duplicate Range headers");
     // One byte cannot be split into multiple nonempty native frames. Content-length
     // promises nine more bytes, but no peer timeout or EOF can supply them.
     stream
@@ -194,6 +204,7 @@ async fn serve(
     requests.send(Ok(Request {
         number,
         idempotency_key: keys[0].clone(),
+        range: ranges.into_iter().next(),
         finish_body,
     }))?;
     tokio::select! {

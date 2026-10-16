@@ -20,6 +20,18 @@
 
 // Top-level / app-scoped commands -----------------------------------------------------------------
 
+pub const MCP_IMPORT: &str = "Select an import by its optional manifest name or unique full URL.
+These commands do not add imports. Declare imports in mcp.imports first.
+OAuth-protected upstreams need a stored grant obtained with authorize and complete;
+declaring or deploying an import does not grant consent.
+Use --manifest for OAuth before deployment. Deployed operations require a local
+manifest that reproduces the import configuration and permission to view the
+deployment summary. Identical deployed configurations cannot be distinguished by
+CLI-only names. Output uses the declaration's name or null for an unnamed import;
+import URLs are not echoed. For unnamed imports, replace <import-url> in completion
+instructions with the original exact URL. Keep the printed --revision when
+completing deployed consent.";
+
 pub const NEW: &str = "Examples:
   # List available templates first
   golem-cli templates

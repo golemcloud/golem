@@ -327,9 +327,8 @@ Example:
 ```scala
 import golem.HostApi
 
-val begin = HostApi.markBeginOperation()
 // ... do work ...
-HostApi.markEndOperation(begin)
+HostApi.oplogCommit(1)
 ```
 
 ## Dependencies

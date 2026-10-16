@@ -49,7 +49,10 @@ async fn memory_quota_exhaustion_interrupts_silent_tcp(
         deps,
         &context,
         resource_limits,
-        Arc::new(move |config| config.resource_usage_metering = metering),
+        Arc::new(move |config| {
+            config.agent_sockets.enabled = true;
+            config.resource_usage_metering = metering;
+        }),
     )
     .await?;
     let component = executor
@@ -234,6 +237,7 @@ async fn memory_quota_exhaustion_interrupts_silent_tcp(
         let before_invocation =
             before_invocation.expect("durable invocation has an oplog boundary");
         let before_resume = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let committed_prefix = executor.stored_oplog(&worker_id).await;
         assert_eq!(
             count_agent_invocation_pair_since(&before_resume, before_invocation),
             (1, 0),
@@ -300,24 +304,23 @@ async fn memory_quota_exhaustion_interrupts_silent_tcp(
         executor.resume(&worker_id, false).await?;
         let recovered = tokio::time::timeout(Duration::from_secs(30), invocation).await???;
         let recovered = recovered.into_typed::<Result<String, String>>()?;
-        assert_eq!(recovered, Err("ErrorCode::InvalidState".to_string()));
+        assert_eq!(recovered, Err("ErrorCode::ConnectionBroken".to_string()));
         executor
             .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
             .await?;
 
         let after_resume = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let raw_after_resume = executor.stored_oplog(&worker_id).await;
+        assert!(raw_after_resume.len() >= committed_prefix.len());
+        assert_eq!(
+            &raw_after_resume[..committed_prefix.len()],
+            committed_prefix.as_slice()
+        );
         assert_eq!(
             count_agent_invocation_pair_since(&after_resume, before_invocation),
             (1, 1),
             "recovery must commit one retained invocation terminal"
         );
-        let ended_starts = after_resume
-            .iter()
-            .filter_map(|entry| match &entry.entry {
-                PublicOplogEntry::End(end) => Some(end.start_index),
-                _ => None,
-            })
-            .collect::<HashSet<_>>();
         let cancelled_starts = after_resume
             .iter()
             .filter_map(|entry| match &entry.entry {
@@ -325,13 +328,12 @@ async fn memory_quota_exhaustion_interrupts_silent_tcp(
                 _ => None,
             })
             .collect::<HashSet<_>>();
-        let jump_regions = after_resume
-            .iter()
-            .filter_map(|entry| match &entry.entry {
-                PublicOplogEntry::Jump(jump) => Some(jump.jump.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
+        assert!(
+            !after_resume
+                .iter()
+                .any(|entry| entry.oplog_index > before_invocation
+                    && matches!(entry.entry, PublicOplogEntry::Jump(_)))
+        );
         for (function_name, interrupted_start) in [
             ("sockets::types::tcp-socket::receive", receive_start),
             ("sockets::types::tcp-socket::receive-chunk", chunk_start),
@@ -348,27 +350,15 @@ async fn memory_quota_exhaustion_interrupts_silent_tcp(
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            assert_eq!(starts.len(), 2, "{function_name} must replay exactly once");
-            assert!(!ended_starts.contains(&interrupted_start));
+            assert_eq!(
+                starts,
+                vec![interrupted_start],
+                "{function_name} must retain its original Start"
+            );
+            assert_eq!(after_resume.iter().filter(|entry| matches!(
+                &entry.entry, PublicOplogEntry::End(end) if end.start_index == interrupted_start
+            )).count(), 1, "{function_name} must settle under its original Start once");
             assert!(!cancelled_starts.contains(&interrupted_start));
-            assert!(
-                jump_regions
-                    .iter()
-                    .any(|region| region.contains(interrupted_start)),
-                "interrupted {function_name} must be covered by a recovery jump"
-            );
-            let replay_start = starts
-                .into_iter()
-                .find(|start| *start != interrupted_start)
-                .expect("one replay start must differ from the interrupted start");
-            assert!(ended_starts.contains(&replay_start));
-            assert!(!cancelled_starts.contains(&replay_start));
-            assert!(
-                jump_regions
-                    .iter()
-                    .all(|region| !region.contains(replay_start)),
-                "settled replay {function_name} must be outside recovery jumps"
-            );
         }
         assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
     } else {

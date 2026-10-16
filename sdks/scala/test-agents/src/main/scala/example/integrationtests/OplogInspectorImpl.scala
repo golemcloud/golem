@@ -30,10 +30,7 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
   override def inspectRecent(): Future[String] = Future.successful {
     val sb       = new StringBuilder
     val meta     = HostApi.getSelfMetadata()
-    val startIdx = {
-      val cur = HostApi.getOplogIndex()
-      if (cur > BigInt(20)) cur - BigInt(20) else BigInt(0)
-    }
+    val startIdx = BigInt(0)
 
     sb.append(s"=== Oplog Inspector (agent=${meta.agentName}) ===\n")
     sb.append(s"Reading from index $startIdx\n\n")
@@ -105,14 +102,11 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
       case OplogApi.OplogEntry.Error(p)   =>
         s"ERROR @ $ts kind=${p.kind} '${p.error}' retryFrom=${p.retryFrom}"
       case OplogApi.OplogEntry.RecoverySucceeded(t)      => s"RECOVERY_SUCCEEDED @ ${t.seconds}s"
-      case OplogApi.OplogEntry.NoOp(t)                   => s"NOOP @ ${t.seconds}s"
       case OplogApi.OplogEntry.Jump(p)                   => s"JUMP @ $ts range=[${p.jump.start},${p.jump.end}]"
       case OplogApi.OplogEntry.Interrupted(t)            => s"INTERRUPTED @ ${t.seconds}s"
       case OplogApi.OplogEntry.Exited(t)                 => s"EXITED @ ${t.seconds}s"
       case OplogApi.OplogEntry.SetRetryPolicy(p)         => s"SET_RETRY_POLICY @ $ts name=${p.name}"
       case OplogApi.OplogEntry.RemoveRetryPolicy(p)      => s"REMOVE_RETRY_POLICY @ $ts name=${p.name}"
-      case OplogApi.OplogEntry.BeginAtomicRegion(t)      => s"BEGIN_ATOMIC @ ${t.seconds}s"
-      case OplogApi.OplogEntry.EndAtomicRegion(p)        => s"END_ATOMIC @ $ts begin=${p.beginIndex}"
       case OplogApi.OplogEntry.BeginRemoteWrite(t)       => s"BEGIN_REMOTE_WRITE @ ${t.seconds}s"
       case OplogApi.OplogEntry.EndRemoteWrite(p)         => s"END_REMOTE_WRITE @ $ts begin=${p.beginIndex}"
       case OplogApi.OplogEntry.PendingAgentInvocation(p) =>
@@ -127,7 +121,7 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
         s"PENDING_INVOCATION @ $ts $invDesc"
       case OplogApi.OplogEntry.PendingUpdate(p) =>
         val desc = p.updateDescription match {
-          case OplogApi.UpdateDescription.AutoUpdate       => "auto"
+          case OplogApi.UpdateDescription.AutoUpdate           => "auto"
           case OplogApi.UpdateDescription.SnapshotBased(d, fs) =>
             s"snapshot(${d.length}B fs=${fs.getOrElse("none")})"
         }
@@ -152,6 +146,7 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
         }
         s"LOG @ $ts [$level] ${p.context}: ${p.message}"
       case OplogApi.OplogEntry.Restart(t)                      => s"RESTART @ ${t.seconds}s"
+      case OplogApi.OplogEntry.Resumed(t)                      => s"RESUMED @ ${t.seconds}s"
       case OplogApi.OplogEntry.ActivatePlugin(p)               => s"ACTIVATE_PLUGIN @ $ts ${p.plugin.name}@${p.plugin.version}"
       case OplogApi.OplogEntry.DeactivatePlugin(p)             => s"DEACTIVATE_PLUGIN @ $ts ${p.plugin.name}@${p.plugin.version}"
       case OplogApi.OplogEntry.Revert(p)                       => s"REVERT @ $ts range=[${p.start},${p.end}]"
@@ -163,8 +158,8 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
       case OplogApi.OplogEntry.RolledBackRemoteTransaction(p)  => s"ROLLED_BACK_TX @ $ts begin=${p.beginIndex}"
       case OplogApi.OplogEntry.Snapshot(t, data, mime, fs)     =>
         s"SNAPSHOT @ ${t.seconds}s ${data.length}B mime=$mime fs=${fs.getOrElse("none")}"
-      case OplogApi.OplogEntry.SnapshotConfirmed(t, fs)        => s"SNAPSHOT_CONFIRMED @ ${t.seconds}s fs=$fs"
-      case OplogApi.OplogEntry.OplogProcessorCheckpoint(p)     =>
+      case OplogApi.OplogEntry.SnapshotConfirmed(t, fs)    => s"SNAPSHOT_CONFIRMED @ ${t.seconds}s fs=$fs"
+      case OplogApi.OplogEntry.OplogProcessorCheckpoint(p) =>
         s"OPLOG_CHECKPOINT @ $ts plugin=${p.plugin.name} confirmed=${p.confirmedUpTo}"
     }
   }

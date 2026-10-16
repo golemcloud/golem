@@ -30,6 +30,27 @@ use std::collections::HashMap;
 use test_r::test;
 use url::Url;
 
+#[test]
+fn node_http_router_ports_match_manifest_schema() {
+    for key in [
+        "1", "3000", "65535", "0", "03000", "+3000", "65536", "3000.0", "port",
+    ] {
+        let document = serde_json::json!({
+            "app": "test-app",
+            "components": {"app:main": {"nodeHttpRouters": {
+                key: {"name": "Web", "mount": "/", "auth": true, "cors": ["https://example.test"]}
+            }}}
+        });
+        let valid = matches!(key, "1" | "3000" | "65535");
+        assert_eq!(
+            serde_json::from_value::<Application>(document.clone()).is_ok(),
+            valid,
+            "{key}"
+        );
+        assert_eq!(JSON_SCHEMA_VALIDATOR.is_valid(&document), valid, "{key}");
+    }
+}
+
 fn arb_opt<T: Clone + std::fmt::Debug + 'static>(
     strategy: BoxedStrategy<T>,
 ) -> BoxedStrategy<Option<T>> {
@@ -474,6 +495,7 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
                 component_wasm,
                 output_wasm,
                 dependencies: ComponentDependencies::default(),
+                node_http_routers: None,
                 build_merge_mode,
                 build,
                 custom_commands,
@@ -547,6 +569,7 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
                 component_wasm,
                 output_wasm,
                 dependencies: ComponentDependencies::default(),
+                node_http_routers: None,
                 build_merge_mode,
                 build,
                 custom_commands,
@@ -623,6 +646,7 @@ fn arb_component_model() -> BoxedStrategy<Component> {
                 component_wasm,
                 output_wasm,
                 dependencies: ComponentDependencies::default(),
+                node_http_routers: None,
                 build_merge_mode,
                 build,
                 custom_commands,
@@ -1097,7 +1121,8 @@ fn mcp_imports_serde_and_schema_preserve_order_and_shapes() {
 mcp:
   imports:
     prod:
-      - url: https://first.example.com/mcp
+      - name: first
+        url: https://first.example.com/mcp
         auth:
           bearer: "{{ MCP_TOKEN }}"
         prefix: first
@@ -1117,8 +1142,63 @@ mcp:
     let app: Application = serde_yaml::from_str(yaml).unwrap();
     let imports = &app.mcp.unwrap().imports[&EnvironmentName("prod".into())];
     assert_eq!(imports.len(), 3);
-    assert_eq!(imports[0].prefix.as_deref(), Some("first"));
-    assert_eq!(imports[1].version.as_deref(), Some("2025-03-26"));
+    assert_eq!(imports[0].name.as_deref(), Some("first"));
+    assert!(imports[1].name.is_none());
+    assert_eq!(imports[0].import.prefix.as_deref(), Some("first"));
+    assert_eq!(imports[1].import.version.as_deref(), Some("2025-03-26"));
+    let serialized = serde_json::to_value(&imports[0]).unwrap();
+    assert_eq!(serialized["name"], "first");
+    assert_eq!(serialized["url"], "https://first.example.com/mcp");
+    assert_eq!(
+        serde_json::from_value::<McpImport>(serialized).unwrap(),
+        imports[0]
+    );
+    assert!(
+        serde_json::to_value(&imports[0].import)
+            .unwrap()
+            .get("name")
+            .is_none()
+    );
+}
+
+#[test]
+fn mcp_import_names_and_unknown_fields_are_rejected() {
+    for name in ["", "0", "Bad", "with space", "https://example.com/mcp"] {
+        let import = serde_json::json!({"name": name, "url": "https://example.com/mcp"});
+        let manifest = serde_json::json!({"mcp": {"imports": {"prod": [import.clone()]}}});
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&manifest), "{name}");
+        assert!(
+            serde_json::from_value::<McpImport>(import).is_err(),
+            "{name}"
+        );
+    }
+    for extra in [
+        serde_json::json!({"unknown": true}),
+        serde_json::json!({"name": null}),
+    ] {
+        let mut import = serde_json::json!({"url": "https://example.com/mcp"});
+        import
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let manifest = serde_json::json!({"mcp": {"imports": {"prod": [import.clone()]}}});
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&manifest));
+        assert!(serde_json::from_value::<McpImport>(import).is_err());
+    }
+    for input in [
+        "url: https://first.example/mcp\nurl: https://second.example/mcp",
+        "url: https://first.example/mcp\nname: first\nname: second",
+        "url: https://first.example/mcp\nauth:\n  bearer: first\n  bearer: second",
+    ] {
+        assert!(serde_yaml::from_str::<McpImport>(input).is_err(), "{input}");
+    }
+    for input in [
+        r#"{"url":"https://first.example/mcp","url":"https://second.example/mcp"}"#,
+        r#"{"url":"https://first.example/mcp","name":"first","name":"second"}"#,
+        r#"{"url":"https://first.example/mcp","auth":{"bearer":"first","bearer":"second"}}"#,
+    ] {
+        assert!(serde_json::from_str::<McpImport>(input).is_err(), "{input}");
+    }
 }
 
 #[test]
