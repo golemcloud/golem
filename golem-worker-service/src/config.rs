@@ -256,6 +256,7 @@ pub struct InvocationSessionConfig {
     #[serde(with = "humantime_serde")]
     pub keep_alive_interval: Duration,
     /// Zero disables the Pong deadline without disabling periodic Pings.
+    /// A positive deadline can disconnect a live peer when either endpoint is backpressured.
     #[serde(with = "humantime_serde")]
     pub max_pong_timeout: Duration,
 }

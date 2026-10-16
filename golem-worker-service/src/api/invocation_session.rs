@@ -79,10 +79,15 @@ const WRITE_PROGRESS_TIMEOUT: std::time::Duration = std::time::Duration::from_se
 const CLIENT_GONE_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const SESSION_BYTE_BUDGET: usize = 64 * 1024 * 1024;
 const OUTPUT_BYTE_BUDGET: usize = 32 * 1024 * 1024;
+const CONTROL_BYTE_BUDGET: usize = 64 * 1024;
 const INPUT_UNACKNOWLEDGED_BYTE_BUDGET: usize = 16 * 1024 * 1024;
 const STREAM_BYTE_BUDGET: usize = 16 * 1024 * 1024;
 const STREAM_ITEM_BUDGET: usize = 256;
 
+#[cfg(test)]
+mod admission_tests;
+#[cfg(test)]
+mod backpressure_tests;
 #[cfg(test)]
 mod keep_alive_tests;
 
@@ -107,10 +112,19 @@ struct QueuedMessage {
     message: Message,
     stream_channel: Option<u32>,
     drop_if_output_cancelled: bool,
-    _session: OwnedSemaphorePermit,
-    _output: OwnedSemaphorePermit,
+    _admission: OutboundAdmission,
     _stream_bytes: Option<OwnedSemaphorePermit>,
     _stream_item: Option<OwnedSemaphorePermit>,
+}
+
+enum OutboundAdmission {
+    Data {
+        _session: OwnedSemaphorePermit,
+        _output: OwnedSemaphorePermit,
+    },
+    Control {
+        _bytes: OwnedSemaphorePermit,
+    },
 }
 
 impl QueuedMessage {
@@ -129,6 +143,7 @@ impl QueuedMessage {
 struct SessionBudgets {
     session: Arc<Semaphore>,
     output: Arc<Semaphore>,
+    control: Arc<Semaphore>,
     unacknowledged_input: Arc<Semaphore>,
     stream_bytes: Arc<Mutex<HashMap<u32, Arc<Semaphore>>>>,
     stream_items: Arc<Mutex<HashMap<u32, Arc<Semaphore>>>>,
@@ -140,6 +155,7 @@ impl SessionBudgets {
         Self {
             session: Arc::new(Semaphore::new(SESSION_BYTE_BUDGET)),
             output: Arc::new(Semaphore::new(OUTPUT_BYTE_BUDGET)),
+            control: Arc::new(Semaphore::new(CONTROL_BYTE_BUDGET)),
             unacknowledged_input: Arc::new(Semaphore::new(INPUT_UNACKNOWLEDGED_BYTE_BUDGET)),
             stream_bytes: Arc::new(Mutex::new(HashMap::new())),
             stream_items: Arc::new(Mutex::new(HashMap::new())),
@@ -169,7 +185,33 @@ struct Outbound {
 
 impl Outbound {
     async fn send(&self, message: Message, stream: Option<(u32, usize)>) -> Result<(), ()> {
+        if matches!(
+            message,
+            Message::Close(_) | Message::Ping(_) | Message::Pong(_)
+        ) {
+            return self.send_control(message).await;
+        }
         self.send_with_policy(message, stream, true).await
+    }
+
+    async fn send_control(&self, message: Message) -> Result<(), ()> {
+        let bytes = message_size(&message).max(1);
+        if bytes > CONTROL_BYTE_BUDGET {
+            return Err(());
+        }
+        // Prefetched input and queued output must not consume protocol rejection credit.
+        let credit = acquire_bytes(&self.budgets.control, bytes).await?;
+        self.sender
+            .send(QueuedMessage {
+                message,
+                stream_channel: None,
+                drop_if_output_cancelled: false,
+                _admission: OutboundAdmission::Control { _bytes: credit },
+                _stream_bytes: None,
+                _stream_item: None,
+            })
+            .await
+            .map_err(|_| ())
     }
 
     async fn send_stream_terminal(
@@ -228,8 +270,10 @@ impl Outbound {
                 message,
                 stream_channel,
                 drop_if_output_cancelled,
-                _session: session,
-                _output: output,
+                _admission: OutboundAdmission::Data {
+                    _session: session,
+                    _output: output,
+                },
                 _stream_bytes: stream_bytes,
                 _stream_item: stream_item,
             })
@@ -3074,8 +3118,29 @@ async fn acquire_input_admission(
 }
 
 async fn send_text(sender: &Outbound, message: &PublicServerMessage) -> Result<(), ()> {
-    let message = text_message(message).map_err(|_| ())?;
-    sender.send(message, None).await
+    let mut frame = text_message(message).map_err(|_| ())?;
+    if let PublicServerMessage::InvocationRejected {
+        attempt_id,
+        code,
+        retryable,
+        version,
+        ..
+    } = message
+    {
+        if message_size(&frame) > CONTROL_BYTE_BUDGET {
+            frame = text_message(&PublicServerMessage::InvocationRejected {
+                attempt_id: *attempt_id,
+                code: *code,
+                message: safe_rejection_message(*code),
+                retryable: *retryable,
+                version: *version,
+            })
+            .map_err(|_| ())?;
+        }
+        sender.send_control(frame).await
+    } else {
+        sender.send(frame, None).await
+    }
 }
 
 async fn send_rejection(
