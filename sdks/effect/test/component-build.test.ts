@@ -260,6 +260,7 @@ describe("capability-sensitive component exports", () => {
       return EffectRuntime.Effect.succeed({
         result: response,
         cancel: EffectRuntime.Effect.sync(cancel),
+        detach: EffectRuntime.Effect.void,
       })
     })
     const invokeTool = async () =>
@@ -283,7 +284,7 @@ describe("capability-sensitive component exports", () => {
         },
       })
       expect(await invokeTool()).toEqual(v.err(v.string("denied:blocked")))
-      expect(cancel).toHaveBeenCalledTimes(3)
+      expect(cancel).toHaveBeenCalledTimes(2)
     } finally {
       vi.unstubAllGlobals()
     }

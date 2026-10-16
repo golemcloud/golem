@@ -343,11 +343,12 @@ object ToolMiddlewareInvokerRuntime {
   def validateOutcome(
     tool: ExtendedToolType,
     commandIndex: Int,
-    outcome: Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]
+    outcome: Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult],
+    validateOutputs: Boolean = true
   ): Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult] =
     outcome match {
       case Right(result) =>
-        validateSuccess(tool, commandIndex, result).map(_ => result)
+        validateSuccess(tool, commandIndex, result, validateOutputs).map(_ => result)
       case Left(error @ ToolInvokeError.Tool(payload)) =>
         validateCustomError(tool, commandIndex, payload).fold(Left(_), _ => Left(error))
       case Left(error @ ToolInvokeError.UnknownToolError(name, payload)) =>
@@ -402,7 +403,8 @@ object ToolMiddlewareInvokerRuntime {
   private def validateSuccess(
     tool: ExtendedToolType,
     commandIndex: Int,
-    result: ToolMiddlewareResult
+    result: ToolMiddlewareResult,
+    validateOutputs: Boolean
   ): Either[ToolInvokeError.InvalidResult, Unit] =
     tool.commands.lift(commandIndex).flatMap(_.body) match {
       case None       => Left(ToolInvokeError.InvalidResult(s"invalid tool command index: $commandIndex"))
@@ -426,8 +428,8 @@ object ToolMiddlewareInvokerRuntime {
           case (true, true)   => Right(())
         }
         valueValidation
-          .flatMap(_ => stdoutValidation)
-          .flatMap(_ => stderrValidation)
+          .flatMap(_ => if (validateOutputs) stdoutValidation else Right(()))
+          .flatMap(_ => if (validateOutputs) stderrValidation else Right(()))
           .left
           .map(ToolInvokeError.InvalidResult.apply)
     }

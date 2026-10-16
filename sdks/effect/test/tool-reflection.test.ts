@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest"
-import { Effect, Result, Schema } from "effect"
+import type * as Common from "golem:tool/common@0.1.0"
+import { Effect, Result, Schema, Scope } from "effect"
 import { c, compileDefinition, toolDefinition } from "../src/internal/tool/model.js"
-import { ToolType } from "../src/ToolReflection.js"
+import { DynamicToolClient, ToolType } from "../src/ToolReflection.js"
+import * as ToolSchema from "../src/Schema.js"
 import { toolClientDefinition, ToolTransport } from "../src/Tool.js"
 import { ToolClient } from "../src/host/ToolClient.js"
 import { compile } from "../src/WitCodec.js"
@@ -9,6 +11,7 @@ import { t } from "../src/internal/schema-model/model.js"
 import { schemaGraphToWit } from "../src/internal/schema-model/wit.js"
 import { SchemaRef } from "../src/SchemaRef.js"
 import { Binary, restrict, Uint8 } from "../src/WitTypes.js"
+import { SchemaValueStream } from "golem:core/types@2.0.0"
 
 const definition = toolDefinition("effect-reflection").body((body) =>
   body.positional("name", Schema.String).returns(Schema.String),
@@ -20,6 +23,130 @@ const registered = {
 }
 
 describe("native tool reflection", () => {
+  it.each(
+    [
+      "rejected",
+      "startJson",
+      "invokeJson",
+      "stdout",
+      "stderr",
+      "bothOutputs",
+      "collect",
+      "result",
+      "dynamic",
+      "custom",
+    ].flatMap((mode) => [
+      { mode, tag: "secret-value", schema: ToolSchema.Secret(Schema.String) },
+      { mode, tag: "quota-token-handle", schema: ToolSchema.QuotaToken() },
+      {
+        mode,
+        tag: "permission-card-handle",
+        schema: ToolSchema.PermissionCard({ polymorphic: false }),
+      },
+      { mode, tag: "stream-value", schema: ToolSchema.AgentStream(Schema.Number) },
+    ]),
+  )("releases only undisclosed $tag payloads: $mode", async ({ mode, tag, schema }) => {
+    const definition = toolDefinition("ownership").body((body) =>
+      body.returns(schema).error("custom", schema).output().stderr(),
+    )
+    const registration = { ...registered, definition: compileDefinition(definition).wire }
+    const dispose = vi.fn()
+    const next = vi.fn()
+    const close = vi.fn(async () => ({ done: true as const, value: undefined }))
+    const raw =
+      tag === "stream-value"
+        ? await SchemaValueStream.wrap({ [Symbol.asyncIterator]: () => ({ next, return: close }) })
+        : {}
+    Object.assign(raw, { [Symbol.dispose]: dispose })
+    const payload: Common.TypedSchemaValue = {
+      graph: Effect.runSync(compile(schema)).schemaGraph,
+      value: { root: 0, valueNodes: [{ tag, val: raw } as never] },
+    }
+    if (mode === "rejected") payload.graph = schemaGraphToWit({ defs: new Map(), root: t.bool() })
+    const failedOutput = async function* () {
+      yield { tag: "err", val: { tag: "failed", val: "output failed" } } as const
+    }
+    const transport = ToolTransport.of({
+      start: () =>
+        Effect.succeed({
+          result:
+            mode === "custom"
+              ? Effect.fail({
+                  tag: "remote-tool-error",
+                  val: { tag: "custom-error", val: { name: "custom", payload } },
+                } as const)
+              : Effect.succeed({ result: payload }),
+          stdout: ["stdout", "bothOutputs", "collect", "result", "dynamic", "custom"].includes(mode)
+            ? failedOutput()
+            : undefined,
+          stderr: ["stderr", "bothOutputs", "custom"].includes(mode) ? failedOutput() : undefined,
+          cancel: Effect.void,
+          detach: Effect.void,
+        }),
+    })
+    const command = new ToolType(registration).client.command([])
+    const input = command.packJson({})
+    const call: Effect.Effect<unknown, unknown, ToolClient | Scope.Scope> =
+      mode === "startJson"
+        ? command.startJson({}).pipe(Effect.flatMap((started) => started.result))
+        : mode === "invokeJson"
+          ? command.invokeJson({})
+          : mode === "collect"
+            ? command.startValue(input).pipe(Effect.flatMap((started) => started.collect))
+            : mode === "result"
+              ? command.startValue(input).pipe(Effect.flatMap((started) => started.result))
+              : mode === "dynamic"
+                ? new DynamicToolClient("ownership").invoke([], {
+                    graph: schemaGraphToWit(command.inputSchema!.graph),
+                    value: input,
+                  })
+                : command.invokeValue(input)
+    const failure = vi.fn()
+    const exit = await Effect.runPromiseExit(
+      call.pipe(
+        Effect.tapError((error) => Effect.sync(() => failure(error))),
+        Effect.provideService(ToolTransport, transport),
+        Effect.provideService(
+          ToolClient,
+          ToolClient.of({
+            getAllTools: () => [registration],
+            getTool: () => registration,
+            createStdin: vi.fn() as never,
+            createStdinFromStream: vi.fn() as never,
+            createOutput: vi.fn() as never,
+            rpc: vi.fn() as never,
+            createRpc: vi.fn() as never,
+          }),
+        ),
+        Effect.scoped,
+      ),
+    )
+    if (mode === "collect" || mode === "result") {
+      expect(exit._tag).toBe("Success")
+      expect(dispose).not.toHaveBeenCalled()
+      expect(payload.value.valueNodes[0].val).toBe(raw)
+      if (exit._tag === "Success" && mode === "collect") {
+        expect(exit.value).toMatchObject({ result: Result.succeed(payload.value) })
+        expect(Result.isFailure((exit.value as any).stdout)).toBe(true)
+      }
+    } else {
+      expect(exit._tag).toBe("Failure")
+      expect(dispose).toHaveBeenCalledOnce()
+      expect(payload.value.valueNodes[0].val).toBeUndefined()
+      if (tag === "stream-value") expect(close).toHaveBeenCalledOnce()
+      if (["stdout", "stderr", "bothOutputs", "dynamic"].includes(mode))
+        expect(failure).toHaveBeenCalledWith({
+          tag: "rpc",
+          error: {
+            tag: "protocol-error",
+            val: `tool ${mode === "stderr" ? "stderr" : "stdout"} failed`,
+          },
+        })
+      else expect(failure).toHaveBeenCalledWith(expect.objectContaining({ phase: "output" }))
+    }
+    expect(next).not.toHaveBeenCalled()
+  })
+
   it("emits the authored tool version while retaining the default", () => {
     expect(compileDefinition(toolDefinition("default-version")).wire.version).toBe("0.1.0")
     expect(
@@ -134,6 +261,7 @@ describe("native tool reflection", () => {
         return Effect.succeed({
           result: Effect.succeed({ result: undefined }),
           cancel: Effect.void,
+          detach: Effect.void,
         })
       },
     })
@@ -202,6 +330,7 @@ describe("native tool reflection", () => {
             },
           }),
           cancel: Effect.void,
+          detach: Effect.void,
         })
       },
     })
@@ -280,6 +409,7 @@ describe("native tool reflection", () => {
   it("returns a validated result and releases its scoped invocation", async () => {
     const codec = Effect.runSync(compile(Schema.String))
     const cancel = vi.fn()
+    const detach = vi.fn()
     const transport = ToolTransport.of({
       start: () =>
         Effect.succeed({
@@ -290,6 +420,7 @@ describe("native tool reflection", () => {
             },
           }),
           cancel: Effect.sync(cancel),
+          detach: Effect.sync(detach),
         }),
     })
     const host = ToolClient.of({
@@ -309,7 +440,8 @@ describe("native tool reflection", () => {
         Effect.provideService(ToolClient, host),
       )
     await expect(Effect.runPromise(call)).resolves.toBe("ok")
-    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(cancel).not.toHaveBeenCalled()
+    expect(detach).toHaveBeenCalledOnce()
   })
 
   it("settles result and stdout and preserves both failures", async () => {
@@ -334,6 +466,7 @@ describe("native tool reflection", () => {
           })(),
           result: Effect.fail({ tag: "denied", val: "result failed" } as const),
           cancel: Effect.void,
+          detach: Effect.void,
         }),
     })
     const host = ToolClient.of({
@@ -417,6 +550,7 @@ describe("native tool reflection", () => {
             },
           }),
           cancel: Effect.void,
+          detach: Effect.void,
         }),
     })
     const host = ToolClient.of({

@@ -72,6 +72,8 @@ golem agent invoke --trigger --schedule-at 2026-03-15T10:30:00Z -i 'increment-20
 
 ## Value Syntax
 
+Pass one Go literal per exported field of the method's input struct, in declaration order. Skip `golem.Principal` fields; do not supply a principal value or placeholder. Do not wrap all fields in a JSON object. A method whose input is `golem.Unit` takes no arguments, not `'{}'`. `--format json` controls output only. Load [`golem-invoke-agent-go`](/next/how-to-guides/go/golem-invoke-agent-go) for the string fallback and the different HTTP body rules. Awaited, triggered, and scheduled invocations share the same CLI argument parser.
+
 Agent ID parameters and method arguments use Go syntax, read against the agent's schema:
 
 - Strings `"my-counter"`, runes `'x'`, integers `5`, floats `2.5`, booleans `true` / `false`.
@@ -82,6 +84,12 @@ Agent ID parameters and method arguments use Go syntax, read against the agent's
 - Rich values as constructors: `Uuid("…")`, `Datetime("2026-01-01T00:00:00Z")`, `Duration("PT30S")` (or `30 * time.Second`).
 
 For example: `golem agent invoke 'ShelfAgent({zone: "a", level: 2}, closed, {"x"})' describe '"fragile"' '{ "k" => 2 }'`.
+
+This example assumes `type RunTaskIn struct{ Config TaskConfig }` with `type TaskConfig struct{ Priority uint32; Retry bool }`. Pass the single `config` value, not a wrapper containing `config`:
+
+```shell
+golem agent invoke --trigger --schedule-at 2026-03-15T10:30:00Z 'MyAgent("user-123")' runTask '{priority: 1, retry: true}'
+```
 
 ## Key Constraints
 
