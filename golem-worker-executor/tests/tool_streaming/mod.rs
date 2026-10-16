@@ -20952,3 +20952,893 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
     server.abort();
     Ok(())
 }
+
+/// How the client closes the stdin of an external tool call.
+#[derive(Clone, Copy)]
+enum StdinClose {
+    Cancel,
+    End,
+}
+
+/// What `streaming run` writes to stdout first in the modes that these tests use.
+const RUN_MARKER: &[u8] = b"marker:";
+
+/// An external tool call whose body runs: its marker arrived on stdout, and the client holds
+/// its stdin open.
+struct RunningExternalToolCall {
+    context: TestContext,
+    environment_state: Arc<TestEnvironmentStateService>,
+    executor: TestWorkerExecutor,
+    worker_id: golem_common::model::AgentId,
+    sender: tokio::sync::mpsc::Sender<golem_api_grpc::proto::golem::worker::InvocationRequest>,
+    responses: tonic::Streaming<golem_api_grpc::proto::golem::worker::InvocationResponse>,
+    accepted: golem_api_grpc::proto::golem::worker::InvocationAccepted,
+    stdout: Vec<u8>,
+}
+
+/// An external tool call that ended with a success, with what a test needs to go on with its
+/// agent.
+struct EndedExternalToolCall {
+    stdout_after_marker: String,
+    context: TestContext,
+    environment_state: Arc<TestEnvironmentStateService>,
+    executor: TestWorkerExecutor,
+    worker_id: golem_common::model::AgentId,
+}
+
+/// Starts `streaming run` in `mode` from outside the agent, with stdin and stdout attached.
+async fn start_external_streaming_run(
+    executor: &TestWorkerExecutor,
+    context: &TestContext,
+    worker_id: &golem_common::model::AgentId,
+    mode: &str,
+) -> anyhow::Result<(
+    tokio::sync::mpsc::Sender<golem_api_grpc::proto::golem::worker::InvocationRequest>,
+    tonic::Streaming<golem_api_grpc::proto::golem::worker::InvocationResponse>,
+    golem_api_grpc::proto::golem::worker::InvocationAccepted,
+)> {
+    start_external_run_of(executor, context, worker_id, "streaming", mode).await
+}
+
+/// Starts the command `run` of the tool `tool` in `mode` from outside the agent, with stdin and
+/// stdout attached.
+async fn start_external_run_of(
+    executor: &TestWorkerExecutor,
+    context: &TestContext,
+    worker_id: &golem_common::model::AgentId,
+    tool: &str,
+    mode: &str,
+) -> anyhow::Result<(
+    tokio::sync::mpsc::Sender<golem_api_grpc::proto::golem::worker::InvocationRequest>,
+    tonic::Streaming<golem_api_grpc::proto::golem::worker::InvocationResponse>,
+    golem_api_grpc::proto::golem::worker::InvocationAccepted,
+)> {
+    use golem_api_grpc::proto::golem::worker::{
+        ExternalToolInvocation, InvocationRequest, InvocationStart, invocation_request,
+        invocation_response,
+    };
+    let metadata = executor.get_worker_metadata(worker_id).await?;
+    let input = TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::record(vec![
+            golem_common::schema::NamedFieldType {
+                name: "mode".to_string(),
+                body: SchemaType::string(),
+                metadata: Default::default(),
+            },
+        ])),
+        SchemaValue::Record {
+            fields: vec![SchemaValue::String(mode.to_string())],
+        },
+    );
+    let (sender, receiver) = tokio::sync::mpsc::channel(8);
+    sender
+        .send(InvocationRequest {
+            request: Some(invocation_request::Request::Start(InvocationStart {
+                agent_id: Some(worker_id.clone().into()),
+                idempotency_key: Some(IdempotencyKey::fresh().into()),
+                auth_ctx: Some(executor.auth_ctx().into()),
+                principal: Some(
+                    Principal::GolemUser(GolemUserPrincipal {
+                        account_id: context.account_id,
+                    })
+                    .into(),
+                ),
+                environment_id: Some(context.default_environment_id.into()),
+                component_owner_account_id: Some(context.account_id.into()),
+                expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+                attempt_id: Some(uuid::Uuid::new_v4().into()),
+                external_tool: Some(ExternalToolInvocation {
+                    tool_name: tool.to_string(),
+                    command_path: vec!["run".to_string()],
+                    input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+                    stdin: true,
+                    stdout: true,
+                    stderr: false,
+                    fresh_owner: false,
+                    expected_deployment_revision: None,
+                }),
+                ..Default::default()
+            })),
+        })
+        .await?;
+    let mut responses = executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+    let acceptance = responses.message().await?.expect("session acceptance");
+    let Some(invocation_response::Response::Accepted(accepted)) = acceptance.response else {
+        anyhow::bail!("the session was not accepted: {acceptance:?}");
+    };
+    Ok((sender, responses, accepted))
+}
+
+/// The request with which the client closes the stdin of an accepted external tool call.
+fn stdin_close_request(
+    accepted: &golem_api_grpc::proto::golem::worker::InvocationAccepted,
+    close: StdinClose,
+) -> golem_api_grpc::proto::golem::worker::InvocationRequest {
+    use golem_api_grpc::proto::golem::worker::{
+        InputStreamEnd, InvocationRequest, StreamCancel, StreamCancelReason, StreamCancelRole,
+        ToolByteStreamRole, invocation_request,
+    };
+    let stdin = accepted
+        .stream_mappings
+        .iter()
+        .find(|mapping| mapping.tool_byte_stream_role == Some(ToolByteStreamRole::Stdin as i32))
+        .expect("stdin role");
+    let transport_stream_id = stdin.transport_stream_id;
+    let durable_stream_id = stdin.handle.as_ref().unwrap().stream_id;
+    InvocationRequest {
+        request: Some(match close {
+            StdinClose::Cancel => invocation_request::Request::StreamCancel(StreamCancel {
+                transport_stream_id,
+                producer_sequence: 0,
+                role: StreamCancelRole::InputProducer as i32,
+                reason: StreamCancelReason::Cancelled as i32,
+                details: None,
+                durable_stream_id,
+                epoch: accepted.epoch,
+                durable_offset: Vec::new(),
+            }),
+            StdinClose::End => invocation_request::Request::InputEnd(InputStreamEnd {
+                transport_stream_id,
+                sequence: 0,
+                durable_stream_id,
+                epoch: accepted.epoch,
+            }),
+        }),
+    }
+}
+
+/// Reads the responses of an external tool call to their end and returns the rest of its
+/// stdout. Fails unless the tool returned a success and the session finished with a success.
+/// `awaited` names the end of the call in the error of the time limit.
+async fn stdout_of_a_successful_run(
+    responses: &mut tonic::Streaming<golem_api_grpc::proto::golem::worker::InvocationResponse>,
+    awaited: &str,
+) -> anyhow::Result<Vec<u8>> {
+    use golem_api_grpc::proto::golem::worker::{
+        invocation_response, invocation_session_completion, invocation_session_result,
+    };
+    use golem_common::model::oplog::PublicExternalToolResult;
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let mut stdout = Vec::new();
+        let mut succeeded = false;
+        let mut finished = false;
+        while let Some(response) = responses.message().await? {
+            match response.response {
+                Some(invocation_response::Response::OutputItem(item)) => {
+                    stdout.extend(item.packed_u8);
+                }
+                Some(invocation_response::Response::Result(result)) => {
+                    let Some(invocation_session_result::Result::ToolResult(result)) = result.result
+                    else {
+                        anyhow::bail!("the session returned a non-tool result");
+                    };
+                    let result: PublicExternalToolResult =
+                        result.try_into().map_err(anyhow::Error::msg)?;
+                    anyhow::ensure!(
+                        matches!(result, PublicExternalToolResult::Success(_)),
+                        "the tool call failed: {result:?}"
+                    );
+                    succeeded = true;
+                }
+                Some(invocation_response::Response::Finished(completion)) => {
+                    anyhow::ensure!(
+                        matches!(
+                            completion.outcome,
+                            Some(invocation_session_completion::Outcome::Success(_))
+                        ),
+                        "the session failed: {completion:?}"
+                    );
+                    finished = true;
+                }
+                _ => {}
+            }
+        }
+        anyhow::ensure!(succeeded, "the session ended without a tool result");
+        anyhow::ensure!(finished, "the session ended without its completion");
+        Ok(stdout)
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("waited 60 s for {awaited}"))?
+}
+
+/// Starts an executor and a new agent that has the `streaming` tool.
+async fn start_an_agent_with_the_streaming_tool(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    provider: &PrecompiledComponent,
+    caller: &PrecompiledComponent,
+    name: &str,
+    overrides: TestExecutorOverrides,
+) -> anyhow::Result<(
+    TestContext,
+    Arc<TestEnvironmentStateService>,
+    TestWorkerExecutor,
+    golem_common::model::AgentId,
+)> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..overrides
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    // The tool may use the files of the agent, as bash may. Only a call from outside gives such
+    // a tool a live stdin: an agent's call hands the stdin over when it has ended.
+    for bindings in deployment.tool_bindings.values_mut() {
+        bindings
+            .get_mut(&ToolName::try_from("streaming").unwrap())
+            .unwrap()
+            .filesystem_access = ToolFilesystemAccess::Allowed;
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let worker_id = executor
+        .start_agent(&caller_component.id, agent_id!("ToolStreamingCaller", name))
+        .await?;
+    Ok((context, environment_state, executor, worker_id))
+}
+
+/// Starts `streaming run` in `mode` from outside a new agent and waits for the marker on
+/// stdout: the tool body runs, and the client holds its stdin open.
+async fn start_an_external_tool_call(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    provider: &PrecompiledComponent,
+    caller: &PrecompiledComponent,
+    mode: &str,
+    overrides: TestExecutorOverrides,
+) -> anyhow::Result<RunningExternalToolCall> {
+    use golem_api_grpc::proto::golem::worker::invocation_response;
+    let (context, environment_state, executor, worker_id) = start_an_agent_with_the_streaming_tool(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        &format!("external-{mode}"),
+        overrides,
+    )
+    .await?;
+    let (sender, mut responses, accepted) =
+        start_external_streaming_run(&executor, &context, &worker_id, mode).await?;
+    let mut stdout = Vec::new();
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while stdout.len() < RUN_MARKER.len() {
+            match responses.message().await?.map(|response| response.response) {
+                Some(Some(invocation_response::Response::OutputItem(item))) => {
+                    stdout.extend(item.packed_u8);
+                }
+                other => anyhow::bail!("expected the marker on stdout, got {other:?}"),
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("waited 60 s for the marker on stdout"))??;
+    anyhow::ensure!(
+        stdout == RUN_MARKER,
+        "expected the marker on stdout, got {stdout:?}"
+    );
+    Ok(RunningExternalToolCall {
+        context,
+        environment_state,
+        executor,
+        worker_id,
+        sender,
+        responses,
+        accepted,
+        stdout,
+    })
+}
+
+/// The client closes the stdin of a running external tool call, and the call must end with a
+/// success. What the tool wrote to stdout after the marker says how its stdin ended.
+async fn close_the_stdin_of_an_external_tool_call(
+    call: RunningExternalToolCall,
+    close: StdinClose,
+) -> anyhow::Result<EndedExternalToolCall> {
+    let RunningExternalToolCall {
+        context,
+        environment_state,
+        executor,
+        worker_id,
+        sender,
+        mut responses,
+        accepted,
+        mut stdout,
+    } = call;
+    sender.send(stdin_close_request(&accepted, close)).await?;
+    stdout.extend(
+        stdout_of_a_successful_run(
+            &mut responses,
+            "the end of the call after its stdin was closed",
+        )
+        .await?,
+    );
+    Ok(EndedExternalToolCall {
+        stdout_after_marker: String::from_utf8_lossy(&stdout[RUN_MARKER.len()..]).into_owned(),
+        context,
+        environment_state,
+        executor,
+        worker_id,
+    })
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn stdin_cancel_reaches_a_tool_that_computes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let call = start_an_external_tool_call(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "stdin-or-spin",
+        Default::default(),
+    )
+    .await?;
+    // The body computes for a while before the client cancels.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let ended = close_the_stdin_of_an_external_tool_call(call, StdinClose::Cancel).await?;
+    assert_eq!(ended.stdout_after_marker, "stdin-cancelled");
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn stdin_cancel_reaches_a_tool_that_waits_on_a_long_clock(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let call = start_an_external_tool_call(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "stdin-or-clock",
+        TestExecutorOverrides {
+            // The interval of `long_clock_through_tool_entity_suspends_and_reconstructs_owner`,
+            // where the owner of a tool that waits on a clock is suspended.
+            configure: Some(Arc::new(|config| {
+                config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    // A client's open stdin keeps the owner in memory, so the cancel reaches a tool that was
+    // never unloaded.
+    let owned = OwnedAgentId::new(call.context.default_environment_id, &call.worker_id);
+    let loads = call.executor.instance_load_count(&call.worker_id);
+    let held_open = std::time::Instant::now();
+    while held_open.elapsed() < Duration::from_secs(3) {
+        assert!(
+            call.executor.worker_is_loaded(&owned).await,
+            "the owner was unloaded while a client held the stdin of its tool call open"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        call.executor
+            .get_oplog(&call.worker_id, OplogIndex::INITIAL)
+            .await?
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Suspend(_))),
+        "the owner was suspended while a client held the stdin of its tool call open"
+    );
+    let ended = close_the_stdin_of_an_external_tool_call(call, StdinClose::Cancel).await?;
+    assert_eq!(ended.stdout_after_marker, "stdin-cancelled");
+    assert_eq!(ended.executor.instance_load_count(&ended.worker_id), loads);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_clean_end_of_stdin_stays_a_clean_end(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let call = start_an_external_tool_call(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "stdin-or-spin",
+        Default::default(),
+    )
+    .await?;
+    let ended = close_the_stdin_of_an_external_tool_call(call, StdinClose::End).await?;
+    assert_eq!(ended.stdout_after_marker, "stdin-eof");
+    Ok(())
+}
+
+/// Covers a tool body that makes no other host call while it reads its stdin.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_cancelled_stdin_is_replayed_after_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let call = start_an_external_tool_call(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "stdin-or-spin",
+        Default::default(),
+    )
+    .await?;
+    let cancelled = close_the_stdin_of_an_external_tool_call(call, StdinClose::Cancel).await?;
+    assert_eq!(cancelled.stdout_after_marker, "stdin-cancelled");
+    let EndedExternalToolCall {
+        context,
+        environment_state,
+        executor,
+        worker_id,
+        ..
+    } = cancelled;
+    drop(executor);
+
+    // The new executor has no agent in memory. The next call loads the agent, and the load
+    // replays the cancelled call from the journals.
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let (_stdin, mut responses, _) =
+        start_external_streaming_run(&executor, &context, &worker_id, "empty").await?;
+    let next_call =
+        stdout_of_a_successful_run(&mut responses, "the end of the call after the restart").await;
+
+    // A replay that failed shows in the agent before it shows in the next call.
+    assert_ne!(
+        executor.get_worker_metadata(&worker_id).await?.status,
+        AgentStatus::Failed,
+        "the agent failed after the restart"
+    );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "the replay of the cancelled call must not fail"
+    );
+    next_call?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_call_that_ends_with_its_stdin_open_leaves_the_agent_usable(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let (context, environment_state, executor, worker_id) = start_an_agent_with_the_streaming_tool(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "open-stdin",
+        Default::default(),
+    )
+    .await?;
+    let loads = executor.instance_load_count(&worker_id);
+    // The tool returns without a read of its stdin, and the client never closes that stdin.
+    for call in 1..=3 {
+        let (_stdin, mut responses, _) =
+            start_external_streaming_run(&executor, &context, &worker_id, "empty").await?;
+        stdout_of_a_successful_run(
+            &mut responses,
+            &format!("the end of call {call} with an open stdin"),
+        )
+        .await?;
+    }
+    assert_eq!(
+        executor.instance_load_count(&worker_id),
+        loads,
+        "the agent was restarted between the calls"
+    );
+    drop(executor);
+
+    // The next call loads the agent on a new executor, and the load replays the three calls.
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let (_stdin, mut responses, _) =
+        start_external_streaming_run(&executor, &context, &worker_id, "empty").await?;
+    let next_call =
+        stdout_of_a_successful_run(&mut responses, "the end of the call after the restart").await;
+
+    assert_ne!(
+        executor.get_worker_metadata(&worker_id).await?.status,
+        AgentStatus::Failed,
+        "the agent failed after the restart"
+    );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "a call that ended with its stdin open must not fail the agent"
+    );
+    next_call?;
+    Ok(())
+}
+
+/// call, after `bytes_sent` earlier bytes.
+fn stdin_item_request(
+    accepted: &golem_api_grpc::proto::golem::worker::InvocationAccepted,
+    bytes_sent: u64,
+    bytes: &[u8],
+) -> golem_api_grpc::proto::golem::worker::InvocationRequest {
+    use golem_api_grpc::proto::golem::worker::{
+        InputStreamItem, InvocationRequest, ToolByteStreamRole, input_stream_item,
+        invocation_request,
+    };
+    let stdin = accepted
+        .stream_mappings
+        .iter()
+        .find(|mapping| mapping.tool_byte_stream_role == Some(ToolByteStreamRole::Stdin as i32))
+        .expect("stdin role");
+    InvocationRequest {
+        request: Some(invocation_request::Request::InputItem(InputStreamItem {
+            transport_stream_id: stdin.transport_stream_id,
+            sequence: bytes_sent,
+            payload: Some(input_stream_item::Payload::PackedU8(bytes.to_vec())),
+            durable_stream_id: stdin.handle.as_ref().unwrap().stream_id,
+            epoch: accepted.epoch,
+        })),
+    }
+}
+
+/// [`stdin_close_request`] for a stdin that the client sent `bytes_sent` bytes to.
+fn stdin_close_request_after(
+    accepted: &golem_api_grpc::proto::golem::worker::InvocationAccepted,
+    close: StdinClose,
+    bytes_sent: u64,
+) -> golem_api_grpc::proto::golem::worker::InvocationRequest {
+    use golem_api_grpc::proto::golem::worker::invocation_request;
+    let mut request = stdin_close_request(accepted, close);
+    match &mut request.request {
+        Some(invocation_request::Request::StreamCancel(cancel)) => {
+            cancel.producer_sequence = bytes_sent;
+        }
+        Some(invocation_request::Request::InputEnd(end)) => end.sequence = bytes_sent,
+        _ => unreachable!("a stdin close is a cancel or an end"),
+    }
+    request
+}
+
+impl RunningExternalToolCall {
+    /// Reads the call's stdout until it is `expected`. The body has then written all of it and
+    /// still runs.
+    async fn read_stdout_until_it_is(&mut self, expected: &str) -> anyhow::Result<()> {
+        use golem_api_grpc::proto::golem::worker::invocation_response;
+        tokio::time::timeout(Duration::from_secs(60), async {
+            while self.stdout.len() < expected.len() {
+                match self
+                    .responses
+                    .message()
+                    .await?
+                    .map(|response| response.response)
+                {
+                    Some(Some(invocation_response::Response::OutputItem(item))) => {
+                        self.stdout.extend(item.packed_u8);
+                    }
+                    // The answer to what the client sent to the stdin.
+                    Some(Some(invocation_response::Response::InputAck(_))) => {}
+                    other => anyhow::bail!("expected {expected:?} on stdout, got {other:?}"),
+                }
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("waited 60 s for {expected:?} on stdout"))??;
+        anyhow::ensure!(
+            self.stdout == expected.as_bytes(),
+            "expected {expected:?} on stdout, got {:?}",
+            String::from_utf8_lossy(&self.stdout)
+        );
+        Ok(())
+    }
+
+    /// Reads the answers of the call until the session has taken the client's stdin up to the
+    /// byte with the number `last`. What the call wrote to its stdout in between is kept.
+    async fn wait_until_the_stdin_was_taken(&mut self, last: u64) -> anyhow::Result<()> {
+        use golem_api_grpc::proto::golem::worker::invocation_response;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                match self
+                    .responses
+                    .message()
+                    .await?
+                    .map(|response| response.response)
+                {
+                    Some(Some(invocation_response::Response::InputAck(ack)))
+                        if ack.highest_contiguous_sequence == last =>
+                    {
+                        return Ok::<_, anyhow::Error>(());
+                    }
+                    Some(Some(invocation_response::Response::OutputItem(item))) => {
+                        self.stdout.extend(item.packed_u8);
+                    }
+                    Some(Some(
+                        ended @ (invocation_response::Response::Finished(_)
+                        | invocation_response::Response::Rejected(_)),
+                    )) => anyhow::bail!(
+                        "the call ended before it took the stdin of the client: {ended:?}"
+                    ),
+                    Some(_) => {}
+                    None => {
+                        anyhow::bail!("the session ended before it took the stdin of the client")
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("waited 30 s for the call to take the stdin of the client"))?
+    }
+
+    /// The client sends `bytes` to the stdin, after `bytes_sent` earlier bytes, and waits until
+    /// the session has taken them.
+    async fn send_to_the_stdin(&mut self, bytes_sent: u64, bytes: &[u8]) -> anyhow::Result<()> {
+        self.sender
+            .send(stdin_item_request(&self.accepted, bytes_sent, bytes))
+            .await?;
+        self.wait_until_the_stdin_was_taken(bytes_sent + bytes.len() as u64 - 1)
+            .await
+    }
+}
+
+/// The role and the details of each stream cancel in the oplog of an agent, in the order of the
+/// oplog.
+async fn stream_cancels(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+) -> anyhow::Result<
+    Vec<(
+        golem_common::model::durable_stream::StreamCancelRole,
+        String,
+    )>,
+> {
+    use golem_common::model::durable_stream::StreamCancelRecord;
+    let mut cancels = Vec::new();
+    for entry in executor.get_oplog(worker_id, OplogIndex::INITIAL).await? {
+        if let PublicOplogEntry::StreamCancel(cancel) = &entry.entry {
+            let record = StreamCancelRecord::from_value(cancel.record.value())
+                .map_err(anyhow::Error::msg)?;
+            cancels.push((record.role, record.details.unwrap_or_default()));
+        }
+    }
+    Ok(cancels)
+}
+
+/// Starts an executor that has the native test tool as `native-streaming`, with the component
+/// whose agents may call it.
+async fn start_an_executor_with_the_native_streaming_tool(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    caller: &PrecompiledComponent,
+) -> anyhow::Result<(
+    TestContext,
+    Arc<TestEnvironmentStateService>,
+    TestWorkerExecutor,
+    golem_common::model::component::ComponentId,
+)> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let mut streaming = native_streaming_tool_metadata();
+    streaming.commands.nodes[0].name = "native-streaming".to_string();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            native_tool_metadata: Some(streaming.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(native_deployment_state(
+            context.account_id,
+            "ToolStreamingCaller",
+            streaming,
+            native_test_tool_metadata(),
+        )),
+    );
+    Ok((context, environment_state, executor, caller_component.id))
+}
+
+/// Starts `native-streaming run` in `mode` from outside a new agent. The body is a native one:
+/// a host task reads the stdin of the call for it. The client holds that stdin open.
+async fn start_an_external_native_run(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    caller: &PrecompiledComponent,
+    mode: &str,
+) -> anyhow::Result<RunningExternalToolCall> {
+    let (context, environment_state, executor, caller_component) =
+        start_an_executor_with_the_native_streaming_tool(last_unique_id, deps, caller).await?;
+    let worker_id = executor
+        .start_agent(
+            &caller_component,
+            agent_id!("ToolStreamingCaller", "external-native"),
+        )
+        .await?;
+    let (sender, responses, accepted) =
+        start_external_run_of(&executor, &context, &worker_id, "native-streaming", mode).await?;
+    Ok(RunningExternalToolCall {
+        context,
+        environment_state,
+        executor,
+        worker_id,
+        sender,
+        responses,
+        accepted,
+        stdout: Vec::new(),
+    })
+}
+
+/// A native tool body writes each chunk of its stdin to its stdout. It gets what the client
+/// sent, and a clean end of the stdin ends its reading.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_native_tool_reads_the_stdin_of_a_client_call_to_its_clean_end(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let mut call = start_an_external_native_run(last_unique_id, deps, caller, "echo").await?;
+    call.read_stdout_until_it_is("native:").await?;
+    call.send_to_the_stdin(0, b"abc").await?;
+    call.send_to_the_stdin(3, b"de").await?;
+    call.sender
+        .send(stdin_close_request_after(
+            &call.accepted,
+            StdinClose::End,
+            5,
+        ))
+        .await?;
+    call.stdout.extend(
+        stdout_of_a_successful_run(&mut call.responses, "the end of the native call").await?,
+    );
+    assert_eq!(String::from_utf8_lossy(&call.stdout), "native:abcde");
+    let cancels = stream_cancels(&call.executor, &call.worker_id).await?;
+    assert!(
+        cancels.is_empty(),
+        "nothing cancels a stdin that was read to its clean end: {cancels:?}"
+    );
+    Ok(())
+}
+
+/// The client cancels the stdin of a call to a native tool body. The body's read must give the
+/// cancel, not the end of the stream: this tool fails on a read that fails, and it would end
+/// with a success on a clean end.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_native_tool_reads_a_cancelled_stdin_of_a_client_call_as_cancelled(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let mut call = start_an_external_native_run(last_unique_id, deps, caller, "echo").await?;
+    call.read_stdout_until_it_is("native:").await?;
+    call.send_to_the_stdin(0, b"abc").await?;
+    call.sender
+        .send(stdin_close_request_after(
+            &call.accepted,
+            StdinClose::Cancel,
+            3,
+        ))
+        .await?;
+    let failure = stdout_of_a_successful_run(&mut call.responses, "the end of the native call")
+        .await
+        .expect_err("the tool read a clean end for a stdin that the client cancelled");
+    let failure = format!("{failure:#}");
+    assert!(
+        failure.contains("ByteStreamFailure::Cancelled"),
+        "the call did not fail on the cancelled read of the tool: {failure}"
+    );
+    Ok(())
+}

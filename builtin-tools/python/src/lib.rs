@@ -91,6 +91,11 @@ impl Read for AttachedInput {
             };
             match wit_bindgen::block_on(stream.next()) {
                 Some(Ok(bytes)) => self.pending = io::Cursor::new(bytes),
+                Some(Err(
+                    golem_rust::golem_agentic::golem::tool::streams::ByteStreamFailure::Cancelled,
+                )) => {
+                    return Err(io::Error::other(runtime::StdinCancelled));
+                }
                 Some(Err(error)) => return Err(io::Error::other(format!("stdin: {error:?}"))),
                 None => {
                     self.stream = None;
