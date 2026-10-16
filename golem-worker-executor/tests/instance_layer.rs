@@ -399,13 +399,9 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
                         vec![],
                         None,
                     )
-                    .await
-                    .expect_err("other namespace wallet must refuse before persistent creation");
+                    .await?;
                     assert!(
-                        matches!(
-                            wrong.downcast_ref::<types::PermissionError>(),
-                            Some(types::PermissionError::LowerBoundTooBroad(_))
-                        ),
+                        matches!(wrong, Err(types::PermissionError::LowerBoundTooBroad(_))),
                         "other namespace wallet must be refused: historical={historical}, {wrong:?}"
                     );
                     if !historical {
