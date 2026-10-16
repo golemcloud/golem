@@ -386,7 +386,7 @@ dependencies = [
 [[package]]
 name = "brush-builtins"
 version = "0.2.0"
-source = "git+https://github.com/golemcloud/brush?rev=9549479d688721d6ae10a0b5fdc413d617fe5f03#9549479d688721d6ae10a0b5fdc413d617fe5f03"
+source = "git+https://github.com/golemcloud/brush?rev=518bd2f0ad68e3f2ea25beee4eb17e62ce694c1a#518bd2f0ad68e3f2ea25beee4eb17e62ce694c1a"
 dependencies = [
  "brush-core",
  "brush-parser",
@@ -410,7 +410,7 @@ dependencies = [
 [[package]]
 name = "brush-core"
 version = "0.5.0"
-source = "git+https://github.com/golemcloud/brush?rev=9549479d688721d6ae10a0b5fdc413d617fe5f03#9549479d688721d6ae10a0b5fdc413d617fe5f03"
+source = "git+https://github.com/golemcloud/brush?rev=518bd2f0ad68e3f2ea25beee4eb17e62ce694c1a#518bd2f0ad68e3f2ea25beee4eb17e62ce694c1a"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -448,7 +448,7 @@ dependencies = [
 [[package]]
 name = "brush-parser"
 version = "0.4.0"
-source = "git+https://github.com/golemcloud/brush?rev=9549479d688721d6ae10a0b5fdc413d617fe5f03#9549479d688721d6ae10a0b5fdc413d617fe5f03"
+source = "git+https://github.com/golemcloud/brush?rev=518bd2f0ad68e3f2ea25beee4eb17e62ce694c1a#518bd2f0ad68e3f2ea25beee4eb17e62ce694c1a"
 dependencies = [
  "bon",
  "cached",
@@ -1416,15 +1416,20 @@ name = "golem-rust"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "ctor",
+ "futures",
  "glob-match",
  "golem-rust-macro",
  "golem-schema",
  "golem-tool-metadata",
  "http",
+ "http-body",
+ "http-body-util",
  "log",
  "serde",
  "serde_json",
+ "thiserror",
  "unicode-segmentation",
  "uuid",
  "wasi-logger",

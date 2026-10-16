@@ -4,6 +4,36 @@ A library that help writing [Golem](https://golem.cloud) programs by providing h
 wrappers for Golem's runtime APIs, including functions for defining and performing operations
 transactionally.
 
+## Outgoing HTTP
+
+Use `golem_rust::http` for WASI HTTP p3 requests in async agent methods. No separate
+HTTP client crate is needed. The SDK uses standard `http` request builders:
+
+```rust,no_run
+use golem_rust::http::{self, Request};
+
+async fn fetch_text(url: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let request = Request::get(url).body(Vec::new())?;
+    let response = http::send(request).await?;
+    if !response.status().is_success() {
+        return Err(format!("HTTP {}", response.status()).into());
+    }
+    Ok(http::response_text(response).await?)
+}
+```
+
+`send` accepts a buffered `Request<Vec<u8>>` and checks upload and transmission
+errors. It does not reject HTTP error statuses, follow redirects, or retry on its
+own. Read status and headers before consuming the response with `response_bytes`,
+`response_text`, or `response_json::<T>` (the default `json` feature). These helpers
+buffer the entire remaining body and propagate final body errors. For large bodies,
+read frames from `response.into_body()` using `http_body_util::BodyExt` instead.
+
+For JSON requests, set `Content-Type: application/json` and use
+`.body(serde_json::to_vec(&value)?)`. Low-level p3 bindings and HTTP adapters are
+available through `golem_rust::wasip3::{http, http_compat}`. Sending requires the
+Golem WASI p3 runtime, not a native socket executor.
+
 ## Self metadata and restrictive permissions
 
 `get_self_metadata()` returns `Result<AgentMetadata, AgentOperationError>`. Handle
