@@ -5453,15 +5453,7 @@ impl RustResourceToolStreamingCaller for RustResourceToolStreamingCallerImpl {
         let (first, second) = (first.issue(), second.issue()).join().await;
         let first = first.expect("first concurrent permission issue succeeds");
         let second = second.expect("second concurrent permission issue succeeds");
-        let first_id = first
-            .card
-            .with_handle(|card| CardId::from(permission_types::id(card)))
-            .expect("first concurrently derived card is usable");
-        let second_id = second
-            .card
-            .with_handle(|card| CardId::from(permission_types::id(card)))
-            .expect("second concurrently derived card is usable");
-        first_id != second_id
+        first.card.id() != second.card.id()
     }
 
     async fn matrix_typed_stream_observation(&self) -> MatrixResourceObservation {

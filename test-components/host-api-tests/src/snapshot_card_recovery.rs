@@ -1,7 +1,8 @@
 use golem_rust::bindings::golem::agent::host::{Datetime, RpcError, WasmRpc};
 use golem_rust::golem_schema::CardId;
 use golem_rust::permissions::{
-    self, Bounds, Holder, Lifespan, PatternGrant, PermissionCard, PermissionError, ScopeCard,
+    self, Bounds, Holder, Lifespan, PatternGrant, PermissionCard, PermissionError,
+    PolymorphicPermissionCard, ScopeCard, Timestamp, WalletCard,
 };
 use golem_rust::{
     AgentId, ComponentId, FromSchema, GolemReflectError, IntoSchema, ParsedAgentId, PromiseId,
@@ -31,7 +32,7 @@ mod raw {
     use golem_rust::{ComponentId, Uuid};
 
     pub use golem_rust::schema::wit::wire::PermissionCard as Card;
-    pub use types::PermissionError;
+    pub use types::{PermissionError, WalletCard};
 
     fn card_id(id: wire::CardId) -> CardId {
         CardId::new(Uuid::from(id.uuid))
@@ -49,27 +50,33 @@ mod raw {
         inspect::inspect_card(card)
     }
 
-    fn is_template(card: &Card) -> bool {
-        view(card).is_ok_and(|view| {
-            view.lower_positive
-                .iter()
-                .chain(&view.lower_negative)
-                .chain(&view.upper_positive)
-                .chain(&view.upper_negative)
-                .any(|grant| grant.owner.contains('?'))
-        })
-    }
-
     pub fn is_inspect_grant(grant: &types::PatternGrant) -> bool {
         grant.class == "card" && grant.verb == "inspect" && grant.resource_id == "*"
+    }
+
+    /// The cards of the caller's wallet with the kind that `self-wallet`
+    /// labels each with: `concrete`, `template` or `scope`.
+    pub fn labelled_wallet() -> Vec<(&'static str, Card)> {
+        wallet::self_wallet()
+            .into_iter()
+            .map(|card| match card {
+                WalletCard::Concrete(card) => ("concrete", card),
+                WalletCard::Template(card) => ("template", card),
+                WalletCard::Scope(card) => ("scope", card),
+            })
+            .collect()
+    }
+
+    fn wallet_cards() -> impl Iterator<Item = Card> {
+        labelled_wallet().into_iter().map(|(_, card)| card)
     }
 
     /// The caller's initial card, which is the root of every card derived
     /// from the wallet.
     pub fn template() -> Card {
-        wallet::self_wallet()
+        labelled_wallet()
             .into_iter()
-            .find(is_template)
+            .find_map(|(kind, card)| (kind == "template").then_some(card))
             .expect("scope-card test parent is not installed")
     }
 
@@ -124,35 +131,26 @@ mod raw {
     }
 
     pub fn wallet_card(card_id: &CardId) -> Option<Card> {
-        wallet::self_wallet()
-            .into_iter()
-            .find(|card| &id(card) == card_id)
+        wallet_cards().find(|card| &id(card) == card_id)
     }
 
     /// The wallet cards derived from `root`, such as a scope card lent to
     /// this invocation by an agent whose initial card is `root`.
     pub fn children_of(root: &CardId) -> Vec<Card> {
-        wallet::self_wallet()
-            .into_iter()
+        wallet_cards()
             .filter(|card| parents(card).contains(root))
             .collect()
     }
 }
 
-fn is_template_card(card: &PermissionCard) -> bool {
-    let view = card.inspect().expect("failed to inspect wallet card");
-    view.lower_positive
-        .iter()
-        .chain(&view.lower_negative)
-        .chain(&view.upper_positive)
-        .chain(&view.upper_negative)
-        .any(|grant| grant.owner.contains('?'))
-}
-
-fn parent_card() -> PermissionCard {
+/// The agent's initial card, a template card.
+fn parent_card() -> PolymorphicPermissionCard {
     permissions::wallet()
         .into_iter()
-        .find(is_template_card)
+        .find_map(|card| match card {
+            WalletCard::Template(card) => Some(card),
+            _ => None,
+        })
         .expect("scope-card test parent is not installed")
 }
 
@@ -160,7 +158,7 @@ fn is_inspect_grant(grant: &PatternGrant) -> bool {
     grant.class == "card" && grant.verb == "inspect" && grant.resource_id == "*"
 }
 
-fn retained_inspect_grant(card: &PermissionCard) -> PatternGrant {
+fn retained_inspect_grant(card: &PolymorphicPermissionCard) -> PatternGrant {
     card.inspect()
         .expect("failed to inspect parent card")
         .lower_positive
@@ -193,7 +191,10 @@ fn derive_persistent_card_from_wallet() -> PermissionCard {
 fn wallet_card(card_id: &permissions::CardId) -> Option<PermissionCard> {
     permissions::wallet()
         .into_iter()
-        .find(|card| &card.id() == card_id)
+        .find_map(|card| match card {
+            WalletCard::Concrete(card) if &card.id() == card_id => Some(card),
+            _ => None,
+        })
 }
 
 fn agent_holder(component_id: ComponentId, agent_id: String) -> Holder {
@@ -380,6 +381,58 @@ pub trait ScopeCardAgent {
     /// Lends a scope card to a `SealedScopeAgent` target, which lists it;
     /// see `SealedScopeAgent::observe_lent_scope`.
     async fn lend_scope_to_observer(&self, target: String) -> (bool, bool);
+
+    /// This agent's wallet; see [`labelled_wallet`].
+    fn labelled_wallet(&self) -> LabelledWallet;
+
+    /// Lends a scope card derived from this agent's initial card to the
+    /// `ScopeCardAgent` `target` and returns the target's
+    /// [`labelled_wallet`] during that call.
+    async fn lend_scope_to_wallet_lister(&self, target: String) -> LabelledWallet;
+
+    /// Derives a scope card from every expiring concrete card of the wallet
+    /// and from the initial card, and lends it to the `ScopeCardAgent`
+    /// `target`. Returns the earliest expiry of the expiring cards, the
+    /// expiry of the scope card, and the target's [`lent_scope_expiry`].
+    async fn expiring_scope_expiries(
+        &self,
+        target: String,
+    ) -> (Option<Expiry>, Option<Expiry>, (bool, Option<Expiry>));
+
+    /// Whether the typed wallet lists a scope card lent to this invocation,
+    /// and the expiry of that scope card.
+    fn lent_scope_expiry(&self) -> (bool, Option<Expiry>);
+}
+
+/// The cards of a wallet as the raw `self-wallet` labels them, each with its
+/// id and parents, and the kinds the typed `permissions::wallet` reports for
+/// the same wallet, in order.
+type LabelledWallet = (Vec<(String, CardId, Vec<CardId>)>, Vec<String>);
+
+/// A card expiry as seconds and nanoseconds since the Unix epoch.
+type Expiry = (i64, u32);
+
+fn labelled_wallet() -> LabelledWallet {
+    let listed = raw::labelled_wallet()
+        .into_iter()
+        .map(|(kind, card)| (kind.to_string(), raw::id(&card), raw::parents(&card)))
+        .collect();
+    let typed_kinds = permissions::wallet()
+        .iter()
+        .map(|card| {
+            match card {
+                WalletCard::Concrete(_) => "concrete",
+                WalletCard::Template(_) => "template",
+                WalletCard::Scope(_) => "scope",
+            }
+            .to_string()
+        })
+        .collect();
+    (listed, typed_kinds)
+}
+
+fn expiry(timestamp: Timestamp) -> Expiry {
+    (timestamp.seconds, timestamp.nanoseconds)
 }
 
 /// A method-only client of `ScopeCardAgent`, whose awaited calls return RPC
@@ -983,6 +1036,59 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
             .with_scope_card(&scope_card)
             .observe_lent_scope(raw::id(&raw::template()))
             .await
+    }
+
+    fn labelled_wallet(&self) -> LabelledWallet {
+        labelled_wallet()
+    }
+
+    async fn lend_scope_to_wallet_lister(&self, target: String) -> LabelledWallet {
+        let scope_card = derive_scope_card();
+        ScopeCardAgentClient::get(target)
+            .with_scope_card(&scope_card)
+            .labelled_wallet()
+            .await
+    }
+
+    async fn expiring_scope_expiries(
+        &self,
+        target: String,
+    ) -> (Option<Expiry>, Option<Expiry>, (bool, Option<Expiry>)) {
+        let template = parent_card();
+        let grant = retained_inspect_grant(&template);
+        let expiring = permissions::wallet()
+            .into_iter()
+            .filter_map(|card| match card {
+                WalletCard::Concrete(card) if card.expires_at().is_some() => Some(card),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let earliest = expiring
+            .iter()
+            .filter_map(|card| card.expires_at().map(expiry))
+            .min();
+        let mut parents = expiring.iter().map(Into::into).collect::<Vec<_>>();
+        parents.push((&template).into());
+        let scope_card = permissions::derive_scope(&parents, &lower_positive(grant))
+            .expect("scope-card derivation failed");
+        let lent = ScopeCardAgentClient::get(target)
+            .with_scope_card(&scope_card)
+            .lent_scope_expiry()
+            .await;
+        (earliest, scope_card.expires_at().map(expiry), lent)
+    }
+
+    fn lent_scope_expiry(&self) -> (bool, Option<Expiry>) {
+        let scope_card = permissions::wallet()
+            .into_iter()
+            .find_map(|card| match card {
+                WalletCard::Scope(card) => Some(card),
+                _ => None,
+            });
+        match scope_card {
+            Some(scope_card) => (true, scope_card.expires_at().map(expiry)),
+            None => (false, None),
+        }
     }
 
     fn use_moved_card(&self) -> String {
