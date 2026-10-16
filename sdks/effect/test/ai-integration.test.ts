@@ -70,7 +70,7 @@ describe("Effect AI language model integration", () => {
       body.option("mode", Schema.String, { default: "destructive" }),
     )
     const start = vi.fn<ToolTransportService["start"]>(() =>
-      Effect.succeed({ result: Effect.succeed({}), cancel: Effect.void }),
+      Effect.succeed({ result: Effect.succeed({}), cancel: Effect.void, detach: Effect.void }),
     )
     const approval = vi.fn(
       (parameters: Readonly<Record<string, unknown>>) => parameters.mode === "destructive",
@@ -107,7 +107,7 @@ describe("Effect AI language model integration", () => {
       implementedBy: { uuid: { highBits: 0n, lowBits: 1n } },
     })
     const start = vi.fn<ToolTransportService["start"]>(() =>
-      Effect.succeed({ result: Effect.succeed({}), cancel: Effect.void }),
+      Effect.succeed({ result: Effect.succeed({}), cancel: Effect.void, detach: Effect.void }),
     )
     const approval = vi.fn(
       (parameters: Readonly<Record<string, unknown>>) => parameters.mode === "destructive",
@@ -158,6 +158,7 @@ describe("Effect AI language model integration", () => {
             },
           }),
           cancel: Effect.void,
+          detach: Effect.void,
         }
       }),
     )
@@ -206,6 +207,7 @@ describe("Effect AI language model integration", () => {
           },
         }),
         cancel: Effect.void,
+        detach: Effect.void,
       }),
     )
     const toolkit = await Effect.runPromise(

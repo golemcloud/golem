@@ -19,6 +19,7 @@ package golem.runtime.tool
 import golem.FutureInterop
 import golem.host.js.tool.{JsByteStreamIterator, JsByteStreamIteratorResult, JsWasiInputStream, JsWasiOutputStream}
 import golem.runtime.tool.host.ToolHostApi
+import golem.schema.AgentStreamOwnership
 import golem.schema.wire.SchemaWire
 import golem.tool._
 import golem.tool.wire.WitToolError
@@ -395,7 +396,22 @@ private[golem] object ToolImplementationRuntime {
       (path, input, stdin, stdout, stderr, principal) =>
         handle
           .invoke(path, WireToolInput(input.value, stdin, stdout, stderr, principal))
-          .map(_.map(ToolInvocationResult.apply))
+          .map { outcome =>
+            try {
+              val tool = ToolReflection.fromWire(handle.descriptor)
+              validateReturned(
+                tool,
+                path,
+                outcome.left
+                  .map(errorFromWire)
+                  .map(value => ToolInvokeResult(value.map(SchemaWire.typedSchemaValueFromWit)))
+              )
+            } catch {
+              case scala.util.control.NonFatal(error)
+                  if !error.isInstanceOf[java.util.concurrent.CancellationException] =>
+                Left(WitToolError.InvalidResult(String.valueOf(error.getMessage)))
+            }
+          }
     )
 
   def register(handle: ToolImplementationHandle): Unit = {
@@ -432,16 +448,44 @@ private[golem] object ToolImplementationRuntime {
               principal
             )
       }
-      invoked.map {
-        case Right(result) =>
-          Right(
-            ToolInvocationResult(
-              result.result.map(SchemaWire.typedSchemaValueToWit)
-            )
-          )
-        case Left(error) => Left(errorToWire(error))
-      }
+      invoked.map(outcome => validateReturned(tool, commandPath, outcome))
     }
+
+  private def validateReturned(
+    tool: ExtendedToolType,
+    path: List[String],
+    outcome: Either[ToolInvokeError[golem.schema.TypedSchemaValue], ToolInvokeResult]
+  ): Either[WitToolError, ToolInvocationResult] = {
+    def releaseReturned(): Unit = outcome match {
+      case Right(result)                                    => result.result.foreach(value => SchemaWire.releaseOwned(value.value))
+      case Left(ToolInvokeError.UnknownToolError(_, value)) => SchemaWire.releaseOwned(value.value)
+      case Left(ToolInvokeError.Tool(value))                => SchemaWire.releaseOwned(value.value)
+      case _                                                => ()
+    }
+    try {
+      val checked = tool.commandIndexByPath(path) match {
+        case Some(index) =>
+          ToolMiddlewareInvokerRuntime.validateOutcome(
+            tool,
+            index,
+            outcome.map(result => ToolMiddlewareResult(result.result, None, None)),
+            validateOutputs = false
+          )
+        case None => outcome.map(result => ToolMiddlewareResult(result.result, None, None))
+      }
+      checked match {
+        case Left(_: ToolInvokeError.InvalidResult) => releaseReturned()
+        case _                                      => ()
+      }
+      checked.left
+        .map(errorToWire)
+        .map(result => ToolInvocationResult(result.result.map(SchemaWire.typedSchemaValueToWit)))
+    } catch {
+      case scala.util.control.NonFatal(error) if !error.isInstanceOf[java.util.concurrent.CancellationException] =>
+        AgentStreamOwnership.cleanup { releaseReturned(); Future.successful(()) }
+        Left(WitToolError.InvalidResult(String.valueOf(error.getMessage)))
+    }
+  }
 
   private[tool] def errorToWire(error: ToolInvokeError[golem.schema.TypedSchemaValue]): WitToolError =
     ToolInvokeError.toWire(error)

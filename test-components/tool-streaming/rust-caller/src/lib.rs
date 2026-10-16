@@ -31,6 +31,8 @@ use std::io::{Read, Write};
 use streaming_tool_guest_client::{StreamSummary, StreamingClient, StreamingRunError};
 use typed_output_stream_tool_guest_client::TypedOutputStreamClient;
 
+mod wallet_recovery;
+
 #[allow(dead_code)]
 mod definition_owned_proxy {
     use golem_rust::agentic::{InputStream, OutputStream};
@@ -795,6 +797,7 @@ pub trait RustResourceToolStreamingCaller {
     async fn matrix_secret_observation(&self) -> MatrixResourceObservation;
     async fn matrix_quota_observation(&self) -> MatrixResourceObservation;
     async fn matrix_permission_observation(&self) -> MatrixResourceObservation;
+    async fn matrix_parallel_permission_issuance(&self) -> bool;
     async fn matrix_typed_stream_observation(&self) -> MatrixResourceObservation;
     async fn matrix_resource_observation(&self) -> MatrixResourceObservation;
 }
@@ -3612,22 +3615,18 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         use std::task::Poll;
 
         let (writer, _stdin, closed) = tool_host::create_stdin();
-        writer.write(vec![0x13; 64]).await.unwrap();
         let mut first = Box::pin(writer.write(vec![0xa7; 7]));
         poll_fn(|cx| {
             assert!(first.as_mut().poll(cx).is_pending());
             Poll::Ready(())
         })
         .await;
-        let second = writer.write(vec![0xa7; 7]).await.unwrap_err();
-        assert!(matches!(
-            second,
-            tool_host::StreamWriteError::ConcurrentOperation
-        ));
-        wait_at_promise_checkpoint("direct-stdin-waits-done").await;
+        wait_at_promise_checkpoint("first-stdin-write-accepted").await;
+        writer.write(vec![0xa7; 7]).await.unwrap();
         drop(first);
+        wait_at_promise_checkpoint("direct-stdin-waits-done").await;
         writer.finish().await.unwrap();
-        vec![format!("{:?}", closed.wait().await), format!("{second:?}")]
+        vec![format!("{:?}", closed.wait().await)]
     }
 
     async fn direct_stdin_write_order(&self) -> Vec<String> {
@@ -5405,6 +5404,23 @@ impl RustResourceToolStreamingCaller for RustResourceToolStreamingCallerImpl {
             permission_owner_agent_id: exchange.owner_agent_id,
             ..empty_matrix_resource_observation()
         }
+    }
+
+    async fn matrix_parallel_permission_issuance(&self) -> bool {
+        let first = MatrixPermissionIssuerClient::default();
+        let second = MatrixPermissionIssuerClient::default();
+        let (first, second) = (first.issue(), second.issue()).join().await;
+        let first = first.expect("first concurrent permission issue succeeds");
+        let second = second.expect("second concurrent permission issue succeeds");
+        let first_id = first
+            .card
+            .with_handle(|card| CardId::from(permission_types::id(card)))
+            .expect("first concurrently derived card is usable");
+        let second_id = second
+            .card
+            .with_handle(|card| CardId::from(permission_types::id(card)))
+            .expect("second concurrently derived card is usable");
+        first_id != second_id
     }
 
     async fn matrix_typed_stream_observation(&self) -> MatrixResourceObservation {

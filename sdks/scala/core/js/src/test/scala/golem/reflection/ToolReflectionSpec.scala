@@ -11,7 +11,9 @@
 package golem.reflection
 
 import golem.Uuid
+import golem.FutureInterop
 import golem.host.ToolWireInterop
+import golem.host.js.tool.JsInvocationResult
 import golem.schema._
 import golem.schema.SchemaTypeBody.{ListType, RecordType, RefType, S32Type, StringType}
 import golem.schema.SchemaValue._
@@ -27,6 +29,7 @@ import zio.test._
 import java.util.concurrent.CancellationException
 import scala.collection.immutable.ListMap
 import scala.concurrent.{ExecutionContext, Future, Promise}
+import scala.scalajs.js
 
 object ToolReflectionSpec extends ZIOSpecDefault {
   private val stringGraph = SchemaGraph(ListMap.empty, SchemaType(StringType))
@@ -84,6 +87,51 @@ object ToolReflectionSpec extends ZIOSpecDefault {
   }
 
   def spec = suite("ToolReflectionSpec")(
+    test("reflected value, JSON, and dynamic clients preserve explicit detach failure") {
+      ZIO.fromFuture { implicit ec =>
+        val global        = js.Dynamic.global.globalThis
+        val previous      = global.selectDynamic("__golemScalaTestHost")
+        val pending       = Promise[JsInvocationResult]()
+        var drops         = 0
+        var cancellations = 0
+        val observer      = js.Dynamic.literal(
+          "get"    -> js.Any.fromFunction0(() => FutureInterop.toPromise(pending.future)),
+          "cancel" -> js.Any.fromFunction0(() => cancellations += 1)
+        )
+        js.Dynamic.global.Reflect
+          .set(observer, js.Dynamic.global.Symbol.selectDynamic("dispose"), js.Any.fromFunction0(() => drops += 1))
+        val rpc = js.Dynamic.literal("asyncInvokeAndAwait" -> js.Any.fromFunction5 {
+          (_: js.Any, _: js.Any, _: js.Any, _: js.Any, _: js.Any) => observer
+        })
+        global.updateDynamic("__golemScalaTestHost")(
+          js.Dynamic.literal(
+            "createToolRpc" -> js.Any.fromFunction1((name: String) =>
+              if (name == "sample") rpc else throw new IllegalArgumentException(s"unknown tool: $name")
+            )
+          )
+        )
+        val command = sample().command(List("run")).toOption.get
+        val json    = Json.Object("message" -> Json.String("hello"))
+        val value   = command.startValue(command.packJson(json).toOption.get).toOption.get
+        val packed  = command.startJson(json).toOption.get
+        val dynamic =
+          new DynamicToolClient("sample").start(List("run"), IntoSchema[String].toTyped("hello")).toOption.get
+        value.detach()
+        packed.detach()
+        dynamic.detach()
+        Future.sequence(List(value.result.failed, packed.result.failed, dynamic.result.failed)).transform { outcome =>
+          pending.trySuccess(JsInvocationResult(js.undefined))
+          global.updateDynamic("__golemScalaTestHost")(previous)
+          outcome.map(errors =>
+            assertTrue(
+              errors.forall(_.isInstanceOf[IllegalStateException]),
+              errors.forall(_.getMessage == "tool result observer detached"),
+              cancellations == 0
+            )
+          )
+        }
+      }
+    },
     test("filesystem requirement survives reflection and JS wire conversion") {
       val wire         = sample().definition
       val js           = ToolWireInterop.toolToJs(wire)

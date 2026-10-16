@@ -49,22 +49,23 @@ describe("GOL-40 Effect SDK acceptance", () => {
   it("SDK-PROXY preserves generated-client inputs, outputs, principal, and stream cleanup", async () => {
     installArtifactProvider(observations)
     const generated = GeneratedArtifactClient.create()
-    const started = await Effect.runPromise(
-      generated
-        .execute(request as never, stdin())
-        .pipe(
-          Effect.provideService(ToolTransport, transport),
-          Effect.provideService(ToolClient, noHost),
-          Effect.scoped,
-        ),
-    )
     const [result, stdout, stderr] = await Effect.runPromise(
-      Effect.all(
-        [started.result, Stream.runCollect(started.stdout!), Stream.runCollect(started.stderr!)],
-        { concurrency: "unbounded" },
+      generated.execute(request as never, stdin()).pipe(
+        Effect.flatMap((started) =>
+          Effect.all(
+            [
+              started.result,
+              Stream.runCollect(started.stdout!),
+              Stream.runCollect(started.stderr!),
+            ],
+            { concurrency: "unbounded" },
+          ),
+        ),
+        Effect.provideService(ToolTransport, transport),
+        Effect.provideService(ToolClient, noHost),
+        Effect.scoped,
       ),
     )
-
     expect(result).toEqual({
       artifactId: 18446744073709551614n,
       digest: "deadbeef",
@@ -80,23 +81,21 @@ describe("GOL-40 Effect SDK acceptance", () => {
   it("SDK-REFLECTION matches generated success, streams, principal, and cleanup", async () => {
     installArtifactProvider(observations)
     const generated = GeneratedArtifactClient.create()
-    const generatedStarted = await Effect.runPromise(
-      generated
-        .execute(request as never, stdin())
-        .pipe(
-          Effect.provideService(ToolTransport, transport),
-          Effect.provideService(ToolClient, noHost),
-          Effect.scoped,
-        ),
-    )
     const generatedResult = await Effect.runPromise(
-      Effect.all(
-        [
-          generatedStarted.result,
-          Stream.runCollect(generatedStarted.stdout!),
-          Stream.runCollect(generatedStarted.stderr!),
-        ] as const,
-        { concurrency: "unbounded" },
+      generated.execute(request as never, stdin()).pipe(
+        Effect.flatMap((started) =>
+          Effect.all(
+            [
+              started.result,
+              Stream.runCollect(started.stdout!),
+              Stream.runCollect(started.stderr!),
+            ] as const,
+            { concurrency: "unbounded" },
+          ),
+        ),
+        Effect.provideService(ToolTransport, transport),
+        Effect.provideService(ToolClient, noHost),
+        Effect.scoped,
       ),
     )
     const registration = {
@@ -185,6 +184,7 @@ describe("GOL-40 Effect SDK acceptance", () => {
           stdout: stdout.iterable,
           stderr: undefined,
           cancel: Effect.sync(cancel),
+          detach: Effect.void,
         }),
     }
     await Effect.runPromise(
@@ -205,7 +205,7 @@ describe("GOL-40 Effect SDK acceptance", () => {
         Effect.provideService(ToolClient, noHost),
       ),
     )
-    expect(cancel).toHaveBeenCalledTimes(2)
+    expect(cancel).toHaveBeenCalledOnce()
   })
 
   it("SDK-TERMINALS leaves a dropped result observer pending while stdout completes", async () => {
@@ -222,6 +222,7 @@ describe("GOL-40 Effect SDK acceptance", () => {
           stdout: stdout.iterable,
           stderr: undefined,
           cancel: Effect.sync(cancel),
+          detach: Effect.void,
         }),
     }
 
@@ -243,11 +244,11 @@ describe("GOL-40 Effect SDK acceptance", () => {
     )
 
     expect(resultObserved).not.toHaveBeenCalled()
-    expect(cancel).toHaveBeenCalledOnce()
+    expect(cancel).not.toHaveBeenCalled()
     expect(stdout.returned.mock.calls.length).toBeGreaterThanOrEqual(1)
   })
 
-  it("SDK-EFFECT-FINISH fails a successful invocation when implicit output finish fails", async () => {
+  it("SDK-EFFECT-FINISH preserves success when implicit output finish fails", async () => {
     lifecycleDefinition("success")
     const stdout = lifecycleWriter(new Error("stdout finish failed"))
     const stderr = lifecycleWriter()
@@ -262,7 +263,7 @@ describe("GOL-40 Effect SDK acceptance", () => {
         stderr.writer as never,
         principal,
       ),
-    ).rejects.toThrow("stdout finish failed")
+    ).resolves.toHaveProperty("result")
     expect(stdout.events).toEqual(["write:1", "finish"])
     expect(stderr.events).toEqual(["write:2", "finish"])
   })

@@ -55,6 +55,8 @@ export const CounterImpl = Counter.implement({
 
 State lives in the object returned by `init()` and is read/written through `this` inside the handlers — there are no class fields. A method with no parameters declares `input: {}` and its handler takes no argument; a method with parameters declares one schema per named parameter and receives them as a single destructured object.
 
+Do not use `config`, `getId`, `getPhantomId`, or `getPrincipal` as top-level state fields returned by `init()` or a snapshot `load()`. These names belong to the SDK's configuration accessor and identity/principal helpers. Initialization and restoration reject these fields even when their value is `undefined`. Rename them or put them inside another state field; nested fields may use these names.
+
 ## Custom Types
 
 Describe parameter and return shapes with schemas. For object types, define a schema once and derive the TypeScript type from it with `z.infer`. **TypeScript enums are not supported** — use a string-literal union (`z.enum([...])`) instead:

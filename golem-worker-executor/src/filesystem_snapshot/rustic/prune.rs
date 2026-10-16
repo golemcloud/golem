@@ -780,6 +780,16 @@ pub(super) struct DuePrune {
     pub(super) records: FreedRecords,
 }
 
+/// What a due check found.
+pub(super) enum DueCheck {
+    /// A prune is due, with this claim.
+    Due(DuePrune),
+    /// No prune is due.
+    NotDue,
+    /// A prune is due, and another delete holds its claims.
+    Held,
+}
+
 /// What a delete found on its way to a prune. A field is `None` until its step ran.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Observed {
@@ -942,7 +952,7 @@ pub(super) async fn due_prune(
     files: &SnapshotFiles,
     clock: &dyn Clock,
     policy: &PrunePolicy,
-) -> anyhow::Result<Option<DuePrune>> {
+) -> anyhow::Result<DueCheck> {
     let (observed, step) = stream::iter(0..MOST_PASSES)
         .map(Ok)
         .try_fold(
@@ -959,16 +969,19 @@ pub(super) async fn due_prune(
         )
         .await?;
     Ok(match step {
-        Next::Claim(claim) => Some(DuePrune {
+        Next::Claim(claim) => DueCheck::Due(DuePrune {
             claim,
             records: observed.settled.unwrap_or_default(),
         }),
+        // [`next`] reads the claims only when a prune is due, and then stops only when another
+        // delete holds them.
+        Next::Stop if observed.claims.is_some() => DueCheck::Held,
         Next::ListLedgers
         | Next::ListFreed
         | Next::ListPacks
         | Next::SettleFreed
         | Next::ListClaims(_)
-        | Next::Stop => None,
+        | Next::Stop => DueCheck::NotDue,
     })
 }
 

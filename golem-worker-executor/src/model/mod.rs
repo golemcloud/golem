@@ -112,6 +112,7 @@ pub struct AgentConfig {
     pub(crate) replay: ReplayBaseline,
     pub agent_effective_surface: EffectiveSurface,
     pub authority_wallet: Option<Vec<StoredCard>>,
+    pub(crate) entity_start_index: Option<OplogIndex>,
     pub owner_component_metadata: Option<Arc<Component>>,
 }
 
@@ -126,6 +127,7 @@ impl AgentConfig {
         replay: ReplayBaseline,
         agent_effective_surface: EffectiveSurface,
         authority_wallet: Option<Vec<StoredCard>>,
+        entity_start_index: Option<OplogIndex>,
         owner_component_metadata: Option<Arc<Component>>,
     ) -> AgentConfig {
         AgentConfig {
@@ -138,6 +140,7 @@ impl AgentConfig {
             replay,
             agent_effective_surface,
             authority_wallet,
+            entity_start_index,
             owner_component_metadata,
         }
     }

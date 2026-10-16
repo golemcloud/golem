@@ -127,6 +127,7 @@ pub struct EntityInvocationDurability {
     input: TypedSchemaValue,
     resolved_position: ResolvedEntityInvocationPosition,
     historical_reconstruction: Option<HistoricalReconstruction>,
+    scope_interest: Arc<crate::services::card_interest::CardInterestContribution>,
 }
 
 /// Caller identity captured in guest admission order, before asynchronous dispatch or replay claims.
@@ -516,13 +517,29 @@ impl EntityInvocationDurability {
         Ctx: WorkerCtx,
     {
         let parent_start_index = parent.start_index();
-        let (owner, invocation_scope_card) = store.with(|mut access| {
+        let (owner, invocation_scope_card, interest) = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
             (
                 ctx.state.owned_agent_id.clone(),
                 ctx.current_invocation_scope_card(),
+                ctx.state.owner_wallet.interest.clone(),
             )
         });
+        let invocation_id = EntityInvocationId::new(
+            OwnedAgentEntityId {
+                owner: owner.clone(),
+                entity: metadata.entity.clone(),
+            },
+            handle.start_index(),
+        )
+        .map_err(WorkerExecutorError::runtime)?;
+        let scope_interest = interest.contribute(
+            Some(invocation_id.clone()),
+            invocation_scope_card
+                .as_ref()
+                .map(|scope| scope.root_card_ids.as_slice())
+                .unwrap_or_default(),
+        );
         let calling_principal = Principal::Agent(AgentPrincipal {
             agent_id: owner.agent_id.clone(),
         });
@@ -550,14 +567,6 @@ impl EntityInvocationDurability {
         };
         let principal = metadata.principal;
         let activation = Arc::new(resolved_position.layer().activation().clone());
-        let invocation_id = EntityInvocationId::new(
-            OwnedAgentEntityId {
-                owner,
-                entity: metadata.entity,
-            },
-            handle.start_index(),
-        )
-        .map_err(WorkerExecutorError::runtime)?;
         let execution_mode = if handle.is_live() {
             InvocationExecutionMode::Live
         } else {
@@ -603,6 +612,7 @@ impl EntityInvocationDurability {
             input,
             resolved_position,
             historical_reconstruction,
+            scope_interest,
         })
     }
 
@@ -612,6 +622,12 @@ impl EntityInvocationDurability {
 
     pub(crate) fn historical_reconstruction_hold(&self) -> Option<HistoricalReconstruction> {
         self.historical_reconstruction.clone()
+    }
+
+    pub(crate) fn scope_interest(
+        &self,
+    ) -> Arc<crate::services::card_interest::CardInterestContribution> {
+        self.scope_interest.clone()
     }
 
     pub fn principal(&self) -> &Principal {
@@ -668,6 +684,7 @@ impl EntityInvocationDurability {
             input,
             resolved_position,
             mut historical_reconstruction,
+            scope_interest,
         } = self;
         let (handle, cancelled) = match handle.replay_reconstruction_access(store, get_ctx).await? {
             ReconstructionReplayOutcome::Incomplete(handle) => (handle, false),
@@ -719,6 +736,7 @@ impl EntityInvocationDurability {
             input,
             resolved_position,
             historical_reconstruction: None,
+            scope_interest,
         };
         Ok(if cancelled {
             IncompleteLiveRepairBeforeBody::Cancelled(durability)
@@ -964,6 +982,7 @@ impl EntityInvocationDurability {
             parent,
             call_mode,
             mut historical_reconstruction,
+            scope_interest: _scope_interest,
             ..
         } = self;
         let invocation = scope.invocation_id().clone();
@@ -1035,6 +1054,7 @@ impl EntityInvocationDurability {
             let supervisor_activity = runtime.as_ref().map(|runtime| runtime.external_activity());
             let completed_supervisor = executor_tasks.spawn_entity(async move {
                 let _activity = supervisor_activity;
+                let _scope_interest = _scope_interest;
                 let mut historical_reconstruction = historical_reconstruction;
                 let reconstruction = std::panic::AssertUnwindSafe(async {
                     let reconstruction = coordinate_entity_reconstruction_inner(

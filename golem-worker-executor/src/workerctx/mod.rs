@@ -165,6 +165,9 @@ pub trait ReplayAdmissionHook: Send + Sync {
     /// recorded terminal.
     fn before_direct_replay_wait(&self, function: &'static str, start_index: OplogIndex);
 
+    /// Runs after normal card replay advancement, before consuming the owner's audit receipt.
+    async fn before_runtime_card_audit_lookup(&self, start_index: OplogIndex);
+
     /// Runs synchronously on the Store-holding direct path right before a positional replay
     /// read expecting the `expected` marker entry.
     fn before_positional_replay_read(&self, expected: &str);

@@ -57,18 +57,84 @@ entity `Start`.
   Store after replay. A revoked or expired root removes the inherited scope, as it removes the
   primary's scope, and descendants started later inherit no scope.
 - `rederive_agent_effective_surface_from_wallet` re-derives entity surfaces too. Card events are
-  consumed by whichever of the owner's Stores reaches a boundary first, so at each live boundary
-  every Store, primary or entity, runs `synchronize_owner_authority`: it excludes every card the
-  worker status lists as revoked or pending revocation from its effective and delegation surfaces
-  (`authority_wallet_cards`), and removes a scope with a revoked root. Without it, a revocation drained by a middleware Store left the card authorizing the
-  primary's own calls.
+  consumed by whichever Store reaches the serialized boundary first, but all live Stores read
+  one immutable `OwnerWallet` snapshot belonging to their `OwnerExecution` replay generation.
+  Membership, wallet generation and component metadata are published together. Stores own scopes
+  and cached effective/delegation surfaces, not independent live membership maps. At each live
+  boundary, `synchronize_owner_authority` also excludes pending/recorded revocations and removes
+  a scope with a revoked root. A sibling's install or concrete source transfer therefore changes
+  the next authorization in an existing Store without requiring the producer to return.
 - Removing a scope also removes its upper restrictions, so the Store continues with its wallet
   authority. This is the primary Store's policy, which entity Stores follow.
-- Known gap: Stores reconcile revocations recorded or pending in the owner status, but
-  cross-Store wallet updates and owner-wide card-interest registration remain incomplete. Card
-  installs and transfers drained by another Store do not reach an existing entity Store's wallet
-  copy, and a Store that refreshes card interest from a stale wallet can unregister a card that
-  another Store relies on, so a later revocation of that card may not reach the owner status.
+- Card interest is the union of canonical wallet IDs, independent scope roots and admission
+  candidates. RAII contributions release only their own interest. Entity finalization owns the
+  scope contribution before Store construction; the Store retains it through repair and retained
+  settlement. Result observer loss or sibling refresh cannot erase another contribution. Generation
+  matching and serialized activation/cache removal prevent old cleanup from removing replacement
+  interest. Accepted wallet work retains candidate interest until canonical publication takes over.
+
+### Wallet publication and historical reconstruction
+
+Live wallet writes prepare from the serialized predecessor under the card-event boundary and
+validate generation admission **before append**. The existing status actor owns accepted
+`WalletCommit` work, its append token, candidate contribution and guard through commit/fold,
+snapshot publication and authority invalidation. Cancellation before acceptance publishes nothing;
+cancellation after acceptance cannot abandon publication. The actor never waits for a Store to
+resume. Source transfer releases the source boundary before target delivery and resynchronizes
+afterward. Save-hook live transfer/revoke uses the same transaction path.
+
+Generation replacement seals old append admission and drains accepted work without holding the
+card boundary or the Worker instance lock. Under the boundary it then settles buffered work,
+selects one committed horizon, and builds the wallet and replay state from the same baseline and
+horizon before installing them with a fresh matching append handle. The wallet starts from the
+component or selected snapshot. The existing replay cursor reserves an owner projection only when
+it commits a wallet event, never on speculative reads. There is no auxiliary wallet-history scan
+or wallet cache in agent status. Each event carries its physical-prefix receipt through ordinary
+delivery, including deferral to retained Starts. Revision metadata preparation runs independently
+of delivery; Root installs initial files and metadata when it receives the update. Stale handles
+cannot publish into the replacement generation.
+Config reads classify a key as local or secret only after durable-call resolution, including an
+incomplete call's live continuation. Classification captured before preparation can miss a new
+secret-hold requirement when an update changes the key's source.
+
+Failed retained preparation enters the existing owner-failure election before retiring the wallet
+generation. It releases its typed error receipt before election or entity drainage: an in-progress
+terminal selection can need that receipt before election can proceed. The elected cleanup
+interrupts the primary and fences the matching entity execution;
+it does not enqueue a generic restart. An elected `RecoveryRequired` remains an infrastructure
+recovery failure even if retirement makes the observing host call return `Jump`. An earlier
+trap or lifecycle winner keeps priority, and ephemeral agents retain their fail-stop behavior.
+
+Historical Stores retain their recorded admission wallet and ordered replay preparation, not the
+latest canonical snapshot. Each outstanding entity retains a wallet-prefix receipt captured at
+its first committed body entry or Start, before trailing hints. Before that boundary exists, its
+claim-time prefix allows pre-Start body work to run without waiting for itself. Delivered events
+advance the local generation; later physical read-ahead cannot change the retained seed. Store
+construction uses this evidence, not the cursor's latest prefix. This does not record otherwise
+unrecorded wallet observations.
+Primary pins resolve definitions at their own physical index, even when a sibling consumed the
+install. Retained Starts preserve pending preparation; cancellation lets the next boundary help
+finish it. Completed bodies remain historical through validation; incomplete bodies adopt canonical
+authority only at their own live transition. Root-only effects do not mutate an entity's historical
+view. Ordinary event delivery changes local membership, not the complete physical projection:
+another Store can have advanced that projection past events still deferred to an unclaimed Start.
+Runtime-derived-card audits retain their physical-prefix evidence independently of the delivered
+event queue. Lookup drives ordinary replay and consumes that evidence without reading history
+again. Evidence ends with its primary invocation or entity reconstruction lifetime. For example,
+Start 11, install 12/gen 1, End 13, audit 14/gen 1 must validate against generation 1, not Start 11's
+generation. A missing post-End audit is repaired only after ordinary replay exhaustion and the
+call's normal live continuation; unrelated committed hints do not prevent that repair.
+
+Live authority publication waits for the physically consumed prefix and its final projection,
+outside the card boundary, then rechecks under the reservation lock. It publishes reconstruction
+once; subsequent live commits cannot be overwritten by historical projection. Target growth after
+publication retires the generation for ordinary reconstruction rather than folding old history
+over live state. Live revocation and expiry checks remain part of authority synchronization.
+
+Wallet observation recording is unchanged. Adjacent unrecorded wallet reads can still diverge
+after reconstruction when a wallet event falls between the reads; canonical live ownership does
+not supply that missing historical observation association. Do not substitute current live state
+for recorded inputs or weaken replay checks to hide this limit.
 
 ### Structural tool authorization
 
