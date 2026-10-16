@@ -13570,6 +13570,44 @@ fs.writeFileSync('/workspace/project/entry.js', "console.log([require('probe-pac
             }
         }
     }
+    for (cwd, source, expected) in [
+        (
+            "/workspace",
+            "const require = 7; console.log(require)",
+            "7\n",
+        ),
+        (
+            "/workspace",
+            "let require = 'shadowed'; console.log(require)",
+            "shadowed\n",
+        ),
+        (
+            "/workspace/project",
+            "setTimeout(() => console.log(require('probe-package')), 20)",
+            "package:project\n",
+        ),
+    ] {
+        let result = invoke_cli_tool(
+            &executor,
+            &caller_component,
+            agent_name,
+            "node",
+            cwd,
+            vec!["-e", source],
+        )
+        .await?;
+        if result.exit_code != 0
+            || result.stdout != expected.as_bytes()
+            || !result.stderr.is_empty()
+        {
+            failures.push(format!(
+                "{source:?} in {cwd}: exit {}; stdout: {}; stderr: {}",
+                result.exit_code,
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr),
+            ));
+        }
+    }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 
     let file = invoke_cli_tool(

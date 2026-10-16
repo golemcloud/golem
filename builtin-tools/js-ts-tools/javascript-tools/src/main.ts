@@ -189,6 +189,9 @@ async function runNode(
   }
   const cwd = validatedCwd(input.cwd);
   const home = `${cwd}/.golem-home`;
+  const globalScope = globalThis as typeof globalThis & { require: NodeJS.Require };
+  const originalRequire = globalScope.require;
+  if (parsed?.source !== undefined) globalScope.require = createRequire(join(cwd, '[eval]'));
   return runCli(
     {
       argv: parsed?.argv ?? ['node', ...input.args],
@@ -212,14 +215,16 @@ async function runNode(
       if (parsed!.source !== undefined) {
         const AsyncFunction = Object.getPrototypeOf(async () => undefined).constructor as new (
           ...args: string[]
-        ) => (require: NodeJS.Require) => Promise<unknown>;
-        await new AsyncFunction('require', parsed!.source)(createRequire(join(cwd, '[eval]')));
+        ) => () => Promise<unknown>;
+        await new AsyncFunction(parsed!.source)();
       } else {
         readFileSync(entry!);
         await import(entry!);
       }
     },
-  );
+  ).finally(() => {
+    globalScope.require = originalRequire;
+  });
 }
 
 nodeTool.implement({
