@@ -548,6 +548,193 @@ async fn custom_durability_counter_ids_handle_nested_and_concurrent_no_input_cal
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
+async fn custom_durability_recovers_with_one_completed_and_one_suspended_sibling(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let history = Arc::new(Mutex::new(Vec::<String>::new()));
+    let second_arrived = Arc::new(tokio::sync::Notify::new());
+    let checkpoint = Arc::new(tokio::sync::Notify::new());
+    let resume = Arc::new(tokio::sync::Semaphore::new(0));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+
+    #[derive(Deserialize)]
+    struct Params {
+        payload: String,
+    }
+    let route_history = history.clone();
+    let callback_resume = resume.clone();
+    let release_resume = resume.clone();
+    let route_checkpoint = checkpoint.clone();
+    let route = Router::new()
+        .route(
+            "/callback",
+            any(move |Query(params): Query<Params>| {
+                let history = route_history.clone();
+                let arrived = second_arrived.clone();
+                let resume = callback_resume.clone();
+                async move {
+                    history.lock().unwrap().push(params.payload.clone());
+                    match params.payload.as_str() {
+                        "first" => arrived.notified().await,
+                        "second" => {
+                            arrived.notify_one();
+                            let _ = resume.acquire().await;
+                        }
+                        _ => {}
+                    }
+                    params.payload
+                }
+            }),
+        )
+        .route(
+            "/release",
+            any(move || {
+                let checkpoint = route_checkpoint.clone();
+                let resume = release_resume.clone();
+                async move {
+                    // The guest sends this only after finishing the first custom operation.
+                    checkpoint.notify_one();
+                    let _ = resume.acquire().await;
+                    "released"
+                }
+            }),
+        );
+    let server =
+        tokio::spawn(async move { axum::serve(listener, route).await.unwrap() }.in_current_span());
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("CustomDurability", "partial-concurrent-recovery");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), port.to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "warmup_environment", data_value!())
+        .await?;
+    let invocation = tokio::spawn({
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        async move {
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &agent_id,
+                    "concurrent_first_finishes",
+                    data_value!(),
+                )
+                .await
+        }
+        .in_current_span()
+    });
+    tokio::time::timeout(Duration::from_secs(20), checkpoint.notified()).await?;
+    let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let anchor = before
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(params)
+                if matches!(&params.invocation, PublicAgentInvocation::AgentMethodInvocation(call)
+                if call.method_name == "concurrent_first_finishes") =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("concurrent invocation anchor");
+    let roots = |entries: &[PublicOplogEntryWithIndex]| {
+        entries
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "golem-it::test-generator"
+                        && params.invocation_id.is_some_and(|id| id.anchor == anchor) =>
+                {
+                    assert_eq!(params.parent_start_index, None);
+                    Some((entry.oplog_index, params.invocation_id.unwrap()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let siblings = roots(&before);
+    assert_eq!(siblings.len(), 2);
+    assert_eq!(siblings[0].1.ordinal, 0);
+    assert_eq!(siblings[1].1.ordinal, 1);
+    let ends = |entries: &[PublicOplogEntryWithIndex], start| {
+        entries
+            .iter()
+            .filter(|entry| {
+                matches!(&entry.entry,
+                    PublicOplogEntry::End(params) if params.start_index == start
+                )
+            })
+            .count()
+    };
+    assert_eq!(ends(&before, siblings[0].0), 1);
+    assert_eq!(ends(&before, siblings[1].0), 0);
+
+    executor.simulated_crash(&worker_id).await?;
+    // Closing the gate also releases requests from the discarded Store, if still connected.
+    resume.close();
+    assert_eq!(
+        invocation.await??.into_typed::<Vec<String>>()?,
+        vec!["first", "second"]
+    );
+    let effects = history.lock().unwrap().clone();
+    assert_eq!(effects.iter().filter(|p| *p == "first").count(), 1);
+    assert_eq!(effects.iter().filter(|p| *p == "second").count(), 2);
+    let recovered = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        roots(&recovered),
+        siblings,
+        "recovery retains both logical identities"
+    );
+    for (start, _) in &siblings {
+        assert_eq!(ends(&recovered, *start), 1);
+        assert!(recovered.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::Start(params) if params.function_name == "http::client::send"
+                && params.observational_owner == Some(*start) && params.invocation_id.is_none()
+        )));
+    }
+    let root_sends: Vec<_> = recovered
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params)
+                if params.function_name == "http::client::send"
+                    && params.invocation_id.is_some_and(|id| id.anchor == anchor) =>
+            {
+                Some(params)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        root_sends.len(),
+        1,
+        "the release request remains a root call"
+    );
+    assert_eq!(root_sends[0].observational_owner, None);
+    assert_eq!(root_sends[0].parent_start_index, None);
+    assert_eq!(root_sends[0].invocation_id.unwrap().ordinal, 2);
+    server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
 async fn custom_durability_scopes_follow_poll_and_drop_execution(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
