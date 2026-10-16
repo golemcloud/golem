@@ -426,15 +426,18 @@ func TestAMissingStandardInputIsRefusedBeforeTheDecode(t *testing.T) {
 	}
 }
 
-// A result decoded as Unit gives its cards back to the host.
-func TestAUnitResultReleasesItsCards(t *testing.T) {
+// A value returned by a command that declares no result is an invalid
+// result, and its cards go back to the host.
+func TestAValueForAUnitCommandReleasesItsCards(t *testing.T) {
 	released := recordReleases(t)
 	cmd, _, _ := declareKeys(t)
 	result, live := liveCardValue(t)
-	if _, err := cmd.ce.finish("keys", toolCall{wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+	_, err := cmd.ce.finish("keys", toolCall{wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
 		return witTypes.Some(result), nil
-	}}); err != nil {
-		t.Fatal(err)
+	}})
+	var ce *CallError
+	if !errors.As(err, &ce) || ce.Kind != CallInvalidResult {
+		t.Fatalf("a value for a Unit command gave %v", err)
 	}
 	if len(*released) != 1 || (*released)[0] != live {
 		t.Errorf("released %v, want the result's card", *released)

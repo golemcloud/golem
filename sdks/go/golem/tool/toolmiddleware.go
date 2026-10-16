@@ -601,7 +601,7 @@ func (d *definitions) runMiddleware(e *middlewareEntry, inv *middlewareInvocatio
 		if v, has := out.Interface().(golem.Option[golem.TypedValue]).Get(); has {
 			if err := engine.CheckCardsPresent(witOf(v).Value); err != nil {
 				engine.ReleaseCardsIn(witOf(v).Value.ValueNodes, link.ReleaseCard)
-				return fail(passThroughToolError(err))
+				return fail(types.MakeToolErrorInvalidResult(fmt.Sprintf("%s: result: %v", label, err)))
 			}
 			result = witTypes.Some(sendOnce(witOf(v)))
 		}
@@ -654,7 +654,7 @@ func (d *definitions) passThrough(inv *middlewareInvocation) witTypes.Result[too
 	if v, has := result.Get(); has {
 		if err := engine.CheckCardsPresent(witOf(v).Value); err != nil {
 			engine.ReleaseCardsIn(witOf(v).Value.ValueNodes, link.ReleaseCard)
-			return fail(passThroughToolError(err))
+			return fail(types.MakeToolErrorInvalidResult(fmt.Sprintf("middleware %s: result: %v", inv.entry.name, err)))
 		}
 		wire = witTypes.Some(sendOnce(witOf(v)))
 	}

@@ -444,14 +444,16 @@ func (ce *commandEntry) finish(target string, call toolCall) (reflect.Value, err
 	tree := res.Some().Value
 	return witschema.DecodeOwned(tree, func() (reflect.Value, error) {
 		if ce.outType == reflect.TypeFor[golem.Unit]() {
+			engine.ReleaseCardsIn(tree.ValueNodes, link.ReleaseCard)
 			return reflect.Value{}, ce.callError(target, CallInvalidResult, "the command returned a value but declares none")
 		}
 		out := reflect.New(ce.outType).Elem()
 		dec := engine.Decoder{Nodes: tree.ValueNodes}
 		if err := ce.node.entry.d.Compile(ce.outType).Decode(&dec, out, tree.Root); err != nil {
-			// The adopted cards go back into the tree, which releases them with
-			// the rest of its capabilities.
-			dec.Restore()
+			// Every card, adopted or not reached, goes back to the host and
+			// its node is marked taken, so the tree's release drops only its
+			// other capabilities.
+			dec.ReleaseCards(link.ReleaseCard)
 			return reflect.Value{}, ce.callError(target, CallInvalidResult, "%v", err)
 		}
 		dec.ReleaseRest(link.ReleaseCard)
