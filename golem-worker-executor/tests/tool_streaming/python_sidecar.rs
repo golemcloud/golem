@@ -391,10 +391,12 @@ async fn exercise_python_session(
                         status.root_type(),
                         &SchemaType::ref_to("golem.tool.ProcessExitStatus".into())
                     );
+                    // A cancelled stdin is Ctrl+C for the script: the read raises
+                    // KeyboardInterrupt, and Python exits with 130.
                     assert_eq!(
                         status.value(),
                         &SchemaValue::Record {
-                            fields: vec![SchemaValue::U8(23)]
+                            fields: vec![SchemaValue::U8(if cancel_input { 130 } else { 23 })]
                         }
                     );
                     assert!(!result_seen);
@@ -419,10 +421,15 @@ async fn exercise_python_session(
         assert_eq!(ends, BTreeSet::from([stdout_id, stderr_id]));
         if cancel_input {
             assert_eq!(output, b"ready:");
+            let errors = String::from_utf8_lossy(&errors);
+            assert!(
+                errors.contains("KeyboardInterrupt") && !errors.contains("error:"),
+                "{errors}"
+            );
         } else {
             assert_eq!(output, [b"ready:".as_slice(), bytes.as_slice()].concat());
+            assert_eq!(errors, b"error:\x00\xff");
         }
-        assert_eq!(errors, b"error:\x00\xff");
         Ok::<_, anyhow::Error>(())
     };
     tokio::try_join!(send, receive)?;
