@@ -466,3 +466,26 @@ func TestReflectedToolDefaultsGlobalsAndFlags(t *testing.T) {
 		t.Errorf("missing %v, want the tail and the repeatable options", missing)
 	}
 }
+
+// A value sent once moved its cards to the host: sending it again fails
+// rather than name handles the host already owns.
+func TestDynamicToolClientSendsAValueOnce(t *testing.T) {
+	card, err := golem.DecodeTypedValue[golem.PermissionCard](link.TypedValue(types.TypedSchemaValue{
+		Graph: witOf(golem.EncodeTypedValue(golem.Unit{})).Graph,
+		Value: types.SchemaValueTree{ValueNodes: []types.SchemaValueNode{types.MakeSchemaValueNodePermissionCardHandle(&types.PermissionCard{})}},
+	}).(golem.TypedValue))
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := golem.EncodeTypedValue(struct{ Card golem.PermissionCard }{card})
+	calls := tool.RecordToolCalls(t, func([]string) (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+		return witTypes.None[types.TypedSchemaValue](), nil
+	})
+	client := reflection.BindTool("keys")
+	if _, err := client.Call([]string{"get"}, input); err != nil {
+		t.Fatalf("the first send failed: %v", err)
+	}
+	if _, err := client.Call([]string{"get"}, input); !errors.Is(err, golem.ErrPermissionCardTaken) || len(*calls) != 1 {
+		t.Errorf("the second send gave %v after %d calls", err, len(*calls))
+	}
+}

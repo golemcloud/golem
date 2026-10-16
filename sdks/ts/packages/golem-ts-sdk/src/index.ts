@@ -47,7 +47,11 @@ import './schema/effect';
 export { Uuid } from './uuid';
 export { ComponentId, AccountId, EnvironmentId } from './ids';
 export { ParsedAgentId } from './agentId';
-export type { ParsedAgentIdCreateOptions, ParsedAgentIdParts } from './agentId';
+export type {
+  AgentClientBindOptions,
+  ParsedAgentIdCreateOptions,
+  ParsedAgentIdParts,
+} from './agentId';
 export * from './agentClassName';
 export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';
@@ -63,7 +67,8 @@ export * as oplog from './host/oplog';
 export * from './host/guard';
 export { acquireQuotaToken, QuotaToken, Reservation, withReservation } from './host/quota';
 export type { FailedReservation } from './host/quota';
-export type { GuestPermissionCardHandle as PermissionCard } from './internal/schema-model/permissionCardHandle';
+export * as permissions from './permissions';
+export { PermissionCard, PolymorphicPermissionCard, ScopeCard } from './host/permissions';
 export * from './host/retry';
 export * from './host/result';
 export * from './host/saga';
@@ -205,6 +210,7 @@ export type {
   RemoteAgentError,
   RemoteCallErrorCause,
   RemoteCallOptions,
+  RemoteClientOptions,
   RemoteClient,
   RemoteClientFactory,
 } from './client';

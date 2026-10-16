@@ -47,11 +47,63 @@ import (
 // Misuse — a zero Client, an input that does not encode, a stream on a
 // fire-and-forget form — panics in every form.
 
-// noScopeCard is the permission scope card sent with every outgoing invocation.
-// Calls carry no scope card, as in the TS and Rust SDKs; cards move as fields of
-// the invocation's values instead.
+// noScopeCard is the scope card of the invocations that do not wait for their
+// result: the host accepts a scope card only on an awaited call.
 func noScopeCard() witTypes.Option[*types.PermissionCard] {
 	return witTypes.None[*types.PermissionCard]()
+}
+
+// Scope cards.
+//
+// An awaited call — Call, MustCall or CallAsync — may carry a [ScopeCard] from
+// [DeriveScope]. The callee holds the card's grants for that invocation only,
+// and loses them when the invocation ends. Attaching a card lends it: the
+// caller keeps it and may attach it again within the same invocation. Trigger
+// and Schedule never carry a scope card, as the host accepts one only on an
+// awaited call.
+//
+//	scope := golem.MustDeriveScope(bounds, parent)
+//	out, err := Charge.WithScopeCard(scope).Call(pay, ChargeIn{AmountCents: 500})
+//
+// [Client.WithScopeCard] sets a default for every awaited call through the
+// client; a card attached to the call takes precedence.
+//
+// A scope card is valid only during the invocation that derived it. Keeping
+// one, or a client whose default is one, for a later invocation makes that
+// invocation's awaited calls fail: the host retires the card when its
+// invocation ends, and denies them. Releasing a retired card is safe.
+//
+// The scope card is checked before the input is encoded: a released scope card
+// panics with [ErrPermissionCardMoved] and leaves every card in the input with
+// the caller.
+
+// ScopedMethod is a method descriptor with a scope card attached to its
+// awaited calls, made by [MethodDef.WithScopeCard].
+type ScopedMethod[Id, In, Out any] struct {
+	m    MethodDef[Id, In, Out]
+	card ScopeCard
+}
+
+// WithScopeCard attaches card to the awaited calls of m. The card is lent, not
+// moved, and is valid only in the invocation that derived it. It panics on the
+// zero ScopeCard.
+func (m MethodDef[Id, In, Out]) WithScopeCard(card ScopeCard) ScopedMethod[Id, In, Out] {
+	return ScopedMethod[Id, In, Out]{m: m, card: mustScopeCard(m.name, card)}
+}
+
+// Call is [MethodDef.Call] carrying the scope card.
+func (s ScopedMethod[Id, In, Out]) Call(c Client[Id], in In) (Out, error) {
+	return s.m.callAsync(c, in, s.card).Get()
+}
+
+// MustCall is [MethodDef.MustCall] carrying the scope card.
+func (s ScopedMethod[Id, In, Out]) MustCall(c Client[Id], in In) Out {
+	return s.m.callAsync(c, in, s.card).MustGet()
+}
+
+// CallAsync is [MethodDef.CallAsync] carrying the scope card.
+func (s ScopedMethod[Id, In, Out]) CallAsync(c Client[Id], in In) *Future[Out] {
+	return s.m.callAsync(c, in, s.card)
 }
 
 // Call invokes the method and waits for its result. A remote failure is
@@ -67,12 +119,12 @@ func noScopeCard() witTypes.Option[*types.PermissionCard] {
 // yield point, exactly like Future.Get. To have several calls in flight at once,
 // use [MethodDef.CallAsync] directly.
 func (m MethodDef[Id, In, Out]) Call(c Client[Id], in In) (Out, error) {
-	return m.CallAsync(c, in).Get()
+	return m.callAsync(c, in, ScopeCard{}).Get()
 }
 
 // MustCall is [MethodDef.Call] that panics on a remote failure.
 func (m MethodDef[Id, In, Out]) MustCall(c Client[Id], in In) Out {
-	return m.CallAsync(c, in).MustGet()
+	return m.callAsync(c, in, ScopeCard{}).MustGet()
 }
 
 // Trigger invokes the method without waiting for a result, returning the
@@ -149,14 +201,20 @@ func (m MethodDef[Id, In, Out]) MustSchedule(c Client[Id], at time.Time, in In) 
 // a time, so fanning out to the SAME agent instance does not run in parallel.
 // Concurrency is across DIFFERENT targets.
 func (m MethodDef[Id, In, Out]) CallAsync(c Client[Id], in In) *Future[Out] {
+	return m.callAsync(c, in, ScopeCard{})
+}
+
+// callAsync starts an awaited call carrying scope, or the client's default
+// scope card when scope is the zero ScopeCard.
+func (m MethodDef[Id, In, Out]) callAsync(c Client[Id], in In, scope ScopeCard) *Future[Out] {
 	if c.rpc == nil {
 		panic(fmt.Errorf("golem: %s: called on a zero Client", m.name))
 	}
-	tree, err := m.encodeInput(in)
+	tree, card, err := m.awaitedCallArgs(c, in, scope)
 	if err != nil {
 		panic(err)
 	}
-	inv := c.rpc.AsyncInvokeAndAwait(m.name, tree, noScopeCard())
+	inv := c.rpc.AsyncInvokeAndAwait(m.name, tree, card)
 	return &Future[Out]{
 		ID:     invocationIDFrom(inv.Metadata),
 		fut:    inv.Future,
@@ -168,6 +226,19 @@ func (m MethodDef[Id, In, Out]) CallAsync(c Client[Id], in In) *Future[Out] {
 // ---------------------------------------------------------------------------
 // encoding / decoding, shared by every call shape
 // ---------------------------------------------------------------------------
+
+// awaitedCallArgs resolves an awaited call's scope card — scope, or the
+// client's default when scope is the zero ScopeCard — and then encodes the
+// input. The order matters: a released scope card panics before any card in
+// the input moves.
+func (m MethodDef[Id, In, Out]) awaitedCallArgs(c Client[Id], in In, scope ScopeCard) (types.SchemaValueTree, witTypes.Option[*types.PermissionCard], error) {
+	if scope.sst == nil {
+		scope = c.scopeCard
+	}
+	card := scopeCardHandle(scope)
+	tree, err := m.encodeInput(in)
+	return tree, card, err
+}
 
 // encodeInput encodes the In value into a parameter-list value tree. The callee
 // derives the same field list from the same Go type, which is what keeps the two
@@ -187,11 +258,15 @@ func (m MethodDef[Id, In, Out]) encodeInput(in In) (tree types.SchemaValueTree, 
 
 // decodeOutput decodes a remote result through the LOCAL descriptor's Out codec.
 // That codec checks every node tag, so a remote returning the wrong shape yields
-// an error rather than a panic.
+// an error rather than a panic. The permission cards in the result that the
+// decode does not keep go back to the host.
 func decodeOutput[Out any](target, method string, out witTypes.Option[types.SchemaValueTree]) (Out, error) {
 	var zero Out
 	outType := reflect.TypeFor[Out]()
 	if outType == reflect.TypeFor[Unit]() {
+		if out.IsSome() {
+			engine.ReleaseCardsIn(out.Some().ValueNodes, releaseCard)
+		}
 		return zero, nil
 	}
 	if out.IsNone() {
@@ -204,11 +279,13 @@ func decodeOutput[Out any](target, method string, out witTypes.Option[types.Sche
 	dst := reflect.New(outType).Elem()
 	dec := engine.Decoder{Nodes: tree.ValueNodes}
 	if err := defs.Compile(outType).Decode(&dec, dst, tree.Root); err != nil {
+		dec.ReleaseCards(releaseCard)
 		return zero, &RemoteCallError{
 			Target: target, Method: method, Kind: RemoteProtocolError,
 			Message: "remote returned an undecodable value: " + err.Error(),
 		}
 	}
+	dec.ReleaseRest(releaseCard)
 	return dst.Interface().(Out), nil
 }
 

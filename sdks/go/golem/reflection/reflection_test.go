@@ -274,12 +274,13 @@ type fakeRPC struct {
 	has       bool
 	err       error
 	cancelled bool
+	scope     witTypes.Option[*types.PermissionCard]
 }
 
 var fakeID = golem.InvocationID{AgentID: "Greeter(\"ada\")", IdempotencyKey: "k1"}
 
-func (f *fakeRPC) start(method string, _ types.SchemaValueTree) (pendingRPC, error) {
-	f.gotMethod, f.gotForm = method, "call"
+func (f *fakeRPC) start(method string, _ types.SchemaValueTree, scope witTypes.Option[*types.PermissionCard]) (pendingRPC, error) {
+	f.gotMethod, f.gotForm, f.scope = method, "call", scope
 	return pendingRPC{
 		id: fakeID,
 		wait: func() (witTypes.Option[types.SchemaValueTree], error) {
@@ -332,6 +333,44 @@ func TestReflectedClientCallsAndDecodes(t *testing.T) {
 	sched, err := client.Schedule(time.Now(), "greet", map[string]any{"greeting": "hi", "times": 1})
 	if err != nil || rpc.gotForm != "schedule" || sched.ID != fakeID {
 		t.Errorf("Schedule: %v %q %+v", err, rpc.gotForm, sched)
+	}
+}
+
+// A call without a scope card sends none, and every attachment refuses the
+// zero ScopeCard before anything is sent. Which card a call carries is shown
+// end to end, where scope cards exist.
+func TestReflectedClientsSendNoScopeCardUnlessOneIsAttached(t *testing.T) {
+	r := snapshotOf(t)
+	rpc := &fakeRPC{tree: greetResult(t, r, "hi"), has: true}
+	client := &AgentClient{agentType: r, agentID: "greeter-1", rpc: rpc}
+	rpc.scope = witTypes.Some(&types.PermissionCard{})
+	if _, _, err := client.Call("greet", map[string]any{"greeting": "hi", "times": 1}); err != nil || rpc.scope.IsSome() {
+		t.Errorf("the call sent a scope card: %v", err)
+	}
+	m, _ := r.Method("greet")
+	input, err := m.Input().PackJSON(map[string]any{"greeting": "hi", "times": 1})
+	if err != nil {
+		t.Fatalf("PackJSON: %v", err)
+	}
+	dynamic := &DynamicAgentClient{agentID: "greeter-1", rpc: rpc}
+	rpc.scope = witTypes.Some(&types.PermissionCard{})
+	if _, err := dynamic.CallAsync("greet", input); err != nil || rpc.scope.IsSome() {
+		t.Errorf("the dynamic call sent a scope card: %v", err)
+	}
+
+	for name, attach := range map[string]func(){
+		"AgentClient.WithScopeCard":        func() { client.WithScopeCard(golem.ScopeCard{}) },
+		"DynamicAgentClient.WithScopeCard": func() { dynamic.WithScopeCard(golem.ScopeCard{}) },
+		"CallScopeCard":                    func() { CallScopeCard(golem.ScopeCard{}) },
+	} {
+		func() {
+			defer func() {
+				if r := recover(); r == nil || !strings.Contains(fmt.Sprint(r), "a zero ScopeCard") {
+					t.Errorf("%s accepted the zero ScopeCard: %v", name, r)
+				}
+			}()
+			attach()
+		}()
 	}
 }
 

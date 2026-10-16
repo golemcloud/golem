@@ -24,6 +24,7 @@ use crate::Tracing;
 pub mod attempt_server;
 pub mod checkout_v2_regressions;
 pub mod manifest_status;
+pub mod permissions;
 pub mod sdk_policy;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);

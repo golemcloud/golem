@@ -49,6 +49,10 @@ import {
   schemaValueConforms,
   validateExtendedTool,
 } from '../src/internal/tool';
+import {
+  permissionCardFromRaw,
+  polymorphicPermissionCardFromRaw,
+} from './permissionCardTestSupport';
 
 const stringCodec = compileSchema(z.string());
 
@@ -1397,7 +1401,6 @@ describe('internal extended tool model', () => {
   it.each([
     ['secret', s.secret(z.string())],
     ['quota-token', s.quotaToken()],
-    ['permission-card', s.permissionCard({ polymorphic: false })],
   ] as const)('rolls back partial %s adoption in synthetic list codecs', (_name, schema) => {
     const raw = {} as never;
     const item = compileSchema(schema);
@@ -1409,7 +1412,6 @@ describe('internal extended tool model', () => {
   it.each([
     ['secret', s.secret(z.string())],
     ['quota-token', s.quotaToken()],
-    ['permission-card', s.permissionCard({ polymorphic: false })],
   ] as const)('rolls back present optional %s fields on later failure', (_name, schema) => {
     const raw = {} as never;
     const capability = compileSchema(schema);
@@ -1426,6 +1428,35 @@ describe('internal extended tool model', () => {
       }),
     ).toThrow('later failed');
     expect(capability.fromValue(capability.toValue(raw))).toBe(raw);
+  });
+
+  it.each([
+    {
+      kind: 'concrete',
+      card: () => permissionCardFromRaw({}),
+      schema: () => s.permissionCard({ polymorphic: false }),
+    },
+    {
+      kind: 'template',
+      card: () => polymorphicPermissionCardFromRaw({}),
+      schema: () => s.permissionCard({ polymorphic: true }),
+    },
+  ] as const)('keeps a $kind permission card usable when a later optional field fails', (kind) => {
+    const card = kind.card();
+    const capability = compileSchema(kind.schema());
+    const canonical = new CanonicalInputModel([
+      { name: 'capability', aliases: [], codec: optionalCanonicalFieldCodec(capability) },
+      { name: 'later', aliases: [], codec: stringCodec },
+    ]);
+    expect(() =>
+      canonical.encode({
+        capability: card,
+        get later() {
+          throw new Error('later failed');
+        },
+      }),
+    ).toThrow('later failed');
+    expect(card.isMoved()).toBe(false);
   });
 
   it('does not roll back a successful reentrant capability conversion', () => {

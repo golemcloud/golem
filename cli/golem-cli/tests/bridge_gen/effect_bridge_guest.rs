@@ -9,6 +9,7 @@ use golem_cli::bridge_gen::BridgeGenerator;
 use golem_cli::bridge_gen::effect::effect_guest::EffectGuestBridgeGenerator;
 use golem_common::model::agent::AgentMode;
 use golem_common::schema::SchemaType;
+use golem_common::schema::schema_type::PermissionCardSpec;
 use tempfile::TempDir;
 use test_r::test;
 
@@ -86,11 +87,140 @@ void produced
     );
 }
 
+#[test]
+fn effect_guest_scope_cards_on_awaited_calls_compile() {
+    let card = || SchemaType::permission_card(PermissionCardSpec { polymorphic: false });
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let durable = mode == AgentMode::Durable;
+        let schema = agent(
+            "CardAgent",
+            "effect",
+            vec![field("name", SchemaType::string())],
+            vec![
+                method(
+                    "give",
+                    vec![field("card", card())],
+                    Some(SchemaType::string()),
+                ),
+                method("take", vec![], Some(card())),
+                method("withScopeCard", vec![], Some(SchemaType::string())),
+                method("scopeCard", vec![], Some(SchemaType::string())),
+            ],
+            vec![],
+            mode,
+        );
+        let (factory, value) = if durable {
+            ("CardAgent.get(\"a\")", "string")
+        } else {
+            (
+                "CardAgent.newPhantom(\"a\")",
+                "{ readonly metadata: unknown; readonly value: string }",
+            )
+        };
+        let source = generate_and_compile(
+            schema,
+            "card-agent-guest-client.ts",
+            &format!(
+                r#"
+import {{ Effect }} from "effect"
+import {{ Permissions }} from "@golemcloud/effect-golem"
+import {{ CardAgent }} from "./card-agent-guest-client.js"
+declare const card: Permissions.PermissionCard
+declare const scope: Permissions.ScopeCard
+const program = Effect.gen(function* () {{
+  const client = yield* {factory}
+  const scoped: CardAgent = client.withScopeCard(scope)
+  const viaDefault: {value} = yield* scoped.give(card)
+  const perCall: {value} = yield* client.give.withScopeCard(scope)(card)
+  const cleared: {value} = yield* scoped.give.withScopeCard(undefined)(card)
+  yield* client.take.withScopeCard(scope)()
+  yield* client.give.trigger(card)
+  const renamedMethod: {value} = yield* client.withScopeCard1()
+  const renamedField: {value} = yield* client.scopeCard1.withScopeCard(scope)()
+  // @ts-expect-error triggers never carry a scope card
+  void client.give.trigger.withScopeCard
+  // @ts-expect-error a persistent card is not a client default scope card
+  void client.withScopeCard(card)
+  // @ts-expect-error a persistent card is not a per-call scope card
+  void client.give.withScopeCard(card)
+  // @ts-expect-error a scope card is not a schema permission card
+  void client.give(scope)
+  return [viaDefault, perCall, cleared, renamedMethod, renamedField]
+}})
+void program
+"#
+            ),
+        );
+        assert!(
+            source.contains("base.permissionCardToSchemaValue(")
+                && source.contains("base.permissionCardFromSchemaValue("),
+            "generated card codecs use the renamed bridge symbols"
+        );
+    }
+}
+
+#[test]
+fn effect_guest_polymorphic_permission_cards_compile() {
+    let concrete = || SchemaType::permission_card(PermissionCardSpec { polymorphic: false });
+    let template = || SchemaType::permission_card(PermissionCardSpec { polymorphic: true });
+    let schema = agent(
+        "TemplateAgent",
+        "effect",
+        vec![field("name", SchemaType::string())],
+        vec![
+            method(
+                "giveTemplate",
+                vec![field("card", template())],
+                Some(template()),
+            ),
+            method(
+                "giveConcrete",
+                vec![field("card", concrete())],
+                Some(concrete()),
+            ),
+        ],
+        vec![],
+        AgentMode::Durable,
+    );
+    let source = generate_and_compile(
+        schema,
+        "template-agent-guest-client.ts",
+        r#"
+import { Effect } from "effect"
+import { Permissions } from "@golemcloud/effect-golem"
+import { TemplateAgent } from "./template-agent-guest-client.js"
+declare const card: Permissions.PermissionCard
+declare const template: Permissions.PolymorphicPermissionCard
+const program = Effect.gen(function* () {
+  const client = yield* TemplateAgent.get("a")
+  const returnedTemplate: Permissions.PolymorphicPermissionCard = yield* client.giveTemplate(template)
+  const returnedCard: Permissions.PermissionCard = yield* client.giveConcrete(card)
+  // @ts-expect-error a concrete card is not a polymorphic card
+  void client.giveTemplate(card)
+  // @ts-expect-error a polymorphic card is not a concrete card
+  void client.giveConcrete(template)
+  // @ts-expect-error a polymorphic result is not a concrete card
+  const wrong: Permissions.PermissionCard = yield* client.giveTemplate(template)
+  return [returnedTemplate, returnedCard, wrong]
+})
+void program
+"#,
+    );
+    for symbol in [
+        "base.polymorphicPermissionCardToSchemaValue(",
+        "base.polymorphicPermissionCardFromSchemaValue(",
+        "base.permissionCardToSchemaValue(",
+        "base.permissionCardFromSchemaValue(",
+    ] {
+        assert!(source.contains(symbol), "missing {symbol}:\n{source}");
+    }
+}
+
 fn generate_and_compile(
     schema: golem_common::schema::AgentTypeSchema,
     filename: &str,
     consumer: &str,
-) {
+) -> String {
     let dir = TempDir::new().unwrap();
     let target = Utf8Path::from_path(dir.path()).unwrap();
     EffectGuestBridgeGenerator::new(schema, target, true)
@@ -130,4 +260,5 @@ fn generate_and_compile(
             String::from_utf8_lossy(&output.stderr)
         );
     }
+    source
 }

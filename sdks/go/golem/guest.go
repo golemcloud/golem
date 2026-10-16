@@ -140,7 +140,11 @@ func restoreAgent(agentType string, input types.SchemaValueTree, principal Princ
 // that reads config populates the same per-worker config cache the methods use;
 // neither sees the not-yet-built state, so the nil state is unobservable. A nil
 // instance means failure, reported in the result.
+//
+// The constructor input's cards are this component's: the ones the decode did
+// not take go back to the host however the call ends.
 func beginAgent(agentType string, input types.SchemaValueTree, principal Principal) (*instance, reflect.Value, witTypes.Result[witTypes.Unit, common.AgentError]) {
+	defer engine.ReleaseCardsIn(input.ValueNodes, releaseCard)
 	fail := func(e common.AgentError) (*instance, reflect.Value, witTypes.Result[witTypes.Unit, common.AgentError]) {
 		return nil, reflect.Value{}, witTypes.Err[witTypes.Unit](e)
 	}
@@ -174,6 +178,9 @@ func init() {
 	}
 
 	guestExports.Exports.Invoke = func(methodName string, input types.SchemaValueTree, principal common.Principal) witTypes.Result[witTypes.Option[types.SchemaValueTree], common.AgentError] {
+		// The input's cards are this component's: the ones the decode did not
+		// take go back to the host however the invocation ends.
+		defer engine.ReleaseCardsIn(input.ValueNodes, releaseCard)
 		fail := func(e common.AgentError) witTypes.Result[witTypes.Option[types.SchemaValueTree], common.AgentError] {
 			return witTypes.Err[witTypes.Option[types.SchemaValueTree]](e)
 		}

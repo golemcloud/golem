@@ -205,7 +205,7 @@ fn[E] encode_reflected_input(
 ) -> Result[@types.TypedSchemaValue, @tool.ToolError[E]] {
   try @model.typed_schema_value_to_wit(input) catch {
     error => {
-      input.value.release_resources(@model_host.resource_drops())
+      input.value.rollback_input_resources(@model_host.resource_drops())
       Err(
         reflected_protocol_error("failed to encode tool input: \{Repr(error)}"),
       )
@@ -916,7 +916,7 @@ pub fn ToolCommand::start_value(
   let client = match @tool.ToolClient::try_new(self.tool.lookup_name) {
     Ok(client) => client
     Err(error) => {
-      input.value.release_resources(@model_host.resource_drops())
+      input.value.rollback_input_resources(@model_host.resource_drops())
       match stdin {
         Some(stdin) => stdin.drop_sync()
         None => ()
@@ -1174,7 +1174,7 @@ pub fn DynamicToolClient::start_value(
   let client = match @tool.ToolClient::try_new(self.name) {
     Ok(client) => client
     Err(error) => {
-      input.value.release_resources(@model_host.resource_drops())
+      input.value.rollback_input_resources(@model_host.resource_drops())
       match stdin {
         Some(stdin) => stdin.drop_sync()
         None => ()

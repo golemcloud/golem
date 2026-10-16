@@ -1,0 +1,162 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/permissions"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/internal/permission_card",
+  "golemcloud/golem_sdk/schema",
+  "golemcloud/golem_sdk/schema_model",
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn derive_from_wallet(Bounds, lifespan? : Lifespan) -> PermissionCard raise PermissionError
+
+pub fn derive_scope(Array[PermissionCard], Bounds, template_parents? : Array[PolymorphicPermissionCard], scope_parents? : Array[ScopeCard]) -> ScopeCard raise PermissionError
+
+pub fn drop_all(Array[WalletCard]) -> Unit
+
+pub fn list_modules() -> Array[KernelModule]
+
+pub fn validate_grant(PatternGrant) -> Unit raise PermissionError
+
+pub fn wallet() -> Array[WalletCard]
+
+pub fn wallet_version() -> WalletVersionToken
+
+// Errors
+pub(all) suberror PermissionError {
+  NotPermitted(String)
+  LowerBoundTooBroad(String)
+  UpperBoundTooBroad(String)
+  WalletMultiSourceRequired(String)
+  CardRevoked(String)
+  CardExpired(String)
+  InstallRecipientMismatch(String)
+  UnknownResourceClass(String)
+  InvalidPattern(String)
+  InvalidVerb(String)
+  InvalidOwner(String)
+  InvalidRecipient(String)
+} derive(Eq, @debug.Debug)
+pub fn PermissionError::kind(Self) -> String
+pub fn PermissionError::message(Self) -> String
+pub impl Show for PermissionError
+
+// Types and methods
+pub(all) struct Bounds {
+  lower_positive : Array[PatternGrant]
+  lower_negative : Array[PatternGrant]
+  upper_positive : Array[PatternGrant]
+  upper_negative : Array[PatternGrant]
+} derive(Eq, @debug.Debug)
+pub fn Bounds::new(lower_positive? : Array[PatternGrant], lower_negative? : Array[PatternGrant], upper_positive? : Array[PatternGrant], upper_negative? : Array[PatternGrant]) -> Self
+
+pub struct CardId {
+  // private fields
+}
+pub impl Eq for CardId
+pub impl Hash for CardId
+pub impl Show for CardId
+pub impl ToJson for CardId
+pub impl @debug.Debug for CardId
+
+pub(all) struct CardView {
+  lower_positive : Array[PatternGrant]
+  lower_negative : Array[PatternGrant]
+  upper_positive : Array[PatternGrant]
+  upper_negative : Array[PatternGrant]
+} derive(Eq, @debug.Debug)
+
+pub(all) enum Holder {
+  Account(@types.Uuid)
+  App(@types.Uuid)
+  Agent(@types.AgentId)
+} derive(Eq, @debug.Debug)
+
+pub(all) struct KernelModule {
+  class_name : String
+  verbs : Array[String]
+} derive(Eq, @debug.Debug)
+
+pub struct Lifespan {
+  // private fields
+} derive(Eq, @debug.Debug)
+pub fn Lifespan::from_duration(@schema.Duration) -> Self raise PermissionError
+pub fn Lifespan::iso8601(String) -> Self
+pub fn Lifespan::to_iso8601(Self) -> String
+
+pub(all) struct PatternGrant {
+  class : String
+  owner : String
+  recipient : String
+  verb : String
+  resource_id : String
+} derive(Eq, Hash, @debug.Debug)
+
+pub struct PermissionCard {
+  // private fields
+}
+pub fn PermissionCard::derive_child(Self, Bounds, lifespan? : Lifespan) -> Self raise PermissionError
+pub fn PermissionCard::drop(Self) -> Unit
+pub fn PermissionCard::expires_at(Self) -> Timestamp?
+pub fn PermissionCard::id(Self) -> CardId
+pub fn PermissionCard::inspect(Self) -> CardView raise PermissionError
+pub fn PermissionCard::install(Self, Holder) -> Unit raise PermissionError
+pub fn PermissionCard::is_moved(Self) -> Bool
+pub fn PermissionCard::parents(Self) -> Array[CardId]
+pub fn PermissionCard::revoke(Self) -> UInt raise PermissionError
+pub impl @schema.FromSchema for PermissionCard
+pub impl @schema.FromWire for PermissionCard
+pub impl @schema.IntoSchema for PermissionCard
+pub impl @schema.IntoWire for PermissionCard
+pub impl @schema.WireSchema for PermissionCard
+
+pub struct PolymorphicPermissionCard {
+  // private fields
+}
+pub fn PolymorphicPermissionCard::derive_child(Self, Bounds, lifespan? : Lifespan) -> PermissionCard raise PermissionError
+pub fn PolymorphicPermissionCard::drop(Self) -> Unit
+pub fn PolymorphicPermissionCard::expires_at(Self) -> Timestamp?
+pub fn PolymorphicPermissionCard::id(Self) -> CardId
+pub fn PolymorphicPermissionCard::inspect(Self) -> CardView raise PermissionError
+pub fn PolymorphicPermissionCard::install(Self, Holder) -> Unit raise PermissionError
+pub fn PolymorphicPermissionCard::is_moved(Self) -> Bool
+pub fn PolymorphicPermissionCard::parents(Self) -> Array[CardId]
+pub fn PolymorphicPermissionCard::revoke(Self) -> UInt raise PermissionError
+pub impl @schema.FromSchema for PolymorphicPermissionCard
+pub impl @schema.FromWire for PolymorphicPermissionCard
+pub impl @schema.IntoSchema for PolymorphicPermissionCard
+pub impl @schema.IntoWire for PolymorphicPermissionCard
+pub impl @schema.WireSchema for PolymorphicPermissionCard
+
+pub struct ScopeCard {
+  handle : @permission_card.ScopeCardHandle
+}
+pub fn ScopeCard::drop(Self) -> Unit
+pub fn ScopeCard::expires_at(Self) -> Timestamp?
+pub fn ScopeCard::id(Self) -> CardId
+pub fn ScopeCard::inspect(Self) -> CardView raise PermissionError
+pub fn ScopeCard::is_moved(Self) -> Bool
+pub fn ScopeCard::parents(Self) -> Array[CardId]
+
+pub(all) struct Timestamp {
+  seconds : Int64
+  nanoseconds : UInt
+} derive(Compare, Eq, @debug.Debug)
+
+pub enum WalletCard {
+  Concrete(PermissionCard)
+  Template(PolymorphicPermissionCard)
+  Scope(ScopeCard)
+}
+pub fn WalletCard::drop(Self) -> Unit
+
+pub(all) struct WalletVersionToken {
+  wallet_id_hash : Bytes
+  generation : UInt64
+} derive(Eq, @debug.Debug)
+
+// Type aliases
+
+// Traits

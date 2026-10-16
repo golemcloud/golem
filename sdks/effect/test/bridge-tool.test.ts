@@ -74,7 +74,7 @@ describe("BridgeTool", () => {
             Schema.Struct({
               secret: ToolSchema.Secret(Schema.String),
               quota: ToolSchema.QuotaToken(),
-              permission: ToolSchema.PermissionCard({ polymorphic: false }),
+              permission: ToolSchema.PermissionCard,
               stream: ToolSchema.AgentStream(Schema.Number),
             }),
           ),
