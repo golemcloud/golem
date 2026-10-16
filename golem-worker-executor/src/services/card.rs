@@ -1276,6 +1276,7 @@ mod tests {
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
             upper_negative: Vec::new(),
+            expires_at: None,
         }
     }
 

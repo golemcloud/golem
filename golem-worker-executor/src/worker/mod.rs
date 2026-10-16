@@ -53,9 +53,10 @@ use self::agent_config::{
 use crate::durable_host::durable_session::{DurableStreamConsumerJournal, StreamSession};
 use crate::durable_host::durable_stream::{
     AttachedStreamSegmentSource, CommittedProducerStreamEvent, ConsumerAttachmentStatus,
-    DbDirectStreamAttachmentConsumerProbe, DurableStreamCommit, DurableStreamStore,
-    ProducerRegistrationRequest, RoutedStreamAttachmentControl, SessionControlMetadata,
-    SessionError, StreamAttachmentConsumerProbe, StreamAttachmentControl, StreamStoreError,
+    DbDirectStreamAttachmentConsumerProbe, DurableStreamCommit, DurableStreamPublishedHorizon,
+    DurableStreamStore, ProducerRegistrationRequest, RoutedStreamAttachmentControl,
+    SessionControlMetadata, SessionError, StreamAttachmentConsumerProbe, StreamAttachmentControl,
+    StreamStoreError,
 };
 use crate::durable_host::schema_value_stream::contains_stream;
 use crate::durable_host::tool::operation::OwnerFailureWinner;
@@ -8027,6 +8028,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let service = self.worker_service();
         let mode = data.initial_worker_metadata.agent_mode;
         let tasks = data.tasks.clone();
+        let published_horizon = Self::durable_stream_published_horizon_for(data);
         data.durable_stream_producer
             .get_or_load(commit.clone(), move || async move {
                 let producer = DurableStreamStore::load_indexed_with_commit(
@@ -8040,6 +8042,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await?;
                 producer.set_worker_tasks(tasks);
+                producer.set_published_horizon(published_horizon);
                 Ok(producer)
             })
             .await
@@ -8069,6 +8072,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         })
     }
 
+    /// The status task publishes a durable agent's status only after it folds a successful commit
+    /// that flushed every entry through the status index. An ephemeral agent's weaker commit levels
+    /// fold without reaching storage, and a detached status is not a fold of the oplog.
+    fn durable_stream_published_horizon_for(
+        data: &ResolvedWorkerData<Ctx>,
+    ) -> DurableStreamPublishedHorizon {
+        let durable = data.initial_worker_metadata.agent_mode == AgentMode::Durable;
+        let status = data.last_known_status.clone();
+        let detached = data.last_known_status_detached.clone();
+        Arc::new(move || {
+            (durable && !detached.load(Ordering::Acquire)).then(|| status.load().oplog_idx)
+        })
+    }
+
     fn durable_stream_commit(&self) -> DurableStreamCommit {
         Self::durable_stream_commit_for(self)
     }
@@ -8091,6 +8108,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let service = self.worker_service();
         let mode = data.initial_worker_metadata.agent_mode;
         let tasks = data.tasks.clone();
+        let published_horizon = Self::durable_stream_published_horizon_for(data);
         data.durable_stream_producer
             .get_or_load(commit.clone(), move || async move {
                 let producer = DurableStreamStore::load_indexed_with_commit(
@@ -8104,22 +8122,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await?;
                 producer.set_worker_tasks(tasks);
+                producer.set_published_horizon(published_horizon);
                 Ok(producer)
             })
             .await
     }
 
-    fn durable_stream_consumer_auth_ctx(&self) -> Result<AuthCtx, WorkerExecutorError> {
+    fn durable_stream_consumer_auth_ctx(&self) -> Result<Arc<AuthCtx>, WorkerExecutorError> {
         let surface = crate::durable_host::owner_effective_surface_from_component_metadata(
             self.current_component.load().as_ref(),
             &self.owned_agent_id,
             &self.owner_context,
         )?;
-        Ok(AuthCtx::agent_with_effective_surface(
+        Ok(Arc::new(AuthCtx::agent_with_effective_surface(
             self.initial_worker_metadata.created_by,
             self.initial_worker_metadata.created_by_email.clone(),
             surface,
-        ))
+        )))
     }
 
     fn has_durable_stream_history(&self) -> bool {

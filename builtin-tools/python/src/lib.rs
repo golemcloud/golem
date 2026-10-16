@@ -15,7 +15,7 @@ pub enum PythonError {
     Io { reason: String },
 }
 
-#[tool_definition(version = "0.1.0", requires_filesystem = true)]
+#[tool_definition(version = "0.1.1", requires_filesystem = true)]
 pub trait Python {
     /// Run Python with -c, -m, a script path, or noninteractive stdin. The frozen RustPython
     /// standard library is included. Native extensions, subprocesses and sockets are unavailable.
@@ -91,6 +91,11 @@ impl Read for AttachedInput {
             };
             match wit_bindgen::block_on(stream.next()) {
                 Some(Ok(bytes)) => self.pending = io::Cursor::new(bytes),
+                Some(Err(
+                    golem_rust::golem_agentic::golem::tool::streams::ByteStreamFailure::Cancelled,
+                )) => {
+                    return Err(io::Error::other(runtime::StdinCancelled));
+                }
                 Some(Err(error)) => return Err(io::Error::other(format!("stdin: {error:?}"))),
                 None => {
                     self.stream = None;

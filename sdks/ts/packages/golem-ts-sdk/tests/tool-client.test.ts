@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { PermissionCard as RawPermissionCard } from 'golem:core/types@2.0.0';
 import type { ToolRpcError as RpcError } from 'golem:core/types@2.0.0';
 import { createStdin, createOutput, ToolRpc } from 'golem:tool/host@0.1.0';
 import { type as arkType } from 'arktype';
@@ -35,11 +36,12 @@ import {
   v,
 } from '../src/internal/schema-model';
 import { Bytes, s } from '../src/schema/markers';
+import { PermissionCard } from '../src/host/permissions';
 import {
-  GuestPermissionCardHandle,
-  peekGuestPermissionCardHandle,
-} from '../src/internal/schema-model/permissionCardHandle';
-import { PERMISSION_CARD_INTERNAL } from '../src/internal/schema-model/permissionCardInternal';
+  permissionCardFromRaw,
+  rawOfPermissionCard,
+  fakeRawCard,
+} from './permissionCardTestSupport';
 
 interface RecordedInvocation {
   readonly commandPath: readonly string[];
@@ -827,7 +829,7 @@ describe('tool runtime client', () => {
     const definition = toolDefinition('permission-card-result').body((body) =>
       body.returns(schema),
     );
-    class ImportedPermissionCard {
+    class ImportedPermissionCard extends RawPermissionCard {
       private live = true;
       borrow() {
         if (!this.live) throw new Error('unknown handle index 4294967295');
@@ -843,16 +845,13 @@ describe('tool runtime client', () => {
       transport: new FakeTransport(() => ({
         result: typedSchemaValueToWit({
           graph: codec.graph,
-          value: codec.toValue(raw),
+          value: codec.toValue(permissionCardFromRaw(raw)),
         }),
       })),
     })['permission-card-result']({});
 
-    expect(card).toBeInstanceOf(GuestPermissionCardHandle);
-    const imported = peekGuestPermissionCardHandle(
-      PERMISSION_CARD_INTERNAL,
-      card as GuestPermissionCardHandle,
-    ) as unknown as ImportedPermissionCard;
+    expect(card).toBeInstanceOf(PermissionCard);
+    const imported = rawOfPermissionCard(card) as ImportedPermissionCard;
     expect(imported).toBe(raw);
     expect(imported.borrow()).toBe('card-id');
 
@@ -869,7 +868,7 @@ describe('tool runtime client', () => {
         return {};
       }),
     })['permission-card-exchange']({ card });
-    expect(peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, card)).toBeUndefined();
+    expect((card as PermissionCard).isMoved()).toBe(true);
   });
 
   it.each([false, true])(
@@ -880,10 +879,15 @@ describe('tool runtime client', () => {
         issuer: z.string(),
       });
       const remoteCodec = compileSchema(
-        z.object({ card: s.permissionCard({ polymorphic }), issuer: z.string() }),
+        z.object({
+          card: polymorphic
+            ? s.permissionCard({ polymorphic: true })
+            : s.permissionCard({ polymorphic: false }),
+          issuer: z.string(),
+        }),
       );
       const dispose = vi.fn();
-      const raw = { [Symbol.dispose]: dispose } as never;
+      const raw = fakeRawCard({ [Symbol.dispose]: dispose }) as never;
       const definition = toolDefinition('named-issuer').body((body) => body.returns(localSchema));
       const result = client(definition, {
         transport: new FakeTransport(() => ({
@@ -906,7 +910,11 @@ describe('tool runtime client', () => {
                 ],
               ]),
             },
-            value: remoteCodec.toValue({ card: raw, issuer: 'rust' }),
+            // The value tree does not carry the polymorphic flag; only the graph differs.
+            value: compileSchema(localSchema).toValue({
+              card: permissionCardFromRaw(raw),
+              issuer: 'rust',
+            }),
           }),
         })),
       })['named-issuer']({});
@@ -918,12 +926,7 @@ describe('tool runtime client', () => {
       } else {
         const output = await result;
         expect(output.issuer).toBe('rust');
-        expect(
-          peekGuestPermissionCardHandle(
-            PERMISSION_CARD_INTERNAL,
-            output.card as GuestPermissionCardHandle,
-          ),
-        ).toBe(raw);
+        expect(rawOfPermissionCard(output.card)).toBe(raw);
         expect(dispose).not.toHaveBeenCalled();
       }
     },

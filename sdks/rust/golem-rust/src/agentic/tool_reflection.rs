@@ -21,7 +21,9 @@ use crate::golem_agentic::golem::tool::host::{self, ToolRpc};
 use crate::schema::tool::canonical::CanonicalSurfaceRef;
 use crate::schema::tool::validation::validate_tool;
 use crate::schema::tool::wit::decode_tool;
-use crate::schema::tool::{CommandBody, Constraint, Doc, FlagShape, Ref, Tool};
+use crate::schema::tool::{
+    CommandBody, Constraint, Doc, FlagShape, OptionShape, OptionSpec, Ref, Tool,
+};
 use crate::schema::validation::subtyping::is_equivalent_cross_graph;
 use crate::schema::{SchemaGraph, SchemaValue, TypedSchemaValue};
 use std::fmt::{Display, Formatter};
@@ -86,6 +88,15 @@ fn flag_default(shape: &FlagShape) -> SchemaValue {
     match shape {
         FlagShape::BoolFlag(shape) => SchemaValue::Bool(shape.default),
         FlagShape::CountFlag(_) => SchemaValue::U32(0),
+    }
+}
+
+/// The value an omitted scalar option takes in a JSON call. Repeatable options keep their
+/// collected-type behaviour and receive no substituted default.
+fn option_omitted_default(spec: &OptionSpec) -> Option<SchemaValue> {
+    match spec.shape {
+        OptionShape::Scalar(_) | OptionShape::OptionalScalar(_) => spec.default.clone(),
+        OptionShape::RepeatableList(_) | OptionShape::RepeatableMap(_) => None,
     }
 }
 
@@ -225,39 +236,51 @@ impl ToolType {
             .as_ref()
             .expect("resolved body");
         let mut arguments = Vec::with_capacity(input.fields.len());
+        let mut json_defaults = Vec::with_capacity(input.fields.len());
         let surfaces = self.definition.canonical_input_surfaces(index);
         input
             .fields
             .iter()
             .zip(surfaces)
             .for_each(|(field, surface)| {
-                let (required, default) = match surface {
+                let (required, default, omitted) = match surface {
                     CanonicalSurfaceRef::GlobalOption { node, index } => {
                         let spec = &self.definition.commands.nodes[node].globals.options[index];
-                        (spec.required, spec.default.clone())
+                        (
+                            spec.required,
+                            spec.default.clone(),
+                            option_omitted_default(spec),
+                        )
                     }
                     CanonicalSurfaceRef::BodyOption { index } => {
                         let spec = &body.options[index];
-                        (spec.required, spec.default.clone())
+                        (
+                            spec.required,
+                            spec.default.clone(),
+                            option_omitted_default(spec),
+                        )
                     }
                     CanonicalSurfaceRef::BodyPositional { index } => {
                         let spec = &body.positionals.fixed[index];
-                        (spec.required, spec.default.clone())
+                        (spec.required, spec.default.clone(), spec.default.clone())
                     }
                     CanonicalSurfaceRef::BodyTail => (
                         body.positionals.tail.as_ref().is_some_and(|s| s.min > 0),
                         None,
+                        None,
                     ),
-                    CanonicalSurfaceRef::GlobalFlag { node, index } => (
-                        false,
-                        Some(flag_default(
+                    CanonicalSurfaceRef::GlobalFlag { node, index } => {
+                        let default = flag_default(
                             &self.definition.commands.nodes[node].globals.flags[index].shape,
-                        )),
-                    ),
+                        );
+                        (false, Some(default.clone()), Some(default))
+                    }
                     CanonicalSurfaceRef::BodyFlag { index } => {
-                        (false, Some(flag_default(&body.flags[index].shape)))
+                        let default = flag_default(&body.flags[index].shape);
+                        (false, Some(default.clone()), Some(default))
                     }
                 };
+                json_defaults.push(omitted);
                 let kind = match surface {
                     CanonicalSurfaceRef::GlobalOption { .. }
                     | CanonicalSurfaceRef::BodyOption { .. } => ToolArgumentKind::Option,
@@ -296,7 +319,8 @@ impl ToolType {
             tool: self.clone(),
             index,
             path: canonical_path,
-            input: SchemaRef::with_root(self.schema.clone(), input.record_schema.root.clone()),
+            input: SchemaRef::with_root(self.schema.clone(), input.record_schema.root.clone())
+                .with_root_field_defaults(json_defaults),
             wire_input: input.record_schema,
             arguments,
         })
@@ -1189,10 +1213,11 @@ mod tests {
     use super::*;
     use crate::IntoSchema;
     use crate::schema::SchemaType;
+    use crate::schema::render::RenderError;
     use crate::schema::tool::{
         BoolFlagShape, CommandBody, CommandIndex, CommandNode, CommandTree, ErrorCase, ErrorKind,
-        FlagSpec, Globals, OptionShape, OptionSpec, Positional, Positionals, ResultSpec,
-        ValueIsRef,
+        FlagSpec, Globals, OptionShape, OptionSpec, Positional, Positionals, RepeatableListShape,
+        Repetition, ResultSpec, TailPositional, ValueIsRef,
     };
     use crate::schema::{NamedFieldType, SchemaTypeDef, TypeId};
     use test_r::test;
@@ -1666,6 +1691,14 @@ mod tests {
                     }))
                     .is_err()
             );
+            assert!(
+                command
+                    .pack_json(&serde_json::json!({
+                        "message": "hello",
+                        "mode": "fast",
+                    }))
+                    .is_err()
+            );
             let error = command
                 .invoke_json(&serde_json::json!({
                     "message": "hello",
@@ -1679,5 +1712,336 @@ mod tests {
                 "invalid tool input: invalid input: command constraint 0 failed"
             );
         }
+    }
+
+    fn option_spec(long: &str, shape: OptionShape, default: Option<SchemaValue>) -> OptionSpec {
+        OptionSpec {
+            long: long.to_string(),
+            short: None,
+            aliases: Vec::new(),
+            doc: Doc::default(),
+            value_name: None,
+            shape,
+            default,
+            required: false,
+            env_var: None,
+        }
+    }
+
+    fn flag_spec(long: &str, shape: FlagShape) -> FlagSpec {
+        FlagSpec {
+            long: long.to_string(),
+            short: None,
+            aliases: Vec::new(),
+            doc: Doc::default(),
+            shape,
+            env_var: None,
+        }
+    }
+
+    fn some(value: SchemaValue) -> SchemaValue {
+        SchemaValue::Option {
+            inner: Some(Box::new(value)),
+        }
+    }
+
+    /// A command shaped like the builtin bash tool: a required `script` positional, defaulted
+    /// `cwd` and `timeout` options, an option-typed `shell` option with a default, a bool and a
+    /// count flag, and an optional `label` option without a default.
+    fn bash_shaped() -> ToolType {
+        let mut tool = sample();
+        let definition = Arc::make_mut(&mut tool.definition);
+        let body = definition.commands.nodes[1].body.as_mut().unwrap();
+        body.positionals.fixed[0].name = "script".to_string();
+        body.options = vec![
+            option_spec(
+                "cwd",
+                OptionShape::Scalar(SchemaType::string()),
+                Some(SchemaValue::String(String::new())),
+            ),
+            option_spec(
+                "timeout",
+                OptionShape::Scalar(SchemaType::u32()),
+                Some(SchemaValue::U32(600)),
+            ),
+            option_spec(
+                "shell",
+                OptionShape::Scalar(SchemaType::option(SchemaType::string())),
+                Some(some(SchemaValue::String("sh".to_string()))),
+            ),
+            option_spec("label", OptionShape::Scalar(SchemaType::string()), None),
+        ];
+        body.flags = vec![
+            flag_spec(
+                "login",
+                FlagShape::BoolFlag(BoolFlagShape {
+                    default: false,
+                    negatable: true,
+                }),
+            ),
+            flag_spec("verbose", FlagShape::CountFlag(None)),
+        ];
+        tool
+    }
+
+    fn bash_record(
+        script: &str,
+        cwd: &str,
+        timeout: u32,
+        shell: SchemaValue,
+        label: SchemaValue,
+        login: bool,
+        verbose: u32,
+    ) -> SchemaValue {
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String(script.to_string()),
+                SchemaValue::String(cwd.to_string()),
+                SchemaValue::U32(timeout),
+                shell,
+                label,
+                SchemaValue::Bool(login),
+                SchemaValue::U32(verbose),
+            ],
+        }
+    }
+
+    #[test]
+    fn json_packing_fills_omitted_declared_defaults() {
+        let command = bash_shaped().command(&["run"]).unwrap();
+        assert_eq!(
+            command
+                .arguments()
+                .iter()
+                .map(|argument| argument.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "script", "cwd", "timeout", "shell", "label", "login", "verbose"
+            ]
+        );
+        let sh = || some(SchemaValue::String("sh".to_string()));
+        let none = || SchemaValue::Option { inner: None };
+
+        assert_eq!(
+            command
+                .pack_json(&serde_json::json!({ "script": "echo ok" }))
+                .unwrap(),
+            bash_record("echo ok", "", 600, sh(), none(), false, 0)
+        );
+        assert_eq!(
+            command
+                .input_schema()
+                .validate_json(&serde_json::json!({ "script": "echo ok" }))
+                .unwrap(),
+            bash_record("echo ok", "", 600, sh(), none(), false, 0)
+        );
+        assert_eq!(
+            command
+                .pack_json(&serde_json::json!({
+                    "script": "echo ok",
+                    "cwd": "/tmp",
+                    "timeout": 30,
+                    "shell": null,
+                    "label": "build",
+                    "login": true,
+                    "verbose": 2,
+                }))
+                .unwrap(),
+            bash_record(
+                "echo ok",
+                "/tmp",
+                30,
+                none(),
+                some(SchemaValue::String("build".to_string())),
+                true,
+                2,
+            )
+        );
+        assert_eq!(
+            command
+                .pack_json(&serde_json::json!({ "script": "sleep 1", "timeout": 120000 }))
+                .unwrap(),
+            bash_record("sleep 1", "", 120000, sh(), none(), false, 0)
+        );
+        assert!(matches!(
+            command.pack_json(&serde_json::json!({ "script": "echo ok", "unknown": 1 })),
+            Err(ToolReflectionError::InvalidInput(
+                GolemReflectError::SchemaRender(RenderError::UnexpectedField { field, .. })
+            )) if field == "unknown"
+        ));
+        assert!(matches!(
+            command.pack_json(&serde_json::json!({ "script": "echo ok", "timeout": "soon" })),
+            Err(ToolReflectionError::InvalidInput(
+                GolemReflectError::SchemaRender(_)
+            ))
+        ));
+    }
+
+    #[test]
+    async fn json_calls_report_the_missing_required_field() {
+        let command = bash_shaped().command(&["run"]).unwrap();
+        let expected = "invalid tool input: schema rendering failed: value mismatch at $: \
+                        missing record field `script`";
+        let error = command
+            .pack_json(&serde_json::json!({ "timeout": 30 }))
+            .unwrap_err();
+        assert!(matches!(
+            &error,
+            ToolReflectionError::InvalidInput(GolemReflectError::SchemaRender(
+                RenderError::ValueMismatch { path, reason }
+            )) if path == "$" && reason == "missing record field `script`"
+        ));
+        assert_eq!(error.to_string(), expected);
+        assert_eq!(
+            command
+                .invoke_json(&serde_json::json!({}))
+                .await
+                .unwrap_err()
+                .to_string(),
+            expected
+        );
+    }
+
+    #[test]
+    fn json_schema_marks_defaulted_arguments_optional_with_their_default() {
+        let command = bash_shaped().command(&["run"]).unwrap();
+        let schema = command.input_schema().to_json_schema(false);
+        assert_eq!(schema["required"], serde_json::json!(["script"]));
+        let properties = &schema["properties"];
+        assert_eq!(properties["cwd"]["default"], serde_json::json!(""));
+        assert_eq!(properties["timeout"]["default"], serde_json::json!(600));
+        assert_eq!(properties["shell"]["default"], serde_json::json!("sh"));
+        assert_eq!(properties["login"]["default"], serde_json::json!(false));
+        assert_eq!(properties["verbose"]["default"], serde_json::json!(0));
+        assert!(properties["script"].get("default").is_none());
+        assert!(properties["label"].get("default").is_none());
+
+        let mut stripped = schema.clone();
+        for property in stripped["properties"].as_object_mut().unwrap().values_mut() {
+            property.as_object_mut().unwrap().remove("default");
+        }
+        let mut plain = SchemaRef::with_root(
+            command.tool.schema.clone(),
+            command.input_schema().root().clone(),
+        )
+        .to_json_schema(false);
+        assert_eq!(
+            plain["required"],
+            serde_json::json!(["script", "cwd", "timeout", "login", "verbose"])
+        );
+        plain["required"] = serde_json::json!(["script"]);
+        assert_eq!(stripped, plain);
+        assert_eq!(
+            command.input_schema().to_json_schema(true)["required"],
+            serde_json::json!(["script"])
+        );
+    }
+
+    #[test]
+    fn json_defaults_leave_the_wire_record_unchanged() {
+        let tool = bash_shaped();
+        let command = tool.command(&["run"]).unwrap();
+        let index = command.index;
+        assert_eq!(
+            command.wire_input,
+            tool.definition
+                .canonical_input_record_schema(index)
+                .unwrap()
+        );
+        assert_eq!(command.input_schema().root(), &command.wire_input.root);
+        let SchemaType::Record { fields, .. } = &command.wire_input.root else {
+            panic!("record root");
+        };
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.body.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                SchemaType::string(),
+                SchemaType::string(),
+                SchemaType::u32(),
+                SchemaType::option(SchemaType::string()),
+                SchemaType::option(SchemaType::string()),
+                SchemaType::bool(),
+                SchemaType::u32(),
+            ]
+        );
+        let packed = command
+            .pack_json(&serde_json::json!({ "script": "echo ok" }))
+            .unwrap();
+        assert!(command.checked_input(packed).is_ok());
+        assert!(
+            command
+                .validate_value(&SchemaValue::Record {
+                    fields: vec![SchemaValue::String("echo ok".to_string())],
+                })
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn json_defaults_skip_repeatable_options_and_tails() {
+        let mut tool = bash_shaped();
+        let definition = Arc::make_mut(&mut tool.definition);
+        let body = definition.commands.nodes[1].body.as_mut().unwrap();
+        body.options.push(option_spec(
+            "env",
+            OptionShape::RepeatableList(RepeatableListShape {
+                repetition: Repetition::Repeated,
+                item_type: SchemaType::string(),
+            }),
+            Some(SchemaValue::List {
+                elements: vec![SchemaValue::String("A=1".to_string())],
+            }),
+        ));
+        body.positionals.tail = Some(TailPositional {
+            name: "args".to_string(),
+            doc: Doc::default(),
+            value_name: None,
+            item_type: SchemaType::string(),
+            min: 0,
+            max: None,
+            separator: None,
+            verbatim: false,
+            accepts_stdio: false,
+        });
+        let command = tool.command(&["run"]).unwrap();
+        let env = command
+            .arguments()
+            .iter()
+            .find(|argument| argument.name == "env")
+            .unwrap();
+        assert_eq!(
+            env.default,
+            Some(SchemaValue::List {
+                elements: vec![SchemaValue::String("A=1".to_string())],
+            })
+        );
+
+        for (json, missing) in [
+            (
+                serde_json::json!({ "script": "echo ok", "args": [] }),
+                "env",
+            ),
+            (
+                serde_json::json!({ "script": "echo ok", "env": [] }),
+                "args",
+            ),
+        ] {
+            assert!(matches!(
+                command.pack_json(&json),
+                Err(ToolReflectionError::InvalidInput(GolemReflectError::SchemaRender(
+                    RenderError::ValueMismatch { reason, .. }
+                ))) if reason == format!("missing record field `{missing}`")
+            ));
+        }
+        let schema = command.input_schema().to_json_schema(false);
+        assert_eq!(
+            schema["required"],
+            serde_json::json!(["script", "args", "env"])
+        );
+        assert!(schema["properties"]["env"].get("default").is_none());
+        assert!(schema["properties"]["args"].get("default").is_none());
     }
 }

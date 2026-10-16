@@ -85,7 +85,7 @@ test "native config accepts large integers without a JSON round trip" {
       { path: ["counter"], value: Json::number(9007199254740992.0), },
     ])
   catch {
-    Json(_) => ()
+    Json(_, ..) => ()
     error => fail("unexpected error: \{repr(error)}")
   } noraise {
     _ => fail("expected JSON unsafe integer to be rejected")

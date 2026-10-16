@@ -165,6 +165,15 @@ enum StartClaimAttempt {
     MissingSettling { replay_target: OplogIndex },
 }
 
+/// The decision on a `Start` claim that found no match, taken after the cursor moved past the
+/// records of other owners ([`CursorTx::decide_missing_start`]).
+enum MissingStart {
+    /// The cursor reached the replay target: the call has no recorded `Start` and continues live.
+    ReplayEnded,
+    /// The cursor stopped at an entry that its owner can still consume.
+    Blocked(BlockedOn),
+}
+
 /// Why a claim cannot be decided in its current cursor transaction, and therefore what it waits
 /// for before it runs again.
 enum BlockedOn {

@@ -25,9 +25,12 @@ use golem_common::base_model::api;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::card::StoredCard;
-use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
+use golem_common::model::component::{
+    CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
+};
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{PublicOplogEntryWithIndex, PublicOplogPageEntry};
 use golem_common::model::worker::{AgentCreationRequest, AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, ScanCursor};
 use golem_common::{SafeDisplay, recorded_http_api_request};
@@ -659,10 +662,71 @@ impl WorkerApi {
         };
 
         for entry in &mut response.entries {
-            entry.entry.redact_host_managed_values_for_external();
+            if let PublicOplogPageEntry::Included(entry) = entry {
+                entry.entry.redact_host_managed_values_for_external();
+            }
         }
 
         Ok(Json(response))
+    }
+
+    /// Get one oplog entry of a worker
+    ///
+    /// Oplog pages omit entries whose encoded form is larger than a server limit, and describe
+    /// them by their type, timestamp, size and component revision. This endpoint returns such an
+    /// entry in full. Pass the component revision of the description to save the server from
+    /// scanning the oplog for it.
+    #[oai(
+        path = "/:component_id/workers/:agent_name/oplog/:oplog_index",
+        method = "get",
+        operation_id = "get_oplog_entry"
+    )]
+    async fn get_oplog_entry(
+        &self,
+        component_id: Path<ComponentId>,
+        agent_name: Path<String>,
+        oplog_index: Path<u64>,
+        component_revision: Query<Option<ComponentRevision>>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<PublicOplogEntryWithIndex>> {
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let agent_id = self
+            .normalize_agent_id(component_id.0, agent_name.as_str())
+            .await?;
+
+        let record = recorded_http_api_request!(
+            "get_oplog_entry",
+            agent_id = agent_id.to_string(),
+            oplog_index = oplog_index.0
+        );
+
+        let response = self
+            .get_oplog_entry_internal(
+                agent_id,
+                OplogIndex::from_u64(oplog_index.0),
+                component_revision.0,
+                auth,
+            )
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_oplog_entry_internal(
+        &self,
+        agent_id: AgentId,
+        oplog_index: OplogIndex,
+        component_revision: Option<ComponentRevision>,
+        auth: AuthCtx,
+    ) -> Result<Json<PublicOplogEntryWithIndex>> {
+        let mut entry = self
+            .worker_service
+            .get_oplog_entry(&agent_id, oplog_index, component_revision, auth)
+            .await?;
+        entry.entry.redact_host_managed_values_for_external();
+        Ok(Json(entry))
     }
 
     /// List files in a worker

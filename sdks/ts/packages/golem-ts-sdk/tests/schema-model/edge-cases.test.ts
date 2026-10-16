@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { fakeRawCard } from '../permissionCardTestSupport';
 import { describe, it, expect } from 'vitest';
 
 import type {
@@ -322,7 +323,7 @@ describe('rich semantic and capability values', () => {
   });
 
   it('permission-card handles transfer once through nested schema values', () => {
-    const raw = { id: 'opaque-permission-card' } as never;
+    const raw = fakeRawCard({ id: 'opaque-permission-card' }) as never;
     const handle = createGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, raw);
 
     const wit = schemaValueToWit(v.tuple([v.string('card'), v.permissionCard(handle)]));
@@ -377,7 +378,7 @@ describe('rich semantic and capability values', () => {
   });
 
   it('a frozen permission-card wire node is dropped without creating a hidden owner', () => {
-    const raw = { id: 'frozen-permission-card' } as never;
+    const raw = fakeRawCard({ id: 'frozen-permission-card' }) as never;
     const frozen: WitSchemaValueTree = {
       valueNodes: [Object.freeze({ tag: 'permission-card-handle', val: raw })],
       root: 0,
@@ -404,7 +405,7 @@ describe('rich semantic and capability values', () => {
   });
 
   it('rejected WIT trees drain owned permission-card handles', () => {
-    const raw = { id: 'opaque-permission-card' } as never;
+    const raw = fakeRawCard({ id: 'opaque-permission-card' }) as never;
     const wit: WitSchemaValueTree = {
       valueNodes: [
         { tag: 'tuple-value', val: [1, 2] },
@@ -419,7 +420,7 @@ describe('rich semantic and capability values', () => {
   });
 
   it('rejects duplicate raw permission-card resources and drains both nodes', () => {
-    const raw = { id: 'opaque-permission-card' } as never;
+    const raw = fakeRawCard({ id: 'opaque-permission-card' }) as never;
     const wit: WitSchemaValueTree = {
       valueNodes: [
         { tag: 'tuple-value', val: [1, 2] },

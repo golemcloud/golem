@@ -23,8 +23,8 @@ use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
 use golem_common::model::card::{
-    CardId, CardManagedByRuntimeDerived, PolymorphicCard, PolymorphicPermissionPattern, StoredCard,
-    parse_polymorphic_permission,
+    Card, CardId, CardManagedByRuntimeDerived, PolymorphicCard, PolymorphicPermissionPattern,
+    StoredCard, parse_permission_fields, parse_polymorphic_permission,
 };
 use golem_common::model::component::ComponentId;
 use golem_common::model::oplog::types::{SerializableP3SocketErrorCode, SerializableRpcError};
@@ -69,6 +69,10 @@ inherit_test_dep!(
     #[tagged_as("agent_sdk_rust")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_moonbit")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 #[test_dep(scope = Shared)]
@@ -85,6 +89,10 @@ async fn permission_mysql() -> DockerMysqlRdb {
 async fn permission_ignite() -> DockerIgniteRdb {
     DockerIgniteRdb::new().await
 }
+
+/// The owner path of the test environment, as the test component service
+/// names its account, application and environment.
+const TEST_ENVIRONMENT_OWNER: &str = "test@golem/test-app/test-env";
 
 fn scope_card_initial_permissions() -> Vec<PolymorphicPermissionPattern> {
     vec![
@@ -151,6 +159,13 @@ struct ScopeCardAuthority {
     additional_cards: RwLock<HashMap<CardId, StoredCard>>,
     revoke_card_gate: std::sync::Mutex<Option<CardServiceGate>>,
     record_revoked_cards_gate: std::sync::Mutex<Option<CardServiceGate>>,
+    check_cards_gate: std::sync::Mutex<Option<CheckCardsGate>>,
+}
+
+/// Pauses the first `check_cards` call that names all of `card_ids`.
+struct CheckCardsGate {
+    card_ids: Vec<CardId>,
+    gate: CardServiceGate,
 }
 
 /// Pauses one card service call until the test releases it.
@@ -261,6 +276,41 @@ impl ScopeCardAuthority {
     fn gate_record_revoked_cards(&self) -> CardServiceGateHandle {
         CardServiceGate::install(&self.record_revoked_cards_gate)
     }
+
+    fn gate_check_cards(&self, card_ids: Vec<CardId>) -> CardServiceGateHandle {
+        let slot = std::sync::Mutex::new(None);
+        let handle = CardServiceGate::install(&slot);
+        let gate = slot
+            .into_inner()
+            .expect("card service gate lock poisoned")
+            .expect("card service gate was just installed");
+        *self
+            .check_cards_gate
+            .lock()
+            .expect("check-cards gate lock poisoned") = Some(CheckCardsGate { card_ids, gate });
+        handle
+    }
+
+    async fn pass_check_cards_gate(&self, card_ids: &[CardId]) {
+        let gate = {
+            let mut slot = self
+                .check_cards_gate
+                .lock()
+                .expect("check-cards gate lock poisoned");
+            if slot
+                .as_ref()
+                .is_some_and(|gate| gate.card_ids.iter().all(|id| card_ids.contains(id)))
+            {
+                slot.take().map(|gate| gate.gate)
+            } else {
+                None
+            }
+        };
+        if let Some(gate) = gate {
+            let _ = gate.entered.send(());
+            let _ = gate.release.await;
+        }
+    }
 }
 
 struct ScopeCardService {
@@ -316,6 +366,7 @@ impl CardService for ScopeCardService {
         self.authority
             .check_cards_count
             .fetch_add(1, Ordering::SeqCst);
+        self.authority.pass_check_cards_gate(&card_ids).await;
         let root_card = self.authority.root_card().ok_or_else(|| {
             WorkerExecutorError::runtime("scope-card test root was not configured")
         })?;
@@ -355,7 +406,7 @@ async fn start_scope_card_executor(
                     authority: authority.clone(),
                 })
             })),
-            ..Default::default()
+            ..TestExecutorOverrides::agent_sockets_enabled()
         },
     )
     .await
@@ -459,6 +510,389 @@ async fn scope_cards_are_delivered_by_both_await_variants_and_removed_at_end(
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
+async fn lent_scope_card_is_listed_only_to_a_callee_that_may_inspect_cards(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let lent_env = vec![("LENT_ENV".to_string(), "lent".to_string())];
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("SealedScopeAgent")
+        .with_env("SealedScopeAgent", lent_env.clone())
+        .with_env("ScopeCardAgent", lent_env)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            let grants = &mut config.initial_permissions.lower_bound.positive;
+            grants.extend(scope_card_initial_permissions());
+            grants.push(
+                parse_polymorphic_permission("env(?env/*/*) @ * : read : LENT_ENV")
+                    .expect("valid lent environment permission"),
+            );
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", "lent-env-caller");
+    let sealed_target_name = "sealed-target";
+    let sealed_target = agent_id!("SealedScopeAgent", sealed_target_name);
+    let inspecting_target_name = "inspecting-target";
+    let inspecting_target = agent_id!("ScopeCardAgent", inspecting_target_name);
+    configure_scope_card_root(&authority, &component, &caller)?;
+    executor.start_agent(&component.id, caller.clone()).await?;
+    let sealed_worker = executor
+        .start_agent(&component.id, sealed_target.clone())
+        .await?;
+
+    // Without card:inspect the lent scope card stays out of the wallet listing,
+    // but its grant still lets the callee read the variable during the call.
+    let (listed, value, slot_grant_is_invalid, root_card_id) = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "lend_env_scope",
+            data_value!(sealed_target_name, true, TEST_ENVIRONMENT_OWNER),
+        )
+        .await?
+        .into_typed::<(Option<SchemaCardId>, Option<String>, bool, SchemaCardId)>()?;
+    assert!(listed.is_none(), "a sealed scope card must not be listed");
+    assert_eq!(value.as_deref(), Some("lent"));
+    assert!(
+        slot_grant_is_invalid,
+        "a requested grant with an owner slot must be an invalid pattern"
+    );
+
+    // The callee itself has no grant for the variable.
+    let (listed, value) = executor
+        .invoke_and_await_agent(
+            &component,
+            &sealed_target,
+            "lent_scope_observation",
+            data_value!(root_card_id),
+        )
+        .await?
+        .into_typed::<(Option<SchemaCardId>, Option<String>)>()?;
+    assert_eq!((listed, value), (None, None));
+
+    let (listed, _, _, _) = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "lend_env_scope",
+            data_value!(inspecting_target_name, false, TEST_ENVIRONMENT_OWNER),
+        )
+        .await?
+        .into_typed::<(Option<SchemaCardId>, Option<String>, bool, SchemaCardId)>()?;
+    let scope_card_id = listed.expect("a callee with card:inspect must see the lent scope card");
+    assert_scope_absent(&executor, &component, &inspecting_target, scope_card_id).await?;
+
+    executor.check_oplog_is_queryable(&sealed_worker).await?;
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn scope_card_revoked_at_the_wallet_boundary_is_not_listed_to_an_inspecting_callee(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend(scope_card_initial_permissions());
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", "revoked-lent-caller");
+    let target_name = "revoked-lent-target";
+    let target = agent_id!("SealedScopeAgent", target_name);
+    let root_card_id = configure_scope_card_root(&authority, &component, &caller)?;
+    // The callee may inspect cards through its own card, which the revocation
+    // of the scope card's root does not touch.
+    let target_card = StoredCard::Polymorphic(
+        component
+            .metadata
+            .agent_type_initial_permission_card(&target.agent_type)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("missing sealed-scope test initial card"))?,
+    );
+    let target_card_id = target_card.card_id();
+    authority.add_card(target_card);
+    let target_worker = executor.start_agent(&component.id, target.clone()).await?;
+    executor.start_agent(&component.id, caller.clone()).await?;
+
+    // Pause the callee's self-wallet call while its wallet snapshot holds the
+    // card-event boundary, and queue the revocation of the scope card's root
+    // behind it. The revocation is then applied by the authority boundary that
+    // self-wallet crosses before it lists the lent scope card.
+    let mut gate = authority.gate_check_cards(vec![target_card_id, root_card_id]);
+    let key = IdempotencyKey::fresh();
+    let params = data_value!(target_name);
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &caller,
+            &key,
+            "lend_scope_to_observer",
+            params.clone(),
+        )
+        .await?;
+    gate.entered().await?;
+    let release = async {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        gate.release();
+    };
+    let (queued, ()) = tokio::join!(
+        executor.queue_card_revocation(&target_worker, root_card_id),
+        release
+    );
+    queued?;
+
+    let (listed, parent_refused) = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &key,
+            "lend_scope_to_observer",
+            params,
+        )
+        .await?
+        .into_typed::<(bool, bool)>()?;
+    assert!(
+        !listed,
+        "a scope card revoked at the wallet boundary must not be listed"
+    );
+    assert!(
+        parent_refused,
+        "a revoked scope card must not be usable as a scope parent"
+    );
+    Ok(())
+}
+
+/// A concrete card derived from `parent` that grants card inspection.
+fn concrete_inspect_card(parent: CardId, expires_at: Option<chrono::DateTime<Utc>>) -> StoredCard {
+    StoredCard::Concrete(Card {
+        card_id: CardId::new(),
+        parent_ids: vec![parent],
+        lower_positive: vec![
+            parse_permission_fields("card", "*", "*", "inspect", "*")
+                .expect("valid card inspection grant"),
+        ],
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: Utc::now(),
+        expires_at,
+        system_card: false,
+        managed_by: None,
+    })
+}
+
+/// The cards of a wallet as the raw `self-wallet` labels them, with their ids
+/// and parents, and the kinds the typed `permissions::wallet` reports; see
+/// `labelled_wallet` in the host-api-tests component.
+type LabelledWallet = (Vec<(String, SchemaCardId, Vec<SchemaCardId>)>, Vec<String>);
+
+fn labelled_cards(wallet: LabelledWallet) -> Vec<(String, SchemaCardId, Vec<SchemaCardId>)> {
+    let (cards, typed_kinds) = wallet;
+    assert_eq!(
+        cards
+            .iter()
+            .map(|(kind, _, _)| kind.clone())
+            .collect::<Vec<_>>(),
+        typed_kinds,
+        "the typed wallet must report the kinds that self-wallet labels"
+    );
+    let mut cards = cards;
+    cards.sort_by(|left, right| left.0.cmp(&right.0));
+    cards
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn self_wallet_labels_concrete_template_and_lent_scope_cards(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend(scope_card_initial_permissions());
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", "labelled-wallet-caller");
+    let target_name = "labelled-wallet-target";
+    let target = agent_id!("ScopeCardAgent", target_name);
+    let root_card = configure_scope_card_root(&authority, &component, &caller)?;
+    let root_card_id = SchemaCardId::from(root_card.0);
+    let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
+    executor.start_agent(&component.id, target.clone()).await?;
+
+    let concrete_card = concrete_inspect_card(root_card, None);
+    let concrete_card_id = SchemaCardId::from(concrete_card.card_id().0);
+    authority.add_card(concrete_card.clone());
+    executor
+        .queue_card_install(&caller_worker, concrete_card)
+        .await?;
+
+    // The initial card is a template card; the installed card is concrete.
+    let wallet = executor
+        .invoke_and_await_agent(&component, &caller, "labelled_wallet", data_value!())
+        .await?
+        .into_typed::<LabelledWallet>()?;
+    assert_eq!(
+        labelled_cards(wallet),
+        vec![
+            (
+                "concrete".to_string(),
+                concrete_card_id,
+                vec![root_card_id.clone()]
+            ),
+            ("template".to_string(), root_card_id.clone(), vec![]),
+        ]
+    );
+
+    // A callee that may inspect cards lists the lent scope card as a scope
+    // entry next to its own template card.
+    let wallet = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "lend_scope_to_wallet_lister",
+            data_value!(target_name),
+        )
+        .await?
+        .into_typed::<LabelledWallet>()?;
+    let cards = labelled_cards(wallet);
+    let [(scope_kind, scope_card_id, scope_parents), template] = cards.as_slice() else {
+        panic!("the callee must list its template card and the lent scope card: {cards:?}");
+    };
+    assert_eq!(scope_kind, "scope");
+    assert_eq!(scope_parents, &vec![root_card_id.clone()]);
+    assert_ne!(scope_card_id, &root_card_id);
+    assert_eq!(
+        template,
+        &("template".to_string(), root_card_id.clone(), vec![])
+    );
+    assert_scope_absent(&executor, &component, &target, scope_card_id.clone()).await?;
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn scope_card_reports_the_earliest_root_expiry_to_its_deriver_and_callee(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend(scope_card_initial_permissions());
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", "expiring-scope-caller");
+    let target_name = "expiring-scope-target";
+    let target = agent_id!("ScopeCardAgent", target_name);
+    let root_card = configure_scope_card_root(&authority, &component, &caller)?;
+    let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
+    executor.start_agent(&component.id, target.clone()).await?;
+
+    // The scope-card parents are, in this order, concrete cards that expire
+    // after two hours, one hour and three hours, then the initial card, which
+    // does not expire. Only the minimum gives one hour: the first, the last
+    // and the latest expiring parent all differ from it.
+    // Whole seconds, so the expiry survives any timestamp encoding unchanged.
+    let now = chrono::DateTime::from_timestamp(Utc::now().timestamp(), 0)
+        .expect("the current time is a valid timestamp");
+    let earliest_expiry = now + chrono::Duration::hours(1);
+    let parent_expiries = [
+        now + chrono::Duration::hours(2),
+        earliest_expiry,
+        now + chrono::Duration::hours(3),
+    ];
+    for expires_at in parent_expiries {
+        let card = concrete_inspect_card(root_card, Some(expires_at));
+        authority.add_card(card.clone());
+        executor.queue_card_install(&caller_worker, card).await?;
+    }
+    let parent_expiries = parent_expiries
+        .iter()
+        .map(|expires_at| (expires_at.timestamp(), expires_at.timestamp_subsec_nanos()))
+        .collect::<Vec<_>>();
+    let expected = Some((
+        earliest_expiry.timestamp(),
+        earliest_expiry.timestamp_subsec_nanos(),
+    ));
+
+    let (earliest, scope_expiry, (listed, callee_expiry)) = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "expiring_scope_expiries",
+            data_value!(target_name, parent_expiries),
+        )
+        .await?
+        .into_typed::<(
+            Option<(i64, u32)>,
+            Option<(i64, u32)>,
+            (bool, Option<(i64, u32)>),
+        )>()?;
+    assert_eq!(
+        earliest, expected,
+        "the guest must see the expiry of the one-hour parent"
+    );
+    assert_eq!(
+        scope_expiry, expected,
+        "the scope card must expire with its earliest expiring root"
+    );
+    assert!(
+        listed,
+        "a callee with card:inspect must list the lent scope card"
+    );
+    assert_eq!(
+        callee_expiry, expected,
+        "the callee must see the expiry of the lent scope card"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
 async fn scope_cards_reject_non_await_and_persistent_arguments(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -506,6 +940,31 @@ async fn scope_cards_reject_non_await_and_persistent_arguments(
     assert!(
         persistent_denied,
         "a persistent card must not be accepted as the scope-card argument"
+    );
+
+    let persistent_async_denied = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "persistent_async_scope_is_denied",
+            data_value!("rejection-target"),
+        )
+        .await?
+        .into_typed::<bool>()?;
+    assert!(
+        persistent_async_denied,
+        "async-invoke-and-await must deny a persistent scope-card argument without trapping"
+    );
+
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let wallet_cards = executor
+        .invoke_and_await_agent(&component, &caller, "wallet_card_count", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    assert!(
+        wallet_cards > 0,
+        "the caller must recover by replaying the recorded async scope-card denial"
     );
 
     for (method, caller_name) in [
@@ -931,16 +1390,17 @@ async fn queued_wallet_revocation_updates_cached_authorization_at_boundary(
     let root_card_id = configure_scope_card_root(&authority, &component, &caller)?;
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
 
-    assert!(
-        !executor
+    assert_eq!(
+        executor
             .invoke_and_await_agent(
                 &component,
                 &caller,
-                "derive_from_wallet_is_denied",
+                "derive_from_wallet_denial",
                 data_value!(),
             )
             .await?
-            .into_typed::<bool>()?,
+            .into_typed::<Option<String>>()?,
+        None,
         "the cached surface must initially authorize wallet derivation"
     );
 
@@ -949,18 +1409,37 @@ async fn queued_wallet_revocation_updates_cached_authorization_at_boundary(
         .queue_card_revocation(&caller_worker, root_card_id)
         .await?;
 
-    let error = executor
+    let denial = executor
         .invoke_and_await_agent(
             &component,
             &caller,
-            "derive_from_wallet_is_denied",
+            "derive_from_wallet_denial",
             data_value!(),
         )
-        .await
-        .expect_err("the queued revocation must deny wallet derivation");
+        .await?
+        .into_typed::<Option<String>>()?
+        .expect("the queued revocation must deny wallet derivation");
     assert!(
-        error.to_string().contains("card:derive is not permitted"),
-        "unexpected authorization error: {error:#}"
+        denial.contains("NotPermitted") && denial.contains("card:derive is not permitted"),
+        "unexpected wallet derivation denial: {denial}"
+    );
+
+    drop(caller_worker);
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let replayed_denial = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "derive_from_wallet_denial",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Option<String>>()?;
+    assert!(
+        replayed_denial.is_some(),
+        "the caller must replay its earlier denials and stay denied after recovery"
     );
 
     let oplog = executor
@@ -1528,18 +2007,19 @@ async fn replayed_wallet_authorization_uses_pinned_cards_until_live_transition(
         1,
         "replay must not query registry liveness; only the replay-to-live transition may do so"
     );
-    let error = executor
+    let denial = executor
         .invoke_and_await_agent(
             &component,
             &caller,
-            "derive_from_wallet_is_denied",
+            "derive_from_wallet_denial",
             data_value!(),
         )
-        .await
-        .expect_err("the revoked card must stop authorizing new live invocations");
+        .await?
+        .into_typed::<Option<String>>()?
+        .expect("the revoked card must stop authorizing new live invocations");
     assert!(
-        error.to_string().contains("card:derive is not permitted"),
-        "unexpected authorization error: {error:#}"
+        denial.contains("NotPermitted") && denial.contains("card:derive is not permitted"),
+        "unexpected wallet derivation denial: {denial}"
     );
     Ok(())
 }
@@ -1761,7 +2241,7 @@ async fn repeated_authorization_does_not_revalidate_wallet_or_scope_roots(
             .invoke_and_await_agent(
                 &component,
                 &caller,
-                "invoke_and_await_repeated_scope_inspection",
+                "repeated_scope_inspection_through_default_scope_card",
                 data_value!(target_name, 0u32),
             )
             .await?
@@ -1776,7 +2256,7 @@ async fn repeated_authorization_does_not_revalidate_wallet_or_scope_roots(
             .invoke_and_await_agent(
                 &component,
                 &caller,
-                "invoke_and_await_repeated_scope_inspection",
+                "repeated_scope_inspection_through_default_scope_card",
                 data_value!(target_name, 5u32),
             )
             .await?
@@ -4572,14 +5052,39 @@ async fn capabilities_round_trip_between_agents_and_codec_rejects_reuse(
             data_value!("capability-round-trip-receiver"),
         )
         .await?
-        .into_typed::<Result<Vec<String>, String>>()?
+        .into_typed::<Result<(Vec<String>, bool, bool, bool, Option<String>), String>>()?
         .map_err(anyhow::Error::msg)?;
-    assert_eq!(observations.len(), 7);
-    assert_eq!(observations[0], observations[1]);
-    assert_eq!(observations[0], observations[2]);
-    assert_eq!(observations[3], observations[4]);
-    assert_eq!(observations[3], observations[5]);
-    assert_eq!(observations[6], secret_value);
+    let (
+        secret_observations,
+        receiver_got_sent_card,
+        sender_got_sent_card,
+        sender_got_template_back,
+        mismatched_kind_error,
+    ) = observations;
+    assert_eq!(secret_observations.len(), 4);
+    assert_eq!(secret_observations[0], secret_observations[1]);
+    assert_eq!(secret_observations[0], secret_observations[2]);
+    assert_eq!(secret_observations[3], secret_value);
+    assert!(
+        receiver_got_sent_card,
+        "the receiver must get the sent card"
+    );
+    assert!(
+        sender_got_sent_card,
+        "the sender must get the sent card back"
+    );
+    assert!(
+        sender_got_template_back,
+        "the sender must get its template card back"
+    );
+    // The guest codec decodes any card value as the declared type; the host
+    // checks the kind of the card against the declared parameter.
+    let mismatched_kind_error = mismatched_kind_error
+        .expect("a template card sent to a concrete-card parameter must be refused");
+    assert!(
+        mismatched_kind_error.contains("expected polymorphic `false`, found `true`"),
+        "unexpected refusal of a template card: {mismatched_kind_error}"
+    );
 
     let codec_sender = agent_id!("CapabilityRpcSender", "capability-codec-rejections");
     configure_scope_card_root(&authority, &component, &codec_sender)?;
@@ -4591,12 +5096,14 @@ async fn capabilities_round_trip_between_agents_and_codec_rejects_reuse(
         .await?
         .into_typed::<Result<Vec<String>, String>>()?
         .map_err(anyhow::Error::msg)?;
-    assert_eq!(errors.len(), 6);
+    assert_eq!(errors.len(), 8);
     for (error, expected) in errors.iter().zip([
         "same secret handle appeared more than once",
         "secret handle was already transferred",
         "same quota-token handle appeared more than once",
         "quota-token handle was already transferred",
+        "same permission-card handle appeared more than once",
+        "permission-card handle was already transferred",
         "same permission-card handle appeared more than once",
         "permission-card handle was already transferred",
     ]) {
@@ -5083,3 +5590,5 @@ async fn p2_and_p3_environment_replay_uses_the_recorded_filtered_result(
     )
     .await
 }
+
+mod moonbit;

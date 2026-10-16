@@ -73,6 +73,8 @@ import {
   type TypedSchemaValue,
 } from './internal/schema-model';
 import { ToolRegistry } from './internal/registry/toolRegistry';
+import { detachGuestPermissionCardResource } from './internal/schema-model/permissionCardHandle';
+import { PERMISSION_CARD_INTERNAL } from './internal/schema-model/permissionCardInternal';
 import type { ToolClientOptions } from './toolClient';
 import {
   emptyMiddlewareParameterCodec,
@@ -2344,7 +2346,7 @@ export function withWireValueOwnership<T>(
   wire: WireTypedSchemaValue,
   decode: (lift: () => TypedSchemaValue) => T,
 ): T | Promise<never> {
-  const resources = new Map<object, Array<{ val: unknown }>>();
+  const resources = new Map<object, Array<{ tag: string; val: unknown }>>();
   const streams = new Set<SchemaValueStream>();
   const nodes = wire?.value?.valueNodes;
   for (const node of Array.isArray(nodes) ? nodes : []) {
@@ -2369,6 +2371,10 @@ export function withWireValueOwnership<T>(
     const dispose = (): never => {
       for (const [raw, nodes] of resources) {
         for (const node of nodes) node.val = undefined;
+        // A card lifted before the failure must not keep a disposed resource.
+        if (nodes.some((node) => node.tag === 'permission-card-handle')) {
+          detachGuestPermissionCardResource(PERMISSION_CARD_INTERNAL, raw as never);
+        }
         if (disposedWireCapabilities.has(raw)) continue;
         disposedWireCapabilities.add(raw);
         try {
