@@ -720,7 +720,7 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 						issues = append(issues, Issue{Path: child(path, f.Name), Message: err.Error()})
 						continue
 					}
-					fields = append(fields, d)
+					fields = append(fields, cloneValue(d))
 					continue
 				}
 				// An optional field may be left out: it is then None.

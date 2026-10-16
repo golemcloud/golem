@@ -281,6 +281,51 @@ func TestFieldDefaultsApplyOnlyToTheRootRecord(t *testing.T) {
 	}
 }
 
+// TestFieldDefaultsDoNotShareStorage — mutating a packed default, or the value
+// handed to WithFieldDefaults, does not change what a later pack produces.
+func TestFieldDefaultsDoNotShareStorage(t *testing.T) {
+	root := typ(RecordType{Fields: []NamedField{
+		{Name: "tags", Body: typ(ListType{Element: typ(StringType{})})},
+		{Name: "payload", Body: typ(BinaryType{})},
+		{Name: "label", Body: typ(OptionType{Inner: typ(StringType{})})},
+	}})
+	label := SchemaValue(StringValue{Value: "x"})
+	tags := ListValue{Items: []SchemaValue{StringValue{Value: "a"}}}
+	payload := BinaryValue{Bytes: []byte{1, 2}}
+	r := NewRef(SchemaGraph{Root: root}).WithFieldDefaults(map[string]SchemaValue{
+		"tags": tags, "payload": payload, "label": OptionValue{Value: &label},
+	})
+	x := SchemaValue(StringValue{Value: "x"})
+	want := RecordValue{Fields: []SchemaValue{
+		ListValue{Items: []SchemaValue{StringValue{Value: "a"}}},
+		BinaryValue{Bytes: []byte{1, 2}},
+		OptionValue{Value: &x},
+	}}
+
+	tags.Items[0] = StringValue{Value: "changed"}
+	payload.Bytes[0] = 9
+	label = StringValue{Value: "changed"}
+	first, err := r.PackJSON(map[string]any{})
+	if err != nil {
+		t.Fatalf("PackJSON: %v", err)
+	}
+	if !reflect.DeepEqual(first, want) {
+		t.Fatalf("mutating the declared defaults changed the pack: %#v", first)
+	}
+
+	fields := first.(RecordValue).Fields
+	fields[0].(ListValue).Items[0] = StringValue{Value: "mutated"}
+	fields[1].(BinaryValue).Bytes[0] = 9
+	*fields[2].(OptionValue).Value = StringValue{Value: "mutated"}
+	second, err := r.PackJSON(map[string]any{})
+	if err != nil {
+		t.Fatalf("PackJSON: %v", err)
+	}
+	if !reflect.DeepEqual(second, want) {
+		t.Errorf("mutating a packed value changed the next pack: %#v", second)
+	}
+}
+
 // TestFieldDefaultIsCheckedAgainstItsField — a default that does not fit its
 // field is a problem at that field, not a value sent on.
 func TestFieldDefaultIsCheckedAgainstItsField(t *testing.T) {

@@ -59,7 +59,7 @@ func (r Ref) WithFieldDefaults(defaults map[string]SchemaValue) Ref {
 	if len(defaults) > 0 {
 		out.fieldDefaults = make(map[string]SchemaValue, len(defaults))
 		for name, v := range defaults {
-			out.fieldDefaults[name] = v
+			out.fieldDefaults[name] = cloneValue(v)
 		}
 	}
 	return out
