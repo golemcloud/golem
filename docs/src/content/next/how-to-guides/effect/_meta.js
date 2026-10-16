@@ -12,7 +12,8 @@ export default {
   "golem-configure-durability-effect": "Configuring Agent Durability (Effect)",
   "golem-add-cors-effect": "Configuring CORS for Effect HTTP Endpoints",
   "golem-retry-policies-effect": "Configuring Retry Policies in Effect Golem Applications",
-  "golem-create-agent-instance-effect": "Creating an Effect Golem Agent Instance with `golem agent new`",
+  "golem-create-agent-instance-effect":
+    "Creating an Effect Golem Agent Instance with `golem agent new`",
   "golem-stateless-agent-effect": "Creating Ephemeral Agents with Effect",
   "golem-durable-streams-effect": "Durable Streams with Effect",
   "golem-tools-middleware-effect": "Effect tools and middleware",
@@ -43,5 +44,5 @@ export default {
   "golem-add-mysql-effect": "Using MySQL from an Effect Agent",
   "golem-add-postgres-effect": "Using PostgreSQL from an Effect Golem Agent",
   "golem-add-webhook-effect": "Using Webhooks in an Effect Golem Agent",
-  "golem-wait-for-external-input-effect": "Waiting for External Input in an Effect Golem Agent"
-};
+  "golem-wait-for-external-input-effect": "Waiting for External Input in an Effect Golem Agent",
+}
