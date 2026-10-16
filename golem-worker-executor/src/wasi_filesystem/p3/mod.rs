@@ -58,8 +58,8 @@ use golem_common::model::oplog::host_functions::{
 use golem_common::model::oplog::types::{SerializableFileTimes, SerializableP3FileSystemError};
 use golem_common::model::oplog::{
     DurableFunctionType, DurableInvocationId, HostPayloadPair, HostRequestFileSystemPath,
-    HostRequestNoInput, HostResponseFileSystemPermissionDenied, HostResponseP3FileSystemStat,
-    HostResponseP3FileSystemWriteAdmission,
+    HostRequestNoInput, HostResponseP3FileSystemStat, HostResponseP3FileSystemWriteAdmission,
+    HostResponsePermissionDenied,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use wasmtime::component::{
@@ -192,11 +192,11 @@ async fn record_permission_denial<Ctx: WorkerCtx, U: Send + 'static>(
         invocation_id,
         permission_denial_request(requests),
         DurableFunctionType::ReadLocal,
-        async || -> wasmtime::Result<_> { Ok(HostResponseFileSystemPermissionDenied {}) },
+        async || -> wasmtime::Result<_> { Ok(HostResponsePermissionDenied {}) },
     )
     .await
     {
-        Ok(HostResponseFileSystemPermissionDenied {}) => types::ErrorCode::NotPermitted.into(),
+        Ok(HostResponsePermissionDenied {}) => types::ErrorCode::NotPermitted.into(),
         Err(error) => FilesystemError::trap(error),
     }
 }

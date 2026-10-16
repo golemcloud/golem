@@ -434,6 +434,10 @@ oplog_payload! {
             /// The `(verb, guest path)` pairs that the denied check covered.
             requests: Vec<(String, String)>
         },
+        SocketsTcpConnectPermissionDenial {
+            /// The remote socket address of the denied connect.
+            address: String
+        },
     }
 }
 
@@ -779,7 +783,7 @@ oplog_payload! {
         ToolAttachmentWrite { outcome: ToolAttachmentWriteOutcome },
         ToolAttachmentTerminalResult { outcome: ToolAttachmentTerminalOutcome },
         ToolAttachmentClosed { cause: ByteStreamCloseCause },
-        FileSystemPermissionDenied {},
+        PermissionDenied {},
     }
 }
 
@@ -1045,7 +1049,8 @@ pub mod host_functions {
         (GolemToolOutputWrite => "golem::tool::streams::tool-output-writer", "write", ToolAttachmentWrite, ToolAttachmentWrite),
         (GolemToolOutputFinish => "golem::tool::streams::tool-output-writer", "finish", ToolAttachmentFinish, ToolAttachmentTerminalResult),
         (GolemToolOutputFail => "golem::tool::streams::tool-output-writer", "fail", ToolAttachmentFail, ToolAttachmentTerminalResult),
-        (FilesystemPermissionDenied => "filesystem::permissions", "denied", FileSystemPermissionDenial, FileSystemPermissionDenied)
+        (FilesystemPermissionDenied => "filesystem::permissions", "denied", FileSystemPermissionDenial, PermissionDenied),
+        (SocketsTcpPermissionDenied => "sockets::tcp::permissions", "denied", SocketsTcpConnectPermissionDenial, PermissionDenied)
     }
 }
 

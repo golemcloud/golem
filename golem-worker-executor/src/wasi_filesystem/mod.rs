@@ -16,10 +16,10 @@ use std::hash::Hasher;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::authorization::targets::{
     CanonicalGuestPath, TargetError, agent_owner, filesystem_target,
 };
+use crate::durable_host::{DurableWorkerCtx, RecordedDenialAdmission};
 use crate::services::agent_filesystem::{
     self as agent_filesystem, AccessMode, AttributeChanges, Error as AgentFilesystemError,
     File as AgentFile, FileDisposition, FilesystemCall, FilesystemGenerationHandle, FlushLevel,
@@ -111,12 +111,8 @@ fn canonical_guest_path_from_descriptor_path(
     CanonicalGuestPath::new(&absolute)?.resolve(relative)
 }
 
-/// How a protected filesystem import decides its permission check.
-///
-/// A live check that denies the import records the denial as a durable call under the
-/// invocation id of the import, and an allowed check records nothing. Replay never checks
-/// permissions: an import whose id has a recorded denial replays the denial, and any other import
-/// that runs before the Store is live continues as allowed.
+/// How a protected filesystem import decides its permission check (see
+/// [`RecordedDenialAdmission`]).
 pub(crate) enum FilesystemAdmission {
     /// The history records a denial of this import.
     RecordedDenial,
@@ -126,28 +122,18 @@ pub(crate) enum FilesystemAdmission {
     ReplayedAllowed,
 }
 
-/// Fails when the history records a denial for an import that can no longer replay it: a durable
-/// call admitted live would record a second denial under the same invocation id.
 pub(crate) fn filesystem_admission<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     invocation_id: Option<DurableInvocationId>,
     requests: &[(FilesystemVerb, CanonicalGuestPath)],
 ) -> Result<FilesystemAdmission, WorkerExecutorError> {
-    match invocation_id {
-        Some(invocation_id) if ctx.has_recorded_permission_denial(invocation_id) => {
-            if ctx.durable_call_is_live() {
-                Err(WorkerExecutorError::runtime(format!(
-                    "the filesystem permission denial of invocation id {invocation_id} is recorded, but the import runs after replay"
-                )))
-            } else {
-                Ok(FilesystemAdmission::RecordedDenial)
-            }
+    Ok(match ctx.recorded_denial_admission(invocation_id)? {
+        RecordedDenialAdmission::RecordedDenial => FilesystemAdmission::RecordedDenial,
+        RecordedDenialAdmission::Check => {
+            FilesystemAdmission::Check(filesystem_permission_targets(ctx, requests))
         }
-        _ if ctx.is_live() => Ok(FilesystemAdmission::Check(filesystem_permission_targets(
-            ctx, requests,
-        ))),
-        _ => Ok(FilesystemAdmission::ReplayedAllowed),
-    }
+        RecordedDenialAdmission::ReplayedAllowed => FilesystemAdmission::ReplayedAllowed,
+    })
 }
 
 /// The request of the durable call that records a filesystem permission denial.

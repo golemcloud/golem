@@ -3305,7 +3305,7 @@ impl ReplayState {
     }
 
     /// Scans the non-deleted entries of `[from, to]` for successful-completion delivery markers
-    /// and recorded filesystem permission denials.
+    /// and recorded permission denials.
     /// Exactly one visible `CompletionDelivered` or `CompletionDiscarded` may reference a
     /// `Start`, and exactly one visible permission denial may carry an invocation id; duplicates
     /// or a conflicting pair are oplog corruption.
@@ -3373,8 +3373,11 @@ impl ReplayState {
                         request,
                         ..
                     } => {
-                        if function_name == HostFunctionName::FilesystemPermissionDenied
-                            && !skipped_regions.is_in_deleted_region(marker_idx)
+                        if matches!(
+                            function_name,
+                            HostFunctionName::FilesystemPermissionDenied
+                                | HostFunctionName::SocketsTcpPermissionDenied
+                        ) && !skipped_regions.is_in_deleted_region(marker_idx)
                             && let Some(invocation_id) = invocation_id
                             && let Some(previous) =
                                 permission_denials.insert(invocation_id, marker_idx)
@@ -4666,7 +4669,7 @@ impl ReplayState {
         self.cursor.is_live_published()
     }
 
-    /// Whether the replayed history records a filesystem permission denial for the guest import
+    /// Whether the replayed history records a permission denial for the guest import
     /// with `invocation_id`. Does not take the cursor lock.
     pub(crate) fn has_recorded_permission_denial(
         &self,

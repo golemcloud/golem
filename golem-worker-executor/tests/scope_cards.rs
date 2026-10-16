@@ -1902,6 +1902,111 @@ async fn p3_tcp_default_denial_is_durable_and_does_not_reach_the_backend(
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
+async fn p2_tcp_connect_denial_is_recorded_and_does_not_reach_the_backend_on_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("Networking")
+        .store()
+        .await?;
+    let caller = agent_id!("Networking", "p2-tcp-permission-denial");
+    configure_scope_card_root(&authority, &component, &caller)?;
+    let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let invocation_key = IdempotencyKey::fresh();
+
+    let denied = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &invocation_key,
+            "probe_p2",
+            data_value!("tcp-start-connect", "", port, Vec::<u8>::new()),
+        )
+        .await?
+        .into_typed::<Result<String, String>>()?;
+    assert!(
+        denied
+            .as_ref()
+            .is_err_and(|error| normalized_error_contains(error, "accessdenied")),
+        "a P2 TCP connect without a grant must return AccessDenied, got {denied:?}"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), listener.accept())
+            .await
+            .is_err(),
+        "a denied connect must not reach the TCP backend"
+    );
+
+    let oplog = executor
+        .get_oplog(&caller_worker, OplogIndex::INITIAL)
+        .await?;
+    let denial_start = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params)
+                if params.function_name == "sockets::tcp::permissions::denied" =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("the denied connect must record a denial");
+    assert!(
+        oplog.iter().any(|entry| matches!(
+            &entry.entry,
+            PublicOplogEntry::End(params) if params.start_index == denial_start
+        )),
+        "the denial recorded at {denial_start} must be complete"
+    );
+
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let replayed = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &invocation_key,
+            "probe_p2",
+            data_value!("tcp-start-connect", "", port, Vec::<u8>::new()),
+        )
+        .await?
+        .into_typed::<Result<String, String>>()?;
+    assert_eq!(replayed, denied);
+    // Replay runs the guest again; a denial replayed as allowed would connect now.
+    let after_restart = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "probe_p2",
+            data_value!("resolve-addresses", "localhost", 0u16, Vec::<u8>::new()),
+        )
+        .await?
+        .into_typed::<Result<String, String>>()?;
+    assert!(
+        after_restart.is_err(),
+        "the new probe must be denied, got {after_restart:?}"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), listener.accept())
+            .await
+            .is_err(),
+        "replaying a denied connect must not reach the TCP backend"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
 async fn p3_tcp_replay_keeps_an_admitted_result_after_revocation_and_denies_new_work(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

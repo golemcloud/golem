@@ -15,8 +15,14 @@
 use wasmtime::component::Resource;
 
 use crate::durable_host::authorization::targets::tcp_target;
-use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::{
+    DurabilityHost, DurableCallSession, DurableWorkerCtx, NotCancellable, RecordedDenialAdmission,
+};
 use crate::workerctx::WorkerCtx;
+use golem_common::model::oplog::host_functions::SocketsTcpPermissionDenied;
+use golem_common::model::oplog::{
+    DurableFunctionType, HostRequestSocketsTcpConnectPermissionDenial, HostResponsePermissionDenied,
+};
 use wasmtime_wasi::p2::SocketError;
 use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode;
 use wasmtime_wasi::p2::bindings::sockets::tcp::{
@@ -48,13 +54,7 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
         network: Resource<Network>,
         remote_address: IpSocketAddress,
     ) -> Result<(), SocketError> {
-        if self.state.is_live() {
-            let target = ip_socket_target(&remote_address).ok_or(ErrorCode::AccessDenied)?;
-            match self.authorize_live_permission(&target).await {
-                Ok(Ok(_)) => {}
-                Ok(Err(_)) | Err(_) => return Err(ErrorCode::AccessDenied.into()),
-            }
-        }
+        authorize_connect(self, &remote_address).await?;
         self.observe_function_call("sockets::tcp", "start_connect");
         let mut view = self.as_wasi_view();
         HostTcpSocket::start_connect(&mut view.sockets(), self_, network, remote_address).await
@@ -246,6 +246,48 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
+
+/// Checks the permission of a connect, and gives a denial a track in the oplog (see
+/// [`RecordedDenialAdmission`]). It reserves the invocation id of the connect, both live and
+/// during replay, so the ids of later calls do not depend on the decision.
+async fn authorize_connect<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    remote_address: &IpSocketAddress,
+) -> Result<(), SocketError> {
+    let invocation_id = ctx
+        .direct_call_invocation_id(&DurableFunctionType::ReadLocal)
+        .map_err(|error| SocketError::trap(wasmtime::Error::from(error)))?;
+    let denied = match ctx
+        .recorded_denial_admission(invocation_id)
+        .map_err(|error| SocketError::trap(wasmtime::Error::from(error)))?
+    {
+        RecordedDenialAdmission::ReplayedAllowed => false,
+        RecordedDenialAdmission::RecordedDenial => true,
+        RecordedDenialAdmission::Check => match ip_socket_target(remote_address) {
+            Some(target) => ctx
+                .authorize_live_permission(&target)
+                .await
+                .map_err(|error| SocketError::trap(wasmtime::Error::from(error)))?
+                .is_err(),
+            None => true,
+        },
+    };
+    if !denied {
+        return Ok(());
+    }
+    DurableCallSession::<SocketsTcpPermissionDenied, NotCancellable>::invoke_with_reserved_invocation_id(
+        ctx,
+        invocation_id,
+        HostRequestSocketsTcpConnectPermissionDenial {
+            address: std::net::SocketAddr::from(*remote_address).to_string(),
+        },
+        DurableFunctionType::ReadLocal,
+        async |_ctx| -> wasmtime::Result<_> { Ok(HostResponsePermissionDenied {}) },
+    )
+    .await
+    .map_err(SocketError::trap)?;
+    Err(ErrorCode::AccessDenied.into())
+}
 
 fn ip_socket_target(
     address: &IpSocketAddress,

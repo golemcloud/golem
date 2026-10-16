@@ -50,7 +50,7 @@ use golem_common::model::oplog::types::{
 };
 use golem_common::model::oplog::{
     DurableFunctionType, DurableInvocationId, HostRequestFileSystemPath,
-    HostResponseFileSystemPermissionDenied, HostResponseFileSystemStat,
+    HostResponseFileSystemStat, HostResponsePermissionDenied,
 };
 
 use crate::wasi_filesystem::{
@@ -137,11 +137,11 @@ async fn record_permission_denial<Ctx: WorkerCtx>(
         invocation_id,
         permission_denial_request(requests),
         DurableFunctionType::ReadLocal,
-        async |_ctx| -> wasmtime::Result<_> { Ok(HostResponseFileSystemPermissionDenied {}) },
+        async |_ctx| -> wasmtime::Result<_> { Ok(HostResponsePermissionDenied {}) },
     )
     .await
     {
-        Ok(HostResponseFileSystemPermissionDenied {}) => ErrorCode::NotPermitted.into(),
+        Ok(HostResponsePermissionDenied {}) => ErrorCode::NotPermitted.into(),
         Err(error) => FsError::trap(error),
     }
 }

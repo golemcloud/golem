@@ -520,8 +520,9 @@ struct ReplayCursor {
     /// Guest-consumed journal positions, with their durable scope owner. Host projections are
     /// ordinary hints; guest records reserve the cursor until the native read observer fires.
     stream_observations: std::sync::Mutex<StreamObservationPositions>,
-    /// Recorded filesystem permission denials of the visible replayed range, keyed by the
-    /// invocation id of the denied guest import, with the index of their `Start`. A live check
+    /// Recorded permission denials (filesystem imports and P2 TCP connects) of the visible
+    /// replayed range, keyed by the invocation id of the denied guest import, with the index of
+    /// their `Start`. A live check
     /// records a denial and nothing for an allowed import, so a replayed import must know whether
     /// its id is here before it claims anything. Built by the same scan as `completion_markers`
     /// and maintained with it when the replay target or the deleted regions change.

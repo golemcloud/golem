@@ -1458,7 +1458,7 @@ the P2/P3 adapters live in `wasi_filesystem/{p2/types.rs,p3/mod.rs}`.
 
 Filesystem permission decisions have a track in the oplog. Every protected P2/P3 filesystem import
 reserves its durable invocation id at entry, live and during replay, and decides through
-`wasi_filesystem::filesystem_admission`. A live check that denies the import records a complete
+`wasi_filesystem::filesystem_admission`, which uses `DurableWorkerCtx::recorded_denial_admission`. A live check that denies the import records a complete
 `filesystem::permissions::denied` `Start`/`End` (`ReadLocal`; the request holds the verbs and the
 guest paths) under that id and returns `not-permitted`. An allowed import records nothing. The
 recovery-metadata scan indexes these denials by invocation id (`ReplayCursor::permission_denials`;
@@ -1473,6 +1473,12 @@ call (`admit_stream_write`); an executor error of that check fails the call befo
 the repair of an incomplete admission `Start` completes it as allowed, because authorization cannot
 run during replay. Tests: `tests/scope_cards.rs::denied_filesystem_imports_are_recorded_and_replayed_after_restart`,
 `replay_state/tests.rs::recorded_permission_denials_follow_the_visible_replayed_range`.
+
+P2 TCP `start-connect` is not a durable call either, and uses the same shared decision
+(`DurableWorkerCtx::recorded_denial_admission`, `RecordedDenialAdmission`): a denied connect records
+`sockets::tcp::permissions::denied` (the request holds the remote address) and returns
+`access-denied`, and its replay returns the recorded denial without a connect. The same index holds
+both kinds of denial. Test: `tests/scope_cards.rs::p2_tcp_connect_denial_is_recorded_and_does_not_reach_the_backend_on_replay`.
 
 Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic
 capability escape refusal as `SandboxEscape`; P2/P3 return `access`, or EACCES, and keep the
