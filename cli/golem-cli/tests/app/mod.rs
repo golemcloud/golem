@@ -103,7 +103,7 @@ tag_suite!(chunk_f_policy_boundary, deploy);
 tag_suite!(directory_source_ifs, deploy);
 tag_suite!(effect_source_conformance, agents_guest_bridge);
 tag_suite!(effect_http_router, deploy);
-tag_suite!(external_durable_streams, agents_streaming);
+tag_suite!(external_durable_streams, agents);
 tag_suite!(go_agent_ops, deploy);
 tag_suite!(go_guest_streams, agents_guest_bridge);
 tag_suite!(go_http_router, deploy);

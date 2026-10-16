@@ -55,7 +55,7 @@ impl MyAgent for MyAgentImpl {
     }
 
     async fn fetch_data(&self, url: String) -> String {
-        // Use wstd::http for HTTP requests
+        // Use golem_rust::http for WASI HTTP p3 requests
         todo!()
     }
 }

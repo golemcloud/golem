@@ -28,6 +28,7 @@ components:
       - golem-it:tool-streaming-rust-provider/matrix-core
       - golem-it:tool-streaming-rust-provider/matrix-resource
       - golem-it:tool-streaming-rust-provider/matrix-permission-issuer
+      - golem-it:tool-streaming-rust-provider/wallet-mutation
   golem-it:tool-streaming-rust-middleware:
     dir: rust-middleware
     templates: rust, rust-test-component
@@ -48,6 +49,8 @@ tools:
     component: golem-it:tool-streaming-rust-provider
   matrix-permission-issuer:
     component: golem-it:tool-streaming-rust-provider
+  wallet-mutation:
+    component: golem-it:tool-streaming-rust-provider
 
 agents:
   ToolStreamingCaller:
@@ -67,6 +70,9 @@ agents:
   EnvironmentProbeCaller:
     tools:
       environment-probe: {}
+  WalletRecoveryProbe:
+    tools:
+      wallet-mutation: {}
 
 bridge:
   rust:
@@ -81,6 +87,7 @@ bridge:
       - matrix-core
       - matrix-resource
       - matrix-permission-issuer
+      - wallet-mutation
 
 environments:
   local:
