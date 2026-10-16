@@ -91,8 +91,26 @@ impl<U: Send + 'static, Ctx: WorkerCtx> client::HostWithStore<U> for DurableP3<C
             })?
         };
 
-        if is_idempotent_http_method(&serialize_method(method)) {
+        // The durable call shape follows the request's effective idempotence, not only its
+        // method. A `WriteRemote` send has no durable scope: a crash before the response headers
+        // repairs the recorded `Start` in place (same index, same derived idempotency key, the
+        // deterministic guest re-produces the body), and independent operations recorded next to
+        // it are kept. A batched send can only recover through a suffix rollback, which must
+        // refuse when a foreign remote write interleaves, so it is reserved for requests that are
+        // not re-executable at all. The guest sets the idempotence mode deterministically, so the
+        // replayed call claims the same shape it recorded.
+        let serialized_method = serialize_method(method);
+        if is_idempotent_http_method(&serialized_method) {
             send_with_durability::<Ctx, U, LeaveIncompleteOnDrop>(
+                store,
+                req,
+                DurableFunctionType::WriteRemote,
+            )
+            .await
+        } else if effective_method_idempotence::<Ctx, U>(store, &serialized_method) {
+            // A guest drop of a pending non-idempotent-method send stays a recorded `Cancelled`
+            // terminal, as before; only the crash recovery changes.
+            send_with_durability::<Ctx, U, Cancellable>(
                 store,
                 req,
                 DurableFunctionType::WriteRemote,

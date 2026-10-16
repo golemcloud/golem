@@ -2203,7 +2203,7 @@ elif equals ${component} python
     build_task = set build-python-tool
     wasm = set builtin-tools/python.wasm
     artifact_id = set python
-    exports_json = set "{\"tools\":[\"python@0.1.0\"]}"
+    exports_json = set "{\"tools\":[\"python@0.1.1\"]}"
     licenses = set builtin-tools/python/licenses
     source_notice = set builtin-tools/python/SOURCE.md
     sbom = set ""
