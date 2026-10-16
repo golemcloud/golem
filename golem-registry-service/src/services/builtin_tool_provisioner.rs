@@ -90,7 +90,7 @@ static BUILTIN_EXPORTS: &[BuiltinExportDescriptor] = &[
         component_name: "python",
         artifact_id: "python",
         export_name: "python",
-        release_version: "0.1.0",
+        release_version: "0.1.1",
         kind: BuiltinExportKind::Tool,
     },
     BuiltinExportDescriptor {
