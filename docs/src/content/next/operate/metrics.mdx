@@ -25,7 +25,6 @@ Component service exposes the following Prometheus metrics:
 | `api_success_seconds`      | histogram | `api`, `api_type`                                                                                          | Measures the duration of successfully serving API requests (both HTTP and gRPC) |
 | `api_failure_seconds`      | histogram | `api`, `api_type`                                                                                          | Measures the duration of failed API requests (both HTTP and gRPC)               |
 | `grpc_api_active_streams`  | gauge     |                                                                                                            | Number of open incoming gRPC streams                                            |
-| `http_api_active_streams`  | gauge     |                                                                                                            | Number of open incoming HTTP streams                                            |
 
 ### Component Compilation Service
 
@@ -49,7 +48,6 @@ Shard manager exposes the following Prometheus metrics:
 | `api_success_seconds`               | histogram | `api`, `api_type`   | Measures the duration of successfully serving API requests (both HTTP and gRPC) |
 | `api_failure_seconds`               | histogram | `api`, `api_type`   | Measures the duration of failed API requests (both HTTP and gRPC)               |
 | `grpc_api_active_streams`           | gauge     |                     | Number of open incoming gRPC streams                                            |
-| `http_api_active_streams`           | gauge     |                     | Number of open incoming HTTP streams                                            |
 | `external_call_success_seconds`     | histogram | `target`, `op`      | Duration of successful outgoing calls                                          |
 | `external_call_response_size_bytes` | histogram | `target`, `op`      | Size of the response of outgoing calls                                          |
 | `external_call_retry_total`         | counter   | `target`, `op`      | Number of failed outgoing calls that got retried                                |
@@ -71,7 +69,6 @@ Worker executors expose the following Prometheus metrics:
 | `api_success_seconds`               | histogram | `api`, `api_type`   | Measures the duration of successfully serving API requests (both HTTP and gRPC) |
 | `api_failure_seconds`               | histogram | `api`, `api_type`   | Measures the duration of failed API requests (both HTTP and gRPC)               |
 | `grpc_api_active_streams`           | gauge     |                     | Number of open incoming gRPC streams                                            |
-| `http_api_active_streams`           | gauge     |                     | Number of open incoming HTTP streams                                            |
 | `external_call_success_seconds`     | histogram | `target`, `op`      | Duration of successful outgoing calls                                          |
 | `external_call_response_size_bytes` | histogram | `target`, `op`      | Size of the response of outgoing calls                                          |
 | `external_call_retry_total`         | counter   | `target`, `op`      | Number of failed outgoing calls that got retried                                |
@@ -124,6 +121,17 @@ Worker executors expose the following Prometheus metrics:
 
 For configuration, recovery, and deletion diagnostics, see [Operating Durable Stream Sessions](/next/operate/durable_streams).
 
+#### Agent Filesystems
+
+These metrics are for the XFS volume of the agent filesystems. An executor exports them at 0 from the start when it uses an XFS storage mode. The project metrics are only for `ManagedXfs`. For the usage of the volume, use the volume metrics of your platform, for example `kubelet_volume_stats_available_bytes` on Kubernetes.
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `filesystem_pressure_recovery_seconds` | histogram | `outcome` | Time of a recovery of free space after a write failed for space. The recovery unloads idle agents until the free space reaches the target. `outcome` is `recovered`, `target_not_reached` (no idle agent was left to unload), `deadline`, `observation_failed` (the free space could not be read), `cleanup_failed` (the cleanup of an unloaded agent filesystem failed), `not_under_pressure` (the volume had enough space, so the failure has another cause) or `unavailable` (the executor is shutting down). |
+| `filesystem_storage_refusals_total` | counter | `cause` | Agent filesystem calls that failed because no space was left. `cause` is `agent_quota` (the agent used up its own quota, which is normal) or `physical_capacity` (the volume is full, and a recovery did not free enough). |
+| `filesystem_project_cleanup_failures_total` | counter | `operation` | Failed cleanups of managed XFS projects. The project stays reserved, and its space stays used, until a later cleanup succeeds. `operation` is `delete` (the delete of an agent filesystem), `drop` (the fallback cleanup of an agent filesystem that was dropped without a delete) or `stale` (the cleanup of a project left over at the path of a new agent filesystem). |
+| `filesystem_project_stale_reclaims_total` | counter | | Managed XFS projects that a new agent filesystem found left over at its path, for example after a crash, and cleaned. A rate that keeps going up shows that cleanups fail. |
+
 #### Filesystem Snapshots
 
 | Metric                                            | Type      | Labels            | Description                                                                      |
@@ -153,7 +161,6 @@ Worker service exposes the following Prometheus metrics:
 | `api_success_seconds`               | histogram | `api`, `api_type`                                                                                          | Measures the duration of successfully serving API requests (both HTTP and gRPC) |
 | `api_failure_seconds`               | histogram | `api`, `api_type`                                                                                          | Measures the duration of failed API requests (both HTTP and gRPC)               |
 | `grpc_api_active_streams`           | gauge     |                                                                                                            | Number of open incoming gRPC streams                                            |
-| `http_api_active_streams`           | gauge     |                                                                                                            | Number of open incoming HTTP streams                                            |
 | `external_call_success_seconds`     | histogram | `target`, `op`                                                                                             | Duration of successful outgoing calls                                          |
 | `external_call_response_size_bytes` | histogram | `target`, `op`                                                                                             | Size of the response of outgoing calls                                          |
 | `external_call_retry_total`         | counter   | `target`, `op`                                                                                             | Number of failed outgoing calls that got retried                                |
