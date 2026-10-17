@@ -19,6 +19,26 @@ Both `golem` and `golem-cli` can be used — every command below works with eith
 golem agent invoke <AGENT_ID> <FUNCTION_NAME> [ARGUMENTS...]
 ```
 
+## Encoding Parameters
+
+Pass one shell argument per exported field of the method's input struct, in declaration order. Do not pass a JSON object wrapping all fields. A struct-valued field is one argument.
+
+Skip `golem.Principal` fields: the host fills them. Do not supply a principal value or placeholder, and keep the order of the other fields. Awaited, triggered, and scheduled invocations share the same CLI argument parser.
+
+| Method | CLI method and arguments |
+|--------|--------------------------|
+| `Method[PromptIn, golem.Unit]("prompt")` with `type PromptIn struct{ Text string }` | `prompt '"hello"'` |
+| `Method[SubmitIn, golem.Unit]("submit")` with `type SubmitIn struct{ Request Request }` and `type Request struct{ Text string }` | `submit '{text: "hello"}'` |
+| `Method[ProcessOrderIn, golem.Unit]("processOrder")` with `type ProcessOrderIn struct{ OrderID string; Quantity uint32 }` | `processOrder '"order-456"' 42` |
+| `Method[AuditIn, golem.Unit]("audit")` with `type AuditIn struct{ Principal golem.Principal; Note string }` | `audit '"checked"'` |
+| `Method[golem.Unit, []string]("history")` | `history` |
+
+For a method whose input is `golem.Unit` or has no user-supplied fields, omit arguments; `history '{}'` supplies an extra argument. Quote each Go literal as one shell argument. For a string field, if Go literal parsing fails, the CLI uses the argument as raw text. Passing `'{"text": "hello"}'` to `prompt` therefore passes that entire JSON text as the string; it does not extract `text`.
+
+Custom HTTP endpoints use a different rule: structured JSON bodies contain the named body fields, even for one field. The `submit` method above needs `{"request": {"text": "hello"}}` over HTTP when `Request` is a body field. Path/query/header fields are not body fields; unstructured text and binary fields use raw bodies. Load [`golem-http-params-go`](/next/how-to-guides/go/golem-http-params-go) for HTTP mapping.
+
+`--format json` selects output formatting, not input encoding. Triggered and scheduled CLI invocations use the same positional arguments.
+
 ## Agent ID Format
 
 The agent ID identifies the agent type and its constructor parameters:

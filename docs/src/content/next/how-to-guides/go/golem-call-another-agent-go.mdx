@@ -68,7 +68,7 @@ if err != nil {
 }
 ```
 
-`MustCall` panics with the same error instead. A panic in a method traps the component, as in Rust: the calling agent fails, or, inside `durability.Atomically`, the region is retried.
+`MustCall` panics with the same error instead. A panic in a method traps the component, as in Rust: the calling invocation fails without retry.
 
 ## Asynchronous call
 

@@ -13,10 +13,11 @@
 // limitations under the License.
 
 use crate::Tracing;
-use crate::app::{TestContext, builtin_artifact_sources, cmd, flag};
+use crate::app::{TestContext, cmd, flag};
 use axum::Router;
 use golem_cli::versions;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -46,11 +47,10 @@ struct BuiltinArtifact {
 
 impl BuiltinArtifact {
     fn source(&self) -> (PathBuf, String) {
-        builtin_artifact_sources()
-            .iter()
-            .find(|(source, _)| source.ends_with(self.path))
-            .cloned()
-            .unwrap_or_else(|| panic!("no built-in artifact source for '{}'", self.id))
+        let source = crate::workspace_path().join(self.path);
+        let bytes = std::fs::read(&source).unwrap();
+        let sha256 = format!("{:x}", Sha256::digest(bytes));
+        (source, sha256)
     }
 }
 
@@ -90,8 +90,7 @@ impl Drop for HoldingArtifactServer {
     }
 }
 
-/// Fills a cache directory with every built-in artifact except the held one, and points the
-/// registry service at that directory and at the server for the held artifact.
+/// Points the registry service at an empty cache and at the server for the held artifact.
 fn configure_held_artifact(
     ctx: &mut TestContext,
     held: &BuiltinArtifact,
@@ -99,12 +98,7 @@ fn configure_held_artifact(
 ) -> PathBuf {
     let cache_dir = ctx.working_dir.join("held-artifact-cache");
     std::fs::create_dir_all(&cache_dir).unwrap();
-    let (held_source, held_sha256) = held.source();
-    for (source, sha256) in builtin_artifact_sources() {
-        if source != &held_source {
-            std::fs::copy(source, cache_dir.join(format!("{sha256}.wasm"))).unwrap();
-        }
-    }
+    let (_, held_sha256) = held.source();
 
     let config_file = ctx.working_dir.join("golem-server-held-artifact.toml");
     std::fs::write(

@@ -28,6 +28,7 @@
 use super::fault::run_end;
 use super::files::{NotAnswered, SnapshotFiles, Unanswered};
 use super::runs::RunEnd;
+use crate::metrics::filesystem_snapshots::{self, StoredSource};
 use bytes::Bytes;
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -159,7 +160,13 @@ pub(super) async fn publish(
         )
         .await
     {
-        Ok(_) => Published::Written,
+        Ok(_) => {
+            filesystem_snapshots::record_stored_bytes(
+                StoredSource::Save,
+                staged.content.len() as u64,
+            );
+            Published::Written
+        }
         Err(NotAnswered { error, why }) => Published::NotWritten {
             end: match why {
                 Unanswered::Failed(failure) => run_end(failure),

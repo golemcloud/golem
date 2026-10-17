@@ -10,6 +10,8 @@ import {
   type ToolRuntimeError,
 } from "./BridgeTool.js"
 import { ToolClient } from "./host/ToolClient.js"
+import { discardRejectedPayload } from "./internal/tool/discardRejectedPayload.js"
+import { wholeToolCall } from "./internal/tool/resultObserver.js"
 import {
   cloneSchemaValue,
   field,
@@ -30,8 +32,12 @@ import {
 } from "./internal/schema-model/wit.js"
 import { freezeSchemaGraph, SchemaRef, type JsonValue } from "./SchemaRef.js"
 import { SchemaRenderError } from "./internal/reflection/schemaRender.js"
+import { attachJsonFieldDefaults } from "./internal/reflection/jsonFieldDefaults.js"
 
 const EMPTY_TUPLE_GRAPH: SchemaGraph = { defs: new Map(), root: t.tuple([]) }
+
+/** Values that canonical JSON input supplies for omitted scalar options, fixed positionals, and flags. */
+const omittedJsonDefaults = new WeakMap<ToolArgument, SchemaValue>()
 
 /** A local schema, metadata, or remote output failure. @since 1.6.0 @category errors */
 export class ToolReflectionError {
@@ -40,6 +46,14 @@ export class ToolReflectionError {
     readonly phase: "discovery" | "schema" | "input" | "invoke" | "output",
     readonly cause: unknown,
   ) {}
+
+  /** A readable description of the failure cause. @since 1.6.0 */
+  get message(): string {
+    const cause = this.cause
+    return cause instanceof Error || cause instanceof ToolReflectionError
+      ? cause.message
+      : String(cause)
+  }
 }
 
 /** One declared argument in the effective command input. @since 1.6.0 @category models */
@@ -66,6 +80,8 @@ export interface StartedToolInvocation<A, E = never> {
   readonly stderr?: Stream.Stream<Uint8Array, ToolRuntimeError<never>>
   readonly result: Effect.Effect<A, ToolRuntimeError<E> | ToolReflectionError>
   readonly cancel: Effect.Effect<void>
+  /** Stop result delivery without cancelling the invocation or outputs. */
+  readonly detach: Effect.Effect<void>
   readonly collect: Effect.Effect<
     CollectedToolInvocation<A, ToolRuntimeError<E> | ToolReflectionError, ToolRuntimeError<never>>
   >
@@ -73,10 +89,19 @@ export interface StartedToolInvocation<A, E = never> {
 
 const resultFromCollected = <A, ResultError, OutputError>(
   collected: CollectedToolInvocation<A, ResultError, OutputError>,
+  payload: (value: A) => Common.TypedSchemaValue | undefined,
 ): Effect.Effect<A, ResultError | OutputError> => {
   if (Result.isFailure(collected.result)) return Effect.fail(collected.result.failure)
-  if (Result.isFailure(collected.stdout)) return Effect.fail(collected.stdout.failure)
-  if (Result.isFailure(collected.stderr)) return Effect.fail(collected.stderr.failure)
+  if (Result.isFailure(collected.stdout))
+    return discardRejectedPayload(
+      payload(collected.result.success),
+      Effect.fail(collected.stdout.failure),
+    )
+  if (Result.isFailure(collected.stderr))
+    return discardRejectedPayload(
+      payload(collected.result.success),
+      Effect.fail(collected.stderr.failure),
+    )
   return Effect.succeed(collected.result.success)
 }
 
@@ -129,7 +154,7 @@ export class ToolCommand {
               positional.default_ === undefined
                 ? undefined
                 : schemaValueFromWit(positional.default_)
-            return Object.freeze({
+            const argument: ToolArgument = Object.freeze({
               kind: "positional" as const,
               name: positional.name,
               aliases: [] as ReadonlyArray<string>,
@@ -142,6 +167,8 @@ export class ToolCommand {
                 defaultValue === undefined ? undefined : canonicalDefault(schema, defaultValue),
               schema,
             })
+            if (defaultValue !== undefined) omittedJsonDefaults.set(argument, defaultValue)
+            return argument
           }),
           ...(body.positionals.tail
             ? [
@@ -194,6 +221,15 @@ export class ToolCommand {
       this.inputSchema = SchemaRef.fromImmutableGraph(
         graph,
         t.record(this.arguments.map((argument) => field(argument.name, argument.schema.root))),
+      )
+      attachJsonFieldDefaults(
+        this.inputSchema,
+        new Map(
+          this.arguments.flatMap((argument) => {
+            const value = omittedJsonDefaults.get(argument)
+            return value === undefined ? [] : [[argument.name, value] as const]
+          }),
+        ),
       )
       this.wireGraph = this.inputSchema.graph
     }
@@ -330,35 +366,52 @@ export class ToolCommand {
       const stdout = started.stdout
       const stderr = started.stderr
       const result = started.result.pipe(
-        Effect.mapError((error) => command.mapFailure(error)),
+        Effect.catch((error) => {
+          const mapped = command.mapFailure(error)
+          const payload =
+            error.tag === "rpc" &&
+            error.error.tag === "remote-tool-error" &&
+            error.error.val.tag === "custom-error"
+              ? error.error.val.val.payload
+              : undefined
+          return discardRejectedPayload(
+            mapped instanceof ToolReflectionError ? payload : undefined,
+            Effect.fail(mapped),
+          )
+        }),
         Effect.flatMap((terminal) => {
-          if (!command.result) {
-            return terminal.result === undefined
-              ? Effect.succeed(undefined)
-              : Effect.fail(new ToolReflectionError("output", "unexpected remote result"))
-          }
-          if (!terminal.result)
-            return Effect.fail(
-              new ToolReflectionError("output", "missing or malformed remote result"),
-            )
-          return Effect.try({
-            try: () =>
-              schemaShapesMatch(
-                command.result!.graph,
-                schemaGraphFromWit(terminal.result!.graph),
-              ) && command.result!.validateValue(terminal.result!.value).success,
-            catch: (cause) => new ToolReflectionError("output", cause),
-          }).pipe(
-            Effect.flatMap((valid) =>
-              valid
-                ? Effect.succeed(terminal.result!.value)
-                : Effect.fail(new ToolReflectionError("output", "malformed remote result")),
-            ),
+          return discardRejectedPayload(
+            terminal.result,
+            Effect.suspend(() => {
+              if (!command.result) {
+                return terminal.result === undefined
+                  ? Effect.succeed(undefined)
+                  : Effect.fail(new ToolReflectionError("output", "unexpected remote result"))
+              }
+              if (!terminal.result)
+                return Effect.fail(
+                  new ToolReflectionError("output", "missing or malformed remote result"),
+                )
+              return Effect.try({
+                try: () =>
+                  schemaShapesMatch(
+                    command.result!.graph,
+                    schemaGraphFromWit(terminal.result!.graph),
+                  ) && command.result!.validateValue(terminal.result!.value).success,
+                catch: (cause) => new ToolReflectionError("output", cause),
+              }).pipe(
+                Effect.flatMap((valid) =>
+                  valid
+                    ? Effect.succeed(terminal.result!.value)
+                    : Effect.fail(new ToolReflectionError("output", "malformed remote result")),
+                ),
+              )
+            }),
           )
         }),
       )
       const collect = collectToolInvocation(result, stdout, stderr)
-      return { stdout, stderr, result, cancel: started.cancel, collect }
+      return { stdout, stderr, result, cancel: started.cancel, detach: started.detach, collect }
     })
   }
 
@@ -381,10 +434,13 @@ export class ToolCommand {
           Effect.flatMap((value) =>
             value === undefined
               ? Effect.succeed(undefined)
-              : Effect.try({
-                  try: () => this.result!.unpackJson(value),
-                  catch: (cause) => new ToolReflectionError("output", cause),
-                }),
+              : discardRejectedPayload(
+                  { graph: schemaGraphToWit(this.result!.graph), value },
+                  Effect.try({
+                    try: () => this.result!.unpackJson(value),
+                    catch: (cause) => new ToolReflectionError("output", cause),
+                  }),
+                ),
           ),
         )
         const collect = collectToolInvocation(result, started.stdout, started.stderr)
@@ -393,6 +449,7 @@ export class ToolCommand {
           stderr: started.stderr,
           result,
           cancel: started.cancel,
+          detach: started.detach,
           collect,
         }
       }),
@@ -406,9 +463,14 @@ export class ToolCommand {
         new ToolReflectionError("input", "command requires caller-readable output"),
       )
     return Effect.scoped(
-      this.startValue(input, stdin).pipe(
-        Effect.flatMap((started) => started.collect),
-        Effect.flatMap(resultFromCollected),
+      wholeToolCall(this.startValue(input, stdin), (started) => started.collect).pipe(
+        Effect.flatMap((collected) =>
+          resultFromCollected(collected, (value) =>
+            value === undefined
+              ? undefined
+              : { graph: schemaGraphToWit(this.result!.graph), value },
+          ),
+        ),
       ),
     )
   }
@@ -423,10 +485,13 @@ export class ToolCommand {
       Effect.flatMap((value) =>
         value === undefined
           ? Effect.succeed(undefined)
-          : Effect.try({
-              try: () => this.result!.unpackJson(value),
-              catch: (cause) => new ToolReflectionError("output", cause),
-            }),
+          : discardRejectedPayload(
+              { graph: schemaGraphToWit(this.result!.graph), value },
+              Effect.try({
+                try: () => this.result!.unpackJson(value),
+                catch: (cause) => new ToolReflectionError("output", cause),
+              }),
+            ),
       ),
     )
   }
@@ -517,11 +582,10 @@ export class ToolCommand {
     if (!declared) return error
     try {
       if (!declared.payload) {
-        const value = schemaValueFromWit(custom.payload.value)
         if (
           !schemaShapesMatch(EMPTY_TUPLE_GRAPH, schemaGraphFromWit(custom.payload.graph)) ||
-          value.tag !== "tuple" ||
-          value.elements.length !== 0
+          !new SchemaRef(schemaGraphToWit(EMPTY_TUPLE_GRAPH)).validateValue(custom.payload.value)
+            .success
         )
           return new ToolReflectionError("output", "custom error has an unexpected payload")
         return { tag: "tool", error: { name: custom.name } }
@@ -670,7 +734,7 @@ export class DynamicToolClient {
       const stderr = started.stderr
       const result = started.result.pipe(Effect.map((terminal) => terminal.result))
       const collect = collectToolInvocation(result, stdout, stderr)
-      return { stdout, stderr, result, cancel: started.cancel, collect }
+      return { stdout, stderr, result, cancel: started.cancel, detach: started.detach, collect }
     })
   }
 
@@ -681,9 +745,8 @@ export class DynamicToolClient {
     stdin?: Stream.Stream<Uint8Array>,
   ) {
     return Effect.scoped(
-      this.start(path, input, stdin).pipe(
-        Effect.flatMap((started) => started.collect),
-        Effect.flatMap(resultFromCollected),
+      wholeToolCall(this.start(path, input, stdin), (started) => started.collect).pipe(
+        Effect.flatMap((collected) => resultFromCollected(collected, (value) => value)),
       ),
     )
   }
@@ -775,7 +838,7 @@ function optionArgument(
         : !option.required && option.shape.tag === "repeatable-map"
           ? v.map([])
           : undefined
-  return Object.freeze({
+  const argument: ToolArgument = Object.freeze({
     kind: "option",
     name: option.long,
     aliases: Object.freeze([...option.aliases]),
@@ -787,6 +850,12 @@ function optionArgument(
     defaultJson: defaultValue === undefined ? undefined : canonicalDefault(schema, defaultValue),
     schema,
   })
+  if (
+    option.default_ !== undefined &&
+    (option.shape.tag === "scalar" || option.shape.tag === "optional-scalar")
+  )
+    omittedJsonDefaults.set(argument, defaultValue!)
+  return argument
 }
 
 function optionalRoot(graph: SchemaGraph, root: SchemaType): SchemaType {
@@ -809,7 +878,7 @@ function flagArgument(flag: Common.FlagSpec, graph: SchemaGraph): ToolArgument {
     graph,
     flag.shape.tag === "bool-flag" ? t.bool() : t.u32(),
   )
-  return Object.freeze({
+  const argument: ToolArgument = Object.freeze({
     kind: "flag",
     name: flag.long,
     aliases: Object.freeze([...flag.aliases]),
@@ -818,6 +887,8 @@ function flagArgument(flag: Common.FlagSpec, graph: SchemaGraph): ToolArgument {
     defaultJson: freezeJson(schema.unpackJson(schemaValueToWit(defaultValue))),
     schema,
   })
+  omittedJsonDefaults.set(argument, defaultValue)
+  return argument
 }
 
 function valuePresent(value: SchemaValue, defaultValue?: SchemaValue, flag = false): boolean {

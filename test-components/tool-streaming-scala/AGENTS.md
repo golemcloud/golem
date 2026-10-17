@@ -56,7 +56,6 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-wait-for-external-input-scala` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
 | `golem-add-webhook-scala` | Creating and awaiting webhooks for integrating with webhook-driven external APIs |
 | `golem-multi-instance-agent-scala` | Creating multiple agent instances with the same constructor parameters using phantom agents |
-| `golem-atomic-block-scala` | Atomic blocks and idempotency |
 | `golem-add-transactions-scala` | Saga-pattern transactions with compensation |
 | `golem-add-http-endpoint-scala` | Exposing an agent over HTTP with mount paths and endpoint annotations |
 | `golem-http-params-scala` | Mapping path, query, header, and body parameters for HTTP endpoints |
@@ -121,7 +120,7 @@ Retryable failures in the following operations are handled transparently:
 - **RPC calls** between agents
 - **Database / storage calls** — `golem.host.Rdbms.Postgres`, `golem.host.Rdbms.Mysql`, `wasi:blobstore`, `wasi:keyvalue`
 
-An uncaught exception or failed `Future` outside an atomic region fails the agent without retry. Inside an atomic region, these errors trap and the region is retried according to the applicable retry policy; if the policy gives up, the agent becomes failed.
+An uncaught exception or failed `Future` permanently fails the invocation. Sagas compensate caught failures in reverse order; fallible helpers propagate the original exception only after complete rollback, and partial rollback retains both failures. Recovery repairs eligible incomplete calls at their original `Start`. New saga attempts append history without rewinding; after complete rollback, infallible sagas use the bounded host policy and durable backoff. Exhaustion and policy errors retain the original failure.
 
 Only customize when the *strategy* needs to change (different backoff, give-up conditions, per-status-code policies). For that, see the `golem-retry-policies-scala` skill.
 

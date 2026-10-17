@@ -769,7 +769,7 @@ impl BlobStorageBackend for ScriptedBlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<Option<u64>> {
         let _in_flight = self.in_flight(&namespace, op_label, path);
         let script = (self.rule)(&_in_flight.namespace, op_label, path);
         if script.is_late() {

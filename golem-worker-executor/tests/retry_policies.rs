@@ -427,3 +427,109 @@ async fn golem_rust_set_retry_policy(
 
     Ok(())
 }
+
+#[test]
+#[timeout("60s")]
+#[tracing::instrument]
+async fn guest_and_explicit_host_traps_after_an_effect_are_permanent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::AgentStatus;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let effects = Arc::new(AtomicUsize::new(0));
+    let observed = effects.clone();
+    let router = axum::Router::new().route(
+        "/effect",
+        axum::routing::post(move || {
+            let observed = observed.clone();
+            async move {
+                observed.fetch_add(1, Ordering::SeqCst);
+                "recorded effect"
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let authority = format!("localhost:{}", listener.local_addr()?.port());
+    let server = tokio::spawn(async move { axum::serve(listener, router).await });
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    for (expected_effects, via_host) in [(1, false), (2, true)] {
+        let parsed_agent_id = agent_id!("GolemHostApi", format!("trap-after-effect-{via_host}"));
+        let worker_id = executor
+            .start_agent(&component.id, parsed_agent_id.clone())
+            .await?;
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &parsed_agent_id,
+                "set_simple_count_retry_policy",
+                data_value!("retry-everything".to_string(), 0u32, 3u32),
+            )
+            .await?;
+        let error = executor
+            .invoke_and_await_agent(
+                &component,
+                &parsed_agent_id,
+                "trap_after_recorded_effect",
+                data_value!(authority.clone(), via_host),
+            )
+            .await
+            .expect_err("a trap must not return to the guest");
+        assert!(
+            error.to_string().contains("terminal compensation failure"),
+            "the caller must receive the original trap reason: {error}"
+        );
+        executor
+            .wait_for_status(&worker_id, AgentStatus::Failed, Duration::from_secs(5))
+            .await?;
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let failures: Vec<_> = oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Error(params) => Some(params),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            failures.len(),
+            1,
+            "only the terminal failure is recorded, not retry errors"
+        );
+        assert!(
+            failures[0].retry_policy_state.is_none(),
+            "a deterministic trap must bypass the catch-all policy"
+        );
+        assert!(
+            oplog
+                .iter()
+                .all(|entry| !matches!(entry.entry, PublicOplogEntry::Jump(_)))
+        );
+        assert_eq!(
+            effects.load(Ordering::SeqCst),
+            expected_effects,
+            "the recorded side effect must not execute again"
+        );
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(|entry| matches!(&entry.entry,
+                    PublicOplogEntry::Start(params) if params.function_name == "http::client::send"
+                ))
+                .count(),
+            1,
+            "the invocation must not append another send"
+        );
+        executor.check_oplog_is_queryable(&worker_id).await?;
+    }
+    server.abort();
+    Ok(())
+}

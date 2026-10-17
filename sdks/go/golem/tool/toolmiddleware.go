@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
 	"io"
 	"reflect"
 	"slices"
@@ -38,7 +39,7 @@ import (
 //
 //	var _ = Policy.Handle(inventory.Adjust, func(ctx *tool.MiddlewareContext[PolicyParams], a inventory.AdjustArgs) (int32, error) {
 //	    if a.By > ctx.Parameters().MaxAdjust {
-//	        return 0, errors.New("adjustment too large")
+//	        return 0, tool.ConstraintViolation("adjustment too large")
 //	    }
 //	    return Policy.Underlying(ctx, inventory.Adjust).Forward(a)
 //	})
@@ -199,7 +200,7 @@ type MiddlewareContext[P any] struct {
 func newMiddlewareContext[P any](inv *middlewareInvocation) (*MiddlewareContext[P], error) {
 	params, err := golem.DecodeTypedValue[P](inv.parameters)
 	if err != nil {
-		return nil, fmt.Errorf("middleware %s: parameters: %w", inv.entry.name, err)
+		return nil, &CallError{Kind: CallInvalidResult, Message: fmt.Sprintf("middleware %s: parameters: %v", inv.entry.name, err)}
 	}
 	return &MiddlewareContext[P]{inv: inv, params: params}, nil
 }
@@ -287,12 +288,14 @@ func startUnderlying[O any](ce *commandEntry, inv *middlewareInvocation, m *midd
 		return nil, fmt.Errorf("golem: middleware %s calls %s of tool %s, which it does not wrap",
 			m.name, ce.label(), ce.node.entry.name)
 	}
-	input, stdin, err := ce.prepare(inv.toolName, fill)
+	input, stdin, restore, err := ce.prepare(inv.toolName, fill)
 	if err != nil {
 		return nil, err
 	}
 	call, err := inv.under.start(ce.node.path, input, stdin)
 	if err != nil {
+		// The layer beneath took nothing: the cards in the arguments go back.
+		restore()
 		return nil, err
 	}
 	started := commandInvocation[O](ce, inv.toolName, call)
@@ -339,7 +342,7 @@ func (m *UniversalMiddleware[P]) Handle(h func(*UniversalMiddlewareContext[P]) (
 	m.e.universal = func(inv *middlewareInvocation) (golem.Option[golem.TypedValue], error) {
 		params, err := golem.DecodeTypedValue[P](inv.parameters)
 		if err != nil {
-			return golem.None[golem.TypedValue](), fmt.Errorf("middleware %s: parameters: %w", inv.entry.name, err)
+			return golem.None[golem.TypedValue](), &CallError{Kind: CallInvalidResult, Message: fmt.Sprintf("middleware %s: parameters: %v", inv.entry.name, err)}
 		}
 		return h(&UniversalMiddlewareContext[P]{inv: inv, params: params})
 	}
@@ -385,6 +388,11 @@ func (c *UniversalMiddlewareContext[P]) CommandPath() []string {
 }
 
 // Input returns the call's arguments, the command's canonical input record.
+//
+// A permission card in it moves out when [golem.DecodeTypedValue] decodes it,
+// or when Start or Next hands the input on. After that the input can no longer
+// be handed on whole: Start and Next refuse it with an error, as the card is
+// held elsewhere; build the input to hand on from the decoded value instead.
 func (c *UniversalMiddlewareContext[P]) Input() golem.TypedValue {
 	return typedValue(c.inv.input)
 }
@@ -436,6 +444,9 @@ func (inv *middlewareInvocation) outputs() []*Output {
 // startRaw starts the invoked command beneath with the given input and the
 // original standard input.
 func (inv *middlewareInvocation) startRaw(input types.TypedSchemaValue) (*Invocation[golem.Option[golem.TypedValue]], error) {
+	if err := engine.CheckCardsPresent(input.Value); err != nil {
+		return nil, err
+	}
 	var stdin io.Reader
 	if inv.stdin.present() {
 		stdin = inv.stdin
@@ -444,6 +455,9 @@ func (inv *middlewareInvocation) startRaw(input types.TypedSchemaValue) (*Invoca
 	if err != nil {
 		return nil, err
 	}
+	// The layer beneath took the input's cards: the same value cannot be
+	// handed on again.
+	engine.MarkCardsSent(input.Value.ValueNodes)
 	tool, path := inv.toolName, inv.commandPath
 	started := newInvocation(call, func(call toolCall) (golem.Option[golem.TypedValue], error) {
 		res, rpcErr := call.wait()
@@ -559,7 +573,7 @@ func (e *toolEntry) commands() []*commandEntry {
 // invokeMiddleware runs one middleware layer.
 func (d *definitions) invokeMiddleware(name string, inv *middlewareInvocation) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 	fail := witTypes.Err[toolCommon.InvocationResult, types.ToolError]
-	defer inv.stdin.close()
+	defer inv.stdin.closeAfterHandler()
 	e, known := toolDefs.getMiddleware(name)
 	if !known {
 		return fail(types.MakeToolErrorInvalidToolName(name))
@@ -585,7 +599,11 @@ func (d *definitions) runMiddleware(e *middlewareEntry, inv *middlewareInvocatio
 		}
 		result := witTypes.None[types.TypedSchemaValue]()
 		if v, has := out.Interface().(golem.Option[golem.TypedValue]).Get(); has {
-			result = witTypes.Some(witOf(v))
+			if err := engine.CheckCardsPresent(witOf(v).Value); err != nil {
+				engine.ReleaseCardsIn(witOf(v).Value.ValueNodes, link.ReleaseCard)
+				return fail(types.MakeToolErrorInvalidResult(fmt.Sprintf("%s: result: %v", label, err)))
+			}
+			result = witTypes.Some(sendOnce(witOf(v)))
 		}
 		return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](toolCommon.InvocationResult{
 			Result: result, Stdout: witTypes.None[*witTypes.StreamReader[uint8]](), Stderr: witTypes.None[*witTypes.StreamReader[uint8]](),
@@ -613,7 +631,7 @@ func (d *definitions) runMiddleware(e *middlewareEntry, inv *middlewareInvocatio
 	if err != nil {
 		return fail(d.handlerError(ce, err))
 	}
-	return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](d.encodeResult(ce, out))
+	return d.encodeResult(ce, out)
 }
 
 // passThrough hands a command a transparent middleware does not handle
@@ -634,7 +652,11 @@ func (d *definitions) passThrough(inv *middlewareInvocation) witTypes.Result[too
 	}
 	wire := witTypes.None[types.TypedSchemaValue]()
 	if v, has := result.Get(); has {
-		wire = witTypes.Some(witOf(v))
+		if err := engine.CheckCardsPresent(witOf(v).Value); err != nil {
+			engine.ReleaseCardsIn(witOf(v).Value.ValueNodes, link.ReleaseCard)
+			return fail(types.MakeToolErrorInvalidResult(fmt.Sprintf("middleware %s: result: %v", inv.entry.name, err)))
+		}
+		wire = witTypes.Some(sendOnce(witOf(v)))
 	}
 	return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](toolCommon.InvocationResult{
 		Result: wire, Stdout: witTypes.None[*witTypes.StreamReader[uint8]](), Stderr: witTypes.None[*witTypes.StreamReader[uint8]](),

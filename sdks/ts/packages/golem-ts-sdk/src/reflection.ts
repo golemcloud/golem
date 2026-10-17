@@ -58,7 +58,8 @@ import { SchemaRef, type JsonValue } from './schema/ref';
 import { Uuid } from './uuid';
 import { ComponentId } from './ids';
 export { ComponentId } from './ids';
-import { ParsedAgentId, bindAgentClient } from './agentId';
+import { ParsedAgentId, bindAgentClient, type AgentClientBindOptions } from './agentId';
+import type { ScopeCard } from './host/permissions';
 export {
   DynamicAgentClient,
   DynamicAgentMethod,
@@ -165,6 +166,7 @@ export class AgentType {
   [bindAgentClient](
     agentId: ParsedAgentId,
     config: readonly AgentConfigEntry[] = [],
+    options?: AgentClientBindOptions,
   ): ReflectedAgentClient {
     const parts = agentId.parts();
     if (parts.typeName !== this.name) {
@@ -187,6 +189,7 @@ export class AgentType {
         this.validateConfigValues(config),
         this.mode,
       ),
+      options?.scopeCard,
     );
   }
 
@@ -338,30 +341,41 @@ export class ReflectedAgentClient {
   constructor(
     private readonly agentType: AgentType,
     private readonly remote: RemoteAgentHandle,
+    private readonly scopeCard?: ScopeCard,
   ) {}
 
   method(name: string): ReflectedAgentMethod {
     const method = this.agentType.method(name);
     if (!method) throw new TypeError(`Agent type '${this.agentType.name}' has no method '${name}'`);
-    return new ReflectedAgentMethod(method, this.remote);
+    return new ReflectedAgentMethod(method, this.remote, this.scopeCard);
   }
 }
 
+/**
+ * One method of a reflected agent. The awaited calls borrow `scopeCard` when it
+ * is given, and otherwise the client's default scope card; `null` sends none.
+ */
 export class ReflectedAgentMethod {
   constructor(
     public readonly definition: AgentMethod,
     private readonly remote: RemoteAgentHandle,
+    private readonly defaultScopeCard?: ScopeCard,
   ) {}
 
-  invoke(input: JsonValue, signal?: AbortSignal): Promise<ReflectedInvocation<JsonValue>> {
-    return this.invokeJson(input, signal);
+  invoke(
+    input: JsonValue,
+    signal?: AbortSignal,
+    scopeCard?: ScopeCard | null,
+  ): Promise<ReflectedInvocation<JsonValue>> {
+    return this.invokeJson(input, signal, scopeCard);
   }
 
   async invokeJson(
     input: JsonValue,
     signal?: AbortSignal,
+    scopeCard?: ScopeCard | null,
   ): Promise<ReflectedInvocation<JsonValue>> {
-    const result = await this.invokeValue(this.definition.input.packJson(input), signal);
+    const result = await this.invokeValue(this.definition.input.packJson(input), signal, scopeCard);
     try {
       return {
         metadata: result.metadata,
@@ -379,6 +393,7 @@ export class ReflectedAgentMethod {
   async invokeValue(
     input: SchemaValue,
     signal?: AbortSignal,
+    scopeCard?: ScopeCard | null,
   ): Promise<ReflectedInvocation<SchemaValue>> {
     if (!this.definition.input.validateValue(input).success) {
       throw new TypeError(`Invalid input for reflected method '${this.definition.name}'`);
@@ -387,6 +402,7 @@ export class ReflectedAgentMethod {
       this.definition.name,
       input,
       signal,
+      scopeCard === null ? undefined : (scopeCard ?? this.defaultScopeCard),
     );
     if (this.definition.output !== undefined && result.value === undefined) {
       throw new RemoteOutputError(

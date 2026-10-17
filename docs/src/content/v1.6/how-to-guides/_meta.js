@@ -17,4 +17,7 @@ export default {
   moonbit: {
     title: "MoonBit",
   },
+  go: {
+    title: "Go",
+  },
 }

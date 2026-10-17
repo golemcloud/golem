@@ -106,6 +106,8 @@ Via [ungap/structured-clone](https://github.com/ungap/structured-clone):
 
 ### Node.js-Compatible Modules
 
+> ⚠️ Golem does not support `node:net`, `node:dgram` and `node:dns`. These modules use WASI sockets, which the worker executor refuses by default: every TCP connect, UDP send, bind and DNS lookup fails. Only an operator can turn WASI sockets on, with the executor setting `agent_sockets.enabled`. For HTTP, use `fetch` or the `node:http` client, which do not use WASI sockets.
+
 #### `node:assert`
 
 - `ok`, `equal`, `notEqual`, `strictEqual`, `notStrictEqual`
@@ -160,9 +162,9 @@ Merged constants from `os.constants`, `fs.constants`, and `crypto.constants` (si
 - **Primes:** `generatePrime`, `generatePrimeSync`, `checkPrime`, `checkPrimeSync`
 - **Other:** `timingSafeEqual`, `getFips`, `setFips`, `secureHeapUsed`
 
-#### `node:dgram`
+#### `node:dgram` *(not supported)*
 
-UDP datagram sockets built on WASI sockets.
+UDP datagram sockets built on WASI sockets. Golem does not support this module: the worker executor refuses WASI sockets by default, so binds and sends fail.
 
 - `dgram.createSocket(type[, listener])` — `udp4` or `udp6`
 - `socket.bind`, `socket.send`, `socket.sendto`, `socket.connect`, `socket.disconnect`, `socket.close`
@@ -180,9 +182,9 @@ UDP datagram sockets built on WASI sockets.
 - `TracingChannel` — `subscribe`, `unsubscribe`, `hasSubscribers`, `traceSync`, `tracePromise`, `traceCallback`
 - Built-in HTTP diagnostics channels: `http.client.request.created`, `http.client.request.start`, `http.client.request.error`, `http.client.response.finish`
 
-#### `node:dns`
+#### `node:dns` *(not supported)*
 
-DNS resolution via WASI sockets.
+DNS resolution via WASI sockets. Golem does not support this module: the worker executor refuses WASI sockets by default, so lookups fail.
 
 - `lookup`, `lookupService`, `resolve`, `resolve4`, `resolve6`
 - `resolveAny`, `resolveCname`, `resolveCaa`, `resolveMx`, `resolveNaptr`, `resolveNs`, `resolvePtr`, `resolveSoa`, `resolveSrv`, `resolveTxt`, `resolveTlsa`
@@ -224,7 +226,7 @@ Comprehensive filesystem API on WASI filesystem.
 
 #### `node:http` / `node:https`
 
-Requires `http` feature flag. Client uses `wasi:http` (TLS transparent). Server uses `wasi:sockets` for TCP-level HTTP/1.1.
+Requires `http` feature flag. Client uses `wasi:http` (TLS transparent). Socket-backed servers use WASI sockets and are not supported; to serve HTTP with an `http.createServer` request listener, mount the server as a custom HTTP router with `nodeHttpHandler` from `@golemcloud/golem-ts-sdk/http-router`.
 
 - `http.request`, `http.get`, `http.METHODS`, `http.STATUS_CODES`, `http.maxHeaderSize`, `http.validateHeaderName`, `http.validateHeaderValue`
 - `http.Agent`, `http.globalAgent`
@@ -251,9 +253,9 @@ No V8 inspector in WASM.
 
 - `require`, `createRequire`, `builtinModules`, `isBuiltin`, `runMain`, `_nodeModulePaths`
 
-#### `node:net`
+#### `node:net` *(not supported)*
 
-TCP sockets and servers on WASI sockets.
+TCP sockets and servers on WASI sockets. Golem does not support this module: the worker executor refuses WASI sockets by default, so connects and listens fail.
 
 - `net.createServer`, `net.createConnection`, `net.connect`
 - `net.isIP`, `net.isIPv4`, `net.isIPv6`

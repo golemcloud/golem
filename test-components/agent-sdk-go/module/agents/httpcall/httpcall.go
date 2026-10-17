@@ -27,17 +27,8 @@ var ScheduleCallback = Agent.Method[CallbackIn, string]("schedule-callback", gol
 // replay rebuilds from the oplog.
 var ScheduleAttempts = Agent.Method[golem.Unit, uint32]("schedule-attempts", golem.Description("The attempts of every schedule-callback so far"))
 
-// AtomicTimedCallback reads the clock (wall + monotonic) inside the atomic
-// region right before the HTTP call — a user-level stand-in for the runtime's
-// sampled clock read that coincided with the pre-send hang.
-var AtomicTimedCallback = Agent.Method[CallbackIn, string]("atomic-timed-callback", golem.Description("time.Now() then GET, inside an atomic region"))
-
-// AtomicCallback makes the same call inside durability.Atomically — the minimal case
-// for "does an outbound HTTP call settle before an atomic region closes?".
-var AtomicCallback = Agent.Method[CallbackIn, string]("atomic-callback", golem.Description("GET the callback endpoint inside an atomic region"))
-
 // TransactionCallback runs a fallible transaction whose two steps each GET the
-// callback endpoint; the steps of a transaction run inside an atomic region.
+// callback endpoint.
 var TransactionCallback = Agent.Method[CallbackIn, string]("transaction-callback", golem.Description("GET the callback endpoint from two transaction steps and join the bodies"))
 
 // ReadTruncated GETs /truncated, whose response ends before its Content-Length,

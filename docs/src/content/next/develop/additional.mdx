@@ -495,12 +495,18 @@ Both resources, once constructed, provide a `get-next` function that returns a c
 
 The low-level `golem:durability@1.6.0` interface is for SDK and library authors who need to wrap raw host effects as one durable operation. Application code should use the normal high-level SDK APIs and Golem's built-in durability instead.
 
+**TypeScript, Effect, Scala, MoonBit, and Go support sequential and properly nested custom operations only.** An async body may await host operations, but no unrelated guest work may run during those waits. This includes ordinary host calls, not just other custom operations: sibling effects can be attributed to the wrong custom operation and cause incorrect replay or invocation failure. The SDKs do not reliably detect this misuse.
+
+Await each nested operation before continuing its parent. Do not detach work or let it outlive the body, including on failure or cancellation. Stop and join outstanding work before closing the operation; fail-fast promise/future combinators do not necessarily wait for surviving siblings. Go's blocking `durability.Run` can yield to other goroutines and has the same restriction. See [custom durable operations](/next/develop/durability#custom-durable-operations) for the per-SDK limits and supported use cases. These limits do not restrict ordinary built-in durability or Rust's scope integration.
+
+The durable function type has four cases: `ReadLocal`, `WriteLocal`, `ReadRemote`, and `WriteRemote` (spelled `read-local`, `write-local`, `read-remote`, and `write-remote` in WIT). The cases classify local or remote reads and writes. They carry no oplog index. The executor records nesting separately in `Start.parent_start_index`; a nested remote write is still `WriteRemote`.
+
 A library opens the operation with `begin-custom-durable-invocation`, passing a stable function name, a typed request, and a durable function type. The executor synchronously allocates a replay-stable UUID before the host call can yield. The UUID identifies the logical call; the request remains its independently recorded and validated semantic input. This separation means a unit/no-input request remains correct for generators while concurrent calls still have distinct identities. The result selects one of two paths:
 
-- `live(live-invocation)`: perform the complete operation while the returned resource is active, then consume the resource by calling its static `finish` function with the typed result.
+- `live(live-invocation)`: perform the complete operation while its execution scope is installed, then call `finish` with the typed result. Async wrappers use `finish-async` so the host records when the guest receives the completion.
 - `replayed(persisted-invocation)`: do not perform the physical body. Decode and return the recorded response.
 
-Only the live result contains a resource. Host calls initiated while it is active remain available as replay-inert observational oplog entries owned by the custom operation. Keep the resource alive until every synchronous or asynchronous host effect has completed.
+Only the live result contains a resource. Begin installs its execution scope on the current guest task. Host calls initiated in the installed scope remain available as replay-inert observational oplog entries owned by the custom operation. Holding the resource alone does not install its scope. Rust's async wrapper uses `exchange-custom-invocation-context` to install the scope only while polling the body, and async begin/replay uses the recorded completion boundary. Detached tasks do not inherit this scope automatically. Keep the resource alive until every synchronous or asynchronous host effect has completed.
 
 ```text
 invocation = begin-custom-durable-invocation(name, request, function-type)
@@ -517,7 +523,7 @@ Golem derives the UUID from the top-level idempotency key, the parent custom inv
 
 If recovery replays an unfinished live invocation, it runs the **whole operation** again. Individual physical effects are not independently resumed, so the library must make a repeated attempt safe by selecting the correct function type and, where appropriate, using external idempotency keys or transactions.
 
-The resource is affine: `finish` consumes it, and it cannot be completed twice. Dropping it unfinished removes observational ownership without recording an `End`, but does not trigger a retry. A deterministic trap outside an atomic region fails the agent without retry; inside an atomic region, the region is retried according to the applicable retry policy.
+The resource is affine: `finish` consumes it, and it cannot be completed twice. Dropping it unfinished removes observational ownership without recording an `End`, but does not trigger a retry. A deterministic guest trap fails the invocation without retry. Recovery repairs an eligible incomplete call at its own `Start`; completed calls retain their recorded outcomes.
 
 The request, response, operation name, and observational host calls are intended to support observability. They may appear in oplog inspection, logs, and metrics. Use useful schemas and names, but redact credentials and personal data, and avoid recording unnecessary or unbounded payloads.
 

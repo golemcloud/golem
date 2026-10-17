@@ -112,6 +112,7 @@ pub struct AgentConfig {
     pub(crate) replay: ReplayBaseline,
     pub agent_effective_surface: EffectiveSurface,
     pub authority_wallet: Option<Vec<StoredCard>>,
+    pub(crate) entity_start_index: Option<OplogIndex>,
     pub owner_component_metadata: Option<Arc<Component>>,
 }
 
@@ -126,6 +127,7 @@ impl AgentConfig {
         replay: ReplayBaseline,
         agent_effective_surface: EffectiveSurface,
         authority_wallet: Option<Vec<StoredCard>>,
+        entity_start_index: Option<OplogIndex>,
         owner_component_metadata: Option<Arc<Component>>,
     ) -> AgentConfig {
         AgentConfig {
@@ -138,6 +140,7 @@ impl AgentConfig {
             replay,
             agent_effective_surface,
             authority_wallet,
+            entity_start_index,
             owner_component_metadata,
         }
     }
@@ -295,18 +298,6 @@ pub enum TrapType {
     Error {
         error: AgentError,
         retry_from: OplogIndex,
-        /// Whether the trapping call was inside an atomic region (membership). For a durable-call
-        /// trap this is the call's own region membership carried in the
-        /// `DurableCallTrapContext` marker; otherwise it falls back to the ambient
-        /// "any atomic region currently active" state. Drives the live `DeterministicTrap`
-        /// recovery decision (`fixed_decision_for_trap_type`).
-        in_atomic_region: bool,
-        /// Whether the trapping call's atomic region had recorded side effects. Always the ambient
-        /// "outermost active region has side effects" state at trap classification time, even for a
-        /// durable-call (marked) trap: this only modulates `AgentError::DeterministicTrap`
-        /// retriability, and a marked host-call trap is never a deterministic wasm trap, so there is
-        /// no call-owned value to prefer. Becomes the persisted `OplogEntry::Error.inside_atomic_region`.
-        atomic_region_had_side_effects: bool,
         /// Ephemeral semantic-retry override carried from the host call that
         /// produced this trap. Populated when `try_trigger_retry` resolved a
         /// named retry policy with full host-call properties (e.g. HTTP
@@ -324,42 +315,30 @@ impl TrapType {
     pub fn from_worker_executor_error<Ctx: WorkerCtx>(
         error: WorkerExecutorError,
         fallback_retry_from: OplogIndex,
-        fallback_in_atomic_region: bool,
-        fallback_atomic_region_had_side_effects: bool,
         agent_mode: AgentMode,
     ) -> TrapType {
         match error {
             WorkerExecutorError::PermissionDenied { details } => TrapType::Error {
                 error: AgentError::PermissionDenied(details),
                 retry_from: fallback_retry_from,
-                in_atomic_region: fallback_in_atomic_region,
-                atomic_region_had_side_effects: fallback_atomic_region_had_side_effects,
                 semantic_trap_retry_override: None,
             },
-            error => Self::from_error::<Ctx>(
-                &anyhow::Error::new(error),
-                fallback_retry_from,
-                fallback_in_atomic_region,
-                fallback_atomic_region_had_side_effects,
-                agent_mode,
-            ),
+            error => {
+                Self::from_error::<Ctx>(&anyhow::Error::new(error), fallback_retry_from, agent_mode)
+            }
         }
     }
 
     /// Classifies an escaping error into a [`TrapType`].
     ///
-    /// `fallback_retry_from`, `fallback_in_atomic_region`, and
-    /// `fallback_atomic_region_had_side_effects` describe the *ambient* worker state at trap time
-    /// and are used only for traps that do **not** carry a call-owned context (guest-originated
-    /// traps, infrastructure errors). When a durable call abandoned for the trap, its own
+    /// `fallback_retry_from` supplies the retry point for traps without call-owned context.
+    /// When a durable call abandoned for the trap, its own
     /// `DurableCallTrapContext` marker (and, for a resolved named policy, its
     /// `SemanticTrapRetryOverride`) overrides these so the failure is grouped and classified
     /// against the *call's* scope, immune to overlapping siblings.
     pub fn from_error<Ctx: WorkerCtx>(
         error: &anyhow::Error,
         fallback_retry_from: OplogIndex,
-        fallback_in_atomic_region: bool,
-        fallback_atomic_region_had_side_effects: bool,
         agent_mode: AgentMode,
     ) -> TrapType {
         use crate::durable_host::durability::{
@@ -370,7 +349,7 @@ impl TrapType {
         // Extract any call-owned context carried in the error chain once and reuse it in every
         // `TrapType::Error` construction below. A semantic override (resolved named policy) wins for
         // the retry point; the durable-call context supplies the call-owned retry point (when there
-        // is no semantic override) and atomic-region membership.
+        // is no semantic override).
         let semantic_trap_retry_override = find_semantic_trap_retry_override(error);
         let durable_call_trap_context = find_durable_call_trap_context(error);
         let retry_from = semantic_trap_retry_override
@@ -378,21 +357,11 @@ impl TrapType {
             .map(|override_| override_.retry_from)
             .or_else(|| durable_call_trap_context.map(|ctx| ctx.retry_from))
             .unwrap_or(fallback_retry_from);
-        let in_atomic_region = durable_call_trap_context
-            .map(|ctx| ctx.in_atomic_region)
-            .unwrap_or(fallback_in_atomic_region);
-        // The side-effect bit is always ambient: it only modulates `AgentError::DeterministicTrap`
-        // retriability, and a deterministic wasm trap never carries a durable-call marker, so there
-        // is no call-owned value to prefer here.
-        let atomic_region_had_side_effects = fallback_atomic_region_had_side_effects;
-
         // Single constructor for every `TrapType::Error` arm below, so the call-owned/fallback
         // classification is applied uniformly and adding fields stays a one-line change.
         let make_error = |error: AgentError| TrapType::Error {
             error,
             retry_from,
-            in_atomic_region,
-            atomic_region_had_side_effects,
             semantic_trap_retry_override: semantic_trap_retry_override.clone(),
         };
 
@@ -990,8 +959,6 @@ mod tests {
         let trap = TrapType::from_error::<crate::workerctx::default::Context>(
             &error,
             OplogIndex::INITIAL,
-            false,
-            false,
             AgentMode::Durable,
         );
         assert!(matches!(trap, TrapType::Interrupt(InterruptKind::Jump)));
@@ -1004,8 +971,6 @@ mod tests {
                 golem_service_base::error::worker_executor::GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted
             ),
             OplogIndex::INITIAL,
-            false,
-            false,
             AgentMode::Durable,
         );
 
@@ -1034,8 +999,6 @@ mod tests {
                 crate::services::oplog::OplogError::Fenced(fence)
             )),
             OplogIndex::INITIAL,
-            false,
-            false,
             AgentMode::Durable,
         );
 
@@ -1055,8 +1018,6 @@ mod tests {
                 crate::services::oplog::OplogError::Payload("payload too large".to_string())
             )),
             OplogIndex::INITIAL,
-            false,
-            false,
             AgentMode::Durable,
         );
 
@@ -1087,14 +1048,12 @@ mod tests {
         let with_context = anyhow::Error::from(crate::services::oplog::OplogError::Fenced(
             fence_for("bare-fenced-host-call"),
         ))
-        .context("ending atomic region");
+        .context("ending durable function");
 
         for error in [bare, with_context] {
             let trap = TrapType::from_error::<crate::workerctx::default::Context>(
                 &error,
                 OplogIndex::INITIAL,
-                false,
-                false,
                 AgentMode::Durable,
             );
             assert!(
@@ -1111,8 +1070,6 @@ mod tests {
                 "payload too large".to_string(),
             )),
             OplogIndex::INITIAL,
-            false,
-            false,
             AgentMode::Durable,
         );
 
@@ -1148,8 +1105,6 @@ mod tests {
         let trap = TrapType::from_error::<crate::workerctx::default::Context>(
             &error,
             ambient_fallback_retry_from,
-            false,
-            false,
             AgentMode::Durable,
         );
 
@@ -1164,6 +1119,25 @@ mod tests {
     }
 
     #[test]
+    fn deterministic_guest_traps_are_never_retried() {
+        let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+            &anyhow::Error::new(wasmtime::Trap::UnreachableCodeReached)
+                .context("guest-requested trap: reservation failed"),
+            OplogIndex::from_u64(37),
+            AgentMode::Durable,
+        );
+        assert!(matches!(&trap, TrapType::Error {
+            error: AgentError::DeterministicTrap(message),
+            retry_from,
+            ..
+        } if message.contains("reservation failed") && *retry_from == OplogIndex::from_u64(37)));
+        assert_eq!(
+            crate::durable_host::DurableWorkerCtx::<crate::workerctx::default::Context>::fixed_decision_for_trap_type(&trap),
+            Some(RetryDecision::None)
+        );
+    }
+
+    #[test]
     fn unexpected_oplog_entry_is_non_retriable_internal_error() {
         let trap = TrapType::from_error::<crate::workerctx::default::Context>(
             &anyhow::Error::from(
@@ -1173,8 +1147,6 @@ mod tests {
                 ),
             ),
             OplogIndex::INITIAL,
-            false,
-            false,
             AgentMode::Durable,
         );
 
@@ -1212,8 +1184,6 @@ mod tests {
                 Some(4),
             ),
             OplogIndex::INITIAL,
-            false,
-            false,
             AgentMode::Durable,
         );
 
@@ -1244,8 +1214,6 @@ mod tests {
                 "card-revoked: scope root was revoked while the invocation was queued",
             ),
             OplogIndex::INITIAL,
-            false,
-            false,
             AgentMode::Durable,
         );
 
@@ -1275,8 +1243,6 @@ mod tests {
         let error = |error: AgentError| TrapType::Error {
             error,
             retry_from: OplogIndex::INITIAL,
-            in_atomic_region: false,
-            atomic_region_had_side_effects: false,
             semantic_trap_retry_override: None,
         };
         let retry = |trap: &TrapType| {
@@ -1318,8 +1284,6 @@ mod tests {
                 ),
             ),
             OplogIndex::INITIAL,
-            false,
-            false,
             AgentMode::Durable,
         );
 
@@ -1366,8 +1330,6 @@ mod tests {
         let trap = TrapType::from_error::<crate::workerctx::default::Context>(
             &anyhow::Error::from(preserved),
             OplogIndex::INITIAL,
-            false,
-            false,
             AgentMode::Durable,
         );
 
@@ -1392,8 +1354,6 @@ mod tests {
                 golem_service_base::error::worker_executor::GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted
             ),
             OplogIndex::INITIAL,
-            false,
-            false,
             AgentMode::Ephemeral,
         );
 

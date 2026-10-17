@@ -231,7 +231,7 @@ ephemeral identity cannot accept another invocation or be resumed.
 Validation happens at several boundaries:
 
 - `defineAgentClient` compiles the caller-owned schemas. A full client validates constructor values and declared config overrides before opening RPC; a method-only client cannot validate identity or config declarations it does not own.
-- Reflected `packJson`, `validateJson`, and calls apply the complete discovered schema, including restrictions and nested values, before opening RPC.
+- Reflected `packJson`, `validateJson`, and calls apply the complete discovered schema, including restrictions and nested values, before opening RPC. For a tool command, an omitted scalar option, positional with a declared default, or flag takes its declared default, and `command.inputSchema.toJsonSchema()` does not require it.
 - The host authorizes the caller, resolves the environment-scoped identity, validates effective configuration, and checks the deployed input schema.
 - Awaited typed and reflected calls verify unit/non-unit cardinality and decode the declared result. Catch `RemoteCallError` with `isRemoteCallError(error)` and handle `error.cause` as a tagged value; do not parse messages.
 

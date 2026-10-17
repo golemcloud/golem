@@ -22,6 +22,7 @@ export {
   Map,
   Path,
   PermissionCard,
+  PolymorphicPermissionCard,
   Quantity,
   QuotaToken,
   Secret,

@@ -15,7 +15,6 @@
 package tool
 
 import (
-	"errors"
 	"fmt"
 	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
@@ -114,10 +113,10 @@ func TestTransparentMiddlewareInterceptsAHandledCommand(t *testing.T) {
 	policy := v.tool.Middleware[PolicyParams]("policy", MiddlewareSpec{Version: "1.0.0"})
 	_ = policy.Handle(v.commit, func(ctx *MiddlewareContext[PolicyParams], a CommitArgs) (CommitResult, error) {
 		if a.Message == ctx.Parameters().Block {
-			return CommitResult{}, errors.New("blocked by policy")
+			return CommitResult{}, ConstraintViolation("blocked by policy")
 		}
 		if _, ok := ctx.Principal().(golem.AnonymousPrincipal); !ok {
-			return CommitResult{}, errors.New("lost the principal")
+			panic("lost the principal")
 		}
 		a.Message += " (audited)"
 		return policy.Underlying(ctx, v.commit).Forward(a)
@@ -137,7 +136,7 @@ func TestTransparentMiddlewareInterceptsAHandledCommand(t *testing.T) {
 	res, _ = runMiddlewareFor(t, r, d, "policy", middlewareRun{
 		path: []string{"commit"}, input: blocked, params: mustTypedValue(t, PolicyParams{Block: "nope"}), under: under,
 	})
-	if res.IsOk() || res.Err().Tag() != types.ToolErrorInvalidResult || !strings.Contains(res.Err().InvalidResult(), "blocked by policy") {
+	if res.IsOk() || res.Err().Tag() != types.ToolErrorConstraintViolation || !strings.Contains(res.Err().ConstraintViolation(), "blocked by policy") {
 		t.Errorf("a blocked call gave %+v", res)
 	}
 
@@ -280,7 +279,7 @@ func TestUniversalMiddlewareWrapsAnyTool(t *testing.T) {
 	_ = audit.Handle(func(ctx *UniversalMiddlewareContext[AuditParams]) (golem.Option[golem.TypedValue], error) {
 		seen = append(seen, ctx.Parameters().Channel+":"+ctx.ToolName()+":"+strings.Join(ctx.CommandPath(), " "))
 		if ctx.Parameters().Deny {
-			return golem.None[golem.TypedValue](), errors.New("denied by audit policy")
+			return golem.None[golem.TypedValue](), ConstraintViolation("denied by audit policy")
 		}
 		return ctx.Next(ctx.Input())
 	})
@@ -309,7 +308,7 @@ func TestUniversalMiddlewareWrapsAnyTool(t *testing.T) {
 	res, _ = runMiddlewareFor(t, r, d, "audit", middlewareRun{
 		path: []string{"commit"}, input: input, params: mustTypedValue(t, AuditParams{Deny: true}), under: under,
 	})
-	if res.IsOk() || !strings.Contains(res.Err().InvalidResult(), "denied by audit policy") {
+	if res.IsOk() || res.Err().Tag() != types.ToolErrorConstraintViolation || !strings.Contains(res.Err().ConstraintViolation(), "denied by audit policy") {
 		t.Errorf("denied call gave %+v", res)
 	}
 

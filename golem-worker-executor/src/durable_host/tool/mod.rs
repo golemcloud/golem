@@ -101,7 +101,9 @@ use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::ToolOwnerPattern;
 use golem_common::model::card::{ToolArgPattern, ToolIdentifier, ToolInvocationValue};
 use golem_common::model::component::ComponentName;
-use golem_common::model::durable_stream::{DurableStreamHandle, SessionStreamRole};
+use golem_common::model::durable_stream::{
+    DurableStreamHandle, SessionStreamRole, StreamCancelReason,
+};
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationPlanReference,
     InvocationExecutionMode, NamedToolErrorSchema, ToolInputDecodeFailure,
@@ -146,9 +148,9 @@ use golem_service_base::error::worker_executor::{
 };
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::task::{Context as TaskContext, Poll};
 use tokio::sync::{Notify, mpsc, oneshot};
 use wasmtime::component::{
@@ -437,6 +439,8 @@ impl<D> StreamConsumer<D> for UnderlyingToolStdinStreamConsumer {
 struct ToolStdinStreamPumpTask<Ctx> {
     producer: AttachmentProducer,
     items: mpsc::UnboundedReceiver<ToolStdinStreamItem>,
+    /// The reason of a cancel by the producer of a client's stdin, set before the source ends.
+    source_cancel: Option<Arc<OnceLock<StreamCancelReason>>>,
     _ctx: std::marker::PhantomData<fn() -> Ctx>,
 }
 
@@ -462,7 +466,17 @@ impl<Ctx: WorkerCtx, U: Send + 'static> AccessorTask<U, HasSelf<DurableWorkerCtx
                 return Ok(());
             }
         }
-        let _ = self.producer.finish();
+        // A tool's stdin has a failure item, so a client's cancel reaches the tool as
+        // `cancelled`. Every other end of the source is a clean end.
+        let cancelled = matches!(
+            self.source_cancel.as_ref().and_then(|reason| reason.get()),
+            Some(StreamCancelReason::Cancelled)
+        );
+        let _ = if cancelled {
+            self.producer.fail(ByteStreamFailure::Cancelled)
+        } else {
+            self.producer.finish()
+        };
         Ok(())
     }
 }
@@ -1498,6 +1512,12 @@ where
     };
     use golem_common::model::mcp_import::McpImportSource;
 
+    crate::durable_host::call_coordinator::process_pending_replay_events_access(
+        accessor,
+        accessor.getter(),
+    )
+    .await
+    .map_err(ToolDiscoveryError::Retrieval)?;
     let (service, owner) = accessor.with(|mut access| {
         let ctx = access.get();
         (
@@ -1579,6 +1599,11 @@ where
     U: Send + 'static,
     Ctx: WorkerCtx,
 {
+    crate::durable_host::call_coordinator::process_pending_replay_events_access(
+        accessor,
+        accessor.getter(),
+    )
+    .await?;
     let has_stdin = stdin.is_some();
     let ToolInvocationAttempt {
         target,
@@ -2524,8 +2549,6 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                 0,
                 &error,
                 store.data().get_current_retry_point().await,
-                store.data().current_in_atomic_region(),
-                store.data().current_atomic_region_had_side_effects(),
                 store.data().agent_mode(),
             )
             .as_trap_type::<Ctx>()
@@ -2626,6 +2649,7 @@ async fn invoke_native_tool<Ctx: WorkerCtx>(
             scope.activation().clone(),
             owner_component_metadata,
             scope.authority_wallet().to_vec(),
+            Some(scope.invocation_id().start_index()),
         ),
     )
     .await
@@ -2958,7 +2982,7 @@ async fn complete_owner_attachment_terminals<U: Send + 'static, Ctx: WorkerCtx>(
         let setup = (|| {
             let recording = worker.runtime_append_tasks().register().ok_or(
                 WorkerExecutorError::Interrupted {
-                    kind: InterruptKind::Jump,
+                    kind: InterruptKind::Restart,
                 },
             )?;
             prepare_access_terminal_effect(
@@ -4221,9 +4245,11 @@ where
     let cancellation = execution
         .filter(|execution| execution.cancellable)
         .map(|execution| execution.cancel.clone());
+    let scope_interest = durability.scope_interest();
     let finalize = move |result: Result<HostResponseEntityInvocation, WorkerExecutorError>| {
         let operation = operation_for_finalize;
         async move {
+            let _scope_interest = scope_interest;
             let (result, admission_rejection_preselected) = match result {
                 Err(error)
                     if crate::durable_host::is_tool_attachment_live_admission_rejection(&error) =>
@@ -5131,20 +5157,23 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
             let endpoint = stdin
                 .take_host_endpoint::<DurableInputEndpoint>()
                 .map_err(wasmtime::Error::msg)?;
+            let source_cancel = Arc::new(OnceLock::new());
             let reader = accessor.with(|mut access| {
                 let ctx = access.get();
                 let producer = DurableByteInputProducer(
-                    DurableInputProducer::new(endpoint).with_drop_cleanup(
-                        ctx.state
-                            .dropped_call_event_sender()
-                            .expect("dropped-call event sender is always available"),
-                        ctx.stream_runtime_teardown_probe(),
-                    ),
+                    DurableInputProducer::new(endpoint)
+                        .with_drop_cleanup(
+                            ctx.state
+                                .dropped_call_event_sender()
+                                .expect("dropped-call event sender is always available"),
+                            ctx.stream_runtime_teardown_probe(),
+                        )
+                        .with_producer_cancel_observer(source_cancel.clone()),
                 );
                 StreamReader::new(&mut access, producer)
             })?;
             Some(
-                create_native_underlying_stdin(accessor, reader)
+                create_native_underlying_stdin(accessor, reader, source_cancel)
                     .map_err(wasmtime::Error::from_anyhow)?,
             )
         } else {
@@ -5608,6 +5637,7 @@ where
         access.spawn(ToolStdinStreamPumpTask::<Ctx> {
             producer,
             items: received,
+            source_cancel: None,
             _ctx: std::marker::PhantomData,
         });
         Ok(stdin)
@@ -5617,6 +5647,7 @@ where
 fn create_native_underlying_stdin<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     source: StreamReader<u8>,
+    source_cancel: Arc<OnceLock<StreamCancelReason>>,
 ) -> anyhow::Result<Resource<ToolStdinEntry>>
 where
     U: Send + 'static,
@@ -5649,6 +5680,7 @@ where
         access.spawn(ToolStdinStreamPumpTask::<Ctx> {
             producer,
             items: received,
+            source_cancel: Some(source_cancel),
             _ctx: std::marker::PhantomData,
         });
         Ok(stdin)
@@ -5886,6 +5918,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub(crate) async fn get_all_tools_model(&mut self) -> anyhow::Result<Vec<Arc<DiscoveredTool>>> {
+        self.process_pending_replay_events().await?;
         let environment_id = self.state.owned_agent_id.environment_id;
         let owner_component_metadata = self.owner_component_metadata();
         let component_id = owner_component_metadata.id;
@@ -5983,6 +6016,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         tool_name: String,
     ) -> anyhow::Result<Option<Arc<DiscoveredTool>>> {
+        self.process_pending_replay_events().await?;
         let valid_tool_name = ToolName::try_from(tool_name.as_str()).ok();
         let environment_id = self.state.owned_agent_id.environment_id;
         let owner_component_metadata = self.owner_component_metadata();
@@ -6507,6 +6541,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
             access.spawn(ToolStdinStreamPumpTask::<Ctx> {
                 producer,
                 items: received,
+                source_cancel: None,
                 _ctx: std::marker::PhantomData,
             });
             Ok(stdin)

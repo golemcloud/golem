@@ -6,6 +6,7 @@ package main
 
 import (
 	_ "agent-sdk-go/agents/blobs/impl"
+	_ "agent-sdk-go/agents/cards/impl"
 	_ "agent-sdk-go/agents/clock/impl"
 	_ "agent-sdk-go/agents/configecho/impl"
 	_ "agent-sdk-go/agents/counter/impl"

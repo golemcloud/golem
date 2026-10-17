@@ -8,6 +8,25 @@ pub using @retry {type RetryPolicy}
 pub using @retry {type PredicateValue}
 
 ///|
+pub using @retry {type RetryDecision}
+
+///|
+/// Evaluate the next retry in the host. Start with an empty state and carry
+/// the returned opaque state to the next failure. Elapsed is in nanoseconds
+/// and includes work, compensation, and waiting. None uses config.retry.
+/// A delay of None means the policy is exhausted; Err reports evaluation errors.
+pub fn next_retry_delay(
+  policy : RetryPolicy?,
+  state : FixedArray[Byte],
+  elapsed : UInt64,
+  verb : String,
+  noun_uri : String,
+  properties : Array[(String, PredicateValue)],
+) -> Result[RetryDecision, String] {
+  @retry.next_retry_delay(policy, state, elapsed, verb, noun_uri, properties)
+}
+
+///|
 /// Gets all retry policies active for this agent.
 pub fn get_retry_policies() -> Array[NamedRetryPolicy] {
   @retry.get_retry_policies()
@@ -23,11 +42,12 @@ pub fn get_retry_policy_by_name(name : String) -> NamedRetryPolicy? {
 /// Resolves the matching retry policy for a given operation context.
 /// Evaluates named policies in descending priority order; returns the
 /// policy from the first rule whose predicate matches, or None.
+/// Invalid predicates return Err without aborting the invocation.
 pub fn resolve_retry_policy(
   verb : String,
   noun_uri : String,
   properties : Array[(String, PredicateValue)],
-) -> RetryPolicy? {
+) -> Result[RetryPolicy?, String] {
   @retry.resolve_retry_policy(verb, noun_uri, properties)
 }
 

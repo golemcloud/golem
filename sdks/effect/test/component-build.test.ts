@@ -100,6 +100,7 @@ const build = async (fixture: string, execute = true) => {
     const hosts = new Map<string, unknown>([
       ["effect", EffectRuntime],
       ["node:fs", { existsSync }],
+      ["node:process", process],
     ])
     for (const id of new Set([...chunk.imports, ...chunk.dynamicImports])) {
       if (hosts.has(id)) continue
@@ -260,6 +261,7 @@ describe("capability-sensitive component exports", () => {
       return EffectRuntime.Effect.succeed({
         result: response,
         cancel: EffectRuntime.Effect.sync(cancel),
+        detach: EffectRuntime.Effect.void,
       })
     })
     const invokeTool = async () =>
@@ -283,7 +285,7 @@ describe("capability-sensitive component exports", () => {
         },
       })
       expect(await invokeTool()).toEqual(v.err(v.string("denied:blocked")))
-      expect(cancel).toHaveBeenCalledTimes(3)
+      expect(cancel).toHaveBeenCalledTimes(2)
     } finally {
       vi.unstubAllGlobals()
     }

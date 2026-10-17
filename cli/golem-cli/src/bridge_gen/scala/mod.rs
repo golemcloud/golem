@@ -165,12 +165,34 @@ const GUEST_AGENT_ID: &str = "_root_.scala.Predef.String";
 const GUEST_GOLEM_SERVER: &str = "_root_.golem.runtime.rpc.RemoteAgentClient";
 const GUEST_DATETIME: &str = "_root_.golem.Datetime";
 const GUEST_UUID: &str = "_root_.golem.Uuid";
+const GUEST_PERMISSION_CARD: &str = "_root_.golem.host.PermissionsApi.PermissionCard";
+const GUEST_POLYMORPHIC_PERMISSION_CARD: &str =
+    "_root_.golem.host.PermissionsApi.PolymorphicPermissionCard";
+const GUEST_SCOPE_CARD: &str = "_root_.golem.host.PermissionsApi.ScopeCard";
+const GUEST_AGENT_CLIENT_RUNTIME: &str = "_root_.golem.runtime.rpc.AgentClientRuntime";
+/// The nested class of every generated method class whose awaited calls borrow
+/// a scope card. Generated types are always referenced by their rooted name, so
+/// a user type of the same name is not shadowed.
+const GUEST_SCOPED_CALL_CLASS: &str = "GolemScopeCardCall";
+/// Members of the generated remote trait that set its default scope card. A
+/// method whose Scala name collides is renamed.
+const GUEST_SCOPE_CARD_MEMBER_NAMES: &[&str] = &["withDefaultScopeCard", "withoutDefaultScopeCard"];
 
 /// Scala `Future`, `ExecutionContext`, `String`, `Unit`.
 const FUTURE: &str = "_root_.scala.concurrent.Future";
 const EXECUTION_CONTEXT: &str = "_root_.scala.concurrent.ExecutionContext";
 const STRING: &str = "_root_.scala.Predef.String";
 const UNIT: &str = "_root_.scala.Unit";
+
+/// The Scala guest card type of a `permission-card` schema: a template card
+/// for `polymorphic: true`, a concrete card otherwise.
+fn guest_permission_card_type(polymorphic: bool) -> &'static str {
+    if polymorphic {
+        GUEST_POLYMORPHIC_PERMISSION_CARD
+    } else {
+        GUEST_PERMISSION_CARD
+    }
+}
 
 /// The two `AgentInvocationMode` wire strings (server OpenAPI enum).
 const MODE_AWAIT: &str = "await";
@@ -215,8 +237,18 @@ const RESERVED_PARAM_NAMES: &[&str] = &[
     "configValue",
 ];
 
-const GUEST_RESERVED_PARAM_NAMES: &[&str] =
-    &["__invocation", "__decoded", "__inputCodec", "__outputCodec"];
+const GUEST_RESERVED_PARAM_NAMES: &[&str] = &[
+    "__invocation",
+    "__decoded",
+    "__inputCodec",
+    "__outputCodec",
+    "__input",
+    "__scopeCard",
+    "__defaultScopeCard",
+    "__attachedScopeCard",
+    "__await",
+    "__cancelable",
+];
 
 /// Member names a generated named type cannot use for a case-class field or a
 /// companion case object / case class, because they would clash with (or fail
@@ -860,10 +892,15 @@ impl ScalaBridgeGenerator {
             "!=",
             "eq",
             "ne",
+            // Names in scope in the anonymous remote built by `bindRemote`.
+            "bindRemote",
+            "resolved",
+            "__defaultScopeCard",
         ];
         if self.agent_type.mode == AgentMode::Durable {
             reserved_method_names.push("agentId");
         }
+        reserved_method_names.extend_from_slice(GUEST_SCOPE_CARD_MEMBER_NAMES);
         let method_val_names = unique_idents_with_reserved(
             methods
                 .iter()
@@ -905,7 +942,7 @@ impl ScalaBridgeGenerator {
         let invoke_args = param_names.join(", ");
 
         writer.line(format!(
-            "final class {class_name} private[{object_name}] (resolved: {GUEST_REMOTE_AGENT_CLIENT}) {{"
+            "final class {class_name} private[{object_name}] (resolved: {GUEST_REMOTE_AGENT_CLIENT}, __defaultScopeCard: _root_.scala.Option[{GUEST_SCOPE_CARD}]) {{"
         ));
         writer.indent();
         let direct = self.guest_direct_input(&method.input_schema);
@@ -932,10 +969,26 @@ impl ScalaBridgeGenerator {
         writer.line("}");
         writer.blank();
 
-        let async_encoder = if direct {
-            "_root_.golem.host.SchemaWireInterop.ownedValueTreeToJsAsync".to_string()
+        // Awaited calls check the scope card before they encode the input and
+        // again in the turn of the host call, so a moved scope card never
+        // consumes an argument.
+        let awaited_input = if direct {
+            format!("{GUEST_AGENT_CLIENT_RUNTIME}.awaitedWireInput(__scopeCard)")
         } else {
-            format!("{GUEST_CODEC}.encodeValueAsync")
+            format!("{GUEST_AGENT_CLIENT_RUNTIME}.awaitedValueInput(__scopeCard)")
+        };
+        let scope_card_option = format!("_root_.scala.Option[{GUEST_SCOPE_CARD}]");
+        let scoped_decls = if param_decls.is_empty() {
+            format!("__scopeCard: {scope_card_option}")
+        } else {
+            format!("__scopeCard: {scope_card_option}, {param_decls}")
+        };
+        let scoped_args = |card: &str| {
+            if invoke_args.is_empty() {
+                card.to_string()
+            } else {
+                format!("{card}, {invoke_args}")
+            }
         };
         let sync_encoder = if direct {
             "_root_.golem.host.SchemaWireInterop.valueTreeToJs".to_string()
@@ -959,16 +1012,21 @@ impl ScalaBridgeGenerator {
             decode_block
         };
         let ephemeral = self.agent_type.mode == AgentMode::Ephemeral;
+        let apply_ret_ty = if ephemeral {
+            format!("{FUTURE}[{GUEST_RUNTIME_PKG}.runtime.rpc.InvocationResult[{ret_ty}]]")
+        } else {
+            format!("{FUTURE}[{ret_ty}]")
+        };
         if ephemeral {
             writer.line(format!(
-                "def apply({param_decls}): {FUTURE}[{GUEST_RUNTIME_PKG}.runtime.rpc.InvocationResult[{ret_ty}]] = {{"
+                "private def __await({scoped_decls}): {apply_ret_ty} = {{"
             ));
             writer.indent();
             writer.line(format!(
-                "{async_encoder}(methodParameters({invoke_args})).flatMap {{ parameters =>"
+                "{awaited_input}(methodParameters({invoke_args})).flatMap {{ __input =>"
             ));
             writer.line(format!(
-                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.cancelableAsyncInvokeAndAwaitWithMetadata({method_name_lit}, parameters)).flatMap {{ __invocation =>"
+                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(__input.call(resolved.cancelableAsyncInvokeAndAwaitWithMetadata({method_name_lit}, _, __scopeCard))).flatMap {{ __invocation =>"
             ));
             writer.indent();
             writer.line(format!("__invocation.result.{result_map} {{ __result =>"));
@@ -995,13 +1053,15 @@ impl ScalaBridgeGenerator {
             writer.dedent();
             writer.line("}");
         } else {
-            writer.line(format!("def apply({param_decls}): {FUTURE}[{ret_ty}] = {{"));
+            writer.line(format!(
+                "private def __await({scoped_decls}): {apply_ret_ty} = {{"
+            ));
             writer.indent();
             writer.line(format!(
-                "{async_encoder}(methodParameters({invoke_args})).flatMap {{ parameters =>"
+                "{awaited_input}(methodParameters({invoke_args})).flatMap {{ __input =>"
             ));
             writer.line(format!(
-                "resolved.asyncInvokeAndAwait({method_name_lit}, parameters).{result_map} {{ __result =>"
+                "__input.call(resolved.asyncInvokeAndAwait({method_name_lit}, _, __scopeCard)).{result_map} {{ __result =>"
             ));
             writer.indent();
             writer.line(decode_block.clone());
@@ -1013,16 +1073,21 @@ impl ScalaBridgeGenerator {
         }
         writer.blank();
 
+        let cancelable_ret_ty = if ephemeral {
+            format!("{FUTURE}[{GUEST_RUNTIME_PKG}.runtime.rpc.CancelableAsyncInvocation[{ret_ty}]]")
+        } else {
+            format!("({FUTURE}[{ret_ty}], {GUEST_RUNTIME_PKG}.runtime.rpc.CancellationToken)")
+        };
         if ephemeral {
             writer.line(format!(
-                "def cancelable({param_decls}): {FUTURE}[{GUEST_RUNTIME_PKG}.runtime.rpc.CancelableAsyncInvocation[{ret_ty}]] = {{"
+                "private def __cancelable({scoped_decls}): {cancelable_ret_ty} = {{"
             ));
             writer.indent();
             writer.line(format!(
-                "{async_encoder}(methodParameters({invoke_args})).flatMap {{ parameters =>"
+                "{awaited_input}(methodParameters({invoke_args})).flatMap {{ __input =>"
             ));
             writer.line(format!(
-                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.cancelableAsyncInvokeAndAwaitWithMetadata({method_name_lit}, parameters)).map {{ __invocation =>"
+                "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(__input.call(resolved.cancelableAsyncInvokeAndAwaitWithMetadata({method_name_lit}, _, __scopeCard))).map {{ __invocation =>"
             ));
             writer.indent();
             writer.line(format!(
@@ -1042,14 +1107,14 @@ impl ScalaBridgeGenerator {
             writer.line("}");
         } else {
             writer.line(format!(
-                "def cancelable({param_decls}): ({FUTURE}[{ret_ty}], {GUEST_RUNTIME_PKG}.runtime.rpc.CancellationToken) = {{"
+                "private def __cancelable({scoped_decls}): {cancelable_ret_ty} = {{"
             ));
             writer.indent();
             writer.line(format!(
-                "var __underlying = _root_.scala.Option.empty[_root_.golem.runtime.rpc.CancellationToken]\nvar __cancelled = false\nval __token = _root_.golem.runtime.rpc.CancellationToken.fromFunction(() => {{ __cancelled = true; __underlying.foreach(_.cancel()) }})\nval __future = {async_encoder}(methodParameters({invoke_args})).flatMap {{ parameters =>"
+                "var __underlying = _root_.scala.Option.empty[_root_.golem.runtime.rpc.CancellationToken]\nvar __cancelled = false\nval __token = _root_.golem.runtime.rpc.CancellationToken.fromFunction(() => {{ __cancelled = true; __underlying.foreach(_.cancel()) }})\nval __future = {awaited_input}(methodParameters({invoke_args})).flatMap {{ __input =>"
             ));
             writer.line(format!(
-                "val (__rawFuture, __rawToken) = resolved.cancelableAsyncInvokeAndAwait({method_name_lit}, parameters)\n__underlying = _root_.scala.Some(__rawToken)\nif (__cancelled) __rawToken.cancel()\n__rawFuture.{result_map} {{ __result =>"
+                "val (__rawFuture, __rawToken) = __input.call(resolved.cancelableAsyncInvokeAndAwait({method_name_lit}, _, __scopeCard))\n__underlying = _root_.scala.Some(__rawToken)\nif (__cancelled) __rawToken.cancel()\n__rawFuture.{result_map} {{ __result =>"
             ));
             writer.indent();
             writer.line(decode_block.clone());
@@ -1060,6 +1125,34 @@ impl ScalaBridgeGenerator {
             writer.dedent();
             writer.line("}");
         }
+        writer.blank();
+
+        let default_args = scoped_args("__defaultScopeCard");
+        writer.line(format!(
+            "def apply({param_decls}): {apply_ret_ty} = __await({default_args})"
+        ));
+        writer.line(format!(
+            "def cancelable({param_decls}): {cancelable_ret_ty} = __cancelable({default_args})"
+        ));
+        writer.blank();
+        writer.line("/** The awaited calls of this method, borrowing `card` as the scope card. */");
+        writer.line(format!(
+            "def withScopeCard(card: {GUEST_SCOPE_CARD}): {GUEST_SCOPED_CALL_CLASS} = new {GUEST_SCOPED_CALL_CLASS}(card)"
+        ));
+        writer.blank();
+        writer.line(format!(
+            "final class {GUEST_SCOPED_CALL_CLASS} private[{class_name}] (__attachedScopeCard: {GUEST_SCOPE_CARD}) {{"
+        ));
+        writer.indent();
+        let attached_args = scoped_args("_root_.scala.Some(__attachedScopeCard)");
+        writer.line(format!(
+            "def apply({param_decls}): {apply_ret_ty} = __await({attached_args})"
+        ));
+        writer.line(format!(
+            "def cancelable({param_decls}): {cancelable_ret_ty} = __cancelable({attached_args})"
+        ));
+        writer.dedent();
+        writer.line("}");
         writer.blank();
 
         if uses_streams {
@@ -1168,12 +1261,20 @@ impl ScalaBridgeGenerator {
         for (val_name, class_name) in method_val_names.iter().zip(method_class_names) {
             writer.line(format!("val {val_name}: {class_name}"));
         }
+        writer.line(
+            "/** A client whose awaited calls borrow `card` as the scope card unless a call sets its own. */",
+        );
+        writer.line(format!(
+            "def withDefaultScopeCard(card: {GUEST_SCOPE_CARD}): {remote_name}"
+        ));
+        writer.line("/** A client whose awaited calls carry no default scope card. */");
+        writer.line(format!("def withoutDefaultScopeCard: {remote_name}"));
         writer.dedent();
         writer.line("}");
         writer.blank();
 
         writer.line(format!(
-            "private def bindRemote(resolved: {GUEST_REMOTE_AGENT_CLIENT}): {remote_name} = new {remote_name} {{"
+            "private def bindRemote(resolved: {GUEST_REMOTE_AGENT_CLIENT}, __defaultScopeCard: _root_.scala.Option[{GUEST_SCOPE_CARD}] = _root_.scala.None): {remote_name} = new {remote_name} {{"
         ));
         writer.indent();
         if self.agent_type.mode == AgentMode::Durable {
@@ -1184,9 +1285,15 @@ impl ScalaBridgeGenerator {
         ));
         for (val_name, class_name) in method_val_names.iter().zip(method_class_names) {
             writer.line(format!(
-                "val {val_name}: {class_name} = new {class_name}(resolved)"
+                "val {val_name}: {class_name} = new {class_name}(resolved, __defaultScopeCard)"
             ));
         }
+        writer.line(format!(
+            "def withDefaultScopeCard(card: {GUEST_SCOPE_CARD}): {remote_name} = bindRemote(resolved, _root_.scala.Some(card))"
+        ));
+        writer.line(format!(
+            "def withoutDefaultScopeCard: {remote_name} = bindRemote(resolved, _root_.scala.None)"
+        ));
         writer.dedent();
         writer.line("}");
     }
@@ -3064,8 +3171,11 @@ impl ScalaBridgeGenerator {
             SchemaType::QuotaToken { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
                 format!("{GUEST_SV}.QuotaTokenHandle({val_expr}.handle)")
             }
-            SchemaType::PermissionCard { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
-                format!("{GUEST_SV}.PermissionCardHandle({val_expr})")
+            SchemaType::PermissionCard { spec, .. }
+                if self.mode == ScalaBridgeMode::GuestWasmRpc =>
+            {
+                let card = guest_permission_card_type(spec.polymorphic);
+                format!("{card}.intoSchema.toValue({val_expr})")
             }
             SchemaType::Record { .. }
             | SchemaType::Variant { .. }
@@ -3247,9 +3357,12 @@ impl ScalaBridgeGenerator {
             SchemaType::QuotaToken { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => format!(
                 "{val_expr} match {{ case {GUEST_SV}.QuotaTokenHandle(handle) => new _root_.golem.host.QuotaApi.QuotaToken(handle); case other => throw {GUEST_CLIENT_ERROR}(s\"Expected quota-token handle, got $other\") }}"
             ),
-            SchemaType::PermissionCard { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
+            SchemaType::PermissionCard { spec, .. }
+                if self.mode == ScalaBridgeMode::GuestWasmRpc =>
+            {
+                let card = guest_permission_card_type(spec.polymorphic);
                 format!(
-                    "{val_expr} match {{ case {GUEST_SV}.PermissionCardHandle(handle) => handle; case other => throw {GUEST_CLIENT_ERROR}(s\"Expected permission-card handle, got $other\") }}"
+                    "{card}.fromSchema.fromValue({val_expr}) match {{ case _root_.scala.Right(card) => card; case _root_.scala.Left(error) => throw {GUEST_CLIENT_ERROR}(s\"Expected permission-card handle: $error\") }}"
                 )
             }
             SchemaType::Record { .. }
@@ -3486,8 +3599,10 @@ impl ScalaBridgeGenerator {
             SchemaType::QuotaToken { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
                 Ok("_root_.golem.host.QuotaApi.QuotaToken".to_string())
             }
-            SchemaType::PermissionCard { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
-                Ok("_root_.golem.schema.GuestPermissionCardHandle".to_string())
+            SchemaType::PermissionCard { spec, .. }
+                if self.mode == ScalaBridgeMode::GuestWasmRpc =>
+            {
+                Ok(guest_permission_card_type(spec.polymorphic).to_string())
             }
             // Named composites should already have been resolved to their name
             // above; reaching here means the walker did not register one.
@@ -3998,7 +4113,7 @@ mod tests {
         ));
         assert!(client_source.contains("__inputCodec.encodeValue(_root_.scala.Vector(message))"));
         assert!(client_source.contains(
-            "_root_.golem.host.SchemaWireInterop.ownedValueTreeToJsAsync(methodParameters(message))"
+            "_root_.golem.runtime.rpc.AgentClientRuntime.awaitedWireInput(__scopeCard)(methodParameters(message))"
         ));
         assert!(!client_source.contains("_root_.golem.schema.SchemaValue.StringValue(message)"));
         assert!(client_source.contains("_root_.golem.runtime.rpc.RemoteAgentClient.resolve"));

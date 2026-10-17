@@ -528,6 +528,14 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "PublicOplogEntryWithIndex",
                 "golem_common::model::oplog::PublicOplogEntryWithIndex",
             ),
+            (
+                "PublicOplogPageEntry",
+                "golem_common::model::oplog::PublicOplogPageEntry",
+            ),
+            (
+                "OmittedOplogEntry",
+                "golem_common::model::oplog::OmittedOplogEntry",
+            ),
             // http_api_deployment
             (
                 "HttpApiDeploymentScheme",

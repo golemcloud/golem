@@ -180,8 +180,8 @@ pub(crate) trait DurableContext<Ctx: WorkerCtx> {
         forced_commit: bool,
     ) -> impl Future<Output = Result<(), WorkerExecutorError>> + Send;
 
-    /// The caller holds the card-event boundary lock through live publication finalization.
-    fn process_replay_events_locked(
+    /// Completes retained replay applications before exposing live continuation.
+    fn process_replay_events(
         &mut self,
     ) -> impl Future<Output = Result<(), WorkerExecutorError>> + Send;
 
@@ -262,7 +262,7 @@ impl<T: 'static, D: HasData + ?Sized, Ctx: WorkerCtx, A: DurableAccess<T, D> + ?
         .await
     }
 
-    async fn process_replay_events_locked(&mut self) -> Result<(), WorkerExecutorError> {
+    async fn process_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
         process_pending_replay_events_access(self.store, self.get_ctx).await
     }
 
@@ -313,7 +313,7 @@ impl<Ctx: WorkerCtx> DurableContext<Ctx> for SharedDurableContext<Ctx> {
         .await
     }
 
-    async fn process_replay_events_locked(&mut self) -> Result<(), WorkerExecutorError> {
+    async fn process_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
         process_pending_replay_events_access(self, |ctx| ctx.durable_ctx_mut()).await
     }
 
@@ -361,8 +361,8 @@ impl<Ctx: WorkerCtx> DurableContext<Ctx> for DurableWorkerCtx<Ctx> {
             .await
     }
 
-    async fn process_replay_events_locked(&mut self) -> Result<(), WorkerExecutorError> {
-        self.process_pending_replay_events_locked().await
+    async fn process_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
+        self.process_pending_replay_events().await
     }
 
     async fn agent_auth_ctx(&mut self) -> Result<AuthCtx, WorkerExecutorError> {
@@ -433,7 +433,6 @@ mod tests {
             ),
             InvocationExecutionMode::Live,
             IdempotencyKey::fresh(),
-            false,
             false,
             IdempotencyKey::fresh(),
         )
