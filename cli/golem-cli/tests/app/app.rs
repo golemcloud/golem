@@ -663,6 +663,65 @@ async fn app_new_adds_template_to_component_without_dir_in_manifest(_tracing: &T
 }
 
 #[test]
+async fn app_new_adds_template_to_component_of_included_manifest(_tracing: &Tracing) {
+    let app_name = "test-app-included";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // Move the component into `sub/`, declared by an included manifest without a `dir`.
+    std::fs::create_dir_all(ctx.cwd_path_join("sub")).unwrap();
+    std::fs::rename(ctx.cwd_path_join("src"), ctx.cwd_path_join("sub/src")).unwrap();
+    std::fs::rename(
+        ctx.cwd_path_join("tsconfig.json"),
+        ctx.cwd_path_join("sub/tsconfig.json"),
+    )
+    .unwrap();
+    let component_entry = format!("  {app_name}:ts-main:\n    templates: ts\n");
+    fs::write_str(
+        ctx.cwd_path_join("sub/golem.yaml"),
+        format!("manifestVersion: 1.6.0\ncomponents:\n{component_entry}"),
+    )
+    .unwrap();
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let root_component_entry =
+        format!("components:\n  {app_name}:ts-main:\n    dir: \"\"\n    templates: ts\n");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    assert!(manifest.contains(&root_component_entry));
+    fs::write_str(
+        &manifest_path,
+        manifest.replace(&root_component_entry, "includes:\n  - sub/golem.yaml\n"),
+    )
+    .unwrap();
+
+    for _ in 0..2 {
+        let outputs = ctx
+            .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "ts/json"])
+            .await;
+        assert!(outputs.success_or_dump());
+    }
+
+    assert!(ctx.cwd_path_join("sub/src/task-agent.ts").is_file());
+    assert!(!ctx.cwd_path_join("src").exists());
+    assert!(
+        !fs::read_to_string(&manifest_path)
+            .unwrap()
+            .contains(&format!("{app_name}:ts-main"))
+    );
+    assert!(
+        fs::read_to_string(ctx.cwd_path_join("sub/golem.yaml"))
+            .unwrap()
+            .contains(&format!("{app_name}:ts-main"))
+    );
+}
+
+#[test]
 async fn app_new_keeps_customized_scala_build_files_when_upgrading_layout(_tracing: &Tracing) {
     let app_name = "test-app-scala-merge";
 

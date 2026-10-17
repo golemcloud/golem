@@ -53,8 +53,9 @@ use tracing::debug;
 #[derive(Debug)]
 struct ExistingComponent {
     pub language: GuestLanguage,
-    pub dir: PathBuf,           // component_dir, relative to the application root
-    pub component_dir: PathBuf, // canonical resolved dir
+    pub dir: PathBuf,             // component_dir, relative to the application root
+    pub component_dir: PathBuf,   // canonical resolved dir
+    pub manifest_source: PathBuf, // the manifest file where the component is defined
     pub manifest_source_dir: PathBuf, // source of the manifest, where the component is defined
 }
 
@@ -97,6 +98,9 @@ struct NewTemplateInputs {
     pub component_templates: BTreeMap<ComponentName, AppTemplateComponent>,
     pub agent_templates: BTreeMap<AppTemplateName, AppTemplateAgent>,
     pub all_component_directories: BTreeMap<ComponentName, PathBuf>,
+    /// The manifests of the existing components that an included manifest declares, not the
+    /// root manifest of the application.
+    pub included_component_manifests: BTreeMap<ComponentName, PathBuf>,
     pub layout_upgrade_plans: BTreeMap<ComponentName, MultiComponentLayoutUpgradePlan>,
     pub layout_upgrade: MultiComponentLayoutUpgradePlan,
 }
@@ -298,6 +302,7 @@ impl TemplateHandler {
                                     dir => dir.to_path_buf(),
                                 },
                                 component_dir: component.component_dir().to_path_buf(),
+                                manifest_source: fs::normalize_path_lexically(component.source()),
                                 manifest_source_dir: fs::parent_or_err(component.source())?
                                     .to_path_buf(),
                             };
@@ -704,11 +709,21 @@ impl TemplateHandler {
             }
         }
 
+        let root_manifest = fs::normalize_path_lexically(&application_path.join("golem.yaml"));
+        let included_component_manifests = existing_components
+            .iter()
+            .filter(|(_, component)| component.manifest_source != root_manifest)
+            .map(|(component_name, component)| {
+                (component_name.clone(), component.manifest_source.clone())
+            })
+            .collect();
+
         Ok(NewTemplateInputs {
             common_templates,
             component_templates,
             agent_templates,
             all_component_directories,
+            included_component_manifests,
             layout_upgrade_plans,
             layout_upgrade,
         })
@@ -743,15 +758,25 @@ impl TemplateHandler {
                     )
                 })?;
 
-            template_plan_builder.add(
-                component_template.0.name.as_str(),
-                &component_template.generate(
+            let generated = match template_inputs
+                .included_component_manifests
+                .get(component_name)
+            {
+                Some(manifest_path) => generate_component_template_in_manifest(
+                    component_template,
+                    application_name,
+                    &application_path.join(component_dir),
+                    component_name,
+                    manifest_path,
+                )?,
+                None => component_template.generate(
                     application_name,
                     application_path,
                     component_name,
                     component_dir,
                 )?,
-            );
+            };
+            template_plan_builder.add(component_template.0.name.as_str(), &generated);
         }
 
         for (agent_template_name, agent_template) in &template_inputs.agent_templates {
@@ -1266,6 +1291,55 @@ impl TemplateHandler {
 
         Ok(())
     }
+}
+
+/// Generates the component template of an existing component that an included manifest
+/// declares. The component entry goes into that manifest, not into the root manifest, and
+/// its `dir` is relative to the directory of that manifest, as the manifest defines it.
+fn generate_component_template_in_manifest(
+    component_template: &AppTemplateComponent,
+    application_name: &ApplicationName,
+    component_dir: &Path,
+    component_name: &ComponentName,
+    manifest_path: &Path,
+) -> anyhow::Result<InMemoryFs> {
+    let manifest_dir = fs::parent_or_err(manifest_path)?;
+    let normalized_component_dir = fs::normalize_path_lexically(component_dir);
+    let Ok(dir) = normalized_component_dir.strip_prefix(manifest_dir) else {
+        bail!(
+            "Cannot apply the component template to component {}: its directory {} is not inside the directory of its manifest {}",
+            component_name.as_str().log_color_highlight(),
+            component_dir
+                .display()
+                .to_string()
+                .log_color_error_highlight(),
+            manifest_path.display().to_string().log_color_highlight()
+        );
+    };
+    let dir = if dir.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        dir.to_path_buf()
+    };
+
+    let generated =
+        component_template.generate(application_name, manifest_dir, component_name, &dir)?;
+    let generated_manifest = manifest_dir.join("golem.yaml");
+
+    Ok(InMemoryFs::from_files(
+        generated
+            .files()
+            .iter()
+            .map(|(path, contents)| {
+                let path = if *path == generated_manifest {
+                    manifest_path.to_path_buf()
+                } else {
+                    path.clone()
+                };
+                (path, contents.clone())
+            })
+            .collect(),
+    ))
 }
 
 fn is_non_empty_dir(path: &Path) -> anyhow::Result<bool> {
