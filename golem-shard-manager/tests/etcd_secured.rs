@@ -711,3 +711,30 @@ async fn a_running_replica_stops_on_a_refused_certificate_only_when_its_files_ch
     let (_restarted, restarted_details) = spawn_replica(config);
     started(restarted_details).await;
 }
+
+#[test]
+// etcd's election service reports a denied write as `Unknown` instead of `PermissionDenied`. A role
+// that may not write `/golem/` does not change while the replica runs, so the replica must stop
+// with the reason instead of campaigning forever.
+async fn a_user_who_may_only_read_does_not_start(_tracing: &Tracing, _crypto: &CryptoProvider) {
+    let pki = TestPki::new();
+    let etcd = auth_etcd(&pki, pki.etcd_options()).await;
+    let root = inspection_client_auth(&etcd.client_url(), &pki).await;
+    let mut auth = root.auth_client();
+    auth.role_add("reader").await.unwrap();
+    auth.role_grant_permission("reader", Permission::read("/golem/").with_prefix())
+        .await
+        .unwrap();
+    auth.user_add("reader", PASSWORD, None).await.unwrap();
+    auth.user_grant_role("reader", "reader").await.unwrap();
+
+    let mut config = auth_config(&etcd.client_url(), PASSWORD, &pki);
+    if let PersistenceConfig::Etcd(etcd) = &mut config.persistence {
+        etcd.username = Some("reader".to_string());
+    }
+    let message = refused(config).await;
+    assert!(
+        message.contains("etcdserver: permission denied"),
+        "The refusal should be etcd's permission check, but was: {message}"
+    );
+}

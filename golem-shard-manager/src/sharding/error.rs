@@ -104,6 +104,13 @@ impl ShardManagerError {
     }
 }
 
+/// etcd's election service runs on etcd's in-process client, which loses the gRPC code: a write
+/// that the user's role does not allow comes back as `Unknown` with etcd's text instead of
+/// `PermissionDenied`. The role does not change while the replica runs, so a retry could only loop.
+fn is_denied_by_election(status: &tonic::Status) -> bool {
+    status.code() == tonic::Code::Unknown && status.message() == "etcdserver: permission denied"
+}
+
 /// The alerts with which a TLS peer refuses a certificate.
 const CERTIFICATE_ALERTS: [rustls::AlertDescription; 7] = [
     rustls::AlertDescription::BadCertificate,
@@ -187,6 +194,7 @@ impl IsRetriableError for ShardManagerError {
             // etcd's certificate can be fixed on etcd's side. Before the campaign it becomes
             // `TlsHandshakeFailed` instead, and a watch stops a replica whose files changed.
             ShardManagerError::EtcdError(err) => match err {
+                etcd_client::Error::GRpcStatus(status) if is_denied_by_election(status) => false,
                 etcd_client::Error::GRpcStatus(status) => status.is_retriable(),
                 etcd_client::Error::TransportError(_)
                 | etcd_client::Error::IoError(_)
@@ -350,6 +358,22 @@ mod tests {
             assert!(!is_certificate_failure(&failure), "{failure}");
             assert!(ShardManagerError::EtcdError(failure).is_retriable());
         }
+    }
+
+    #[test]
+    fn a_write_denied_by_the_election_service_is_not_retriable() {
+        let denied = |code| {
+            ShardManagerError::EtcdError(etcd_client::Error::GRpcStatus(tonic::Status::new(
+                code,
+                "etcdserver: permission denied",
+            )))
+        };
+        assert!(!denied(tonic::Code::Unknown).is_retriable());
+        assert!(!denied(tonic::Code::PermissionDenied).is_retriable());
+        let other_unknown = ShardManagerError::EtcdError(etcd_client::Error::GRpcStatus(
+            tonic::Status::new(tonic::Code::Unknown, "h2 protocol error"),
+        ));
+        assert!(other_unknown.is_retriable());
     }
 
     #[test]
