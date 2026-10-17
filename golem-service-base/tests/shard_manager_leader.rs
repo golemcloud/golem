@@ -384,6 +384,35 @@ async fn a_one_try_call_through_a_standby_reaches_the_leader() {
 }
 
 #[test]
+// A call that must not be repeated may have reached the leader before it failed, so a known
+// leader's failure goes back to the caller instead of being sent again to anyone.
+async fn a_one_try_call_to_a_known_leader_that_fails_is_not_sent_again() {
+    let leader = run_replica(Mode::Leader).await;
+    let standby = run_replica(Mode::Standby(Some(leader.address()))).await;
+    let client = client_for(&standby);
+    client
+        .get_routing_table()
+        .await
+        .expect("the standby names the leader");
+    leader.script([Mode::Fails(tonic::Code::Unavailable)]);
+
+    client
+        .deregister(Uuid::new_v4(), BTreeMap::new())
+        .await
+        .expect_err("the failure of a one-try call is returned");
+
+    assert_eq!(leader.calls(), 1, "only the discovery call was served");
+    assert_eq!(leader.refusals(), 1, "the one try reached the leader once");
+    assert_eq!(
+        standby.refusals(),
+        1,
+        "the standby saw only the discovery call"
+    );
+    leader.stop().await;
+    standby.stop().await;
+}
+
+#[test]
 async fn after_the_leader_goes_away_the_client_asks_the_configured_address_again() {
     let first = run_replica(Mode::Leader).await;
     let standby = run_replica(Mode::Standby(Some(first.address()))).await;
