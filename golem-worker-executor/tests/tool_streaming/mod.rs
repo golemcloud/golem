@@ -16770,6 +16770,36 @@ async fn builtin_javascript_and_typescript_tools_run_in_sidecars_and_reconstruct
     assert!(immediate_exit.stderr.is_empty());
 
     let behavior_agent = "js-ts-behavior";
+    let npm_init = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "npm",
+        "/workspace",
+        vec!["init", "-y", "--init-version=0.1.0"],
+    )
+    .await?;
+    assert_eq!(
+        npm_init.exit_code,
+        0,
+        "npm init stderr: {}",
+        String::from_utf8_lossy(&npm_init.stderr)
+    );
+    let initialized = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "node",
+        "/workspace",
+        vec![
+            "-e",
+            "const m = JSON.parse(require('node:fs').readFileSync('package.json', 'utf8')); console.log([m.name, m.version, m.license, m.main].join(','))",
+        ],
+    )
+    .await?;
+    assert_eq!(initialized.exit_code, 0);
+    assert_eq!(initialized.stdout, b"workspace,0.1.0,ISC,index.js\n");
+
     let fixture_source = r##"
 const fs = require('node:fs');
 fs.mkdirSync('local-pkg', { recursive: true });
@@ -16940,6 +16970,72 @@ fs.writeFileSync('invalid.ts', 'const value: number = "wrong";\n');
     assert_eq!(tsc_build.exit_code, 0);
     assert!(tsc_build.stdout.is_empty());
     assert!(tsc_build.stderr.is_empty());
+
+    // Each invocation evaluates a fresh compiler, so incremental builds rely only on the build
+    // information and output timestamps persisted by earlier invocations.
+    let tsc_build_unchanged = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "tsc",
+        "/workspace",
+        vec![
+            "--build",
+            "--verbose",
+            "--listEmittedFiles",
+            "--pretty",
+            "false",
+        ],
+    )
+    .await?;
+    let tsc_build_unchanged_stdout = String::from_utf8(tsc_build_unchanged.stdout)?;
+    assert_eq!(tsc_build_unchanged.exit_code, 0);
+    assert!(
+        tsc_build_unchanged_stdout.contains("is up to date"),
+        "{tsc_build_unchanged_stdout}"
+    );
+    assert!(
+        !tsc_build_unchanged_stdout.contains("TSFILE:"),
+        "{tsc_build_unchanged_stdout}"
+    );
+    let tsc_source_change = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "node",
+        "/workspace",
+        vec![
+            "-e",
+            "require('node:fs').appendFileSync('valid.ts', 'export const changed = true;\\n')",
+        ],
+    )
+    .await?;
+    assert_eq!(tsc_source_change.exit_code, 0);
+    let tsc_build_changed = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "tsc",
+        "/workspace",
+        vec![
+            "--build",
+            "--verbose",
+            "--listEmittedFiles",
+            "--pretty",
+            "false",
+        ],
+    )
+    .await?;
+    let tsc_build_changed_stdout = String::from_utf8(tsc_build_changed.stdout)?;
+    assert_eq!(tsc_build_changed.exit_code, 0);
+    assert!(
+        tsc_build_changed_stdout.contains("is out of date"),
+        "{tsc_build_changed_stdout}"
+    );
+    assert!(
+        tsc_build_changed_stdout.contains("TSFILE: /workspace/build/valid.js"),
+        "{tsc_build_changed_stdout}"
+    );
 
     drop(executor);
     let executor = start_with_overrides(deps, &context, overrides).await?;
