@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::DEAD_MEMBER;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
@@ -1317,10 +1318,6 @@ fn replacement_shard_state(number_of_shards: usize) -> ShardLeaseState {
     )
 }
 
-/// Refuses connections rather than black-holing them: tonic keeps a refusing member in the
-/// balancer's rotation and fails each request that lands on it at once.
-pub(crate) const DEAD_MEMBER: &str = "http://127.0.0.1:1";
-
 /// A member whose name does not resolve, as when a Compose service or a pod is gone.
 const UNRESOLVABLE_MEMBER: &str = "http://golem-no-such-member.invalid:2379";
 
@@ -1332,7 +1329,9 @@ const BLACK_HOLED_MEMBER: &str = "http://192.0.2.1:2379";
 /// 0.75^80, below 1e-10, and a run this long meets the dead member many times over.
 const REQUESTS_THROUGH_DEAD_MEMBER: usize = 80;
 
-/// A client built the way `connect_for_requests` builds one, over `endpoints`.
+/// A client built the way `connect_for_requests` builds one, over `endpoints`: with a connect
+/// timeout and a request timeout, both short so that a member that never answers is given up on
+/// within a test.
 pub(crate) async fn request_client(endpoints: &[String]) -> etcd_client::Client {
     etcd_client::Client::connect(
         endpoints,
@@ -1427,6 +1426,10 @@ async fn only_a_failure_to_connect_counts_as_never_reaching_etcd(etcd: &Arc<Dock
     );
     proxy.restore();
 
+    // The established connection is closed under the client, as an etcd member going away does.
+    // That must fail the next request on it, and the failure may have come after etcd received
+    // the request.
+    let mut failures_on_a_closed_connection = 0;
     for _ in 0..5 {
         proxy.drop_all_connections().await;
         if let Err(err) = through_proxy.kv_client().txn(a_read_only_txn()).await {
@@ -1434,8 +1437,14 @@ async fn only_a_failure_to_connect_counts_as_never_reaching_etcd(etcd: &Arc<Dock
                 !never_reached_etcd(&err),
                 "A request on a connection that was reset was taken for an unsent one: {err:?}"
             );
+            failures_on_a_closed_connection += 1;
         }
     }
+    assert!(
+        failures_on_a_closed_connection > 0,
+        "No request failed after its connection was closed, so the classifier was never shown a \
+         failure on an established connection"
+    );
 }
 
 /// An etcd store, the sentinel leader key it is fenced on, and a persistence over `endpoints`

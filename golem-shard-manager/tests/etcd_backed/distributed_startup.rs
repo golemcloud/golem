@@ -19,6 +19,7 @@
 //! accept port 0 and report what they bound, and the test framework cannot point a spawned shard
 //! manager at etcd.
 
+use super::DEAD_MEMBER;
 use super::proxy::BreakableProxy;
 use anyhow::anyhow;
 use chrono::DateTime;
@@ -1217,10 +1218,6 @@ async fn a_task_that_finishes_cleanly_does_not_stop_the_leader(etcd: &Arc<Docker
         .expect("The serving task should not panic")
         .expect("A requested shutdown is a clean stop");
 }
-
-/// Refuses connections rather than black-holing them: tonic keeps a refusing member in the
-/// balancer's rotation and fails fast, where a black hole would be waited out instead.
-const DEAD_MEMBER: &str = "http://127.0.0.1:1";
 
 /// Reads made after startup, through a client configured exactly like the one `run()` uses.
 const PROBE_READS: usize = 20;

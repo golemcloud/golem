@@ -1768,7 +1768,7 @@ fn an_election_value_reads_back() {
 #[test]
 #[tracing::instrument(skip_all)]
 // etcd-client keeps a member that refuses connections in its rotation, so a single attempt lands
-// on it about half the time. Marking the leader ready only sets the same value again, so it must
+// on it about a quarter of the time. Marking the leader ready only sets the same value again, so it must
 // ride that out instead of failing the startup.
 async fn marking_the_leader_ready_survives_a_dead_member_in_the_endpoint_list(
     etcd: &Arc<DockerEtcd>,

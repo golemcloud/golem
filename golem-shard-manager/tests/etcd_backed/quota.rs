@@ -25,8 +25,9 @@
 //! repository from the same stores the routing-table persistence tests use. The etcd-only tests at
 //! the end cover what only distributed mode has: the leadership fence and paged reads.
 
+use crate::etcd_backed::DEAD_MEMBER;
 use crate::etcd_backed::persistence::{
-    DEAD_MEMBER, EtcdRoutingTablePersistenceFactory, GetRoutingTablePersistence, PersistenceStore,
+    EtcdRoutingTablePersistenceFactory, GetRoutingTablePersistence, PersistenceStore,
     request_client,
 };
 use async_trait::async_trait;
