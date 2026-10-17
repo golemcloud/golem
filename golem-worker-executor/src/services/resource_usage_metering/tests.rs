@@ -408,6 +408,7 @@ async fn sampler_uses_immediate_ten_millisecond_and_anchored_hundred_millisecond
     baseline.release();
     wait_for_observations_to_finish(&reader).await;
     wait_for_observation_state(&window).await;
+    clock.wait_for_sleep_until(Duration::from_millis(10)).await;
     clock.set(Duration::from_millis(9)).await;
     for _ in 0..10 {
         tokio::task::yield_now().await;
@@ -418,6 +419,7 @@ async fn sampler_uses_immediate_ten_millisecond_and_anchored_hundred_millisecond
     first.release();
     wait_for_observations_to_finish(&reader).await;
     wait_for_observation_state(&window).await;
+    clock.wait_for_sleep_until(Duration::from_millis(100)).await;
     clock.set(Duration::from_millis(99)).await;
     assert_eq!(reader.calls.load(Ordering::Acquire), 2);
     clock.set(Duration::from_millis(100)).await;
