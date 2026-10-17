@@ -91,6 +91,8 @@ mod admission_tests;
 mod backpressure_tests;
 #[cfg(test)]
 mod keep_alive_tests;
+#[cfg(test)]
+mod oversize_tests;
 
 struct AdmittedRequest {
     request: InvocationRequest,
@@ -105,6 +107,26 @@ struct AdmittedMessage {
 struct InboundAdmission {
     _input: OwnedSemaphorePermit,
     _session: OwnedSemaphorePermit,
+}
+
+#[derive(Clone, Copy)]
+enum WebSocketShutdown {
+    Close,
+    MessageTooLarge,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("invocation session application message exceeds 32 MiB")]
+struct WebSocketMessageTooLarge;
+
+fn is_message_too_large(error: &std::io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|source| source.is::<WebSocketMessageTooLarge>())
+}
+
+fn message_too_large_error() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, WebSocketMessageTooLarge)
 }
 
 struct PendingInputAdmission {
@@ -172,6 +194,9 @@ impl SessionBudgets {
     }
 
     async fn admit_inbound_frame(&self, bytes: usize) -> Result<InboundAdmission, ()> {
+        if bytes > INPUT_BYTE_BUDGET {
+            return Err(());
+        }
         // Retain the input limit through private request delivery, leaving output headroom.
         let input = acquire_bytes(&self.input, bytes).await?;
         let session = acquire_bytes(&self.session, bytes).await?;
@@ -925,12 +950,22 @@ async fn serve_invocation_session_connection<F>(
     let (mut websocket_sink, websocket_stream) = websocket.split();
     let budgets = SessionBudgets::new();
     let (incoming_tx, incoming_rx) = mpsc::channel(CHANNEL_CAPACITY);
+    let (shutdown, mut requested_shutdown) = mpsc::channel(1);
+    let reader_shutdown = shutdown.clone();
+    let reader_budgets = budgets.clone();
+    let input_open = incoming_tx.clone();
     // Keep reading control frames while session setup waits for the executor.
-    let mut reader = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(read_websocket(
-        websocket_stream,
-        incoming_tx,
-        budgets.clone(),
-    )));
+    let mut reader = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        let result = read_websocket(websocket_stream, incoming_tx, reader_budgets).await;
+        if result.as_ref().is_err_and(is_message_too_large) {
+            let _ = reader_shutdown
+                .send(WebSocketShutdown::MessageTooLarge)
+                .await;
+        }
+        // Publish a fatal close reason before the application can observe input EOF.
+        drop(input_open);
+        result
+    }));
     let websocket_stream = tokio_stream::wrappers::ReceiverStream::new(incoming_rx);
     let (outbound_tx, mut outbound_rx) = mpsc::channel::<QueuedMessage>(CHANNEL_CAPACITY);
     let outbound = Outbound {
@@ -938,18 +973,26 @@ async fn serve_invocation_session_connection<F>(
         budgets: budgets.clone(),
     };
     let writer_budgets = budgets.clone();
-    let force_close = tokio_util::sync::CancellationToken::new();
-    let writer_force_close = force_close.clone();
     let mut writer = tokio::spawn(async move {
         // A queued close frame is held back and sent as the final frame once the session ends,
         // so the client cannot observe the close handshake before the private session has been
         // drained. Everything queued after a close frame is dropped.
         let mut pending_close = None;
-        while let Some(message) = tokio::select! {
-            biased;
-            _ = writer_force_close.cancelled() => None,
-            message = outbound_rx.recv() => message,
-        } {
+        'messages: loop {
+            let message = tokio::select! {
+                biased;
+                requested = requested_shutdown.recv() => match requested {
+                    Some(WebSocketShutdown::MessageTooLarge) => {
+                        pending_close = Some(message_too_large_close());
+                        continue;
+                    }
+                    Some(WebSocketShutdown::Close) | None => break,
+                },
+                message = outbound_rx.recv() => match message {
+                    Some(message) => message,
+                    None => break,
+                },
+            };
             if pending_close.is_some() || message.should_drop(&writer_budgets).await {
                 continue;
             }
@@ -957,13 +1000,23 @@ async fn serve_invocation_session_connection<F>(
                 pending_close = Some(message.message);
                 continue;
             }
-            let sent = tokio::select! {
-                biased;
-                _ = writer_force_close.cancelled() => break,
-                sent = tokio::time::timeout(WRITE_PROGRESS_TIMEOUT, websocket_sink.send(message.message)) => sent,
-            };
-            if !matches!(sent, Ok(Ok(()))) {
-                return;
+            let write =
+                tokio::time::timeout(WRITE_PROGRESS_TIMEOUT, websocket_sink.send(message.message));
+            tokio::pin!(write);
+            loop {
+                tokio::select! {
+                    biased;
+                    requested = requested_shutdown.recv() => match requested {
+                        Some(WebSocketShutdown::MessageTooLarge) => pending_close = Some(message_too_large_close()),
+                        Some(WebSocketShutdown::Close) | None => break 'messages,
+                    },
+                    sent = &mut write => {
+                        if !matches!(sent, Ok(Ok(()))) {
+                            return;
+                        }
+                        break;
+                    },
+                }
             }
         }
         if let Some(close) = pending_close {
@@ -993,7 +1046,7 @@ async fn serve_invocation_session_connection<F>(
         }
     };
     if close_now {
-        force_close.cancel();
+        let _ = shutdown.send(WebSocketShutdown::Close).await;
     }
     let _ = writer.await;
 }
@@ -1187,15 +1240,31 @@ fn invocation_session_websocket(
         config.keep_alive_interval,
         config.max_pong_timeout,
     )
-    .map(|result| {
-        result.map_err(|error| match error {
-            KeepAliveError::Sink(error) | KeepAliveError::Stream(error) => error,
-            KeepAliveError::Timeout => std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "invocation session Ping confirmation timed out",
-            ),
-        })
-    })
+    .map(|result| result.map_err(invocation_session_websocket_error))
+}
+
+fn invocation_session_websocket_error(
+    error: KeepAliveError<std::io::Error, std::io::Error>,
+) -> std::io::Error {
+    match error {
+        KeepAliveError::Sink(error) | KeepAliveError::Stream(error) => {
+            // Poem erases non-I/O tungstenite errors to io::Error::other(String).
+            // Match only its capacity diagnostic; wire-level tests cover this adapter.
+            if error.kind() == std::io::ErrorKind::Other
+                && error
+                    .to_string()
+                    .starts_with("Space limit exceeded: Message too long: ")
+            {
+                message_too_large_error()
+            } else {
+                error
+            }
+        }
+        KeepAliveError::Timeout => std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "invocation session Ping confirmation timed out",
+        ),
+    }
 }
 
 async fn read_websocket(
@@ -1214,6 +1283,9 @@ async fn read_websocket(
             Some(Ok(Message::Close(_))) | None => return Ok(()),
             Some(Err(error)) => return Err(error),
             Some(Ok(message)) => {
+                if message_size(&message) > MAX_WEBSOCKET_MESSAGE_SIZE {
+                    return Err(message_too_large_error());
+                }
                 let Ok(admission) = budgets
                     .admit_inbound_frame(message_size(&message).max(1))
                     .await
@@ -3198,12 +3270,11 @@ async fn close_error(sender: &Outbound, reason: &str) {
 }
 
 async fn close_too_large(sender: &Outbound) {
-    let _ = sender
-        .send(
-            Message::close_with(CloseCode::Size, "application message exceeds 32 MiB"),
-            None,
-        )
-        .await;
+    let _ = sender.send(message_too_large_close(), None).await;
+}
+
+fn message_too_large_close() -> Message {
+    Message::close_with(CloseCode::Size, "application message exceeds 32 MiB")
 }
 
 fn bounded_close_reason(reason: &str) -> String {

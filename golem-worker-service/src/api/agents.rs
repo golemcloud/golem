@@ -264,7 +264,7 @@ impl AgentsApi {
     }
 }
 
-fn invocation_session_websocket_config() -> WebSocketConfig {
+pub(super) fn invocation_session_websocket_config() -> WebSocketConfig {
     WebSocketConfig::default()
         .max_message_size(Some(INVOCATION_SESSION_MAX_MESSAGE_SIZE))
         .max_frame_size(Some(INVOCATION_SESSION_MAX_MESSAGE_SIZE))
