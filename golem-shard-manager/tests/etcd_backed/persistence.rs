@@ -1327,9 +1327,10 @@ const UNRESOLVABLE_MEMBER: &str = "http://golem-no-such-member.invalid:2379";
 /// A member that never answers the connection attempt.
 const BLACK_HOLED_MEMBER: &str = "http://192.0.2.1:2379";
 
-/// How many requests to send through an endpoint list with a dead member. Each one lands on the
-/// dead member with a chance of about one in two, so a run this long meets it many times over.
-const REQUESTS_THROUGH_DEAD_MEMBER: usize = 30;
+/// How many requests to send through an endpoint list with a dead member. The balancer sends
+/// about a quarter of them to the dead member, so the chance that none of 80 does is
+/// 0.75^80, below 1e-10, and a run this long meets the dead member many times over.
+const REQUESTS_THROUGH_DEAD_MEMBER: usize = 80;
 
 /// A client built the way `connect_for_requests` builds one, over `endpoints`.
 pub(crate) async fn request_client(endpoints: &[String]) -> etcd_client::Client {
@@ -1437,10 +1438,12 @@ async fn only_a_failure_to_connect_counts_as_never_reaching_etcd(etcd: &Arc<Dock
     }
 }
 
-/// An etcd store, the sentinel leader key it is fenced on, and a persistence over `endpoints`.
+/// An etcd store, the sentinel leader key it is fenced on, and a persistence over `endpoints`
+/// that keeps `compaction_retention_revisions` revisions of history.
 async fn fenced_persistence_over(
     etcd: &Arc<DockerEtcd>,
     endpoints: &[String],
+    compaction_retention_revisions: u64,
 ) -> EtcdRoutingTablePersistence {
     let store = EtcdRoutingTablePersistenceFactory { etcd: etcd.clone() }
         .new_etcd_store()
@@ -1450,7 +1453,7 @@ async fn fenced_persistence_over(
         request_client(endpoints).await,
         NUMBER_OF_SHARDS,
         fence,
-        0,
+        compaction_retention_revisions,
         store.read_retry(),
     )
 }
@@ -1462,7 +1465,7 @@ async fn fenced_persistence_over(
 // write again is safe, and giving up on it would stop the leader.
 async fn writes_survive_a_dead_member_in_the_endpoint_list(etcd: &Arc<DockerEtcd>) {
     let persistence =
-        fenced_persistence_over(etcd, &[etcd.client_url(), DEAD_MEMBER.to_string()]).await;
+        fenced_persistence_over(etcd, &[etcd.client_url(), DEAD_MEMBER.to_string()], 0).await;
 
     let mut revision = NO_REVISION;
     for write in 0..REQUESTS_THROUGH_DEAD_MEMBER {
@@ -1477,10 +1480,31 @@ async fn writes_survive_a_dead_member_in_the_endpoint_list(etcd: &Arc<DockerEtcd
                 )
             });
     }
-    persistence
-        .compact(revision)
-        .await
-        .expect("Compaction through the endpoint list should succeed");
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// Compaction is sent again under the same rule as a write. A retention of zero turns compaction
+// off, and a compaction whose target has not moved sends nothing, so this keeps history and moves
+// the target forward with every round, to have each one reach the balancer.
+async fn compaction_survives_a_dead_member_in_the_endpoint_list(etcd: &Arc<DockerEtcd>) {
+    let persistence =
+        fenced_persistence_over(etcd, &[etcd.client_url(), DEAD_MEMBER.to_string()], 2).await;
+
+    let mut revision = NO_REVISION;
+    for round in 0..REQUESTS_THROUGH_DEAD_MEMBER {
+        revision = persistence
+            .write(&sample_shard_state(NUMBER_OF_SHARDS), revision)
+            .await
+            .unwrap_or_else(|err| panic!("Write {round} failed: {err}"));
+        persistence.compact(revision).await.unwrap_or_else(|err| {
+            panic!(
+                "Compaction {round} of {REQUESTS_THROUGH_DEAD_MEMBER} through the endpoint list \
+                 failed: {err}. The leader's worker stops on a failed compaction, so this is an \
+                 etcd member being restarted taking the leader down."
+            )
+        });
+    }
 }
 
 #[test]
@@ -1489,7 +1513,7 @@ async fn writes_survive_a_dead_member_in_the_endpoint_list(etcd: &Arc<DockerEtcd
 // answering "the revision is not what you expected" is an answer, and it is final.
 async fn a_refused_write_is_not_sent_again_through_a_dead_member(etcd: &Arc<DockerEtcd>) {
     let persistence =
-        fenced_persistence_over(etcd, &[etcd.client_url(), DEAD_MEMBER.to_string()]).await;
+        fenced_persistence_over(etcd, &[etcd.client_url(), DEAD_MEMBER.to_string()], 0).await;
     let revision = persistence
         .write(&sample_shard_state(NUMBER_OF_SHARDS), NO_REVISION)
         .await
