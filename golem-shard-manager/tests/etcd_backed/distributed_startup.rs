@@ -2229,7 +2229,8 @@ async fn a_leader_that_loses_its_lease_during_its_startup_stops_at_once(etcd: &A
 
     // The health check reaching the stand-in executor is what proves the replica won the
     // election and is now in its startup, which is the state this test breaks.
-    timeout(STARTUP_TIMEOUT, silent_executor.accept())
+    // Kept open until the end of the test, so that the check keeps waiting for an answer.
+    let (_health_check, _) = timeout(STARTUP_TIMEOUT, silent_executor.accept())
         .await
         .expect("The new leader should reach its initial health check")
         .expect("The stand-in executor should accept the health check");
