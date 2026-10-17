@@ -50,7 +50,7 @@ pub use sharding::etcd_retry::ReadRetry;
 pub use sharding::healthcheck::HealthCheck;
 pub use sharding::leader_election::{
     Elected, ElectionValue, LEADER_ELECTION_NAME, LeaderElection, LeaderFence, LeaderLocator,
-    LeadershipHandle, LeaseKeepAlive, LeaseLossReason, LeaseLost, RetryDelays,
+    LeadershipHandle, LeaseBelief, LeaseKeepAlive, LeaseLossReason, LeaseLost, RetryDelays,
 };
 pub use sharding::persistence::{
     DbRoutingTablePersistence, EtcdRoutingTablePersistence, ExternalRevision, NO_REVISION,
@@ -320,10 +320,10 @@ mod advertised_host_tests {
     #[test]
     fn a_loopback_host_starts_with_a_warning() {
         for host in ["127.0.0.1", "::1", "localhost", "LOCALHOST"] {
-            let warning = validate_advertised_host(&distributed(Some(host)))
+            let named = validate_advertised_host(&distributed(Some(host)))
                 .expect(host)
                 .expect("a loopback host must warn");
-            assert!(warning.contains("same host"), "{warning}");
+            assert_eq!(named, host.to_string());
         }
     }
 
@@ -371,6 +371,7 @@ type Persistence = (
     Arc<dyn RoutingTablePersistence>,
     Arc<dyn crate::quota::QuotaRepo>,
     Option<LeadershipHandle>,
+    Option<LeaseBelief>,
 );
 
 /// The shard manager service as the gate serves it once this replica leads.
@@ -446,7 +447,7 @@ async fn start_distributed_mode(
     gate: &LeaderGate<ShardManagerGrpcService>,
     own: LeaderAddress,
     join_set: &mut JoinSet<anyhow::Result<()>>,
-) -> anyhow::Result<(Client, LeaderFence, LeadershipHandle)> {
+) -> anyhow::Result<(Client, LeaderFence, LeadershipHandle, LeaseBelief)> {
     let shutdown = match deployment {
         Deployment::Standalone { shutdown } => shutdown.clone(),
         Deployment::Embedded => anyhow::bail!(
@@ -485,16 +486,15 @@ async fn start_distributed_mode(
         "Configured the etcd client for shard lease state persistence"
     );
 
-    // From here a call to this replica is answered with the leader's address. The request client
-    // is bounded by `request_timeout`, which bounds how long such an answer can take.
-    gate.stand_by(
-        Arc::new(LeaderLocator::new(
-            kv.clone(),
-            LEADER_ELECTION_NAME,
-            etcd.request_timeout,
-        )),
-        own.clone(),
-    );
+    let election = LeaderElection::connect(etcd, LEADER_ELECTION_NAME)
+        .await?
+        .with_shutdown(shutdown.clone())
+        .with_grpc_address(own.clone());
+    let (watch, watcher) = election.watch();
+    join_set.spawn(watcher.run().in_current_span());
+    // From here a call to this replica is answered from the watched view of the election, which
+    // costs no etcd read per call.
+    gate.stand_by(Arc::new(watch.clone()), own.clone(), etcd.leader_lease_ttl);
 
     metrics::record_standing_by();
 
@@ -518,10 +518,6 @@ async fn start_distributed_mode(
         ensure_shard_count_matches(stored, number_of_shards)?;
     }
 
-    let election = LeaderElection::connect(etcd, LEADER_ELECTION_NAME)
-        .await?
-        .with_shutdown(shutdown)
-        .with_grpc_address(own);
     let elected = campaign_watching_startup(&election, join_set).await?;
 
     metrics::record_elected(
@@ -533,6 +529,7 @@ async fn start_distributed_mode(
 
     // The keepalive can only end in an error, and that error ends the process: a lost lease must
     // stop this replica rather than leave it serving a table it can no longer write.
+    let belief = elected.keepalive.belief();
     let keepalive = elected.keepalive;
     let leadership = elected.leadership;
     let stepping_down = leadership.clone();
@@ -553,7 +550,7 @@ async fn start_distributed_mode(
         .in_current_span(),
     );
 
-    Ok((kv, elected.fence, leadership))
+    Ok((kv, elected.fence, leadership, belief))
 }
 
 /// The advertised host as written, without the brackets an IPv6 literal may carry.
@@ -567,8 +564,8 @@ fn advertised_host(config: &ShardManagerConfig) -> Option<&str> {
 }
 
 /// Checks the host a replica publishes for its gRPC port. Only distributed mode uses it: there
-/// clients connect to the leader at that host. Returns a warning for a host that works only when
-/// every process runs on this machine.
+/// clients connect to the leader at that host. Returns the host when it works only when every
+/// process runs on this machine, so that the caller can warn about it.
 fn validate_advertised_host(config: &ShardManagerConfig) -> anyhow::Result<Option<String>> {
     if !matches!(config.persistence, PersistenceConfig::Etcd(_)) {
         return Ok(None);
@@ -588,12 +585,7 @@ fn validate_advertised_host(config: &ShardManagerConfig) -> anyhow::Result<Optio
         Some(ip) => ip.is_loopback(),
         None => host.eq_ignore_ascii_case("localhost"),
     };
-    Ok(local_only.then(|| {
-        format!(
-            "grpc.advertised_host is {host}: clients can reach this replica only if they run on \
-             the same host"
-        )
-    }))
+    Ok(local_only.then(|| host.to_string()))
 }
 
 /// Where this replica serves gRPC to other processes: the advertised host and the bound port.
@@ -725,23 +717,35 @@ pub async fn run(
     for warning in validate_timing_config(shard_manager_config)? {
         warn!("{warning}");
     }
-    if let Some(warning) = validate_advertised_host(shard_manager_config)? {
-        warn!("{warning}");
+    if let Some(host) = validate_advertised_host(shard_manager_config)? {
+        warn!(
+            advertised_host = host,
+            "grpc.advertised_host is a loopback name: clients can reach this replica only if \
+             they run on the same host"
+        );
     }
 
+    let gate: LeaderGate<ShardManagerGrpcService> = LeaderGate::new();
+
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
+    // NOT_SERVING until this replica serves: a standby accepts calls only to send them on. The
+    // overall status ("") stays SERVING, because the process is healthy.
     health_reporter
-        .set_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
+        .set_not_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
         .await;
 
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
         .build_v1()?;
 
-    let http_port = golem_service_base::observability::start_health_and_metrics_server(
+    let http_port = golem_service_base::observability::start_health_metrics_and_readiness_server(
         shard_manager_config.http_addr(),
         registry,
         "shard manager is running",
+        {
+            let gate = gate.clone();
+            move || gate.is_ready()
+        },
         join_set,
     )
     .await?;
@@ -773,7 +777,6 @@ pub async fn run(
     // Opened before the persistence below, which in distributed mode blocks in the campaign.
     // Every replica serves this port from the start, so that an orchestrator sees each one as
     // ready; until this replica leads, the gate answers for the service.
-    let gate: LeaderGate<ShardManagerGrpcService> = LeaderGate::new();
     let listener = golem_service_base::net::bind_tcp_listener(shard_manager_config.grpc_addr())?;
     let grpc_port = listener.local_addr()?.port();
 
@@ -794,7 +797,7 @@ pub async fn run(
             .in_current_span()
     });
 
-    let (persistence_service, quota_repo, leadership): Persistence = {
+    let (persistence_service, quota_repo, leadership, lease_belief): Persistence = {
         use golem_service_base::db;
         use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 
@@ -816,6 +819,7 @@ pub async fn run(
                     )),
                     Arc::new(DbQuotaRepo::logged(pool)),
                     None,
+                    None,
                 )
             }
             PersistenceConfig::Sqlite(sqlite) => {
@@ -829,11 +833,12 @@ pub async fn run(
                     )),
                     Arc::new(DbQuotaRepo::logged(pool)),
                     None,
+                    None,
                 )
             }
             PersistenceConfig::Etcd(etcd) => {
                 let own = advertised_address(&shard_manager_config, grpc_port)?;
-                let (kv, fence, leadership) = start_distributed_mode(
+                let (kv, fence, leadership, belief) = start_distributed_mode(
                     etcd,
                     &deployment,
                     shard_manager_config.number_of_shards,
@@ -859,6 +864,7 @@ pub async fn run(
                         ReadRetry::from_config(etcd),
                     )),
                     Some(leadership),
+                    Some(belief),
                 )
             }
         }
@@ -925,7 +931,11 @@ pub async fn run(
             ))
             .accept_compressed(CompressionEncoding::Gzip)
             .send_compressed(CompressionEncoding::Gzip),
+            lease_belief.clone(),
         );
+        health_reporter
+            .set_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
+            .await;
 
         // After `serve`: a standby names this leader from the moment its value is ready, and the
         // leader must already serve by then.

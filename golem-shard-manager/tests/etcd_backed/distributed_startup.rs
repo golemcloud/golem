@@ -1491,6 +1491,51 @@ async fn await_campaigners(etcd: &DockerEtcd, count: usize) {
     });
 }
 
+/// Polls `condition` until it holds, and panics if it does not within `within`.
+async fn await_until<F, Fut>(within: Duration, mut condition: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    timeout(within, async {
+        while !condition().await {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("A condition did not hold within {within:?}"));
+}
+
+/// A port that was free a moment ago. A replica's HTTP port is not reported while it campaigns,
+/// so a test that needs it must choose it first; a collision fails loudly with "address in use"
+/// at startup and cannot make a test pass wrongly.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .expect("A local port is free")
+        .local_addr()
+        .expect("The listener has an address")
+        .port()
+}
+
+/// GET `/readyz` on a replica's HTTP port; `true` for 200. Raw HTTP/1.1: the crate has no HTTP
+/// client among its dependencies.
+async fn readyz(http_port: u16) -> bool {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let Ok(mut stream) = tokio::net::TcpStream::connect(("127.0.0.1", http_port)).await else {
+        return false;
+    };
+    stream
+        .write_all(b"GET /readyz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .await
+        .expect("the request is written");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .await
+        .expect("the response is read");
+    response.starts_with("HTTP/1.1 200")
+}
+
 /// What a handover may cost. Under `LEASE_TTL - renewal_interval`, the soonest an unrevoked
 /// leadership can free up, so a step-down that does not revoke cannot pass by being fast.
 const HANDOVER_BUDGET: Duration = Duration::from_secs(1);
@@ -1930,4 +1975,87 @@ async fn a_client_pointed_at_a_standby_reaches_the_leader(etcd: &Arc<DockerEtcd>
 
     leader.abort();
     standby.abort();
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A replica cut off from etcd must leave the rollout's count of ready replicas, and must still
+// answer callers from what it last saw.
+async fn a_standby_cut_off_from_etcd_stops_being_ready_but_still_names_the_leader(
+    etcd: &Arc<DockerEtcd>,
+) {
+    wipe_state(etcd).await;
+    let config = distributed_config(etcd);
+    let (leader, leader_ports) = spawn_replica(config.clone(), CancellationToken::new());
+    let leader_details = timeout(STARTUP_TIMEOUT, leader_ports)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let proxy = BreakableProxy::start(&etcd.client_url()).await;
+    let mut standby_config = config.clone();
+    standby_config.http_port = free_port();
+    if let PersistenceConfig::Etcd(etcd_config) = &mut standby_config.persistence {
+        etcd_config.endpoints = vec![proxy.url()];
+    }
+    let before = campaigner_keys(etcd).await;
+    let (standby, _) = spawn_replica(standby_config.clone(), CancellationToken::new());
+    let standby_address = await_new_campaigner(etcd, &before).await;
+    await_until(STARTUP_TIMEOUT, || readyz(standby_config.http_port)).await;
+
+    proxy.black_hole();
+    let refusal = routing_table_status(standby_address.port)
+        .await
+        .expect_err("a standby never serves");
+    assert_eq!(
+        leader_of(&refusal).map(|address| address.port),
+        Some(leader_details.grpc_port),
+        "the standby answers from its last view while etcd is unreachable"
+    );
+    await_until(LEASE_TTL * 3, || async {
+        !readyz(standby_config.http_port).await
+    })
+    .await;
+
+    proxy.restore();
+    await_until(STARTUP_TIMEOUT, || readyz(standby_config.http_port)).await;
+    leader.abort();
+    standby.abort();
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A leader cut off from etcd must stop serving within one lease TTL: from then on another replica
+// may lead.
+async fn a_leader_cut_off_from_etcd_stops_serving_within_one_lease_ttl(etcd: &Arc<DockerEtcd>) {
+    wipe_state(etcd).await;
+    let proxy = BreakableProxy::start(&etcd.client_url()).await;
+    let mut config = distributed_config(etcd);
+    if let PersistenceConfig::Etcd(etcd_config) = &mut config.persistence {
+        etcd_config.endpoints = vec![proxy.url()];
+    }
+    let (leader, ports) = spawn_replica(config, CancellationToken::new());
+    let details = timeout(STARTUP_TIMEOUT, ports).await.unwrap().unwrap();
+    routing_table_status(details.grpc_port)
+        .await
+        .expect("the leader serves");
+
+    let cut_at = Instant::now();
+    proxy.black_hole();
+    // Either the gate refuses the call, or the replica has already stopped as a lost lease makes
+    // it do, and its port refuses the connection: in both cases it serves nothing.
+    await_until(LEASE_TTL * 2, || async {
+        match ShardManagerServiceClient::connect(format!("http://127.0.0.1:{}", details.grpc_port))
+            .await
+        {
+            Err(_) => true,
+            Ok(mut client) => client
+                .get_routing_table(GetRoutingTableRequest {})
+                .await
+                .is_err(),
+        }
+    })
+    .await;
+    assert!(cut_at.elapsed() <= LEASE_TTL + Duration::from_millis(500));
+    leader.abort();
 }

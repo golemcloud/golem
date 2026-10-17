@@ -31,8 +31,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::future::Future;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering};
+use std::sync::{Arc, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::{Instant, MissedTickBehavior, interval, sleep, sleep_until, timeout};
 use tokio_util::sync::CancellationToken;
@@ -160,6 +160,37 @@ pub struct LeaseLost {
     pub source: Option<etcd_client::Error>,
 }
 
+/// Until when this replica may believe that it holds its leadership lease: one TTL after the send
+/// of the last renewal that etcd acknowledged. The keepalive moves it; the gate serves only before
+/// it, so a leader that was paused past its lease (a long GC pause, CPU throttling) serves nothing
+/// after it resumes, even before its keepalive task runs and stops the process.
+#[derive(Clone, Debug)]
+pub struct LeaseBelief {
+    deadline: Arc<std::sync::Mutex<Instant>>,
+}
+
+impl LeaseBelief {
+    fn new(deadline: Instant) -> Self {
+        Self {
+            deadline: Arc::new(std::sync::Mutex::new(deadline)),
+        }
+    }
+
+    fn set(&self, deadline: Instant) {
+        *self.deadline.lock().unwrap_or_else(PoisonError::into_inner) = deadline;
+    }
+
+    pub fn held(&self) -> bool {
+        Instant::now() < *self.deadline.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// A belief that ends at `deadline`. **Tests only.**
+    #[doc(hidden)]
+    pub fn until(deadline: Instant) -> Self {
+        Self::new(deadline)
+    }
+}
+
 /// Bounds how long this replica may believe it holds the lease: a black-holed connection yields
 /// neither an error nor a close, so silence has to become a bounded detection. Kept apart from
 /// [`LeaseKeepAlive`] so the anchoring rule can be tested without a live stream.
@@ -172,6 +203,8 @@ struct RenewalWatchdog {
     /// and the send is the earlier of the two instants, so a watchdog that errs gives the lease up
     /// sooner.
     unacknowledged: VecDeque<Instant>,
+    /// The same deadline, shared with the gate.
+    belief: LeaseBelief,
 }
 
 impl RenewalWatchdog {
@@ -182,6 +215,7 @@ impl RenewalWatchdog {
             ttl,
             deadline: sent_at + ttl,
             unacknowledged: VecDeque::new(),
+            belief: LeaseBelief::new(sent_at + ttl),
         }
     }
 
@@ -200,6 +234,7 @@ impl RenewalWatchdog {
     fn record_acknowledgement(&mut self) {
         if let Some(sent_at) = self.unacknowledged.pop_front() {
             self.deadline = sent_at + self.ttl;
+            self.belief.set(self.deadline);
         }
     }
 
@@ -213,6 +248,7 @@ impl RenewalWatchdog {
     /// performs when a reconnect succeeds.
     fn rearm_at(&mut self, sent_at: Instant) {
         self.deadline = sent_at + self.ttl;
+        self.belief.set(self.deadline);
     }
 }
 
@@ -229,6 +265,11 @@ pub struct LeaseKeepAlive {
 }
 
 impl LeaseKeepAlive {
+    /// Shared with the gate; see [`LeaseBelief`].
+    pub fn belief(&self) -> LeaseBelief {
+        self.watchdog.belief.clone()
+    }
+
     /// A third of the TTL, as etcd's own client does, with a floor so a short test TTL is not a
     /// busy loop. Public so the failover test's bound is derived from the same formula.
     pub fn renewal_interval(ttl: Duration) -> Duration {

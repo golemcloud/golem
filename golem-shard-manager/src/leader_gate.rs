@@ -20,30 +20,36 @@
 //! standby answers each call with `UNAVAILABLE` and, once the leader is ready, the leader's
 //! address, which the shard manager client follows.
 
-use crate::ShardManagerError;
-use crate::sharding::leader_election::{ElectionValue, LeaderLocator};
-use async_trait::async_trait;
+use crate::sharding::election_watch::ElectionWatch;
+use crate::sharding::leader_election::{ElectionValue, LeaseBelief};
 use golem_service_base::clients::shard_manager_leader::{LeaderAddress, not_leader_status};
 use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::task::{Context, Poll};
+use std::time::Duration;
 use tonic::Status;
 use tonic::body::Body;
 use tonic::codegen::Service;
 use tonic::server::NamedService;
 
 /// Where a standby reads the current leader. A trait so that the gate is testable without etcd.
-#[async_trait]
 pub(crate) trait LeaderLookup: Send + Sync {
-    async fn leader(&self) -> Result<Option<ElectionValue>, ShardManagerError>;
+    /// `None` until etcd has answered once; then the leader's value, if one leads and its value
+    /// is readable.
+    fn leader(&self) -> Option<Option<ElectionValue>>;
+    /// Whether etcd answered this replica within `window`.
+    fn answered_within(&self, window: Duration) -> bool;
 }
 
-#[async_trait]
-impl LeaderLookup for LeaderLocator {
-    async fn leader(&self) -> Result<Option<ElectionValue>, ShardManagerError> {
-        LeaderLocator::leader(self).await
+impl LeaderLookup for ElectionWatch {
+    fn leader(&self) -> Option<Option<ElectionValue>> {
+        self.leader_value()
+    }
+
+    fn answered_within(&self, window: Duration) -> bool {
+        ElectionWatch::answered_within(self, window)
     }
 }
 
@@ -55,8 +61,14 @@ enum GateState<S> {
     Standby {
         leader: Arc<dyn LeaderLookup>,
         own: LeaderAddress,
+        /// A standby that etcd has not answered for this long is not ready: one lease TTL.
+        ready_window: Duration,
     },
-    Serving(S),
+    Serving {
+        service: S,
+        /// The leader's lease belief; `None` in local mode, which has no lease.
+        lease: Option<LeaseBelief>,
+    },
 }
 
 /// Shared by the gRPC server, which asks it about each call, and `run()`, which moves it on.
@@ -84,44 +96,73 @@ impl<S: Clone> LeaderGate<S> {
         }
     }
 
-    pub fn stand_by(&self, leader: Arc<dyn LeaderLookup>, own: LeaderAddress) {
-        self.set(GateState::Standby { leader, own });
+    pub fn stand_by(
+        &self,
+        leader: Arc<dyn LeaderLookup>,
+        own: LeaderAddress,
+        ready_window: Duration,
+    ) {
+        self.set(GateState::Standby {
+            leader,
+            own,
+            ready_window,
+        });
     }
 
-    pub fn serve(&self, service: S) {
-        self.set(GateState::Serving(service));
+    pub fn serve(&self, service: S, lease: Option<LeaseBelief>) {
+        self.set(GateState::Serving { service, lease });
     }
 
     fn set(&self, state: GateState<S>) {
         *self.state.write().unwrap_or_else(PoisonError::into_inner) = state;
     }
 
-    async fn route(&self) -> Route<S> {
-        // Copied out, so that no lock is held across the etcd read below.
-        let (leader, own) = match &*self.state.read().unwrap_or_else(PoisonError::into_inner) {
+    /// What `/readyz` answers. A serving replica is ready while it believes it holds its lease; a
+    /// standby while etcd answers it, so that a replica cut off from etcd is taken out of a
+    /// rollout's count; a starting replica never.
+    pub fn is_ready(&self) -> bool {
+        match &*self.state.read().unwrap_or_else(PoisonError::into_inner) {
+            GateState::Starting => false,
+            GateState::Standby {
+                leader,
+                ready_window,
+                ..
+            } => leader.answered_within(*ready_window),
+            GateState::Serving { lease, .. } => lease.as_ref().is_none_or(LeaseBelief::held),
+        }
+    }
+
+    fn route(&self) -> Route<S> {
+        match &*self.state.read().unwrap_or_else(PoisonError::into_inner) {
             GateState::Starting => {
-                return Route::Refuse(Status::unavailable("the shard manager is starting; retry"));
+                Route::Refuse(Status::unavailable("the shard manager is starting; retry"))
             }
-            GateState::Serving(service) => return Route::Serve(service.clone()),
-            GateState::Standby { leader, own } => (leader.clone(), own.clone()),
-        };
-        Route::Refuse(standby_answer(leader.as_ref(), &own).await)
+            GateState::Serving {
+                lease: Some(lease), ..
+            } if !lease.held() => Route::Refuse(Status::unavailable(
+                "this shard manager's leadership lease may have lapsed; retry",
+            )),
+            GateState::Serving { service, .. } => Route::Serve(service.clone()),
+            GateState::Standby { leader, own, .. } => {
+                Route::Refuse(standby_answer(leader.leader(), own))
+            }
+        }
     }
 }
 
 /// Names the leader only when its value is ready and is not this replica's own: a replica that
 /// has just won still finds itself here until its startup completes.
-async fn standby_answer(leader: &dyn LeaderLookup, own: &LeaderAddress) -> Status {
-    match leader.leader().await {
-        Ok(Some(ElectionValue {
+fn standby_answer(leader: Option<Option<ElectionValue>>, own: &LeaderAddress) -> Status {
+    match leader {
+        None => Status::unavailable(
+            "this replica has not read the shard manager leader from etcd yet; retry",
+        ),
+        Some(Some(ElectionValue {
             ready: true,
             grpc_address: Some(address),
             ..
         })) if &address != own => not_leader_status(&address),
-        Ok(_) => Status::unavailable("no shard manager leader is ready yet; retry"),
-        Err(err) => Status::unavailable(format!(
-            "cannot read the shard manager leader from etcd: {err}; retry"
-        )),
+        Some(_) => Status::unavailable("no shard manager leader is ready yet; retry"),
     }
 }
 
@@ -168,7 +209,7 @@ where
     fn call(&mut self, request: http::Request<Body>) -> Self::Future {
         let gate = self.gate.clone();
         Box::pin(async move {
-            match gate.route().await {
+            match gate.route() {
                 Route::Serve(mut service) => {
                     std::future::poll_fn(|cx| service.poll_ready(cx)).await?;
                     service.call(request).await
@@ -184,6 +225,7 @@ mod tests {
     use super::*;
     use golem_service_base::clients::shard_manager_leader::leader_of;
     use test_r::test;
+    use tokio::time::Instant;
 
     /// Answers 200 with an `x-served` header: stands in for the shard manager service.
     #[derive(Clone)]
@@ -211,12 +253,18 @@ mod tests {
         }
     }
 
-    struct FixedLeader(Result<Option<ElectionValue>, String>);
+    struct FixedLeader {
+        leader: Option<Option<ElectionValue>>,
+        answered: bool,
+    }
 
-    #[async_trait]
     impl LeaderLookup for FixedLeader {
-        async fn leader(&self) -> Result<Option<ElectionValue>, ShardManagerError> {
-            self.0.clone().map_err(ShardManagerError::Internal)
+        fn leader(&self) -> Option<Option<ElectionValue>> {
+            self.leader.clone()
+        }
+
+        fn answered_within(&self, _: Duration) -> bool {
+            self.answered
         }
     }
 
@@ -247,9 +295,16 @@ mod tests {
         Status::from_header_map(response.headers()).expect("a refusal carries a gRPC status")
     }
 
-    fn standby(leader: Result<Option<ElectionValue>, String>) -> LeaderGate<Served> {
+    fn standby(leader: Option<Option<ElectionValue>>) -> LeaderGate<Served> {
         let gate = LeaderGate::new();
-        gate.stand_by(Arc::new(FixedLeader(leader)), address(9001));
+        gate.stand_by(
+            Arc::new(FixedLeader {
+                leader,
+                answered: true,
+            }),
+            address(9001),
+            Duration::from_secs(10),
+        );
         gate
     }
 
@@ -262,46 +317,103 @@ mod tests {
 
     #[test]
     async fn a_standby_sends_the_caller_to_a_ready_leader() {
-        let response = answer(&standby(Ok(Some(value(9002, true))))).await;
+        let response = answer(&standby(Some(Some(value(9002, true))))).await;
         assert_eq!(leader_of(&status(&response)), Some(address(9002)));
     }
 
     #[test]
     async fn a_standby_does_not_name_a_leader_that_is_not_ready() {
-        let response = answer(&standby(Ok(Some(value(9002, false))))).await;
+        let response = answer(&standby(Some(Some(value(9002, false))))).await;
         assert_eq!(status(&response).code(), tonic::Code::Unavailable);
         assert_eq!(leader_of(&status(&response)), None);
     }
 
     #[test]
     async fn a_standby_never_names_itself() {
-        let response = answer(&standby(Ok(Some(value(9001, true))))).await;
+        let response = answer(&standby(Some(Some(value(9001, true))))).await;
         assert_eq!(leader_of(&status(&response)), None);
     }
 
     #[test]
     async fn a_standby_without_a_leader_names_none() {
-        let response = answer(&standby(Ok(None))).await;
+        let response = answer(&standby(Some(None))).await;
         assert_eq!(leader_of(&status(&response)), None);
     }
 
     #[test]
-    async fn a_standby_that_cannot_read_etcd_names_no_leader() {
-        let response = answer(&standby(Err("etcd is unreachable".to_string()))).await;
+    async fn a_standby_that_has_not_read_etcd_yet_names_no_leader() {
+        let response = answer(&standby(None)).await;
         let status = status(&response);
         assert_eq!(status.code(), tonic::Code::Unavailable);
         assert_eq!(leader_of(&status), None);
         assert!(
-            status.message().contains("etcd is unreachable"),
+            status.message().contains("not read"),
             "{}",
             status.message()
         );
     }
 
     #[test]
+    async fn a_leader_whose_lease_belief_has_expired_serves_nothing() {
+        let gate = standby(Some(None));
+        gate.serve(
+            Served,
+            Some(LeaseBelief::until(
+                Instant::now() - Duration::from_millis(1),
+            )),
+        );
+        let response = answer(&gate).await;
+        assert_eq!(status(&response).code(), tonic::Code::Unavailable);
+        assert!(response.headers().get("x-served").is_none());
+    }
+
+    #[test]
+    async fn a_leader_within_its_lease_belief_serves() {
+        let gate = standby(Some(None));
+        gate.serve(
+            Served,
+            Some(LeaseBelief::until(Instant::now() + Duration::from_secs(10))),
+        );
+        assert_eq!(
+            answer(&gate).await.headers().get("x-served").unwrap(),
+            "yes"
+        );
+    }
+
+    #[test]
+    fn readiness_follows_the_gate() {
+        let gate: LeaderGate<Served> = LeaderGate::new();
+        assert!(!gate.is_ready(), "a starting replica is not ready");
+
+        let quiet = LeaderGate::<Served>::new();
+        quiet.stand_by(
+            Arc::new(FixedLeader {
+                leader: Some(None),
+                answered: false,
+            }),
+            address(9001),
+            Duration::from_secs(10),
+        );
+        assert!(
+            !quiet.is_ready(),
+            "a standby that etcd did not answer is not ready"
+        );
+        assert!(
+            standby(Some(None)).is_ready(),
+            "a standby that etcd answered is ready"
+        );
+
+        gate.serve(Served, None);
+        assert!(
+            gate.is_ready(),
+            "a local-mode replica is ready once it serves"
+        );
+    }
+
+    #[test]
     async fn a_serving_replica_passes_the_call_through() {
-        let gate = standby(Ok(Some(value(9002, true))));
-        gate.serve(Served);
+        let gate = standby(Some(Some(value(9002, true))));
+        gate.serve(Served, None);
         let response = answer(&gate).await;
         assert_eq!(response.headers().get("x-served").unwrap(), "yes");
     }
