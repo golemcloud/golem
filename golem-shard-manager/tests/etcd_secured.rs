@@ -152,7 +152,10 @@ impl SecuredEtcd {
             .with_exposed_port(2379.tcp())
             .with_wait_for(WaitFor::message_on_stderr("ready to serve client requests"))
             .with_copy_to("/certs/server.pem", pki.server_pem.clone().into_bytes())
-            .with_copy_to("/certs/server-key.pem", pki.server_key_pem.clone().into_bytes())
+            .with_copy_to(
+                "/certs/server-key.pem",
+                pki.server_key_pem.clone().into_bytes(),
+            )
             .with_copy_to("/certs/ca.pem", pki.ca_pem.clone().into_bytes())
             .with_cmd(flags);
         let container = image.start().await.expect("Cannot start the TLS etcd");
@@ -179,7 +182,10 @@ impl SecuredEtcd {
             .with_exposed_port(2379.tcp())
             .with_wait_for(WaitFor::message_on_stderr("ready to serve client requests"))
             .with_copy_to("/certs/server.pem", pki.server_pem.clone().into_bytes())
-            .with_copy_to("/certs/server-key.pem", pki.server_key_pem.clone().into_bytes())
+            .with_copy_to(
+                "/certs/server-key.pem",
+                pki.server_key_pem.clone().into_bytes(),
+            )
             .with_cmd(flags);
         let container = image.start().await.expect("Cannot start the auth etcd");
         let port = container.get_host_port_ipv4(2379).await.unwrap();

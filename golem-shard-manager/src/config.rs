@@ -859,6 +859,9 @@ mod tests {
         assert_eq!(config.password.expect("a password").expose(), "123456");
 
         let config = with_password_from_env("s3cr3t-value").expect("text is accepted");
-        assert_eq!(config.password.expect("a password").expose(), "s3cr3t-value");
+        assert_eq!(
+            config.password.expect("a password").expose(),
+            "s3cr3t-value"
+        );
     }
 }
