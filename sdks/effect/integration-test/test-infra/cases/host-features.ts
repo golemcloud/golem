@@ -52,17 +52,8 @@ const run: Effect.Effect<void, TestFailure, GolemCli | TestSession> = Effect.gen
   const failingName = `hf-fail-${session.stamp}`
   const failingRef = `HostFeatures("${failingName}")`
 
-  // Oplog index — string of digits.
-  const idx = yield* liftCliError(cli.invoke(r, "oplogIndex"))
-  yield* expectMatch(idx.stdout, /\b\d+\b/, "HostFeatures.oplogIndex returns numeric string")
-
-  // Durability.atomically — increments by 3, returns 3.
-  const atomic = yield* liftCliError(cli.invoke(r, "withAtomic", ["3"]))
-  yield* expectMatch(atomic.stdout, /\b3\b/, "HostFeatures.withAtomic returns 3")
-
-  // Durability.withIdempotenceMode(false, …) — adds 5, total 8.
-  const persistNothing = yield* liftCliError(cli.invoke(r, "withPersistNothing", ["5"]))
-  yield* expectMatch(persistNothing.stdout, /\b8\b/, "HostFeatures.withPersistNothing returns 8")
+  const increment = yield* liftCliError(cli.invoke(r, "increment", ["8"]))
+  yield* expectMatch(increment.stdout, /\b8\b/, "HostFeatures.increment returns 8")
 
   // Idempotency key — UUID.
   const ikey = yield* liftCliError(cli.invoke(r, "idempotencyKey"))
@@ -98,8 +89,8 @@ const run: Effect.Effect<void, TestFailure, GolemCli | TestSession> = Effect.gen
     "HostFeatures.readOplog returns recognizable tag names",
   )
 
-  // Search oplog for "withAtomic" — that invocation just happened.
-  const search = yield* liftCliError(cli.invoke(r, "searchOplog", [`"withAtomic"`, "10"]))
+  // Search oplog for the preceding increment invocation.
+  const search = yield* liftCliError(cli.invoke(r, "searchOplog", [`"increment"`, "10"]))
   yield* expectMatch(
     search.stdout,
     /\[/,
@@ -154,28 +145,22 @@ const run: Effect.Effect<void, TestFailure, GolemCli | TestSession> = Effect.gen
   // Trigger snapshot drill (everyN(10)) to make sure the
   // Durability + snapshotting interaction works.
   for (let i = 0; i < 10; i++) {
-    yield* liftCliError(cli.invoke(r, "withAtomic", ["1"]))
+    yield* liftCliError(cli.invoke(r, "increment", ["1"]))
   }
   const oplog = yield* liftCliError(cli.oplog(r))
   yield* expectMatch(oplog.stdout, /SNAPSHOT/i, "HostFeatures oplog has SNAPSHOT entry")
 
-  const persistedBeforeUpdate = yield* liftCliError(cli.invoke(r, "withAtomic", ["0"]))
+  const persistedBeforeUpdate = yield* liftCliError(cli.invoke(r, "increment", ["0"]))
   yield* expectMatch(persistedBeforeUpdate.stdout, /\b18\b/, "HostFeatures persisted live result")
 
   // update --await proves the snapshot+restore path lights up; the
   // restored agent state is observable via the next invocation.
   yield* updateTolerant(r, "manual")
-  const persistedAfterUpdate = yield* liftCliError(cli.invoke(r, "withAtomic", ["0"]))
+  const persistedAfterUpdate = yield* liftCliError(cli.invoke(r, "increment", ["0"]))
   yield* expectMatch(
     persistedAfterUpdate.stdout,
     /\b18\b/,
     "HostFeatures persisted result survives update/restart replay",
-  )
-  const idxAfterUpdate = yield* liftCliError(cli.invoke(r, "oplogIndex"))
-  yield* expectMatch(
-    idxAfterUpdate.stdout,
-    /\b\d+\b/,
-    "HostFeatures.oplogIndex still works after update --await",
   )
 })
 

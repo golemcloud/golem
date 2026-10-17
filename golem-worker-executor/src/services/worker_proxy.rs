@@ -1687,7 +1687,7 @@ mod tests {
         let control = RoutedStreamAttachmentControl::new(
             rpc.clone() as Arc<dyn Rpc>,
             mapping.clone(),
-            AuthCtx::System,
+            Arc::new(AuthCtx::System),
         );
 
         // A deleting producer answers unavailable until its deletion completes; once it is gone
@@ -1822,6 +1822,7 @@ mod tests {
                     lower_negative: Vec::new(),
                     upper_positive: Vec::new(),
                     upper_negative: Vec::new(),
+                    expires_at: None,
                 }),
             )
             .await

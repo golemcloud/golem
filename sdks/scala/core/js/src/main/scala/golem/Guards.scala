@@ -54,45 +54,6 @@ object Guards {
   def useRetryPolicy(policy: Retry.NamedPolicy): RetryPolicyGuard =
     useRetryPolicy(Retry.namedPolicyToJsOrThrow(policy))
 
-  def withIdempotenceMode[A](flag: Boolean)(block: => Future[A]): Future[A] =
-    withGuard(useIdempotenceMode(flag))(block)
-
-  def useIdempotenceMode(flag: Boolean): IdempotenceModeGuard = {
-    val original = HostApi.getIdempotenceMode()
-    HostApi.setIdempotenceMode(flag)
-    new IdempotenceModeGuard(() => HostApi.setIdempotenceMode(original))
-  }
-
-  /**
-   * Executes a block atomically.
-   *
-   * On success the atomic region is committed via `markEndOperation`. On
-   * failure the SDK calls the host `trap` function, which surfaces as an
-   * uncatchable wasm trap so user code cannot observe the failure with a
-   * `try/catch` or `recover`. The atomic region is intentionally left open so
-   * the existing replay-time fallback in `markBeginOperation` deletes the
-   * partial inner side effects via a `Jump` and re-executes the block.
-   */
-  def atomically[A](block: => Future[A]): Future[A] = {
-    val guard = markAtomicOperation()
-    block.transform(
-      result => { guard.drop(); result },
-      error => HostApi.trap(s"atomic block failed: ${formatErrorForTrap(error)}")
-    )
-  }
-
-  private def formatErrorForTrap(error: Throwable): String = {
-    val sw = new java.io.StringWriter
-    val pw = new java.io.PrintWriter(sw)
-    error.printStackTrace(pw)
-    sw.toString
-  }
-
-  def markAtomicOperation(): AtomicOperationGuard = {
-    val begin = HostApi.markBeginOperation()
-    new AtomicOperationGuard(() => HostApi.markEndOperation(begin))
-  }
-
   private implicit val ec: ExecutionContext = ExecutionContext.global
 
   private def withGuard[A, G <: Guard](guard: => G)(block: => Future[A]): Future[A] = {
@@ -118,8 +79,4 @@ object Guards {
   }
 
   final class RetryPolicyGuard private[golem] (release: () => Unit) extends Guard(release)
-
-  final class IdempotenceModeGuard private[golem] (release: () => Unit) extends Guard(release)
-
-  final class AtomicOperationGuard private[golem] (release: () => Unit) extends Guard(release)
 }

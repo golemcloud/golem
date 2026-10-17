@@ -107,11 +107,7 @@ final class ObservabilityDemoImpl(@unused private val name: String) extends Obse
       DurabilityApi.DurableFunctionType.ReadLocal,
       DurabilityApi.DurableFunctionType.WriteLocal,
       DurabilityApi.DurableFunctionType.ReadRemote,
-      DurabilityApi.DurableFunctionType.WriteRemote,
-      DurabilityApi.DurableFunctionType.WriteRemoteBatched(None),
-      DurabilityApi.DurableFunctionType.WriteRemoteBatched(Some(BigInt(42))),
-      DurabilityApi.DurableFunctionType.WriteRemoteTransaction(None),
-      DurabilityApi.DurableFunctionType.WriteRemoteTransaction(Some(BigInt(99)))
+      DurabilityApi.DurableFunctionType.WriteRemote
     )
     sb.append(s"DurableFunctionType variants: ${allTypes.size}\n")
     allTypes.foreach(ft => sb.append(s"  ${ft.tag}\n"))

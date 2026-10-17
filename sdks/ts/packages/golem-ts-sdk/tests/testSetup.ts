@@ -91,6 +91,9 @@ vi.mock('golem:tool/host@0.1.0', () => {
 });
 
 vi.mock('golem:core/types@2.0.0', () => ({
+  // The host permission-card resource class. Wire lifting accepts only its
+  // instances; tests build fakes with `fakeRawCard`.
+  PermissionCard: class PermissionCard {},
   SchemaValueStream: {
     unwrap: async (value: { reader: AsyncIterable<unknown> }) => value.reader,
     wrap: async (
@@ -139,6 +142,11 @@ vi.mock('golem:api/oplog@1.5.0', () => ({
 
 vi.mock('golem:quota/types@1.5.0', () => ({}));
 vi.mock('golem:permissions/types@0.1.0', () => ({}));
+vi.mock('golem:permissions/inspect@0.1.0', () => ({}));
+vi.mock('golem:permissions/derive@0.1.0', () => ({}));
+vi.mock('golem:permissions/revoke@0.1.0', () => ({}));
+vi.mock('golem:permissions/wallet@0.1.0', () => ({}));
+vi.mock('golem:permissions/kernel-introspection@0.1.0', () => ({}));
 
 vi.mock('golem:secrets/reveal@0.1.0', () => ({
   reveal: vi.fn(() => {

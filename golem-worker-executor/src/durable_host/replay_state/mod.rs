@@ -24,7 +24,6 @@ use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     AtomicOplogIndex, DurableFunctionType, DurableInvocationId, EntityAttribution, HostResponse,
     HostResponseGolemApiFork, LogLevel, OplogEntry, OplogIndex, OplogScopeProjection,
-    ScopeScanState,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
@@ -145,31 +144,27 @@ pub struct ClaimedConcurrentStart {
     pub timestamp: Timestamp,
 }
 
-pub(crate) enum ScopeStartClaimOutcome {
-    Claimed {
-        begin_index: OplogIndex,
-        handle: ReplayCallHandle,
-    },
-    Missing,
-    MissingSettling {
-        replay_target: OplogIndex,
-    },
-}
-
 /// Internal claim result. `Missing` is a completed semantic search with no matching `Start`;
 /// payload loading and decoding failures remain errors and must not enter missing-claim recovery.
 enum StartClaimAttempt {
     Claimed(ReplayCallHandle, Box<OplogEntry>),
     Blocked(BlockedOn),
     Missing,
-    MissingSettling { replay_target: OplogIndex },
+}
+
+/// The decision on a `Start` claim that found no match, taken after the cursor moved past the
+/// records of other owners ([`CursorTx::decide_missing_start`]).
+enum MissingStart {
+    /// The cursor reached the replay target: the call has no recorded `Start` and continues live.
+    ReplayEnded,
+    /// The cursor stopped at an entry that its owner can still consume.
+    Blocked(BlockedOn),
 }
 
 /// Why a claim cannot be decided in its current cursor transaction, and therefore what it waits
 /// for before it runs again.
 enum BlockedOn {
-    /// The cursor must move first: a reserved `CompletionDelivered` marker bounds the claim, or
-    /// the guest must consume a retained atomic Begin before a host subtask continues live.
+    /// The cursor must move first: a reserved `CompletionDelivered` marker bounds the claim.
     CursorProgress,
     /// No matching `Start` was found, but the entry at the cursor head belongs to an entity body
     /// that is still active. The body, or the supervisor that drains its recorded terminal, can
@@ -197,13 +192,9 @@ mod abandoned;
 mod claims;
 mod cursor;
 mod resolution;
-mod rollback;
 
 use abandoned::AbandonedStarts;
 pub(crate) use claims::{CustomStartClaimOutcome, ReplayStartClaimOutcome, StartClaim};
-#[cfg(test)]
-use rollback::atomic_rollback_region;
-pub use rollback::suffix_rollback_region;
 
 #[derive(Debug, Clone)]
 pub struct ReplayState {
@@ -240,6 +231,7 @@ enum ReplayTransitionPhase {
 }
 
 type CompletionMarkers = HashMap<OplogIndex, CompletionMarker>;
+type TransactionMarkers = HashMap<OplogIndex, std::collections::BTreeMap<OplogIndex, OplogEntry>>;
 type StreamObservationPositions = HashMap<OplogIndex, Option<OplogIndex>>;
 
 /// Storage coordinates only; neither a Start claim nor permission to publish an effect.
@@ -549,6 +541,8 @@ struct ReplayCursor {
     /// recorder is an owned tokio task that must not queue on the cursor lock, and all accesses
     /// are short synchronous map operations that never hold the lock across an `await`.
     completion_markers: std::sync::Mutex<CompletionMarkers>,
+    /// Transaction protocol markers are resolved by scope owner, never by cursor position.
+    transaction_markers: std::sync::Mutex<TransactionMarkers>,
     /// Retained accepted output writes and their ancestor links, independent of Start claims
     /// and acknowledgment disposition. Contains no argument or output bytes.
     tool_attachment_reconstruction: std::sync::Mutex<ToolAttachmentReconstruction>,
@@ -727,10 +721,13 @@ struct CursorState {
     /// such an entry it is auto-consumed like an awaited terminal instead of being handed to a
     /// positional reader; its resolver awaiter was registered at claim time.
     claimed_starts: HashSet<OplogIndex>,
-    /// Completed custom durable invocations replay as one logical subtree: once a root `Start`
-    /// is claimed, descendant `Start`s are replay-inert implementation details of that recorded
-    /// operation and are drained with their terminals while resolving the root. The map stores
-    /// every known member index for each root so nested descendants can be recognized by parent.
+    /// Replay-inert subtrees. Completed custom durable invocations replay as one logical subtree:
+    /// once a root `Start` is claimed, descendant `Start`s are replay-inert implementation details
+    /// of that recorded operation and are drained with their terminals while resolving the root.
+    /// The host-internal calls of a call that the guest cancelled before it delivered anything are
+    /// drained the same way: replay parks the call at its recorded cancellation and never makes
+    /// them again. The map stores every known member index for each root so nested descendants
+    /// can be recognized by parent.
     custom_subtrees: HashMap<OplogIndex, HashSet<OplogIndex>>,
     /// Durable-call `Start`s the cursor committed past before their owner claimed them, keyed by
     /// the `Start`'s index and kept in oplog order, together with the `End`/`Cancelled` that
@@ -745,7 +742,7 @@ struct CursorState {
     /// therefore commits past it and retains it here, where the owner's later claim finds it in
     /// oplog order ([`CursorTx::claim_retained_start`]). Entries leave this map when claimed, when
     /// the invocation-boundary reader folds them into the abandoned-record tolerance, or when a
-    /// target shrink / rollback deletes their region.
+    /// target shrink or external history cut deletes their region.
     retained_starts: std::collections::BTreeMap<OplogIndex, RetainedStart>,
 }
 

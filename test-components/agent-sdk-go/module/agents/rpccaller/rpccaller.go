@@ -28,9 +28,6 @@ var Agent = golem.DefineAgent[Id](golem.Spec{
 var (
 	Call  = Agent.Method[CallIn, int64]("call", golem.Description("Record via a synchronous RPC and return the ledger's new total"))
 	Async = Agent.Method[CallIn, int64]("async", golem.Description("Record via CallAsync + Future.Get and return the ledger's new total"))
-	// AtomicCall makes the same RPC inside durability.Atomically — checks whether a
-	// cross-agent call settles before an atomic region closes.
-	AtomicCall = Agent.Method[CallIn, int64]("atomic-call", golem.Description("Record via a synchronous RPC inside an atomic region"))
 	// CallParallel records on every region's ledger at once, one goroutine per
 	// region, and returns the totals in region order.
 	CallParallel = Agent.Method[CallParallelIn, []int64]("call-parallel", golem.Description("Record on several ledgers concurrently from goroutines"))

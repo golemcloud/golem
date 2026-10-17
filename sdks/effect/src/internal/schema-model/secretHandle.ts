@@ -20,11 +20,14 @@ interface SecretHandleState {
   raw: RawSecret | undefined
   readonly onTake?: () => void
   readonly tracked: boolean
+  /** Set by release, including while the resource is on the wire, so a restore cannot revive it. */
+  released?: boolean
 }
 
 interface SecretHandleRegistry {
   readonly states: WeakMap<object, SecretHandleState>
   readonly owners: WeakMap<RawSecret, object>
+  readonly wireOrigins: WeakMap<object, GuestSecretHandle>
   readonly transferredOwner: object
 }
 
@@ -35,9 +38,10 @@ const globals = globalThis as typeof globalThis & {
 const registry = (globals[registryKey] ??= {
   states: new WeakMap<object, SecretHandleState>(),
   owners: new WeakMap<RawSecret, object>(),
+  wireOrigins: new WeakMap<object, GuestSecretHandle>(),
   transferredOwner: Object.freeze({}),
 })
-const { states, owners, transferredOwner } = registry
+const { states, owners, wireOrigins, transferredOwner } = registry
 
 export class GuestSecretHandle {
   constructor(key: SecretInternal, raw: RawSecret, onTake?: () => void, tracked = true) {
@@ -145,10 +149,37 @@ export function takeGuestSecretHandleToWire(
   }
   state.raw = undefined
   if (raw !== undefined) {
-    if (state.tracked) owners.set(raw, wireOwner)
+    if (state.tracked) {
+      owners.set(raw, wireOwner)
+      wireOrigins.set(wireOwner, handle)
+    }
     state.onTake?.()
   }
   return raw
+}
+
+/**
+ * Give a raw secret that `wireOwner` still holds back to the handle it was taken from. Use it only
+ * when the host never received the wire value. See `restoreGuestPermissionCardHandleFromWire`.
+ */
+export function restoreGuestSecretHandleFromWire(
+  key: SecretInternal,
+  raw: RawSecret,
+  wireOwner: object,
+): "restored" | "released" | "unknown" {
+  requireSecretInternal(key)
+  const handle = wireOrigins.get(wireOwner)
+  if (handle === undefined || owners.get(raw) !== wireOwner) return "unknown"
+  const state = stateOf(handle)
+  if (state.raw !== undefined) return "unknown"
+  wireOrigins.delete(wireOwner)
+  if (state.released) {
+    owners.delete(raw)
+    return "released"
+  }
+  state.raw = raw
+  owners.set(raw, handle)
+  return "restored"
 }
 
 export function assertGuestSecretHandleCanLiftFromWire(
@@ -185,6 +216,7 @@ export function releaseGuestSecretHandle(
     throw new Error("secret handle ownership is invalid")
   }
   state.raw = undefined
+  state.released = true
   if (raw !== undefined) {
     if (state.tracked) owners.delete(raw)
     state.onTake?.()

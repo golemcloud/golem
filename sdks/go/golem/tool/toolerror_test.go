@@ -94,7 +94,8 @@ func encodeArgs[A any](t *testing.T, ce *commandEntry, fill func(*A)) types.Type
 	args := reflect.New(ce.argsType).Elem()
 	args.Set(l.defaults)
 	fill(args.Addr().Interface().(*A))
-	return l.encode(ce.node.entry.d, args)
+	input, _ := l.encode(ce.node.entry.d, args)
+	return input
 }
 
 // TestDeclaredErrorsAreInTheCommandContract — the failures are published with

@@ -1,0 +1,24 @@
+import {
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/interface/golem/permissions/types" @raw,
+  "golemcloud/golem_sdk/interface/golem/permissions/inspect" @rawInspect,
+  "golemcloud/golem_sdk/interface/golem/permissions/derive" @rawDerive,
+  "golemcloud/golem_sdk/interface/golem/permissions/revoke" @rawRevoke,
+  "golemcloud/golem_sdk/interface/golem/permissions/wallet" @rawWallet,
+  "golemcloud/golem_sdk/interface/golem/permissions/kernel-introspection" @rawKernel,
+  "golemcloud/golem_sdk/internal/permission_card" @card,
+  "golemcloud/golem_sdk/schema",
+  "golemcloud/golem_sdk/schema_model" @model,
+}
+
+import {
+  "golemcloud/golem_sdk/schema_model_host" @model_host,
+  "moonbitlang/core/hashset",
+} for "test"
+
+// A new `permission-error` case in the WIT makes the exhaustive error
+// conversion a partial match; this turns that into a build error.
+
+warnings = "-44@partial_match"
+
+supported_targets = "+wasm"

@@ -20,7 +20,6 @@ import {
   Policy,
   Predicate,
   Props,
-  atomically,
   withRetryPolicy,
 } from '@golemcloud/golem-ts-sdk';
 
@@ -61,7 +60,11 @@ export const RetryTest = defineAgent({
       returns: z.boolean(),
     }),
     manifestStatusRetryV2OkThenForever500: method({
-      input: { host: z.string(), port: z.number(), requestTimeoutMs: z.number() },
+      input: {
+        host: z.string(),
+        port: z.number(),
+        requestTimeoutMs: z.number(),
+      },
       returns: z.boolean(),
     }),
   },
@@ -71,16 +74,17 @@ export const RetryTestImpl = RetryTest.implement({
   init: () => ({}),
   methods: {
     async withRetryPolicyTest({ host, port }) {
-      const policy = NamedPolicy.named('retry-test', Policy.immediate().maxRetries(10));
-      return withRetryPolicy(policy, () =>
-        atomically(async () => {
-          const response = await fetch(`http://${host}:${port}/attempt`);
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-          }
-          return true;
-        }),
-      );
+      const policy = NamedPolicy.named(
+        'retry-test',
+        Policy.immediate().maxRetries(10),
+      ).appliesWhen(Predicate.eq(Props.statusCode, 500));
+      return withRetryPolicy(policy, async () => {
+        const response = await fetch(`http://${host}:${port}/attempt`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        return true;
+      });
     },
 
     async withStatusRetryPolicyTest({ host, port }) {
@@ -97,7 +101,7 @@ export const RetryTestImpl = RetryTest.implement({
 
     /**
      * Plain fetch + throw on !ok, with
-     * NO `withRetryPolicy` and NO `atomically`.  All retry behaviour must
+     * NO `withRetryPolicy`. All retry behaviour must
      * come from a `retryPolicyDefaults`-style policy defined at the
      * environment level (i.e. supplied to the executor through the
      * `EnvironmentStateService`).
@@ -122,8 +126,8 @@ export const RetryTestImpl = RetryTest.implement({
      *   });
      *   if (!res.ok) throw new Error(...);
      *
-     * The retry policy comes from the environment (no `withRetryPolicy`,
-     * no `atomically`). The host's inline status-code retry path must
+     * The retry policy comes from the environment (no `withRetryPolicy`).
+     * The host's inline status-code retry path must
      * transparently re-issue the failing POST request — including its
      * `content-type` header and JSON body — until success.
      */
@@ -149,7 +153,11 @@ export const RetryTestImpl = RetryTest.implement({
       const response = await fetch(`http://${host}:${port}${path}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ orderId: 'ord_repro', amount: 29.99, currency: 'USD' }),
+        body: JSON.stringify({
+          orderId: 'ord_repro',
+          amount: 29.99,
+          currency: 'USD',
+        }),
       });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -240,7 +248,11 @@ export const RetryTestImpl = RetryTest.implement({
      * retry budget alone produces a large observed request count to
      * `/perma-500`.
      */
-    async manifestStatusRetryV2OkThenForever500({ host, port, requestTimeoutMs }) {
+    async manifestStatusRetryV2OkThenForever500({
+      host,
+      port,
+      requestTimeoutMs,
+    }) {
       const ok = await postWithTimeout(
         `http://${host}:${port}/ok-post`,
         { step: 'ok' },

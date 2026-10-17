@@ -806,51 +806,6 @@ async fn authentication_stays_on_wire_and_completed_replay_skips_secret_fetch(
 
 #[test]
 #[timeout("120s")]
-async fn incomplete_append_respects_disabled_idempotence(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-    #[tagged_as("external_durable_streams")] fixture: &PrecompiledComponent,
-) -> anyhow::Result<()> {
-    let server = Server::start(true).await?;
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, fixture)
-        .store()
-        .await?;
-    let agent = agent_id!("ExternalDurableStreams", "non-idempotent");
-    let id = executor.start_agent(&component.id, agent.clone()).await?;
-    let pending = {
-        let executor = executor.clone();
-        let component = component.clone();
-        let agent = agent.clone();
-        let url = server.url.clone();
-        tokio::spawn(async move {
-            executor
-                .invoke_and_await_agent(
-                    &component,
-                    &agent,
-                    "append_non_idempotent",
-                    data_value!(url, "non-idempotent-writer"),
-                )
-                .await
-        })
-    };
-    server.peer.accepted.notified().await;
-    executor.commit_oplog(&id).await?;
-    executor.simulated_crash(&id).await?;
-    assert!(
-        pending.await?.is_err(),
-        "incomplete WriteRemote must fail closed with idempotence disabled"
-    );
-    assert_eq!(server.peer.attempts.lock().unwrap().len(), 1);
-    assert_eq!(server.peer.effects.lock().unwrap().len(), 1);
-    Ok(())
-}
-
-#[test]
-#[timeout("120s")]
 async fn concurrent_appends_keep_identity_in_both_completion_orders(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

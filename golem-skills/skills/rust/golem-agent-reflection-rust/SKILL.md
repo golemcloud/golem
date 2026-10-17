@@ -41,7 +41,9 @@ may include that field with `null`, and reflection JSON Schema omits it from
 positionals and options use that option carrier. Repeatable/tail inputs use an
 empty list for absence, flags use their effective boolean/count value, and an
 explicit default is represented by the default value. Do not replace an absent
-optional carrier with a zero or empty string.
+optional carrier with a zero or empty string. In tool command JSON, an omitted
+scalar option, positional with a declared default, or flag takes its declared
+default, and the command input JSON Schema does not require it.
 
 Canonical JSON represents `s64`, `u64`, duration nanoseconds, and quantity
 mantissas as canonical base-10 strings. Smaller integers remain JSON numbers.

@@ -10,8 +10,6 @@ pub trait RawWasiHttp {
     async fn run_with_interrupt(&self) -> String;
     async fn send_request(&mut self);
     fn process_response(&mut self) -> String;
-    fn probe_p2(&self, operation: String, authority: String) -> Result<(), String>;
-    fn p2_request(&self, authority: String, path: String, consume: bool, spin: bool) -> u16;
     async fn dispatch_result(&self, authority: String) -> Result<u16, String>;
     async fn drop_unread_response_then_wait(&self) -> u16;
 }
@@ -58,77 +56,6 @@ impl RawWasiHttp for RawWasiHttpImpl {
     fn process_response(&mut self) -> String {
         let (body, status) = self.stored_response.take().unwrap();
         format!("{} {}", status, String::from_utf8(body).unwrap())
-    }
-
-    fn probe_p2(&self, operation: String, authority: String) -> Result<(), String> {
-        use wasi::http::{outgoing_handler, types as p2_types};
-
-        if operation != "outgoing-handler-handle" {
-            return Err(format!("unknown P2 HTTP operation: {operation}"));
-        }
-        let headers = p2_types::Fields::new();
-        let request = p2_types::OutgoingRequest::new(headers);
-        request
-            .set_method(&p2_types::Method::Get)
-            .map_err(|_| "failed to set method".to_string())?;
-        request
-            .set_path_with_query(Some("/"))
-            .map_err(|_| "failed to set path".to_string())?;
-        request
-            .set_scheme(Some(&p2_types::Scheme::Http))
-            .map_err(|_| "failed to set scheme".to_string())?;
-        request
-            .set_authority(Some(&authority))
-            .map_err(|_| "failed to set authority".to_string())?;
-        outgoing_handler::handle(request, None)
-            .map(|_| ())
-            .map_err(|error| format!("{error:?}"))
-    }
-
-    fn p2_request(&self, authority: String, path: String, consume: bool, spin: bool) -> u16 {
-        use wasi::http::{outgoing_handler, types as p2_types};
-
-        let request = p2_types::OutgoingRequest::new(p2_types::Fields::new());
-        request.set_method(&p2_types::Method::Get).unwrap();
-        request.set_path_with_query(Some(&path)).unwrap();
-        request.set_scheme(Some(&p2_types::Scheme::Http)).unwrap();
-        request.set_authority(Some(&authority)).unwrap();
-        let future = outgoing_handler::handle(request, None).unwrap();
-        let response = loop {
-            if let Some(response) = future.get() {
-                break response.unwrap().unwrap();
-            }
-            future.subscribe().block();
-        };
-        drop(future);
-        let status = response.status();
-        if consume {
-            let body = response.consume().unwrap();
-            let stream = body.stream().unwrap();
-            loop {
-                match stream.blocking_read(4096) {
-                    Ok(_) => {}
-                    Err(wasi::io::streams::StreamError::Closed) => break,
-                    Err(error) => panic!("body read failed: {error:?}"),
-                }
-            }
-            drop(stream);
-            let trailers = p2_types::IncomingBody::finish(body);
-            loop {
-                if let Some(result) = trailers.get() {
-                    result.unwrap().unwrap();
-                    break;
-                }
-                trailers.subscribe().block();
-            }
-        }
-        drop(response);
-        if spin {
-            loop {
-                std::hint::spin_loop();
-            }
-        }
-        status
     }
 
     async fn dispatch_result(&self, authority: String) -> Result<u16, String> {

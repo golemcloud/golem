@@ -16,7 +16,11 @@ use crate::Tracing;
 use golem_common::base_model::AgentId;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
-use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex};
+use golem_common::model::oplog::PublicOplogEntry;
+use golem_common::model::{
+    AgentStatus, IdempotencyKey, NamedRetryPolicy, OplogIndex, Predicate, PredicateValue,
+    RetryPolicy,
+};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::ResultValuePayload;
 use golem_common::{agent_id, data_value};
@@ -27,8 +31,8 @@ use golem_worker_executor::services::rdbms::RdbmsType;
 use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start,
+    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
+    WorkerExecutorTestDependencies, start, start_with_overrides,
 };
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -179,6 +183,21 @@ enum TransactionFailOn {
 }
 
 impl TransactionFailOn {
+    fn loses_transaction(&self) -> bool {
+        match self {
+            Self::OplogAdd(entry, _) => {
+                entry == "PreCommitRemoteTransaction" || entry == "PreRollbackRemoteTransaction"
+            }
+            Self::OplogAddAndTx(entry, _, _, _) => {
+                entry == "PreCommitRemoteTransaction" || entry == "PreRollbackRemoteTransaction"
+            }
+        }
+    }
+
+    fn fails_before_commit(&self) -> bool {
+        matches!(self, Self::OplogAdd(entry, _) if entry == "PreCommitRemoteTransaction")
+    }
+
     fn oplog_add(entry: &str, fail_count: u8) -> Self {
         Self::OplogAdd(entry.to_string(), fail_count)
     }
@@ -580,9 +599,16 @@ async fn postgres_transaction_recovery_test(
     )
     .await?;
 
-    check_test_result(&worker_id, result1.clone(), insert_test.clone());
+    if fail_on.loses_transaction() {
+        assert!(
+            get_test_result_error(result1).contains("transaction was lost during reconstruction")
+        );
+    } else {
+        check_test_result(&worker_id, result1.clone(), insert_test.clone());
+    }
 
-    let select_test = if transaction_end == TransactionEnd::Commit {
+    let select_test = if transaction_end == TransactionEnd::Commit && !fail_on.fails_before_commit()
+    {
         RdbmsTest::new(
             postgres_select_statements(&table_name, expected_values),
             None,
@@ -649,6 +675,104 @@ async fn postgres_transaction_recovery_test(
 
 #[test]
 #[tracing::instrument]
+async fn rdbms_transaction_status_give_up_does_not_fall_back_to_trap_policy(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    postgres: &DockerPostgresRdb,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            retry_policies: Some(vec![
+                NamedRetryPolicy {
+                    name: "status-give-up".to_string(),
+                    priority: 100,
+                    predicate: Predicate::PropEq {
+                        property: "verb".to_string(),
+                        value: PredicateValue::Text("transaction-status".to_string()),
+                    },
+                    policy: RetryPolicy::Never,
+                },
+                NamedRetryPolicy {
+                    name: "permissive-trap".to_string(),
+                    priority: 0,
+                    predicate: Predicate::True,
+                    policy: RetryPolicy::CountBox {
+                        max_retries: 5,
+                        inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(1))),
+                    },
+                },
+            ]),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let fail_on = TransactionFailOn::oplog_add_and_tx(
+        "CommittedRemoteTransaction",
+        1,
+        "GetTransactionStatusError",
+        1,
+    );
+    let workers = start_workers::<PostgresType>(
+        &executor,
+        &component,
+        &postgres.public_connection_string(),
+        &fail_on.name(),
+        1,
+    )
+    .await?;
+    let (worker_id, agent_id) = &workers[0];
+    let error = execute_worker_test::<PostgresType>(
+        &executor,
+        &component,
+        agent_id,
+        &IdempotencyKey::fresh(),
+        RdbmsTest::new(
+            vec![StatementTest::execute_test(
+                "SELECT 1".to_string(),
+                vec![],
+                None,
+            )],
+            Some(TransactionEnd::Commit),
+        ),
+    )
+    .await
+    .expect_err("status give-up must not retry under the permissive trap policy");
+    assert!(
+        error
+            .to_string()
+            .contains("transaction status resolution exhausted")
+    );
+    let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
+    let transaction_start = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start) if start.function_name == "<scope:transaction>" => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("the uncertain transaction must retain its Start");
+    assert!(
+        !oplog.iter().any(|entry| matches!(
+            &entry.entry,
+            PublicOplogEntry::End(end) if end.start_index == transaction_start
+        )),
+        "status give-up must not record a terminal transaction outcome"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 async fn rdbms_postgres_commit_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -656,13 +780,29 @@ async fn rdbms_postgres_commit_recovery(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    for fail_count in 1..=2 {
+    for fail_on in [
+        TransactionFailOn::oplog_add("BeginRemoteTransaction", 1),
+        TransactionFailOn::oplog_add("CommittedRemoteTransaction", 1),
+        TransactionFailOn::oplog_add("CommittedRemoteTransaction", 2),
+        TransactionFailOn::oplog_add_and_tx(
+            "CommittedRemoteTransaction",
+            1,
+            "GetTransactionStatusError",
+            1,
+        ),
+        TransactionFailOn::oplog_add_and_tx(
+            "CommittedRemoteTransaction",
+            1,
+            "GetTransactionStatusInProgress",
+            1,
+        ),
+    ] {
         postgres_transaction_recovery_test(
             last_unique_id,
             deps,
             postgres,
             host_api_tests,
-            TransactionFailOn::oplog_add("CommittedRemoteTransaction", fail_count),
+            fail_on,
             TransactionEnd::Commit,
         )
         .await?;
@@ -699,6 +839,81 @@ async fn rdbms_postgres_pre_commit_recovery(
     )
     .await?;
 
+    Ok(())
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn rdbms_postgres_incomplete_statement_and_stream_report_typed_loss(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    postgres: &DockerPostgresRdb,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::host_functions::HostFunctionName;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let address = postgres.public_connection_string();
+    let pool = sqlx::PgPool::connect(&address).await?;
+    for (suffix, function, transactional) in [
+        (
+            "statement",
+            HostFunctionName::RdbmsPostgresDbTransactionExecute,
+            true,
+        ),
+        (
+            "stream",
+            HostFunctionName::RdbmsPostgresDbResultStreamGetNext,
+            false,
+        ),
+    ] {
+        let sequence = format!("recovery_{}", Uuid::new_v4().simple());
+        sqlx::query(&format!("CREATE SEQUENCE {sequence}"))
+            .execute(&pool)
+            .await?;
+        let workers =
+            start_workers::<PostgresType>(&executor, &component, &address, suffix, 1).await?;
+        let (worker, agent) = &workers[0];
+        let (entered, release) = executor.gate_next_oplog_function_end(worker, function, true);
+        let statement = format!("SELECT nextval('{sequence}')");
+        let test = RdbmsTest::new(
+            vec![
+                StatementTest::query_test(statement.clone(), vec![], None),
+                if transactional {
+                    StatementTest::execute_test(statement, vec![], None)
+                } else {
+                    StatementTest::query_stream_test(statement, vec![], None)
+                },
+            ],
+            transactional.then_some(TransactionEnd::Commit),
+        );
+        let key = IdempotencyKey::fresh();
+        let invocation =
+            execute_worker_test::<PostgresType>(&executor, &component, agent, &key, test);
+        let fail_after_effect = async {
+            entered
+                .await
+                .expect("target database effect must reach its End");
+            release.send(()).expect("target End must still be waiting");
+        };
+        let (result, ()) = tokio::join!(invocation, fail_after_effect);
+        assert!(get_test_result_error(result?).contains("ResourceLost"));
+        // Sequences are not rolled back with the transaction. Both the completed query and
+        // the incomplete call must execute once, even though the runtime was reconstructed.
+        let count: i64 = sqlx::query_scalar(&format!("SELECT last_value FROM {sequence}"))
+            .fetch_one(&pool)
+            .await?;
+        assert_eq!(count, 2);
+        sqlx::query(&format!("DROP SEQUENCE {sequence}"))
+            .execute(&pool)
+            .await?;
+    }
     Ok(())
 }
 
@@ -760,7 +975,6 @@ async fn rdbms_postgres_pre_rollback_recovery(
 
 #[test]
 #[tracing::instrument]
-#[ignore] // This test simulates that the commit succeeds, but we neither write this to the oplog or can query this fact from the DB. In this case the transaction gets retried and it leads to violations, which is expected, but the current test does not expect it.
 async fn rdbms_postgres_commit_and_tx_status_not_found_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1255,9 +1469,16 @@ async fn mysql_transaction_recovery_test(
     )
     .await?;
 
-    check_test_result(&worker_id, result1.clone(), insert_test.clone());
+    if fail_on.loses_transaction() {
+        assert!(
+            get_test_result_error(result1).contains("transaction was lost during reconstruction")
+        );
+    } else {
+        check_test_result(&worker_id, result1.clone(), insert_test.clone());
+    }
 
-    let select_test = if transaction_end == TransactionEnd::Commit {
+    let select_test = if transaction_end == TransactionEnd::Commit && !fail_on.fails_before_commit()
+    {
         RdbmsTest::new(mysql_select_statements(&table_name, expected_values), None)
     } else {
         RdbmsTest::new(mysql_select_statements(&table_name, vec![]), None)
@@ -1326,13 +1547,29 @@ async fn rdbms_mysql_commit_recovery(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    for fail_count in 1..=2 {
+    for fail_on in [
+        TransactionFailOn::oplog_add("BeginRemoteTransaction", 1),
+        TransactionFailOn::oplog_add("CommittedRemoteTransaction", 1),
+        TransactionFailOn::oplog_add("CommittedRemoteTransaction", 2),
+        TransactionFailOn::oplog_add_and_tx(
+            "CommittedRemoteTransaction",
+            1,
+            "GetTransactionStatusError",
+            1,
+        ),
+        TransactionFailOn::oplog_add_and_tx(
+            "CommittedRemoteTransaction",
+            1,
+            "GetTransactionStatusInProgress",
+            1,
+        ),
+    ] {
         mysql_transaction_recovery_test(
             last_unique_id,
             deps,
             mysql,
             host_api_tests,
-            TransactionFailOn::oplog_add("CommittedRemoteTransaction", fail_count),
+            fail_on,
             TransactionEnd::Commit,
         )
         .await?;
@@ -1431,7 +1668,6 @@ async fn rdbms_mysql_pre_rollback_recovery(
 
 #[test]
 #[tracing::instrument]
-#[ignore] // This test simulates that the commit succeeds, but we neither write this to the oplog or can query this fact from the DB. In this case the transaction gets retried and it leads to violations, which is expected, but the current test does not expect it.
 async fn rdbms_mysql_commit_and_tx_status_not_found_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

@@ -36,7 +36,7 @@ async fn nested_leaf_trap_notifies_external_caller_while_primary_waits_on_silent
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {

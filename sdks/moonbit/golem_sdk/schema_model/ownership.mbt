@@ -73,7 +73,7 @@ fn take_owned_capabilities(
         None => ()
       }
     PermissionCard(handle) =>
-      match handle.take() {
+      match @card.take(handle) {
         Some(raw) => push_unique(permission_cards, raw)
         None => ()
       }
@@ -153,7 +153,7 @@ pub fn drop_wit_capabilities(value : @types.SchemaValueTree) -> Unit {
     quota_token.drop()
   }
   for permission_card in permission_cards {
-    permission_card.drop()
+    @card.drop_unless_held(permission_card)
   }
   for stream in streams {
     stream.drop()

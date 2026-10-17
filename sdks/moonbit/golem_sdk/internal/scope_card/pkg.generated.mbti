@@ -1,0 +1,20 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/internal/scope_card"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/permissions",
+}
+
+// Values
+pub fn borrow_raw(@permissions.ScopeCard) -> @types.PermissionCard
+
+pub fn resolve(@permissions.ScopeCard?, @permissions.ScopeCard?) -> @types.PermissionCard?
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits

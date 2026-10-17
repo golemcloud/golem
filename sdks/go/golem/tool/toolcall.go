@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
 	"io"
 	"reflect"
 	"slices"
@@ -118,6 +119,11 @@ type CallError struct {
 	// ErrorName is the declared error case, for [CallDeclaredError].
 	ErrorName string
 	payload   golem.TypedValue
+	// decoded holds the payload as each successful Match decoded it, by Go
+	// type. Decoding moves a permission card out of the payload, so every
+	// later Match for that type, and every copy of the error, reads it from
+	// here.
+	decoded *decodedPayloads
 	// wire is the tool's own error, kept so a middleware passing the failure
 	// on returns it unchanged.
 	wire *types.ToolError
@@ -125,7 +131,38 @@ type CallError struct {
 
 // Payload returns a declared error's payload; read it with JSON, or decode it
 // with [DecodeTypedValue]. A typed caller matches the case with its Match.
+//
+// A permission card in the payload moves out with the first decode, either
+// Match's or DecodeTypedValue's; a later DecodeTypedValue of the payload
+// fails for it. Match decodes once and returns the same value every time.
 func (e *CallError) Payload() golem.TypedValue { return e.payload }
+
+// decodedPayloads is a declared error's payload as each Go type it decoded
+// as.
+type decodedPayloads struct{ byType map[reflect.Type]any }
+
+// decodePayload decodes the payload as P, and keeps a successful decode for
+// every later call for P. A failed decode leaves the payload as it was, so it
+// is not kept: a later call decodes again. A decode as another type after a
+// successful one fails for a card the first one took.
+func decodePayload[P any](e *CallError) (P, error) {
+	typ := reflect.TypeFor[P]()
+	if e.decoded == nil {
+		e.decoded = &decodedPayloads{}
+	}
+	if v, ok := e.decoded.byType[typ]; ok {
+		p, _ := v.(P)
+		return p, nil
+	}
+	p, err := golem.DecodeTypedValue[P](e.payload)
+	if err == nil {
+		if e.decoded.byType == nil {
+			e.decoded.byType = map[reflect.Type]any{}
+		}
+		e.decoded.byType[typ] = p
+	}
+	return p, err
+}
 
 // InvalidInput rejects a tool invocation's arguments, from a command handler
 // or a middleware; the caller sees a [CallInvalidInput] failure.
@@ -187,6 +224,7 @@ func toolCallErrorFromWit(tool string, path []string, e types.ToolRpcError) *Cal
 		case types.ToolErrorCustomError:
 			ce := te.CustomError()
 			out.Kind, out.ErrorName, out.payload = CallDeclaredError, ce.Name, typedValue(ce.Payload)
+			out.decoded = &decodedPayloads{}
 		default:
 			out.Kind = CallInvalidResult
 		}
@@ -341,11 +379,16 @@ func (ce *commandEntry) callError(target string, kind CallErrorKind, format stri
 }
 
 func (ce *commandEntry) start(target string, fill func(reflect.Value)) (toolCall, error) {
-	input, stdin, err := ce.prepare(target, fill)
+	input, stdin, restore, err := ce.prepare(target, fill)
 	if err != nil {
 		return toolCall{}, err
 	}
-	return startToolCall(target, ce.node.path, input, stdin, ce.streams())
+	call, err := startToolCall(target, ce.node.path, input, stdin, ce.streams())
+	if err != nil {
+		// The host took nothing: the cards in the arguments go back.
+		restore()
+	}
+	return call, err
 }
 
 // streams are the outputs a call of the command requests: every declared one.
@@ -358,12 +401,13 @@ func (ce *commandEntry) streams() Streams {
 type Streams struct{ Stdout, Stderr bool }
 
 // prepare builds a call's input: the declared defaults, then fill, rendered
-// as the canonical input record, and the standard input field.
-func (ce *commandEntry) prepare(target string, fill func(reflect.Value)) (types.TypedSchemaValue, io.Reader, error) {
+// as the canonical input record, and the standard input field. restore gives
+// the cards the input moved back, for a call that fails to start.
+func (ce *commandEntry) prepare(target string, fill func(reflect.Value)) (input types.TypedSchemaValue, stdin io.Reader, restore func(), err error) {
 	e := ce.node.entry
 	l, ok := ce.resolve()
 	if !ok || ce.node.body != ce {
-		return types.TypedSchemaValue{}, nil, fmt.Errorf("golem: tool %s command %s is not well-defined:\n%s",
+		return types.TypedSchemaValue{}, nil, nil, fmt.Errorf("golem: tool %s command %s is not well-defined:\n%s",
 			e.name, ce.label(), engine.AllErrors(e.d.Errs))
 	}
 	args := reflect.New(ce.argsType).Elem()
@@ -375,14 +419,14 @@ func (ce *commandEntry) prepare(target string, fill func(reflect.Value)) (types.
 	}
 	fill(args)
 
-	var stdin io.Reader
 	if l.stdin != nil {
 		stdin, _ = args.FieldByIndex(l.stdin.path).Interface().(io.Reader)
 		if stdin == nil && !l.stdin.optional {
-			return types.TypedSchemaValue{}, nil, ce.callError(target, CallInvalidInput, "the command requires standard input")
+			return types.TypedSchemaValue{}, nil, nil, ce.callError(target, CallInvalidInput, "the command requires standard input")
 		}
 	}
-	return l.encode(e.d, args), stdin, nil
+	input, restore = l.encode(e.d, args)
+	return input, stdin, restore, nil
 }
 
 // finish awaits the outcome and decodes the result.
@@ -400,13 +444,19 @@ func (ce *commandEntry) finish(target string, call toolCall) (reflect.Value, err
 	tree := res.Some().Value
 	return witschema.DecodeOwned(tree, func() (reflect.Value, error) {
 		if ce.outType == reflect.TypeFor[golem.Unit]() {
+			engine.ReleaseCardsIn(tree.ValueNodes, link.ReleaseCard)
 			return reflect.Value{}, ce.callError(target, CallInvalidResult, "the command returned a value but declares none")
 		}
 		out := reflect.New(ce.outType).Elem()
 		dec := engine.Decoder{Nodes: tree.ValueNodes}
 		if err := ce.node.entry.d.Compile(ce.outType).Decode(&dec, out, tree.Root); err != nil {
+			// Every card, adopted or not reached, goes back to the host and
+			// its node is marked taken, so the tree's release drops only its
+			// other capabilities.
+			dec.ReleaseCards(link.ReleaseCard)
 			return reflect.Value{}, ce.callError(target, CallInvalidResult, "%v", err)
 		}
+		dec.ReleaseRest(link.ReleaseCard)
 		return out, nil
 	})
 }

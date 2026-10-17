@@ -286,7 +286,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> wit::HostDurableStreamReaderWithStore<U>
             accessor.getter(),
             DurableFunctionType::ReadRemote,
                 AccessClaimOptions::default(),
-            async move |_| Ok(recorded),
+            recorded,
         ).await?;
         if !call.is_live() {
             match call.replay_access(accessor, accessor.getter()).await? {
@@ -361,7 +361,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> wit::HostDurableStreamWriterWithStore<U>
             accessor.getter(),
             DurableFunctionType::WriteRemote,
                 AccessClaimOptions::default(),
-            async move |_| Ok(recorded),
+            recorded,
         ).await?;
         if !call.is_live() {
             match call.replay_access(accessor, accessor.getter()).await? {

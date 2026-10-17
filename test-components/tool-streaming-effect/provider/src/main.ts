@@ -50,7 +50,7 @@ const QuotaExchange = Schema.Struct({
   token: MatrixQuotaToken,
 })
 
-const PermissionCard = WitTypes.PermissionCard({ polymorphic: false })
+const PermissionCard = WitTypes.PermissionCard
 const PermissionExchange = Schema.Struct({
   ...ProviderEvidence,
   card: PermissionCard,

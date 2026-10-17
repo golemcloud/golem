@@ -5,8 +5,6 @@ pub(all) enum DurableFunctionType {
   WriteLocal
   ReadRemote
   WriteRemote
-  WriteRemoteBatched(UInt64?)
-  WriteRemoteTransaction(UInt64?)
 } derive(Debug, Eq)
 
 ///|
@@ -24,10 +22,6 @@ fn DurableFunctionType::to_raw(
     WriteLocal => @oplog.WrappedFunctionType::WriteLocal
     ReadRemote => @oplog.WrappedFunctionType::ReadRemote
     WriteRemote => @oplog.WrappedFunctionType::WriteRemote
-    WriteRemoteBatched(parent) =>
-      @oplog.WrappedFunctionType::WriteRemoteBatched(parent)
-    WriteRemoteTransaction(parent) =>
-      @oplog.WrappedFunctionType::WriteRemoteTransaction(parent)
   }
 }
 
@@ -38,6 +32,9 @@ fn DurableFunctionType::to_raw(
 /// persisted response without evaluating the body. If the body raises, the unfinished invocation
 /// is dropped without triggering a retry. If recovery later replays the incomplete invocation,
 /// the body runs again.
+///
+/// Sequential and properly nested execution only. Do not detach tasks or callbacks that outlive
+/// the body, including on failure. See `durable_async` for the concurrency restriction.
 pub fn[
   Request : @schema.IntoSchema,
   Response : @schema.IntoSchema + @schema.FromSchema,
@@ -81,6 +78,13 @@ pub fn[
 ///
 /// The live invocation remains active while the asynchronous body is suspended. Replayed
 /// invocations return immediately without evaluating the body.
+///
+/// Sequential and properly nested execution only. The body may await host calls when no unrelated
+/// guest work runs during the wait. Do not overlap it with other tasks, including ordinary host
+/// calls: sibling effects can acquire the wrong scope and cause incorrect replay or invocation
+/// failure. Misuse is not reliably detected. Await each nested operation and do not detach tasks.
+/// Stop and join outstanding work before the body exits, including on failure or cancellation.
+/// A task group's eventual join does not make concurrent custom scopes supported.
 pub async fn[
   Request : @schema.IntoSchema,
   Response : @schema.IntoSchema + @schema.FromSchema,
