@@ -467,7 +467,19 @@ failed/aborted evidence, not a passing parallel-suite claim. The subsequent comb
 suspension proofs have their own scope in
 [custom scopes compose with suspension](reference/testing-patterns.md#custom-scopes-compose-with-suspension).
 
-The existing teardown, idle, monthly-time, replay and other test controls remain open F10/F11 work;
+The teardown-fence removal deletes its Worker field, gate/snapshot types, setter and pre-fence
+await. Ordinary owner failure selection and EntityFence drainage remain unchanged. Before producer
+deletion, the native consumers pass without calling it: the pending writer still blocks its actual
+FIFO contender, and later startup cases distinguish old and new acceptance through physical cleanup
+and real permit contention. The two artificial release-order variants retire together; a real
+loaded-idle compute-admission case retains Counter effects, keys, exact history and the committed raw
+prefix through reconstruction. Private pre-fence snapshots and forced Pending/held projections retire
+with their producer, not as weaker replacements for surviving effects or cleanup. Separate
+post-removal library, affected native and custom-suspension/acceptance regression batches, strict
+lint, production compilation and browser checks pass. No replacement runtime gate or diagnostic
+producer is added. This does not close the remaining A1/F10/F11 work.
+
+Idle, monthly-time, completed-replay, deletion and other test controls remain open F10/F11 work;
 isolating their fields under test configuration does not justify or complete their removal.
 
 An accepted stop in `WaitingForPermit` takes that attempt's exact task handle before signalling

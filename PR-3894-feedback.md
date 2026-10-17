@@ -227,9 +227,17 @@ Findings 11-14 have separate linked comments.
   - [x] Preserve causal tests of actual production bodies plus separate real-Worker effects, markers,
     receipts, accounting, physical cleanup and ordinary recovery. No sleeps, retries, lower concurrency
     or weaker assertions substituted for these removed controls.
-  - [ ] Remove teardown-fence controls with the discarded generic protocol. Preserve surviving
+  - [x] Remove teardown-fence controls with the discarded generic protocol. Preserve surviving
     terminal/history/physical-cleanup guarantees; do not rebuild the old private-election conjunction
     if its production state machine is removed. Pre-commit append backpressure is not that checkpoint.
+    The local change removes the whole field/type/setter/await family after native consumers
+    pass without calling it. Real pending-writer FIFO release, later-start identity/error/marker
+    checks and compute-admission Counter effects remain strict. Artificial pre-fence snapshots,
+    forced await-ready Pending and the release-before/after-join matrix retire with the pause.
+    The admission case adds a complete stopped raw-prefix check. Separate post-removal library,
+    affected native and custom-suspension/acceptance regression batches, strict executor lint,
+    production compilation and browser checks pass. This completes this control family only;
+    overall A1/F10/F11 remain open.
   - [ ] Address remaining idle-close, completed-replay and deletion-stage gates.
   - [x] Remove the complete invocation-deadline control family. The Worker watch field, forced-expiry
     setter and test-feature timer branch are removed. Native selection tests use the configured
@@ -280,6 +288,9 @@ Findings 11-14 have separate linked comments.
     supplies actual Pending/Returned/Dropped and exact connection binding, without Worker test state.
   - [x] Delete the invocation-deadline watch state and Worker expiry interfaces with their producer
     branch. The native tests now use the existing timer, as recorded under F10.
+  - [x] Delete the Worker-owned teardown-fence field, pause methods, snapshot/gate types and
+    invocation-loop test await. The consumer baseline and separate producer-removal checks pass,
+    as recorded under F10. No replacement runtime coordination or trace producer is introduced.
   - [ ] Address the keyed filesystem gate; oplog backpressure is not actual metadata Pending.
   - [x] Remove the monthly-acceptance observer/completion family. The local change
     removes the Worker sender, constructor wiring, setter, exported acceptance envelope and producer
@@ -292,8 +303,8 @@ Findings 11-14 have separate linked comments.
     cases and all cases that timed out previously pass in exact-name guarded batches under the
     user-approved local profile. The earlier broad failure and killed run remain recorded; this is
     not a claim that their resource behavior is fixed or that the full parallel cohort passes.
-    The read-only current-window snapshot remains separate from this removed transport. #4195 needs
-    separate combined-source validation after integration.
+    The read-only current-window snapshot remains separate from this removed transport. The
+    subsequent #4195 combined-source proofs have their own validation scope above.
   - [ ] Address idle/tail observations,
     private lifecycle projections, scripted allocation support and test-only entity construction.
   - [ ] Keep shared support at real dependency boundaries or in test-utils where appropriate.
@@ -343,9 +354,10 @@ were fixed as part of the completed items above.
 - [ ] Reconcile the PR body and feedback replies against this checklist. Drafts exist but are unposted.
 - [ ] Push/post/resolve threads only with authorization. Do not change GOL-442 status or claim MVP acceptance.
 
-The user authorized committing and pushing the current checkpoint, then continuing the remaining
-engineering work. Grant precedence stays unchanged until the other work is complete and the user
-chooses the policy. Checkpoint publication does not imply reviewer acceptance or thread resolution.
+The earlier executor checkpoints had publication authorization. Current follow-up engineering and
+main integration are authorized for local commits only. Keep them unpushed until new authorization.
+Grant precedence stays unchanged until the other work is complete and the user chooses the policy.
+Checkpoint publication does not imply reviewer acceptance or thread resolution.
 
 ## Source coverage
 

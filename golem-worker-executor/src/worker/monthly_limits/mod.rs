@@ -905,52 +905,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     #[cfg(feature = "test-utils")]
-    pub fn pause_next_teardown_fence_for_test(
-        &self,
-    ) -> (
-        tokio::sync::oneshot::Receiver<super::OwnerFenceTestSnapshot>,
-        tokio::sync::oneshot::Sender<()>,
-    ) {
-        let (entered, observe) = tokio::sync::oneshot::channel();
-        let (release, wait) = tokio::sync::oneshot::channel();
-        assert!(
-            self.test_support
-                .lock()
-                .unwrap()
-                .teardown_fence_gate
-                .replace(super::OwnerFenceTestGate {
-                    generation: self.resident_generation_for_test(),
-                    entered,
-                    release: wait,
-                })
-                .is_none()
-        );
-        (observe, release)
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub(crate) async fn wait_teardown_fence_for_test(
-        &self,
-        proposed: Option<&crate::durable_host::tool::operation::OwnerFailureWinner>,
-        final_interrupt: Option<InterruptKind>,
-    ) {
-        let gate = self.test_support.lock().unwrap().teardown_fence_gate.take();
-        if let Some(gate) = gate {
-            let generation = self.resident_generation_for_test();
-            assert_eq!(generation, gate.generation);
-            let snapshot = super::OwnerFenceTestSnapshot {
-                generation,
-                proposed_owner_failure: format!("{proposed:?}"),
-                final_interrupt,
-                pending: self.pending_stop_for_test().await,
-                selected_owner_failure: self.selected_owner_failure_for_test().await,
-            };
-            let _ = gate.entered.send(snapshot);
-            let _ = gate.release.await;
-        }
-    }
-
-    #[cfg(feature = "test-utils")]
     pub fn terminal_interrupt_pending_for_test(&self) -> bool {
         *self.terminal_interrupt().borrow()
     }

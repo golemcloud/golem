@@ -102,7 +102,6 @@ async fn pending_suspend_append_keeps_result_and_cleanup_ownership_through_a_lat
     let generation = worker.resident_generation_for_test();
     let key = IdempotencyKey::fresh();
     let (outcome, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
-    let (teardown, release_teardown) = worker.pause_next_teardown_fence_for_test();
     executor
         .invoke_agent_with_key(
             &component,
@@ -178,16 +177,7 @@ async fn pending_suspend_append_keeps_result_and_cleanup_ownership_through_a_lat
         Err(tokio::sync::broadcast::error::TryRecvError::Closed)
     );
     assert_eq!(worker.owner_stop_for_test().await, Some(requested));
-    assert!(worker.concurrent_agent_permit_is_held().await);
-    assert!((&mut held_permit).now_or_never().is_none());
-    // The actual teardown hold, not a paused publisher, keeps native cleanup pending here.
-    assert!((&mut unloaded).now_or_never().is_none());
     assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
-    let snapshot = tokio::time::timeout(Duration::from_secs(10), teardown).await??;
-    assert_eq!(snapshot.generation, generation);
-    assert!(worker.concurrent_agent_permit_is_held().await);
-
-    release_teardown.send(()).unwrap();
     tokio::time::timeout(
         Duration::from_secs(10),
         worker.join_accepted_stops_for_test(),
@@ -293,7 +283,6 @@ async fn retained_terminal(
     let worker = active.primary();
     let generation = worker.resident_generation_for_test();
     let key = IdempotencyKey::fresh();
-    let (teardown, release_teardown) = worker.pause_next_teardown_fence_for_test();
     executor
         .invoke_agent_with_key(
             &component,
@@ -303,29 +292,14 @@ async fn retained_terminal(
             crate::raw_params(vec![promise]),
         )
         .await?;
-    let snapshot = tokio::time::timeout(Duration::from_secs(10), teardown).await??;
-    assert_eq!(snapshot.generation, generation);
-    assert_eq!(snapshot.pending, None);
-    assert!(worker.concurrent_agent_permit_is_held().await);
-    let acquisitions = worker.permit_acquisitions_for_test();
-
-    // Queue the real FIFO account waiter before the old resident releases its slot.
-    let mut held_permit = Box::pin(executor.acquire_account_concurrent_agent_permit(AgentId {
-        component_id: component.id,
-        agent_id: agent_id!("Counter", "retained-terminal-permit-holder").to_string(),
-    }));
-    assert!((&mut held_permit).now_or_never().is_none());
-    assert_eq!(worker.pending_stop_for_test().await, None);
-    assert!((&mut held_permit).now_or_never().is_none());
-
-    // This command cannot be drained by the parked teardown. Ordinary unload resolves it.
-    let mut unloaded = Box::pin(worker.await_ready_to_process_commands());
-    assert!((&mut unloaded).now_or_never().is_none());
-    assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
-    release_teardown.send(()).unwrap();
-    let held_permit = tokio::time::timeout(Duration::from_secs(10), held_permit).await?;
-    tokio::time::timeout(Duration::from_secs(10), &mut unloaded).await??;
-    drop(unloaded);
+    executor
+        .wait_for_status(&id, AgentStatus::Suspended, Duration::from_secs(10))
+        .await?;
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        worker.await_ready_to_process_commands(),
+    )
+    .await??;
     tokio::time::timeout(
         Duration::from_secs(10),
         worker.join_accepted_stops_for_test(),
@@ -343,8 +317,18 @@ async fn retained_terminal(
     assert!(!worker.concurrent_agent_permit_is_held().await);
     assert!(worker.unload_succeeded_for_test());
     assert_eq!(worker.resident_generation_for_test(), generation);
-    assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
     assert_eq!(worker.pending_stop_for_test().await, None);
+    let acquisitions = worker.permit_acquisitions_for_test();
+    // The old resident is physically gone. A real account permit now keeps only the next
+    // startup waiting; no private pre-fence phase is needed to distinguish their markers.
+    let held_permit = tokio::time::timeout(
+        Duration::from_secs(10),
+        executor.acquire_account_concurrent_agent_permit(AgentId {
+            component_id: component.id,
+            agent_id: agent_id!("Counter", "retained-terminal-permit-holder").to_string(),
+        }),
+    )
+    .await?;
     let entries = worker
         .oplog()
         .read_exact(

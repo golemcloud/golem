@@ -828,8 +828,6 @@ struct DeletionStageTestGate {
 #[derive(Default)]
 struct ExecutionTestSupport {
     #[cfg(feature = "test-utils")]
-    teardown_fence_gate: Option<OwnerFenceTestGate>,
-    #[cfg(feature = "test-utils")]
     completed_replay_gate: Option<CompletedReplayTestGate>,
     #[cfg(feature = "test-utils")]
     tail_drain_observer:
@@ -848,23 +846,6 @@ struct ExecutionTestSupport {
 struct CompletedReplayTestGate {
     key: IdempotencyKey,
     entered: tokio::sync::oneshot::Sender<(OplogIndex, OplogIndex)>,
-    release: tokio::sync::oneshot::Receiver<()>,
-}
-
-#[cfg(feature = "test-utils")]
-#[derive(Debug)]
-pub struct OwnerFenceTestSnapshot {
-    pub generation: u64,
-    pub proposed_owner_failure: String,
-    pub final_interrupt: Option<InterruptKind>,
-    pub pending: Option<InterruptKind>,
-    pub selected_owner_failure: Option<String>,
-}
-
-#[cfg(feature = "test-utils")]
-struct OwnerFenceTestGate {
-    generation: u64,
-    entered: tokio::sync::oneshot::Sender<OwnerFenceTestSnapshot>,
     release: tokio::sync::oneshot::Receiver<()>,
 }
 

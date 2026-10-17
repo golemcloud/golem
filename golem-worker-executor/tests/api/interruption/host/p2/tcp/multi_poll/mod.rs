@@ -230,8 +230,6 @@ async fn pending_multi_poll(
             ensure!(!invocation.is_finished() && worker.concurrent_agent_permit_is_held().await);
         }
         ensure!(phase.state() == WaitState::Pending);
-        let teardown = (resource == Resource::Memory && durable)
-            .then(|| worker.pause_next_teardown_fence_for_test());
         let stop_started = tokio::time::Instant::now();
         let allocation_observations = source.observations();
         let refresh = if resource == Resource::Storage {
@@ -294,16 +292,6 @@ async fn pending_multi_poll(
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
         ensure!(worker.monthly_stop_for_test() == Some(signal));
         ensure!(worker.owner_stop_for_test().await == Some(signal));
-        if let Some((entered, release)) = teardown {
-            tokio::time::timeout(Duration::from_secs(10), entered)
-                .await
-                .context("stop reached teardown fence")??;
-            // A delivered signal cannot release the permit while teardown is fenced.
-            // Socket closure is observed separately after ordinary unload resumes.
-            ensure!(worker.is_loaded().await);
-            ensure!(worker.concurrent_agent_permit_is_held().await);
-            release.send(()).map_err(|_| anyhow!("teardown fence closed"))?;
-        }
         if resource == Resource::Compute {
             ensure!(account.settled_fuel_generation_for_test() > initial.fuel_generation);
         }

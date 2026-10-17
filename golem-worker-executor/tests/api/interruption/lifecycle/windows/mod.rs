@@ -410,7 +410,6 @@ mod activation {
         outcome.entered().await;
         assert!(worker.concurrent_agent_permit_is_held().await);
         let acquisitions = worker.permit_acquisitions_for_test();
-        let (teardown, release_teardown) = worker.pause_next_teardown_fence_for_test();
         assert!(matches!(
             &*worker
                 .owner_runtime_resources()
@@ -427,19 +426,7 @@ mod activation {
         worker.join_accepted_stops_for_test().await?;
         assert_eq!(worker.owner_stop_for_test().await, Some(accepted));
         outcome.release();
-        let snapshot = teardown.await?;
-        eprintln!("[lifecycle-regression] consumed stop before teardown: {snapshot:?}");
-        assert_eq!(snapshot.generation, generation);
-        assert_eq!(
-            snapshot.pending, None,
-            "the invocation loop consumed the stop"
-        );
         assert_eq!(worker.owner_stop_for_test().await, Some(accepted));
-        assert!(!worker.has_unload_cleanup_for_test());
-        assert!(worker.concurrent_agent_permit_is_held().await);
-        // A post-publication retained drain blocking window release is proved by the actual
-        // EntityFence/ExecutionWindow body test. This hold establishes native pre-disposal state.
-        release_teardown.send(()).unwrap();
         worker.join_accepted_stops_for_test().await?;
         tokio::time::timeout(Duration::from_secs(10), async {
             while worker.is_loaded().await {
@@ -449,6 +436,7 @@ mod activation {
         .await?;
         worker.retained_cleanup_for_test().await?;
         assert!(!worker.concurrent_agent_permit_is_held().await);
+        assert_eq!(worker.pending_stop_for_test().await, None);
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
         assert_eq!(worker.resident_generation_for_test(), generation);
         eprintln!(
@@ -641,7 +629,6 @@ mod activation {
         assert_eq!(worker.pending_stop_for_test().await, Some(accepted));
         assert_eq!(worker.owner_stop_for_test().await, Some(accepted));
         assert_eq!(worker.await_interrupt_for_test().await, accepted);
-        let (teardown, release_teardown) = worker.pause_next_teardown_fence_for_test();
         let entry = limits.initialize_account(context.account_id).await?;
         assert!(!entry.monthly_capacity_is_exhausted_for_test(
             golem_common::model::agent::AgentMode::Durable
@@ -696,18 +683,14 @@ mod activation {
             tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??,
             accepted
         );
-        let snapshot = teardown.await?;
-        eprintln!(
-            "[lifecycle-regression] selected writer released before queued admission, teardown={snapshot:?}"
-        );
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
-        assert!(!worker.concurrent_agent_permit_is_held().await);
         worker.join_accepted_stops_for_test().await?;
         assert_eq!(worker.owner_stop_for_test().await, Some(accepted));
-        let mut unloaded = Box::pin(worker.await_ready_to_process_commands());
-        assert!(futures::poll!(unloaded.as_mut()).is_pending());
-        release_teardown.send(()).unwrap();
-        tokio::time::timeout(Duration::from_secs(10), unloaded).await??;
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            worker.await_ready_to_process_commands(),
+        )
+        .await??;
         worker.retained_cleanup_for_test().await?;
         assert!(!worker.is_loaded().await);
         assert!(!worker.concurrent_agent_permit_is_held().await);

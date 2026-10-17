@@ -1047,10 +1047,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     .then_some(InterruptKind::ShardLost)
                     .or(terminal_interrupt)
                     .map(OwnerFailureWinner::Lifecycle);
-                #[cfg(feature = "test-utils")]
-                self.parent
-                    .wait_teardown_fence_for_test(owner_failure.as_ref(), final_interrupt)
-                    .await;
                 match owner_failure {
                     Some(failure) => active_agent.fence_entity_bodies(failure).await,
                     None => active_agent.fence_entity_bodies_for_unload().await,

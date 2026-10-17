@@ -258,6 +258,22 @@ the lifecycle propagation and stale-generation cases in `tests/active_agents.rs`
 entity shutdown cases in `src/services/active_agents/tests.rs` and
 `src/worker/entity_invocation.rs`.
 
+### Teardown without a private pre-fence pause
+
+Use real pending outcome appends to prove writer and FIFO-capacity ownership. The retained-Suspend
+native case keeps its writer withheld while an accepted stop signals, requires the same account
+contender to stay blocked, then releases the writer and joins actual cleanup before that contender
+acquires. It does not invent a second teardown checkpoint after the writer returns.
+
+Later-start provenance cases first join automatic suspension and physical cleanup, then occupy a
+real account permit for the next startup. Keep their exact receipt, error, marker, generation and
+acquisition matrix. The fake before/after-fence snapshots and await-ready Pending projections retire
+with the removed pause. They are not a reason to add another fence or to call append backpressure
+the same checkpoint. The loaded-idle compute-admission case retains the original queued key without
+guest execution until policy recovery, checks one Suspend and the complete raw prefix, then counts
+the next fresh Counter effect. Admission-before-establishment release-order variants have no
+surviving production protocol to reproduce.
+
 ### Native wait observations without Worker hooks
 
 Use production tracing fields for real-Worker native Pending observations, including P2, RPC, UDP

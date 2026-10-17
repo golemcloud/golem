@@ -281,41 +281,20 @@ mod initialization {
     }
 }
 
-mod owner_election {
+mod loaded_compute_admission {
     use super::*;
     use anyhow::Context as _;
-    use golem_service_base::error::worker_executor::InterruptKind;
     use golem_worker_executor::services::HasOplog;
     use pretty_assertions::assert_eq;
     use test_r::test;
 
     #[test]
     #[timeout("60s")]
-    async fn teardown_released_before_driver_join(
+    async fn exhausted_compute_after_idle_preserves_queued_invocation_and_recovers(
         last_unique_id: &LastUniqueId,
         deps: &WorkerExecutorTestDependencies,
         #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
         _tracing: &Tracing,
-    ) -> anyhow::Result<()> {
-        loaded_compute_election(last_unique_id, deps, agent_counters, true).await
-    }
-
-    #[test]
-    #[timeout("60s")]
-    async fn teardown_released_after_driver_join(
-        last_unique_id: &LastUniqueId,
-        deps: &WorkerExecutorTestDependencies,
-        #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
-        _tracing: &Tracing,
-    ) -> anyhow::Result<()> {
-        loaded_compute_election(last_unique_id, deps, agent_counters, false).await
-    }
-
-    async fn loaded_compute_election(
-        last_unique_id: &LastUniqueId,
-        deps: &WorkerExecutorTestDependencies,
-        agent_counters: &PrecompiledComponent,
-        release_teardown_before_join: bool,
     ) -> anyhow::Result<()> {
         let policy = MonthlyResourcePolicy {
             period: AccountUsagePeriod::current(),
@@ -354,7 +333,7 @@ mod owner_election {
             .component_dep(&context.default_environment_id, agent_counters)
             .store()
             .await?;
-        let name = agent_id!("Counter", "loaded-Compute-election");
+        let name = agent_id!("Counter", "loaded-compute-admission");
         let id = executor.start_agent(&component.id, name.clone()).await?;
         let owned = OwnedAgentId::new(context.default_environment_id, &id);
         let active = executor.production_active_agent(&owned).await.unwrap();
@@ -381,11 +360,6 @@ mod owner_election {
         .await?;
         assert!(!worker.monthly_window_active_for_test());
         assert!(!worker.concurrent_agent_permit_is_held().await);
-        eprintln!(
-            "[owner-election] idle after success key={setup_key}, actual closed runtime={:?}, permit_acquisitions={}",
-            worker.current_monthly_proposal_for_test(),
-            worker.permit_acquisitions_for_test()
-        );
         let entry = limits.initialize_account(context.account_id).await?;
         assert!(
             worker
@@ -412,114 +386,26 @@ mod owner_election {
         assert_eq!(worker.selected_owner_failure_for_test().await, None);
         let key = IdempotencyKey::fresh();
         let before = executor.oplog_max_index(&id).await?;
-        let (teardown, release_teardown) = worker.pause_next_teardown_fence_for_test();
-        let mut attempts =
-            crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
+        let acquisitions = worker.permit_acquisitions_for_test();
         executor
             .invoke_agent_with_key(&component, &name, &key, "increment", data_value!())
             .await?;
-        let snapshot = tokio::time::timeout(Duration::from_secs(10), teardown).await??;
-        eprintln!(
-            "[owner-election] release_teardown_before_join={release_teardown_before_join} before_fence={snapshot:?}"
-        );
-        assert_eq!(snapshot.generation, generation);
-        assert_eq!(snapshot.final_interrupt, None);
-        assert_eq!(snapshot.pending, None);
-        assert_eq!(snapshot.selected_owner_failure, None);
-        assert!(worker.concurrent_agent_permit_is_held().await);
-        assert_eq!(entry.monthly_observer_count_for_test(), 1);
-        let acquisitions = worker.permit_acquisitions_for_test();
-        let admission_tip = worker.oplog().current_oplog_index().await;
-        let admission_prefix = worker
-            .oplog()
-            .read_exact(OplogIndex::INITIAL, admission_tip.as_u64())
-            .await;
-        let admission_suspends: Vec<_> = admission_prefix
-            .iter()
-            .filter_map(|(index, entry)| match entry {
-                golem_common::model::oplog::OplogEntry::Suspend { timestamp } => {
-                    Some((*index, *timestamp))
-                }
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            admission_suspends.len(),
-            1,
-            "admission must commit its marker before owner fencing: snapshot={snapshot:?}, markers={admission_suspends:?}"
-        );
-
-        // A real monitor proposal targets the permit-held window paused before its owner fence.
-        registry.set_policy(exhausted);
-        let refresh = tokio::spawn({
-            let limits = limits.clone();
-            async move { limits.run_batch_for_test().await }
-        });
-        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-            .await?
-            .context("monitor proposal while compute admission teardown is held")?;
-        assert_eq!(attempt.proposal.resident_generation, generation);
-        assert!(attempt.accepted);
-        let accepted = worker
-            .monthly_stop_for_test()
-            .expect("monitor accepted a stop");
-        assert!(matches!(accepted, InterruptKind::Suspend(_)));
-        eprintln!(
-            "[owner-election] accepted={accepted:?} pending={:?} selected={:?} generation={generation}",
-            worker.pending_stop_for_test().await,
-            worker.selected_owner_failure_for_test().await
-        );
-        let stop_result;
-        if release_teardown_before_join {
-            release_teardown.send(()).unwrap();
-            tokio::time::timeout(Duration::from_secs(10), async {
-                while worker.selected_owner_failure_for_test().await.is_none() {
-                    tokio::task::yield_now().await;
-                }
-            })
+        executor
+            .wait_for_status(&id, AgentStatus::Suspended, Duration::from_secs(10))
             .await?;
-            eprintln!(
-                "[owner-election] owner after teardown release={:?}",
-                worker.selected_owner_failure_for_test().await
-            );
-            stop_result = worker.join_accepted_stops_for_test().await;
-        } else {
-            stop_result = worker.join_accepted_stops_for_test().await;
-            eprintln!(
-                "[owner-election] owner before teardown release={:?}",
-                worker.selected_owner_failure_for_test().await
-            );
-            release_teardown.send(()).unwrap();
-        }
-        eprintln!(
-            "[owner-election] stop_result={stop_result:?} pending={:?} selected={:?} generation={}",
-            worker.pending_stop_for_test().await,
-            worker.selected_owner_failure_for_test().await,
-            worker.resident_generation_for_test()
-        );
+        worker.join_accepted_stops_for_test().await?;
         tokio::time::timeout(Duration::from_secs(10), async {
             while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
                 tokio::task::yield_now().await;
             }
         })
-        .await?;
-        let cleanup = worker.retained_cleanup_for_test().await;
-        refresh.await?;
-        eprintln!("[owner-election] cleanup={cleanup:?}");
-        stop_result?;
-        cleanup?;
-        assert_eq!(worker.owner_stop_for_test().await, Some(accepted));
+        .await
+        .context("compute admission must physically stop without entering the queued invocation")?;
+        worker.retained_cleanup_for_test().await?;
         assert_eq!(worker.resident_generation_for_test(), generation);
-        assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
+        assert_eq!(worker.permit_acquisitions_for_test(), acquisitions + 1);
         assert_eq!(entry.monthly_observer_count_for_test(), 0);
-        assert_eq!(
-            worker
-                .oplog()
-                .read_exact(OplogIndex::INITIAL, admission_tip.as_u64())
-                .await,
-            admission_prefix,
-            "monitor stop cannot rewrite admission history: elected={accepted:?}, snapshot={snapshot:?}"
-        );
+        let stopped_prefix = executor.stored_oplog(&id).await;
         let entries = worker
             .oplog()
             .read_exact(
@@ -546,9 +432,8 @@ mod owner_election {
                 .filter(|entry| matches!(entry, OplogEntry::Suspend { .. }))
                 .count(),
             1,
-            "admission markers={admission_suspends:?}, final markers={final_suspends:?}, elected={accepted:?}, snapshot={snapshot:?}"
+            "one admission Suspend must remain authoritative: {final_suspends:?}"
         );
-        assert_eq!(final_suspends, admission_suspends);
         assert_eq!(
             entries
                 .values()
@@ -582,6 +467,13 @@ mod owner_election {
             )
             .await;
         assert_eq!(recovered.values().filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
+        let recovered_raw = executor.stored_oplog(&id).await;
+        assert!(recovered_raw.len() >= stopped_prefix.len());
+        assert_eq!(
+            &recovered_raw[..stopped_prefix.len()],
+            stopped_prefix.as_slice(),
+            "ordinary reconstruction must retain the complete committed admission prefix"
+        );
         assert_eq!(
             executor
                 .invoke_and_await_agent(&component, &name, "increment", data_value!())
