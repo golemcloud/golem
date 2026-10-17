@@ -1,0 +1,5 @@
+package experiment:process-perf;
+world process-perf {
+    export run: func(count: u32) -> u32;
+    export run-job: async func(count: u32) -> u32;
+}
