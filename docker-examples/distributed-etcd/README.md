@@ -47,10 +47,50 @@ Both misconfigurations described below stop it at startup:
 | Quota state | in Postgres | in etcd, with the shard state |
 
 The endpoint list must be bracketed — `'["http://etcd:2379"]'`. Unbracketed it is read as a single
-string and fails to deserialize. The etcd here is plaintext, so the endpoint is `http://`. For an
-etcd that requires TLS, client certificates or a user, set `GOLEM__PERSISTENCE__CONFIG__TLS__CA_CERT_FILE`
-(and `__CLIENT_CERT_FILE`, `__CLIENT_KEY_FILE`, `__SERVER_NAME`), `GOLEM__PERSISTENCE__CONFIG__USERNAME`
-and `GOLEM__PERSISTENCE__CONFIG__PASSWORD`, and use `https://` endpoints; see the deployment guide.
+string and fails to deserialize. The etcd here is plaintext, so the endpoint is `http://`.
+
+### With TLS and an etcd user
+
+For an etcd that requires TLS, client certificates or a user, the shard manager takes the
+certificates as files (or as Base64 values in `__TLS__CA_CERT`, `__TLS__CLIENT_CERT` and
+`__TLS__CLIENT_KEY`) and the password from a file, and every endpoint is `https://`. A user without
+TLS is refused, so switch both on together. The deployment guide has the details.
+
+```yaml
+services:
+  golem-shard-manager:
+    environment:
+      GOLEM__PERSISTENCE__TYPE: Etcd
+      GOLEM__PERSISTENCE__CONFIG__ENDPOINTS: '["https://etcd:2379"]'
+      GOLEM__PERSISTENCE__CONFIG__TLS__CA_CERT_FILE: /etc/etcd-tls/ca.pem
+      GOLEM__PERSISTENCE__CONFIG__TLS__CLIENT_CERT_FILE: /etc/etcd-tls/client.pem
+      GOLEM__PERSISTENCE__CONFIG__TLS__CLIENT_KEY_FILE: /etc/etcd-tls/client-key.pem
+      GOLEM__PERSISTENCE__CONFIG__USERNAME: golem-shard-manager
+      GOLEM__PERSISTENCE__CONFIG__PASSWORD_FILE: /run/secrets/etcd-password
+    volumes:
+      - ./etcd-tls:/etc/etcd-tls:ro
+    secrets:
+      - etcd-password
+  etcd:
+    command:
+      - /usr/local/bin/etcd
+      - --listen-client-urls=https://0.0.0.0:2379
+      - --advertise-client-urls=https://etcd:2379
+      - --cert-file=/etc/etcd-tls/server.pem
+      - --key-file=/etc/etcd-tls/server-key.pem
+      - --trusted-ca-file=/etc/etcd-tls/ca.pem
+      - --client-cert-auth
+    volumes:
+      - ./etcd-tls:/etc/etcd-tls:ro
+
+secrets:
+  etcd-password:
+    file: ./etcd-password.txt
+```
+
+etcd's server certificate must name `etcd` (the endpoint host), or set
+`GOLEM__PERSISTENCE__CONFIG__TLS__SERVER_NAME` to a name it holds. The etcd user and its role
+(`readwrite` on `/golem/`) are created with `etcdctl` before authentication is enabled.
 
 ## Limitations of this example
 

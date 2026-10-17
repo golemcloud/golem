@@ -311,8 +311,9 @@ pub struct EtcdConfig {
 /// TLS to etcd. Set, every endpoint must be `https://`; unset, every endpoint must be `http://`.
 ///
 /// Each item comes from a PEM file or from an inline value (the PEM, Base64-encoded), not both.
-/// Files and values are read once, at startup: after a certificate is renewed, restart the
-/// replicas.
+/// Files and values are read once, at startup, so a renewed certificate takes effect on a
+/// restart; a running replica stops by itself when etcd refuses its certificates and the files have
+/// changed since startup.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EtcdTlsConfig {
     /// PEM file with the certificate of the CA that signed etcd's server certificate.
