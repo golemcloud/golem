@@ -968,7 +968,9 @@ pub struct EnabledGrpcClientTlsConfig {
     pub client_key: Base64,
     /// CA certificate used to validate server certificates (PEM)
     pub server_ca_cert: Base64,
-    /// expected server domain/SAN. If None the domain name validation is disabled
+    /// The name the server's certificate must carry. Without it, the certificate is checked
+    /// against the host of the address the client connects to (an IPv6 literal without its
+    /// brackets).
     pub server_domain_name: Option<String>,
 }
 

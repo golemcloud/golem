@@ -28,12 +28,15 @@ use golem_api_grpc::proto::golem::shardmanager::v1::{
     get_routing_table_response,
 };
 use golem_common::model::RetryConfig;
+use golem_common::model::base64::Base64;
 use golem_schema::proto::golem::common::Empty;
 use golem_service_base::clients::shard_manager::{
     GrpcShardManager, GrpcShardManagerConfig, ShardManager,
 };
 use golem_service_base::clients::shard_manager_leader::{LeaderAddress, not_leader_status};
-use golem_service_base::grpc::client::GrpcClientConfig;
+use golem_service_base::grpc::client::{
+    EnabledGrpcClientTlsConfig, GrpcClientConfig, GrpcClientTlsConfig,
+};
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -243,6 +246,12 @@ impl Running {
 }
 
 async fn run_replica(mode: Mode) -> Running {
+    run_replica_with(mode, None).await
+}
+
+async fn run_replica_with(mode: Mode, tls: Option<tonic::transport::ServerTlsConfig>) -> Running {
+    // The test binary has no process-level crypto provider; the services install theirs in main.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let delay = Arc::new(Mutex::new(None));
@@ -263,7 +272,11 @@ async fn run_replica(mode: Mode) -> Running {
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let service = replica.clone();
     let server = tokio::spawn(async move {
-        let _ = tonic::transport::Server::builder()
+        let mut builder = tonic::transport::Server::builder();
+        if let Some(tls) = tls {
+            builder = builder.tls_config(tls).expect("a valid server TLS config");
+        }
+        let _ = builder
             .add_service(service)
             .serve_with_incoming_shutdown(
                 tokio_stream::wrappers::TcpListenerStream::new(listener),
@@ -279,6 +292,16 @@ async fn run_replica(mode: Mode) -> Running {
         stop,
         server,
     }
+}
+
+const TLS_FIXTURES: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/shard-manager-tls"
+);
+
+fn fixture(name: &str) -> Vec<u8> {
+    std::fs::read(format!("{TLS_FIXTURES}/{name}"))
+        .unwrap_or_else(|err| panic!("cannot read the TLS fixture {name}: {err}"))
 }
 
 /// A loopback port that refuses connections and that no other process can take while the socket
@@ -610,6 +633,52 @@ async fn a_retried_call_rides_out_a_dead_leader_that_is_still_named() {
         .get_routing_table()
         .await
         .expect("the call rides out the time in which the dead leader is still named");
+    assert_eq!(leader.calls(), 1);
+    leader.stop().await;
+    standby.stop().await;
+}
+
+#[test]
+// Clients reach the leader by its advertised host, a pod IP that the shard managers' certificate
+// does not name. With no server name configured, the client must check the leader's certificate
+// against the host it was configured with, the name the certificate is issued for.
+async fn a_redirect_over_tls_checks_the_leader_against_the_configured_host() {
+    let server_tls = || {
+        tonic::transport::ServerTlsConfig::new().identity(tonic::transport::Identity::from_pem(
+            fixture("server.crt"),
+            fixture("server.key"),
+        ))
+    };
+    let leader = run_replica_with(Mode::Leader, Some(server_tls())).await;
+    // The leader's address is an IP literal, as a pod IP is.
+    let standby = run_replica_with(Mode::Standby(Some(leader.address())), Some(server_tls())).await;
+    let client = GrpcShardManager::new(&GrpcShardManagerConfig {
+        host: "localhost".to_string(),
+        port: standby.addr.port(),
+        client_config: GrpcClientConfig {
+            connect_timeout: Duration::from_secs(10),
+            retries_on_unavailable: RetryConfig {
+                max_attempts: 2,
+                min_delay: Duration::from_millis(10),
+                max_delay: Duration::from_millis(50),
+                multiplier: 2.0,
+                max_jitter_factor: None,
+            },
+            tls: GrpcClientTlsConfig::Enabled(EnabledGrpcClientTlsConfig {
+                client_cert: Base64(fixture("client.crt")),
+                client_key: Base64(fixture("client.key")),
+                server_ca_cert: Base64(fixture("ca.crt")),
+                server_domain_name: None,
+            }),
+            ..GrpcClientConfig::default()
+        },
+        retries: RetryConfig::default(),
+    });
+
+    client
+        .get_routing_table()
+        .await
+        .expect("the leader's certificate names the configured host");
     assert_eq!(leader.calls(), 1);
     leader.stop().await;
     standby.stop().await;

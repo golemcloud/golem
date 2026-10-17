@@ -4454,6 +4454,7 @@ dependencies = [
  "prost-types",
  "reqwest 0.13.4",
  "rustc-hash",
+ "rustls",
  "scc",
  "serde",
  "serde_json",

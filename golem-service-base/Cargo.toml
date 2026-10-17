@@ -104,6 +104,7 @@ aws-runtime = { workspace = true }
 aws-smithy-runtime-api = { workspace = true }
 criterion = { workspace = true }
 pretty_assertions = { workspace = true }
+rustls = { workspace = true, features = ["ring"] }
 tempfile = { workspace = true }
 test-r = { workspace = true }
 tracing-subscriber = { workspace = true }

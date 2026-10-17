@@ -19,7 +19,8 @@
 use crate::clients::shard_manager::GrpcShardManagerConfig;
 use crate::clients::shard_manager_leader::{LeaderAddress, is_not_leader, leader_of};
 use crate::grpc::client::{
-    GrpcClient, GrpcClientConfig, MultiTargetGrpcClient, requires_reconnect,
+    EnabledGrpcClientTlsConfig, GrpcClient, GrpcClientConfig, GrpcClientTlsConfig,
+    MultiTargetGrpcClient, requires_reconnect,
 };
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 use golem_common::model::RetryConfig;
@@ -68,14 +69,40 @@ fn new_client(channel: OtelGrpcService<Channel>, max_message_size: usize) -> Cli
 
 /// One attempt with a short connect: on any failure the client goes back to the configured
 /// address, whose replicas know the current leader.
-fn leader_client_config(config: &GrpcClientConfig) -> GrpcClientConfig {
+fn leader_client_config(config: &GrpcShardManagerConfig) -> GrpcClientConfig {
+    let client = &config.client_config;
     GrpcClientConfig {
-        connect_timeout: config.connect_timeout.min(LEADER_CONNECT_TIMEOUT),
+        connect_timeout: client.connect_timeout.min(LEADER_CONNECT_TIMEOUT),
         retries_on_unavailable: RetryConfig {
             max_attempts: 0,
-            ..config.retries_on_unavailable.clone()
+            ..client.retries_on_unavailable.clone()
         },
-        ..config.clone()
+        tls: leader_tls(&client.tls, &config.host),
+        ..client.clone()
+    }
+}
+
+/// The client reaches the leader by its advertised host, usually a pod IP that the shard managers'
+/// certificate does not name. Without a configured server name, the leader's certificate is
+/// checked against the configured host instead: the name that clients reach the shard managers
+/// by, which their certificate is issued for. An IP literal as the configured host is left alone,
+/// because it names one replica, not all of them.
+fn leader_tls(tls: &GrpcClientTlsConfig, configured_host: &str) -> GrpcClientTlsConfig {
+    let is_ip_literal = configured_host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<std::net::IpAddr>()
+        .is_ok();
+    match tls {
+        GrpcClientTlsConfig::Enabled(enabled)
+            if enabled.server_domain_name.is_none() && !is_ip_literal =>
+        {
+            GrpcClientTlsConfig::Enabled(EnabledGrpcClientTlsConfig {
+                server_domain_name: Some(configured_host.to_string()),
+                ..enabled.clone()
+            })
+        }
+        other => other.clone(),
     }
 }
 
@@ -141,7 +168,7 @@ impl LeaderRouter {
             leaders: MultiTargetGrpcClient::new(
                 "shard_manager_leader",
                 new_client,
-                leader_client_config(&config.client_config),
+                leader_client_config(config),
             )
             .with_redirect(is_not_leader),
             leader: Arc::new(Mutex::new(None)),
@@ -336,5 +363,54 @@ impl LeaderRouter {
             );
             *known = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::base64::Base64;
+    use test_r::test;
+
+    fn enabled(server_domain_name: Option<&str>) -> GrpcClientTlsConfig {
+        GrpcClientTlsConfig::Enabled(EnabledGrpcClientTlsConfig {
+            client_cert: Base64(vec![]),
+            client_key: Base64(vec![]),
+            server_ca_cert: Base64(vec![]),
+            server_domain_name: server_domain_name.map(str::to_string),
+        })
+    }
+
+    fn name(tls: &GrpcClientTlsConfig) -> Option<String> {
+        match tls {
+            GrpcClientTlsConfig::Enabled(enabled) => enabled.server_domain_name.clone(),
+            GrpcClientTlsConfig::Disabled(_) => None,
+        }
+    }
+
+    #[test]
+    fn the_leader_is_checked_against_a_configured_dns_name() {
+        assert_eq!(
+            name(&leader_tls(&enabled(None), "golem-shard-manager")).as_deref(),
+            Some("golem-shard-manager")
+        );
+    }
+
+    #[test]
+    fn a_configured_server_name_wins() {
+        assert_eq!(
+            name(&leader_tls(
+                &enabled(Some("sm.example")),
+                "golem-shard-manager"
+            ))
+            .as_deref(),
+            Some("sm.example")
+        );
+    }
+
+    #[test]
+    fn an_ip_literal_host_is_not_used_as_a_server_name() {
+        assert_eq!(name(&leader_tls(&enabled(None), "10.0.0.7")), None);
+        assert_eq!(name(&leader_tls(&enabled(None), "[::1]")), None);
     }
 }
