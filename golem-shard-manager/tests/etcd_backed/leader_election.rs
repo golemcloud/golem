@@ -20,8 +20,9 @@ use golem_shard_manager::LEADER_ELECTION_NAME;
 use golem_shard_manager::config::EtcdConfig;
 use golem_shard_manager::{
     CampaignView, Elected, ElectionValue, ElectionWatch, EtcdRoutingTablePersistence, ExecutorAddr,
-    ExecutorId, LeaderElection, LeaderFence, LeaderLocator, LeaseKeepAlive, LeaseLossReason,
-    NO_REVISION, RoutingTablePersistence, STATE_KEY, ShardLeaseState, ShardManagerError,
+    ExecutorId, LeaderElection, LeaderFence, LeaderLocator, LeaseBelief, LeaseKeepAlive,
+    LeaseLossReason, NO_REVISION, RoutingTablePersistence, STATE_KEY, ShardLeaseState,
+    ShardManagerError,
 };
 use golem_test_framework::components::etcd::docker_etcd::DockerEtcd;
 use std::net::{IpAddr, Ipv4Addr};
@@ -1699,7 +1700,7 @@ async fn a_published_leader_is_named_ready(etcd: &Arc<DockerEtcd>) {
 
     elected
         .leadership
-        .publish_ready()
+        .publish_ready(None)
         .await
         .expect("Publishing should succeed while leading");
 
@@ -1741,7 +1742,7 @@ async fn a_leader_that_stepped_down_cannot_publish(etcd: &Arc<DockerEtcd>) {
 
     elected
         .leadership
-        .publish_ready()
+        .publish_ready(None)
         .await
         .expect_err("A replica that no longer leads must not mark itself ready");
     let locator = LeaderLocator::new(
@@ -1796,7 +1797,7 @@ async fn marking_the_leader_ready_survives_a_dead_member_in_the_endpoint_list(
     for attempt in 1..=10 {
         elected
             .leadership
-            .publish_ready()
+            .publish_ready(None)
             .await
             .unwrap_or_else(|err| panic!("Marking ready failed on attempt {attempt}: {err}"));
     }
@@ -1849,7 +1850,7 @@ async fn the_election_watch_follows_campaigners_and_the_ready_mark(etcd: &Arc<Do
 
     elected
         .leadership
-        .publish_ready()
+        .publish_ready(None)
         .await
         .expect("Marking ready should succeed");
     await_view(&mut watch, |view| {
@@ -2083,7 +2084,7 @@ async fn a_leader_whose_lease_lapsed_before_its_startup_ended_is_never_marked_re
 
     elected
         .leadership
-        .publish_ready()
+        .publish_ready(None)
         .await
         .expect_err("a leader whose lease lapsed must not mark itself ready");
     assert!(
@@ -2093,5 +2094,41 @@ async fn a_leader_whose_lease_lapsed_before_its_startup_ended_is_never_marked_re
             .expect("the inspection read succeeds")
             .is_none_or(|value| !value.ready),
         "no value of the lapsed leader may read ready"
+    );
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// The marking is retried, and the retries can outlast the lease: a leader whose lease lapses
+// while it is still trying must stop at that attempt, not announce itself on the next one.
+async fn a_lease_that_lapses_between_attempts_to_mark_ready_ends_the_marking(
+    etcd: &Arc<DockerEtcd>,
+) {
+    let proxy = BreakableProxy::start(&etcd.client_url()).await;
+    let mut config = election_config(etcd);
+    config.endpoints = vec![proxy.url()];
+    let election = LeaderElection::connect(&config, unique_election_name())
+        .await
+        .expect("Connecting the election client to etcd should succeed")
+        .with_grpc_address(address(4202));
+    let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
+        .await
+        .expect("An uncontested campaign should finish")
+        .expect("An uncontested campaign should be won");
+
+    // The first attempt starts inside the belief and times out in the black hole, which is a
+    // failure that is retried; the belief is over by the second.
+    let belief = LeaseBelief::until(Instant::now() + TEST_REQUEST_TIMEOUT / 2);
+    proxy.black_hole();
+    let err = timeout(
+        TEST_REQUEST_TIMEOUT * 10,
+        elected.leadership.publish_ready(Some(&belief)),
+    )
+    .await
+    .expect("A lapsed lease must end the marking, not leave it retrying")
+    .expect_err("A leader whose lease lapsed must not mark itself ready");
+    assert!(
+        matches!(&err, ShardManagerError::Internal(message) if message.contains("lapsed")),
+        "The marking should end with the lapsed lease, got {err}"
     );
 }

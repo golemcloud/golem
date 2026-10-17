@@ -1022,15 +1022,8 @@ pub async fn run(
         // After `serve`: a standby names this leader from the moment its value is ready, and the
         // leader must already serve by then.
         if let Some(leadership) = &leadership {
-            // The keepalive reports a lost lease too, but only once it next runs; this closes the
-            // instant before it does, so that a lapsed leader never announces itself.
-            anyhow::ensure!(
-                lease_belief.as_ref().is_none_or(|belief| belief.held()),
-                "the leadership lease lapsed during startup, so this replica does not publish \
-                 itself as the leader"
-            );
             unless_a_task_fails(join_set, async {
-                leadership.publish_ready().await?;
+                leadership.publish_ready(lease_belief.as_ref()).await?;
                 anyhow::Ok(())
             })
             .await?;

@@ -450,7 +450,16 @@ impl LeadershipHandle {
     /// say - is retried within one lease TTL, past which the lease is lost anyway. etcd refuses it
     /// for good once the key is no longer this replica's, and that fails the startup, which steps
     /// down.
-    pub async fn publish_ready(&self) -> Result<(), ShardManagerError> {
+    ///
+    /// `lease` is the belief about the lease that the keepalive maintains. It is checked before
+    /// every attempt, not once before the first, because the keepalive reports a lost lease only
+    /// when it next runs and a retry that sleeps in between can outlast the lease: a lapsed lease
+    /// ends the publication with an error that is not retried, so that a replica that no longer
+    /// leads never announces itself as the leader.
+    pub async fn publish_ready(
+        &self,
+        lease: Option<&LeaseBelief>,
+    ) -> Result<(), ShardManagerError> {
         let value = ElectionValue {
             ready: true,
             ..self.value.clone()
@@ -465,7 +474,15 @@ impl LeadershipHandle {
                 let mut election_client = self.client.election_client();
                 let options = ProclaimOptions::new().with_leader(self.leader_key.clone());
                 let value = value.clone();
+                let lapsed = lease.is_some_and(|belief| !belief.held());
                 async move {
+                    if lapsed {
+                        return Err(ShardManagerError::Internal(format!(
+                            "the leadership lease {} lapsed before this replica could publish \
+                             itself as the leader",
+                            self.lease_id
+                        )));
+                    }
                     bounded(
                         self.request_timeout,
                         election_client.proclaim(value, Some(options)),
