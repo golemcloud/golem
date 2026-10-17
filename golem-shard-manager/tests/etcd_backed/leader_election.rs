@@ -1989,11 +1989,10 @@ async fn the_election_watch_recovers_after_etcd_goes_silent(etcd: &Arc<DockerEtc
     assert_eq!(view.leader().map(|leader| leader.lease), Some(lease));
     assert!(watch.answered_within(TEST_LEASE_TTL));
 
-    inspection_client(etcd)
-        .await
-        .lease_revoke(lease)
-        .await
-        .unwrap();
+    // Cleanup only, after every assertion: under the load of the whole suite etcd can take longer
+    // than the short request timeout of the inspection client to answer, and the lease expires on
+    // its own after its ten seconds.
+    let _ = inspection_client(etcd).await.lease_revoke(lease).await;
     watcher.abort();
 }
 
