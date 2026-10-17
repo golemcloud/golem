@@ -352,9 +352,26 @@ acceptance on the unchanged revision within its existing proposal bound. A tempo
 must remain unchanged and is dropped before final subscription checks. This does not replace the
 real timer with a policy update. Keep opposite-class availability, exact outcomes, overshoot and
 disabled-meter accounting, closed-generation sampling, physical release and ordinary recovery.
-Stored prefixes use the actual agent mode. The dynamic nonmatching-update clock helper is unchanged;
-its tighter update/rearm proof is separate. The matching/nonmatching matrix, compute/retry/tail
+Stored prefixes use the actual agent mode. The matching/nonmatching matrix, compute/retry/tail
 composition, scoped strict lint, formatting and assertion audit pass for this consumer slice.
+
+The nonmatching-storage cases also remove their virtual clock, while retaining GOL-617's native
+applied-update plus completed-periodic-check conjunction. The shared test flusher carries window ID
+and policy revision from one existing snapshot. Require exactly one actual capacity-watch change and
+none afterward. Memory metering is disabled, so the monitor has no memory-rate wake. Six matching
+flusher observations conservatively cover the completed update and a later periodic check, including
+a ready tick winning the biased select before the pending update. Require real elapsed time of at
+least one cadence too. The source emits observations only for active targets, so final cancelled
+flushes cannot supply that evidence. No acceptance event is filtered or operation retried.
+
+Exact no-early/update-rearm/mode/queue properties pass in standard paused-Tokio tests of the actual
+MonthlyMemoryCheck, AtomicResourceEntry and queue function. The old virtual now/deadline/receiver
+projections retire with that transport; a pre-wait callback is still not proof that a sleep was
+polled. The native two-minute bound includes the real cadence, while all non-clock outcome,
+identity, positive matching accounting, disabled dimensions, no false stop, user interruption and
+physical-cleanup assertions remain, with complete actual-mode prefixes added. The native storage
+matrix and compute/retry/tail composition, full monthly library, strict all-target lint, formatting
+and browser verification pass. The whole clock producer and overall A1/F10/F11 remain open.
 
 ### Root completion and live tail ownership
 

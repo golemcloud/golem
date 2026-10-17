@@ -276,6 +276,99 @@ fn a_capacity_update_rearms_the_normal_tokio_timer_from_the_update() {
 }
 
 #[test]
+fn nonmatching_storage_update_and_normal_tick_keep_the_actual_queue_empty() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(async {
+            for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+                let mut policy = stop_fuel_policy();
+                let entry = Arc::new(AtomicResourceEntry::new_with_monthly_policy(
+                    policy.clone(),
+                    usize::MAX,
+                    usize::MAX,
+                    u64::MAX,
+                    1,
+                ));
+                let mut check = MonthlyMemoryCheck::new(entry.clone(), None);
+                let interrupts = super::super::interrupt::Interrupts::default();
+                let tail = Mutex::new(InterruptEstablishment::ready());
+                let original_tail = tail.lock().unwrap().clone();
+                let monthly = Mutex::new(None);
+                let started = tokio::time::Instant::now();
+                let duration = check.duration();
+                assert_eq!(duration, Duration::from_secs(30));
+                {
+                    let wait = check.wait(tokio::time::sleep(duration));
+                    tokio::pin!(wait);
+                    assert!(futures::poll!(wait.as_mut()).is_pending());
+                    tokio::time::advance(Duration::from_secs(11)).await;
+                    assert!(futures::poll!(wait.as_mut()).is_pending());
+                    if mode == AgentMode::Durable {
+                        policy.available_ephemeral_storage_byte_seconds = 0;
+                    } else {
+                        policy.available_durable_storage_byte_seconds = 0;
+                    }
+                    assert!(entry.apply_monthly_snapshot_for_test(1, policy, 1));
+                    assert!(wait.await.is_ok());
+                }
+                let current = entry.with_monthly_capacity(mode, None, |capacity| capacity);
+                assert_eq!(current.policy_revision, 1);
+                assert_eq!(current.exhaustion, None);
+                let other = if mode == AgentMode::Durable {
+                    AgentMode::Ephemeral
+                } else {
+                    AgentMode::Durable
+                };
+                assert_eq!(
+                    entry.with_monthly_capacity(other, None, |capacity| capacity.exhaustion),
+                    Some(if other == AgentMode::Durable {
+                        MonthlyResourceExhaustion::DurableStorage
+                    } else {
+                        MonthlyResourceExhaustion::EphemeralStorage
+                    }),
+                );
+                {
+                    let mut guard = interrupts.lock().await;
+                    assert!(
+                        queue_monthly_capacity(current, current, &mut guard, &tail, &monthly)
+                            .is_none()
+                    );
+                    assert!(!guard.has_interrupt());
+                }
+                assert!(monthly.lock().unwrap().is_none());
+                assert!(Arc::ptr_eq(&original_tail, &tail.lock().unwrap()));
+                let duration = check.duration();
+                assert_eq!(duration, Duration::from_secs(30));
+                {
+                    let wait = check.wait(tokio::time::sleep(duration));
+                    tokio::pin!(wait);
+                    assert!(futures::poll!(wait.as_mut()).is_pending());
+                    tokio::time::advance(Duration::from_secs(19)).await;
+                    assert!(futures::poll!(wait.as_mut()).is_pending());
+                    tokio::time::advance(Duration::from_secs(10)).await;
+                    assert!(futures::poll!(wait.as_mut()).is_pending());
+                    tokio::time::advance(Duration::from_secs(1)).await;
+                    assert!(wait.await.is_ok());
+                }
+                assert_eq!(started.elapsed(), Duration::from_secs(41));
+                let after_tick = entry.with_monthly_capacity(mode, None, |capacity| capacity);
+                assert_eq!(after_tick, current);
+                let mut guard = interrupts.lock().await;
+                assert!(
+                    queue_monthly_capacity(after_tick, after_tick, &mut guard, &tail, &monthly)
+                        .is_none()
+                );
+                assert!(!guard.has_interrupt());
+                assert!(monthly.lock().unwrap().is_none());
+                assert!(Arc::ptr_eq(&original_tail, &tail.lock().unwrap()));
+            }
+        });
+}
+
+#[test]
 #[timeout("5s")]
 async fn monthly_supersedes_restart_without_reclassifying_an_already_observed_deadline() {
     use crate::model::TrapType;

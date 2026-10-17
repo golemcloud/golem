@@ -7,7 +7,7 @@ use golem_worker_executor::services::resource_usage_metering::{
     FilesystemUsage, ScriptedFilesystemUsageForTest,
 };
 use golem_worker_executor::services::{HasOplog, HasOplogService, UsesAllDeps};
-use golem_worker_executor::worker::{MonthlyClockForTest, Worker};
+use golem_worker_executor::worker::Worker;
 use pretty_assertions::assert_eq;
 use test_r::test;
 use tokio::io::AsyncReadExt;
@@ -185,7 +185,7 @@ async fn pending_scripted_storage(
     let initial = worker.current_monthly_proposal_for_test();
     let mut next_flush = async || {
         loop {
-            let window = flushes.recv().await.context("owner usage flusher closed")?;
+            let (window, _) = flushes.recv().await.context("owner usage flusher closed")?;
             if window == initial.diagnostic_window_id {
                 return Ok::<_, anyhow::Error>(());
             }

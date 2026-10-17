@@ -346,9 +346,20 @@ Findings 11-14 have separate linked comments.
     timer, with no new policy revision driving exhaustion. Exact revision/window/resource, opposite
     storage-class availability, typed outcomes, overshoot/disabled meters, closed sampling, physical
     cleanup and recovery assertions remain, with actual-mode complete stored prefixes added. Only
-    the matching positive cases migrate; the dynamic nonmatching-update clock helper is unchanged.
+    the matching positive cases migrate in that slice; dynamic nonmatching-update coverage is separate.
     The storage matrix and compute/retry/tail composition, scoped strict lint, formatting and
     assertion audit pass. No production, test-utils or fixture code changes. The clock family remains open.
+    The nonmatching-storage cases retain the native applied-update-plus-periodic-check proof
+    without its virtual clock. Exact window/revision usage-flusher observations, one watch change,
+    no further updates/no memory-rate wake and a real cadence lower bound establish the check.
+    Conservative observation count also covers a tick racing the pending policy update. All original
+    non-clock native assertions remain, with full actual-mode stored prefixes added. Precise virtual
+    timing/queue/mode projections move to passing tests of the actual paused-Tokio primitives.
+    The storage matrix and compute/retry/tail composition, monthly library, strict all-target lint,
+    formatting, source audits and browser checks pass. The first primitive test failure used the
+    helper's generation as its policy revision;
+    only that input was corrected and its exact revision assertion remains. The failed log is retained.
+    The whole clock producer and remaining active consumers stay open.
   - [ ] Address the keyed filesystem metadata gate and remaining protocol ordering controls.
   - [ ] For any hook proposed to remain, document the otherwise untestable guarantee, minimal scope
     and why its scheduling changes do not invalidate the test. Existing main-owned hooks are not

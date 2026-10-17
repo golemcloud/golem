@@ -128,13 +128,23 @@ async fn nonmatching_storage(
     worker
         .owner_runtime_resources()
         .set_scripted_filesystem_usage_for_test(source.clone());
-    let (clock, mut polls) = MonthlyClockForTest::new();
-    worker.set_monthly_clock_for_test(clock.clone());
+    let (flushed, mut flushes) = tokio::sync::mpsc::unbounded_channel();
+    let usage_source: Arc<dyn ResourceUsageFlusher> = Arc::new(ObservedUsageFlusher {
+        owner: Arc::downgrade(&worker),
+        send: flushed,
+    });
+    worker
+        .owner_runtime_resources()
+        .register_resource_usage_flusher(Arc::downgrade(&usage_source));
+    let mut capacity_updates = limits
+        .subscribe_capacity_updates_for_test(context.account_id)
+        .await?;
+    let capacity_version = *capacity_updates.borrow_and_update();
     let mut attempts =
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
-    let invocation = tokio::spawn({
+    let invocation = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
         let name = name.clone();
@@ -150,7 +160,7 @@ async fn nonmatching_storage(
                 )
                 .await
         }
-    });
+    }));
     let (mut socket, _) =
         tokio::time::timeout(Duration::from_secs(30), listener.accept()).await??;
     let chunk = tokio::time::timeout(Duration::from_secs(10), async {
@@ -168,13 +178,35 @@ async fn nonmatching_storage(
     })
     .await
     .context("open receive chunk")??;
-    tokio::time::timeout(Duration::from_secs(10), polls.recv())
-        .await?
-        .unwrap();
     let initial = worker.current_monthly_proposal_for_test();
+    let mut next_flush = async |revision| {
+        loop {
+            let (window, observed_revision) =
+                flushes.recv().await.context("owner usage flusher closed")?;
+            if window == initial.diagnostic_window_id && observed_revision == revision {
+                return Ok::<_, anyhow::Error>(());
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), next_flush(initial.policy_revision))
+        .await
+        .context("initial monitor pre-wait flush")??;
+    let oplog = worker.all().oplog_service();
+    let read_stored = async || {
+        let last = oplog.get_last_index(&owned, mode).await;
+        oplog
+            .read_exact(&owned, mode, OplogIndex::INITIAL, last.as_u64())
+            .await
+    };
+    let prefix = read_stored().await;
+    let prefix_last = *prefix
+        .last_key_value()
+        .context("committed invocation prefix is empty")?
+        .0;
     let acquisitions = worker.permit_acquisitions_for_test();
     let mut raw = worker.raw_interrupt_for_test();
     let account = limits.initialize_account(context.account_id).await?;
+    assert_eq!(account.monthly_observer_count_for_test(), 2);
     assert_eq!(initial.exhaustion, None);
     assert!(!account.monthly_capacity_is_exhausted_for_test(mode));
     assert!(!account.monthly_capacity_is_exhausted_for_test(other));
@@ -192,24 +224,24 @@ async fn nonmatching_storage(
     .await
     .context("positive scripted observation")?;
     tokio::time::sleep(Duration::from_millis(50)).await;
-    while polls.try_recv().is_ok() {}
     let mut opposite_exhausted = policy;
     if durable {
         opposite_exhausted.available_ephemeral_storage_byte_seconds = 0;
     } else {
         opposite_exhausted.available_durable_storage_byte_seconds = 0;
     }
+    let update_started = tokio::time::Instant::now();
     registry.set_policy(opposite_exhausted);
     let revision = registry.current_limits().monthly_policy_revision;
     assert!(revision > initial.policy_revision);
     let refresh = applied_refresh(&limits, &registry, context.account_id).await?;
-    // Wait until the applied-update check finishes and rearms before advancing a separate tick.
-    let update_poll = tokio::time::timeout(Duration::from_secs(10), polls.recv())
+    tokio::time::timeout(Duration::from_secs(10), capacity_updates.changed())
         .await
-        .context("applied update checked")?
-        .unwrap();
-    assert_eq!(update_poll.now, Duration::ZERO);
-    assert_eq!(update_poll.deadline, Duration::from_secs(30));
+        .context("opposite storage policy was not applied")??;
+    assert_eq!(
+        *capacity_updates.borrow_and_update(),
+        capacity_version.wrapping_add(1)
+    );
     assert_eq!(
         limits
             .initialized_policy_revision_for_test(context.account_id)
@@ -244,17 +276,18 @@ async fn nonmatching_storage(
             0
         );
     }
-    clock.advance(Duration::from_secs(30));
-    let tick_poll = tokio::time::timeout(Duration::from_secs(10), polls.recv())
-        .await?
-        .unwrap();
-    assert_eq!(tick_poll.now, Duration::from_secs(30));
-    assert_eq!(tick_poll.deadline, Duration::from_secs(30));
-    let rearmed = tokio::time::timeout(Duration::from_secs(10), polls.recv())
-        .await?
-        .unwrap();
-    assert_eq!(rearmed.now, Duration::from_secs(30));
-    assert_eq!(rearmed.deadline, Duration::from_secs(60));
+    // Healthy iterations flush after wake and before the next wait. The first new-
+    // revision observation can already be pre-wait; six observations cover at least
+    // two completed checks. If the first wake was a tick racing the policy update,
+    // they also include the pending update check and a later complete periodic check.
+    // Memory metering is off, and no further capacity update may supply those wakes.
+    // These are dependency observations, not assertions that a sleep was polled.
+    for _ in 0..6 {
+        next_flush(revision).await?;
+    }
+    assert!(update_started.elapsed() >= Duration::from_secs(30));
+    assert!(!capacity_updates.has_changed()?);
+    drop(capacity_updates);
     worker.drain_lifecycle_for_test().await?;
     let sampled = worker.current_monthly_proposal_for_test();
     assert_eq!(sampled.policy_revision, revision);
@@ -282,7 +315,7 @@ async fn nonmatching_storage(
     );
     assert!(worker.concurrent_agent_permit_is_held().await);
     assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
-    assert_eq!(clock.active_sleeps(), 1);
+    assert!(worker.monthly_window_active_for_test());
     assert_eq!(account.monthly_observer_count_for_test(), 1);
     assert!(!invocation.is_finished());
     executor.commit_oplog(&id).await?;
@@ -319,8 +352,18 @@ async fn nonmatching_storage(
     worker.retained_cleanup_for_test().await?;
     tokio::time::timeout(Duration::from_secs(10), refresh).await??;
     assert!(attempts.try_recv().is_err());
-    assert_eq!(clock.active_sleeps(), 0);
+    assert!(!worker.monthly_window_active_for_test());
     assert_eq!(account.monthly_observer_count_for_test(), 0);
+    let stopped_raw = read_stored().await;
+    assert_eq!(
+        stopped_raw.range(..=prefix_last).collect::<Vec<_>>(),
+        prefix.iter().collect::<Vec<_>>()
+    );
+    assert!(
+        !stopped_raw
+            .values()
+            .any(|entry| matches!(entry, OplogEntry::Jump { .. }))
+    );
     shutdown.cancel();
     Ok(())
 }

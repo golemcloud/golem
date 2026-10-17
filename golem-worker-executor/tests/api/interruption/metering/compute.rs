@@ -251,7 +251,7 @@ async fn pending_compute(
     assert_eq!(account.monthly_observer_count_for_test(), 2);
     let mut next_flush = async || {
         loop {
-            let window = flushes.recv().await.context("owner usage flusher closed")?;
+            let (window, _) = flushes.recv().await.context("owner usage flusher closed")?;
             if window == prepaid.diagnostic_window_id {
                 return Ok::<_, anyhow::Error>(());
             }

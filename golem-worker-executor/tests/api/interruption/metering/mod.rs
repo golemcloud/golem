@@ -6,7 +6,7 @@ use golem_worker_executor::workerctx::default::Context as WorkerContext;
 #[derive(Debug)]
 struct ObservedUsageFlusher {
     owner: std::sync::Weak<Worker<WorkerContext>>,
-    send: tokio::sync::mpsc::UnboundedSender<u64>,
+    send: tokio::sync::mpsc::UnboundedSender<(u64, u64)>,
 }
 
 impl ResourceUsageFlusher for ObservedUsageFlusher {
@@ -14,11 +14,10 @@ impl ResourceUsageFlusher for ObservedUsageFlusher {
         if let Some(owner) = self.owner.upgrade()
             && owner.monthly_window_active_for_test()
         {
-            let _ = self.send.send(
-                owner
-                    .current_monthly_proposal_for_test()
-                    .diagnostic_window_id,
-            );
+            let current = owner.current_monthly_proposal_for_test();
+            let _ = self
+                .send
+                .send((current.diagnostic_window_id, current.policy_revision));
         }
     }
 }
