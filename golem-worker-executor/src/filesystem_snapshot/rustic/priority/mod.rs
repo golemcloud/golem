@@ -23,6 +23,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use tracing::warn;
 
 /// The nice value of the threads of a save or a prune.
+#[cfg(target_os = "linux")]
 pub(super) const LOW_PRIORITY: i32 = 19;
 
 /// How the store runs work at a low priority: the thread count of the rayon pool of the work, and

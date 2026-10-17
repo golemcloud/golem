@@ -1247,12 +1247,14 @@ where
         accessor,
         durable_worker_ctx::<Ctx, U>,
         DurableFunctionType::ReadLocal,
-        async move |start| {
-            if start.is_live {
-                let permit = check_stream_write::<Ctx, U>(accessor, fd_rep).await?;
-                *authorization_for_start.lock().unwrap() = Some(permit);
-            }
-            Ok(HostRequestNoInput {})
+        move |start, accessor| {
+            Box::pin(async move {
+                if start.is_live {
+                    let permit = check_stream_write::<Ctx, U>(accessor, fd_rep).await?;
+                    *authorization_for_start.lock().unwrap() = Some(permit);
+                }
+                Ok(HostRequestNoInput {})
+            })
         },
     )
     .await

@@ -4636,10 +4636,12 @@ impl MutableFilesystemStorageQuota {
     }
 }
 
+#[cfg(target_os = "linux")]
 struct MutableFilesystemStorageQuotaResourceLimits {
     entry: Arc<AtomicResourceEntry>,
 }
 
+#[cfg(target_os = "linux")]
 #[async_trait]
 impl ResourceLimits for MutableFilesystemStorageQuotaResourceLimits {
     async fn initialize_account(

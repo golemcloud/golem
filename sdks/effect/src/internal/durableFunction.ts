@@ -73,6 +73,9 @@ export const observeFunctionCall = (
 /**
  * Opens an invocation in an Effect scope. An unfinished live resource is dropped
  * when the scope closes, including after interruption or a defect.
+ * Resource scoping does not isolate concurrent fibers. Use sequential, properly nested execution
+ * only; unrelated host calls while the operation waits can acquire its scope and replay incorrectly.
+ * Do not detach work. All children must terminate before the resource closes, including on failure.
  * @since 1.6.0
  * @category host bindings
  */
@@ -260,7 +263,17 @@ const run = <
     }),
   )
 
-/** @since 1.6.0 @category combinators */
+/**
+ * Records a custom operation's result. Sequential and properly nested execution only.
+ * The body may await host calls when no unrelated guest work runs during the wait. Do not overlap
+ * it with other fibers, concurrent effects, or JavaScript promises, including ordinary host calls:
+ * sibling effects can acquire the wrong scope and cause incorrect replay or invocation failure.
+ * Misuse is not reliably detected. Await nested operations; do not detach work. Stop and join
+ * outstanding work before the body exits, including on failure or interruption. Structured
+ * finalization alone does not make concurrent custom scopes supported.
+ * @since 1.6.0
+ * @category combinators
+ */
 export const wrap = <
   RequestS extends Schema.Top,
   SuccessS extends Schema.Top,
@@ -281,7 +294,12 @@ export const wrap = <
   | ErrorS["DecodingServices"]
 > => sdkErrorsToDefects(run(opts, request, body, opts.error)) as never
 
-/** @since 1.6.0 @category combinators */
+/**
+ * Infallible form of {@link wrap}, with the same sequential-only and no-detached-work limits.
+ * An infallible body can still be interrupted; all children must terminate before its scope closes.
+ * @since 1.6.0
+ * @category combinators
+ */
 export const wrapInfallible = <RequestS extends Schema.Top, SuccessS extends Schema.Top, R>(
   opts: DurabilityWrapInfallibleOptions<RequestS, SuccessS>,
   request: RequestS["Type"],
