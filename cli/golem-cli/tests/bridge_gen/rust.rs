@@ -2698,6 +2698,30 @@ fn uuid_remap_agent() -> AgentTypeSchema {
                 Some(ref_to("uuid.Uuid")),
             ),
             method("holder", vec![], Some(ref_to("id-holder"))),
+            method(
+                "shapes",
+                vec![
+                    field(
+                        "by-name",
+                        SchemaType::map(SchemaType::string(), ref_to("uuid.Uuid")),
+                    ),
+                    field(
+                        "by-id",
+                        SchemaType::map(ref_to("uuid.Uuid"), SchemaType::u32()),
+                    ),
+                    field(
+                        "pair",
+                        SchemaType::tuple(vec![ref_to("uuid.Uuid"), SchemaType::u32()]),
+                    ),
+                    field("choice", ref_to("id-choice")),
+                ],
+                Some(SchemaType::result(
+                    golem_common::schema::schema_type::ResultSpec {
+                        ok: Some(Box::new(ref_to("uuid.Uuid"))),
+                        err: Some(Box::new(ref_to("uuid.Uuid"))),
+                    },
+                )),
+            ),
         ],
         vec![
             def(
@@ -2705,6 +2729,13 @@ fn uuid_remap_agent() -> AgentTypeSchema {
                 SchemaType::record(vec![
                     named_field("high-bits", SchemaType::u64()),
                     named_field("low-bits", SchemaType::u64()),
+                ]),
+            ),
+            def(
+                "id-choice",
+                SchemaType::variant(vec![
+                    variant_case("id", Some(ref_to("uuid.Uuid"))),
+                    variant_case("none", None),
                 ]),
             ),
             def(
@@ -2839,6 +2870,15 @@ mod uuid_remap_codec {
         let decoded = decode_IdHolder(tree.root, &mut reader).unwrap();
         assert_eq!(decoded.id, id);
         assert_eq!(decoded.native_id, native_id);
+
+        let malformed = vec![
+            __wire::SchemaValueNode::U64Value(1),
+            __wire::SchemaValueNode::StringValue("low".to_string()),
+            __wire::SchemaValueNode::RecordValue(vec![0, 1]),
+            __wire::SchemaValueNode::RecordValue(vec![2, 2]),
+        ];
+        let mut reader = golem_rust::schema::wit::direct::WireReader::new(malformed);
+        assert!(decode_IdHolder(3, &mut reader).is_err());
     }
 }
 "#,
