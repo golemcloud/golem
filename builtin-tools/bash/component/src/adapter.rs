@@ -8,8 +8,9 @@ use bash_shell::session::Session;
 use golem_schema::tool::{
     ProcessExitStatus, Tool,
     argv::{self, ParsedToolArguments},
+    process::{process_status_type, render_custom_error, render_result},
 };
-use golem_schema::{IntoSchema, SchemaGraph, SchemaType, TypedSchemaValue};
+use golem_schema::{IntoSchema, SchemaType, TypedSchemaValue};
 use std::collections::{BTreeMap, HashMap};
 #[cfg(target_arch = "wasm32")]
 use std::sync::Arc;
@@ -149,10 +150,7 @@ fn rpc_failure(
     error: golem_rust::schema::wit::wire::ToolRpcError,
     declared: &BTreeMap<String, u8>,
 ) -> (u8, String) {
-    use golem_rust::schema::{
-        render::json_value::to_json_value_redacted,
-        wit::wire::{ToolError, ToolRpcError},
-    };
+    use golem_rust::schema::wit::wire::{ToolError, ToolRpcError};
     match error {
         ToolRpcError::Denied(message) => (3, message),
         ToolRpcError::NotFound(message) => (127, message),
@@ -161,45 +159,14 @@ fn rpc_failure(
             ToolError::InvalidInput(message) | ToolError::ConstraintViolation(message),
         ) => (2, message),
         ToolRpcError::RemoteToolError(ToolError::CustomError(custom)) => {
-            let code = declared.get(&custom.name).copied().unwrap_or(1);
-            let payload = golem_rust::decode_typed_schema_value(&custom.payload)
-                .ok()
-                .and_then(|typed| {
-                    to_json_value_redacted(typed.graph(), &typed.graph().root, typed.value()).ok()
-                });
-            let message = match payload {
-                Some(payload) => format!("tool error: {}: {payload}", custom.name),
-                None => format!("tool error: {}", custom.name),
-            };
-            (code, message)
+            let payload = golem_rust::decode_typed_schema_value(&custom.payload).ok();
+            render_custom_error(&custom.name, payload.as_ref(), declared)
         }
         ToolRpcError::ProtocolError(message)
         | ToolRpcError::RemoteInternalError(message)
         | ToolRpcError::ResourceExhausted(message) => (1, message),
         other => (1, format!("{other:?}")),
     }
-}
-
-fn process_status_type(graph: &SchemaGraph, root: &SchemaType) -> Result<bool, String> {
-    if !matches!(root, SchemaType::Ref { id, .. } if *id == ProcessExitStatus::type_id()) {
-        return Ok(false);
-    }
-    let definition = graph.lookup(&ProcessExitStatus::type_id());
-    if let Some(definition) = definition
-        && let SchemaType::Record { fields, .. } = &definition.body
-        && fields.len() == 1
-        && fields[0].name == "exit_code"
-        && matches!(
-            fields[0].body,
-            SchemaType::U8 {
-                restrictions: None,
-                ..
-            }
-        )
-    {
-        return Ok(true);
-    }
-    Err("ProcessExitStatus must define exactly one exit_code: u8 field".into())
 }
 
 /// ProcessExitStatus controls shell status; all other results retain their rendering behavior.
@@ -210,49 +177,28 @@ fn apply_result(
     result_is_status: bool,
     wire: Option<golem_rust::schema::wit::wire::TypedSchemaValue>,
 ) {
-    let result = (|| -> Result<(), String> {
-        if stdout && !result_is_status {
-            return Ok(());
-        }
-        let Some(wire) = wire else {
-            return if result_is_status {
-                Err("result: missing ProcessExitStatus".into())
-            } else {
-                Ok(())
-            };
-        };
-        let typed = golem_rust::decode_typed_schema_value(&wire)
-            .map_err(|error| format!("result: {error:?}"))?;
-        if result_is_status {
-            if !process_status_type(typed.graph(), typed.root_type())? {
-                return Err("result: expected named ProcessExitStatus".into());
-            }
-            let golem_schema::SchemaValue::Record { fields } = typed.value() else {
-                return Err("result: expected ProcessExitStatus record".into());
-            };
-            let [golem_schema::SchemaValue::U8(status)] = fields.as_slice() else {
-                return Err("result: expected exactly one u8 exit status value".into());
-            };
+    if stdout && !result_is_status {
+        return;
+    }
+    let result = wire
+        .as_ref()
+        .map(golem_rust::decode_typed_schema_value)
+        .transpose()
+        .map_err(|error| format!("result: {error:?}"))
+        .and_then(|typed| render_result(stdout, result_is_status, typed.as_ref()));
+    match result {
+        Ok(result) => {
             if output.exit_code == 0 {
-                output.exit_code = *status;
+                output.exit_code = result.exit_code;
             }
-        } else {
-            let json = golem_rust::schema::render::json_value::to_json_value_redacted(
-                typed.graph(),
-                typed.root_type(),
-                typed.value(),
-            )
-            .map_err(|error| format!("result: {error:?}"))?;
-            output.stdout = match json {
-                serde_json::Value::String(text) => text.into_bytes(),
-                value => format!("{value}\n").into_bytes(),
-            };
+            if let Some(stdout) = result.stdout {
+                output.stdout = stdout;
+            }
         }
-        Ok(())
-    })();
-    if let Err(error) = result {
-        output.exit_code = 1;
-        output.stderr.extend(format!("{error}\n").bytes());
+        Err(error) => {
+            output.exit_code = 1;
+            output.stderr.extend(format!("{error}\n").bytes());
+        }
     }
 }
 
