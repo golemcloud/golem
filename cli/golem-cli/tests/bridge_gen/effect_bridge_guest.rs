@@ -9,7 +9,7 @@ use golem_cli::bridge_gen::BridgeGenerator;
 use golem_cli::bridge_gen::effect::effect_guest::EffectGuestBridgeGenerator;
 use golem_common::model::agent::AgentMode;
 use golem_common::schema::SchemaType;
-use golem_common::schema::schema_type::PermissionCardSpec;
+use golem_common::schema::schema_type::{PermissionCardSpec, ResultSpec};
 use tempfile::TempDir;
 use test_r::test;
 
@@ -214,6 +214,76 @@ void program
     ] {
         assert!(source.contains(symbol), "missing {symbol}:\n{source}");
     }
+}
+
+#[test]
+fn effect_guest_effect_results_and_trailing_optional_parameters_compile() {
+    let result = |ok: SchemaType, err: SchemaType| {
+        SchemaType::result(ResultSpec {
+            ok: Some(Box::new(ok)),
+            err: Some(Box::new(err)),
+        })
+    };
+    let schema = agent(
+        "OptionalEffectAgent",
+        "effect",
+        vec![
+            field("name", SchemaType::string()),
+            field("nickname", SchemaType::option(SchemaType::string())),
+        ],
+        vec![
+            method(
+                "lookup",
+                vec![
+                    field("first", SchemaType::option(SchemaType::string())),
+                    field("count", SchemaType::u32()),
+                    field("last", SchemaType::option(SchemaType::string())),
+                ],
+                Some(result(SchemaType::u64(), SchemaType::string())),
+            ),
+            method(
+                "accept",
+                vec![field(
+                    "outcome",
+                    result(SchemaType::string(), SchemaType::u32()),
+                )],
+                Some(SchemaType::string()),
+            ),
+        ],
+        vec![],
+        AgentMode::Durable,
+    );
+    let source = generate_and_compile(
+        schema,
+        "optional-effect-agent-guest-client.ts",
+        r#"
+import { Effect, Result } from "effect"
+import { OptionalEffectAgent } from "./optional-effect-agent-guest-client.js"
+const program = Effect.gen(function*() {
+  const client = yield* OptionalEffectAgent.get("name")
+  yield* OptionalEffectAgent.get("name", "nick")
+  const found: Result.Result<bigint, string> = yield* client.lookup(undefined, 1)
+  const count: bigint = Result.isSuccess(found) ? found.success : 0n
+  yield* client.lookup("first", 1, "last")
+  // @ts-expect-error an optional parameter before a required one cannot be omitted
+  yield* client.lookup(1)
+  const accepted: string = yield* client.accept(Result.succeed("yes"))
+  yield* client.accept(Result.fail(1))
+  return [count, accepted] as const
+})
+void program
+"#,
+    );
+    assert!(
+        source.contains("[outcome: Result.Result<string, number>]"),
+        "{source}"
+    );
+    assert!(
+        source.contains("[first: string | undefined, count: number, last?: string]"),
+        "{source}"
+    );
+    assert!(source.contains("Result.succeed("), "{source}");
+    assert!(!source.contains("{ ok:"), "{source}");
 }
 
 fn generate_and_compile(

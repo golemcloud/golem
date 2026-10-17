@@ -214,6 +214,28 @@ impl EffectExternalBridgeGenerator {
         }))
     }
 
+    /// Parameter declarations; the trailing run of Option parameters can be omitted.
+    fn signature(&self, params: &[(String, SchemaType)]) -> anyhow::Result<String> {
+        let optional_from = self
+            .inner
+            .optional_suffix_start(params.iter().map(|(_, schema)| schema));
+        Ok(params
+            .iter()
+            .enumerate()
+            .map(|(index, (name, schema))| {
+                Ok(if index < optional_from {
+                    format!("{name}: {}", self.input_type(schema)?)
+                } else {
+                    format!(
+                        "{name}?: {}",
+                        self.input_type(self.inner.omittable_param_type(schema))?
+                    )
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?
+            .join(", "))
+    }
+
     fn input(&self, input: &InputSchema) -> anyhow::Result<Vec<(String, SchemaType)>> {
         match self.inner.ts_input(input)? {
             TsInput::Params(values) => {
@@ -361,11 +383,7 @@ impl EffectExternalBridgeGenerator {
         let value = naming.fresh("value");
         let controller = naming.fresh("controller");
         let signal = naming.fresh("signal");
-        let signature = params
-            .iter()
-            .map(|(n, t)| Ok(format!("{n}: {}", self.input_type(t)?)))
-            .collect::<anyhow::Result<Vec<_>>>()?
-            .join(", ");
+        let signature = self.signature(params)?;
         let converted = params
             .iter()
             .enumerate()
@@ -480,11 +498,7 @@ impl EffectExternalBridgeGenerator {
                 ),
             );
         }
-        let signature = all
-            .iter()
-            .map(|(n, t)| Ok(format!("{n}: {}", self.input_type(t)?)))
-            .collect::<anyhow::Result<Vec<_>>>()?
-            .join(", ");
+        let signature = self.signature(&all)?;
         let mut args: Vec<String> = if variant == "trigger" {
             Vec::new()
         } else {
