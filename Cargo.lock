@@ -4489,6 +4489,7 @@ dependencies = [
  "anyhow",
  "async-rwlock",
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "conditional-trait-gen",
  "desert_rust",
@@ -4500,6 +4501,7 @@ dependencies = [
  "golem-schema",
  "golem-service-base",
  "golem-test-framework",
+ "hex",
  "http 1.5.0",
  "humantime-serde",
  "include_dir",
@@ -4510,9 +4512,11 @@ dependencies = [
  "prometheus",
  "prost-types",
  "rcgen",
+ "rsa",
  "rustls",
  "scc",
  "serde",
+ "sha2 0.10.9",
  "sqlx",
  "tempfile",
  "test-r",
@@ -4529,6 +4533,7 @@ dependencies = [
  "tracing-test",
  "url",
  "uuid",
+ "x509-parser",
 ]
 
 [[package]]

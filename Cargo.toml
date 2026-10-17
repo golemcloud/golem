@@ -352,6 +352,7 @@ wit-component = "0.251"
 wit-encoder = "0.251"
 wit-parser = "0.251"
 x509-certificate = "0.23.1"
+x509-parser = "0.18.1"
 zstd = "0.13"
 
 [patch.crates-io]

@@ -471,6 +471,21 @@ impl std::fmt::Debug for EtcdPassword {
     }
 }
 
+/// An inline certificate as the configuration display shows it: the SHA-256 fingerprint of its
+/// first certificate, as the startup log also prints it.
+fn inline_certificate(pem: &Base64) -> String {
+    use rustls::pki_types::CertificateDer;
+    use rustls::pki_types::pem::PemObject;
+
+    match CertificateDer::pem_slice_iter(pem).find_map(Result::ok) {
+        Some(der) => format!(
+            "inline value, sha256 {}",
+            crate::sharding::etcd_connection::sha256_hex(&der)
+        ),
+        None => "inline value without a certificate".to_string(),
+    }
+}
+
 fn default_etcd_connect_timeout() -> Duration {
     Duration::from_secs(10)
 }
@@ -554,19 +569,27 @@ impl SafeDisplay for EtcdConfig {
         );
         if let Some(tls) = tls {
             for (item, file, inline) in [
-                ("ca cert", &tls.ca_cert_file, tls.ca_cert.is_some()),
+                (
+                    "ca cert",
+                    &tls.ca_cert_file,
+                    tls.ca_cert.as_ref().map(inline_certificate),
+                ),
                 (
                     "client cert",
                     &tls.client_cert_file,
-                    tls.client_cert.is_some(),
+                    tls.client_cert.as_ref().map(inline_certificate),
                 ),
-                ("client key", &tls.client_key_file, tls.client_key.is_some()),
+                (
+                    "client key",
+                    &tls.client_key_file,
+                    tls.client_key.as_ref().map(|_| "inline value".to_string()),
+                ),
             ] {
                 if let Some(file) = file {
                     let _ = writeln!(&mut result, "tls {item} file: {}", file.display());
                 }
-                if inline {
-                    let _ = writeln!(&mut result, "tls {item}: inline value");
+                if let Some(inline) = inline {
+                    let _ = writeln!(&mut result, "tls {item}: {inline}");
                 }
             }
             if let Some(name) = &tls.server_name {

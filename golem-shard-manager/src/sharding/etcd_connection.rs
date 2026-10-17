@@ -23,7 +23,11 @@ use crate::sharding::error::ShardManagerError;
 use etcd_client::{Certificate, Client, ConnectOptions, Identity, TlsOptions};
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::sign::CertifiedKey;
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use tracing::{info, warn};
+use x509_parser::time::ASN1Time;
 
 fn invalid_config(message: String) -> ShardManagerError {
     ShardManagerError::InvalidConfig(message)
@@ -130,6 +134,13 @@ struct ReadFile {
     content: Vec<u8>,
 }
 
+/// One TLS item as read at startup, and where it came from.
+struct Item {
+    pem: Vec<u8>,
+    /// The setting and, for a file, its path: what a refusal names.
+    source: String,
+}
+
 /// Reads one TLS item from its file or from its inline value - at most one of them may be set -
 /// and checks that it holds what the setting needs, so that a wrong item stops the startup with
 /// the setting's name instead of failing every TLS handshake later. A file read is recorded in
@@ -139,8 +150,8 @@ fn read_item(
     (value_setting, value): (&str, Option<&[u8]>),
     expected: Pem,
     read_files: &mut Vec<ReadFile>,
-) -> Result<Option<Vec<u8>>, ShardManagerError> {
-    let (bytes, source) = match (file, value) {
+) -> Result<Option<Item>, ShardManagerError> {
+    let (pem, source) = match (file, value) {
         (Some(_), Some(_)) => {
             return Err(invalid_config(format!(
                 "persistence.config.tls.{file_setting} and persistence.config.tls.{value_setting} \
@@ -159,23 +170,119 @@ fn read_item(
                 path: path.to_path_buf(),
                 content: bytes.clone(),
             });
-            (bytes, format!("{file_setting} {}", path.display()))
+            (
+                bytes,
+                format!("persistence.config.tls.{file_setting} {}", path.display()),
+            )
         }
-        (None, Some(value)) => (value.to_vec(), value_setting.to_string()),
+        (None, Some(value)) => (
+            value.to_vec(),
+            format!("persistence.config.tls.{value_setting}"),
+        ),
     };
     let (found, kind) = match expected {
         Pem::Certificate => (
-            CertificateDer::pem_slice_iter(&bytes).any(|item| item.is_ok()),
+            CertificateDer::pem_slice_iter(&pem).any(|item| item.is_ok()),
             "certificate",
         ),
-        Pem::PrivateKey => (PrivateKeyDer::from_pem_slice(&bytes).is_ok(), "private key"),
+        Pem::PrivateKey => {
+            // rustls reads no encrypted key; say so instead of "no key".
+            if pem
+                .windows(ENCRYPTED_KEY_LABEL.len())
+                .any(|window| window == ENCRYPTED_KEY_LABEL)
+            {
+                return Err(invalid_config(format!(
+                    "{source} holds an encrypted private key, which is not supported: give the key \
+                     unencrypted, as a Kubernetes TLS Secret holds it"
+                )));
+            }
+            (PrivateKeyDer::from_pem_slice(&pem).is_ok(), "private key")
+        }
     };
     if !found {
+        return Err(invalid_config(format!("{source} holds no PEM {kind}")));
+    }
+    Ok(Some(Item { pem, source }))
+}
+
+const ENCRYPTED_KEY_LABEL: &[u8] = b"-----BEGIN ENCRYPTED PRIVATE KEY-----";
+
+pub(crate) fn sha256_hex(der: &[u8]) -> String {
+    hex::encode(Sha256::digest(der))
+}
+
+/// Logs each certificate of `item` - subject, end of validity and SHA-256 fingerprint - so that an
+/// operator can see which certificate a replica loaded and when it expires, and returns them.
+///
+/// For this replica's own certificate (`own`), the first one must not have expired: etcd would
+/// refuse it with a generic alert that looks like a wrong CA. A CA item must hold at least one
+/// certificate that has not expired; an expired one beside it is only reported, because a CA
+/// bundle holds the old CA for a while during a rotation.
+fn check_certificates(
+    item: &Item,
+    own: bool,
+) -> Result<Vec<CertificateDer<'static>>, ShardManagerError> {
+    let certificates: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&item.pem)
+        .filter_map(Result::ok)
+        .collect();
+    let now = ASN1Time::now().timestamp();
+    let mut valid = 0;
+    for (index, der) in certificates.iter().enumerate() {
+        let (_, certificate) = x509_parser::parse_x509_certificate(der).map_err(|err| {
+            invalid_config(format!(
+                "{} holds a certificate that cannot be parsed: {err}",
+                item.source
+            ))
+        })?;
+        let subject = certificate.subject().to_string();
+        let not_after = certificate.validity().not_after;
+        let expired = not_after.timestamp() < now;
+        let sha256 = sha256_hex(der);
+        if expired {
+            warn!(source = item.source, subject, %not_after, sha256, "etcd TLS certificate has expired");
+        } else {
+            info!(source = item.source, subject, %not_after, sha256, "etcd TLS certificate");
+            valid += 1;
+        }
+        if own && index == 0 && expired {
+            return Err(invalid_config(format!(
+                "{}: the certificate of {subject} expired at {not_after}",
+                item.source
+            )));
+        }
+    }
+    if !own && valid == 0 {
         return Err(invalid_config(format!(
-            "persistence.config.tls.{source} holds no PEM {kind}"
+            "{}: every certificate in it has expired",
+            item.source
         )));
     }
-    Ok(Some(bytes))
+    Ok(certificates)
+}
+
+/// Refuses a key that does not belong to its certificate, which etcd would otherwise reject
+/// with a generic alert at the first handshake.
+fn check_key_matches(
+    certificates: Vec<CertificateDer<'static>>,
+    cert: &Item,
+    key: &Item,
+) -> Result<(), ShardManagerError> {
+    let key_der = PrivateKeyDer::from_pem_slice(&key.pem)
+        .map_err(|err| invalid_config(format!("{}: {err}", key.source)))?;
+    match CertifiedKey::from_der(
+        certificates,
+        key_der,
+        &rustls::crypto::ring::default_provider(),
+    ) {
+        Ok(_) => Ok(()),
+        Err(rustls::Error::InconsistentKeys(rustls::InconsistentKeys::KeyMismatch)) => {
+            Err(invalid_config(format!(
+                "{} does not belong to the certificate in {}",
+                key.source, cert.source
+            )))
+        }
+        Err(err) => Err(invalid_config(format!("{}: {err}", key.source))),
+    }
 }
 
 fn tls_options(
@@ -198,7 +305,8 @@ fn tls_options(
                 .to_string(),
         )
     })?;
-    let mut options = TlsOptions::new().ca_certificate(Certificate::from_pem(ca));
+    check_certificates(&ca, false)?;
+    let mut options = TlsOptions::new().ca_certificate(Certificate::from_pem(ca.pem));
     let cert = read_item(
         ("client_cert_file", tls.client_cert_file.as_deref()),
         (
@@ -218,7 +326,11 @@ fn tls_options(
         read_files,
     )?;
     match (cert, key) {
-        (Some(cert), Some(key)) => options = options.identity(Identity::from_pem(cert, key)),
+        (Some(cert), Some(key)) => {
+            let certificates = check_certificates(&cert, true)?;
+            check_key_matches(certificates, &cert, &key)?;
+            options = options.identity(Identity::from_pem(cert.pem, key.pem));
+        }
         (None, None) => {}
         _ => {
             return Err(invalid_config(
@@ -704,5 +816,258 @@ mod tests {
         let renewed = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
         std::fs::write(files.path("cert.pem"), renewed.cert.pem()).unwrap();
         assert!(settings.tls_files_changed());
+    }
+
+    /// A PEM block with `label` around `der`.
+    fn pem(label: &str, der: &[u8]) -> String {
+        use base64::Engine;
+        let body = base64::engine::general_purpose::STANDARD.encode(der);
+        let lines: Vec<&str> = body
+            .as_bytes()
+            .chunks(64)
+            .map(|line| std::str::from_utf8(line).unwrap())
+            .collect();
+        format!(
+            "-----BEGIN {label}-----\n{}\n-----END {label}-----\n",
+            lines.join("\n")
+        )
+    }
+
+    /// One DER element.
+    fn der(tag: u8, content: &[u8]) -> Vec<u8> {
+        let mut element = vec![tag];
+        if content.len() < 0x80 {
+            element.push(content.len() as u8);
+        } else {
+            let length = content.len().to_be_bytes();
+            let length = &length[length.iter().position(|byte| *byte != 0).unwrap()..];
+            element.push(0x80 | length.len() as u8);
+            element.extend_from_slice(length);
+        }
+        element.extend_from_slice(content);
+        element
+    }
+
+    /// The content of one DER element.
+    fn der_content(element: &[u8]) -> &[u8] {
+        let header = match element[1] {
+            short if short < 0x80 => 2,
+            long => 2 + (long & 0x7f) as usize,
+        };
+        &element[header..]
+    }
+
+    /// The elements of a DER sequence's content, each with its header.
+    fn der_elements(mut content: &[u8]) -> Vec<&[u8]> {
+        let mut elements = Vec::new();
+        while !content.is_empty() {
+            let (length, header) = match content[1] {
+                short if short < 0x80 => (short as usize, 2),
+                long => {
+                    let bytes = (long & 0x7f) as usize;
+                    let length = content[2..2 + bytes]
+                        .iter()
+                        .fold(0, |length, byte| length << 8 | *byte as usize);
+                    (length, 2 + bytes)
+                }
+            };
+            elements.push(&content[..header + length]);
+            content = &content[header + length..];
+        }
+        elements
+    }
+
+    /// An RSA key as PKCS#1 PEM (`RSA PRIVATE KEY`), and its PKCS#8 DER for rcgen.
+    fn pkcs1_key() -> (String, Vec<u8>) {
+        use rsa::pkcs1::EncodeRsaPrivateKey;
+        use rsa::pkcs8::EncodePrivateKey;
+        let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
+        (
+            key.to_pkcs1_pem(rsa::pkcs1::LineEnding::LF)
+                .unwrap()
+                .to_string(),
+            key.to_pkcs8_der().unwrap().as_bytes().to_vec(),
+        )
+    }
+
+    /// An EC P-256 key as SEC1 PEM (`EC PRIVATE KEY`, with the curve named, as Go and so
+    /// cert-manager write it), and its PKCS#8 DER for rcgen.
+    fn sec1_key() -> (String, Vec<u8>) {
+        const PRIME256V1: &[u8] = &[0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07];
+        let pkcs8 = rcgen::KeyPair::generate().unwrap().serialize_der();
+        // PrivateKeyInfo { version, algorithm, privateKey: OCTET STRING holding ECPrivateKey }
+        let info = der_elements(der_content(&pkcs8));
+        let ec_private_key = der_content(info[2]);
+        // ECPrivateKey { version, privateKey, [0] parameters (left out here), [1] publicKey }
+        let fields = der_elements(der_content(ec_private_key));
+        let mut content = [fields[0], fields[1]].concat();
+        content.extend(der(0xA0, PRIME256V1));
+        for field in &fields[2..] {
+            if field[0] != 0xA0 {
+                content.extend_from_slice(field);
+            }
+        }
+        (pem("EC PRIVATE KEY", &der(0x30, &content)), pkcs8)
+    }
+
+    /// A self-signed certificate for the key in `pkcs8`.
+    fn certificate_for(pkcs8: Vec<u8>) -> String {
+        let key = rcgen::KeyPair::try_from(&PrivateKeyDer::Pkcs8(pkcs8.into())).unwrap();
+        rcgen::CertificateParams::new(vec!["golem-shard-manager".to_string()])
+            .unwrap()
+            .self_signed(&key)
+            .unwrap()
+            .pem()
+    }
+
+    #[test]
+    fn pkcs1_and_sec1_keys_are_accepted() {
+        let files = PemFiles::new();
+        for (format, (key, pkcs8), label) in [
+            ("pkcs1", pkcs1_key(), "-----BEGIN RSA PRIVATE KEY-----"),
+            ("sec1", sec1_key(), "-----BEGIN EC PRIVATE KEY-----"),
+        ] {
+            assert!(key.starts_with(label), "{format}");
+            std::fs::write(files.path(&format!("{format}.pem")), certificate_for(pkcs8)).unwrap();
+            std::fs::write(files.path(&format!("{format}-key.pem")), key).unwrap();
+            let tls = EtcdTlsConfig {
+                client_cert_file: Some(files.path(&format!("{format}.pem"))),
+                client_key_file: Some(files.path(&format!("{format}-key.pem"))),
+                ..files.mtls()
+            };
+            if let Err(err) = EtcdConnectSettings::load(&config("https://etcd:2379", Some(tls))) {
+                panic!("a {format} key must be accepted: {err}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_encrypted_key_is_refused() {
+        let files = PemFiles::new();
+        std::fs::write(
+            files.path("encrypted-key.pem"),
+            pem("ENCRYPTED PRIVATE KEY", b"an encrypted key"),
+        )
+        .unwrap();
+        let message = refusal(&config(
+            "https://etcd:2379",
+            Some(EtcdTlsConfig {
+                client_key_file: Some(files.path("encrypted-key.pem")),
+                ..files.mtls()
+            }),
+        ));
+        assert!(
+            message.contains("holds an encrypted private key, which is not supported"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_key_that_does_not_belong_to_its_certificate_is_refused() {
+        let files = PemFiles::new();
+        std::fs::write(
+            files.path("other-key.pem"),
+            rcgen::KeyPair::generate().unwrap().serialize_pem(),
+        )
+        .unwrap();
+        let message = refusal(&config(
+            "https://etcd:2379",
+            Some(EtcdTlsConfig {
+                client_key_file: Some(files.path("other-key.pem")),
+                ..files.mtls()
+            }),
+        ));
+        assert!(
+            message.contains(
+                "does not belong to the certificate in persistence.config.tls.client_cert_file"
+            ),
+            "{message}"
+        );
+    }
+
+    /// A self-signed certificate that expired in 2002, and its key.
+    fn expired_certificate() -> (String, String) {
+        let key = rcgen::KeyPair::generate().unwrap();
+        let mut params =
+            rcgen::CertificateParams::new(vec!["golem-shard-manager".to_string()]).unwrap();
+        params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "golem-shard-manager");
+        params.not_before = rcgen::date_time_ymd(2001, 1, 1);
+        params.not_after = rcgen::date_time_ymd(2002, 1, 1);
+        (params.self_signed(&key).unwrap().pem(), key.serialize_pem())
+    }
+
+    #[test]
+    fn an_expired_client_certificate_is_refused() {
+        let files = PemFiles::new();
+        let (cert, key) = expired_certificate();
+        std::fs::write(files.path("expired.pem"), cert).unwrap();
+        std::fs::write(files.path("expired-key.pem"), key).unwrap();
+        let message = refusal(&config(
+            "https://etcd:2379",
+            Some(EtcdTlsConfig {
+                client_cert_file: Some(files.path("expired.pem")),
+                client_key_file: Some(files.path("expired-key.pem")),
+                ..files.mtls()
+            }),
+        ));
+        assert!(
+            message.contains("persistence.config.tls.client_cert_file"),
+            "{message}"
+        );
+        assert!(
+            message.contains("the certificate of CN=golem-shard-manager expired at"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_ca_whose_certificates_all_expired_is_refused_but_one_valid_is_enough() {
+        let files = PemFiles::new();
+        let (expired, _) = expired_certificate();
+        std::fs::write(files.path("expired-ca.pem"), &expired).unwrap();
+        let message = refusal(&config(
+            "https://etcd:2379",
+            Some(EtcdTlsConfig {
+                ca_cert_file: Some(files.path("expired-ca.pem")),
+                ..files.mtls()
+            }),
+        ));
+        assert!(
+            message.contains("every certificate in it has expired"),
+            "{message}"
+        );
+
+        let bundle = format!(
+            "{expired}{}",
+            String::from_utf8(files.read("cert.pem")).unwrap()
+        );
+        std::fs::write(files.path("bundle.pem"), bundle).unwrap();
+        EtcdConnectSettings::load(&config(
+            "https://etcd:2379",
+            Some(EtcdTlsConfig {
+                ca_cert_file: Some(files.path("bundle.pem")),
+                ..files.mtls()
+            }),
+        ))
+        .expect("a CA bundle with one valid certificate is accepted");
+    }
+
+    #[test]
+    fn an_inline_certificate_shows_its_fingerprint() {
+        let files = PemFiles::new();
+        let display = config("https://etcd:2379", Some(files.inline_mtls())).to_safe_string();
+        let der = CertificateDer::pem_slice_iter(&files.read("cert.pem"))
+            .next()
+            .unwrap()
+            .unwrap();
+        assert!(
+            display.contains(&format!(
+                "tls ca cert: inline value, sha256 {}",
+                sha256_hex(&der)
+            )),
+            "{display}"
+        );
     }
 }
