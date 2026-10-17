@@ -373,14 +373,16 @@ physical release. Known live memory continues accruing during that wait; unavail
 do not fabricate measurements. A late successful read does not erase the window's failure.
 If status work then panics because the actor has stopped, the invocation
 loop retains its resident agent across the borrowed inner-loop failure and runs ordinary unload
-without submitting more actor work. Tests in `tests/api/interruption/lifecycle/health.rs` cover both idle boundaries
-and a pending silent-TCP invocation. Other panic paths still use the outer panic boundary.
+without submitting more actor work. Tests in `tests/api/interruption/lifecycle/health.rs` cover initial
+settlement, later successful invocations and pending silent TCP. Other panic paths still use the outer
+panic boundary.
 
 The monitor has no test-only panic selector or panic token on its target. Native health tests supply
-a panicking adapter through the existing weak owner-usage-flusher interface and wake the normal
-capacity watch with a policy revision. A test-side unwind witness establishes the fault before idle
-release. Cleanup, startup refusal and the original error remain asserted without changing the
-monitor's await graph. Monthly-time and idle controls remain unfinished support.
+a panicking adapter through the existing weak owner-usage-flusher interface. Initial settlement,
+selected-result recording and already-published success need distinct proof boundaries; see
+[idle health with distinct success boundaries](reference/testing-patterns.md#idle-health-with-distinct-success-boundaries).
+Cleanup, startup refusal and the original error remain strict without changing the monitor's await
+graph. Monthly-time support and the actor cell's existing idle barrier remain unfinished work.
 
 The actor-loss change removes both test-only actor-stop methods and the monthly target's exit
 token and task guard. Native tests fail a real positive GrowMemory append through the existing oplog

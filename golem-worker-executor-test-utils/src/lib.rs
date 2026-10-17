@@ -1888,6 +1888,18 @@ impl TestWorkerExecutor {
             .await
     }
 
+    /// Holds a successful invocation's actual Finished append before storage changes.
+    pub async fn gate_next_invocation_finished_append(
+        &self,
+        agent_id: &AgentId,
+    ) -> AgentInitializationEnqueueGateHandle {
+        self.additional_test_deps
+            .gate_next_append(agent_id.clone(), |entry| {
+                matches!(entry, OplogEntry::AgentInvocationFinished { .. })
+            })
+            .await
+    }
+
     /// Holds a selected invocation writer at its real terminal append, before storage changes.
     pub async fn gate_next_invocation_outcome_append(
         &self,

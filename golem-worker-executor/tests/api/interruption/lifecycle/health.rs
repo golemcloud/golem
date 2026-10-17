@@ -9,6 +9,7 @@ use golem_worker_executor::services::resource_limits::ResourceUsageFlusher;
 use golem_worker_executor::services::{HasEvents, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
 use golem_worker_executor::worker::instance::OwnerRuntimeResources;
+use golem_worker_executor::workerctx::default::Context;
 use golem_worker_executor_test_utils::AgentInitializationEnqueueGateHandle;
 use pretty_assertions::assert_eq;
 use std::sync::Mutex;
@@ -18,10 +19,19 @@ use tokio::io::AsyncReadExt;
 #[derive(Debug)]
 struct PanickingUsageFlusher {
     unwound: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    closing_owner: Option<(std::sync::Weak<Worker<Context>>, std::path::PathBuf)>,
 }
 
 impl ResourceUsageFlusher for PanickingUsageFlusher {
     fn flush_usage(&self) {
+        if let Some((owner, _)) = &self.closing_owner {
+            let Some(owner) = owner.upgrade() else {
+                return;
+            };
+            if owner.monthly_window_active_for_test() {
+                return;
+            }
+        }
         let unwound = self.unwound.lock().unwrap().take();
         if let Some(unwound) = unwound {
             struct Notice(Option<tokio::sync::oneshot::Sender<()>>);
@@ -33,6 +43,12 @@ impl ResourceUsageFlusher for PanickingUsageFlusher {
                 }
             }
             let _notice = Notice(Some(unwound));
+            if let Some((_, root)) = &self.closing_owner {
+                assert!(
+                    root.is_dir(),
+                    "initial runtime root must exist at the close-time fault"
+                );
+            }
             panic!("injected monthly monitor panic");
         }
     }
@@ -47,6 +63,7 @@ async fn fail_owner_usage_flusher(
     let (unwound, notice) = tokio::sync::oneshot::channel();
     let source: Arc<dyn ResourceUsageFlusher> = Arc::new(PanickingUsageFlusher {
         unwound: Mutex::new(Some(unwound)),
+        closing_owner: None,
     });
     resources.register_resource_usage_flusher(Arc::downgrade(&source));
     registry.set_policy(registry.current_limits().monthly_policy);
@@ -64,6 +81,13 @@ async fn fail_growing_actor(
     tokio::time::timeout(Duration::from_secs(10), growth.entered())
         .await
         .context("actual lifecycle memory-growth append did not reach the provider")?;
+    fail_entered_growing_actor(growth, owner).await
+}
+
+async fn fail_entered_growing_actor(
+    growth: AgentInitializationEnqueueGateHandle,
+    owner: &OwnedAgentId,
+) -> anyhow::Result<()> {
     assert!(matches!(growth.entry(), OplogEntry::GrowMemory { delta, .. } if delta > 0));
     let mut fence = crate::entity_fence_waits::lifecycle_fence(owner);
     // The existing FailOplogAdd1OnGrowMemory fixture fails this actual append after release.
@@ -421,15 +445,17 @@ async fn storage_observation_timeout_stops_execution_but_retains_pending_read_an
 
 #[test]
 #[timeout("3m")]
-async fn quota_monitor_cleanup_health_survives_initial_and_later_idle(
+async fn quota_monitor_cleanup_health_keeps_results_and_startup_refusal(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    // Initial idle precedes guest work, so no real growth job can fail there. Keep its
-    // actual monitor-fault coverage; actor append failure belongs to a later guest window.
+    // Initial idle precedes guest work. The actor case retains a real guest-growth append
+    // across completed construction and the later allocation before releasing its failure.
     for (later, failure) in [(false, "monitor"), (true, "monitor"), (true, "actor")] {
+        let storage = tempfile::tempdir()?;
+        let storage_root = storage.path().to_path_buf();
         let context = TestContext::new(last_unique_id);
         let metering = ResourceUsageMeteringConfig {
             compute: false,
@@ -445,11 +471,17 @@ async fn quota_monitor_cleanup_health_survives_initial_and_later_idle(
             metering,
             shutdown.clone(),
         );
+        let configure_root = storage_root.clone();
         let executor = start_with_resource_limits_and_configure(
             deps,
             &context,
             limits.clone(),
-            Arc::new(move |config| config.resource_usage_metering = metering),
+            Arc::new(move |config| {
+                config.resource_usage_metering = metering;
+                config.filesystem_storage.mode = golem_worker_executor::services::golem_config::FilesystemStorageMode::Directory {
+                    root: configure_root.clone().into_boxed_path(),
+                };
+            }),
         )
         .await?;
         let component = executor
@@ -467,6 +499,10 @@ async fn quota_monitor_cleanup_health_survives_initial_and_later_idle(
             agent_id: name.to_string(),
         };
         let owned = OwnedAgentId::new(context.default_environment_id, &id);
+        let directory = storage_root
+            .join(context.default_environment_id.to_string())
+            .join(component.id.to_string())
+            .join(golem_service_base::storage::blob::agent_path_segment(&id));
         let seed_id = executor
             .start_agent(&component.id, agent_id!("Counter", "health-seed"))
             .await?;
@@ -486,6 +522,10 @@ async fn quota_monitor_cleanup_health_survives_initial_and_later_idle(
             Principal::anonymous(),
         )
         .await?;
+        let mut events = worker.events().subscribe();
+        let initial_prefix = executor.stored_oplog(&id).await;
+        // The fault fixture can hit guest construction growth, so intercept that actual
+        // append before starting the constructor, not only before explicit allocation.
         let mut actor_growth = if failure == "actor" {
             Some(executor.gate_next_memory_growth_append(&id).await)
         } else {
@@ -501,13 +541,32 @@ async fn quota_monitor_cleanup_health_survives_initial_and_later_idle(
             })
             .await?;
         }
-        let (entered, release_idle) = worker.pause_idle_close_for_test();
+        let prior_acquisitions = worker.permit_acquisitions_for_test();
+        let prior_generation = worker.resident_generation_for_test();
+        if let Some(growth) = &mut actor_growth {
+            tokio::time::timeout(Duration::from_secs(10), growth.entered())
+                .await
+                .context("guest construction growth did not reach its actual append")?;
+            assert!(matches!(growth.entry(), OplogEntry::GrowMemory { delta, .. } if delta > 0));
+        }
+        let mut finished = if later && failure != "actor" {
+            Some(executor.gate_next_invocation_finished_append(&id).await)
+        } else {
+            None
+        };
+        // Actor loss can fail an uncommitted caller. Keep the existing narrow barrier
+        // only where this proof requires an already-published result and an active monitor.
+        let idle = (failure == "actor").then(|| worker.pause_idle_close_for_test());
+        let key = IdempotencyKey::fresh();
         let mut invoke = None;
+        let mut initial_failure_source = None;
+        let mut initial_attempt = None;
         if later {
-            invoke = Some(tokio::spawn({
+            invoke = Some(tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
                 let executor = executor.clone();
                 let name = name.clone();
                 let component = component.clone();
+                let key = key.clone();
                 async move {
                     let (method, input) = if failure == "actor" {
                         // Retain real guest allocation so the lifecycle actor has an actual
@@ -517,24 +576,73 @@ async fn quota_monitor_cleanup_health_survives_initial_and_later_idle(
                         ("increment", data_value!())
                     };
                     executor
-                        .invoke_and_await_agent(&component, &name, method, input)
+                        .invoke_and_await_agent_with_key(&component, &name, &key, method, input)
                         .await
                 }
-            }));
+            })));
         } else {
-            Worker::start_if_needed(worker.clone()).await?;
+            let (unwound, notice) = tokio::sync::oneshot::channel();
+            let source: Arc<dyn ResourceUsageFlusher> = Arc::new(PanickingUsageFlusher {
+                unwound: Mutex::new(Some(unwound)),
+                closing_owner: Some((Arc::downgrade(&worker), directory.clone())),
+            });
+            worker
+                .owner_runtime_resources()
+                .register_resource_usage_flusher(Arc::downgrade(&source));
+            initial_failure_source = Some(source);
+            initial_attempt = Some(
+                Worker::start_if_needed(worker.clone())
+                    .await?
+                    .context("initial startup attempt was not created")?,
+            );
+            tokio::time::timeout(Duration::from_secs(10), notice)
+                .await
+                .context("initial monitor did not unwind while closing its real window")??;
         }
-        entered.await?;
+        let mut release_idle = None;
+        let prefix = if let Some((entered, release)) = idle {
+            tokio::time::timeout(Duration::from_secs(10), entered)
+                .await
+                .context(
+                    "completed actor-case invocation did not reach the existing idle barrier",
+                )??;
+            assert!(directory.is_dir());
+            let completed = tokio::time::timeout(
+                Duration::from_secs(10),
+                invoke
+                    .take()
+                    .expect("actor case must invoke guest allocation"),
+            )
+            .await???;
+            assert_eq!(completed.into_typed::<u32>()?, 1);
+            release_idle = Some(release);
+            executor.stored_oplog(&id).await
+        } else if let Some(finished) = &mut finished {
+            tokio::time::timeout(Duration::from_secs(10), finished.entered())
+                .await
+                .context("successful result did not reach its actual Finished append")?;
+            assert!(matches!(
+                finished.entry(),
+                OplogEntry::AgentInvocationFinished { .. }
+            ));
+            assert!(
+                directory.is_dir(),
+                "selected success must still own its actual runtime root"
+            );
+            executor.stored_oplog(&id).await
+        } else {
+            initial_prefix
+        };
         let generation = worker.resident_generation_for_test();
         let acquisitions = worker.permit_acquisitions_for_test();
-        let attempt = worker.startup_attempt_for_test();
-        if !later {
-            assert!(matches!(attempt, Ok(Some(_))));
+        assert_eq!(acquisitions, prior_acquisitions + 1);
+        assert_eq!(generation, prior_generation + u64::from(!later));
+        if later {
+            assert!(worker.concurrent_agent_permit_is_held().await);
         }
-        let mut events = worker.events().subscribe();
-        assert!(worker.concurrent_agent_permit_is_held().await);
         let mut failure_source = None;
         let expected = match failure {
+            "monitor" if !later => "Monthly monitor panicked: injected monthly monitor panic",
             "monitor" => {
                 failure_source = Some(
                     fail_owner_usage_flusher(
@@ -548,7 +656,7 @@ async fn quota_monitor_cleanup_health_survives_initial_and_later_idle(
                 "Monthly monitor panicked: injected monthly monitor panic"
             }
             "actor" => {
-                fail_growing_actor(actor_growth.take().unwrap(), &owned).await?;
+                fail_entered_growing_actor(actor_growth.take().unwrap(), &owned).await?;
                 assert!(
                     worker
                         .submit_monthly_capacity_for_test()
@@ -560,7 +668,12 @@ async fn quota_monitor_cleanup_health_survives_initial_and_later_idle(
             }
             _ => unreachable!(),
         };
-        release_idle.send(false).unwrap();
+        // Release the monitor case's selected result writer. The actor case has already
+        // returned its committed result and now releases its remaining idle barrier.
+        drop(finished);
+        if let Some(release) = release_idle {
+            release.send(false).unwrap();
+        }
         let error = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 if let Some(error) = worker.cleanup_failure_for_test().await {
@@ -582,10 +695,17 @@ async fn quota_monitor_cleanup_health_survives_initial_and_later_idle(
                 .to_string()
                 .contains(expected)
         );
-        assert!(
-            worker.unload_succeeded_for_test(),
+        assert_eq!(
+            tokio::fs::symlink_metadata(&directory)
+                .await
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound,
             "physical deletion must succeed independently of retained health"
         );
+        if !later || failure == "actor" {
+            assert!(worker.unload_succeeded_for_test());
+        }
         assert!(!worker.concurrent_agent_permit_is_held().await);
         assert!(worker.eviction_class().await.is_none());
         assert_eq!(worker.resident_generation_for_test(), generation);
@@ -597,19 +717,52 @@ async fn quota_monitor_cleanup_health_survives_initial_and_later_idle(
             let loaded = events
                 .wait_for(|event| match event {
                     Event::WorkerLoaded {
-                        agent_id, result, ..
-                    } if agent_id == &id => Some(result.clone()),
+                        agent_id,
+                        start_attempt,
+                        result,
+                        ..
+                    } if agent_id == &id && Some(*start_attempt) == initial_attempt => {
+                        Some(result.clone())
+                    }
                     _ => None,
                 })
                 .await?;
             assert!(loaded.unwrap_err().to_string().contains(expected));
         }
         if let Some(invoke) = invoke {
-            invoke.await??;
+            assert_eq!(invoke.await??.into_typed::<u32>()?, 1);
         }
         if let Some((source, refresh)) = failure_source {
             refresh.await?;
             drop(source);
+        }
+        drop(initial_failure_source);
+        let recorded = executor.stored_oplog(&id).await;
+        assert!(recorded.len() >= prefix.len());
+        assert_eq!(&recorded[..prefix.len()], prefix.as_slice());
+        assert_eq!(
+            recorded
+                .iter()
+                .filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { .. }))
+                .count(),
+            2 * usize::from(later)
+        );
+        assert_eq!(
+            recorded
+                .iter()
+                .filter(|entry| matches!(entry, OplogEntry::AgentInvocationFinished { .. }))
+                .count(),
+            2 * usize::from(later)
+        );
+        assert!(!recorded.iter().any(|entry| matches!(
+            entry,
+            OplogEntry::Error { .. }
+                | OplogEntry::Interrupted { .. }
+                | OplogEntry::Suspend { .. }
+                | OplogEntry::Jump { .. }
+        )));
+        if later {
+            assert_eq!(recorded.iter().filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
         }
         shutdown.cancel();
     }

@@ -330,6 +330,40 @@ The completed rejection diagnostic proves that the policy applied; joining the w
 allowing interruption deadlocks the test. Keep both full joins after physical cleanup. The other
 time-driving consumers and Worker clock support remain separate open work.
 
+### Idle health with distinct success boundaries
+
+Initial idle settlement precedes guest construction. Fault the existing weak usage flusher during
+the monitor's real close-time flush, then require failed readiness for the actual startup attempt,
+no guest execution, retained failed health and refusal to start again. A constructor Finished append
+is too late to prove this initial boundary.
+
+The later monitor case can hold the real selected Finished append, fault the existing usage
+producer, then release the writer and require the original successful Counter result. This is a
+pre-commit dependency hold, not post-success idle. Verify the complete raw prefix and exact invocation
+records independently of the API result.
+
+Actor loss has a different limit. At that earlier append hold it can fail the in-flight caller with
+the actual lifecycle-actor error. That does not prove preservation of an already-published result.
+The actor cell therefore retains the existing idle-close barrier. It observes
+the successful result before faulting the held actual positive growth append, then releases that
+barrier. There is no new registry or runtime hook. Complete idle-control removal stays open; moving
+this fault earlier or allowing an error would weaken the surviving result guarantee.
+
+This barrier delays only the natural idle close after result publication. The actor's real append
+failure, ordinary monitor response and cleanup still run through their production owners. The test
+does not use this extended window to claim normal timing or a resource-release deadline. Release
+joins actual disposal and retains failed health. This is a narrow documented exception, not approval
+to add another lifecycle protocol or a claim that all idle controls are removed.
+
+The first positive guest growth can occur in construction. Arm its existing dependency interceptor
+before bootstrap and observe its entry before registering a later Finished hold. The entered append
+owns its captured gate while the same adapter is rearmed, so it needs no multi-interest registry.
+
+Use a real Directory-backend root for independent deletion evidence. Require the root to exist at
+the fault or dependency hold, join final cleanup and require exact metadata NotFound. The aggregate
+unload-success projection includes monitor-close failure and cannot independently prove deletion.
+Keep the exact retained error, readiness/startup refusal, identity, permit and generation assertions.
+
 ### Native wait observations without Worker hooks
 
 Use production tracing fields for real-Worker native Pending observations, including P2, RPC, UDP

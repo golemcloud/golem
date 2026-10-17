@@ -239,6 +239,17 @@ Findings 11-14 have separate linked comments.
     production compilation and browser checks pass. This completes this control family only;
     overall A1/F10/F11 remain open.
   - [ ] Address remaining idle-close and deletion-stage gates.
+    The local idle-health narrowing removes both monitor cells' private idle holds. Initial
+    readiness failure uses a real close-time usage-flusher fault; later monitor failure uses its
+    selected Finished append and still requires the original successful result. The existing idle
+    barrier remains only for actor loss after an already-published result. Moving that fault to an
+    uncommitted writer produced a real caller error, so it is not an equivalent replacement and
+    the success assertion is not relaxed. Exact physical-root deletion, retained error, startup
+    refusal, identity, generation, permit and history proofs remain. No new runtime hook or append
+    registry is added. The narrowed helper, unchanged monitor/cleanup/after-End collateral,
+    strict integration/test-utils lint and formatting pass. This is a proposed narrow retention,
+    not complete family removal or reviewer acceptance; this checkbox remains open. The barrier
+    delays natural idle close only after successful publication and makes no normal timing claim.
   - [x] Remove the completed-history replay-gate family. The local change deletes its Worker
     field, type, setter, history scan and pre-invocation await after both native consumers pass at
     the exact stored input-payload acquisition boundary. The supported external-payload setting
