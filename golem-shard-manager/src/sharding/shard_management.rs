@@ -261,7 +261,7 @@ impl ShardManagement {
                 .await?;
             info!(
                 executors = regranted,
-                "Re-granted shard leases to the executors that answered the initial health check"
+                "Restarted the shard leases of the executors counted alive at startup"
             );
         }
 
