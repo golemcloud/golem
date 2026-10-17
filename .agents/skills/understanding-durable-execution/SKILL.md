@@ -343,7 +343,13 @@ shard. A commit whose status the status task must rebuild from an oplog that doe
 the incremental fold of the commit fails) is refused with
 `OplogRefusal::Unreadable`, so the start fails with `OplogFailed` (or `RecoveryRequired` when the
 storage did not answer); unlike the fence and the archive
-write, it is not latched on the oplog, and the caller that receives it fails the agent. When
+write, it is not latched on the oplog, and the caller that receives it fails the agent. The
+status stays detached until a later fold or rebuild succeeds. A caller that took the early receipt
+of `commit_oplog_before_status_update` does not wait for the refusal, so the owner finds it
+itself: the invocation loop chooses work only from `Worker::get_repaired_status`, which rebuilds a
+detached status first, and a rebuild that fails again is recorded like a failed recovery and
+ends in infrastructure recovery or in a stop with `OplogFailed` (`unrepaired_status_outcome`).
+`AppendInvocationIfVersion` also rebuilds a detached status before it checks the key. When
 `on_invocation_failure` cannot record the failure of an invocation, the refusal takes the
 classification of its agent error (`terminal_entry_refusal` in `durable_host/mod.rs`). An oplog
 that failed for good fails the invocation with its cause. A storage that did not answer returns

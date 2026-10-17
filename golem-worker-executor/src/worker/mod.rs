@@ -3963,6 +3963,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.state_actor.status().await
     }
 
+    /// The projection as [`Self::get_last_known_status`] gives it, rebuilt first when a failed
+    /// rebuild left it detached. A rebuild that fails again gives the refusal, reported as in
+    /// [`Self::commit_oplog_and_update_state`].
+    pub(crate) async fn get_repaired_status(
+        &self,
+    ) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
+        self.state_actor
+            .repaired_status()
+            .await
+            .map_err(|refusal| self.refused_by(refusal).into())
+    }
+
+    /// Whether the published status is detached from the oplog: a rebuild runs, or one failed.
+    pub(crate) fn last_known_status_detached(&self) -> bool {
+        self.last_known_status_detached.load(Ordering::Acquire)
+    }
+
     pub(crate) async fn get_export_fork_status(
         &self,
     ) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {

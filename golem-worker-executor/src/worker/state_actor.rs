@@ -240,6 +240,12 @@ enum StatusJob {
     Status {
         done: oneshot::Sender<Arc<AgentStatusRecord>>,
     },
+    /// Observes completed projection work in FIFO order like `Status`, but first rebuilds a status
+    /// that an earlier rebuild left detached. Replies with the refusal when the rebuild fails
+    /// again, so no decision is taken from a status that is not a fold of the oplog.
+    RepairedStatus {
+        done: oneshot::Sender<Result<Arc<AgentStatusRecord>, OplogRefusal>>,
+    },
     /// Writes the confirmation record of a filesystem snapshot when the last automatic snapshot
     /// record still has the name. The check and the append run in this one job, so no other
     /// status job runs between them. The job holds the instance guard of its caller until it
@@ -375,8 +381,21 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     } => {
                         complete_status_job(
                             async {
-                                let changed =
-                                    state.commit_and_update_state(level, committed).await?;
+                                let changed = state
+                                    .commit_and_update_state(level, committed)
+                                    .await
+                                    .inspect_err(|refusal| {
+                                        // The entries are stored, but the status was not rebuilt.
+                                        // A caller that took the receipt may no longer wait for
+                                        // this reply, so the owner is woken to repair the detached
+                                        // status itself before it chooses more work.
+                                        if matches!(refusal, OplogRefusal::Unreadable(_)) {
+                                            queue_status_notification(
+                                                &status_lifecycle_jobs,
+                                                &status_notification_queued,
+                                            );
+                                        }
+                                    })?;
                                 let index = state.oplog.current_oplog_index().await;
                                 if changed {
                                     queue_status_notification(
@@ -448,6 +467,13 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     } => {
                         complete_status_job(
                             async {
+                                // A detached status is not a fold of the oplog, so the key is
+                                // checked only against a repaired one.
+                                if state.detached.load(Ordering::Acquire) {
+                                    state
+                                        .commit_and_update_state(CommitLevel::Always, None)
+                                        .await?;
+                                }
                                 let status = state.last_known_status.load();
                                 if !can_append_invocation(
                                     &status,
@@ -487,6 +513,25 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     }
                     StatusJob::Status { done } => {
                         let _ = done.send(state.last_known_status.load_full());
+                    }
+                    StatusJob::RepairedStatus { done } => {
+                        complete_status_job(
+                            async {
+                                if state.detached.load(Ordering::Acquire)
+                                    && state
+                                        .commit_and_update_state(CommitLevel::Always, None)
+                                        .await?
+                                {
+                                    queue_status_notification(
+                                        &status_lifecycle_jobs,
+                                        &status_notification_queued,
+                                    );
+                                }
+                                Ok(state.last_known_status.load_full())
+                            },
+                            done,
+                        )
+                        .await;
                     }
                     StatusJob::ConfirmFilesystemSnapshot {
                         name,
@@ -750,6 +795,15 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     pub async fn status(&self) -> Arc<AgentStatusRecord> {
         self.commit
             .run_status_job(|done| StatusJob::Status { done })
+            .await
+    }
+
+    /// The published status, rebuilt first when an earlier rebuild left it detached. Gives the
+    /// refusal of that rebuild instead of the detached status, so a caller that chooses work from
+    /// the status never chooses it from one that is not a fold of the oplog.
+    pub async fn repaired_status(&self) -> Result<Arc<AgentStatusRecord>, OplogRefusal> {
+        self.commit
+            .run_status_job(|done| StatusJob::RepairedStatus { done })
             .await
     }
 
@@ -1161,7 +1215,8 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     /// store the entries, is returned as the refusal rather than folded into "unchanged": a caller
     /// whose entry was only buffered until this commit must not report it as written. A commit
     /// whose status cannot be rebuilt because the oplog does not read is returned as
-    /// `OplogRefusal::Unreadable`: its entries were stored, but the agent cannot go on.
+    /// `OplogRefusal::Unreadable`: its entries were stored, but the agent cannot go on. The status
+    /// stays detached until a later fold or rebuild succeeds; the refusal itself is not latched.
     async fn commit_and_update_state(
         &self,
         commit_level: CommitLevel,
@@ -1182,6 +1237,8 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         // Reading the index is not a write, so a fenced oplog still answers it; the sample is
         // only consumed on the path where the commit below succeeded.
         let appended_through = self.oplog.current_oplog_index().await;
+        // Only a failed rebuild leaves the status detached between status jobs.
+        let repairing = self.detached.load(Ordering::Acquire);
         let new_entries = settle_commit(self.oplog.commit(commit_level).await, committed)
             .map_err(|refusal| self.refused(refusal))?;
 
@@ -1209,7 +1266,9 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         )
         .await;
         let (updated_status, reconstructed) = match updated_status {
-            Ok(Some(status)) => (status, false),
+            // A status that an earlier rebuild left detached is repaired by this fold: it is
+            // published, attached and flushed as a rebuilt one.
+            Ok(Some(status)) => (status, repairing),
             Ok(None) | Err(_) => {
                 // Suppress background cache writes until the replacement projection is installed.
                 self.detached.store(true, Ordering::Release);
