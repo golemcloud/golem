@@ -3,6 +3,13 @@ declare module 'golem:durability/durability@1.6.0' {
   import * as golemCore200Types from 'golem:core/types@2.0.0';
   import * as wasiClocks030SystemClock from 'wasi:clocks/system-clock@0.3.0';
   /**
+   * With no argument, captures the current context without changing it. With a snapshot,
+   * consumes and installs it and returns the previous context. A snapshot can contain an
+   * empty context. Snapshots cannot be installed in another invocation or after their
+   * enclosing custom invocations have closed. This operation neither yields nor journals.
+   */
+  export function exchangeCustomInvocationContext(next: CustomInvocationContext | undefined): CustomInvocationContext;
+  /**
    * Observes a function call (produces logs and metrics)
    */
   export function observeFunctionCall(iface: string, function_: string): void;
@@ -13,11 +20,27 @@ declare module 'golem:durability/durability@1.6.0' {
    * invocation returns `replayed` with its recorded response.
    */
   export function beginCustomDurableInvocation(functionName: string, request: TypedSchemaValue, functionType: DurableFunctionType): CustomDurableInvocation;
+  /**
+   * Admits an asynchronous operation without blocking sibling guest futures. Live admission
+   * requires enter before executing the body. Completed replay waits for recorded delivery.
+   */
+  export function beginCustomDurableInvocationAsync(functionName: string, request: TypedSchemaValue, functionType: DurableFunctionType): Promise<CustomDurableInvocation>;
+  export class CustomInvocationContext {
+  }
   export class LiveCustomDurableInvocation {
+    /**
+     * Installs a live invocation returned by asynchronous admission on the current task.
+     */
+    enter(): void;
     /**
      * Completes the invocation with its schema-carrying response.
      */
     static finish(this_: LiveCustomDurableInvocation, response: TypedSchemaValue, forcedCommit: boolean): void;
+    /**
+     * Completes an asynchronous invocation at a recorded guest result-delivery boundary.
+     * The caller retains the resource until completion or cancellation, then drops it.
+     */
+    static finishAsync(this_: LiveCustomDurableInvocation, response: TypedSchemaValue, forcedCommit: boolean): Promise<void>;
   }
   export type WrappedFunctionType = golemApi150Oplog.WrappedFunctionType;
   export type Datetime = wasiClocks030SystemClock.Instant;
