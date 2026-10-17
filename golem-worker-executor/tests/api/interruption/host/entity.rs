@@ -289,6 +289,7 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
     );
 
     let mut attempts = worker.observe_monthly_acceptance_for_test();
+    let committed_prefix = executor.stored_oplog(&id).await;
     let (selected, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
     let mut raw = worker.raw_interrupt_for_test();
     let mut exhausted = policy;
@@ -323,7 +324,7 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
     );
     assert!(worker.concurrent_agent_permit_is_held().await);
     assert_eq!(account.monthly_observer_count_for_test(), 1);
-    let mut receipt = worker.accepted_stop_receipt_for_test();
+    let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
     assert!(matches!(
         receipt.try_recv(),
         Err(tokio::sync::broadcast::error::TryRecvError::Empty)
@@ -347,7 +348,6 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
         tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??,
         cause
     );
-    assert_eq!(worker.frozen_stop_for_test(), Some(cause));
     assert_eq!(worker.owner_stop_for_test().await, Some(cause));
     let mut byte = [0_u8];
     assert_eq!(
@@ -398,6 +398,12 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
             worker.oplog().current_oplog_index().await.as_u64(),
         )
         .await;
+    let raw_after_stop = executor.stored_oplog(&id).await;
+    assert!(raw_after_stop.len() >= committed_prefix.len());
+    assert_eq!(
+        &raw_after_stop[..committed_prefix.len()],
+        committed_prefix.as_slice()
+    );
     assert_eq!(stopped.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
     assert_eq!(
         stopped
@@ -464,27 +470,21 @@ async fn pending_receive(
             let entries = oplog
                 .read_exact(OplogIndex::INITIAL, observed_tip.as_u64())
                 .await;
-            let scopes = entries.iter().filter_map(|(index, entry)| match entry {
+            let receives = entries.iter().filter_map(|(index, entry)| match entry {
                 OplogEntry::Start { function_name, parent_start_index, .. }
-                    if *index > after && function_name.to_string() == "<scope:batched-write>"
+                    if *index > after && function_name.to_string() == "sockets::types::tcp-socket::receive"
                         && *parent_start_index == parent => Some(*index),
                 _ => None,
-            }).collect::<HashSet<_>>();
-            let receives = entries.iter().filter_map(|(index, entry)| match entry {
-                OplogEntry::Start { function_name, parent_start_index: Some(scope), .. }
-                    if *index > after && function_name.to_string() == "sockets::types::tcp-socket::receive"
-                        && scopes.contains(scope) => Some((*index, *scope)),
-                _ => None,
             }).collect::<Vec<_>>();
-            if let [(receive, scope)] = receives.as_slice() {
+            if let [receive] = receives.as_slice() {
                 let chunks = entries.iter().filter_map(|(index, entry)| match entry {
                     OplogEntry::Start { function_name, parent_start_index, .. }
                         if function_name.to_string() == "sockets::types::tcp-socket::receive-chunk"
-                            && *parent_start_index == Some(*scope) => Some(*index),
+                            && *parent_start_index == Some(*receive) => Some(*index),
                     _ => None,
                 }).collect::<Vec<_>>();
                 if let [chunk] = chunks.as_slice() {
-                    for pending in [scope, receive, chunk] {
+                    for pending in [receive, chunk] {
                         assert!(!entries.values().any(|entry| matches!(entry,
                             OplogEntry::End { start_index, .. } | OplogEntry::Cancelled { start_index, .. }
                                 if start_index == pending

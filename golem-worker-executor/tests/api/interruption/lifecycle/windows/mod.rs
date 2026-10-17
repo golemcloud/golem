@@ -146,7 +146,6 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
     assert_eq!(credited.start_attempt, old.start_attempt);
     assert_eq!(credited.resident_generation, old.resident_generation);
     assert_eq!(credited.window_identity, old.window_identity);
-    assert_eq!(worker.frozen_stop_for_test(), Some(user_suspend));
     assert_eq!(worker.monthly_stop_for_test(), None);
     drop(updates);
     assert_eq!(account.monthly_observer_count_for_test(), 1);
@@ -245,7 +244,7 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
         .expect("accepted current proposal");
     assert!(matches!(quota_stop, InterruptKind::Suspend(_)));
     assert_eq!(worker.pending_stop_for_test().await, Some(quota_stop));
-    let mut receipt = worker.accepted_stop_receipt_for_test();
+    let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
     assert!(matches!(
         receipt.try_recv(),
         Err(tokio::sync::broadcast::error::TryRecvError::Empty)
@@ -254,7 +253,6 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
         tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??,
         quota_stop
     );
-    assert_eq!(worker.frozen_stop_for_test(), Some(quota_stop));
     assert_eq!(worker.owner_stop_for_test().await, Some(quota_stop));
     release_new_replay.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(10), async {
@@ -427,7 +425,6 @@ mod activation {
             "Started persistence precedes Running and promises no public stop receipt"
         );
         worker.join_accepted_stops_for_test().await?;
-        assert_eq!(worker.frozen_stop_for_test(), Some(accepted));
         assert_eq!(worker.owner_stop_for_test().await, Some(accepted));
         outcome.release();
         let snapshot = teardown.await?;
@@ -437,7 +434,6 @@ mod activation {
             snapshot.pending, None,
             "the invocation loop consumed the stop"
         );
-        assert_eq!(snapshot.frozen, Some(accepted));
         assert_eq!(worker.owner_stop_for_test().await, Some(accepted));
         assert!(!worker.has_unload_cleanup_for_test());
         assert!(worker.concurrent_agent_permit_is_held().await);
@@ -527,7 +523,7 @@ mod activation {
 
     #[test]
     #[timeout("60s")]
-    async fn frozen_interrupt_preserves_queued_invocation_behind_selected_writer_and_quota(
+    async fn explicit_interrupt_preserves_queued_invocation_behind_selected_writer_and_quota(
         last_unique_id: &LastUniqueId,
         deps: &WorkerExecutorTestDependencies,
         #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
@@ -643,11 +639,8 @@ mod activation {
             .await?
             .context("accepted user stop has no receipt")?;
         assert_eq!(worker.pending_stop_for_test().await, Some(accepted));
-        assert_eq!(worker.owner_stop_for_test().await, None);
-        assert!(matches!(
-            raw.try_recv(),
-            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-        ));
+        assert_eq!(worker.owner_stop_for_test().await, Some(accepted));
+        assert_eq!(worker.await_interrupt_for_test().await, accepted);
         let (teardown, release_teardown) = worker.pause_next_teardown_fence_for_test();
         let entry = limits.initialize_account(context.account_id).await?;
         assert!(!entry.monthly_capacity_is_exhausted_for_test(
@@ -755,7 +748,7 @@ mod activation {
         assert_eq!(
             (interrupted, suspended),
             (1, 0),
-            "the frozen explicit Interrupt owns the invocation terminal"
+            "the explicit Interrupt owns the invocation terminal"
         );
         assert_eq!(entries.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 0);
         assert_eq!(entries.values().filter(|e| matches!(e, OplogEntry::PendingAgentInvocation { idempotency_key, .. } if idempotency_key == &key)).count(), 1);

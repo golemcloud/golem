@@ -2558,10 +2558,8 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                 && !replaying_completed
                 && !local_cancellation_selected
             {
-                let worker = store.data().durable_ctx().public_state.worker();
-                let kind = worker.terminal_teardown_cause(*kind).await;
                 let _ = operation
-                    .select_failure(operation::OwnerFailureWinner::Lifecycle(kind))
+                    .select_failure(operation::OwnerFailureWinner::Lifecycle(*kind))
                     .await;
             }
             let output_failure = guest_trap_output_failure(

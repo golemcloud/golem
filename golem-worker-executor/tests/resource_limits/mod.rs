@@ -518,14 +518,16 @@ async fn closed_window_retains_late_stop_health_without_reacquiring_permit(
         worker.join_accepted_stops_for_test().await?;
         let generation = worker.resident_generation_for_test();
         let acquisitions = worker.permit_acquisitions_for_test();
-        assert!(!worker.concurrent_agent_permit_is_held().await);
         let directory = root
             .path()
             .join(context.default_environment_id.to_string())
             .join(component.id.to_string())
             .join(golem_service_base::storage::blob::agent_path_segment(&id));
         assert!(directory.is_dir());
+        let mut reacquisition = crate::scheduler_waits::queued(&context.account_id, &id);
         drop(worker.set_interrupting(InterruptKind::Restart).await?);
+        tokio::time::timeout(Duration::from_secs(5), reacquisition.entered()).await??;
+        assert!(!worker.concurrent_agent_permit_is_held().await);
         tokio::time::timeout(Duration::from_secs(5), async {
             while directory.exists() {
                 tokio::task::yield_now().await;
@@ -647,6 +649,7 @@ async fn released_window_late_stop_cancels_real_permit_reacquisition(
         (&mut permit).now_or_never().is_none(),
         "real FIFO contender cannot acquire the active owner's permit"
     );
+    let mut reacquisition = crate::scheduler_waits::queued(&context.account_id, &id);
     let mut first = worker
         .set_interrupting(InterruptKind::Restart)
         .await?
@@ -661,8 +664,9 @@ async fn released_window_late_stop_cancels_real_permit_reacquisition(
             | tokio::sync::broadcast::error::TryRecvError::Closed)
     ));
     assert!(worker.has_unload_cleanup_for_test());
+    // The existing event follows actual enqueue in the scheduler, after this loop's unload.
+    tokio::time::timeout(Duration::from_secs(5), reacquisition.entered()).await??;
     assert!(!worker.concurrent_agent_permit_is_held().await);
-    assert_eq!(worker.frozen_stop_for_test(), Some(InterruptKind::Restart));
     assert!(
         worker.is_loaded().await,
         "the original loop still owns the waiter"
@@ -690,7 +694,6 @@ async fn released_window_late_stop_cancels_real_permit_reacquisition(
     assert!(!worker.is_loaded().await);
     assert!(!worker.is_loading());
     assert_eq!(worker.pending_stop_for_test().await, None);
-    assert_eq!(worker.frozen_stop_for_test(), Some(InterruptKind::Restart));
     executor
         .wait_for_status(&id, AgentStatus::Interrupted, Duration::from_secs(5))
         .await?;
@@ -805,13 +808,14 @@ async fn concurrent_agent_limit_restarted_waiter_stops_without_permit(
             _ = tokio::task::yield_now() => {}
         }
 
+        let mut reacquisition = crate::scheduler_waits::queued(&context.account_id, &worker_id);
         executor.simulated_crash(&worker_id).await?;
         let held_permit = tokio::time::timeout(Duration::from_secs(5), &mut permit_waiter)
             .await
             .map_err(|_| anyhow::anyhow!("permit holder did not acquire after restart"))?;
         worker.join_accepted_stops_for_test().await?;
+        tokio::time::timeout(Duration::from_secs(5), reacquisition.entered()).await??;
         assert!(worker.has_unload_cleanup_for_test());
-        assert_eq!(worker.frozen_stop_for_test(), Some(InterruptKind::Restart));
         assert_eq!(
             worker.owner_stop_for_test().await,
             Some(InterruptKind::Restart)
@@ -850,7 +854,6 @@ async fn concurrent_agent_limit_restarted_waiter_stops_without_permit(
                     .len(),
                 finished
             );
-            assert_eq!(worker.frozen_stop_for_test(), Some(InterruptKind::Restart));
             assert_eq!(worker.resident_generation_for_test(), generation);
             assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
             assert!(!worker.concurrent_agent_permit_is_held().await);

@@ -413,7 +413,6 @@ mod retries {
         );
         expect_poll(&mut polls, 11, 41).await?;
         assert_eq!(worker.monthly_stop_for_test(), None);
-        assert_eq!(worker.frozen_stop_for_test(), None);
         assert_eq!(worker.owner_stop_for_test().await, None);
         assert!(matches!(
             raw.try_recv(),
@@ -453,7 +452,6 @@ mod retries {
         assert!(!tokio::time::timeout(Duration::from_secs(10), missed_tick.completed).await??);
         expect_poll(&mut polls, 41, 71).await?;
         assert_eq!(worker.monthly_stop_for_test(), None);
-        assert_eq!(worker.frozen_stop_for_test(), None);
         assert_eq!(worker.owner_stop_for_test().await, None);
         assert!(matches!(
             raw.try_recv(),
@@ -497,7 +495,6 @@ mod retries {
         let quota_stop = worker.monthly_stop_for_test().expect("accepted tick stop");
         assert!(matches!(quota_stop, InterruptKind::Suspend(_)));
         assert!(worker.terminal_stop_claimed_for_test().await);
-        assert_eq!(worker.frozen_stop_for_test(), Some(quota_stop));
         assert_eq!(worker.owner_stop_for_test().await, Some(quota_stop));
         assert_eq!(worker.current_monthly_proposal_for_test(), current);
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
@@ -518,7 +515,7 @@ mod retries {
             "[monthly-tick] accepted next tick at 71s, identical target and capacity, overshoot={usage_at_tick}"
         );
 
-        let mut receipt = worker.accepted_stop_receipt_for_test();
+        let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
         release_outcome.send(false).unwrap();
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??,

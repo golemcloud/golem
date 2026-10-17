@@ -335,7 +335,8 @@ remains. Guest-failure, timeout and automatic-Suspend regressions demonstrated t
 was calling failure twice. It now reads FIFO-folded status and records retry interruption only for
 Running or Retrying. Those native assertions remain exact and passed after the source repair.
 The pure monthly mapper cannot replace a deadline or unrelated error with a queued stop.
-Stop publication, admission seals and early generation handoff remain open A1 work.
+The subsequent establishment restoration passes its combined affected checks. Keep the broader
+A1 review and remaining F10/F11 controls open; this is not full upstream SDK or managed-XFS evidence.
 
 ### Retained stop markers and physical release
 
@@ -354,8 +355,8 @@ contender acquires execution capacity while the runtime root still exists. Start
 still refuse the retained structural failure. Hold that lease through ordinary public Delete after
 permissions are restored, then require verified root removal with generation and acquisition count
 unchanged. Returned execution capacity is not successful filesystem cleanup.
-Keep this real-Worker evidence separate from exact freeze/fence/publication ordering in colocated
-production-body tests. Other teardown and monitor controls remain separate.
+Keep this real-Worker evidence separate from queue/predecessor and EntityFence body checks.
+Other teardown and monitor controls remain separate.
 
 `execution_window_closes_before_filesystem_deletion` calls the actual unload body and captures
 settlement, permit and Store-drop facts at the dependency's entered pending deletion. Require settled
@@ -374,54 +375,48 @@ metering tests; transient final-read errors alone do not establish retained enfo
 
 ### Stop publication, drain and acknowledgements
 
-The Worker publication pause field, setter, post-publish await and injected panic are removed, not
-relocated. `StopPublication` remains the production transaction. Its exact phase proofs and native
-consumer checks are separate; neither alone reconstructs the former compound Worker witness.
+The production publication transaction is removed with its private receipt and leader/follower tests.
+Use main's actual request/establishment objects. Queueing must advance the tail only on acceptance;
+replacement retains the preceding establishment. A taken request waits on its own establishment.
+The permit-wait body must drop acquisition before joining it, retain deferred command replies and
+never poll even a ready acquisition when a request already waits.
 
-`published_stop_retains_window_until_real_entity_drain_completes` composes actual freeze,
-owner fencing, typed publication and borrowed `EntityFence::drain`. ActiveAgent delegates
-to that same drain body, which snapshots entity slots under the mutex and releases it before awaiting
-slot drain and owner-failure lanes. The test registers a real EntitySlot, attaches zero-byte
-memory metadata, retains an empty Wasmtime Store with observable Drop, and acquires a real child lane
-for an accepted owner operation. Its notification follows one actual drain poll returning Pending;
-the task then awaits that same drain. The notification cannot hold progress.
+The all-meters-off late-stop test subscribes in test code to the scheduler's existing exact queue
+event for its account and agent. The event follows actual enqueue. Await it after the external FIFO
+contender acquires capacity, then require the original loop's permit flag to be released before
+issuing the later stop. This proves reacquisition without treating establishment as physical unload,
+calling a cleanup API that requires the loop to have stopped, or adding a Worker observer. The
+capture stores only active subscriptions and removes them before delivery. It adds no production
+instrumentation, scheduler branch or wait hook.
 
-After exact typed publication, require both retained driver join and `ExecutionWindow::close` Pending,
-the original real account permit held, a real FIFO contender Pending and no second publication.
-Drop the actual Store, verify destruction, then drop the operation and registration before requiring
-drain/driver/close completion, one physical release and no unfinished release metrics. This proves
-host-primitive ownership, not whole-Worker transient ordering, reconstruction or customer charges.
-Zero-byte attached metadata is not positive guest-memory evidence.
+`entity_fence_keeps_attached_store_and_registration_until_the_body_exits` polls the real
+`EntityFence::drain` Pending with an attached EntitySlot and observable Store. Verify cancellation,
+memory metadata, registration retention and an available slot-map mutex. Destroying the Store alone
+does not drain registration. Releasing registration completes drain without destroying the primary
+Store. This is a host-body proof, not a native guest charge or whole-Worker interleaving.
 
-Keep acknowledgement claims distinct. Running publication returns false for no-Store acknowledgement;
-actual `acknowledge_without_store(false)` emits none. A Running Store can acknowledge before entity
-drain. The publication matrix leaves the terminal Pending and permits exactly one internal
-notification for Suspended status only through actual
-`acknowledge_without_store(true)`. That internal notification is not a public Some receipt promise.
+Window close no longer waits on artificial registered stop futures. Its tests retain actual permit
+release, monitor join and first cleanup failure, including failure after target closure. Entered
+effect and physical-drain retention remain native entity/backend/filesystem obligations, not another
+stop coordinator.
 
-No publication matrix captures or claims a result writer. Generation refusal, exact raw signal,
-unwritten public receipt and actual no-Store acknowledgement remain body checks. The callback and
-normal invocation exit, rather than publication, own the already-recorded outcome.
-
-Native Waiting tests obtain public Some before the driver, hold actual lifecycle-marker persistence,
-require receipt Empty before commit release and exactly one afterward. The held append owns the
-instance mutex: do not query the instance or submit a competing stop while it is held. The native
-Started checkpoint is pre-Running and Suspended; require public None and join the retained publisher,
-not a race-prone private receipt subscription installed after `set_interrupting`. The actual matrix
-owns the exact internal acknowledgement assertion. Native tests retain exact causes, marker counts,
-keys, generation/acquisitions, outcomes, physical cleanup and recovery. The idle-after-success
-observer and writer projections are removed. Teardown, idle-close, monitor/time, replay and other protocol controls remain separate
-work. Monthly acceptance observer and completion interfaces also remain; only its pause gate is removed.
+Native Waiting tests hold actual lifecycle-marker persistence. Run the interrupt request independently
+when that same request owns the held append. Observe its ordinary execution-status receipt, require
+Empty before commit release and exactly one afterward, including on the returned receiver. After
+ordinary status drops the sender, require Closed rather than an artificially retained channel. A raw
+signal channel likewise need not remain open after the status and native wait drop its last sender.
+Do not accept an additional signal or acknowledgement. The append
+owns the instance mutex: do not query it or submit another stop while held. Started can precede Running
+and promise no public receipt. Keep exact marker, key, result, cleanup and reconstruction assertions.
+Monthly native tests use test-side `published_interrupt_receipt` while provider or oplog work is held;
+it observes ordinary status rather than invent a Worker receipt. Teardown, idle, monthly-time and
+replay controls remain unfinished work.
 
 ### Stop freeze capture and native prerequisites
 
-The freeze field, setter, waiter, await/panic implementation and Worker producer await are removed,
-not relocated. Result-writer capture/join is also removed; actual `freeze_pending` takes only the cause.
-`StopTestGate` retains only its existing idle-close use.
-
-`guarded_freeze_preserves_cause_and_releases_guard_without_a_writer_join` polls actual freeze while
-the real interrupt guard is held. Cause remains unset until release, then the exact Freezing kind
-and fixed cause remain with the guard available. It has no writer wait or replacement notification.
+There is no freeze operation, frozen projection or immutable publication cause. Retire tests for
+that protocol with its producers. Main may signal Restart before establishing a later terminal
+request; do not restore the stronger single-elected-signal rule through another gate or coordinator.
 
 Native completion and pending-Suspend cases hold real terminal persistence. Subscribe raw before
 public `set_interrupting` and retain its exact returned Some receiver, not a private writer
@@ -430,19 +425,18 @@ Store and permit until required work finishes. Require one exact outcome/marker,
 history, physical cleanup and recovery; do not accept extra quota errors or duplicate Suspend.
 
 The shared retained-terminal helper's first automatic phase has no public Some promise. Its private
-after-freeze receipt subscription is gone, not replaced by another channel. Exact internal
-acknowledgement stays in the publication matrix. At the already-held teardown checkpoint,
-pending/frozen are still None. Retain the held permit and already-polled real FIFO
+after-freeze receipt subscription is gone. At the already-held teardown checkpoint, retain the
+actual selected result, held permit and already-polled real FIFO
 lease. Create and poll the existing AwaitReady future before releasing that same teardown hold. Then await the same
 lease, await readiness, and join accepted work and cleanup. Do not substitute a fresh lease, new barrier
 or an early empty join before automatic acceptance. Observe the automatic cause from the actual
-owner fence after joined cleanup, not a deleted writer slot. Exact owner/frozen cause and final
+owner fence after joined cleanup, not a deleted writer slot. Exact owner cause and final
 marker/generation/acquisition facts remain native assertions.
 
 Waiting retains its real append and public Some contract above, without instance queries or competing
 stops while persistence owns the instance mutex. BeforeOwner/RestartFollower retain their held admission
 before generation begin and actual driver join. Later pending demand, exact startup/receipt contracts
-and one-versus-two Suspend provenance remain unchanged. Neither proof layer alone establishes the old
+and one-versus-two Suspend provenance remain required. Neither proof layer alone establishes the old
 controlled whole-Worker compound interleaving.
 
 ### Monthly acceptance guard and applied capacity
@@ -454,10 +448,10 @@ atomics or locking the current target. It never unwraps `deletion_runtime`. The 
 cached-owner lookup before the instance mutex, then retains that guard through the predicate, active
 recheck, interrupt try-lock, capacity sample, queue and dispatch. Existing short-circuiting stays lazy.
 
-Actual enum tests reject Deleting around an otherwise matching Running owner with retired=false,
+Actual enum tests reject Deleting around an otherwise matching Running owner,
 and reject `WaitingForPermit`, `Stopping` and `Unloaded`. Poisoned unused current-target locks and the positive
-identity/generation/permit/Arc matrix check the literal guard. Retired/claimed queue rejection is a
-separate proof. Same-revision memory credit uses the actual sample, zero-usage snapshot adapter and
+identity/generation/permit/Arc matrix check the literal guard. Claimed-terminal rejection is a
+separate proof; there is no generic retired-admission flag. Same-revision memory credit uses the actual sample, zero-usage snapshot adapter and
 queue to reject captured exhaustion without stop side effects. Replacement checks the actual target
 Arc/attempt/generation at otherwise equal capacity. These bodies do not execute the whole cached-owner,
 instance-lock or mailbox transaction; native current acceptance exercises that real transaction.
@@ -483,6 +477,19 @@ or persistence/deletion hold and finish physical cleanup before joining every ba
 exhaustion/credit tails before replacement replay begins. Pre-Worker credit has no filesystem target,
 so its full joins are safe. These are read-only dependency observations, not a new Worker interface.
 
+For prepaid RPC caller-first cases, an applied account update wakes both Stores. The target can stop
+and refund at invocation exit before the caller's proposal is validated. A terminal-append hold is
+too late to prevent that refund. Use the existing real target GrowMemory-append dependency to keep
+its lifecycle actor behind that append through caller cleanup. Assert the actual positive append
+and its absence from committed history while held. After exact caller acceptance and physical
+cleanup, require restored capacity, release the append and drain the target's lifecycle mailbox.
+The target must remain live with no monthly stop. Complete its original promise, require the single
+logical increment, then use ordinary idle eviction to close its window before the same two-Store
+refund assertions. Full Registry refreshes wait for live filesystem-limit replies; join every tail
+after target completion, not inside the caller's unchanged physical-stop deadline. Keep the separate
+target-first scenario, which expects caller rejection after real refund. Neither case may accept
+either boolean result or retry a rejected proposal.
+
 ### Durable-source reads without a runtime observer
 
 The keyed durable-source observer, weak registry and ReceiveGuard capture field are absent.
@@ -503,9 +510,9 @@ Accepted can precede remaining ingress startup calls. Before applying exhaustion
 to the existing agent/key-qualified `wait_for_invocation_result` span and requires its creation plus
 the first monthly timer poll. The span follows those startup calls. Test-side capture stores active
 subscriptions only and adds no production instrumentation. This boundary proves startup ordering,
-not source Pending or Running status. Raw delivery is checked by the actual stop-publication bodies.
+not source Pending or Running status. Raw delivery and no-Store acknowledgement have separate tests.
 
-The native case requires the same exact monthly, frozen and owner cause after joined physical
+The native case requires the same exact monthly and owner cause after joined physical
 cleanup, before input or policy restoration. It retains the accepted session, key and stream identity,
 sends its first packed bytes only after release, and checks exact output and one successful result.
 The typed raw prefix must remain unchanged after ordinary continuation. Positive account-level memory

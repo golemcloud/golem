@@ -352,9 +352,13 @@ fn apply_delayed_retry_commands_after_unload<Ctx: WorkerCtx>(
     }
 }
 
-/// Takes a request only after the retained stop driver has published it.
+/// Takes the exact request, then waits for its independently owned establishment.
 async fn take_pending_interrupt(interrupts: &Interrupts) -> Option<PendingWorkerInterrupt> {
-    interrupts.take().await
+    let interrupt = interrupts.take().await;
+    if let Some(interrupt) = &interrupt {
+        interrupt.establishment.wait().await;
+    }
+    interrupt
 }
 
 enum PermitAcquisition<T> {
@@ -365,14 +369,12 @@ enum PermitAcquisition<T> {
 
 async fn acquire_permit_or_interrupt<T, F: Future<Output = T>>(
     interrupts: &Interrupts,
-    progress: &super::StopProgress,
     receiver: &mut UnboundedReceiver<WorkerCommand>,
     mut acquire: impl FnMut() -> F,
     mut defer: impl FnMut(WorkerCommand),
 ) -> Result<PermitAcquisition<T>, WorkerExecutorError> {
     let mut terminal = interrupts.terminal();
     'acquire: loop {
-        super::join_accepted_stops(progress).await?;
         if let Some(interrupt) = take_pending_interrupt(interrupts).await {
             return Ok(PermitAcquisition::Interrupted(interrupt));
         }
@@ -383,7 +385,7 @@ async fn acquire_permit_or_interrupt<T, F: Future<Output = T>>(
                 biased;
                 pending = async { terminal.wait_for(|pending| *pending).await.map(|_| ()) } => {
                     pending.map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
-                    // Drop the scheduler wait before joining the accepted publisher.
+                    // Drop the scheduler wait before joining this request's establishment.
                     continue 'acquire;
                 }
                 command = receiver.recv() => {
@@ -485,7 +487,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             if let Some(interrupt) = pending_interrupt {
                 if self
                     .handle_unloaded_interrupt(
-                        interrupt,
+                        interrupt.clone(),
                         retry_was_live,
                         interrupt.retry_decision(),
                         established_generation,
@@ -497,7 +499,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 continue;
             }
             if self.permit_state.is_none() {
-                if let Err(error) = self.parent.join_stop_progress().await {
+                if let Err(error) = self.parent.join_interrupt_establishment().await {
                     self.parent
                         .complete_startup(self.start_attempt, Err(error.clone()));
                     self.stop_cleanup_failed(error).await;
@@ -515,7 +517,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     if let Some(interrupt) = pending_interrupt
                         && self
                             .handle_unloaded_interrupt(
-                                interrupt,
+                                interrupt.clone(),
                                 retry_was_live,
                                 interrupt.retry_decision(),
                                 established_generation,
@@ -533,7 +535,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         }
                         permit = &mut permit => {
                             #[cfg(feature = "test-utils")]
-                            { self.parent.stop_progress.lock().unwrap().permit_acquisitions += 1; }
+                            { self.parent.test_support.lock().unwrap().permit_acquisitions += 1; }
                             self.permit_state.install_tracked(permit);
                             continue 'outer;
                         }
@@ -552,7 +554,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             let pending_interrupt = self.pending_interrupt().await;
                             if let Some(interrupt) = pending_interrupt
                                 && self
-                                    .handle_unloaded_interrupt(interrupt, retry_was_live, interrupt.retry_decision(), established_generation)
+                                    .handle_unloaded_interrupt(interrupt.clone(), retry_was_live, interrupt.retry_decision(), established_generation)
                                     .await
                             {
                                 break 'outer;
@@ -652,7 +654,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     if let Some(interrupt) = pending_interrupt {
                         if self
                             .handle_unloaded_interrupt(
-                                interrupt,
+                                interrupt.clone(),
                                 retry_was_live,
                                 interrupt.retry_decision(),
                                 established_generation,
@@ -676,7 +678,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                 };
                                 let pending_interrupt = self.pending_interrupt().await;
                                 if let Some(interrupt) = pending_interrupt {
-                                    if self.handle_unloaded_interrupt(interrupt, retry_was_live, interrupt.retry_decision(), established_generation).await {
+                                    if self.handle_unloaded_interrupt(interrupt.clone(), retry_was_live, interrupt.retry_decision(), established_generation).await {
                                         break 'outer;
                                     }
                                     Self::defer_wakeup(&mut deferred_wakeups, command);
@@ -765,7 +767,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             // its filesystem before the window's retained cleanup can join it.
                             let error = self
                                 .parent
-                                .join_stop_progress()
+                                .join_interrupt_establishment()
                                 .await
                                 .err()
                                 .unwrap_or_else(|| {
@@ -1049,12 +1051,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 self.parent
                     .wait_teardown_fence_for_test(owner_failure.as_ref(), final_interrupt)
                     .await;
-                let owner_failure = match terminal_interrupt {
-                    Some(kind) => Some(OwnerFailureWinner::Lifecycle(
-                        self.parent.terminal_teardown_cause(kind).await,
-                    )),
-                    None => owner_failure,
-                };
                 match owner_failure {
                     Some(failure) => active_agent.fence_entity_bodies(failure).await,
                     None => active_agent.fence_entity_bodies_for_unload().await,
@@ -1108,7 +1104,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             let unload_failure = unloading.await;
             #[cfg(feature = "test-utils")]
             {
-                self.parent.stop_progress.lock().unwrap().unload_succeeded =
+                self.parent.test_support.lock().unwrap().unload_succeeded =
                     unload_failure.is_none();
             }
             if let Some(error) = cleanup_failure.or(unload_failure) {
@@ -1836,28 +1832,17 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         let phase = agent_phase_span!(self, "create_instance");
         async {
             debug!("Creating the worker instance");
-            match self.parent.begin_resident_attempt(self.start_attempt).await {
-                Ok(true) => {
-                    *established_generation = None;
+            *established_generation = None;
+            self.parent
+                .resident_generation
+                .fetch_add(1, Ordering::AcqRel);
+            if let super::WorkerInstance::Running(running) =
+                self.parent.instance.lock().await.deletion_runtime_mut()
+            {
+                if running.owner_generation_started {
+                    *self.parent.release_scope.lock().unwrap() = Default::default();
                 }
-                Ok(false) => {
-                    self.stop_unloaded(
-                        None,
-                        PendingLiveInvocationDisposition::Fail,
-                        *established_generation,
-                    )
-                    .await;
-                    return CreateInstanceResult::Failed;
-                }
-                Err(WorkerExecutorError::Interrupted { kind }) => {
-                    return CreateInstanceResult::Interrupted(kind);
-                }
-                Err(error) => {
-                    self.parent
-                        .complete_startup(self.start_attempt, Err(error.clone()));
-                    self.stop_cleanup_failed(error).await;
-                    return CreateInstanceResult::Failed;
-                }
+                running.owner_generation_started = false;
             }
             self.permit_state.release_scope = self.parent.release_scope();
             permit.observe_release(&self.permit_state.release_scope);
@@ -2110,12 +2095,12 @@ where
             let preparation = async {
                 drain_sealed_filesystem(&filesystem).await;
                 drained.complete();
-                let (window, close_error, stop_seal) = match window {
+                let (window, close_error) = match window {
                     Some(window) => {
-                        let (window, error, seal) = window.prepare_disposal().await;
-                        (Some(window), error, Some(seal))
+                        let (window, error) = window.prepare_disposal().await;
+                        (Some(window), error)
                     }
-                    None => (None, None, None),
+                    None => (None, None),
                 };
                 let settlement = match window {
                     Some(window) => crate::services::resource_usage_metering::close_window(
@@ -2132,9 +2117,6 @@ where
                 };
                 drop(permit);
                 permit_held.store(false, Ordering::Release);
-                if let Some(seal) = stop_seal {
-                    seal.complete(settlement.clone());
-                }
                 close_error.or_else(|| settlement.err())
             };
             tokio::pin!(preparation);
@@ -2459,7 +2441,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 WorkerCommand::WorkAvailable | WorkerCommand::InternalStatusChanged => {
                     loop {
                         if let Some(interrupt) = take_pending_interrupt(&self.interrupts).await {
-                            unloaded_interrupt = Some(interrupt);
+                            unloaded_interrupt = Some(interrupt.clone());
                             break self.interrupt(interrupt).await;
                         }
 
@@ -2665,7 +2647,6 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             let deferred_wakeups = &mut *self.deferred_wakeups;
             let acquisition = acquire_permit_or_interrupt(
                 &self.interrupts,
-                &self.parent.stop_progress,
                 self.receiver,
                 || {
                     let account = registered_concurrent_account.clone();
@@ -2690,11 +2671,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             };
             #[cfg(feature = "test-utils")]
             {
-                self.parent
-                    .stop_progress
-                    .lock()
-                    .unwrap()
-                    .permit_acquisitions += 1;
+                self.parent.test_support.lock().unwrap().permit_acquisitions += 1;
             }
             let permit = self.permit_state.track(permit);
             match crate::services::agent_filesystem::open_resource_usage_window(
@@ -3590,6 +3567,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             }) => {
                 if let Some(interrupt) = self.parent.interrupt_signal.claim_pending_terminal().await
                 {
+                    interrupt.establishment.wait().await;
                     self.agent_invocation_failed(
                         &display_name,
                         &invocation_idempotency_key,
@@ -4454,7 +4432,7 @@ struct InnerInvocationLoopResult {
 
 impl InnerInvocationLoopResult {
     fn with_unloaded_interrupt(mut self, interrupt: Option<PendingWorkerInterrupt>) -> Self {
-        if let Some(interrupt) = interrupt {
+        if let Some(interrupt) = &interrupt {
             self.retry_decision = Some(interrupt.retry_decision());
             self.final_interrupt =
                 (!matches!(interrupt.kind, InterruptKind::Restart)).then_some(interrupt.kind);
@@ -4883,7 +4861,7 @@ mod tests {
     async fn published_idle_stop_does_not_poll_a_ready_permit_acquisition() {
         use super::InnerInvocationLoopResult;
         use crate::worker::interrupt::Interrupts;
-        use crate::worker::{PendingWorkerInterrupt, StopProgressState};
+        use crate::worker::{InterruptEstablishment, PendingWorkerInterrupt};
 
         for kind in [
             InterruptKind::Interrupt(Timestamp::from(101_u64)),
@@ -4897,19 +4875,16 @@ mod tests {
                 kind,
                 reacquire_permits: false,
                 unload_request: super::UnloadRequest::ordinary(UnloadReason::from_interrupt(kind)),
+                establishment: InterruptEstablishment::ready(),
             };
             {
                 let mut guard = interrupts.lock().await;
-                assert!(guard.queue(request));
-                guard.freeze();
-                guard.publish();
+                assert!(guard.queue(request.clone()));
             }
-            let progress = Arc::new(Mutex::new(StopProgressState::default()));
             let (_sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
             let acquisitions = AtomicUsize::new(0);
             let result = acquire_permit_or_interrupt(
                 &interrupts,
-                &progress,
                 &mut receiver,
                 || async { acquisitions.fetch_add(1, Ordering::SeqCst) },
                 |_| panic!("no command was queued"),
@@ -4985,10 +4960,9 @@ mod tests {
     }
 
     #[test]
-    async fn blocked_idle_permit_wait_joins_publication_and_retains_commands_and_failure() {
+    async fn blocked_idle_permit_wait_joins_establishment_and_retains_commands() {
         use crate::worker::interrupt::Interrupts;
-        use crate::worker::{PendingWorkerInterrupt, StopProgressState, stop_cleanup_join_error};
-        use futures::FutureExt;
+        use crate::worker::{InterruptEstablishment, PendingWorkerInterrupt};
 
         struct PendingAcquisition(Arc<AtomicUsize>);
         impl Drop for PendingAcquisition {
@@ -4997,15 +4971,13 @@ mod tests {
             }
         }
 
-        for (kind, panic) in [
-            (InterruptKind::Interrupt(Timestamp::from(101_u64)), false),
-            (InterruptKind::Suspend(Timestamp::from(102_u64)), false),
-            (InterruptKind::Restart, false),
-            (InterruptKind::Jump, false),
-            (InterruptKind::Interrupt(Timestamp::from(103_u64)), true),
+        for kind in [
+            InterruptKind::Interrupt(Timestamp::from(101_u64)),
+            InterruptKind::Suspend(Timestamp::from(102_u64)),
+            InterruptKind::Restart,
+            InterruptKind::Jump,
         ] {
             let interrupts = Arc::new(Interrupts::default());
-            let progress = Arc::new(Mutex::new(StopProgressState::default()));
             let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
             let held = semaphore.clone().acquire_owned().await.unwrap();
             let acquisitions = AtomicUsize::new(0);
@@ -5014,7 +4986,6 @@ mod tests {
             let mut deferred = VecDeque::new();
             let mut wait = Box::pin(acquire_permit_or_interrupt(
                 &interrupts,
-                &progress,
                 &mut receiver,
                 || {
                     let semaphore = semaphore.clone();
@@ -5046,24 +5017,8 @@ mod tests {
             assert!(futures::poll!(wait.as_mut()).is_pending());
             assert_eq!(acquisitions.load(Ordering::SeqCst), 1);
 
-            let (release, released) = tokio::sync::oneshot::channel();
-            let publisher = tokio::spawn({
-                let interrupts = interrupts.clone();
-                let sender = sender.clone();
-                async move {
-                    released.await.unwrap();
-                    assert!(!panic, "retained idle stop publisher panic");
-                    {
-                        let mut guard = interrupts.lock().await;
-                        guard.freeze();
-                        guard.publish();
-                    }
-                    sender.send(WorkerCommand::WorkAvailable).unwrap();
-                }
-            });
-            let completion = async move { publisher.await.map_err(stop_cleanup_join_error) }
-                .boxed()
-                .shared();
+            let establishment =
+                Arc::new(InterruptEstablishment::new(InterruptEstablishment::ready()));
             {
                 let mut guard = interrupts.lock().await;
                 assert!(guard.queue(PendingWorkerInterrupt {
@@ -5072,38 +5027,23 @@ mod tests {
                     unload_request: super::UnloadRequest::ordinary(UnloadReason::from_interrupt(
                         kind
                     )),
+                    establishment: establishment.clone(),
                 }));
-                progress.lock().unwrap().tasks.push(completion.clone());
             }
             if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
                 assert!(futures::poll!(wait.as_mut()).is_pending());
                 assert_eq!(cancelled.load(Ordering::SeqCst), 1);
                 assert!(interrupts.try_lock().is_some());
             }
-            release.send(()).unwrap();
-            let result = wait.await;
-            if panic {
-                let Err(error) = result else {
-                    panic!("lost publisher must fail the permit wait");
-                };
-                assert!(error.to_string().contains("Stop cleanup failed"));
-                assert_eq!(
-                    progress
-                        .lock()
-                        .unwrap()
-                        .completed_failure()
-                        .unwrap()
-                        .to_string(),
-                    error.to_string()
-                );
-                assert!(completion.await.is_err());
-            } else {
-                let PermitAcquisition::Interrupted(accepted) = result.unwrap() else {
-                    panic!("accepted stop must cancel the blocked permit wait");
-                };
-                assert_eq!(accepted.kind, kind);
-                assert!(completion.await.is_ok());
-            }
+            sender.send(WorkerCommand::WorkAvailable).unwrap();
+            assert!(futures::poll!(wait.as_mut()).is_pending());
+            assert_eq!(cancelled.load(Ordering::SeqCst), 1);
+            establishment.complete();
+            let PermitAcquisition::Interrupted(accepted) = wait.await.unwrap() else {
+                panic!("accepted stop must cancel the blocked permit wait");
+            };
+            assert_eq!(accepted.kind, kind);
+            assert!(Arc::ptr_eq(&accepted.establishment, &establishment));
             assert_eq!(acquisitions.load(Ordering::SeqCst), 1);
             assert_eq!(cancelled.load(Ordering::SeqCst), 1);
             assert_eq!(semaphore.available_permits(), 0);
@@ -6195,7 +6135,7 @@ mod tests {
         let prepared_without_sampling = prepared.is_some();
         let after_preparation = observations();
         final_sample.release();
-        let (window, error, seal) = match prepared {
+        let (window, error) = match prepared {
             Some(result) => result,
             None => preparation.await,
         };
@@ -6205,12 +6145,6 @@ mod tests {
             super::resource_usage_close_deadline(),
         )
         .await;
-        seal.complete(
-            result
-                .as_ref()
-                .map(|_| ())
-                .map_err(|error| WorkerExecutorError::runtime(error.to_string())),
-        );
         result.unwrap();
         drop(node);
         drop(filesystem);

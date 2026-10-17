@@ -201,43 +201,35 @@ impl MonthlyWindowTarget {
     }
 }
 
-fn queue_monthly_capacity<'a>(
+fn queue_monthly_capacity(
     proposed: MonthlyCapacity,
     current: MonthlyCapacity,
     interrupts: &mut super::interrupt::InterruptGuard<'_>,
-    progress: &'a super::StopProgress,
+    tail: &Mutex<Arc<super::InterruptEstablishment>>,
     monthly: &Mutex<
         Option<(
             InterruptKind,
             crate::services::resource_limits::MonthlyResourceExhaustion,
         )>,
     >,
-) -> Option<(
-    InterruptKind,
-    std::sync::MutexGuard<'a, super::StopProgressState>,
-)> {
+) -> Option<PendingWorkerInterrupt> {
     if current != proposed || current.exhaustion.is_none() {
         return None;
     }
     let kind = InterruptKind::Suspend(Timestamp::now_utc());
-    let admission = progress.lock().unwrap();
     // Monthly observations cannot reopen a terminal stop already claimed by this execution.
-    if !admission.retired
-        && !matches!(
-            **interrupts,
-            super::WorkerInterruptState::TerminalClaimed(_)
-        )
-        && interrupts.queue(PendingWorkerInterrupt {
-            kind,
-            reacquire_permits: false,
-            unload_request: UnloadRequest::ordinary(UnloadReason::Suspend),
-        })
-    {
-        *monthly.lock().unwrap() = Some((kind, current.exhaustion.unwrap()));
-        Some((kind, admission))
-    } else {
-        None
+    if matches!(**interrupts, super::WorkerInterruptState::TerminalClaimed) {
+        return None;
     }
+    let pending = super::register_interrupt_request(
+        interrupts,
+        tail,
+        kind,
+        false,
+        UnloadRequest::ordinary(UnloadReason::Suspend),
+    )?;
+    *monthly.lock().unwrap() = Some((kind, current.exhaustion.unwrap()));
+    Some(pending)
 }
 
 #[cfg(feature = "test-utils")]
@@ -280,7 +272,8 @@ pub struct MonthlyAcceptanceForTest {
 pub(super) struct ExecutionWindow {
     window: Option<ResourceUsageMeteringWindow>,
     monitor: Option<MonthlyMonitor>,
-    stop_progress: super::StopProgress,
+    #[cfg(any(test, feature = "test-utils"))]
+    test_support: Arc<Mutex<super::ExecutionTestSupport>>,
     pub(super) release_scope: crate::metrics::resource_release::ReleaseScope,
 }
 
@@ -317,7 +310,8 @@ impl ExecutionWindow {
         Self {
             window: Some(window),
             monitor: None,
-            stop_progress: Arc::default(),
+            #[cfg(any(test, feature = "test-utils"))]
+            test_support: Arc::default(),
             release_scope,
         }
     }
@@ -351,7 +345,8 @@ impl ExecutionWindow {
             return Self {
                 window: Some(window),
                 monitor: None,
-                stop_progress: worker.stop_progress.clone(),
+                #[cfg(any(test, feature = "test-utils"))]
+                test_support: worker.test_support.clone(),
                 release_scope,
             };
         }
@@ -476,21 +471,17 @@ impl ExecutionWindow {
         Self {
             window: Some(window),
             monitor,
-            stop_progress: worker.stop_progress.clone(),
+            #[cfg(any(test, feature = "test-utils"))]
+            test_support: worker.test_support.clone(),
             release_scope,
         }
     }
 
     pub(super) async fn prepare_disposal(
         mut self,
-    ) -> (
-        ResourceUsageMeteringWindow,
-        Option<WorkerExecutorError>,
-        super::StopAdmissionSeal,
-    ) {
+    ) -> (ResourceUsageMeteringWindow, Option<WorkerExecutorError>) {
         use crate::metrics::resource_release::{Failure, Stage};
         let prepared = self.release_scope.receipt(Stage::WindowPrepared);
-        let mut seal = super::StopAdmissionSeal::new(&self.stop_progress);
         let monitor = self.monitor.take();
         stop_monitor(&monitor);
         let result = join_monitor(monitor).await;
@@ -498,16 +489,10 @@ impl ExecutionWindow {
             self.release_scope
                 .fail(Stage::WindowPrepared, Failure::MonitorJoin);
         }
-        let stopped = seal.join().await;
-        if stopped.is_err() {
-            self.release_scope
-                .fail(Stage::WindowPrepared, Failure::StopDriver);
-        }
         let window = self.window.take().unwrap();
-        let error = result.and(stopped).err();
-        seal.health = error.clone().map_or(Ok(()), Err);
+        let error = result.err();
         prepared.complete();
-        (window, error, seal)
+        (window, error)
     }
 
     pub(super) fn close(
@@ -516,7 +501,7 @@ impl ExecutionWindow {
     ) -> impl Future<Output = Result<ResourceUsageSettlement, WorkerExecutorError>> + Send + 'static
     {
         #[cfg(feature = "test-utils")]
-        if std::mem::take(&mut self.stop_progress.lock().unwrap().lose_settlement_observer) {
+        if std::mem::take(&mut self.test_support.lock().unwrap().lose_settlement_observer) {
             self.window
                 .as_mut()
                 .unwrap()
@@ -525,7 +510,8 @@ impl ExecutionWindow {
         close_owned_window(
             self.window.take().unwrap(),
             self.monitor.take(),
-            self.stop_progress.clone(),
+            #[cfg(test)]
+            self.test_support.clone(),
             self.release_scope.clone(),
             deadline,
         )
@@ -538,7 +524,8 @@ impl Drop for ExecutionWindow {
             drop(close_owned_window(
                 window,
                 self.monitor.take(),
-                self.stop_progress.clone(),
+                #[cfg(test)]
+                self.test_support.clone(),
                 self.release_scope.clone(),
                 Instant::now() + Duration::from_secs(30),
             ));
@@ -549,11 +536,10 @@ impl Drop for ExecutionWindow {
 fn close_owned_window(
     window: ResourceUsageMeteringWindow,
     monitor: Option<MonthlyMonitor>,
-    progress: super::StopProgress,
+    #[cfg(test)] test_support: Arc<Mutex<super::ExecutionTestSupport>>,
     release_scope: crate::metrics::resource_release::ReleaseScope,
     deadline: Instant,
 ) -> impl Future<Output = Result<ResourceUsageSettlement, WorkerExecutorError>> + Send + 'static {
-    let mut seal = super::StopAdmissionSeal::new(&progress);
     stop_monitor(&monitor);
     let unmonitored = monitor.is_none();
     let closing_scope = release_scope.clone();
@@ -569,25 +555,19 @@ fn close_owned_window(
         if monitor_result.is_err() {
             closing_scope.fail(Stage::EndToEnd, Failure::MonitorJoin);
         }
-        let stopped = seal.join().await;
-        if stopped.is_err() {
-            closing_scope.fail(Stage::EndToEnd, Failure::StopDriver);
-        }
         let (settlement, permit) =
             resource_usage_metering::close_window_retaining_permit(window, deadline).await;
         if let Err(error) = &settlement {
             closing_scope.fail(Stage::EndToEnd, error.release_failure());
         }
         let result = monitor_result
-            .and(stopped)
             .and(settlement.map_err(|error| WorkerExecutorError::runtime(error.to_string())));
         drop(permit);
-        seal.complete(result.as_ref().map(|_| ()).map_err(Clone::clone));
         observation.returned();
         closed_in_task.complete();
         result
     });
-    // Poll by mutable pin so pending cleanup keeps its permit and seal when moved to the task.
+    // Poll by mutable pin so pending cleanup keeps its permit when moved to the task.
     if unmonitored {
         let ready = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             closing.as_mut().now_or_never()
@@ -616,7 +596,7 @@ fn close_owned_window(
     }
     #[cfg(test)]
     {
-        progress.lock().unwrap().window_close_tasks += 1;
+        test_support.lock().unwrap().window_close_tasks += 1;
     }
     let task = tokio::spawn(closing);
     futures::future::Either::Right(async move {
@@ -698,7 +678,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     async fn fail_monthly_monitor(
-        &self,
+        self: &Arc<Self>,
         target: &Arc<MonthlyWindowTarget>,
         failure: MonthlyMonitorFailure,
     ) {
@@ -721,32 +701,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 return;
             }
             target.record_failure(failure);
-            let admission = self.stop_progress.lock().unwrap();
             let kind = InterruptKind::Suspend(Timestamp::now_utc());
-            if !admission.retired
-                && interrupts.queue(PendingWorkerInterrupt {
-                    kind,
-                    reacquire_permits: false,
-                    unload_request: UnloadRequest::ordinary(UnloadReason::Failure),
-                })
-            {
-                self.accept_interrupt(&lifecycle, kind, admission);
+            if let Some(pending) = super::register_interrupt_request(
+                &mut interrupts,
+                &self.interrupt_establishment_tail,
+                kind,
+                false,
+                UnloadRequest::ordinary(UnloadReason::Failure),
+            ) {
+                drop(self.start_interrupt_establishment(pending, None, true));
             }
             return;
         }
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn accepted_stop_receipt_for_test(&self) -> tokio::sync::broadcast::Receiver<()> {
-        self.stop_progress
-            .lock()
-            .unwrap()
-            .publication
-            .as_ref()
-            .expect("accepted stop")
-            .0
-            .receipt
-            .subscribe()
     }
 
     #[cfg(feature = "test-utils")]
@@ -759,7 +725,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let (entered, observe) = tokio::sync::oneshot::channel();
         let (release, wait) = tokio::sync::oneshot::channel();
         assert!(
-            self.stop_progress
+            self.test_support
                 .lock()
                 .unwrap()
                 .idle_close_gate
@@ -771,7 +737,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     #[cfg(feature = "test-utils")]
     pub(super) async fn wait_idle_close_for_test(&self) {
-        let gate = self.stop_progress.lock().unwrap().idle_close_gate.take();
+        let gate = self.test_support.lock().unwrap().idle_close_gate.take();
         if let Some((entered, release)) = gate {
             let _ = entered.send(());
             assert!(!release.await.unwrap_or(false), "injected idle panic");
@@ -780,12 +746,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     #[cfg(feature = "test-utils")]
     pub fn unload_succeeded_for_test(&self) -> bool {
-        self.stop_progress.lock().unwrap().unload_succeeded
+        self.test_support.lock().unwrap().unload_succeeded
     }
 
     #[cfg(feature = "test-utils")]
     pub fn lose_window_settlement_for_test(&self) {
-        self.stop_progress.lock().unwrap().lose_settlement_observer = true;
+        self.test_support.lock().unwrap().lose_settlement_observer = true;
     }
 
     #[cfg(feature = "test-utils")]
@@ -802,7 +768,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     #[cfg(feature = "test-utils")]
     pub fn permit_acquisitions_for_test(&self) -> usize {
-        self.stop_progress.lock().unwrap().permit_acquisitions
+        self.test_support.lock().unwrap().permit_acquisitions
     }
 
     #[cfg(feature = "test-utils")]
@@ -835,7 +801,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     #[cfg(feature = "test-utils")]
-    pub fn submit_monthly_capacity_for_test(&self) -> Result<(), WorkerExecutorError> {
+    pub fn submit_monthly_capacity_for_test(self: &Arc<Self>) -> Result<(), WorkerExecutorError> {
         let target = self
             .monthly_window
             .lock()
@@ -845,11 +811,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let capacity = self
             .owner_runtime_resources
             .with_monthly_capacity(self.agent_mode(), |capacity| capacity);
-        self.state_actor.monthly_capacity_exhausted(
-            self.self_ref.upgrade().unwrap(),
-            target,
-            capacity,
-        )
+        self.state_actor
+            .monthly_capacity_exhausted(self.clone(), target, capacity)
     }
 
     #[cfg(feature = "test-utils")]
@@ -881,7 +844,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> tokio::sync::oneshot::Receiver<crate::durable_host::tail_work::TailWorkTracker> {
         let (notify, observe) = tokio::sync::oneshot::channel();
         assert!(
-            self.stop_progress
+            self.test_support
                 .lock()
                 .unwrap()
                 .tail_drain_observer
@@ -896,12 +859,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         tracker: crate::durable_host::tail_work::TailWorkTracker,
     ) {
-        let observer = self
-            .stop_progress
-            .lock()
-            .unwrap()
-            .tail_drain_observer
-            .take();
+        let observer = self.test_support.lock().unwrap().tail_drain_observer.take();
         if let Some(observer) = observer {
             let _ = observer.send(tracker);
         }
@@ -921,7 +879,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let (entered, observe) = tokio::sync::oneshot::channel();
         let (release, wait) = tokio::sync::oneshot::channel();
         assert!(
-            self.stop_progress
+            self.test_support
                 .lock()
                 .unwrap()
                 .completed_replay_gate
@@ -946,7 +904,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         use golem_common::model::oplog::OplogEntry;
 
         let gate = {
-            let mut progress = self.stop_progress.lock().unwrap();
+            let mut progress = self.test_support.lock().unwrap();
             if progress
                 .completed_replay_gate
                 .as_ref()
@@ -992,6 +950,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     #[cfg(feature = "test-utils")]
+    pub async fn pending_stop_for_test(&self) -> Option<InterruptKind> {
+        match &*self.interrupt_signal.lock().await {
+            super::WorkerInterruptState::Pending(pending) => Some(pending.kind),
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "test-utils")]
     pub fn pause_next_teardown_fence_for_test(
         &self,
     ) -> (
@@ -1001,7 +967,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let (entered, observe) = tokio::sync::oneshot::channel();
         let (release, wait) = tokio::sync::oneshot::channel();
         assert!(
-            self.stop_progress
+            self.test_support
                 .lock()
                 .unwrap()
                 .teardown_fence_gate
@@ -1009,7 +975,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     generation: self.resident_generation_for_test(),
                     entered,
                     release: wait,
-                },)
+                })
                 .is_none()
         );
         (observe, release)
@@ -1021,36 +987,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         proposed: Option<&crate::durable_host::tool::operation::OwnerFailureWinner>,
         final_interrupt: Option<InterruptKind>,
     ) {
-        let gate = self
-            .stop_progress
-            .lock()
-            .unwrap()
-            .teardown_fence_gate
-            .take();
+        let gate = self.test_support.lock().unwrap().teardown_fence_gate.take();
         if let Some(gate) = gate {
             let generation = self.resident_generation_for_test();
             assert_eq!(generation, gate.generation);
-            let selected = self.selected_owner_failure_for_test().await;
             let snapshot = super::OwnerFenceTestSnapshot {
                 generation,
                 proposed_owner_failure: format!("{proposed:?}"),
                 final_interrupt,
                 pending: self.pending_stop_for_test().await,
-                frozen: self.frozen_stop_for_test(),
-                selected_owner_failure: selected,
+                selected_owner_failure: self.selected_owner_failure_for_test().await,
             };
             let _ = gate.entered.send(snapshot);
             let _ = gate.release.await;
-        }
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub async fn pending_stop_for_test(&self) -> Option<InterruptKind> {
-        match &*self.interrupt_signal.lock().await {
-            super::WorkerInterruptState::Unpublished(pending)
-            | super::WorkerInterruptState::Freezing(pending)
-            | super::WorkerInterruptState::Pending(pending) => Some(pending.kind),
-            _ => None,
         }
     }
 
@@ -1063,7 +1012,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn terminal_stop_claimed_for_test(&self) -> bool {
         matches!(
             *self.interrupt_signal.lock().await,
-            super::WorkerInterruptState::TerminalClaimed(_)
+            super::WorkerInterruptState::TerminalClaimed
         )
     }
 
@@ -1087,18 +1036,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     #[cfg(feature = "test-utils")]
-    pub fn frozen_stop_for_test(&self) -> Option<InterruptKind> {
-        self.stop_progress
-            .lock()
-            .unwrap()
-            .publication
-            .as_ref()
-            .and_then(|(publication, _)| publication.cause.get().map(|pending| pending.kind))
-    }
-
-    #[cfg(feature = "test-utils")]
     pub async fn join_accepted_stops_for_test(&self) -> Result<(), WorkerExecutorError> {
-        self.join_stop_progress().await
+        self.join_interrupt_establishment().await
     }
 
     #[cfg(feature = "test-utils")]
@@ -1202,7 +1141,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub(super) async fn accept_monthly_capacity(
-        &self,
+        self: &Arc<Self>,
         target: Arc<MonthlyWindowTarget>,
         proposed: MonthlyCapacity,
     ) {
@@ -1234,7 +1173,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     async fn try_accept_monthly_capacity(
-        &self,
+        self: &Arc<Self>,
         target: Arc<MonthlyWindowTarget>,
         proposed: MonthlyCapacity,
     ) -> bool {
@@ -1259,16 +1198,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         self.owner_runtime_resources
             .with_monthly_capacity(self.agent_mode(), |current| {
-                let Some((kind, admission)) = queue_monthly_capacity(
+                let Some(pending) = queue_monthly_capacity(
                     proposed,
                     current,
                     &mut interrupts,
-                    &self.stop_progress,
+                    &self.interrupt_establishment_tail,
                     &self.monthly_stop,
                 ) else {
                     return false;
                 };
-                self.accept_interrupt(&lifecycle, kind, admission);
+                drop(self.start_interrupt_establishment(pending, None, true));
                 true
             })
     }

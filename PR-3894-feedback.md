@@ -92,7 +92,7 @@ contract without accepting arbitrary errors or weakening identity, history or cl
   - Keep the policy/accounting/API work, independent capacity detection, stale-window checks,
     admission checks and targeted host-interruption fixes. Use existing lifecycle owners.
   - Completed control removals below help simplification but do not close this architectural request.
-  - Next: reduce the executor delta against the active #4207 contracts and use surviving interruption
+  - Next: reduce the executor delta against main and use surviving interruption
     and unload owners. Do not restore old-main files wholesale or resurrect removed recovery paths.
     The completed narrow corrections do not by themselves close A1.
   - [x] Remove failure-origin arbitration and its extra callback. Failure keeps its actual boundary
@@ -107,14 +107,27 @@ contract without accepting arbitrary errors or weakening identity, history or cl
     Invocation exit uses FIFO-folded status to avoid recording the same outcome twice. Native
     failure, timeout, Suspend, fenced-prefix, completion, cleanup and reconstruction checks pass.
     Only discarded private-writer projections and stricter signal ordering were retired; exact
-    outcome/history assertions stayed. Stop publication, admission seals and early generation
-    handoff remain open, so this does not close A1.
+    outcome/history assertions stayed. The separate establishment restoration is recorded below;
+    this result-writer removal alone did not close A1.
   - [x] Separate monthly-window failure ownership before deleting the generic stop registry.
     The existing monthly target stores monitor failure and operational policy-outage data,
     rather than adding synthetic completed stop futures. A cleanup fault
     cannot be erased by policy recovery; an outage alone cannot become failed cleanup. Native health
     assertions are unchanged. Focused and consolidated library/native checks, strict lint and the
-    production check pass locally. This is preparation for A1; the general protocol still remains.
+    production check pass locally. The registry removal below has its own validation.
+  - [x] Restore and validate ordinary interruption establishment. The local change deletes
+    `StopPublication`, `StopAdmissionSeal`, the stop-task vector, release successor and retired flag.
+    It uses main's independently owned establishment, request states and startup tail check. Monthly
+    acceptance keeps its exact capacity/owner checks; actual window health and cleanup retain their
+    existing owners. Loading and permit-wait cancellation remain required monthly composition.
+    Frozen/leader/seal projections retire with their protocol. The native tests retain their actual
+    result, effect, identity, raw-history, terminal, accounting, cleanup and reconstruction assertions.
+    Combined library/native scopes, real entity-blob ownership and repair, ordinary deadline/no-Store
+    cases, strict all-target lint, production compilation and browser checks pass locally. Source
+    receipts retain the initial failures and each correction; none is waived. This does not close
+    the broader retained-change review in A1. Existing teardown and other F10/F11 controls remain
+    explicitly test-only and unfinished. Managed-XFS and the genuine metadata-Pending proof remain
+    outside this evidence.
 
 - [x] **C1. Follow the CLI command-handler organization.** Done locally.
   [noise64's inline comment](https://github.com/golemcloud/golem/pull/3894#discussion_r4270447747).

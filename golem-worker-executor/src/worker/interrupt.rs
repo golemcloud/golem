@@ -112,6 +112,11 @@ impl Interrupts {
         self.lock().await.has_interrupt()
     }
 
+    pub(crate) async fn when_idle<T>(&self, f: impl FnOnce() -> T) -> Option<T> {
+        let state = self.lock().await;
+        (!state.has_interrupt()).then(f)
+    }
+
     /// Whether a terminal request waits now.
     pub(crate) fn terminal_pending(&self) -> bool {
         *self.terminal.borrow()
@@ -135,7 +140,7 @@ impl Interrupts {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worker::{UnloadReason, UnloadRequest};
+    use crate::worker::{InterruptEstablishment, UnloadReason, UnloadRequest};
     use golem_common::model::Timestamp;
     use golem_service_base::error::worker_executor::InterruptKind;
     use test_r::test;
@@ -145,6 +150,7 @@ mod tests {
             kind,
             reacquire_permits: false,
             unload_request: UnloadRequest::ordinary(UnloadReason::Interrupt),
+            establishment: InterruptEstablishment::ready(),
         }
     }
 
@@ -158,14 +164,6 @@ mod tests {
             let interrupts = Interrupts::default();
             let terminal = interrupts.terminal();
             assert!(interrupts.lock().await.queue(interrupt(kind)));
-            assert!(!interrupts.claim_observed_terminal(kind).await);
-            assert!(matches!(&*interrupts.lock().await,
-                WorkerInterruptState::Unpublished(pending) if pending.kind == kind));
-            interrupts.lock().await.freeze();
-            assert!(!interrupts.claim_observed_terminal(kind).await);
-            assert!(matches!(&*interrupts.lock().await,
-                WorkerInterruptState::Freezing(pending) if pending.kind == kind));
-            interrupts.lock().await.publish();
             let different = InterruptKind::Suspend(Timestamp::from(101_u64));
             assert!(!interrupts.claim_observed_terminal(different).await);
             assert!(*terminal.borrow());
@@ -186,8 +184,6 @@ mod tests {
                 .await
                 .queue(interrupt(InterruptKind::Restart))
         );
-        interrupts.lock().await.freeze();
-        interrupts.lock().await.publish();
         assert!(
             !interrupts
                 .claim_observed_terminal(InterruptKind::Restart)
@@ -209,21 +205,12 @@ mod tests {
             .unwrap()
             .queue(interrupt(InterruptKind::Restart));
         let restart = (queued_restart, interrupts.terminal_pending());
-        {
-            let mut state = interrupts.lock().await;
-            state.freeze();
-            state.publish();
-        }
         let taken_restart = interrupts.take().await.is_some();
         let queued_suspend = interrupts
             .try_lock()
             .unwrap()
             .queue(interrupt(InterruptKind::Suspend(Timestamp::now_utc())));
         let suspend = (queued_suspend, *terminal.borrow());
-        assert!(interrupts.take().await.is_none());
-        interrupts.lock().await.freeze();
-        assert!(interrupts.terminal_pending());
-        interrupts.lock().await.publish();
         let claimed_request = interrupts.lock().await.claim_pending_terminal().is_some();
         let claimed = (
             claimed_request,
@@ -235,11 +222,6 @@ mod tests {
             .unwrap()
             .queue(interrupt(InterruptKind::Interrupt(Timestamp::now_utc())));
         let queued_again = (queued_interrupt, interrupts.terminal_pending());
-        {
-            let mut state = interrupts.lock().await;
-            state.freeze();
-            state.publish();
-        }
         let taken = (
             interrupts.take().await.is_some(),
             interrupts.terminal_pending(),
@@ -269,11 +251,6 @@ mod tests {
             .unwrap()
             .queue(interrupt(InterruptKind::Restart));
         let after_restart = terminal.has_changed().unwrap();
-        {
-            let mut state = interrupts.lock().await;
-            state.freeze();
-            state.publish();
-        }
         interrupts.take().await;
         interrupts
             .try_lock()

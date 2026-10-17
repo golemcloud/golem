@@ -100,9 +100,7 @@ async fn durable_p3_udp_receive_completion_before_quota_stop(
         ensure!(attempt.proposal.policy_revision == phase.runtime.policy_revision + 1);
         ensure!(attempt.proposal.exhaustion == Some("monthly memory exhausted"));
         ensure!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.frozen_stop_for_test().is_none() { tokio::task::yield_now().await; }
-        }).await?;
+        tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
         ensure!(!invocation.is_finished());
         release.send(false).unwrap();
         ensure!(tokio::time::timeout(Duration::from_secs(10), &mut invocation).await???.into_typed::<Result<Vec<u8>, String>>()? == Ok(b"completed".to_vec()));

@@ -1,6 +1,7 @@
 mod history;
 // monthly_limits::tests proves dual prepaid stop registration before either refund.
-// This integration separately checks mailbox rejection after refund and real RPC recovery.
+// Native caller-first cases hold the target's real GrowMemory append through caller cleanup.
+// A separate target-first scenario checks stale mailbox rejection after refund and RPC recovery.
 mod refund_ordering;
 
 use super::*;
@@ -150,6 +151,7 @@ async fn pending_rpc_scenario(
     };
     let held_growth = !matches!(scenario, refund_ordering::Scenario::Quota { .. });
     let caller_user_stop = scenario == refund_ordering::Scenario::RefundBeforeCaller;
+    let hold_target_acceptance = resource == Resource::Compute && !held_growth && !completion_first;
     if held_growth {
         ensure!(resource == Resource::Compute && mode == AgentMode::Durable);
         ensure!(asynchronous && !completion_first);
@@ -205,7 +207,7 @@ async fn pending_rpc_scenario(
     let target_name = "monthly-rpc-target";
     let target_name_id = agent_id!("RpcBlockingCounter", target_name);
     let expected_target_id = AgentId::from_agent_id(component.id, &target_name_id).unwrap();
-    let mut target_growth = if held_growth {
+    let mut target_growth = if held_growth || hold_target_acceptance {
         Some(
             executor
                 .gate_next_memory_growth_append(&expected_target_id)
@@ -439,6 +441,15 @@ async fn pending_rpc_scenario(
             Some(release)
         } else { None };
         let mut raw = worker.raw_interrupt_for_test();
+        if hold_target_acceptance {
+            // Invocation exit refunds unused fuel before its result append. Hold the target's
+            // existing real GrowMemory append instead, so its lifecycle actor cannot accept a
+            // quota stop and refund that reservation before caller acceptance.
+            let growth = target_growth.as_mut().unwrap();
+            tokio::time::timeout(Duration::from_secs(15), growth.entered()).await?;
+            ensure!(matches!(growth.entry(), OplogEntry::GrowMemory { delta, .. } if delta > 0));
+            refund_ordering::entry_count(&target, &growth.entry(), 0).await?;
+        }
         let stop_started = Instant::now();
         tokio::time::timeout(STOP_BOUND, async {
             if resource == Resource::Compute {
@@ -492,7 +503,7 @@ async fn pending_rpc_scenario(
                 ensure!(matches!(signal, InterruptKind::Suspend(_)));
                 ensure!(target.monthly_stop_for_test() == Some(signal));
                 ensure!(target.monthly_stop_reason_for_test() == Some("monthly compute exhausted"));
-                ensure!(target.frozen_stop_for_test() == Some(signal) && target.owner_stop_for_test().await == Some(signal));
+                ensure!(target.owner_stop_for_test().await == Some(signal));
                 refund_ordering::physical_cleanup(&target).await?;
                 refund_ordering::compute_suspension(&target).await?;
                 let target_stopped = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
@@ -510,7 +521,7 @@ async fn pending_rpc_scenario(
                 ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await && !invocation.is_finished());
                 ensure!(pending_result.as_ref().unwrap().state() == WaitState::Pending);
                 ensure!(!pending.is_ready().await && pending.get().await.is_none());
-                ensure!(worker.monthly_stop_for_test().is_none() && worker.frozen_stop_for_test().is_none());
+                ensure!(worker.monthly_stop_for_test().is_none());
                 ensure!(worker.owner_stop_for_test().await.is_none());
                 ensure!(matches!(raw.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty)));
                 drop(caller_growth.take());
@@ -521,7 +532,7 @@ async fn pending_rpc_scenario(
                 worker.drain_lifecycle_for_test().await?;
                 refund_ordering::entry_count(&worker, caller_entry, 1).await?;
                 ensure!(worker.current_monthly_proposal_for_test() == restored);
-                ensure!(worker.monthly_stop_for_test().is_none() && worker.frozen_stop_for_test().is_none());
+                ensure!(worker.monthly_stop_for_test().is_none());
                 ensure!(worker.owner_stop_for_test().await.is_none());
                 ensure!(matches!(raw.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty)));
                 refund_ordering::no_attempt(&mut attempts)?;
@@ -536,7 +547,7 @@ async fn pending_rpc_scenario(
                 let observed = raw.recv().await?;
                 ensure!(observed == kind);
                 ensure!(worker.monthly_stop_for_test().is_none());
-                ensure!(worker.frozen_stop_for_test() == Some(kind) && worker.owner_stop_for_test().await == Some(kind));
+                ensure!(worker.owner_stop_for_test().await == Some(kind));
                 receipt.recv().await?;
                 None
             } else {
@@ -564,7 +575,8 @@ async fn pending_rpc_scenario(
             ensure!(attempt.proposal.window_identity == initial.window_identity && attempt.proposal.resident_generation == initial.resident_generation);
             ensure!(attempt.proposal.start_attempt == initial.start_attempt && attempt.proposal.fuel_generation == initial.fuel_generation);
             ensure!(attempt.proposal.exhaustion == Some(resource.reason(durable)));
-            ensure!(attempt.completed.await?);
+            let accepted = attempt.completed.await?;
+            ensure!(accepted);
             if let Some(release) = release_result {
                 // The RPC End and target Finished preceded exhaustion. This checks result
                 // survival, not the relative publication order of signal and notification.
@@ -572,14 +584,25 @@ async fn pending_rpc_scenario(
             }
             let signal = raw.recv().await?;
             ensure!(matches!(signal, InterruptKind::Suspend(_)));
-            ensure!(worker.monthly_stop_for_test() == Some(signal) && worker.frozen_stop_for_test() == Some(signal));
+            ensure!(worker.monthly_stop_for_test() == Some(signal));
             ensure!(worker.owner_stop_for_test().await == Some(signal));
             Some(attempt.proposal)
             };
             while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await { tokio::task::yield_now().await; }
             worker.join_accepted_stops_for_test().await?;
             worker.retained_cleanup_for_test().await?;
-            if let Some(refresh) = refreshes.pop() { refresh.await?; }
+            if hold_target_acceptance {
+                // Caller refund restores capacity before this target can validate a queued
+                // proposal. Keep its still-pending invocation live, rather than require both
+                // monitors to stop an account that is no longer exhausted.
+                ensure!(account.effective_fuel_for_test() > 0);
+                drop(target_growth.take());
+                target.drain_lifecycle_for_test().await?;
+                ensure!(target.monthly_stop_for_test().is_none());
+                ensure!(target.is_loaded().await && target.concurrent_agent_permit_is_held().await);
+            }
+            // Full refresh also waits for the live target's filesystem-limit reply. Join it
+            // after target completion, not as part of the caller's physical stop bound.
             ensure!(worker.unload_succeeded_for_test());
             ensure!(worker.permit_acquisitions_for_test() == acquisitions && clock.active_sleeps() == 0);
             if !completion_first { ensure!(!pending.is_ready().await && pending.get().await.is_none()); }
@@ -648,7 +671,7 @@ async fn pending_rpc_scenario(
         ensure!(worker.permit_acquisitions_for_test() == acquisitions && clock.active_sleeps() == 0);
         ensure!(!worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await);
         ensure!(source.observations() == observations);
-        if resource == Resource::Compute {
+        if resource == Resource::Compute && !hold_target_acceptance {
             tokio::time::timeout(Duration::from_secs(5), async {
                 while target.is_loaded().await || target.concurrent_agent_permit_is_held().await { tokio::task::yield_now().await; }
                 target.join_accepted_stops_for_test().await?;
@@ -666,14 +689,14 @@ async fn pending_rpc_scenario(
         refreshes.push(applied_refresh(&limits, &registry, context.account_id).await?);
         info!(updates = ?registry.applied_updates(), "RPC account settlement");
         let updates = registry.applied_updates();
-        if resource == Resource::Compute {
+        if resource == Resource::Compute && !hold_target_acceptance {
             let fuel: i128 = updates.iter().map(|update| i128::from(update.fuel_delta)).sum();
             ensure!(fuel > 0 && fuel < i128::from(2 * FUEL_BUDGET), "two-Store prepaid account must return unused fuel: {updates:?}");
             ensure!(updates.iter().any(|update| update.fuel_delta < 0));
             ensure!(updates.iter().all(|update| update.memory_gb_seconds_delta == 0 && update.memory_byte_nanoseconds_remainder == 0
                 && update.durable_storage_byte_seconds_delta == 0 && update.durable_storage_byte_nanoseconds_remainder == 0
                 && update.ephemeral_storage_byte_seconds_delta == 0 && update.ephemeral_storage_byte_nanoseconds_remainder == 0));
-        } else {
+        } else if resource != Resource::Compute {
             check_accounting(&updates, resource, durable, initial.policy_revision, initial.period)?;
         }
         if !completion_first { ensure!(promises.complete(promise.clone(), vec![]).await?); }
@@ -681,7 +704,30 @@ async fn pending_rpc_scenario(
         // the target promise wakes the target, while caller demand repairs its RPC Start.
         let target_value = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent(&component, &target_name_id, "get_value", data_value!())).await??.into_typed::<u64>()?;
         ensure!(target_value == 7, "exactly one target logical increment, independent of caller return");
-        tokio::time::timeout(Duration::from_secs(5), refreshes.pop().context("applied grant refresh missing")?).await.context("join applied grant filesystem callbacks after target completion")??;
+        if hold_target_acceptance {
+            // Preserve two-Store physical settlement and exact refund assertions. This target
+            // completed normally after caller refund, so use its ordinary idle eviction.
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while target.is_loaded().await && target.eviction_class().await.is_none() { tokio::task::yield_now().await; }
+                if target.is_loaded().await { ensure!(target.stop_if_idle().await); }
+                while target.is_loaded().await || target.concurrent_agent_permit_is_held().await { tokio::task::yield_now().await; }
+                target.join_accepted_stops_for_test().await?;
+                target.retained_cleanup_for_test().await?;
+                Ok::<_, anyhow::Error>(())
+            }).await.context("target compute window closure after normal completion")??;
+            limits.run_batch_for_test().await;
+            let updates = registry.applied_updates();
+            let fuel: i128 = updates.iter().map(|update| i128::from(update.fuel_delta)).sum();
+            ensure!(fuel > 0 && fuel < i128::from(2 * FUEL_BUDGET), "two-Store prepaid account must return unused fuel: {updates:?}");
+            ensure!(updates.iter().any(|update| update.fuel_delta < 0));
+            ensure!(updates.iter().all(|update| update.memory_gb_seconds_delta == 0 && update.memory_byte_nanoseconds_remainder == 0
+                && update.durable_storage_byte_seconds_delta == 0 && update.durable_storage_byte_nanoseconds_remainder == 0
+                && update.ephemeral_storage_byte_seconds_delta == 0 && update.ephemeral_storage_byte_nanoseconds_remainder == 0));
+        }
+        ensure!(!refreshes.is_empty(), "applied grant refresh missing");
+        for refresh in refreshes.drain(..) {
+            tokio::time::timeout(Duration::from_secs(5), refresh).await.context("join applied policy filesystem callbacks after target completion")??;
+        }
         let target_entries = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
         ensure!(history::target(&target_entries, &original.target_key, true)? == Some(target_wait));
         history::settled(&target_entries)?;

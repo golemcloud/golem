@@ -129,9 +129,7 @@ async fn completion_and_history(
         ensure!(attempt.proposal.policy_revision == phase.runtime.policy_revision + 1);
         ensure!(attempt.proposal.exhaustion == Some("monthly memory exhausted"));
         ensure!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.frozen_stop_for_test().is_none() { tokio::task::yield_now().await; }
-        }).await?;
+        tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
         ensure!(!request_is_finished(&invocation));
         release.send(false).unwrap();
         operation.assert_result(join_request(&mut invocation, "invocation result").await?? )?;

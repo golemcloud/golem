@@ -230,7 +230,7 @@ async fn stop_order(
             .await
             .context("selected first-stop terminal append")??;
     }
-    let mut receipt = worker.accepted_stop_receipt_for_test();
+    let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
     assert!(matches!(
         receipt.try_recv(),
         Err(tokio::sync::broadcast::error::TryRecvError::Empty)

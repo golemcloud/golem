@@ -610,7 +610,7 @@ async fn completion_stop(
         let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv()).await?.context("monthly stop acceptance")?;
         ensure!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
         let kind = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
-        ensure!(matches!(kind, InterruptKind::Suspend(_)) && worker.frozen_stop_for_test() == Some(kind));
+        ensure!(matches!(kind, InterruptKind::Suspend(_)));
         let baseline = registry.applied_updates().len();
         tokio::time::sleep(Duration::from_millis(150)).await;
         refreshes.push(tokio_util::task::AbortOnDropHandle::new(tokio::spawn({

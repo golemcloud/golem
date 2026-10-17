@@ -347,8 +347,8 @@ horizon rounds up to a nanosecond; zero allocation, exhausted or inapplicable me
 normal cadence, including rejected-stop retries. This owner-rate estimate is not a global account
 prediction or a universal interruption deadline. It neither scans other
 account owners nor changes Registry refresh cadence. All-off windows have no monthly monitor or
-capacity subscription. Window closure invalidates its target and joins the monitor and registered
-stop cleanup. During unload, the filesystem drains before its final allocation read. The execution
+capacity subscription. Window closure invalidates its target and joins the monitor. During unload,
+the filesystem drains before its final allocation read. The execution
 window then settles and releases its permit before filesystem deletion, as in the existing unload
 path. Failed deletion retains its filesystem reservation and explicit repair obligation, not the
 closed billing window or execution permit. Repair verifies physical cleanup without reopening or
@@ -362,8 +362,8 @@ Ordinary startup rollback after a window opens uses the same unload path. This d
 independent startup panic or cancellation: the filesystem and execution-window Drop fallbacks
 have separate physical tasks, and the panic notification does not join them.
 
-Initial idle settlement precedes startup readiness. Monitor panics, lost delivery, accepted-stop driver
-failures and settlement failures survive successful filesystem deletion as `CleanupFailed`; they
+Initial idle settlement precedes startup readiness. Monitor panics, lost delivery and settlement
+failures survive successful filesystem deletion as `CleanupFailed`; they
 neither request immediate reconstruction nor acquire a replacement permit. The monitor treats a
 closed lifecycle channel or lost send as an infrastructure error, retains that health, and requests
 a cooperative Worker stop. Filesystem observation timeout or failure publishes retained window
@@ -395,47 +395,40 @@ monitor join records that same health even after the target closes. Operational 
 consumed separately when the unloaded loop reports it to current waiters. A healthy settlement
 therefore does not turn a policy outage into failed cleanup, and policy recovery cannot erase a
 real monitor failure. Native health assertions remain unchanged; the affected body/native scopes,
-strict lint and production compilation pass locally. The remaining generic stop-task registry still
-coordinates drivers and must be removed separately.
+strict lint and production compilation passed for that ownership change. The subsequent establishment
+restoration also passes its combined library/native, real entity-blob, ordinary deadline/no-Store,
+strict lint, production and browser checks locally. Remaining F10/F11 controls and native filesystem
+proof/profile gaps are not covered by that statement.
 
-Worker stop registration and window closure share a synchronous admission lock. Closure seals
-its accepted drivers and installs a retained successor. Later accepted drivers wait for the old
-permit's physical release before touching the runtime. That release precedes filesystem deletion;
-startup separately joins filesystem cleanup and cannot bypass retained structural failure.
-New startup and resident-generation publication join prior drivers outside the instance lock and
-recheck under the acceptance lock order. Loading never clears unfinished work or retained errors.
-Owner retirement closes further stop admission before joining the last drivers.
+Interruption uses main's `InterruptEstablishment`. Queueing moves the tail in the same locked step
+that accepts the request. An independently spawned task waits for its predecessor, begins the owner
+entity fence, notifies the primary Store, and drains the fenced entities. Requester cancellation does
+not cancel this task. Each queued request retains its own establishment, including a Restart followed
+by a terminal request. The queue can replace Restart before it is taken, but an earlier establishment
+may already have signalled Restart. There is no frozen elected cause or shared publication leader.
 
-Resident startup also checks completed retained stop failures before returning an earlier successful
-startup result. It does not join pending drivers while holding the instance lock. Operational
-policy failures remain separate. When the inner loop wakes from idle, it consumes a published stop
-before polling concurrent-permit acquisition. Terminal acceptance during a blocked acquisition
-cancels that acquisition before joining publication. Deferred commands keep their replies, and the
-same invocation loop performs teardown. A taken no-body stop retains its unwritten lifecycle marker
-through physical disposal. The existing unloaded-stop handler writes it once; it does not replace
-the completed invocation's selected result or create a result for queued work that has not started.
-A Restart can leave this loop waiting without a loaded
-Store; that surviving loop is not a new Loading attempt.
+The invocation loop takes the exact queued request and waits for its establishment. At an idle permit
+wait it drops acquisition before that wait. It keeps deferred commands and their replies. A taken
+no-body stop retains its unwritten lifecycle marker through disposal, and the unloaded-stop handler
+writes it once. This does not replace a completed invocation's result or invent a result for queued
+work that has not started. A Restart can leave the same loop waiting without a loaded Store.
 
-`StopAdmissionSeal` has no test-only close latch. Colocated owned-window tests register actual
-pending, failed and lost progress futures. The accepted driver and tests use the same
-`run_stop_after_release` prerequisite before polling physical work. These tests retain the real
-permit through pending pre-release work, reject late work after a failed predecessor and preserve a real
-task panic as failed join/close/readiness, not success. Integration uses actual FIFO permit
-contention to prove execution release separately from filesystem cleanup and to check late-stop
-responsiveness. Its precise seal/successor ordering is covered by those production-owner tests,
-not an inferred close timestamp. Raw driver
-pause/panic controls are absent. Exact ordering uses the actual freeze, entity-fence and guarded
-publication bodies; real Worker tests retain effects, markers, physical cleanup and recovery.
-The publication pause/panic field, setter and producer are also absent; the production
-`StopPublication` transaction remains. For the actual publication/drain conjunction and its precise
-receipt limits, read [stop publication proofs](reference/testing-patterns.md#stop-publication-drain-and-acknowledgements).
-The freeze control family is also absent; actual freeze/capture and writer-join order remain.
-Read [freeze capture proofs](reference/testing-patterns.md#stop-freeze-capture-and-native-prerequisites)
-for cause-guard checks and the separate native persistence/readiness prerequisites.
-The monthly acceptance pause gate is removed; its observer and completion interfaces remain.
-Teardown, idle, monitor/time, replay and other private/protocol controls remain separate instrumentation. Operational
-`enforcement_failure` data remains distinct from disposal health.
+Startup uses main's establishment-tail/current-pointer and idle-queue check before reopening entity
+admission. The wallet installer remains the sole owner-generation reset. The resident counter records
+monthly target identity and marker provenance; it does not fence an earlier driver or reset tool state.
+Window close and owner retirement use their existing monitor, metering, filesystem and cleanup joins.
+There is no stop-task vector, release successor, admission seal or publication transaction. Settlement
+and permit release do not wait on a generic signal-publication phase. A real entered effect or
+filesystem drain can still delay their ordinary cleanup owner.
+
+Colocated tests exercise the real queue, establishment predecessor, ready-permit cancellation,
+EntityFence drainage, window close and monitor-health operations. Tests for frozen publication,
+leader/follower progress and seal/successor ordering retire with those producers. Native tests retain
+effects, invocation identity, committed prefixes, exact results and terminals, and physical cleanup.
+Their receipt comes from ordinary `ExecutionStatus::Interrupting`, observed in test-side support
+while provider or oplog work remains held. No private publication receipt remains on Worker.
+The existing teardown, idle, monthly-time, replay and other test controls remain open F10/F11 work;
+isolating their fields under test configuration does not justify or complete their removal.
 
 An accepted stop in `WaitingForPermit` takes that attempt's exact task handle before signalling
 Loading subscribers. The driver cancels and joins the task without acquiring its blocked permit,
@@ -448,24 +441,13 @@ to send that receipt. The real initializer tests in `tests/api/interruption/life
 cleanup and one receipt, durable Suspend and reconstruction, and an ephemeral typed resource
 error recorded as Recovery before any guest invocation starts.
 
-The monitor submits a proposal to the existing Worker state actor. Worker acceptance revalidates
-the cached owner, fingerprint, startup attempt, resident generation, held permit, exact active
-window, policy revision, period, fuel generation and current exhaustion. Acceptance registers
-retained progress before any signal. Restart/Jump remain replaceable until the retained driver
-or terminal invocation-loop teardown freezes the queue's elected cause under the interrupt guard.
-Teardown registers its terminal demand through the same Worker election. Admission-driven
-`TryStop` uses its actual Suspend timestamp rather than synthesizing an Interrupt. An earlier
-accepted monitor stop wins even if teardown reaches the owner fence before its driver. Both use
-the retained frozen cause; only the driver publishes it. Later accepted proposals join that
-publisher; they cannot publish a provisional kind. The driver fences the exact owner
-with the frozen kind, verifies the physical owner-failure winner, then publishes that kind to
-existing Loading/Running subscribers and the late-subscriber projection. A conflicting independent
-owner failure remains authoritative and fails stop cleanup rather than becoming a quota error.
-The invocation loop remains the sole primary-Store owner. Colocated stop tests exercise both
-fence orders through the same EntityFence and publication bodies used in production. Real Context
-tests in `tests/api/interruption/lifecycle/admission.rs` release loaded Compute admission teardown
-before or after the driver join, then verify that the pending invocation executes after ordinary
-unload and reconstruction. Those release orders are not claims about which fence ran first.
+The monitor submits a proposal to the existing Worker state actor. Acceptance revalidates the cached
+owner, fingerprint, startup attempt, resident generation, held permit, exact active window, policy
+revision, period, fuel generation and current exhaustion. It queues the same ordinary interruption
+and advances the establishment tail before reporting acceptance. Capacity and request-state locks
+are released before asynchronous establishment. The invocation loop remains the sole primary-Store
+owner. Entity failure selection stays with the existing operation owner; a competing trap or
+infrastructure failure does not become a quota error or a fabricated stop-election failure.
 
 For the outer-Running acceptance guard, separate body/native claims and applied-capacity watch versus
 filesystem-tail joins, read [monthly acceptance proofs](reference/testing-patterns.md#monthly-acceptance-guard-and-applied-capacity).
@@ -474,10 +456,10 @@ Ordinary nonterminal unload closes tool/entity admission and drains physical own
 electing a synthetic lifecycle failure. The operation owner retains that closed admission separately
 from its first selected Trap, Infrastructure or real Lifecycle cause. A later stop during unloaded
 OOM backoff can therefore elect its exact accepted kind without clearing the old physical fence,
-cleanup or selected invocation outcome. The exact owner-kind guard still rejects real conflicts.
+cleanup or selected invocation outcome. The operation owner keeps its first selected failure.
 
 Monthly acceptance rejects further proposals once a terminal stop is claimed, under the existing
-interrupt and admission locks. The same active window can keep accounting during retirement, but
+interrupt lock and capacity transaction. The same active window can keep accounting during retirement, but
 later ticks or applied updates cannot replace the accepted monthly kind/reason or queue another
 terminal demand. This also preserves a claimed user stop. Generic terminal queuing still permits
 later deletion. `tests/api/interruption/host/p2/tcp/input/repeated_stop.rs` holds a real outcome writer after
@@ -489,17 +471,16 @@ already distinguishes a deadline from a typed lifecycle interruption. Failure re
 wait for private stop publication, consume a queued lifecycle request, or replace a new failure
 candidate with that request. Monthly ephemeral errors map only the exact matching typed interruption;
 an independent guest error, timeout or unmatched interruption keeps its boundary classification.
-No separate origin enum or origin-specific callback remains. Publication errors stay observable
-through stop cleanup rather than replacing an unrelated invocation error.
+No separate origin enum or origin-specific callback remains. Cleanup errors remain separate from
+an unrelated invocation error.
 The invocation deadline uses the same configured Tokio timer with and without `test-utils`. There
 is no Worker watch channel or forced-expiry setter. Native selection tests leave TCP input silent,
 observe the timer's actual typed interrupt and hold the ordinary outcome append before requesting
 a later quota stop. Their other cases let quota or success finish first. They require the exact
 five-second timeout text and complete committed raw prefix. Native cases, strict lint and production
-compilation pass locally. This timer-control removal does not remove the remaining stop publication
-protocol.
+compilation passed for the timer-control removal. Establishment restoration has separate validation.
 Before recording a typed interruption, the ordinary failure callback acknowledges only its exact
-matching, already-published terminal request. A different kind, unpublished or freezing request is
+matching, already-observed terminal request. A different kind or an unobserved queued request is
 left untouched. This prevents later monthly observations from replacing an observed stop without
 reintroducing publication waiting or changing a timeout's cause.
 
@@ -507,13 +488,12 @@ The monthly body test applies the ordinary callback's pure monthly mapper while 
 stop guard. A deadline remains unchanged and the queued stop retains its own exact cause.
 Admission has no test-only pause. Real Worker selection tests retain actual timer expiry, storage
 append backpressure, effect/key/raw-prefix assertions and ordinary reconstruction. Their queued-work
-window is not a pre-admission timing claim. Teardown controls remain separate. These failure-path
-changes do not complete A1: the general publication/seal/generation protocol still needs
-restoration to the existing lifecycle.
+window is not a pre-admission timing claim. Teardown controls remain separate. Establishment
+restoration passes its affected checks; the broader retained-change review in A1 remains open.
 
 After guest success, the invocation loop uses the ordinary `Interrupts::claim_pending_terminal`
-check before success finalization. A published terminal takes the existing failure path. A private
-unpublished/freezing request is not awaited there. Once that boundary permits success, its recorder
+check before success finalization. A queued terminal waits for its own establishment and takes the
+existing failure path, as in main. Once that boundary permits success, its recorder
 does not recheck or consume a later stop or turn the result into a quota error. Finalization still
 drains required durable work and commits `AgentInvocationFinished` before notifying waiters.
 Colocated tests exercise the actual terminal check; native callback/persistence tests retain the
@@ -537,8 +517,8 @@ checks through the real oplog dependency. Selection and host completion cases re
 key/history and ordinary reconstruction, but no longer require raw stop signalling to wait for the
 callback's commit. The idle-after-success observer and private pending/committed-writer projections
 are removed with their protocol. Setup uses actual invocation completion and execution-permit release.
-Stop publication, admission seals, early generation handoff, monthly observers and other cleanup
-controls remain separate open A1/F10/F11 work.
+Monthly observers and other cleanup controls remain open F10/F11 work. The local restoration removes
+the general stop protocol and passes its affected checks; that does not close all architectural work.
 
 The default 10 ms epoch increment still does not wake pending host futures. Real silent-TCP tests
 cover monthly-memory detection by both the local tick and applied Registry update, cooperative
@@ -946,13 +926,13 @@ the writer mutex are distinct.
 
 ### Resident lifecycle unit and identities
 
-The primary Store and every current entity Store are one resident lifecycle unit. The retained
-StopProgress driver freezes the elected lifecycle cause, fences the matching owner's entity
-admission and runtime resources, signals the primary Store and drains the fenced entity bodies.
-The outer loop joins retained stop progress before creating another Store. This check is
-unconditional: a loop that retained its concurrent-agent permit must not skip it. Restart and suspend therefore discard the complete unit,
-and reconstruction recreates entity Stores from the owner's oplog rather than carrying resident
-entity state across generations.
+The primary Store and every current entity Store are one resident lifecycle unit. The ordinary
+establishment task begins the matching owner's entity fence, signals the primary Store and drains
+fenced entity bodies. Invocation-loop teardown uses the same entity owner before physical unload.
+Startup waits for the current establishment tail and checks the idle request state before reopening
+entity admission. The wallet installer owns the one tool/replay-generation reset. Restart and suspend
+discard resident Stores; reconstruction recreates entities from the owner's oplog rather than carrying
+their resident state forward. No generic stop-progress registry or frozen-cause election remains.
 
 Three identities at this boundary are deliberately different:
 

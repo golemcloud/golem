@@ -220,7 +220,6 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
     ensure!(worker.unload_succeeded_for_test());
     ensure!(clock.active_sleeps() == 0 && account.monthly_observer_count_for_test() == 0);
     ensure!(worker.monthly_stop_for_test() == Some(expected));
-    ensure!(worker.frozen_stop_for_test() == Some(expected));
     ensure!(worker.owner_stop_for_test().await == Some(expected));
     ensure!(worker.monthly_stop_reason_for_test() == Some("monthly memory exhausted"));
     let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;

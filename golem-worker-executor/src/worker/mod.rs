@@ -32,9 +32,10 @@ mod interrupt;
 pub mod invocation;
 mod invocation_loop;
 mod lifecycle;
+#[cfg(test)]
+mod lifecycle_tests;
 mod monthly_limits;
 mod outcome;
-mod stop;
 #[cfg(feature = "test-utils")]
 pub use monthly_limits::{
     MonthlyAcceptanceForTest, MonthlyClockForTest, MonthlyProposalForTest, MonthlyTimerPollForTest,
@@ -756,8 +757,10 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
     /// until the worker stops so permit reacquisition cannot lose it between `RunningWorker`s.
     interrupt_signal: Arc<Interrupts>,
-    stop_progress: StopProgress,
-    self_ref: std::sync::Weak<Worker<Ctx>>,
+    interrupt_establishment_tail: StdMutex<Arc<InterruptEstablishment>>,
+    release_scope: StdMutex<crate::metrics::resource_release::ReleaseScope>,
+    #[cfg(any(test, feature = "test-utils"))]
+    test_support: Arc<StdMutex<ExecutionTestSupport>>,
     monthly_window: StdMutex<Option<Arc<monthly_limits::MonthlyWindowTarget>>>,
     #[cfg(feature = "test-utils")]
     monthly_clock: StdMutex<Option<Arc<MonthlyClockForTest>>>,
@@ -826,32 +829,16 @@ struct DeletionStageTestGate {
     release: tokio::sync::oneshot::Receiver<()>,
 }
 
-struct StopPublication {
-    release_scope: crate::metrics::resource_release::ReleaseScope,
-    cause: std::sync::OnceLock<PendingWorkerInterrupt>,
-    receipt: Arc<tokio::sync::broadcast::Sender<()>>,
-    signal: Option<Arc<tokio::sync::broadcast::Sender<InterruptKind>>>,
-}
-
-type StopCompletion = Shared<BoxFuture<'static, Result<(), WorkerExecutorError>>>;
-type StopProgress = Arc<StdMutex<StopProgressState>>;
-
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Default)]
-struct StopProgressState {
-    release_scope: crate::metrics::resource_release::ReleaseScope,
-    tasks: Vec<StopCompletion>,
-    // New drivers belong to the successor and cannot touch the resident runtime until
-    // the preceding permit owner has physically finished. Errors remain retained here.
-    release: Option<StopCompletion>,
-    retired: bool,
-    publication: Option<(Arc<StopPublication>, StopCompletion)>,
+struct ExecutionTestSupport {
+    #[cfg(feature = "test-utils")]
+    teardown_fence_gate: Option<OwnerFenceTestGate>,
     #[cfg(feature = "test-utils")]
     completed_replay_gate: Option<CompletedReplayTestGate>,
     #[cfg(feature = "test-utils")]
     tail_drain_observer:
         Option<tokio::sync::oneshot::Sender<crate::durable_host::tail_work::TailWorkTracker>>,
-    #[cfg(feature = "test-utils")]
-    teardown_fence_gate: Option<OwnerFenceTestGate>,
     #[cfg(feature = "test-utils")]
     lose_settlement_observer: bool,
     #[cfg(feature = "test-utils")]
@@ -865,21 +852,20 @@ struct StopProgressState {
 }
 
 #[cfg(feature = "test-utils")]
+struct CompletedReplayTestGate {
+    key: IdempotencyKey,
+    entered: tokio::sync::oneshot::Sender<(OplogIndex, OplogIndex)>,
+    release: tokio::sync::oneshot::Receiver<()>,
+}
+
+#[cfg(feature = "test-utils")]
 #[derive(Debug)]
 pub struct OwnerFenceTestSnapshot {
     pub generation: u64,
     pub proposed_owner_failure: String,
     pub final_interrupt: Option<InterruptKind>,
     pub pending: Option<InterruptKind>,
-    pub frozen: Option<InterruptKind>,
     pub selected_owner_failure: Option<String>,
-}
-
-#[cfg(feature = "test-utils")]
-struct CompletedReplayTestGate {
-    key: IdempotencyKey,
-    entered: tokio::sync::oneshot::Sender<(OplogIndex, OplogIndex)>,
-    release: tokio::sync::oneshot::Receiver<()>,
 }
 
 #[cfg(feature = "test-utils")]
@@ -894,101 +880,6 @@ type StopTestGate = (
     tokio::sync::oneshot::Sender<()>,
     tokio::sync::oneshot::Receiver<bool>,
 );
-
-impl StopProgressState {
-    fn completed_failure(&self) -> Option<WorkerExecutorError> {
-        self.tasks
-            .iter()
-            .chain(self.release.iter())
-            .find_map(|task| task.clone().now_or_never().and_then(Result::err))
-    }
-
-    fn ready(&self) -> Option<Result<(), WorkerExecutorError>> {
-        let mut result = Ok(());
-        for task in self.tasks.iter().chain(self.release.iter()) {
-            result = result.and(task.clone().now_or_never()?);
-        }
-        Some(result)
-    }
-}
-
-struct StopAdmissionSeal {
-    completion: Vec<StopCompletion>,
-    release: Option<oneshot::Sender<Result<(), WorkerExecutorError>>>,
-    health: Result<(), WorkerExecutorError>,
-}
-
-impl StopAdmissionSeal {
-    fn new(progress: &StopProgress) -> Self {
-        Self::seal(progress, false)
-    }
-
-    fn seal(progress: &StopProgress, retire: bool) -> Self {
-        // Acceptance and transfer to the successor use this same synchronous lock.
-        // The seal owns every earlier driver; later drivers await its release result.
-        let mut progress = progress.lock().unwrap();
-        progress.retired |= retire;
-        let mut completion = progress.tasks.clone();
-        completion.extend(progress.release.clone());
-        let (sender, receiver) = oneshot::channel();
-        let release = async move {
-            receiver.await.unwrap_or_else(|_| {
-                Err(WorkerExecutorError::runtime(
-                    "Stop admission seal lost its physical completion",
-                ))
-            })
-        }
-        .boxed()
-        .shared();
-        progress.release = Some(release);
-        Self {
-            completion,
-            release: Some(sender),
-            health: Ok(()),
-        }
-    }
-
-    async fn join(&mut self) -> Result<(), WorkerExecutorError> {
-        let mut result = Ok(());
-        for task in &self.completion {
-            result = result.and(task.clone().await);
-        }
-        self.health = result.clone();
-        result
-    }
-
-    fn complete(mut self, result: Result<(), WorkerExecutorError>) {
-        let _ = self.release.take().unwrap().send(self.health.and(result));
-    }
-}
-
-async fn run_stop_after_release<T>(
-    predecessor: Option<StopCompletion>,
-    work: impl std::future::Future<Output = Result<T, WorkerExecutorError>>,
-) -> Result<T, WorkerExecutorError> {
-    if let Some(predecessor) = predecessor {
-        predecessor.await?;
-    }
-    work.await
-}
-
-fn stop_cleanup_join_error(error: tokio::task::JoinError) -> WorkerExecutorError {
-    WorkerExecutorError::runtime(format!("Stop cleanup failed: {error}"))
-}
-
-async fn join_accepted_stops(progress: &StopProgress) -> Result<(), WorkerExecutorError> {
-    let tasks = {
-        let progress = progress.lock().unwrap();
-        let mut tasks = progress.tasks.clone();
-        tasks.extend(progress.release.clone());
-        tasks
-    };
-    let mut result = Ok(());
-    for task in tasks {
-        result = result.and(task.await);
-    }
-    result
-}
 
 #[derive(Default, PartialEq, Eq)]
 enum OwnerCleanupState {
@@ -2007,14 +1898,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ))
             .await;
         } else if interrupt.is_some() {
-            self.join_stop_progress().await?;
+            self.join_interrupt_establishment().await?;
             self.commit_pending_terminal_stop(established_generation)
                 .await?;
         }
-        let mut seal = StopAdmissionSeal::seal(&self.stop_progress, true);
-        let stopped = seal.join().await;
-        seal.complete(stopped.clone());
-        stopped?;
+        self.join_interrupt_establishment().await?;
         self.durable_stream_attachment_reconciler.stop().await;
         let lost_shard = self.retired_for_lost_shard();
         // A lost shard's producer and lifecycle writes are refused, which changes nothing about
@@ -2049,6 +1937,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let Some(pending) = pending else {
             return Ok(());
         };
+        pending.establishment.wait().await;
         let status = self.get_last_known_status().await;
         if !matches!(
             status.status,
@@ -2958,8 +2847,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             startup_attempt: StartupAttemptTracker::default(),
             linear_memory_grant: StdMutex::new(None),
             interrupt_signal: Arc::default(),
-            stop_progress: Arc::default(),
-            self_ref: Arc::downgrade(self),
+            interrupt_establishment_tail: StdMutex::new(InterruptEstablishment::ready()),
+            release_scope: StdMutex::default(),
+            #[cfg(any(test, feature = "test-utils"))]
+            test_support: Arc::default(),
             monthly_window: StdMutex::new(None),
             #[cfg(feature = "test-utils")]
             monthly_acceptance_observer: StdMutex::new(None),
@@ -3337,30 +3228,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             *this.last_resume_request.lock().await = Timestamp::now_utc();
         }
 
-        let mut instance_guard = loop {
-            let guard = this.lock_non_stopping_worker().await;
-            if let Some(error) = this
-                .stop_progress
-                .lock()
-                .unwrap()
-                .completed_failure()
-                .or_else(|| this.monthly_cleanup_failure())
-            {
-                return Err(error);
-            }
-            if matches!(&*guard, WorkerInstance::Unloaded { .. }) {
-                let ready = this.stop_progress.lock().unwrap().ready();
-                match ready {
-                    Some(result) => result?,
-                    None => {
-                        drop(guard);
-                        this.join_stop_progress().await?;
-                        continue;
-                    }
-                }
-            }
-            break guard;
-        };
+        let mut instance_guard = this.lock_non_stopping_worker().await;
+        if let Some(error) = this.monthly_cleanup_failure() {
+            return Err(error);
+        }
         instance_guard.ensure_not_deleting()?;
         // A handle kept past a retired generation must not start it again: the start would take
         // permits, could append `Resumed` to an oplog the new owner now writes, and a failure in
@@ -4148,11 +4019,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     fn mark_as_loading(&self, start_attempt: Uuid) {
         self.startup_attempt.begin(Some(start_attempt));
         self.monthly_stop.lock().unwrap().take();
-        {
-            let mut progress = self.stop_progress.lock().unwrap();
-            progress.publication = None;
-            progress.release_scope = Default::default();
-        }
+        *self.release_scope.lock().unwrap() = Default::default();
         let mut execution_status = self.execution_status.write().unwrap();
         *execution_status = ExecutionStatus::loading(execution_status.agent_mode());
     }
@@ -4424,23 +4291,208 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         unload_reason: UnloadReason,
         allow_deleting: bool,
     ) -> Result<Option<Receiver<()>>, WorkerExecutorError> {
+        let Some((pending, waiting, was_running)) = self
+            .queue_interrupt(
+                interrupt_kind,
+                reacquire_permits,
+                unload_reason,
+                allow_deleting,
+            )
+            .await
+        else {
+            return Ok(None);
+        };
+        self.start_interrupt_establishment(pending, waiting, was_running)
+            .await
+            .expect("worker interruption establishment task failed")
+    }
+
+    fn start_interrupt_establishment(
+        self: &Arc<Self>,
+        pending: PendingWorkerInterrupt,
+        waiting: Option<(Uuid, Option<JoinHandle<()>>)>,
+        was_running: bool,
+    ) -> JoinHandle<Result<Option<Receiver<()>>, WorkerExecutorError>> {
+        let worker = self.clone();
+        let establishment = pending.establishment.clone();
+        let scope = self.release_scope();
+        let receipt = scope.accepted_driver();
+        tokio::spawn(async move {
+            let result = worker
+                .establish_queued_interrupt(pending, waiting, &scope)
+                .await;
+            if result.is_err() {
+                scope.fail(
+                    crate::metrics::resource_release::Stage::EndToEnd,
+                    crate::metrics::resource_release::Failure::StopDriver,
+                );
+            }
+            establishment.complete();
+            receipt.complete();
+            if !was_running {
+                scope.seal();
+            }
+            result
+        })
+    }
+
+    async fn establish_queued_interrupt(
+        self: &Arc<Self>,
+        pending: PendingWorkerInterrupt,
+        waiting: Option<(Uuid, Option<JoinHandle<()>>)>,
+        scope: &crate::metrics::resource_release::ReleaseScope,
+    ) -> Result<Option<Receiver<()>>, WorkerExecutorError> {
+        let interrupt_kind = pending.kind;
+        let establishment = pending.establishment.clone();
+        establishment.wait_for_predecessor().await;
+        let active_agent = self.active_agent_for_this_owner().await;
+        if let Some(active_agent) = &active_agent {
+            active_agent
+                .begin_fence_entity_bodies(OwnerFailureWinner::Lifecycle(interrupt_kind))
+                .await;
+        }
+        let monthly = self
+            .monthly_stop
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|(kind, _)| *kind == interrupt_kind)
+            .map(|(_, resource)| *resource);
+        let cause = match monthly {
+            Some(crate::services::resource_limits::MonthlyResourceExhaustion::Compute) => {
+                crate::metrics::resource_release::Cause::MonthlyCompute
+            }
+            Some(crate::services::resource_limits::MonthlyResourceExhaustion::Memory) => {
+                crate::metrics::resource_release::Cause::MonthlyMemory
+            }
+            Some(crate::services::resource_limits::MonthlyResourceExhaustion::DurableStorage) => {
+                crate::metrics::resource_release::Cause::MonthlyDurableStorage
+            }
+            Some(crate::services::resource_limits::MonthlyResourceExhaustion::EphemeralStorage) => {
+                crate::metrics::resource_release::Cause::MonthlyEphemeralStorage
+            }
+            None if interrupt_kind == InterruptKind::Jump => {
+                crate::metrics::resource_release::Cause::Jump
+            }
+            None => pending.unload_request.reason.release_cause(),
+        };
+        scope.freeze_cause(cause);
+        let receiver = self.notify_queued_interrupt(interrupt_kind).await;
+        if let Some(active_agent) = active_agent {
+            active_agent.drain_fenced_entity_bodies().await;
+        }
+        if let Some((attempt, task)) = waiting {
+            let waiting_receipt = scope.accepted_join();
+            let stopped = match self
+                .finish_waiting_stop(attempt, task, &pending, scope, waiting_receipt)
+                .await
+            {
+                Ok(stopped) => stopped,
+                Err(error) => {
+                    self.complete_startup(attempt, Err(error.clone()));
+                    self.stop_internal(
+                        false,
+                        Some(error.clone()),
+                        UnloadRequest::ordinary(UnloadReason::Failure),
+                        FinalWorkerState::CleanupFailed(error.clone()),
+                        PendingLiveInvocationDisposition::Fail,
+                    )
+                    .await;
+                    let _lifecycle = self.instance.lock().await;
+                    acknowledge_no_store_interruption(
+                        &mut self.execution_status.write().unwrap(),
+                        None,
+                    );
+                    return Err(error);
+                }
+            };
+            if let Some((attempt, kind, receipt)) = stopped {
+                self.complete_startup(attempt, Err(WorkerExecutorError::Interrupted { kind }));
+                {
+                    let mut status = self.execution_status.write().unwrap();
+                    if matches!(&*status, ExecutionStatus::Interrupting { await_interruption, .. } if Arc::ptr_eq(await_interruption, &receipt))
+                    {
+                        *status = ExecutionStatus::Suspended {
+                            agent_mode: status.agent_mode(),
+                            timestamp: Timestamp::now_utc(),
+                        };
+                    }
+                }
+                let _ = receipt.send(());
+                if matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
+                    let worker = self.clone();
+                    let established = establishment.clone();
+                    tokio::spawn(async move {
+                        established.wait().await;
+                        let _ = Worker::start_if_needed(worker).await;
+                    });
+                }
+            }
+        }
+        Ok(receiver)
+    }
+
+    async fn notify_queued_interrupt(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {
+        let instance_guard = self.instance.lock().await;
+        if let WorkerInstance::Running(running) = instance_guard.deletion_runtime() {
+            let _ = running.sender.send(WorkerCommand::WorkAvailable);
+        }
+        drop(instance_guard);
+        let mut status = self.execution_status.write().unwrap();
+        let signal = match &*status {
+            ExecutionStatus::Loading {
+                interrupt_signal, ..
+            }
+            | ExecutionStatus::Running {
+                interrupt_signal, ..
+            } => Some(interrupt_signal.clone()),
+            _ => None,
+        };
+        let receipt = match &*status {
+            ExecutionStatus::Interrupting {
+                await_interruption, ..
+            } => await_interruption.clone(),
+            _ => Arc::new(tokio::sync::broadcast::channel(1).0),
+        };
+        let receiver = receipt.subscribe();
+        status
+            .publish_interrupt(interrupt_kind, receipt, signal.as_ref())
+            .then_some(receiver)
+    }
+
+    async fn queue_interrupt(
+        &self,
+        interrupt_kind: InterruptKind,
+        reacquire_permits: bool,
+        unload_reason: UnloadReason,
+        allow_deleting: bool,
+    ) -> Option<(
+        PendingWorkerInterrupt,
+        Option<(Uuid, Option<JoinHandle<()>>)>,
+        bool,
+    )> {
         loop {
             let lifecycle = self.instance.lock().await;
             if !allow_deleting && lifecycle.ensure_not_deleting().is_err() {
-                return Ok(None);
+                return None;
             }
-            if let Some(mut state) = self.interrupt_signal.try_lock() {
-                let admission = self.stop_progress.lock().unwrap();
-                if admission.retired
-                    || !state.queue(PendingWorkerInterrupt {
-                        kind: interrupt_kind,
-                        reacquire_permits,
-                        unload_request: UnloadRequest::ordinary(unload_reason),
-                    })
-                {
-                    return Ok(None);
-                }
-                return Ok(self.accept_interrupt(&lifecycle, interrupt_kind, admission));
+            if let Some(mut interrupts) = self.interrupt_signal.try_lock() {
+                let pending = register_interrupt_request(
+                    &mut interrupts,
+                    &self.interrupt_establishment_tail,
+                    interrupt_kind,
+                    reacquire_permits,
+                    UnloadRequest::ordinary(unload_reason),
+                )?;
+                let waiting = match lifecycle.deletion_runtime() {
+                    WorkerInstance::WaitingForPermit(waiting) => {
+                        Some((waiting.start_attempt, waiting.handle.lock().unwrap().take()))
+                    }
+                    _ => None,
+                };
+                let was_running =
+                    matches!(lifecycle.deletion_runtime(), WorkerInstance::Running(_));
+                return Some((pending, waiting, was_running));
             }
             drop(lifecycle);
             tokio::task::yield_now().await;
@@ -4448,183 +4500,45 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub(crate) async fn acknowledge_invocation_interrupt(&self, kind: InterruptKind) {
-        self.interrupt_signal.claim_observed_terminal(kind).await;
-    }
-
-    // Entity control flow, teardown and the retained driver must fence with the same
-    // elected cause, even when admission stopped the invocation before publication.
-    pub(crate) async fn terminal_teardown_cause(
-        self: &Arc<Self>,
-        kind: InterruptKind,
-    ) -> InterruptKind {
-        if let Err(error) = self.set_interrupting(kind).await {
-            tracing::error!(error = %error, "Failed to accept terminal teardown stop");
+        let observed = matches!(&*self.execution_status.read().unwrap(),
+            ExecutionStatus::Interrupting { interrupt_kind, .. } if *interrupt_kind == kind);
+        if observed {
+            self.interrupt_signal.claim_observed_terminal(kind).await;
         }
-        let mut interrupts = self.interrupt_signal.lock().await;
-        let admission = self.stop_progress.lock().unwrap();
-        let Some((publication, _)) = &admission.publication else {
-            return kind;
-        };
-        stop::freeze(&mut interrupts, publication, &self.monthly_stop)
-            .map_or(kind, |pending| pending.kind)
-    }
-
-    fn accept_interrupt(
-        &self,
-        lifecycle: &WorkerInstance,
-        _kind: InterruptKind,
-        mut admission: std::sync::MutexGuard<'_, StopProgressState>,
-    ) -> Option<Receiver<()>> {
-        let worker = self
-            .self_ref
-            .upgrade()
-            .expect("accepted stop retains its Worker");
-        let waiting = match lifecycle.deletion_runtime() {
-            WorkerInstance::WaitingForPermit(waiting) => waiting
-                .handle
-                .lock()
-                .unwrap()
-                .take()
-                .map(|task| (waiting.start_attempt, task)),
-            _ => None,
-        };
-        // Taking the exact handle also prevents its permit handoff from publishing Running.
-        let was_waiting = waiting.is_some();
-        let before_owner_generation = matches!(lifecycle.deletion_runtime(),
-            WorkerInstance::Running(running) if !running.owner_generation_started);
-        let resident_generation = self.resident_generation.load(Ordering::Acquire);
-        let predecessor = admission.release.clone();
-        let (publication, leader) = stop::publication(&admission, &self.execution_status);
-        let receiver = (!matches!(
-            *self.execution_status.read().unwrap(),
-            ExecutionStatus::Suspended { .. }
-        ))
-        .then(|| publication.receipt.subscribe());
-        let driver_publication = publication.clone();
-        let is_leader = leader.is_none();
-        let release_scope = publication.release_scope.clone();
-        let driver_receipt = release_scope.accepted_driver();
-        let waiting_receipt = was_waiting.then(|| release_scope.accepted_join());
-        let was_running = matches!(lifecycle.deletion_runtime(), WorkerInstance::Running(_));
-        let progress = tokio::spawn(async move {
-            run_stop_after_release(predecessor, async move {
-            let publication = driver_publication;
-            let mut acknowledge_without_store = false;
-            if let Some(leader) = leader {
-                // A later terminal demand can retire the old runtime, but cannot
-                // revise the already published cause or fence winner.
-                stop::publish_follower(&worker.interrupt_signal, leader).await?;
-            } else {
-                let pending = stop::freeze_pending(
-                    &worker.interrupt_signal,
-                    &publication,
-                    &worker.monthly_stop,
-                ).await?;
-                if let Some(active) = worker
-                    .active_agents()
-                    .try_get_active_agent(&worker.owned_agent_id)
-                    .await
-                    && Arc::ptr_eq(&active.primary(), &worker)
-                    && worker.resident_generation.load(Ordering::Acquire) == resident_generation
-                {
-                    // Neither the captured permit-wait task nor a handed-off startup
-                    // that has not rolled its owner election owns the previous winner.
-                    if !was_waiting && !before_owner_generation {
-                        active
-                            .begin_fence_entity_bodies(OwnerFailureWinner::Lifecycle(pending.kind))
-                            .await;
-                        stop::verify_owner_fence(&active.execution().tool_operations(), pending.kind)?;
-                    }
-                    {
-                        let lifecycle = worker.instance.lock().await;
-                        acknowledge_without_store = stop::publish(
-                            stop::PublicationRuntime {
-                                lifecycle: &lifecycle,
-                                resident_generation: &worker.resident_generation,
-                                accepted_generation: resident_generation,
-                            },
-                            &worker.interrupt_signal,
-                            &worker.execution_status,
-                            &publication,
-                            pending,
-                        ).await?;
-                    }
-                    active.drain_fenced_entity_bodies().await;
-                } else {
-                    worker.interrupt_signal.lock().await.publish();
-                }
-            }
-            let waiting_stop = if let Some((attempt, task)) = waiting {
-                worker
-                    .finish_waiting_stop(attempt, task, &release_scope, waiting_receipt.unwrap())
-                    .await?
-            } else {
-                None
-            };
-            if !is_leader {
-                let lifecycle = worker.instance.lock().await;
-                if let WorkerInstance::Running(running) = lifecycle.deletion_runtime() {
-                    let _ = running.sender.send(WorkerCommand::WorkAvailable);
-                }
-            }
-            let restart = waiting_stop.as_ref().is_some_and(|(_, kind, _)| {
-                matches!(kind, InterruptKind::Restart | InterruptKind::Jump)
-            });
-            if let Some((attempt, kind, receipt)) = waiting_stop {
-                worker.complete_startup(attempt, Err(WorkerExecutorError::Interrupted { kind }));
-                let mut status = worker.execution_status.write().unwrap();
-                if matches!(&*status, ExecutionStatus::Interrupting { await_interruption, .. } if Arc::ptr_eq(await_interruption, &receipt))
-                {
-                    *status = ExecutionStatus::Suspended {
-                        agent_mode: status.agent_mode(),
-                        timestamp: Timestamp::now_utc(),
-                    };
-                }
-                let _ = receipt.send(());
-            }
-            stop::acknowledge_without_store(&publication, acknowledge_without_store);
-            Ok(restart)
-            }).await
-        });
-        let progress = stop::retain_driver(
-            &mut admission,
-            publication,
-            is_leader,
-            was_running,
-            driver_receipt,
-            progress,
-        );
-        drop(admission);
-        if was_waiting {
-            let worker = self.self_ref.upgrade().unwrap();
-            tokio::spawn(async move {
-                if matches!(progress.await, Ok(true)) {
-                    let _ = Worker::start_if_needed(worker).await;
-                }
-            });
-        }
-        receiver
     }
 
     async fn finish_waiting_stop(
         &self,
         attempt: Uuid,
-        task: JoinHandle<()>,
+        task: Option<JoinHandle<()>>,
+        request: &PendingWorkerInterrupt,
         scope: &crate::metrics::resource_release::ReleaseScope,
         waiting_receipt: crate::metrics::resource_release::ReleaseReceipt,
     ) -> Result<
         Option<(Uuid, InterruptKind, Arc<tokio::sync::broadcast::Sender<()>>)>,
         WorkerExecutorError,
     > {
-        stop::join_waiting_task(task, scope, waiting_receipt).await?;
+        if let Some(task) = task {
+            join_waiting_task(task, scope, waiting_receipt).await?;
+        } else {
+            // The predecessor owns the exact task and has already joined it.
+            waiting_receipt.complete();
+        }
         let mut lifecycle = self.instance.lock().await;
         if !matches!(lifecycle.deletion_runtime(), WorkerInstance::WaitingForPermit(waiting) if waiting.start_attempt == attempt)
         {
             return Ok(None);
         }
-        let Some(pending) = self.interrupt_signal.lock().await.take() else {
+        let mut interrupts = self.interrupt_signal.lock().await;
+        if !matches!(&*interrupts, WorkerInterruptState::Pending(pending)
+            if Arc::ptr_eq(&pending.establishment, &request.establishment))
+        {
+            return Ok(None);
+        }
+        let Some(pending) = interrupts.take() else {
             return Ok(None);
         };
+        drop(interrupts);
         let kind = pending.kind;
         let receipt = match &*self.execution_status.read().unwrap() {
             ExecutionStatus::Interrupting {
@@ -4667,67 +4581,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(Some((attempt, kind, receipt)))
     }
 
-    async fn join_stop_progress(&self) -> Result<(), WorkerExecutorError> {
-        join_accepted_stops(&self.stop_progress).await?;
+    async fn join_interrupt_establishment(&self) -> Result<(), WorkerExecutorError> {
+        let establishment = self.interrupt_establishment_tail.lock().unwrap().clone();
+        establishment.wait().await;
         self.monthly_cleanup_failure().map_or(Ok(()), Err)
     }
-
-    async fn begin_resident_attempt(
-        &self,
-        start_attempt: Uuid,
-    ) -> Result<bool, WorkerExecutorError> {
-        // Recheck while holding the acceptance lock order, but join without either lock.
-        // No old driver can pass its identity check and then fence the new generation.
-        loop {
-            let mut lifecycle = self.instance.lock().await;
-            let ready = self.stop_progress.lock().unwrap().ready();
-            if let Some(result) = ready {
-                result?;
-                if let Some(error) = self.monthly_cleanup_failure() {
-                    return Err(error);
-                }
-                match lifecycle.deletion_runtime() {
-                    WorkerInstance::Running(running) if running.start_attempt != start_attempt => {
-                        return Err(WorkerExecutorError::runtime(
-                            "Startup attempt changed before instance creation",
-                        ));
-                    }
-                    WorkerInstance::Running(running) if !running.owner_generation_started => {
-                        if let WorkerInterruptState::Pending(pending) =
-                            *self.interrupt_signal.lock().await
-                        {
-                            return Err(WorkerExecutorError::Interrupted { kind: pending.kind });
-                        }
-                    }
-                    WorkerInstance::Stopping(_) => {
-                        if let WorkerInterruptState::Pending(pending) =
-                            *self.interrupt_signal.lock().await
-                        {
-                            return Err(WorkerExecutorError::Interrupted { kind: pending.kind });
-                        }
-                        return Ok(false);
-                    }
-                    _ => {}
-                }
-                let WorkerInstance::Running(running) = lifecycle.deletion_runtime_mut() else {
-                    return Err(WorkerExecutorError::runtime(
-                        "Startup runtime is no longer running",
-                    ));
-                };
-                let mut progress = self.stop_progress.lock().unwrap();
-                if running.owner_generation_started {
-                    progress.release_scope = Default::default();
-                }
-                running.owner_generation_started = false;
-                self.resident_generation.fetch_add(1, Ordering::AcqRel);
-                progress.publication = None;
-                return Ok(true);
-            }
-            drop(lifecycle);
-            self.join_stop_progress().await?;
-        }
-    }
-
     pub(crate) async fn set_interrupting_for(
         self: &Arc<Self>,
         interrupt_kind: InterruptKind,
@@ -6650,7 +6508,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub(crate) fn release_scope(&self) -> crate::metrics::resource_release::ReleaseScope {
-        self.stop_progress.lock().unwrap().release_scope.clone()
+        self.release_scope.lock().unwrap().clone()
     }
 
     pub(crate) fn linear_memory_grant(&self) -> Arc<StdMutex<MemoryGrant>> {
@@ -11384,7 +11242,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             {
                 let mut interrupt = this.interrupt_signal.lock().await;
                 if waiting_worker.handle.lock().unwrap().is_none()
-                    || matches!(*interrupt, WorkerInterruptState::Pending(pending) | WorkerInterruptState::Unpublished(pending) | WorkerInterruptState::Freezing(pending) if pending.is_terminal())
+                    || matches!(&*interrupt, WorkerInterruptState::Pending(pending) if pending.is_terminal())
                 {
                     return;
                 }
@@ -11709,11 +11567,125 @@ impl Drop for WaitingWorker {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+async fn join_waiting_task(
+    task: JoinHandle<()>,
+    scope: &crate::metrics::resource_release::ReleaseScope,
+    waiting_receipt: crate::metrics::resource_release::ReleaseReceipt,
+) -> Result<(), WorkerExecutorError> {
+    use crate::metrics::resource_release::{Failure, Stage};
+    task.abort();
+    let joined = task.await;
+    let joined_at = scope.now();
+    if let Err(error) = &joined
+        && !error.is_cancelled()
+    {
+        scope.fail(
+            Stage::EndToEnd,
+            if error.is_panic() {
+                Failure::Panic
+            } else {
+                Failure::Other
+            },
+        );
+    }
+    if ![
+        Stage::PrimaryStoreDrop,
+        Stage::FilesystemDeleted,
+        Stage::PermitReleased,
+    ]
+    .into_iter()
+    .any(|stage| scope.has_receipt(stage))
+    {
+        scope
+            .receipt(Stage::PermitWaitJoined)
+            .complete_at(joined_at);
+    }
+    waiting_receipt.complete_at(joined_at);
+    if let Err(error) = joined
+        && !error.is_cancelled()
+    {
+        return Err(WorkerExecutorError::runtime(format!(
+            "Waiting worker failed: {error}"
+        )));
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+struct InterruptEstablishment {
+    predecessor: StdMutex<Option<Arc<InterruptEstablishment>>>,
+    complete: AtomicBool,
+    completed: tokio::sync::Notify,
+}
+
+impl InterruptEstablishment {
+    fn new(predecessor: Arc<Self>) -> Self {
+        Self {
+            predecessor: StdMutex::new(Some(predecessor)),
+            complete: AtomicBool::new(false),
+            completed: tokio::sync::Notify::new(),
+        }
+    }
+
+    fn ready() -> Arc<Self> {
+        Arc::new(Self {
+            predecessor: StdMutex::new(None),
+            complete: AtomicBool::new(true),
+            completed: tokio::sync::Notify::new(),
+        })
+    }
+
+    fn complete(&self) {
+        self.complete.store(true, Ordering::Release);
+        self.completed.notify_waiters();
+    }
+
+    async fn wait(&self) {
+        while !self.complete.load(Ordering::Acquire) {
+            let notified = self.completed.notified();
+            if self.complete.load(Ordering::Acquire) {
+                break;
+            }
+            notified.await;
+        }
+    }
+
+    async fn wait_for_predecessor(&self) {
+        let predecessor = self.predecessor.lock().unwrap().clone();
+        if let Some(predecessor) = predecessor {
+            predecessor.wait().await;
+            self.predecessor.lock().unwrap().take();
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 struct PendingWorkerInterrupt {
     kind: InterruptKind,
     reacquire_permits: bool,
     unload_request: UnloadRequest,
+    establishment: Arc<InterruptEstablishment>,
+}
+
+/// Queue and advance the existing establishment tail in the same locked step.
+fn register_interrupt_request(
+    interrupts: &mut interrupt::InterruptGuard<'_>,
+    tail: &StdMutex<Arc<InterruptEstablishment>>,
+    kind: InterruptKind,
+    reacquire_permits: bool,
+    unload_request: UnloadRequest,
+) -> Option<PendingWorkerInterrupt> {
+    let mut tail = tail.lock().unwrap();
+    let pending = PendingWorkerInterrupt {
+        kind,
+        reacquire_permits,
+        unload_request,
+        establishment: Arc::new(InterruptEstablishment::new(tail.clone())),
+    };
+    interrupts.queue(pending.clone()).then(|| {
+        *tail = pending.establishment.clone();
+        pending
+    })
 }
 
 /// The shard epoch the agent's oplog is opened to assert, read from this executor's current
@@ -11866,16 +11838,11 @@ impl UnloadRequest {
 enum WorkerInterruptState {
     #[default]
     Idle,
-    /// Published to the runtime and ready for the invocation loop to take.
     Pending(PendingWorkerInterrupt),
-    /// Replaceable until the retained publisher claims the cause.
-    Unpublished(PendingWorkerInterrupt),
-    /// The cause is fixed; entity fencing must finish before typed publication.
-    Freezing(PendingWorkerInterrupt),
     /// A terminal request has been taken by the invocation loop and remains authoritative until
     /// that worker generation stops. This prevents a late permit-reacquisition restart from
     /// superseding an interrupt that is already being handled.
-    TerminalClaimed(PendingWorkerInterrupt),
+    TerminalClaimed,
 }
 
 impl PendingWorkerInterrupt {
@@ -11906,55 +11873,35 @@ impl WorkerInterruptState {
 
     /// Whether a terminal request waits and nobody has taken it.
     fn terminal_pending(&self) -> bool {
-        matches!(self, Self::Unpublished(interrupt) | Self::Freezing(interrupt) | Self::Pending(interrupt) if interrupt.is_terminal())
+        matches!(self, Self::Pending(interrupt) if interrupt.is_terminal())
     }
 
     fn queue(&mut self, mut interrupt: PendingWorkerInterrupt) -> bool {
         match self {
-            Self::TerminalClaimed(claimed)
-                if interrupt.is_terminal() && interrupt.kind != claimed.kind =>
-            {
-                *self = Self::Unpublished(interrupt);
+            Self::TerminalClaimed if interrupt.is_terminal() => {
+                *self = Self::Pending(interrupt);
                 true
             }
-            Self::TerminalClaimed(_) => false,
-            Self::Freezing(_) | Self::Pending(_) => false,
-            Self::Unpublished(current) if current.is_terminal() => false,
-            Self::Unpublished(current) => {
+            Self::TerminalClaimed => false,
+            Self::Pending(current) if current.is_terminal() => false,
+            Self::Pending(current) => {
                 if matches!(interrupt.kind, InterruptKind::Restart) {
                     interrupt.reacquire_permits |= current.reacquire_permits;
                 }
-                *self = Self::Unpublished(interrupt);
+                *self = Self::Pending(interrupt);
                 true
             }
             Self::Idle => {
-                *self = Self::Unpublished(interrupt);
+                *self = Self::Pending(interrupt);
                 true
             }
-        }
-    }
-
-    fn freeze(&mut self) -> Option<PendingWorkerInterrupt> {
-        match self {
-            Self::Unpublished(interrupt) => {
-                let interrupt = *interrupt;
-                *self = Self::Freezing(interrupt);
-                Some(interrupt)
-            }
-            _ => None,
-        }
-    }
-
-    fn publish(&mut self) {
-        if let Self::Freezing(interrupt) = self {
-            *self = Self::Pending(*interrupt);
         }
     }
 
     fn take(&mut self) -> Option<PendingWorkerInterrupt> {
         match std::mem::take(self) {
             Self::Pending(interrupt) if interrupt.is_terminal() => {
-                *self = Self::TerminalClaimed(interrupt);
+                *self = Self::TerminalClaimed;
                 Some(interrupt)
             }
             Self::Pending(interrupt) => Some(interrupt),
@@ -11973,7 +11920,7 @@ impl WorkerInterruptState {
     }
 
     fn reset_terminal_for_new_generation(&mut self) {
-        if matches!(self, Self::TerminalClaimed(_)) {
+        if matches!(self, Self::TerminalClaimed) {
             *self = Self::Idle;
         }
     }
@@ -13229,33 +13176,26 @@ impl RunningWorker {
         }
         {
             let (active_agent, generation) = entity_generation;
-            let reopening = loop {
-                if let Err(error) = parent.join_stop_progress().await {
-                    break Err(error);
-                }
-                let lifecycle = parent.instance.lock().await;
-                let interrupt_state = parent.interrupt_signal.lock().await;
-                let progress = parent.stop_progress.lock().unwrap();
-                match progress.ready() {
-                    None => {
-                        drop(progress);
-                        drop(interrupt_state);
-                        drop(lifecycle);
-                        continue;
-                    }
-                    Some(Err(error)) => break Err(error),
-                    Some(Ok(())) => {
-                        break if !interrupt_state.has_interrupt()
-                            && active_agent.reopen_entity_admission_if_generation(generation)
-                        {
-                            Ok(())
-                        } else {
-                            Err(WorkerExecutorError::Interrupted {
-                                kind: InterruptKind::Restart,
-                            })
-                        };
-                    }
-                }
+            let establishment = parent.interrupt_establishment_tail.lock().unwrap().clone();
+            establishment.wait().await;
+            let reopening = if let Some(error) = parent.monthly_cleanup_failure() {
+                Err(error)
+            } else if parent
+                .interrupt_signal
+                .when_idle(|| {
+                    Arc::ptr_eq(
+                        &establishment,
+                        &parent.interrupt_establishment_tail.lock().unwrap(),
+                    ) && active_agent.reopen_entity_admission_if_generation(generation)
+                })
+                .await
+                == Some(true)
+            {
+                Ok(())
+            } else {
+                Err(WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::Restart,
+                })
             };
             if let Err(error) = reopening {
                 drop(store);
@@ -13346,7 +13286,7 @@ impl RunningWorker {
     ) {
         #[cfg(feature = "test-utils")]
         {
-            parent.stop_progress.lock().unwrap().permit_acquisitions += 1;
+            parent.test_support.lock().unwrap().permit_acquisitions += 1;
         }
         let release_scope = parent.release_scope();
         let mut invocation_loop = InvocationLoop {
@@ -15376,6 +15316,7 @@ mod tests {
                 kind,
                 reacquire_permits,
                 unload_request: UnloadRequest::ordinary(UnloadReason::from_interrupt(kind)),
+                establishment: InterruptEstablishment::ready(),
             }
             .retry_decision()
         }
@@ -15435,6 +15376,7 @@ mod tests {
                 kind,
                 reacquire_permits: false,
                 unload_request: UnloadRequest::ordinary(UnloadReason::from_interrupt(kind)),
+                establishment: InterruptEstablishment::ready(),
             }
             .is_terminal()
         }
@@ -15453,16 +15395,14 @@ mod tests {
             kind: InterruptKind::Suspend(Timestamp::now_utc()),
             reacquire_permits: false,
             unload_request: UnloadRequest::ordinary(UnloadReason::Suspend),
+            establishment: InterruptEstablishment::ready(),
         }));
-        assert!(state.take().is_none());
-        assert!(state.freeze().is_some());
-        assert!(state.take().is_none());
-        state.publish();
         assert!(state.take().is_some());
         assert!(!state.queue(PendingWorkerInterrupt {
             kind: InterruptKind::Restart,
             reacquire_permits: false,
             unload_request: UnloadRequest::ordinary(UnloadReason::Restart),
+            establishment: InterruptEstablishment::ready(),
         }));
 
         state.reset_terminal_for_new_generation();
@@ -15471,34 +15411,34 @@ mod tests {
             kind: InterruptKind::Restart,
             reacquire_permits: false,
             unload_request: UnloadRequest::ordinary(UnloadReason::Restart),
+            establishment: InterruptEstablishment::ready(),
         }));
     }
 
     #[test]
-    fn terminal_teardown_cannot_requeue_its_exact_claimed_cause() {
+    fn a_later_terminal_request_has_its_own_establishment_after_claim() {
         let claimed = PendingWorkerInterrupt {
             kind: InterruptKind::Suspend(Timestamp::now_utc()),
             reacquire_permits: false,
             unload_request: UnloadRequest::ordinary(UnloadReason::Suspend),
+            establishment: InterruptEstablishment::ready(),
         };
-        let mut state = WorkerInterruptState::Pending(claimed);
+        let mut state = WorkerInterruptState::Pending(claimed.clone());
         assert!(state.claim_pending_terminal().is_some());
-        assert!(!state.queue(claimed));
-        assert!(
-            matches!(state, WorkerInterruptState::TerminalClaimed(pending) if pending.kind == claimed.kind)
-        );
+        assert!(matches!(state, WorkerInterruptState::TerminalClaimed));
         assert!(state.claim_pending_terminal().is_none());
 
         let later = PendingWorkerInterrupt {
             kind: InterruptKind::Interrupt(Timestamp::now_utc()),
             unload_request: UnloadRequest::ordinary(UnloadReason::Interrupt),
+            establishment: InterruptEstablishment::ready(),
             ..claimed
         };
-        assert!(state.queue(later));
-        assert!(state.freeze().is_some());
-        state.publish();
+        assert!(state.queue(later.clone()));
         state.reset_terminal_for_new_generation();
-        assert_eq!(state.claim_pending_terminal().unwrap().kind, later.kind);
+        let actual = state.claim_pending_terminal().unwrap();
+        assert_eq!(actual.kind, later.kind);
+        assert!(Arc::ptr_eq(&actual.establishment, &later.establishment));
     }
 
     #[test]
@@ -15507,24 +15447,24 @@ mod tests {
             kind: InterruptKind::Interrupt(Timestamp::now_utc()),
             reacquire_permits: false,
             unload_request: UnloadRequest::ordinary(UnloadReason::Interrupt),
+            establishment: InterruptEstablishment::ready(),
         });
         assert!(state.take().is_some());
-        assert!(matches!(state, WorkerInterruptState::TerminalClaimed(_)));
+        assert!(matches!(state, WorkerInterruptState::TerminalClaimed));
 
         let delete_interrupt = PendingWorkerInterrupt {
             kind: InterruptKind::Interrupt(Timestamp::now_utc()),
             reacquire_permits: false,
             unload_request: UnloadRequest::ordinary(UnloadReason::Deleting),
+            establishment: InterruptEstablishment::ready(),
         };
         assert!(state.queue(delete_interrupt));
-        assert!(matches!(state, WorkerInterruptState::Unpublished(_)));
+        assert!(matches!(state, WorkerInterruptState::Pending(_)));
         state.reset_terminal_for_new_generation();
-        assert!(matches!(state, WorkerInterruptState::Unpublished(_)));
-        assert!(state.freeze().is_some());
-        state.publish();
+        assert!(matches!(state, WorkerInterruptState::Pending(_)));
         let claimed = state.take().unwrap();
         assert_eq!(claimed.unload_request.reason, UnloadReason::Deleting);
-        assert!(matches!(state, WorkerInterruptState::TerminalClaimed(_)));
+        assert!(matches!(state, WorkerInterruptState::TerminalClaimed));
     }
 }
 
@@ -16351,39 +16291,13 @@ enum StopResult {
 
 #[cfg(test)]
 mod resource_release_tests {
-    use super::{ObservedPrimaryStore, StopProgressState, stop_cleanup_join_error};
+    use super::ObservedPrimaryStore;
     use crate::metrics::resource_release::{Cause, Origin, tests::TestMetrics};
-    use futures::FutureExt;
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     };
     use test_r::test;
-
-    #[test]
-    async fn completed_stop_failure_is_visible_while_another_driver_is_pending() {
-        let driver = tokio::spawn(async { panic!("retained stop driver panic") });
-        let error = stop_cleanup_join_error(driver.await.unwrap_err());
-        let mut progress = StopProgressState::default();
-        progress.tasks.push(std::future::pending().boxed().shared());
-        progress
-            .tasks
-            .push(std::future::ready(Err(error.clone())).boxed().shared());
-
-        assert!(
-            progress.ready().is_none(),
-            "the pending driver still owns its join"
-        );
-        assert_eq!(
-            progress.completed_failure().unwrap().to_string(),
-            error.to_string()
-        );
-        assert_eq!(
-            progress.completed_failure().unwrap().to_string(),
-            error.to_string(),
-            "observing failure must not consume it"
-        );
-    }
 
     #[test]
     fn primary_store_receipt_follows_actual_store_destruction() {

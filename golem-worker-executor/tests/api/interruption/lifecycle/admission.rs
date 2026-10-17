@@ -154,7 +154,7 @@ mod initialization {
             .expect("monthly accepted during core initializer");
         assert!(matches!(quota_stop, InterruptKind::Suspend(_)));
         assert!(worker.concurrent_agent_permit_is_held().await);
-        let mut receipt = worker.accepted_stop_receipt_for_test();
+        let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
         assert!(matches!(
             receipt.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
@@ -408,7 +408,6 @@ mod owner_election {
         assert_eq!(entry.monthly_observer_count_for_test(), 0);
         assert_eq!(worker.monthly_stop_for_test(), None);
         assert_eq!(worker.pending_stop_for_test().await, None);
-        assert_eq!(worker.frozen_stop_for_test(), None);
         assert_eq!(worker.selected_owner_failure_for_test().await, None);
         let key = IdempotencyKey::fresh();
         let before = executor.oplog_max_index(&id).await?;
@@ -424,7 +423,6 @@ mod owner_election {
         assert_eq!(snapshot.generation, generation);
         assert_eq!(snapshot.final_interrupt, None);
         assert_eq!(snapshot.pending, None);
-        assert_eq!(snapshot.frozen, None);
         assert_eq!(snapshot.selected_owner_failure, None);
         assert!(worker.concurrent_agent_permit_is_held().await);
         assert_eq!(entry.monthly_observer_count_for_test(), 1);
@@ -465,9 +463,8 @@ mod owner_election {
             .expect("monitor accepted a stop");
         assert!(matches!(accepted, InterruptKind::Suspend(_)));
         eprintln!(
-            "[owner-election] accepted={accepted:?} pending={:?} frozen={:?} selected={:?} generation={generation}",
+            "[owner-election] accepted={accepted:?} pending={:?} selected={:?} generation={generation}",
             worker.pending_stop_for_test().await,
-            worker.frozen_stop_for_test(),
             worker.selected_owner_failure_for_test().await
         );
         let stop_result;
@@ -493,9 +490,8 @@ mod owner_election {
             release_teardown.send(()).unwrap();
         }
         eprintln!(
-            "[owner-election] stop_result={stop_result:?} pending={:?} frozen={:?} selected={:?} generation={}",
+            "[owner-election] stop_result={stop_result:?} pending={:?} selected={:?} generation={}",
             worker.pending_stop_for_test().await,
-            worker.frozen_stop_for_test(),
             worker.selected_owner_failure_for_test().await,
             worker.resident_generation_for_test()
         );
@@ -510,7 +506,6 @@ mod owner_election {
         eprintln!("[owner-election] cleanup={cleanup:?}");
         stop_result?;
         cleanup?;
-        assert_eq!(worker.frozen_stop_for_test(), Some(accepted));
         assert_eq!(worker.owner_stop_for_test().await, Some(accepted));
         assert_eq!(worker.resident_generation_for_test(), generation);
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);

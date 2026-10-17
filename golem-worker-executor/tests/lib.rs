@@ -69,6 +69,7 @@ pub mod revert;
 pub mod rpc;
 pub mod scalability;
 pub mod scheduler_storage;
+mod scheduler_waits;
 pub mod scope_cards;
 pub mod suspension_races;
 pub mod tool_discovery;
@@ -171,7 +172,11 @@ impl Tracing {
                 &TracingConfig::test_pretty_without_time("worker-executor-tests")
                     .with_env_overrides(),
                 golem_common::tracing::filter::for_all_outputs::default_debug_env(),
-                vec![native_waits::layer(), invocation_waits::layer()],
+                vec![
+                    native_waits::layer(),
+                    invocation_waits::layer(),
+                    scheduler_waits::layer(),
+                ],
             );
         });
         Self

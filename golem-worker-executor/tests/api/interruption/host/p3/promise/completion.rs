@@ -117,7 +117,6 @@ async fn durable_p3_promise_completion_before_quota_stop(
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
         ensure!(worker.monthly_stop_for_test() == Some(signal));
-        ensure!(worker.frozen_stop_for_test() == Some(signal));
         ensure!(worker.owner_stop_for_test().await == Some(signal));
         tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
         tokio::time::timeout(Duration::from_secs(10), async {

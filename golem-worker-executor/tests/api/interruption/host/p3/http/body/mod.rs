@@ -291,7 +291,6 @@ async fn pending_response_body(
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
         ensure!(worker.monthly_stop_for_test() == Some(signal));
-        ensure!(worker.frozen_stop_for_test() == Some(signal));
         ensure!(worker.owner_stop_for_test().await == Some(signal));
         info!(?resource, ?mode, proposal = ?attempt.proposal, ?signal, "Accepted matching monthly HTTP stop and published typed signal");
         if resource == Resource::Compute {

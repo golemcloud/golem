@@ -157,7 +157,7 @@ mod completed_history {
         assert_eq!(worker.resident_generation_for_test(), generation);
         assert!(worker.concurrent_agent_permit_is_held().await);
         assert_eq!(account.monthly_observer_count_for_test(), 1);
-        let mut receipt = worker.accepted_stop_receipt_for_test();
+        let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
         assert!(matches!(
             receipt.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
@@ -525,7 +525,7 @@ mod post_export {
         assert_eq!(account.monthly_observer_count_for_test(), 1);
         assert_eq!(worker.resident_generation_for_test(), generation);
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
-        let mut receipt = worker.accepted_stop_receipt_for_test();
+        let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
         assert!(matches!(
             receipt.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
@@ -538,7 +538,6 @@ mod post_export {
             tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??,
             cause
         );
-        assert_eq!(worker.frozen_stop_for_test(), Some(cause));
         assert_eq!(worker.owner_stop_for_test().await, Some(cause));
         // Keep peer bytes unavailable until the tracked HTTP task has cooperatively retired.
         // Release the peer even on timeout so a failed stop leaves a bounded diagnostic.

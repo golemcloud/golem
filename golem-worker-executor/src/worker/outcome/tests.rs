@@ -1,6 +1,6 @@
 use super::*;
 use crate::worker::interrupt::Interrupts;
-use crate::worker::{PendingWorkerInterrupt, UnloadReason, UnloadRequest};
+use crate::worker::{InterruptEstablishment, PendingWorkerInterrupt, UnloadReason, UnloadRequest};
 use golem_common::model::Timestamp;
 use test_r::test;
 
@@ -8,7 +8,7 @@ use test_r::test;
 fn marker_generation_capture_requires_started_matching_attempt() {
     let attempt = Uuid::new_v4();
     for started in [false, true] {
-        let lifecycle = crate::worker::stop::tests::running_lifecycle(
+        let lifecycle = crate::worker::lifecycle_tests::running_lifecycle(
             std::sync::Arc::default(),
             attempt,
             started,
@@ -58,9 +58,12 @@ fn only_fifo_suspended_status_of_the_established_owner_reuses_a_suspend_marker()
 fn pre_owner_attempt_does_not_reuse_the_previous_suspend_with_an_unchanged_counter() {
     let old_attempt = Uuid::new_v4();
     let new_attempt = Uuid::new_v4();
-    let previous =
-        crate::worker::stop::tests::running_lifecycle(std::sync::Arc::default(), old_attempt, true);
-    let next = crate::worker::stop::tests::running_lifecycle(
+    let previous = crate::worker::lifecycle_tests::running_lifecycle(
+        std::sync::Arc::default(),
+        old_attempt,
+        true,
+    );
+    let next = crate::worker::lifecycle_tests::running_lifecycle(
         std::sync::Arc::default(),
         new_attempt,
         false,
@@ -113,9 +116,8 @@ async fn a_stop_after_the_ordinary_terminal_check_remains_for_the_invocation_loo
             kind,
             reacquire_permits: false,
             unload_request: UnloadRequest::ordinary(UnloadReason::Suspend),
+            establishment: InterruptEstablishment::ready(),
         }));
-        guard.freeze();
-        guard.publish();
     }
     assert_eq!(interrupts.take().await.unwrap().kind, kind);
     assert!(interrupts.take().await.is_none());

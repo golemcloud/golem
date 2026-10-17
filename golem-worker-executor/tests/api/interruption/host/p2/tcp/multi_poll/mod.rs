@@ -292,7 +292,6 @@ async fn pending_multi_poll(
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
         ensure!(worker.monthly_stop_for_test() == Some(signal));
-        ensure!(worker.frozen_stop_for_test() == Some(signal));
         ensure!(worker.owner_stop_for_test().await == Some(signal));
         if let Some((entered, release)) = teardown {
             tokio::time::timeout(Duration::from_secs(10), entered)

@@ -62,7 +62,7 @@ trees, not the newly combined runtime, SDKs or fixtures.
 This section records the state at plan capture, not the status of every later execution step.
 
 - The earlier executor checkpoint is pushed. Later CLI, window-close and failure-origin changes
-  have complete local validation receipts but remain uncommitted and unpushed.
+  have local validation receipts and local checkpoints. They remain unpushed.
 - The current success-boundary migration is unfinished. Production compilation passed, but its
   test build stopped at an old `selected_writer` helper call in `worker/stop.rs`. No tests ran in
   that final batch. Do not describe the working tree as fully validated.
@@ -85,9 +85,12 @@ An existing privileged-XFS case was not executed in this shell and remains
 outside that evidence. The user has authorized skipping the obsolete hooks for local
 commits in this task. Use command-scoped bypasses; shared Git configuration is unchanged.
 No remote publication has occurred.
-The canonical wallet installer now owns the one replay-generation reset. Startup provenance follows
-successful installation, not the earlier attempt counter. Stop publication and progress still need
-restoration to the existing establishment owner; this intermediate merge does not close A1.
+The canonical wallet installer owns the one replay-generation reset. Startup provenance follows
+successful installation, not the earlier attempt counter. The local restoration now uses main's
+establishment owner and removes stop publication, progress and admission seals. Combined library,
+native host/lifecycle/accounting, real entity-blob ownership/repair, strict lint, production and browser
+checks pass. A1 remains open for the broader retained-change review; F10/F11 controls and the native
+filesystem proof/profile gaps remain separate work.
 
 Monthly monitor failures and operational policy outages now belong to the existing window target
 as failure data, not synthetic completed stop futures. Native health assertions remain unchanged;

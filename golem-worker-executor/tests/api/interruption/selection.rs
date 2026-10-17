@@ -11,7 +11,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[test]
 #[timeout("2m")]
-async fn pending_restart_publishes_only_elected_quota_cause(
+async fn monthly_stop_keeps_typed_signal_and_one_pending_tcp_result(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
@@ -150,11 +150,11 @@ async fn pending_restart_publishes_only_elected_quota_cause(
         assert!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
         let quota_stop = worker.monthly_stop_for_test().expect("accepted quota stop");
         assert!(matches!(quota_stop, InterruptKind::Suspend(_)));
-        // Restart supersession and unpublished rejection are actual-body proofs. Storage
-        // backpressure retains this real result and its receipt after typed publication.
+        // Request priority is tested on the actual queue. This native case retains the TCP
+        // result and ordinary receipt behind real terminal-append backpressure.
         tokio::time::timeout(Duration::from_secs(10), failure_selected).await??;
         let late = worker.await_interrupt_for_test();
-        let mut receipt = worker.accepted_stop_receipt_for_test();
+        let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
         assert_eq!(worker.resident_generation_for_test(), generation);
         assert!(worker.concurrent_agent_permit_is_held().await);
         assert!(matches!(
@@ -166,7 +166,6 @@ async fn pending_restart_publishes_only_elected_quota_cause(
         assert_eq!(late.await, quota_stop);
         assert_eq!(worker.await_interrupt_for_test().await, quota_stop);
         assert_eq!(worker.owner_stop_for_test().await, Some(quota_stop));
-        assert_eq!(worker.frozen_stop_for_test(), Some(quota_stop));
         release_failure.send(false).unwrap();
         receipt.recv().await?;
         worker.join_accepted_stops_for_test().await?;
@@ -373,7 +372,6 @@ async fn quota_before_guest_and_user_stop_after_selection_keep_one_result(
                 worker.monthly_stop_reason_for_test(),
                 Some("monthly memory exhausted")
             );
-            assert_eq!(worker.frozen_stop_for_test(), Some(expected));
             assert_eq!(worker.pending_stop_for_test().await, Some(expected));
             assert_eq!(worker.owner_stop_for_test().await, Some(expected));
             // Started precedes Running. This stop exposes driver completion, not a signal receipt.
@@ -538,7 +536,7 @@ async fn quota_stop_preserves_selected_independent_guest_failure(
         assert_eq!(attempt.proposal.resident_generation, generation);
         assert!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
         assert!(worker.monthly_stop_for_test().is_some());
-        let mut receipt = worker.accepted_stop_receipt_for_test();
+        let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
         assert!(matches!(
             receipt.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
@@ -759,7 +757,6 @@ async fn deadline_selection(
                 Err(tokio::sync::broadcast::error::TryRecvError::Empty)
             ));
             assert_eq!(worker.monthly_stop_for_test(), None);
-            assert_eq!(worker.frozen_stop_for_test(), None);
             assert_eq!(worker.pending_stop_for_test().await, None);
             assert!(!worker.terminal_stop_claimed_for_test().await);
         }
@@ -780,7 +777,6 @@ async fn deadline_selection(
                 golem_worker_executor::model::ExecutionStatus::Running { .. }
             ));
             assert_eq!(worker.monthly_stop_for_test(), None);
-            assert_eq!(worker.frozen_stop_for_test(), None);
             assert_eq!(worker.pending_stop_for_test().await, None);
             assert!(!worker.terminal_stop_claimed_for_test().await);
         }
@@ -799,7 +795,7 @@ async fn deadline_selection(
             .monthly_stop_for_test()
             .expect("monthly stop accepted");
         assert!(matches!(quota_stop, InterruptKind::Suspend(_)));
-        let mut receipt = worker.accepted_stop_receipt_for_test();
+        let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
         if !selected_first {
             tokio::time::timeout(Duration::from_secs(10), at_outcome.take().unwrap()).await??;
         }
@@ -811,19 +807,15 @@ async fn deadline_selection(
         // The callback retains its actual append, not a separate writer receipt. Stop signalling
         // may overlap persistence, but invocation result notification still follows commit.
         if selected_first {
-            tokio::time::timeout(Duration::from_secs(10), async {
-                while worker.frozen_stop_for_test().is_none() {
-                    tokio::task::yield_now().await;
-                }
-            })
-            .await?;
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                worker.join_accepted_stops_for_test(),
+            )
+            .await??;
             assert!(matches!(
                 receipt.try_recv(),
                 Err(tokio::sync::broadcast::error::TryRecvError::Empty)
             ));
-        }
-        if !selected_first {
-            assert_eq!(worker.frozen_stop_for_test(), Some(quota_stop));
         }
         release_outcome.send(false).unwrap();
         tokio::time::timeout(Duration::from_secs(10), receipt.recv()).await??;

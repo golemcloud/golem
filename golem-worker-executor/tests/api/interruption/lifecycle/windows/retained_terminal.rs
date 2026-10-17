@@ -138,10 +138,11 @@ async fn pending_suspend_append_keeps_result_and_cleanup_ownership_through_a_lat
     assert_eq!(worker.pending_stop_for_test().await, Some(requested));
     assert!(!worker.terminal_stop_claimed_for_test().await);
     assert!(worker.terminal_interrupt_pending_for_test());
-    assert!(matches!(
+    // The ordinary status no longer keeps the old raw sender after notification.
+    assert_eq!(
         signal.try_recv(),
-        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-    ));
+        Err(tokio::sync::broadcast::error::TryRecvError::Closed)
+    );
     assert!(matches!(
         receipt.try_recv(),
         Err(tokio::sync::broadcast::error::TryRecvError::Empty)
@@ -159,10 +160,10 @@ async fn pending_suspend_append_keeps_result_and_cleanup_ownership_through_a_lat
         entry,
         OplogEntry::Suspend { .. } | OplogEntry::Interrupted { .. } | OplogEntry::Error { .. }
     )));
-    assert!(matches!(
+    assert_eq!(
         signal.try_recv(),
-        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-    ));
+        Err(tokio::sync::broadcast::error::TryRecvError::Closed)
+    );
     assert!(matches!(
         receipt.try_recv(),
         Err(tokio::sync::broadcast::error::TryRecvError::Empty)
@@ -172,12 +173,11 @@ async fn pending_suspend_append_keeps_result_and_cleanup_ownership_through_a_lat
     assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
 
     release_outcome.send(false).unwrap();
-    assert!(matches!(
+    assert_eq!(
         signal.try_recv(),
-        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-    ));
+        Err(tokio::sync::broadcast::error::TryRecvError::Closed)
+    );
     assert_eq!(worker.owner_stop_for_test().await, Some(requested));
-    assert_eq!(worker.frozen_stop_for_test(), Some(requested));
     assert!(worker.concurrent_agent_permit_is_held().await);
     assert!((&mut held_permit).now_or_never().is_none());
     // The actual teardown hold, not a paused publisher, keeps native cleanup pending here.
@@ -185,7 +185,6 @@ async fn pending_suspend_append_keeps_result_and_cleanup_ownership_through_a_lat
     assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
     let snapshot = tokio::time::timeout(Duration::from_secs(10), teardown).await??;
     assert_eq!(snapshot.generation, generation);
-    assert_eq!(snapshot.frozen, Some(requested));
     assert!(worker.concurrent_agent_permit_is_held().await);
 
     release_teardown.send(()).unwrap();
@@ -307,7 +306,6 @@ async fn retained_terminal(
     let snapshot = tokio::time::timeout(Duration::from_secs(10), teardown).await??;
     assert_eq!(snapshot.generation, generation);
     assert_eq!(snapshot.pending, None);
-    assert_eq!(snapshot.frozen, None);
     assert!(worker.concurrent_agent_permit_is_held().await);
     let acquisitions = worker.permit_acquisitions_for_test();
 
@@ -318,7 +316,6 @@ async fn retained_terminal(
     }));
     assert!((&mut held_permit).now_or_never().is_none());
     assert_eq!(worker.pending_stop_for_test().await, None);
-    assert_eq!(worker.frozen_stop_for_test(), None);
     assert!((&mut held_permit).now_or_never().is_none());
 
     // This command cannot be drained by the parked teardown. Ordinary unload resolves it.
@@ -339,7 +336,6 @@ async fn retained_terminal(
         .await
         .context("automatic suspension cause was not established")?;
     ensure!(matches!(automatic, InterruptKind::Suspend(_)));
-    assert_eq!(worker.frozen_stop_for_test(), Some(automatic));
     // Exact written-terminal claim, internal acknowledgement and retained-drain phases
     // belong to the actual bodies. This native path observes physical release and completion.
     worker.retained_cleanup_for_test().await?;
@@ -406,14 +402,16 @@ async fn retained_terminal(
         None
     };
     let mut signal = worker.raw_interrupt_for_test();
-    let mut receipt = worker
-        .set_interrupting(first)
-        .await?
-        .context("new startup stop receipt missing")?;
+    let stopping = tokio::spawn({
+        let worker = worker.clone();
+        async move { worker.set_interrupting(first).await }
+    });
+    let mut receipt;
     if let Some((at_marker, release_marker)) = waiting_marker {
         tokio::time::timeout(Duration::from_secs(10), at_marker).await??;
+        assert!(!stopping.is_finished());
+        receipt = published_interrupt_receipt(worker.as_ref()).await?;
         assert_eq!(signal.recv().await?, first);
-        assert_eq!(worker.frozen_stop_for_test(), Some(first));
         assert!(matches!(
             receipt.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
@@ -421,7 +419,18 @@ async fn retained_terminal(
         assert_eq!(worker.resident_generation_for_test(), generation);
         assert_eq!(worker.startup_attempt_for_test()?, Some(attempt));
         release_marker.send(false).unwrap();
+        let mut returned = stopping
+            .await??
+            .context("new startup stop receipt missing")?;
+        returned.recv().await?;
+        assert_eq!(
+            returned.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Closed)
+        );
     } else {
+        receipt = stopping
+            .await??
+            .context("new startup stop receipt missing")?;
         tokio::time::timeout(
             Duration::from_secs(10),
             worker.join_accepted_stops_for_test(),
@@ -429,8 +438,7 @@ async fn retained_terminal(
         .await??;
         assert_eq!(signal.recv().await?, first);
         assert_eq!(worker.resident_generation_for_test(), generation);
-        // Admission is still held before begin_resident_attempt. No loop can consume
-        // this stop yet, and the previous resident writer cannot claim it during publish.
+        // Admission is still held before resident creation. No loop can consume this stop yet.
         assert_eq!(worker.pending_stop_for_test().await, Some(first));
         assert!(
             !worker.terminal_stop_claimed_for_test().await,
@@ -446,7 +454,6 @@ async fn retained_terminal(
         ));
         assert_eq!(worker.startup_attempt_for_test()?, Some(attempt));
     }
-    assert_eq!(worker.frozen_stop_for_test(), Some(first));
     worker.join_accepted_stops_for_test().await?;
 
     if let Some(release_handoff) = handoff {
@@ -475,7 +482,6 @@ async fn retained_terminal(
         assert_eq!(later_receipt.is_some(), next == NextStart::BeforeOwner);
         assert_eq!(worker.pending_stop_for_test().await, Some(later));
         worker.join_accepted_stops_for_test().await?;
-        assert_eq!(worker.frozen_stop_for_test(), Some(first));
         assert_eq!(worker.pending_stop_for_test().await, Some(later));
         assert!(worker.terminal_interrupt_pending_for_test());
         assert!(!worker.terminal_stop_claimed_for_test().await);

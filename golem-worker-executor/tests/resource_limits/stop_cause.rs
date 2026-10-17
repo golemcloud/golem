@@ -12,7 +12,7 @@ use test_r::test;
 
 #[test]
 #[timeout("2m")]
-async fn waiting_stop_freezes_supersession_and_first_terminal_without_permit(
+async fn waiting_terminal_stop_keeps_its_signal_receipt_and_marker_without_a_permit(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -66,15 +66,29 @@ async fn waiting_stop_freezes_supersession_and_first_terminal_without_permit(
         let mut raw = worker.raw_interrupt_for_test();
         let existing = worker.await_interrupt_for_test();
         let (at_marker, release_marker) = executor.gate_next_invocation_outcome_append(&id).await;
-        let mut receipt = worker
-            .set_interrupting(expected)
-            .await?
-            .expect("accepted first stop");
+        let stopping = tokio::spawn({
+            let worker = worker.clone();
+            async move { worker.set_interrupting(expected).await }
+        });
         // The actual waiting finalizer has taken the request and holds the lifecycle lock
-        // through this append. Competing-stop rejection belongs to the publication body matrix.
+        // through this append. The request task stays owned while the test withholds storage.
         at_marker.await?;
+        assert!(!stopping.is_finished());
+        let mut receipt = match &*worker
+            .owner_runtime_resources()
+            .execution_status()
+            .read()
+            .unwrap()
+        {
+            golem_worker_executor::model::ExecutionStatus::Interrupting {
+                await_interruption,
+                ..
+            } => await_interruption.subscribe(),
+            status => {
+                anyhow::bail!("waiting stop did not publish its ordinary receipt: {status:?}")
+            }
+        };
         let late_published = worker.await_interrupt_for_test();
-        assert_eq!(worker.frozen_stop_for_test(), Some(expected));
         assert_eq!(raw.recv().await?, expected);
         assert_eq!(existing.await, expected);
         assert_eq!(late_published.await, expected);
@@ -86,7 +100,13 @@ async fn waiting_stop_freezes_supersession_and_first_terminal_without_permit(
         assert_eq!(worker.resident_generation_for_test(), 0);
         assert_eq!(worker.permit_acquisitions_for_test(), 0);
         release_marker.send(false).unwrap();
+        let mut returned = stopping.await??.expect("accepted first stop");
         tokio::time::timeout(Duration::from_secs(5), receipt.recv()).await??;
+        assert_eq!(returned.try_recv(), Ok(()));
+        assert_eq!(
+            returned.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Closed)
+        );
         worker.join_accepted_stops_for_test().await?;
         worker.retained_cleanup_for_test().await?;
         assert!(!worker.concurrent_agent_permit_is_held().await);
@@ -97,10 +117,10 @@ async fn waiting_stop_freezes_supersession_and_first_terminal_without_permit(
             (&mut contender).now_or_never().is_none(),
             "the external account lease must still withhold capacity after waiting cleanup"
         );
-        assert!(matches!(
+        assert_eq!(
             receipt.try_recv(),
-            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
-        ));
+            Err(tokio::sync::broadcast::error::TryRecvError::Closed)
+        );
         let entries = worker
             .oplog()
             .read_exact(

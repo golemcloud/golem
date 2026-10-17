@@ -1,6 +1,30 @@
 use super::*;
 use anyhow::ensure;
 
+// Observe the ordinary execution-status receipt while the test holds real provider or oplog
+// work. There is no separate publication transaction or private receipt in Worker.
+pub(super) async fn published_interrupt_receipt<
+    Ctx: golem_worker_executor::workerctx::WorkerCtx,
+>(
+    worker: &golem_worker_executor::worker::Worker<Ctx>,
+) -> anyhow::Result<tokio::sync::broadcast::Receiver<()>> {
+    let kind =
+        tokio::time::timeout(Duration::from_secs(10), worker.await_interrupt_for_test()).await?;
+    let resources = worker.owner_runtime_resources();
+    let status = resources.execution_status();
+    let status = status.read().unwrap();
+    match &*status {
+        golem_worker_executor::model::ExecutionStatus::Interrupting {
+            interrupt_kind,
+            await_interruption,
+            ..
+        } if *interrupt_kind == kind => Ok(await_interruption.subscribe()),
+        status => {
+            anyhow::bail!("interruption receipt is not pending while test work is held: {status:?}")
+        }
+    }
+}
+
 pub(super) const FUEL_BUDGET: u64 = 1_000_000_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

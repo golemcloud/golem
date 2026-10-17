@@ -239,7 +239,7 @@ async fn repeated_stop(
         let accepted = tokio::time::timeout(Duration::from_secs(10), first.completed).await??;
         ensure!(accepted != user_stop, "monthly storage proposal accepted={accepted} after user_stop={user_stop}");
         if !user_stop {
-            receipt = Some(worker.accepted_stop_receipt_for_test());
+            receipt = Some(published_interrupt_receipt(worker.as_ref()).await?);
             signal = worker.monthly_stop_for_test();
             tokio::time::timeout(Duration::from_secs(10), selected.take().unwrap()).await??;
         }
@@ -253,7 +253,6 @@ async fn repeated_stop(
         let expected_reason = (!user_stop).then_some(Resource::Storage.reason(durable));
         ensure!(worker.terminal_stop_claimed_for_test().await);
         ensure!(worker.pending_stop_for_test().await.is_none());
-        ensure!(worker.frozen_stop_for_test() == Some(signal));
         ensure!(worker.owner_stop_for_test().await == Some(signal));
         ensure!(worker.monthly_stop_for_test() == expected_quota_stop);
         ensure!(worker.monthly_stop_reason_for_test() == expected_reason);
@@ -298,10 +297,9 @@ async fn repeated_stop(
         ensure!(worker.current_monthly_proposal_for_test() == expected);
         ensure!(worker.monthly_stop_for_test() == expected_quota_stop);
         ensure!(worker.monthly_stop_reason_for_test() == expected_reason);
-        ensure!(worker.frozen_stop_for_test() == Some(signal));
         ensure!(worker.owner_stop_for_test().await == Some(signal));
         ensure!(tokio::time::timeout(Duration::from_secs(10), worker.await_interrupt_for_test()).await? == signal);
-        ensure!(matches!(raw.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty)));
+        ensure!(matches!(raw.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Closed)));
         ensure!(matches!(receipt.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty)));
         ensure!(worker.monthly_window_active_for_test());
         ensure!(worker.concurrent_agent_permit_is_held().await);

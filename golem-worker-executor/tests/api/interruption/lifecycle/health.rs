@@ -745,7 +745,6 @@ async fn native_failed_cleanup_releases_execution_refuses_startup_and_repairs_wi
             worker.join_accepted_stops_for_test(),
         )
         .await??;
-        assert_eq!(worker.frozen_stop_for_test(), Some(kind));
         assert_eq!(worker.owner_stop_for_test().await, Some(kind));
         assert!(worker.concurrent_agent_permit_is_held().await);
         assert_eq!(worker.resident_generation_for_test(), generation);

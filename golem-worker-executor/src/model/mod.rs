@@ -224,7 +224,12 @@ impl ExecutionStatus {
         receipt: Arc<tokio::sync::broadcast::Sender<()>>,
         signal: Option<&Arc<tokio::sync::broadcast::Sender<InterruptKind>>>,
     ) -> bool {
-        if matches!(self, Self::Interrupting { .. }) {
+        if let Self::Interrupting { interrupt_kind, .. } = self {
+            if matches!(*interrupt_kind, InterruptKind::Restart)
+                && !matches!(kind, InterruptKind::Restart)
+            {
+                *interrupt_kind = kind;
+            }
             return true;
         }
         if let Some(signal) = signal {
