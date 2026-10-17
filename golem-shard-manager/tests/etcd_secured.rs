@@ -499,7 +499,34 @@ async fn a_replica_elects_writes_and_hands_over_with_etcd_auth() {
     let pki = TestPki::new();
     let etcd = SecuredEtcd::with_auth(&pki, &[]).await;
     let inspect = inspection_client_auth(&etcd.url, &pki).await;
-    elect_write_and_hand_over(auth_config(&etcd.url, PASSWORD, &pki), inspect).await;
+    let mut config = auth_config(&etcd.url, PASSWORD, &pki);
+    if let PersistenceConfig::Etcd(etcd) = &mut config.persistence {
+        // The leader compacts after each pass; a retention of one revision makes the first pass
+        // compact, as the user whose role covers `/golem/` only.
+        etcd.compaction_retention_revisions = 1;
+    }
+    elect_write_and_hand_over(config, inspect.clone()).await;
+    history_is_compacted(inspect).await;
+}
+
+/// A failed compaction is only logged, so this looks at etcd: once its history is compacted, a
+/// read at the first revision is refused with `OutOfRange`.
+async fn history_is_compacted(mut client: etcd_client::Client) {
+    let first_revision = Some(etcd_client::GetOptions::new().with_revision(1));
+    timeout(STARTUP_TIMEOUT, async {
+        loop {
+            match client.get(STATE_KEY, first_revision.clone()).await {
+                Err(etcd_client::Error::GRpcStatus(status))
+                    if status.code() == tonic::Code::OutOfRange =>
+                {
+                    return;
+                }
+                _ => tokio::time::sleep(Duration::from_millis(100)).await,
+            }
+        }
+    })
+    .await
+    .expect("The leader should compact etcd's history as the limited user");
 }
 
 #[test]
