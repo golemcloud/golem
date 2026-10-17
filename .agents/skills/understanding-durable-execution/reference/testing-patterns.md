@@ -385,6 +385,14 @@ This helper has no eight-second elapsed-trigger bound; do not generalize that me
 to other matrices. All P2 memory/compute/storage/repeated-stop cases, affected metering consumers,
 nonmatching/retry/tail regressions, scoped strict lint, formatting and assertion/move audits pass.
 
+P3 UDP uses the same ordinary-timer observation for compute/storage, with no extra source/watch for
+memory. Native Pending, exact socket binding, Drop and port reuse remain required before any
+datagram is sent. Durable recovery retains the same ReadRemote receive Start and rebinds natively;
+completed-history reconstruction with the old sender gone may receive only for the fresh key.
+All original non-clock assertions remain, with full actual-mode prefixes through stop, recovery and
+completed-history replay. Virtual retry delays and receiver projections are gone. Both UDP native
+batches, unchanged completion-first/tail collateral, scoped strict lint, format and source audits pass.
+
 ### Root completion and live tail ownership
 
 `run_guest_call_settled` emits "Guest call root completed; settling tail work" immediately after

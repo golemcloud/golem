@@ -369,6 +369,12 @@ Findings 11-14 have separate linked comments.
     trigger assertion; its original limits remain. Build, scoped strict lint, formatting and source
     audits pass. All P2 memory/compute/storage/repeated-stop cases and affected metering/support-move,
     nonmatching/retry/tail regressions pass. The remaining consumers and full clock producer stay open.
+    P3 UDP also uses ordinary compute/storage timers and the same existing flusher. Exact native
+    Pending/Drop/socket binding, ReadRemote Start, rebind and datagram effects, typed outcomes,
+    accounting and physical cleanup remain; full actual-mode prefixes survive stop, recovery and
+    completed-history replay. Memory gets no extra source/watch. Both native UDP batches, unchanged
+    completion-first/tail collateral, scoped strict lint, formatting and assertion/helper audits pass.
+    This is another consumer removal only, not complete clock-producer removal or overall closure.
   - [ ] Address the keyed filesystem metadata gate and remaining protocol ordering controls.
   - [ ] For any hook proposed to remain, document the otherwise untestable guarantee, minimal scope
     and why its scheduling changes do not invalidate the test. Existing main-owned hooks are not

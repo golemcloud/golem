@@ -8,11 +8,12 @@ use golem_common::model::oplog::{
     PublicOplogEntryWithIndex,
 };
 use golem_service_base::error::worker_executor::InterruptKind;
+use golem_worker_executor::services::resource_limits::ResourceUsageFlusher;
 use golem_worker_executor::services::resource_usage_metering::{
     FilesystemUsage, ScriptedFilesystemUsageForTest,
 };
-use golem_worker_executor::services::{HasOplog, UsesAllDeps};
-use golem_worker_executor::worker::{MonthlyClockForTest, Worker};
+use golem_worker_executor::services::{HasOplog, HasOplogService, UsesAllDeps};
+use golem_worker_executor::worker::Worker;
 use test_r::test;
 
 use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
@@ -251,8 +252,33 @@ async fn pending_receive(
             .owner_runtime_resources()
             .set_scripted_filesystem_usage_for_test(source.clone());
     }
-    let (clock, mut polls) = MonthlyClockForTest::new();
-    worker.set_monthly_clock_for_test(clock.clone());
+    let (flushed, mut flushes) = tokio::sync::mpsc::unbounded_channel();
+    let _usage_source = (resource != Resource::Memory).then(|| {
+        let source: Arc<dyn ResourceUsageFlusher> = Arc::new(ObservedUsageFlusher {
+            owner: Arc::downgrade(&worker),
+            send: flushed,
+        });
+        worker
+            .owner_runtime_resources()
+            .register_resource_usage_flusher(Arc::downgrade(&source));
+        source
+    });
+    let mut capacity_updates = if resource != Resource::Memory {
+        let mut updates = limits
+            .subscribe_capacity_updates_for_test(context.account_id)
+            .await?;
+        updates.borrow_and_update();
+        Some(updates)
+    } else {
+        None
+    };
+    let oplog = worker.all().oplog_service();
+    let read_stored = async || {
+        let last = oplog.get_last_index(&owned, mode).await;
+        oplog
+            .read_exact(&owned, mode, OplogIndex::INITIAL, last.as_u64())
+            .await
+    };
     let mut attempts =
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let mut phases =
@@ -284,13 +310,27 @@ async fn pending_receive(
         let receive_start = receive_start(&entries, 0)?;
         assert_invocation(&entries, &key, 0)?;
         ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
-        tokio::time::timeout(Duration::from_secs(10), polls.recv())
-            .await?
-            .context("timer closed")?;
         let initial = worker.current_monthly_proposal_for_test();
+        let mut next_flush = async || {
+            loop {
+                let (window, revision) = flushes.recv().await.context("owner usage flusher closed")?;
+                if window == initial.diagnostic_window_id && revision == initial.policy_revision {
+                    return Ok::<_, anyhow::Error>(());
+                }
+            }
+        };
+        if resource != Resource::Memory {
+            tokio::time::timeout(Duration::from_secs(10), next_flush())
+                .await.context("initial monitor pre-wait flush")??;
+        }
+        let prefix = read_stored().await;
+        let prefix_last = *prefix.last_key_value().context("committed UDP invocation prefix is empty")?.0;
         let mut raw = worker.raw_interrupt_for_test();
         let acquisitions = worker.permit_acquisitions_for_test();
         let account = limits.initialize_account(context.account_id).await?;
+        if resource != Resource::Memory {
+            ensure!(account.monthly_observer_count_for_test() == 2);
+        }
         ensure!(initial.exhaustion.is_none(), "{initial:?}");
         ensure!(phase.runtime == initial);
         ensure!(phase.state() == WaitState::Pending);
@@ -308,11 +348,12 @@ async fn pending_receive(
                 account.monthly_capacity_is_exhausted_for_test(mode),
                 "Store must prepay the remaining fuel"
             );
-            clock.advance(Duration::from_secs(30));
-            tokio::time::timeout(Duration::from_secs(10), async {
-                while polls.recv().await.unwrap().deadline != Duration::from_secs(60) {}
-            })
-            .await?;
+            next_flush().await?;
+            tokio::time::timeout(Duration::from_secs(10), next_flush())
+                .await.context("compute check did not reach the next pre-wait flush")??;
+            ensure!(!capacity_updates.as_ref().unwrap().has_changed()?);
+            drop(capacity_updates.take());
+            worker.drain_lifecycle_for_test().await?;
             ensure!(
                 attempts.try_recv().is_err(),
                 "zero unreserved fuel must not exhaust prepaid fuel"
@@ -326,7 +367,11 @@ async fn pending_receive(
                 allocated_bytes: 101,
                 filesystem_objects: 1,
             });
-            clock.advance(Duration::from_secs(30));
+            // Real timer delivery keeps this proposal on the original revision.
+            // The unchanged whole-test bound includes waiting for ordinary cadence.
+            next_flush().await?;
+            ensure!(!capacity_updates.as_ref().unwrap().has_changed()?);
+            drop(capacity_updates.take());
             None
         } else {
             let mut exhausted = policy.clone();
@@ -338,22 +383,10 @@ async fn pending_receive(
             registry.set_policy(exhausted);
             Some(applied_refresh(&limits, &registry, context.account_id).await?)
         };
-        let attempt = tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                tokio::select! {
-                    attempt = attempts.recv() => return attempt.context("acceptance observer closed"),
-                    poll = polls.recv(), if resource == Resource::Storage => {
-                        poll.context("storage monitor timer closed")?;
-                        // A sampled value is not yet an accepted, accrued allocation. Drive
-                        // subsequent monitor ticks until actual capacity exhaustion is proposed.
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                        clock.advance(Duration::from_secs(30));
-                    }
-                }
-            }
-        })
+        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
         .await
-        .context("monthly proposal")??;
+        .context("monthly proposal")?
+        .context("acceptance observer closed")?;
         ensure!(
             attempt.proposal.policy_revision
                 == initial.policy_revision + u64::from(resource != Resource::Storage)
@@ -399,9 +432,12 @@ async fn pending_receive(
         }
         ensure!(worker.unload_succeeded_for_test());
         ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-        ensure!(clock.active_sleeps() == 0);
+        ensure!(!worker.monthly_window_active_for_test());
         ensure!(account.monthly_observer_count_for_test() == 0);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let stopped_raw = read_stored().await;
+        ensure!(stopped_raw.range(..=prefix_last).eq(prefix.iter()), "the full committed UDP prefix must survive stop");
+        ensure!(stopped_raw.values().all(|entry| !matches!(entry, OplogEntry::Jump { .. })));
         assert_invocation(&stopped, &key, 0)?;
         ensure!(
             self::receive_start(&stopped, 0)? == receive_start,
@@ -513,6 +549,9 @@ async fn pending_receive(
             ensure!(resumed.into_typed::<Result<Vec<u8>, String>>()? == Ok(b"recovered".to_vec()));
             ensure!(reconstructed.state() == WaitState::Returned);
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let recovered_raw = read_stored().await;
+            let stopped_last = *stopped_raw.last_key_value().unwrap().0;
+            ensure!(recovered_raw.range(..=stopped_last).eq(stopped_raw.iter()), "the full stopped prefix must survive UDP reconstruction");
             ensure!(self::receive_start(&recovered, 1)? == receive_start);
             assert_settled_history(&recovered)?;
             assert_invocation(&recovered, &key, 1)?;
@@ -555,6 +594,9 @@ async fn pending_receive(
             ensure!(fresh_phase.state() == WaitState::Returned);
             ensure!(phases.try_recv().is_err(), "no extra native receive");
             let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let history_raw = read_stored().await;
+            let recovered_last = *recovered_raw.last_key_value().unwrap().0;
+            ensure!(history_raw.range(..=recovered_last).eq(recovered_raw.iter()), "completed-history reconstruction must preserve the full recovered prefix");
             ensure!(count_agent_invocation_pair_since(&history, OplogIndex::INITIAL) == (3, 3));
             let starts: Vec<_> = history.iter().filter_map(|entry| match &entry.entry {
                 PublicOplogEntry::Start(start) if start.function_name == RECEIVE => Some(entry.oplog_index),
