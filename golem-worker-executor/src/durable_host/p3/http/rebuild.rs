@@ -363,6 +363,10 @@ pub(super) async fn resend_recorded_request<Ctx: WorkerCtx, U: 'static>(
                     golem_service_base::error::worker_executor::WorkerExecutorError::recovery_required(message),
                 );
             }
+            // The oplog failed for good: the agent fails with it.
+            Err(super::request_body::RecordedFrameError::OplogFailed(error)) => {
+                return ResendOutcome::RecoveryRequired(error);
+            }
             Err(error) => {
                 return ResendOutcome::Refused(format!(
                     "the recorded request-body frames could not be read back: {error}"

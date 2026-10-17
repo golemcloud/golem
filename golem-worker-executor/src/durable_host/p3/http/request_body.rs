@@ -688,13 +688,25 @@ pub(super) enum RecordedFrameError {
     Infrastructure(String),
     Fenced(OplogFence),
     Corrupt(String),
+    /// The oplog of the agent failed for good: an archive layer did not store it, or it does not
+    /// read. The agent fails with this error.
+    OplogFailed(golem_service_base::error::worker_executor::WorkerExecutorError),
 }
 
 impl From<OplogError> for RecordedFrameError {
     fn from(error: OplogError) -> Self {
+        use golem_service_base::error::worker_executor::WorkerExecutorError;
         match error {
             OplogError::Fenced(fence) => Self::Fenced(fence),
-            error => Self::Infrastructure(error.to_string()),
+            error @ (OplogError::ArchiveWrite { .. } | OplogError::Unreadable(_)) => {
+                match WorkerExecutorError::from(error) {
+                    error @ WorkerExecutorError::OplogFailed { .. } => Self::OplogFailed(error),
+                    error => Self::Infrastructure(error.to_string()),
+                }
+            }
+            error @ (OplogError::Payload(_) | OplogError::Maintenance(_)) => {
+                Self::Infrastructure(error.to_string())
+            }
         }
     }
 }
@@ -709,6 +721,7 @@ impl RecordedFrameError {
                 Some(WorkerExecutorError::recovery_required(message.clone()))
             }
             Self::Fenced(fence) => Some(OplogError::Fenced(fence.clone()).into()),
+            Self::OplogFailed(error) => Some(error.clone()),
             Self::Corrupt(_) => None,
         }
     }
@@ -721,13 +734,13 @@ impl From<String> for RecordedFrameError {
 }
 
 /// A read that failed because the storage did not answer is retried by a recovery; any other
-/// read failure means the recorded frame cannot be read back.
+/// read failure is an oplog that failed for good, which fails the agent.
 impl From<crate::services::oplog::UnreadableOplog> for RecordedFrameError {
     fn from(error: crate::services::oplog::UnreadableOplog) -> Self {
         if error.is_transient() {
             Self::Infrastructure(error.to_string())
         } else {
-            Self::Corrupt(error.to_string())
+            Self::OplogFailed(error.into())
         }
     }
 }
@@ -745,7 +758,7 @@ impl From<crate::services::oplog::OplogPayloadDownloadError> for RecordedFrameEr
 /// Carries storage failures across the HTTP transport's binding-specific body error channel.
 #[derive(Clone, Default)]
 pub(super) struct RequestBodyRecovery {
-    message: Arc<Mutex<Option<String>>>,
+    recovery: Arc<Mutex<Option<golem_service_base::error::worker_executor::WorkerExecutorError>>>,
     producer: Arc<Mutex<RequestBodyRecordings>>,
 }
 
@@ -761,11 +774,12 @@ impl RequestBodyRecovery {
         if let RecordedFrameError::Fenced(fence) = &error {
             self.producer.lock().unwrap().error = Some(OplogError::Fenced(fence.clone()));
         }
-        if let RecordedFrameError::Infrastructure(message) = &error {
-            self.message
-                .lock()
-                .unwrap()
-                .get_or_insert_with(|| message.clone());
+        if matches!(
+            error,
+            RecordedFrameError::Infrastructure(_) | RecordedFrameError::OplogFailed(_)
+        ) && let Some(recovery) = error.recovery_error()
+        {
+            self.recovery.lock().unwrap().get_or_insert(recovery);
         }
         ErrorCode::InternalError(Some(error.to_string()))
     }
@@ -776,11 +790,7 @@ impl RequestBodyRecovery {
         if let Some(error) = &self.producer.lock().unwrap().error {
             return RecordedFrameError::from(error.clone()).recovery_error();
         }
-        self.message
-            .lock()
-            .unwrap()
-            .clone()
-            .map(golem_service_base::error::worker_executor::WorkerExecutorError::recovery_required)
+        self.recovery.lock().unwrap().clone()
     }
 
     async fn settle_recordings(&self) {
@@ -802,6 +812,7 @@ impl std::fmt::Display for RecordedFrameError {
         match self {
             Self::Infrastructure(message) | Self::Corrupt(message) => f.write_str(message),
             Self::Fenced(fence) => write!(f, "{fence:?}"),
+            Self::OplogFailed(error) => write!(f, "{error}"),
         }
     }
 }
@@ -2319,6 +2330,48 @@ mod tests {
             matches!(raw, Err(ErrorCode::ConnectionTerminated)),
             "the piped transmission result must arrive on the raw channel, got {raw:?}"
         );
+    }
+
+    /// A request-body frame the archive did not store, or one that does not read for good, fails
+    /// the agent with `OplogFailed`; a storage that did not answer recovers it.
+    #[test]
+    fn a_failed_oplog_fails_the_agent_and_an_unavailable_one_recovers_it() {
+        use crate::services::oplog::{OplogReadError, OplogReadSource, UnreadableOplog};
+        use golem_service_base::error::worker_executor::WorkerExecutorError;
+
+        let agent_id = golem_common::model::AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: "request-body".to_string(),
+        };
+        let archive_write = RecordedFrameError::from(OplogError::ArchiveWrite {
+            agent_id: agent_id.clone(),
+            level: 1,
+            details: "archive refused the write".to_string(),
+        });
+        let corrupt = RecordedFrameError::from(UnreadableOplog::new(
+            &agent_id,
+            OplogReadError::corruption(OplogReadSource::Archive(1), "bad chunk"),
+        ));
+        let unavailable = RecordedFrameError::from(OplogError::Unreadable(UnreadableOplog::new(
+            &agent_id,
+            OplogReadError::source_unavailable(OplogReadSource::Archive(1), "outage"),
+        )));
+        for failed in [archive_write, corrupt] {
+            assert!(matches!(
+                failed.recovery_error(),
+                Some(WorkerExecutorError::OplogFailed { .. })
+            ));
+            let recovery = RequestBodyRecovery::default();
+            recovery.transport_error(failed);
+            assert!(matches!(
+                recovery.error(),
+                Some(WorkerExecutorError::OplogFailed { .. })
+            ));
+        }
+        assert!(matches!(
+            unavailable.recovery_error(),
+            Some(WorkerExecutorError::RecoveryRequired { .. })
+        ));
     }
 
     #[test]
