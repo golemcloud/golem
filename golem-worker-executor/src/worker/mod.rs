@@ -14810,10 +14810,11 @@ mod tests {
 pub enum InvocationFailureDecision {
     /// Retry the invocation, or stop, as the retry decision says.
     Retry(RetryDecision),
-    /// The oplog storage did not answer while the failure was recorded. The agent goes to
-    /// infrastructure recovery with this error, and the invocation stays pending, so it continues
-    /// when the storage answers again.
-    RecoveryRequired(WorkerExecutorError),
+    /// The oplog refused the record of the failure. A `RecoveryRequired` error, a storage that did
+    /// not answer, sends the agent to infrastructure recovery, and the invocation stays pending, so
+    /// it continues when the storage answers again. An `OplogFailed` error stops the agent, and the
+    /// stop gives the error, with its cause, to the waiting callers.
+    Infrastructure(WorkerExecutorError),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]

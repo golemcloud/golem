@@ -3183,7 +3183,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await
                 {
                     InvocationFailureDecision::Retry(decision) => decision,
-                    InvocationFailureDecision::RecoveryRequired(error) => {
+                    InvocationFailureDecision::Infrastructure(error) => {
                         return self.invocation_failure_recovery(&error);
                     }
                 };
@@ -3222,6 +3222,15 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await;
                 CommandOutcome::BreakInnerLoop(RetryDecision::None)
             }
+            // The oplog refused the end of the invocation: the agent recovers, or stops with the
+            // error, instead of recording an `Error` entry in the oplog that refused it.
+            Err(
+                error @ (WorkerExecutorError::RecoveryRequired { .. }
+                | WorkerExecutorError::OplogFailed { .. }),
+            ) => {
+                self.parent.record_recovery_failure(&error).await;
+                self.invocation_failure_recovery(&error)
+            }
             Err(error) => {
                 // A refused commit is the `OplogFenced` arm above; this is the hook's own failure.
                 let trap_type = TrapType::Error {
@@ -3229,7 +3238,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     retry_from: OplogIndex::INITIAL,
                     semantic_trap_retry_override: None,
                 };
-                if let InvocationFailureDecision::RecoveryRequired(error) = self
+                if let InvocationFailureDecision::Infrastructure(error) = self
                     .store
                     .data_mut()
                     .on_invocation_failure(&full_function_name, &trap_type)
@@ -3334,7 +3343,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .await
             {
                 InvocationFailureDecision::Retry(decision) => decision,
-                InvocationFailureDecision::RecoveryRequired(error) => {
+                InvocationFailureDecision::Infrastructure(error) => {
                     return self.invocation_failure_recovery(&error);
                 }
             },
