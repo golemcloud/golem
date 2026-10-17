@@ -119,9 +119,26 @@ See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-co
 
 ### Golem Router
 
-[golem-router](https://github.com/golemcloud/golem/tree/main/golem-router) is an [Nginx](https://nginx.org/) proxy for Golem APIs.
+[golem-router](https://github.com/golemcloud/golem/tree/main/golem-router) is an [Nginx](https://nginx.org/) proxy that serves the services on one port, routed by host. Requests for the management host reach the registry service and the management API of the worker service. Requests for every other host reach the custom request port of the worker service, which serves the HTTP API and MCP deployments by domain. Point every name at the router in DNS.
 
-See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-router/golem-services.conf.template), [docker image](https://hub.docker.com/r/golemservices/golem-router)
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `GOLEM_ROUTER_MANAGEMENT_HOST` | Host name of the management API | required |
+| `GOLEM_ROUTER_REGISTRY_SERVICE_HOST`, `GOLEM_ROUTER_REGISTRY_SERVICE_PORT` | Registry service HTTP API | required, `8081` |
+| `GOLEM_ROUTER_WORKER_SERVICE_HOST` | Host of the worker service | required |
+| `GOLEM_ROUTER_WORKER_SERVICE_PORT` | Worker service HTTP API (`port`) | `9005` |
+| `GOLEM_ROUTER_WORKER_SERVICE_CUSTOM_REQUEST_PORT` | Worker service `custom_request_port` | `9006` |
+| `GOLEM_ROUTER_PORT` | Port the router listens on, IPv4 and IPv6 | `80` |
+| `GOLEM_ROUTER_RESOLVER` | Arguments of the Nginx `resolver` directive, for example `fdaa::3` or `127.0.0.11 ipv6=off` | the name servers of `/etc/resolv.conf` |
+| `GOLEM_ROUTER_RESOLVER_VALID` | How long a resolved address is used | `10s` |
+| `GOLEM_ROUTER_CLIENT_MAX_BODY_SIZE` | Largest request body, such as a component upload | `1g` |
+| `GOLEM_ROUTER_STREAM_TIMEOUT` | Longest time without data on a connection | `1h` |
+
+The router resolves the service host names again when `GOLEM_ROUTER_RESOLVER_VALID` runs out, so it follows a service that restarts with a new address, and it starts before the services are resolvable. It does not buffer requests or responses, so server-sent events and other long-lived streams reach the client at once, and it passes websocket upgrades. It sends the original `Host` header, with its port, and sets `X-Forwarded-Host` to the same value. It sets `X-Forwarded-Proto` to the value that a proxy in front of it sent, `http` or `https`, or else to its own scheme.
+
+The worker service accepts `X-Forwarded-Host` and `X-Forwarded-Proto` only from the addresses in `route_resolver.trusted_ingress_addresses` (`GOLEM__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES`). Add the address of the router to it, so that the worker service takes the scheme from the router, for example `https` where TLS ends in front of the router. Reserve the management host in the registry service with `domain_registration.reserved_domains` (`GOLEM__DOMAIN_REGISTRATION__RESERVED_DOMAINS`), so that no environment can register it.
+
+See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-router/golem-router.conf.template), [docker image](https://hub.docker.com/r/golemservices/golem-router)
 
 ## Network Addresses
 
