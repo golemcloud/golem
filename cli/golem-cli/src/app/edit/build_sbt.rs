@@ -42,28 +42,49 @@ pub fn merge_component_sbt(current: &str, new: &str) -> anyhow::Result<String> {
         })
         .collect::<BTreeMap<_, _>>();
 
+    let current_nodes = descendants(current_tree.root_node());
     let mut replacements = Vec::new();
-    for node in descendants(current_tree.root_node()) {
-        let Some((org, name)) = module_coordinates(node, current) else {
-            continue;
-        };
-        let Some(new_version) = new_versions.get(&(org.to_string(), name.to_string())) else {
-            continue;
-        };
-        let version = node
-            .parent()
-            .filter(|parent| parent.child_by_field_name("left") == Some(node))
-            .and_then(|parent| module_id(parent, current))
-            .and_then(|(_, version)| plain_string(version, current).map(|_| version));
-        let Some(version) = version else {
+    for ((org, name), new_version) in &new_versions {
+        let mut recognized = 0;
+        for node in &current_nodes {
+            if module_coordinates(*node, current) != Some((org.as_str(), name.as_str())) {
+                continue;
+            }
+            let version = node
+                .parent()
+                .filter(|parent| parent.child_by_field_name("left") == Some(*node))
+                .and_then(|parent| module_id(parent, current))
+                .and_then(|(_, version)| plain_string(version, current).map(|_| version));
+            let Some(version) = version else {
+                bail!(
+                    "cannot set the version of `\"{org}\" % \"{name}\"`, because the version is not a plain string literal"
+                );
+            };
+            replacements.push((string_contents(version), new_version.as_str()));
+            recognized += 1;
+        }
+
+        let mentions = current_nodes
+            .iter()
+            .filter(|node| mentions_string(**node, current, name))
+            .count();
+        if mentions != recognized {
             bail!(
-                "cannot set the version of `\"{org}\" % \"{name}\"`, because the version is not a plain string literal"
+                "cannot set the version of `\"{org}\" % \"{name}\"`, because the merge does not recognize the form of its declaration"
             );
-        };
-        replacements.push((string_contents(version), new_version.as_str()));
+        }
     }
 
-    Ok(splice(current, replacements))
+    let merged = splice(current, replacements);
+    parse_sbt(&merged)?;
+    Ok(merged)
+}
+
+/// Whether `node` is a string literal of any kind, plain, triple-quoted or interpolated,
+/// with the contents `contents`.
+fn mentions_string(node: Node<'_>, source: &str, contents: &str) -> bool {
+    matches!(node.kind(), "string" | "interpolated_string")
+        && source[node.byte_range()].trim_matches('"') == contents
 }
 
 /// Merges `build.sbt`: each `ThisBuild / <key> := "<value>"` statement of the template replaces
@@ -98,7 +119,28 @@ pub fn merge_plugins_sbt(current: &str, new: &str) -> anyhow::Result<String> {
 /// Merges a Java properties file such as `project/build.properties`: each property of the
 /// template replaces the current property with the same key, or is appended.
 pub fn merge_properties(current: &str, new: &str) -> anyhow::Result<String> {
-    merge_declarations(current, &properties(current), new, &properties(new))
+    let new_properties = properties(new).0;
+    let (current_properties, continued) = properties(current);
+
+    // An appended property must not become a continuation line of the last current property:
+    // an empty line ends the continuation without changing the value of that property.
+    let appends = new_properties.iter().any(|new_property| {
+        !current_properties
+            .iter()
+            .any(|property| property.key == new_property.key)
+    });
+    let current = if continued && appends {
+        format!(
+            "{current}{}\n",
+            if current.ends_with('\n') { "" } else { "\n" }
+        )
+    } else {
+        current.to_string()
+    };
+
+    let merged = merge_declarations(&current, &properties(&current).0, new, &new_properties)?;
+    ensure_merged(&merged, &properties(&merged).0, new, &new_properties)?;
+    Ok(merged)
 }
 
 /// Rewrite the argument of the `.in(file("..."))` call of the
@@ -135,11 +177,20 @@ pub fn rewrite_component_dir(
         ),
     };
 
-    let Some(dir) = descendants(declaration)
+    let in_calls = descendants(declaration)
         .into_iter()
-        .filter_map(|node| component_dir(node, current))
-        .min_by_key(|node| node.start_byte())
-    else {
+        .filter(|node| is_in_call(*node, current))
+        .collect::<Vec<_>>();
+    let dir = match in_calls.as_slice() {
+        [in_call] => component_dir(*in_call, current),
+        [] => None,
+        _ => bail!(
+            "expected exactly one `.in(file(\"...\"))` inside the `lazy val {}` block, found {} `.in(...)` calls",
+            lazy_val,
+            in_calls.len()
+        ),
+    };
+    let Some(dir) = dir else {
         bail!(
             "expected `.in(file(\"...\"))` inside the `lazy val {}` block but did not find one",
             lazy_val
@@ -205,9 +256,7 @@ fn merge_keyed_statements(
     key: impl Fn(Node<'_>, &str) -> Option<String>,
     conflicts: impl Fn(Node<'_>, &str, &str) -> bool,
 ) -> anyhow::Result<String> {
-    let current_tree = parse_sbt(current)?;
     let new_tree = parse_sbt(new)?;
-
     let new_declarations = statements(&new_tree)
         .into_iter()
         .filter_map(|node| {
@@ -218,29 +267,70 @@ fn merge_keyed_statements(
         })
         .collect::<Vec<_>>();
 
-    let mut current_declarations = Vec::new();
-    for node in statements(&current_tree) {
-        match key(node, current) {
-            Some(key) => current_declarations.push(Declaration {
+    let current_declarations = keyed_statements(current, &new_declarations, &key, &conflicts)?;
+    let merged = merge_declarations(current, &current_declarations, new, &new_declarations)?;
+
+    let merged_declarations = keyed_statements(&merged, &new_declarations, &key, &conflicts)?;
+    ensure_merged(&merged, &merged_declarations, new, &new_declarations)?;
+
+    Ok(merged)
+}
+
+/// The statements of `source` in a recognized form, with their keys. A statement in an other
+/// form that uses a key of `new_declarations` is an error.
+fn keyed_statements(
+    source: &str,
+    new_declarations: &[Declaration],
+    key: &impl Fn(Node<'_>, &str) -> Option<String>,
+    conflicts: &impl Fn(Node<'_>, &str, &str) -> bool,
+) -> anyhow::Result<Vec<Declaration>> {
+    let tree = parse_sbt(source)?;
+    let mut declarations = Vec::new();
+    for node in statements(&tree) {
+        match key(node, source) {
+            Some(key) => declarations.push(Declaration {
                 key,
                 span: node.byte_range(),
             }),
             None => {
                 if let Some(declaration) = new_declarations
                     .iter()
-                    .find(|declaration| conflicts(node, current, &declaration.key))
+                    .find(|declaration| conflicts(node, source, &declaration.key))
                 {
                     bail!(
                         "cannot merge `{}`, because the merge does not recognize the form of this statement: {}",
                         declaration.key,
-                        &current[node.byte_range()]
+                        &source[node.byte_range()]
                     );
                 }
             }
         }
     }
+    Ok(declarations)
+}
 
-    merge_declarations(current, &current_declarations, new, &new_declarations)
+/// Checks the merge result: the merged file declares each key of the template exactly once,
+/// with the text of the template.
+fn ensure_merged(
+    merged: &str,
+    merged_declarations: &[Declaration],
+    new: &str,
+    new_declarations: &[Declaration],
+) -> anyhow::Result<()> {
+    for new_declaration in new_declarations {
+        let mut matching = merged_declarations
+            .iter()
+            .filter(|declaration| declaration.key == new_declaration.key);
+        match (matching.next(), matching.next()) {
+            (Some(declaration), None)
+                if merged[declaration.span.clone()] == new[new_declaration.span.clone()] => {}
+            _ => bail!(
+                "cannot merge `{}`, because the merged file does not declare it exactly once with the template value",
+                new_declaration.key
+            ),
+        }
+    }
+    Ok(())
 }
 
 /// Replaces the given non-overlapping spans of `text`.
@@ -258,9 +348,9 @@ fn splice(text: &str, mut replacements: Vec<(Range<usize>, &str)>) -> String {
     result
 }
 
-/// The properties of a Java properties file. The span of a property includes its
-/// continuation lines.
-fn properties(text: &str) -> Vec<Declaration> {
+/// The properties of a Java properties file, and whether the last line of the file continues
+/// a property. The span of a property includes its continuation lines.
+fn properties(text: &str) -> (Vec<Declaration>, bool) {
     let mut result = Vec::<Declaration>::new();
     let mut offset = 0;
     let mut continued = false;
@@ -289,7 +379,7 @@ fn properties(text: &str) -> Vec<Declaration> {
         continued = content.bytes().rev().take_while(|b| *b == b'\\').count() % 2 == 1;
     }
 
-    result
+    (result, continued)
 }
 
 /// The key of a property line: the text before the first unescaped `=`, `:` or whitespace.
@@ -347,8 +437,17 @@ fn descendants(node: Node<'_>) -> Vec<Node<'_>> {
     result
 }
 
+/// The name of an identifier, without the backticks of a quoted identifier.
 fn identifier<'a>(node: Node<'_>, source: &'a str) -> Option<&'a str> {
-    (node.kind() == "identifier").then(|| &source[node.byte_range()])
+    if node.kind() != "identifier" {
+        return None;
+    }
+    let text = &source[node.byte_range()];
+    Some(
+        text.strip_prefix('`')
+            .and_then(|text| text.strip_suffix('`'))
+            .unwrap_or(text),
+    )
 }
 
 /// The contents of a plain string literal: `"..."`, not triple-quoted, not interpolated and
@@ -464,15 +563,20 @@ fn sbt_plugin(node: Node<'_>, source: &str) -> Option<String> {
     Some(format!("{org}:{name}"))
 }
 
+/// Whether `node` is an `<expression>.in(...)` call.
+fn is_in_call(node: Node<'_>, source: &str) -> bool {
+    node.kind() == "call_expression"
+        && node
+            .child_by_field_name("function")
+            .filter(|function| function.kind() == "field_expression")
+            .and_then(|function| function.child_by_field_name("field"))
+            .and_then(|field| identifier(field, source))
+            == Some("in")
+}
+
 /// `<project>.in(file("<dir>"))`: the string literal of the directory.
 fn component_dir<'t>(node: Node<'t>, source: &str) -> Option<Node<'t>> {
-    if node.kind() != "call_expression" {
-        return None;
-    }
-    let function = node.child_by_field_name("function")?;
-    if function.kind() != "field_expression"
-        || identifier(function.child_by_field_name("field")?, source)? != "in"
-    {
+    if !is_in_call(node, source) {
         return None;
     }
     let arguments = node.child_by_field_name("arguments")?;
@@ -560,6 +664,18 @@ lazy val component_name = project
     }
 
     #[test]
+    fn component_dir_errors_when_more_than_one_in_call() {
+        for src in [
+            "lazy val component_name = project.in(file(\"a\")).in(file(\"b\"))\n",
+            "lazy val component_name = (if (c) other.in(file(\"a\")) else project).in(file(\".\"))\n",
+            "lazy val component_name = project.in(file(dir)).in(file(\".\"))\n",
+        ] {
+            let err = rewrite_component_dir(src, "component_name", "x").unwrap_err();
+            assert!(err.to_string().contains("exactly one"), "{src}: {err}");
+        }
+    }
+
+    #[test]
     fn component_dir_errors_when_in_file_missing() {
         let src = "lazy val component_name = project\n  .settings()\n";
         let err = rewrite_component_dir(src, "component_name", "x").unwrap_err();
@@ -621,6 +737,24 @@ lazy val component_name = project
         let err = merge_component_sbt(current, &new).unwrap_err();
 
         assert!(err.to_string().contains("golem-scala-core"), "{err}");
+    }
+
+    #[test]
+    fn component_sbt_merge_rejects_unrecognized_module_declarations() {
+        let new = flat_sbt().replace("% \"0.1.0\"", "% \"0.2.0\"");
+
+        for current in [
+            "val golemOrg = \"cloud.golem\"\nlibraryDependencies += golemOrg %%% \"golem-scala-core\" % \"0.1.0\"\n",
+            "libraryDependencies += \"cloud.golem\" %%% s\"golem-scala-core\" % \"0.1.0\"\n",
+            "libraryDependencies += \"cloud.golem\".%%%(\"golem-scala-core\").%(\"0.1.0\")\n",
+            "libraryDependencies += (\"cloud.golem\" %%% \"golem-scala-core\") % \"0.1.0\"\n",
+        ] {
+            let err = merge_component_sbt(current, &new).unwrap_err();
+            assert!(
+                err.to_string().contains("golem-scala-core"),
+                "{current}: {err}"
+            );
+        }
     }
 
     #[test]
@@ -706,6 +840,8 @@ lazy val component_name = project
             "ThisBuild / scalaVersion := \"3\" + \".3.0\"\n",
             "ThisBuild / scalaVersion := \"\"\"3.3.0\"\"\"\n",
             "ThisBuild / scalaVersion := s\"3.3.${patch}\"\n",
+            "ThisBuild / scalaVersion := \"3.3.0\"\nThisBuild / `scalaVersion` := \"2.13.12\"\n",
+            "lazy val a = project.settings(`scalaVersion` := \"2.13.12\")\n",
         ] {
             let err = merge_build_sbt(current, new).unwrap_err();
             assert!(err.to_string().contains("scalaVersion"), "{current}: {err}");
@@ -808,5 +944,28 @@ lazy val component_name = project
             "sbt.version=1.11.2\nsbt.color:always\n# sbt.version=0.13\n"
         );
         assert!(merge_properties("sbt.version=1.10.0\nsbt.version 1.10.1\n", new).is_err());
+    }
+
+    #[test]
+    fn properties_merge_ends_a_continued_last_property_before_appending() {
+        let new = "sbt.version=1.11.2\n";
+
+        for current in ["x=1\\\n", "x=1\\"] {
+            let merged = merge_properties(current, new).unwrap();
+
+            assert_eq!(merged, "x=1\\\n\nsbt.version=1.11.2\n", "{current:?}");
+            assert_eq!(merge_properties(&merged, new).unwrap(), merged);
+        }
+    }
+
+    #[test]
+    fn build_sbt_merge_replaces_backtick_quoted_settings() {
+        let merged = merge_build_sbt(
+            "ThisBuild / `scalaVersion` := \"3.3.0\"\n",
+            "ThisBuild / scalaVersion := \"3.7.1\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(merged, "ThisBuild / scalaVersion := \"3.7.1\"\n");
     }
 }

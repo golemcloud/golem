@@ -53,7 +53,7 @@ use tracing::debug;
 #[derive(Debug)]
 struct ExistingComponent {
     pub language: GuestLanguage,
-    pub dir: PathBuf, // relative path, defined in the manifest 'dir' property
+    pub dir: PathBuf,           // component_dir, relative to the application root
     pub component_dir: PathBuf, // canonical resolved dir
     pub manifest_source_dir: PathBuf, // source of the manifest, where the component is defined
 }
@@ -290,10 +290,13 @@ impl TemplateHandler {
                                         component_name
                                     )
                                 })?,
-                                dir: component
-                                    .dir()
-                                    .unwrap_or_else(|| Path::new("."))
-                                    .to_path_buf(),
+                                dir: match fs::strip_prefix_or_err(
+                                    component.component_dir(),
+                                    app_ctx.application().app_root_dir(),
+                                )? {
+                                    dir if dir.as_os_str().is_empty() => PathBuf::from("."),
+                                    dir => dir.to_path_buf(),
+                                },
                                 component_dir: component.component_dir().to_path_buf(),
                                 manifest_source_dir: fs::parent_or_err(component.source())?
                                     .to_path_buf(),
@@ -851,7 +854,7 @@ impl TemplateHandler {
                 ));
 
                 let cargo_target_dir = application_path.join("target");
-                if cargo_target_dir.exists() {
+                if cargo_target_dir.is_dir() {
                     upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_dir(
                         cargo_target_dir,
                         target_root.join("target"),
