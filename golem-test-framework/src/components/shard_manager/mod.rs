@@ -21,23 +21,14 @@ use super::registry_service::RegistryService;
 use crate::components::EnvVarBuilder;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::shardmanager;
-use golem_api_grpc::proto::golem::shardmanager::v1::GetRoutingTableRequest;
-use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 use golem_common::model::RoutingTable;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tonic::codec::CompressionEncoding;
-use tonic::transport::Channel;
 use tracing::{Level, warn};
 
 #[async_trait]
 pub trait ShardManager: Send + Sync {
-    async fn client(&self) -> ShardManagerServiceClient<Channel> {
-        new_client(&self.grpc_host(), self.grpc_port()).await
-    }
-
     fn grpc_host(&self) -> String;
     fn grpc_port(&self) -> u16;
 
@@ -73,40 +64,20 @@ pub trait ShardManager: Send + Sync {
     }
 }
 
-async fn new_client(host: &str, grpc_port: u16) -> ShardManagerServiceClient<Channel> {
-    ShardManagerServiceClient::connect(format!("http://{host}:{grpc_port}"))
-        .await
-        .expect("Failed to connect to golem-shard-manager")
-        .send_compressed(CompressionEncoding::Gzip)
-        .accept_compressed(CompressionEncoding::Gzip)
-}
-
+/// Through Golem's own client, which follows a standby to the leader: a test environment may run
+/// several shard manager replicas behind one address.
 async fn try_get_routing_table(host: &str, grpc_port: u16) -> crate::Result<RoutingTable> {
-    let mut client = ShardManagerServiceClient::connect(format!("http://{host}:{grpc_port}"))
-        .await
-        .map_err(|e| anyhow!("Failed to connect to shard-manager: {e}"))?
-        .send_compressed(CompressionEncoding::Gzip)
-        .accept_compressed(CompressionEncoding::Gzip);
-
-    let routing_table = client
-        .get_routing_table(GetRoutingTableRequest {})
-        .await
-        .map_err(|e| {
-            anyhow!("Unable to fetch the routing table from shard-manager-service: {e}")
-        })?;
-
-    match routing_table.into_inner() {
-        shardmanager::v1::GetRoutingTableResponse {
-            result:
-                Some(shardmanager::v1::get_routing_table_response::Result::Success(routing_table)),
-        } => Ok(routing_table
-            .try_into()
-            .map_err(|e| anyhow!("Failed converting routing table: {e}"))?),
-        shardmanager::v1::GetRoutingTableResponse {
-            result: Some(shardmanager::v1::get_routing_table_response::Result::Failure(err)),
-        } => Err(anyhow!("Failed to get routing table: {err:?}")),
-        _ => Err(anyhow!("Failed to get routing table")),
-    }
+    use golem_service_base::clients::shard_manager::{
+        GrpcShardManager, GrpcShardManagerConfig, ShardManager as _,
+    };
+    GrpcShardManager::new(&GrpcShardManagerConfig {
+        host: host.to_string(),
+        port: grpc_port,
+        ..GrpcShardManagerConfig::default()
+    })
+    .get_routing_table()
+    .await
+    .map_err(|err| anyhow!("Unable to fetch the routing table from the shard manager: {err}"))
 }
 
 async fn env_vars(
