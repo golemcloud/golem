@@ -111,6 +111,7 @@ fn schema_string_list(result: SchemaValue) -> Vec<String> {
         .collect()
 }
 
+#[cfg(target_os = "linux")]
 fn schema_u64_list(result: SchemaValue) -> Vec<u64> {
     let SchemaValue::List { elements } = result else {
         panic!("expected list, got {result:?}")
