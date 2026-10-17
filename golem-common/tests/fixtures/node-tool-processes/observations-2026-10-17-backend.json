@@ -1543,7 +1543,7 @@
     "Host-owned stream collection for blocking calls",
     "New-adapter timeout/cancellation/replay",
     "Async child-process adapter lifecycle",
-    "P2 runtime",
+    "Normal P2/P3 native runtime test harness and complete Clippy matrix",
     "SDK integration",
     "npm/tsc workload performance"
   ],
@@ -1592,5 +1592,30 @@
     "p2Run": false,
     "clippyMatrixRun": false,
     "note": "The normal runtime group6 test is added. Its exact JS sources were executed via this small generated P3 component; the native Rust test harness and full feature matrix remain pending."
+  },
+  "p2ApiSmoke": {
+    "passed": true,
+    "runner": "Existing Wasmtime CLI, with the runtime fixture preopened as the guest root and a fresh component instance.",
+    "wizer": true,
+    "wasmProfile": "release; p2,encoding; no default features",
+    "initializerModule": "wasm-rquickjs-runtime-init",
+    "fixture": "wasm-rquickjs-alt-02/examples/runtime/process-backend",
+    "checks": "Same main/fresh-runtime API assertions as apiSmoke.",
+    "stdout": "true\n",
+    "exitCode": 0,
+    "artifact": {
+      "bytes": 11966206,
+      "sha256": "5e407b8ca4420652b7ed72852ae63b4c3ef4018ecc8adea97ef20056431462bf"
+    },
+    "sourceHashes": {
+      "src/builtin/child_process.js": "cf3767e9a4c5a790225848ecff4cc4bfd9e3dc7d981e0a81f170142a9c9a1ff1",
+      "src/builtin/child_process.rs": "3736aba57248367ef432cae279992223def1741504ecc6db2e3b14b51f5bff80",
+      "src/builtin/child_process_backend.js": "cdcfb5fd1a040a6598e27779350e1f14fe85c6a6530e80475bb6dd6fe0f54b24",
+      "src/builtin/mod.rs": "950ad54bc32cb5144c30670deed7c0b560afad40f765c05049be5ca60d606c64",
+      "src/internal/runtime_services.rs": "ed2874254e6c4e86b8e4cca427af27b489d213a5acd0f57a9678606dab18a47d"
+    },
+    "nativeRuntimeTestHarnessRun": false,
+    "clippyMatrixRun": false,
+    "note": "The compiler is still released 0.4.13 with a source overlay, not a rebuilt or installed compiler. Each changed skeleton file was byte-compared with the active checkout. The first local build command omitted the required p2 feature; the corrected command built and the smoke passed."
   }
 }
