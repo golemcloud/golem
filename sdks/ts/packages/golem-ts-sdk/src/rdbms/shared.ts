@@ -38,6 +38,7 @@ const RDBMS_ERROR_TAGS: ReadonlySet<string> = new Set([
   'query-execution-failure',
   'query-response-failure',
   'other',
+  'resource-lost',
 ]);
 
 interface RdbmsHostError {
@@ -78,6 +79,7 @@ export type RdbmsErrorReason =
   | 'query-parameter-failure'
   | 'query-execution-failure'
   | 'query-response-failure'
+  | 'resource-lost'
   | 'authentication'
   | 'other';
 
@@ -140,6 +142,8 @@ const classify = (cause: unknown): { reason: RdbmsErrorReason; detail: string } 
         return { reason: 'query-execution-failure', detail };
       case 'query-response-failure':
         return { reason: 'query-response-failure', detail };
+      case 'resource-lost':
+        return { reason: 'resource-lost', detail };
       default:
         return { reason: 'other', detail };
     }

@@ -22,9 +22,9 @@ interactive examples; preserve unrelated content and verify changed walkthrough 
    `resume_replay`). Do not design feature-specific "safe to unload" gates; make every pending
    obligation durable or deterministically recomputable instead.
 3. **Durable agent RPC is exactly-once per logical target invocation.** Caller attempts (replay,
-   transport retry, atomic-region rollback) share one idempotency key derived from the caller's
-   invocation key and the durable call's position (`derive_idempotency_key`: the `Start` index,
-   or the outermost atomic region's logical counter); the target persists one invocation and one
+   transport retry, individual call repair) share one idempotency key derived from the caller's
+   invocation key and the durable call's own `Start` index (`derive_idempotency_key`);
+   the target persists one invocation and one
    result. Attempts are not executions. This persistence rule applies to RPCs that execute: a
    settled read-only cache hit or coalesced follower returns the shared cached result without a
    separate target invocation, result, or alias.
@@ -39,6 +39,17 @@ subscriptions, spawned store tasks, sockets. Never let correctness after a resta
 anything in the second list.
 
 ## External effects
+
+Recovery repairs an incomplete durable call at its own `Start`; it does not restart a group of
+completed effects. SDK sagas compensate completed steps and loop in guest code, appending new
+calls without deleting history. A deterministic guest trap fails the invocation; it is not a
+saga retry signal. Nonresumable handles report typed loss after reconstruction, so the application
+must explicitly reopen and initialize a session. Loss does not prove that an earlier write failed.
+Host HTTP transport, status-code and body-resumption retries remain host responsibilities. HTTP
+uses Preview 3; the Rust SDK provides `golem_rust::http`. Preview 2 HTTP is not supported.
+Guests cannot disable durable recording, open atomic regions, or get/set an execution cursor.
+External operators can revert or fork at validated cuts. `oplog-commit` remains a replication
+barrier, not an external transaction commit or an undo operation.
 
 Golem itself enforces exactly-once for durable agent RPC and for oplog-processor plugin delivery
 (`services/oplog/plugin.rs`: batch keys from `oplog_processor_idempotency_key`, checkpoints in

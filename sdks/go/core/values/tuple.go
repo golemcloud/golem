@@ -31,6 +31,16 @@ import "reflect"
 // order, so encoding and decoding walk the fields positionally.
 type Tupleish interface{ tupleElems() []reflect.Type }
 
+// Tuple1 is a 1-element tuple. It differs from its element on the wire, so a
+// schema tuple<T> keeps it.
+type Tuple1[A any] struct {
+	A A
+}
+
+func (t Tuple1[A]) tupleElems() []reflect.Type {
+	return []reflect.Type{reflect.TypeFor[A]()}
+}
+
 // Tuple2 is a 2-element tuple.
 type Tuple2[A, B any] struct {
 	A A

@@ -41,7 +41,6 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-wait-for-external-input-moonbit` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
 | `golem-add-webhook-moonbit` | Creating and awaiting webhooks for integrating with webhook-driven external APIs |
 | `golem-multi-instance-agent-moonbit` | Creating multiple agent instances with the same constructor parameters using phantom agents |
-| `golem-atomic-block-moonbit` | Atomic blocks and idempotency |
 | `golem-add-transactions-moonbit` | Saga-pattern transactions with compensation |
 | `golem-add-http-endpoint-moonbit` | Exposing an agent over HTTP with mount paths and endpoint annotations |
 | `golem-http-params-moonbit` | Mapping path, query, header, and body parameters for HTTP endpoints |
@@ -53,6 +52,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-config-moonbit` | Adding typed configuration to a MoonBit Golem agent |
 | `golem-add-secret-moonbit` | Adding secrets to MoonBit Golem agents |
 | `golem-quota-moonbit` | Adding resource quotas (rate limiting, capacity, concurrency) to MoonBit Golem agents using QuotaToken and reservations |
+| `golem-permission-card-moonbit` | Deriving, inspecting, revoking, and installing permission cards, and attaching scope cards to RPC calls |
 | `golem-retry-policies-moonbit` | Configuring semantic retry policies — composable exponential/periodic/fibonacci backoff, predicates on error properties, scoped overrides with `with_named_policy!`, and live CLI management |
 | `golem-profiles-and-environments` | Understanding CLI profiles, app environments, and component presets — switching between local/cloud, managing deployment targets, and activating per-environment configuration |
 | `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |
@@ -105,7 +105,7 @@ Retryable failures in the following operations are handled transparently:
 - **RPC calls** between agents
 - **Database / storage calls** — `golem:rdbms/postgres`, `golem:rdbms/mysql`, `golem:rdbms/ignite2`, `wasi:blobstore`, `wasi:keyvalue`
 
-An uncaught `raise`, abort, or panic outside an atomic region fails the agent without retry. Inside an atomic region, a deterministic trap is retried according to the applicable retry policy; if the policy gives up, the agent becomes failed.
+An uncaught `raise`, abort, or panic is a deterministic guest trap and fails the invocation without retry. Recovery replays completed outcomes and repairs only an eligible incomplete call at its own `Start`. MoonBit has no public saga helper. For domain compensation, implement ordinary guest control flow that compensates completed steps before appending fresh calls. Such an application loop has no SDK-provided attempt bound or backoff guarantee.
 
 Only customize when the *strategy* needs to change (different backoff, give-up conditions, per-status-code policies). For that, see the `golem-retry-policies-moonbit` skill.
 

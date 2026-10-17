@@ -145,8 +145,7 @@ declare_structs! {
         pub exported_resource_instances: Vec<ExportedResourceMetadata>,
         pub active_plugins: HashSet<EnvironmentPluginGrantId>,
         /// Oplog regions that are skipped during the worker's state recovery, but describe
-        /// the history of the worker. For example if an atomic region gets restarted, its partially
-        /// recorded oplog entries will be skipped on retry.
+        /// the history of the worker.
         pub skipped_regions: Vec<OplogRegion>,
         /// Oplog regions permanently deleted from the workers using the revert functionality.
         pub deleted_regions: Vec<OplogRegion>,

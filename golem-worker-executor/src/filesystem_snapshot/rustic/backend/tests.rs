@@ -1299,7 +1299,7 @@ impl BlobStorageBackend for FailingBlobStorage {
         _op_label: &'static str,
         _namespace: BlobStorageNamespace,
         _path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<Option<u64>> {
         Err(broken())
     }
 

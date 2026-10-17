@@ -17,6 +17,7 @@ package tool_test
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -254,5 +255,237 @@ func TestReflectedCommandErrorsAreDescribed(t *testing.T) {
 	if offline.Kind != tool.RuntimeError || offline.ExitCode != 69 || offline.Payload.IsSome() {
 		t.Errorf("offline = %+v", offline)
 	}
+}
 
+func bashRun(t *testing.T) (reflection.Command, func(types.TypedSchemaValue) error, func() tool.BashArgs) {
+	t.Helper()
+	meta, invoke, seen := tool.BashFixture(t)
+	cmd, ok := reflection.ToolOf(meta).Command([]string{"run"})
+	if !ok {
+		t.Fatal("reflection does not find run")
+	}
+	return cmd, invoke, seen
+}
+
+// startBash starts the bash fixture's run command through a reflected client
+// and returns the input it sent.
+func startBash(t *testing.T, args map[string]any) (types.TypedSchemaValue, error) {
+	t.Helper()
+	meta, _, _ := tool.BashFixture(t)
+	inputs := tool.RecordToolInputs(t)
+	if _, err := reflection.ToolOf(meta).Bind().Start([]string{"run"}, args, nil); err != nil {
+		return types.TypedSchemaValue{}, err
+	}
+	if len(*inputs) != 1 {
+		t.Fatalf("sent %d inputs, want 1", len(*inputs))
+	}
+	return (*inputs)[0], nil
+}
+
+// TestReflectedToolFillsDeclaredDefaults — an argument that declares a default
+// may be left out of the JSON, and the handler then sees that default; an
+// optional option without one is none.
+func TestReflectedToolFillsDeclaredDefaults(t *testing.T) {
+	cmd, invoke, seen := bashRun(t)
+	packed, err := cmd.Input().PackJSON(map[string]any{"script": "echo ok"})
+	if err != nil {
+		t.Fatalf("PackJSON: %v", err)
+	}
+	want := core.RecordValue{Fields: []core.SchemaValue{
+		core.StringValue{Value: "echo ok"}, core.StringValue{Value: ""}, core.U32Value{Value: 600},
+		core.OptionValue{}, core.BoolValue{Value: true},
+	}}
+	if !reflect.DeepEqual(packed, want) {
+		t.Errorf("packed %#v, want %#v", packed, want)
+	}
+
+	input, err := startBash(t, map[string]any{"script": "echo ok"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := invoke(input); err != nil {
+		t.Fatal(err)
+	}
+	if s := seen(); s.Script != "echo ok" || s.Cwd != "" || s.Timeout != 600 || s.Shell.IsSome() || !s.Login {
+		t.Errorf("the handler saw %+v", s)
+	}
+}
+
+// TestReflectedToolKeepsExplicitArguments — a given argument wins over its
+// default, taken as it is: a timeout is not converted or clamped, and an
+// explicit null for an option is none.
+func TestReflectedToolKeepsExplicitArguments(t *testing.T) {
+	_, invoke, seen := bashRun(t)
+	for _, tc := range []struct {
+		args map[string]any
+		want tool.BashArgs
+	}{
+		{map[string]any{"script": "ls", "timeout": 30}, tool.BashArgs{Script: "ls", Timeout: 30, Login: true}},
+		{map[string]any{"script": "ls", "timeout": 120000, "cwd": "/tmp", "login": false, "shell": nil},
+			tool.BashArgs{Script: "ls", Cwd: "/tmp", Timeout: 120000}},
+		{map[string]any{"script": "ls", "shell": "zsh"},
+			tool.BashArgs{Script: "ls", Timeout: 600, Shell: golem.Some("zsh"), Login: true}},
+	} {
+		input, err := startBash(t, tc.args)
+		if err != nil {
+			t.Fatalf("Start(%v): %v", tc.args, err)
+		}
+		if err := invoke(input); err != nil {
+			t.Fatal(err)
+		}
+		if s := seen(); !reflect.DeepEqual(s, tc.want) {
+			t.Errorf("%v: the handler saw %+v, want %+v", tc.args, s, tc.want)
+		}
+	}
+}
+
+// TestReflectedToolReportsAMissingRequiredArgument — a required argument has
+// no default to fall back to, so leaving it out fails before sending, naming
+// it; an unknown argument is still refused.
+func TestReflectedToolReportsAMissingRequiredArgument(t *testing.T) {
+	cmd, _, _ := bashRun(t)
+	_, err := cmd.Input().PackJSON(map[string]any{"timeout": 5})
+	var ve *core.ValidationError
+	if !errors.As(err, &ve) || len(ve.Issues) != 1 || ve.Issues[0].Path != "script" ||
+		ve.Issues[0].Message != `missing field "script"` {
+		t.Errorf("got %v, want one missing-field issue at script", err)
+	}
+
+	meta, _, _ := tool.BashFixture(t)
+	inputs := tool.RecordToolInputs(t)
+	client := reflection.ToolOf(meta).Bind()
+	if _, err := client.Start([]string{"run"}, map[string]any{}, nil); err == nil ||
+		!strings.Contains(err.Error(), `missing field "script"`) || !errors.As(err, &ve) {
+		t.Errorf("Start without script: %v", err)
+	}
+	if _, err := client.Start([]string{"run"}, map[string]any{"script": "ls", "timout": 5}, nil); err == nil ||
+		!strings.Contains(err.Error(), `unknown field "timout"`) {
+		t.Errorf("Start with an unknown argument: %v", err)
+	}
+	if len(*inputs) != 0 {
+		t.Error("a call was sent despite failing validation")
+	}
+}
+
+// TestReflectedToolInputSchemaStatesDefaults — the JSON Schema requires only
+// the arguments without a default and states each default.
+func TestReflectedToolInputSchemaStatesDefaults(t *testing.T) {
+	cmd, _, _ := bashRun(t)
+	data, err := cmd.Input().ToJSONSchemaBytes(false)
+	if err != nil {
+		t.Fatalf("ToJSONSchemaBytes: %v", err)
+	}
+	var doc map[string]any
+	_ = json.Unmarshal(data, &doc)
+	if got, _ := json.Marshal(doc["required"]); string(got) != `["script"]` {
+		t.Errorf("required is %s, want only script", got)
+	}
+	props := doc["properties"].(map[string]any)
+	for name, want := range map[string]any{"cwd": "", "timeout": float64(600), "login": true} {
+		prop := props[name].(map[string]any)
+		if got, has := prop["default"]; !has || got != want {
+			t.Errorf("%s default is %v (present %v), want %v", name, got, has, want)
+		}
+	}
+	for _, name := range []string{"script", "shell"} {
+		if _, has := props[name].(map[string]any)["default"]; has {
+			t.Errorf("%s gained a default", name)
+		}
+	}
+}
+
+// TestReflectedToolWireRecordKeepsItsTypes — filling defaults is a matter of
+// the JSON surface only: the record sent is typed as before, and leaving the
+// defaults out sends exactly what passing them explicitly sends.
+func TestReflectedToolWireRecordKeepsItsTypes(t *testing.T) {
+	cmd, _, _ := bashRun(t)
+	if got := recordFieldNames(cmd.Input()); strings.Join(got, ",") != "script,cwd,timeout,shell,login" {
+		t.Errorf("fields are %v", got)
+	}
+	omitted, err := startBash(t, map[string]any{"script": "echo ok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	explicit, err := startBash(t, map[string]any{"script": "echo ok", "cwd": "", "timeout": 600, "shell": nil, "login": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(omitted, explicit) {
+		t.Error("leaving the defaults out sent a different input from passing them")
+	}
+	root := omitted.Graph.TypeNodes[omitted.Graph.Root].Body
+	if root.Tag() != types.SchemaTypeBodyRecordType {
+		t.Fatal("the input graph root is not a record")
+	}
+	tags := map[string]uint8{}
+	for _, f := range root.RecordType() {
+		tags[f.Name] = omitted.Graph.TypeNodes[f.Body].Body.Tag()
+	}
+	want := map[string]uint8{
+		"script": types.SchemaTypeBodyStringType, "cwd": types.SchemaTypeBodyStringType,
+		"timeout": types.SchemaTypeBodyU32Type, "shell": types.SchemaTypeBodyOptionType,
+		"login": types.SchemaTypeBodyBoolType,
+	}
+	if !reflect.DeepEqual(tags, want) {
+		t.Errorf("wire field types %v, want %v", tags, want)
+	}
+	if err := cmd.Input().Validate(core.RecordValue{Fields: []core.SchemaValue{core.StringValue{Value: "x"}}}); err == nil {
+		t.Error("Validate accepted a record that leaves out defaulted fields")
+	}
+}
+
+// TestReflectedToolDefaultsGlobalsAndFlags — inherited globals, a defaulted
+// positional and count and bool flags fall back to their defaults, while a
+// tail and repeatable options still have to be given.
+func TestReflectedToolDefaultsGlobalsAndFlags(t *testing.T) {
+	meta, invoke, seen := tool.VcsFixture(t)
+	inputs := tool.RecordToolInputs(t)
+	client := reflection.ToolOf(meta).Bind()
+	if _, err := client.Start([]string{"commit"}, map[string]any{
+		"paths": []any{"z"}, "message": "m", "include": []any{}, "tags": []any{},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := invoke((*inputs)[0]); err != nil {
+		t.Fatal(err)
+	}
+	if s := seen(); s.Dir != "." || s.Verbose != 0 || s.Branch != "main" || s.Amend || !s.Signoff || s.Author.IsSome() {
+		t.Errorf("defaults decoded as %+v", s)
+	}
+
+	_, err := client.Start([]string{"commit"}, map[string]any{"message": "m"}, nil)
+	var ve *core.ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("got %v, want a validation error", err)
+	}
+	var missing []string
+	for _, i := range ve.Issues {
+		missing = append(missing, i.Path)
+	}
+	if !slices.Equal(missing, []string{"paths", "include", "tags"}) {
+		t.Errorf("missing %v, want the tail and the repeatable options", missing)
+	}
+}
+
+// A value sent once moved its cards to the host: sending it again fails
+// rather than name handles the host already owns.
+func TestDynamicToolClientSendsAValueOnce(t *testing.T) {
+	card, err := golem.DecodeTypedValue[golem.PermissionCard](link.TypedValue(types.TypedSchemaValue{
+		Graph: witOf(golem.EncodeTypedValue(golem.Unit{})).Graph,
+		Value: types.SchemaValueTree{ValueNodes: []types.SchemaValueNode{types.MakeSchemaValueNodePermissionCardHandle(&types.PermissionCard{})}},
+	}).(golem.TypedValue))
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := golem.EncodeTypedValue(struct{ Card golem.PermissionCard }{card})
+	calls := tool.RecordToolCalls(t, func([]string) (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+		return witTypes.None[types.TypedSchemaValue](), nil
+	})
+	client := reflection.BindTool("keys")
+	if _, err := client.Call([]string{"get"}, input); err != nil {
+		t.Fatalf("the first send failed: %v", err)
+	}
+	if _, err := client.Call([]string{"get"}, input); !errors.Is(err, golem.ErrPermissionCardTaken) || len(*calls) != 1 {
+		t.Errorf("the second send gave %v after %d calls", err, len(*calls))
+	}
 }

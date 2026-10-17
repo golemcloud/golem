@@ -53,6 +53,7 @@ service WorkerExecutor {
   rpc UpdateWorker(UpdateWorkerRequest) returns (UpdateWorkerResponse);
   rpc GetOplog(GetOplogRequest) returns (GetOplogResponse);
   rpc SearchOplog(SearchOplogRequest) returns (SearchOplogResponse);
+  rpc GetOplogEntry(GetOplogEntryRequest) returns (stream GetOplogEntryResponse);
   rpc ForkWorker(ForkWorkerRequest) returns (ForkWorkerResponse);
   rpc ResolveRevertLastInvocations(ResolveRevertLastInvocationsRequest) returns (ResolveRevertLastInvocationsResponse);
   rpc RevertWorker(RevertWorkerRequest) returns (RevertWorkerResponse);
@@ -321,10 +322,30 @@ message GetOplogResponse {
 }
 
 message GetOplogSuccessResponse {
-  repeated golem.worker.OplogEntryWithIndex entries = 1;
+  repeated golem.worker.OplogPageEntry entries = 1;
   optional golem.worker.OplogCursor next = 2;
   uint64 first_index_in_chunk = 3;
   uint64 last_index = 5;
+}
+
+// Reads one oplog entry in full. The executor encodes the entry as a
+// `golem.worker.OplogEntryWithIndex` message and sends the encoded bytes in chunks, so that an
+// entry larger than the message size limit can pass.
+message GetOplogEntryRequest {
+  golem.worker.AgentId agent_id = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
+  uint64 oplog_index = 4;
+  // The component revision to decode the entry with. Without it, the executor scans the oplog
+  // up to the entry to find it.
+  optional uint64 component_revision = 5;
+}
+
+message GetOplogEntryResponse {
+  oneof result {
+    bytes chunk = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
 }
 
 message SearchOplogRequest {
@@ -344,7 +365,7 @@ message SearchOplogResponse {
 }
 
 message SearchOplogSuccessResponse {
-  repeated golem.worker.OplogEntryWithIndex entries = 1;
+  repeated golem.worker.OplogPageEntry entries = 1;
   optional golem.worker.OplogCursor next = 2;
   uint64 last_index = 5;
 }

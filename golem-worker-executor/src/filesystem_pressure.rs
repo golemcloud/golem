@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::metrics::agent_filesystem::{self, PressureRecovery, PressureUnload};
 use crate::sandbox_filesystem::{
     FilesystemSpace, FilesystemStorageError, FilesystemVolume, observe_space,
 };
@@ -266,6 +267,10 @@ struct ProductionWriteRecovery<Ctx: WorkerCtx> {
 impl<Ctx: WorkerCtx> FilesystemWriteRecoveryAuthority for ProductionWriteRecovery<Ctx> {
     async fn recover_write(&self, deadline: Instant) -> FilesystemWriteRecoveryOutcome {
         let Some(active_agents) = self.active_agents.upgrade() else {
+            agent_filesystem::record_pressure_recovery(
+                PressureRecovery::Unavailable,
+                Duration::ZERO,
+            );
             return FilesystemWriteRecoveryOutcome::Unavailable;
         };
         recover_write_from(
@@ -327,26 +332,63 @@ impl<Ctx: WorkerCtx> CapacityRecoverySource for ProductionRecovery<'_, Ctx> {
     }
 }
 
+/// Recovers free space for a write, and records the time and the outcome in the metric.
 async fn recover_write_from<S: CapacityRecoverySource>(
     source: &S,
     recovery: &tokio::sync::Mutex<()>,
     policy: FilesystemWritePressurePolicy,
     deadline: Instant,
 ) -> FilesystemWriteRecoveryOutcome {
+    let started = Instant::now();
+    let (recorded, outcome) = recover_write_classified(source, recovery, policy, deadline).await;
+    agent_filesystem::record_pressure_recovery(recorded, started.elapsed());
+    outcome
+}
+
+/// Recovers free space for a write. Gives the outcome for the metric, which tells the causes of
+/// `Unavailable` and `Denied` apart, and the outcome for the write.
+async fn recover_write_classified<S: CapacityRecoverySource>(
+    source: &S,
+    recovery: &tokio::sync::Mutex<()>,
+    policy: FilesystemWritePressurePolicy,
+    deadline: Instant,
+) -> (PressureRecovery, FilesystemWriteRecoveryOutcome) {
     let observation = match before_deadline(deadline, source.observe_space()).await {
         Ok(Ok(observation)) => observation,
-        Ok(Err(_)) | Err(_) => return FilesystemWriteRecoveryOutcome::Unavailable,
+        Ok(Err(_)) => {
+            return (
+                PressureRecovery::ObservationFailed,
+                FilesystemWriteRecoveryOutcome::Unavailable,
+            );
+        }
+        Err(_) => {
+            return (
+                PressureRecovery::Deadline,
+                FilesystemWriteRecoveryOutcome::Unavailable,
+            );
+        }
     };
     if !policy.physical_pressure(observation) {
-        return FilesystemWriteRecoveryOutcome::NotUnderPressure;
+        return (
+            PressureRecovery::NotUnderPressure,
+            FilesystemWriteRecoveryOutcome::NotUnderPressure,
+        );
     }
 
-    match reclaim_filesystem_capacity_from(source, recovery, policy.target, deadline).await {
-        Ok(reclamation) if reclamation.permits_pressure_retry() => {
-            FilesystemWriteRecoveryOutcome::Recovered
-        }
-        Ok(_) | Err(_) => FilesystemWriteRecoveryOutcome::Denied,
-    }
+    let recorded =
+        match reclaim_filesystem_capacity_from(source, recovery, policy.target, deadline).await {
+            Ok(reclamation) if reclamation.permits_pressure_retry() => {
+                return (
+                    PressureRecovery::Recovered,
+                    FilesystemWriteRecoveryOutcome::Recovered,
+                );
+            }
+            Ok(_) => PressureRecovery::TargetNotReached,
+            Err(FilesystemPressureError::Deadline) => PressureRecovery::Deadline,
+            Err(FilesystemPressureError::Observation(_)) => PressureRecovery::ObservationFailed,
+            Err(FilesystemPressureError::CleanupFailed) => PressureRecovery::CleanupFailed,
+        };
+    (recorded, FilesystemWriteRecoveryOutcome::Denied)
 }
 
 async fn reclaim_filesystem_capacity_from<S: CapacityRecoverySource>(
@@ -380,7 +422,15 @@ async fn reclaim_filesystem_capacity_from<S: CapacityRecoverySource>(
     let candidates = before_deadline(deadline, source.eligible_loaded_idle_victims()).await?;
     let mut unloaded_agents = 0u32;
     for candidate in candidates {
-        match before_deadline(deadline, source.request_unload(candidate, deadline)).await?? {
+        let unload = before_deadline(deadline, source.request_unload(candidate, deadline)).await;
+        agent_filesystem::record_pressure_unload_attempt(match &unload {
+            Ok(Ok(EvictionStopOutcome::Unloaded)) => PressureUnload::Unloaded,
+            Ok(Ok(EvictionStopOutcome::Ineligible)) => PressureUnload::Ineligible,
+            Ok(Ok(EvictionStopOutcome::CleanupFailed)) => PressureUnload::CleanupFailed,
+            Ok(Err(_)) => PressureUnload::TaskFailed,
+            Err(_) => PressureUnload::Deadline,
+        });
+        match unload?? {
             EvictionStopOutcome::Ineligible => continue,
             EvictionStopOutcome::CleanupFailed => {
                 return Err(FilesystemPressureError::CleanupFailed);

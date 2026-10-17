@@ -306,13 +306,18 @@ object SchemaWire {
     visit(value)
   }
 
-  private[golem] def releaseOwned(value: SchemaValue): Unit = {
+  /**
+   * Drop the owned handles of `value`. A permission-card holder that a card
+   * object owns is skipped unless `includeCardOwned` is set, which a caller may
+   * do only for a value that it decoded itself and is discarding.
+   */
+  private[golem] def releaseOwned(value: SchemaValue, includeCardOwned: Boolean = false): Unit = {
     def visit(value: SchemaValue): Unit =
       value match {
-        case SchemaValue.SecretValue(handle)          => handle.take()
-        case SchemaValue.QuotaTokenHandle(handle)     => handle.take()
-        case SchemaValue.PermissionCardHandle(handle) => handle.take()
-        case SchemaValue.StreamValue(handle)          =>
+        case SchemaValue.SecretValue(handle)                                                         => handle.take()
+        case SchemaValue.QuotaTokenHandle(handle)                                                    => handle.take()
+        case SchemaValue.PermissionCardHandle(handle) if includeCardOwned || !handle.isClaimedByCard => handle.take()
+        case SchemaValue.StreamValue(handle)                                                         =>
           handle.take().foreach(stream => AgentStreamOwnership.cleanup(stream.dispose()))
         case SchemaValue.RecordValue(fields)              => fields.foreach(visit)
         case SchemaValue.VariantValue(_, payload)         => payload.foreach(visit)
@@ -472,7 +477,8 @@ object SchemaWire {
             h.take().foreach(stream => AgentStreamOwnership.cleanup(stream.dispose()))
             if (leftover.isEmpty) leftover = Some(i)
           case WitSchemaValueNode.PermissionCardHandle(h) if includeLifted || !liftedHandle(i) =>
-            h.take()
+            // A holder that a card object owns belongs to that card.
+            if (!h.isClaimedByCard) h.take()
             if (leftover.isEmpty) leftover = Some(i)
           case _ => ()
         }
@@ -576,7 +582,7 @@ object SchemaWire {
       case WitSchemaValueNode.QuotaTokenHandle(handle) => handle.take()
       case WitSchemaValueNode.StreamValue(handle)      =>
         handle.take().foreach(stream => AgentStreamOwnership.cleanup(stream.dispose()))
-      case WitSchemaValueNode.PermissionCardHandle(handle) => handle.take()
+      case WitSchemaValueNode.PermissionCardHandle(handle) => if (!handle.isClaimedByCard) handle.take()
       case _                                               => ()
     }
 }

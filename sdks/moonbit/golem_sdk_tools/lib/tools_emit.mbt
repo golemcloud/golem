@@ -2125,7 +2125,7 @@ fn emit_custom_error(command : ToolCommandInfo, error_value : String) -> String 
           error.name + "(" + bindings + ")",
           "{ let __golem_error_schema = @schema.WireTypeEncoder::new(); let __golem_error_root = __golem_error_schema.push(@types.SchemaTypeBody::RecordType([" +
           schema_fields.join(", ") +
-          "])); @types.TypedSchemaValue::{ graph: { type_nodes: __golem_error_schema.nodes, defs: __golem_error_schema.defs, root: __golem_error_root }, value: @schema.into_wire_record_async([" +
+          "])); @types.TypedSchemaValue::{ graph: { type_nodes: __golem_error_schema.nodes, defs: __golem_error_schema.defs, root: __golem_error_root }, value: @schema.into_wire_payload_record_async([" +
           values +
           "]) } }",
         )

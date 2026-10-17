@@ -26,13 +26,13 @@ func TestTrapOnPanicTrapsInsteadOfUnwinding(t *testing.T) {
 	TrapPanic = func(r string, v any) { region, value = r, v }
 
 	ran := false
-	TrapOnPanic("atomic region", func() { ran = true })
+	TrapOnPanic("durable operation", func() { ran = true })
 	if !ran || region != "" {
 		t.Fatalf("a body that returns normally ran=%v, trapped %q", ran, region)
 	}
 
-	TrapOnPanic("atomic region", func() { panic("disk gone") })
-	if region != "atomic region" || value != "disk gone" {
+	TrapOnPanic("durable operation", func() { panic("disk gone") })
+	if region != "durable operation" || value != "disk gone" {
 		t.Fatalf("trapped %q with %v", region, value)
 	}
 }

@@ -79,6 +79,14 @@ declare module 'golem:rdbms/ignite2@1.5.0' {
   {
     tag: 'other'
     val: string
+  } |
+  /**
+   * The resident transaction or result stream cannot be resumed. Recorded results
+   * remain valid; this does not prove that an earlier write failed.
+   */
+  {
+    tag: 'resource-lost'
+    val: string
   };
   /**
    * ── Value types (maps 1-to-1 onto ignite_client::IgniteValue) ─────────────

@@ -44,6 +44,14 @@ type streamHandle struct{ h *types.SchemaValueStream }
 
 func (s streamHandle) Release() { s.h.Drop() }
 
+func releaseNode(n types.SchemaValueNode) {
+	v, err := handleToCore(n)
+	if err != nil {
+		panic(err)
+	}
+	core.ReleaseAll(v)
+}
+
 func handleToCore(n types.SchemaValueNode) (core.SchemaValue, error) {
 	switch n.Tag() {
 	case types.SchemaValueNodeSecretValue:

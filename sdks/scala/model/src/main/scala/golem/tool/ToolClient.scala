@@ -90,7 +90,8 @@ final case class ToolRpcStarted(
   stdout: Option[ToolInputStream],
   stderr: Option[ToolInputStream],
   result: Future[Either[ToolRpcFailure, ToolInvokeResult]],
-  cancel: () => Unit
+  cancel: () => Unit,
+  detach: () => Unit = () => ()
 )
 
 /**
@@ -455,7 +456,8 @@ object ToolClientRuntime {
                 started.stdout,
                 started.stderr,
                 started.result.map(_.left.map(mapRpcFailure(_, decodeError)).flatMap(decode)),
-                started.cancel
+                started.cancel,
+                started.detach
               )
             )
         }

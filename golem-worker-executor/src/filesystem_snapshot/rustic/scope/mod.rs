@@ -22,9 +22,10 @@ use super::fault::storage_end;
 use super::files::SnapshotFiles;
 use super::prune::LEDGERS_PATH;
 use super::runs::RunEnd;
+use crate::metrics::filesystem_snapshots::{self, RemovedSource, StoredSource};
 use futures::{StreamExt, TryStreamExt, stream};
 use golem_service_base::storage::blob::{ListedBlob, PutIfAbsent};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -171,16 +172,11 @@ pub(super) async fn copy_scope(
         .try_collect::<Vec<_>>()
         .await
         .map_err(CopyError::of_storage)?;
-    let paths = |blobs: &[ListedBlob]| {
-        blobs
-            .iter()
-            .map(|blob| blob.path.clone())
-            .collect::<Box<[_]>>()
-    };
     let (snapshots, data_and_index) = match listed.as_slice() {
-        [snapshots, index, keys, data] => {
-            (paths(snapshots), [paths(data), paths(keys), paths(index)])
-        }
+        [snapshots, index, keys, data] => (
+            snapshots.clone(),
+            [data.clone(), keys.clone(), index.clone()],
+        ),
         _ => {
             return Err(CopyError::Permanent(anyhow::anyhow!(
                 "the copy listed another number of directories than it asked for"
@@ -190,12 +186,15 @@ pub(super) async fn copy_scope(
     let copied = stream::iter(data_and_index.into_iter().map(Ok))
         .try_fold(HashSet::new(), |mut copied, blobs| async move {
             copy_directory(from, to, &blobs).await?;
-            copied.extend(blobs);
+            copied.extend(blobs.iter().map(|blob| blob.path.clone()));
             Ok::<_, CopyError>(copied)
         })
         .await?;
     catch_up_rounds(from, to, copied).await?;
-    let source = snapshots.iter().cloned().collect::<HashSet<_>>();
+    let source = snapshots
+        .iter()
+        .map(|blob| blob.path.clone())
+        .collect::<HashSet<_>>();
     remove_stale_snapshots(to, &source).await?;
     copy_directory(from, to, &snapshots).await?;
     to.put_if_absent("copy_write", Path::new(CONFIG_PATH), &config)
@@ -221,7 +220,7 @@ async fn catch_up_rounds(
                 index
                     .iter()
                     .chain(data.iter())
-                    .map(|blob| blob.path.clone())
+                    .cloned()
                     .collect::<Box<[_]>>(),
             )
         }
@@ -230,13 +229,31 @@ async fn catch_up_rounds(
             Ok(listed) => listed,
             Err(error) => return Some((Some(Err(CopyError::of_storage(error))), None)),
         };
+        let sizes = listed
+            .iter()
+            .map(|blob| (blob.path.clone(), blob.size))
+            .collect::<HashMap<_, _>>();
+        let listed = listed
+            .iter()
+            .map(|blob| blob.path.clone())
+            .collect::<Box<[_]>>();
         match catch_up(&copied, &listed, rounds) {
             CatchUp::Done => Some((Some(Ok(())), None)),
             CatchUp::Race => Some((Some(Err(CopyError::Race)), None)),
             CatchUp::Copy { packs, index } => {
+                let blobs = |paths: &[Box<Path>]| {
+                    paths
+                        .iter()
+                        .map(|path| ListedBlob {
+                            path: path.clone(),
+                            size: sizes.get(path).copied().unwrap_or_default(),
+                        })
+                        .collect::<Box<[_]>>()
+                };
+                let (pack_blobs, index_blobs) = (blobs(&packs), blobs(&index));
                 let round = async {
-                    copy_directory(from, to, &packs).await?;
-                    copy_directory(from, to, &index).await
+                    copy_directory(from, to, &pack_blobs).await?;
+                    copy_directory(from, to, &index_blobs).await
                 };
                 match round.await {
                     Ok(()) => {
@@ -276,19 +293,19 @@ async fn remove_stale_snapshots(
         .await
 }
 
-/// Copies the blobs at `paths`, at most [`COPY_CONCURRENCY`] at a time. A copy that fails stops the
+/// Copies the listed blobs, at most [`COPY_CONCURRENCY`] at a time. A copy that fails stops the
 /// start of more copies, and each copy that runs is awaited. Gives the first error.
 async fn copy_directory(
     from: &SnapshotFiles,
     to: &SnapshotFiles,
-    paths: &[Box<Path>],
+    blobs: &[ListedBlob],
 ) -> Result<(), CopyError> {
     let failed = AtomicBool::new(false);
     let failed = &failed;
-    // The stream owns its paths: a stream of borrowed paths makes the future of `copy_all` not
+    // The stream owns its blobs: a stream of borrowed blobs makes the future of `copy_all` not
     // `Send` for each lifetime, which the async trait needs.
-    stream::iter(paths.to_vec())
-        .map(|path| async move { copy_unless_failed(from, to, &path, failed).await })
+    stream::iter(blobs.to_vec())
+        .map(|blob| async move { copy_unless_failed(from, to, &blob, failed).await })
         .buffer_unordered(COPY_CONCURRENCY)
         .collect::<Vec<_>>()
         .await
@@ -296,31 +313,40 @@ async fn copy_directory(
         .collect()
 }
 
-/// Copies the blob at `path` unless an earlier copy of the directory failed, and marks `failed`
-/// when this copy fails.
+/// Copies the blob unless an earlier copy of the directory failed, and marks `failed` when this
+/// copy fails.
 async fn copy_unless_failed(
     from: &SnapshotFiles,
     to: &SnapshotFiles,
-    path: &Path,
+    blob: &ListedBlob,
     failed: &AtomicBool,
 ) -> Result<(), CopyError> {
     if failed.load(Ordering::SeqCst) {
         return Ok(());
     }
-    let copied = copy_blob(from, to, path).await;
+    let copied = copy_blob(from, to, blob).await;
     if copied.is_err() {
         failed.store(true, Ordering::SeqCst);
     }
     copied
 }
 
-async fn copy_blob(from: &SnapshotFiles, to: &SnapshotFiles, path: &Path) -> Result<(), CopyError> {
+/// Copies the blob, and counts its listed size in the metric of the stored bytes.
+async fn copy_blob(
+    from: &SnapshotFiles,
+    to: &SnapshotFiles,
+    blob: &ListedBlob,
+) -> Result<(), CopyError> {
+    let path = &*blob.path;
     match from
         .copy_to(to, "copy", path)
         .await
         .map_err(CopyError::of_storage)?
     {
-        true => Ok(()),
+        true => {
+            filesystem_snapshots::record_stored_bytes(StoredSource::Copy, blob.size);
+            Ok(())
+        }
         // A delete removed the snapshot file after the listing, so the copy leaves it out.
         false if path.starts_with(SNAPSHOTS_PATH) => Ok(()),
         // A prune removed a blob that the copy listed, so a new run lists again.
@@ -329,7 +355,8 @@ async fn copy_blob(from: &SnapshotFiles, to: &SnapshotFiles, path: &Path) -> Res
 }
 
 /// Deletes the repository and the ledger of the scope. The config file goes first, so the scope
-/// holds no repository from that step on. A scope that holds nothing gives success.
+/// holds no repository from that step on. A scope that holds nothing gives success. The metric of
+/// the removed bytes counts the blobs of each deleted directory.
 pub(super) async fn delete_scope(files: &SnapshotFiles) -> anyhow::Result<()> {
     files.delete("delete_scope", Path::new(CONFIG_PATH)).await?;
     stream::iter(
@@ -340,10 +367,12 @@ pub(super) async fn delete_scope(files: &SnapshotFiles) -> anyhow::Result<()> {
             .map(Ok),
     )
     .try_for_each(|directory| async move {
-        files
-            .delete_dir("delete_scope", directory)
-            .await
-            .map(|_| ())
+        let removed = files.delete_dir("delete_scope", directory).await?;
+        filesystem_snapshots::record_removed_bytes(
+            RemovedSource::DeleteAll,
+            removed.unwrap_or_default(),
+        );
+        Ok(())
     })
     .await
 }

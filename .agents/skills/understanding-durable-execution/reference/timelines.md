@@ -53,23 +53,23 @@ may be issued while history is still being consumed).
 
 Replay: `Start#11` matches but has no terminal — `CallReplayOutcome::Incomplete`. For re-executable
 `DurableFunctionType`s the live action runs again under the *same* `Start` (no new `Start` is
-appended; `End` is appended when it finishes). For non-idempotent, batched or transactional
-writes the session hard-errors and recovery falls to the enclosing durable scope handled in
-`begin_durable_function`. Owner: `concurrent/call.rs::run`, `durability.rs`.
+appended; `End` is appended when it finishes). This includes `WriteRemote`; external peers must
+deduplicate ambiguous writes. Batched and transactional owners decide recovery; nonresumable
+resources return typed loss instead of deleting a suffix. Owner: `concurrent/call.rs::run`,
+`durability.rs`.
 
 Trap variant: if the guest trapped while the call was in flight, `abandon_for_trap` leaves the
 `Start` incomplete in exactly the same shape. A trap is never recorded as `Cancelled`.
 
-### 3a. Recovery data is temporarily unavailable during p2 HTTP body resumption
+### 3a. Recovery data is temporarily unavailable
 
-The guest has received one response chunk and started the next read. The transport breaks, so
-inline HTTP resumption scans prior body-read results to calculate the Range offset. Downloading
-the recorded first chunk fails because Golem's payload backend is temporarily unavailable.
+Reading a recorded result can fail because Golem's payload backend is temporarily unavailable.
+This is an infrastructure reconstruction failure, not a new HTTP response.
 
 ```
-#19 Start { fn: incoming_body_stream/blocking_read }
+#19 Start { fn: durable read }
 #20 End   { start_index: 19, response: first 256 bytes }
-#21 Start { fn: incoming_body_stream/blocking_read }
+#21 Start { fn: durable read }
      payload backend unavailable while counting delivered bytes
 #22 Error { kind: Recovery, retry_policy_state: None } (h)
      ✕ Store and filesystem window are destroyed; #21 gets no terminal
@@ -143,11 +143,9 @@ Caller C                                             Target T
      ✕ caller crashes before End
 ```
 
-Caller reconstruction: `Start#30` is incomplete. RPC is a `WriteRemote` durable call; with the
-default idempotence mode (`assume_idempotence == true`) it is re-executable, so the path
+Caller reconstruction: `Start#30` is incomplete. RPC is a `WriteRemote` durable call, so the path
 re-dispatches under the existing `Start` with the *same* key
-(`InvocationFreshnessDisposition::MayExist`). (With `set-idempotence-mode(false)` the incomplete
-remote write would fail instead of re-dispatching.) T's
+(`InvocationFreshnessDisposition::MayExist`). T's
 `lookup_invocation_result(key)` is not `New`, so it attaches to invocation `#6..#9` and returns
 `1`. C appends `End { start_index: 30, response: 1 }`. Two caller attempts, one target
 execution, counter 1.
@@ -179,29 +177,21 @@ an embedded opening and failed/denied close; their baked future owns no later cl
 
 Resource and guest-created spans can outlive their opening call. Finish, drop, and successful
 attribute mutation are short ordinary local operations whose terminals carry the close or
-applied updates; they do not hold the opening call or an atomic lease for the span lifetime.
+applied updates; they do not hold the opening call for the span lifetime.
 
-## 7. Atomic region rollback keeps the RPC key
+## 7. Individual call repair keeps the RPC key
 
 ```
-#50 BeginAtomicRegion
-#51 Start { rpc/invoke, request }   key = derived(logical counter n)
-#52 End   { start_index: 51 }
-#53 Start { keyvalue/set }          ✕ trap inside the region
-     → retry: a Jump covering #51..#54 is appended; those entries stay where they are but are
-       skipped by replay. The region ends at the Jump's own index
-       (`end: pending.replay_target().next()`, `golem/v1x.rs`) so the Jump skips itself too
-       and `BeginAtomicRegion` at #50 is kept
-#54 Jump { region: 51..=54 }
-#55 Start { rpc/invoke, request }   key = derived(logical counter n)   ← same key, new position
+#50 Start { rpc/invoke, request }   key = derived(invocation key, #50)
+     target accepts and completes; caller loses its Store before recording End
+     → reconstruction re-dispatches the incomplete call with the same key
+     target returns its recorded result, without executing again
+#51 End   { start_index: 50 }
 ```
 
-`current_idempotency_key_oplog_index` uses the outermost atomic region's logical counter
-(`next_idempotency_key_oplog_index`) rather than the physical index, so the re-executed RPC
-carries the same key and the target deduplicates. The physical position of the re-executed call
-changed (#51 → #55); identity did not. The counter is resident state rebuilt during replay from
-the region's entries. Tests: `tests/transactions.rs::{golem_rust_atomic_region,
-golem_rust_idempotence_on, golem_rust_idempotence_off}`, `tests/revert.rs`.
+The original `Start` remains the call identity. Completed neighboring calls remain recorded.
+A new saga attempt is different: after compensation, the SDK loops in guest code and appends new
+calls. It does not erase the previous attempt or its compensation records.
 
 ## 8. Concurrent completions, one recorded delivery order
 
@@ -478,7 +468,7 @@ executor's shared MCP transport and the ordinary derived durable key.
 ```
 
 Replay returns `#91` offline and repairs only the presence read under `#92`; it does not resend
-`tools/call`. Ordinary atomic-region rollback can still roll back both entries. An observed absent
+`tools/call`. Completed calls remain recorded. An observed absent
 tool maps to `InvalidToolName`; true or a missing observation preserves the protocol ambiguity and
 maps to `InvalidInput`. Other MCP `isError` content becomes a custom tool error. Fixed discovery
 uses its recorded exact deployment reference, while this dynamic execution uses the full admission
@@ -515,4 +505,3 @@ A crash between the oplog delete and the member removal leaves the member. The n
 finds no oplog for it, requests `delete_all_snapshots` for `(id, F)` first, and then removes the
 member. A crash after the member removal and before the store delete ended leaks the repository;
 no sweep removes it yet.
-

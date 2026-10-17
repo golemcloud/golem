@@ -45,8 +45,17 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
       val ty = tpe.dealias
       if (ty.typeSymbol.fullName == "golem.schema.GuestSecretHandle")
         return t.secret(t.string)
-      if (ty.typeSymbol.fullName == "golem.schema.GuestPermissionCardHandle")
+      if (
+        ty.typeSymbol.fullName == "golem.schema.GuestPermissionCardHandle" ||
+        ty.typeSymbol.fullName == "golem.host.PermissionsApi.PermissionCard" ||
+        ty.show == "golem.host.PermissionsApi.PermissionCard"
+      )
         return SchemaType(SchemaTypeBody.PermissionCardType(PermissionCardSpec(polymorphic = false)))
+      if (
+        ty.typeSymbol.fullName == "golem.host.PermissionsApi.PolymorphicPermissionCard" ||
+        ty.show == "golem.host.PermissionsApi.PolymorphicPermissionCard"
+      )
+        return SchemaType(SchemaTypeBody.PermissionCardType(PermissionCardSpec(polymorphic = true)))
       if (
         ty.typeSymbol.fullName == "golem.host.QuotaApi.NamedQuotaToken" ||
         ty.show.startsWith("golem.host.QuotaApi.NamedQuotaToken[")

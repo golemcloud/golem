@@ -99,6 +99,29 @@ func TestCompositesRoundTrip(t *testing.T) {
 		})
 
 	// Composites nest: a list of options.
+	throughTheWire(t, "tuple1", values.Tuple1[bool]{A: true},
+		func(v values.Tuple1[bool]) schema.SchemaValue { return EncodeTuple1(v, EncodeBool) },
+		func(sv schema.SchemaValue) (values.Tuple1[bool], error) { return DecodeTuple1(sv, DecodeBool) })
+
+	type node struct{ next *node }
+	var encodeNode func(node) schema.SchemaValue
+	encodeNode = func(n node) schema.SchemaValue {
+		return schema.RecordValue{Fields: []schema.SchemaValue{EncodePointer(n.next, encodeNode)}}
+	}
+	var decodeNode func(schema.SchemaValue) (node, error)
+	decodeNode = func(sv schema.SchemaValue) (node, error) {
+		r, ok := sv.(schema.RecordValue)
+		if !ok || len(r.Fields) != 1 {
+			return node{}, Mismatch("record", sv)
+		}
+		next, err := DecodePointer(r.Fields[0], decodeNode)
+		return node{next: next}, err
+	}
+	throughTheWire(t, "pointer", node{next: &node{next: &node{}}}, encodeNode, decodeNode)
+	if sv := EncodePointer[node](nil, encodeNode); !reflect.DeepEqual(sv, schema.OptionValue{}) {
+		t.Fatalf("a nil pointer encoded as %v", sv)
+	}
+
 	throughTheWire(t, "nested", []values.Option[int64]{values.Some[int64](1), values.None[int64]()},
 		func(v []values.Option[int64]) schema.SchemaValue {
 			return EncodeList(v, func(e values.Option[int64]) schema.SchemaValue { return EncodeOption(e, EncodeS64) })

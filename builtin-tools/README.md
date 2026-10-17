@@ -1,12 +1,13 @@
 # Built-in tools
 
-Built-in tools and middlewares are component sources built from this repository, published as
-immutable releases in [`golemcloud/golem-builtins`](https://github.com/golemcloud/golem-builtins),
-downloaded into the registry-service artifact cache, and provisioned at registry startup.
+Built-in tools and middlewares are component sources built from this repository and provisioned
+at registry startup. Development uses local WASMs prepared by
+`cargo make ensure-builtin-artifacts`. Tagged releases publish immutable assets in
+[`golemcloud/golem-builtins`](https://github.com/golemcloud/golem-builtins).
 `BUILTIN_EXPORTS` in `golem-registry-service/src/services/builtin_tool_provisioner.rs` is the
-production export inventory; `builtin-artifacts.lock.json` pins each component artifact's
-independent version and SHA-256. The registry derives the canonical GitHub release URL from that
-lock. Server configuration is only for deployment-specific cache placement and source overrides;
+production export inventory; `builtin-artifacts.json` lists build tasks, source inputs, and outputs.
+The generated `builtin-artifacts.release.json` pins release versions and SHA-256 values.
+Server configuration is only for deployment-specific cache placement and source overrides;
 it does not duplicate the production release catalog.
 
 The filesystem component is implemented in Rust under `builtin-tools/filesystem-tools/`. The same
@@ -31,7 +32,9 @@ provider state.
 The web fetch tool is implemented separately under `builtin-tools/web-fetch/`. Its generated
 `builtin-tools/web-fetch.wasm` is published externally rather than committed. It provides the
 read-only, open-world `web-fetch` tool for bounded HTTP and HTTPS retrieval without filesystem
-access. Its timeout, response-size, and redirect limits are optional invocation arguments, not
+access. The source exports `web-fetch@0.1.2`; its new immutable component release awaits
+authorized publication. The artifact lock still pins the previous release. Its timeout,
+response-size, and redirect limits are optional invocation arguments, not
 deployment configuration. HTML is returned as decoded source unless the invocation enables
 conversion to readable text.
 
@@ -50,7 +53,8 @@ The Git tool is implemented in TypeScript under `builtin-tools/git/`, backed by 
 `isomorphic-git`, and built into `builtin-tools/git-tool.wasm`. The source implements local
 `init`, `status`, `diff`, `log`, `branch`, `add`, `commit`, `checkout`, and repository-local `config`,
 plus HTTP(S) `remote`, `ls-remote`, `clone`, `fetch`, `push`, `pull`, `merge`, and linear `rebase`.
-The published `git@0.1.13` release provides these workflows through the checksum-pinned artifact.
+The source exports `git@0.1.15`; its new immutable component release awaits authorized
+publication. The artifact lock still pins the previous release.
 All network commands inject the component's WASI HTTP adapter; they do not use sockets.
 Called from a shell, commands start in the shell's current directory; other callers start at `/`
 unless they pass `--cwd`. Repeated `-C` options resolve from that starting directory in order.
@@ -133,16 +137,15 @@ the sibling tool's locked dependencies before bundling; a warm tool `node_module
 1. Add a standalone tool component source and build it through its Golem application manifest. Do
    not invoke its language compiler directly.
 2. Add its logical artifact ID to `BuiltinExportDescriptor`; keep export metadata in the descriptor
-   and add the component name, independent artifact version, and checksum to
-   `builtin-artifacts.lock.json`.
+   and add the component name, output path, build task, and transitive inputs to
+   `builtin-artifacts.json`.
 3. Set `component_name`, `export_name`, `release_version`, and `kind` to the artifact's exported
    metadata. Provisioning validates these values before writing anything.
 4. Add an independent build task and include it in `build-builtin-tools`. Validate the generated
    WASM and run the registry provisioning tests.
-5. Commit the exact source and build inputs, then manually publish an immutable component release
-   from that clean local checkout with `cargo make publish-builtin-artifact`. Commit the resulting
-   version/checksum update to `builtin-artifacts.lock.json` separately. Generated WASMs are never
-   committed.
+5. Verify `cargo make ensure-builtin-artifacts` and local provisioning. Development changes need
+   no publication. Follow [the release procedure](../BUILTIN_ARTIFACTS.md) for tagged releases.
+   Generated WASMs and release manifests are never committed.
 
 Provisioning is idempotent for identical bytes and an identical exact version. A published system
 release is protected and immutable. Every byte-changing component publication requires a new
@@ -251,7 +254,7 @@ tools:
     release:
       account: builtin-tool-owner@golem.cloud
       name: git
-      version: 0.1.13
+      version: 0.1.15
 
 agents:
   CodingAgent:
@@ -282,7 +285,7 @@ tools:
     release:
       account: builtin-tool-owner@golem.cloud
       name: web-fetch
-      version: 0.1.0
+      version: 0.1.2
 
 agents:
   ResearchAgent:

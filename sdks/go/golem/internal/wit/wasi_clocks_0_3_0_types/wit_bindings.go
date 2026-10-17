@@ -10,6 +10,7 @@
 //     golem:durability@1.6.0
 //     golem:quota@1.5.0
 //     golem:secrets@0.1.0
+//     golem:permissions@0.1.0
 //     wasi:filesystem@0.3.0
 //     wasi:sockets@0.3.0
 //     wasi:random@0.3.0
@@ -21,7 +22,6 @@
 //     golem:websocket@1.5.0
 //     wasi:http@0.3.0
 //     golem:agent-guest
-//     golem:permissions@0.1.0
 //     wasi:io@0.2.6
 //     wasi:clocks@0.2.6
 //     wasi:filesystem@0.2.6

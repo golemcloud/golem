@@ -245,14 +245,6 @@ sealed trait JsRemoveRetryPolicyParameters extends js.Object {
   def name: String          = js.native
 }
 
-// --- EndAtomicRegionParameters ---
-
-@js.native
-sealed trait JsEndAtomicRegionParameters extends js.Object {
-  def timestamp: JsDatetime = js.native
-  def beginIndex: js.BigInt = js.native
-}
-
 // --- EndRemoteWriteParameters ---
 
 @js.native

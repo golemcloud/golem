@@ -7,8 +7,6 @@ import { OplogClient } from "./host/OplogClient.js"
  *
  * Exposes the agent's own oplog accessors:
  *
- * - {@link currentIndex} — read the persistent log's current index
- * - {@link setIndex} — time-travel back to a previous index (advanced)
  * - {@link read} / {@link reader} — paged read of a specific agent's oplog
  * - {@link search} — paged full-text search of a specific agent's oplog
  * - {@link enrich} — resolve raw entries into public-shape entries
@@ -67,39 +65,6 @@ export class OplogHostError {
 // ---------------------------------------------------------------------------
 // Effect-typed host calls
 // ---------------------------------------------------------------------------
-
-/**
- * Read the current position in the persistent oplog.
- *
- * @since 1.5.0
- * @category operations
- */
-export const currentIndex: Effect.Effect<RawOplogIndex, OplogHostError, OplogClient> = Effect.gen(
-  function* () {
-    const client = yield* OplogClient
-    return yield* Effect.try({
-      try: () => client.getOplogIndex(),
-      catch: (e) => new OplogHostError(e),
-    })
-  },
-)
-
-/**
- * Imperative time-travel: rewind execution to a previous oplog index.
- * Marked dangerous — most app code should not need this. Mirrors the
- * official SDK's `setOplogIndex`.
- *
- * @since 1.5.0
- * @category operations
- */
-export const setIndex = (idx: RawOplogIndex): Effect.Effect<void, OplogHostError, OplogClient> =>
-  Effect.gen(function* () {
-    const client = yield* OplogClient
-    return yield* Effect.try({
-      try: () => client.setOplogIndex(idx),
-      catch: (e) => new OplogHostError(e),
-    })
-  })
 
 /**
  * Resolve raw oplog entries into the public-shape entries by replaying

@@ -238,8 +238,7 @@ mapping).
 
 Use `Schema.NullOr(T)` for ordinary not-found behavior. Use a declared error schema and
 `Effect.fail(...)` for expected typed failures. Unhandled defects such as `Effect.die(...)` fail
-the agent without retry outside an atomic region. Inside `Durability.atomically`, failures retry
-the region according to the applicable retry policy. Do not use defects to select an HTTP status.
+the invocation without retry. Do not use defects to select an HTTP status or to repeat completed calls.
 
 The SDK does not expose a raw response builder or per-error status mapping. Do not return an
 Effect Platform `HttpServerResponse` or invent response-header/status helpers.
