@@ -20,14 +20,14 @@ use crate::services::rpc::RpcError;
 pub struct RoutedStreamAttachmentControl {
     rpc: Arc<dyn Rpc>,
     mapping: StreamSessionMappingRecord,
-    auth_ctx: AuthCtx,
+    auth_ctx: Arc<AuthCtx>,
 }
 
 /// Segment source that routes reads to the producer while preserving attachment identity.
 pub struct RoutedAttachedStreamSegmentSource {
     rpc: Arc<dyn Rpc>,
     mapping: StreamSessionMappingRecord,
-    auth_ctx: AuthCtx,
+    auth_ctx: Arc<AuthCtx>,
     metadata: Arc<DurableStreamStore>,
 }
 
@@ -36,7 +36,7 @@ impl RoutedAttachedStreamSegmentSource {
     pub fn new(
         rpc: Arc<dyn Rpc>,
         mapping: StreamSessionMappingRecord,
-        auth_ctx: AuthCtx,
+        auth_ctx: Arc<AuthCtx>,
         metadata: Arc<DurableStreamStore>,
     ) -> Self {
         Self {
@@ -127,7 +127,11 @@ impl AttachedStreamSegmentSource for RoutedAttachedStreamSegmentSource {
 
 impl RoutedStreamAttachmentControl {
     /// Creates routed attachment control with the caller's authorization context.
-    pub fn new(rpc: Arc<dyn Rpc>, mapping: StreamSessionMappingRecord, auth_ctx: AuthCtx) -> Self {
+    pub fn new(
+        rpc: Arc<dyn Rpc>,
+        mapping: StreamSessionMappingRecord,
+        auth_ctx: Arc<AuthCtx>,
+    ) -> Self {
         Self {
             rpc,
             mapping,

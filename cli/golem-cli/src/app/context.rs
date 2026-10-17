@@ -76,12 +76,27 @@ pub enum ResolvedEnvironmentTool<'a> {
     Mcp(&'a golem_client::model::McpResolvedTool),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum BuildMetadataRequired {
+    #[error("Remote tool '{0}' is not granted to the selected environment")]
+    Tool(golem_common::model::tool::ToolName),
+    #[error("Tool middleware '{0}' has no environment release grant")]
+    Middleware(golem_common::model::tool_middleware::ToolMiddlewareName),
+    #[error(
+        "Environment tool dependency '{0}' was not found among the selected environment's ambient tools or MCP imports"
+    )]
+    EnvironmentTool(golem_common::model::tool::ToolName),
+}
+
 pub struct BuildContext<'a> {
     application_context: &'a ApplicationContext,
     build_config: &'a BuildConfig,
     resolved_tool_grants: Option<&'a ResolvedToolGrants>,
     resolved_tool_middleware_grants: Option<&'a ResolvedToolMiddlewareGrants>,
     environment_tools: Option<&'a ResolvedEnvironmentTools>,
+    pub(crate) extracted_metadata: std::sync::Mutex<
+        BTreeMap<ComponentName, golem_common::model::agent::extraction::ExtractedComponentMetadata>,
+    >,
 }
 
 impl<'a> BuildContext<'a> {
@@ -92,6 +107,7 @@ impl<'a> BuildContext<'a> {
             resolved_tool_grants: None,
             resolved_tool_middleware_grants: None,
             environment_tools: None,
+            extracted_metadata: Default::default(),
         }
     }
 
@@ -106,6 +122,7 @@ impl<'a> BuildContext<'a> {
             resolved_tool_grants: Some(resolved_tool_grants),
             resolved_tool_middleware_grants: None,
             environment_tools: None,
+            extracted_metadata: Default::default(),
         }
     }
 
@@ -114,23 +131,26 @@ impl<'a> BuildContext<'a> {
         self
     }
 
-    pub fn remote_middleware_definitions(
+    pub(crate) fn remote_middleware_definition(
         &self,
-    ) -> anyhow::Result<Vec<golem_common::schema::tool::ToolMiddleware>> {
-        self.application()
-            .remote_tool_middleware_release_references()
-            .map(|(name, reference)| {
-                let reference = reference
-                    .to_release_reference()
-                    .map_err(anyhow::Error::msg)?;
-                self.resolved_tool_middleware_grants
-                    .and_then(|grants| grants.get(&reference))
-                    .map(|grant| grant.release.definition.clone())
-                    .ok_or_else(|| {
-                        anyhow!("Tool middleware '{name}' has no environment release grant")
-                    })
-            })
-            .collect()
+        name: &golem_common::model::tool_middleware::ToolMiddlewareName,
+    ) -> anyhow::Result<golem_common::schema::tool::ToolMiddleware> {
+        let declaration = self
+            .application()
+            .tool_middleware_declarations()
+            .get(name)
+            .ok_or_else(|| anyhow!("Tool middleware '{name}' is not declared"))?;
+        let reference = declaration
+            .value
+            .release
+            .as_ref()
+            .ok_or_else(|| anyhow!("Tool middleware '{name}' has no release"))?
+            .to_release_reference()
+            .map_err(anyhow::Error::msg)?;
+        self.resolved_tool_middleware_grants
+            .and_then(|grants| grants.get(&reference))
+            .map(|grant| grant.release.definition.clone())
+            .ok_or_else(|| BuildMetadataRequired::Middleware(name.clone()).into())
     }
 
     pub fn with_environment_tools(mut self, tools: &'a ResolvedEnvironmentTools) -> Self {
@@ -176,9 +196,7 @@ impl<'a> BuildContext<'a> {
                 diagnostic.reason
             );
         }
-        bail!(
-            "Environment tool dependency '{name}' was not found among the selected environment's ambient tools or MCP imports"
-        )
+        Err(BuildMetadataRequired::EnvironmentTool(name.clone()).into())
     }
 
     pub fn environment_tool_diagnostic(

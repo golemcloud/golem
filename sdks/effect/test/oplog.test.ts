@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
-import { Effect, Exit, Layer, Stream } from "effect"
-import { OplogClient, OplogLive } from "../src/host/OplogClient.js"
+import { Effect, Exit, Stream } from "effect"
+import { OplogLive } from "../src/host/OplogClient.js"
 import * as Oplog from "../src/Oplog.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
 import * as OplogMock from "./mocks/golem-api-oplog.js"
@@ -24,48 +24,6 @@ afterEach(() => {
   OplogMock.__reset()
 })
 
-describe("Oplog — currentIndex / setIndex", () => {
-  it.effect("currentIndex returns the host's monotonic counter", () =>
-    Effect.gen(function* () {
-      const a = yield* Oplog.currentIndex
-      const b = yield* Oplog.currentIndex
-      expect(b).toBeGreaterThan(a)
-    }).pipe(Effect.provide(OplogLive)),
-  )
-
-  it.effect("setIndex forwards the requested index to the host", () =>
-    Effect.gen(function* () {
-      yield* Oplog.setIndex(42n)
-      expect(ApiHostMock.__getOplogIndex()).toBe(42n)
-    }).pipe(Effect.provide(OplogLive)),
-  )
-
-  it.effect("wraps host throws as OplogHostError", () => {
-    const live = OplogClient.of({
-      getOplogIndex: () => {
-        throw new Error("nope")
-      },
-      setOplogIndex: (idx) => ApiHostMock.setOplogIndex(idx),
-      enrichOplogEntries: (e, a, entries, cr) =>
-        OplogMock.enrichOplogEntries(
-          e as never,
-          a as never,
-          entries.map(([i, x]) => [i, x] as [bigint, OplogMock.OplogEntry]),
-          cr,
-        ) as never,
-      newGetOplog: (agentId, start) => new OplogMock.GetOplog(agentId as never, start) as never,
-      newSearchOplog: (agentId, text) => new OplogMock.SearchOplog(agentId as never, text) as never,
-    })
-    return Effect.gen(function* () {
-      const exit = yield* Effect.exit(Oplog.currentIndex)
-      expect(Exit.isFailure(exit)).toBe(true)
-      if (Exit.isFailure(exit)) {
-        expect(JSON.stringify(exit.cause)).toMatch(/OplogHostError/)
-      }
-    }).pipe(Effect.provide(Layer.succeed(OplogClient, live)))
-  })
-})
-
 describe("Oplog — read stream", () => {
   it.effect("reads paged chunks until the host returns undefined", () =>
     Effect.gen(function* () {
@@ -85,13 +43,13 @@ describe("Oplog — read stream", () => {
 
   it.effect("reader exposes manual paging", () =>
     Effect.gen(function* () {
-      OplogMock.__seedReadChunks(sampleAgent, 5n, [[mkEntry("log")], [mkEntry("no-op")]])
+      OplogMock.__seedReadChunks(sampleAgent, 5n, [[mkEntry("log")], [mkEntry("suspend")]])
       const r = yield* Oplog.reader({ agentId: sampleAgent, start: 5n })
       const first = yield* r.next
       const second = yield* r.next
       const third = yield* r.next
       expect(first?.map((e) => (e as { tag: string }).tag)).toEqual(["log"])
-      expect(second?.map((e) => (e as { tag: string }).tag)).toEqual(["no-op"])
+      expect(second?.map((e) => (e as { tag: string }).tag)).toEqual(["suspend"])
       expect(third).toBeUndefined()
     }).pipe(Effect.provide(OplogLive)),
   )

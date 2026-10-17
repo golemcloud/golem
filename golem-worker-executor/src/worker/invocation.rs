@@ -447,9 +447,6 @@ async fn apply_invocation_deadline<Ctx: WorkerCtx>(
             interrupt_kind: InterruptKind::Interrupt(_),
         }) => {
             let retry_from = store.data().get_current_retry_point().await;
-            let in_atomic_region = store.data().current_in_atomic_region();
-            let atomic_region_had_side_effects =
-                store.data().current_atomic_region_had_side_effects();
             Ok(InvokeResult::Failed {
                 consumed_fuel,
                 timed_out: true,
@@ -460,8 +457,6 @@ async fn apply_invocation_deadline<Ctx: WorkerCtx>(
                         .expect("an exceeded deadline always has a configured duration")
                 )),
                 retry_from,
-                in_atomic_region,
-                atomic_region_had_side_effects,
                 semantic_trap_retry_override: None,
             })
         }
@@ -568,7 +563,9 @@ fn classify_guest_call_settlement<R>(
             })
         } else if let Some(error) = error.chain().find_map(|cause| {
             let error = cause.downcast_ref::<WorkerExecutorError>()?;
-            matches!(error, WorkerExecutorError::RecoveryRequired { .. }).then(|| error.clone())
+            (matches!(error, WorkerExecutorError::RecoveryRequired { .. })
+                || crate::durable_host::is_tool_attachment_live_admission_rejection(error))
+            .then(|| error.clone())
         }) {
             GuestCallSettlementError::Infrastructure(error)
         } else if is_guest_semantic_trap(&error) {
@@ -888,15 +885,10 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 }),
                 Ok(Err(error)) => {
                     let retry_from = store.data().get_current_retry_point().await;
-                    let in_atomic_region = store.data().current_in_atomic_region();
-                    let atomic_region_had_side_effects =
-                        store.data().current_atomic_region_had_side_effects();
                     Ok(InvokeResult::from_error::<Ctx>(
                         consumed_fuel,
                         &error,
                         retry_from,
-                        in_atomic_region,
-                        atomic_region_had_side_effects,
                         store.data().agent_mode(),
                     ))
                 }
@@ -941,8 +933,6 @@ pub(crate) async fn invoke_result_from_trap<Ctx: WorkerCtx>(
     err: wasmtime::Error,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let retry_from = store.data().get_current_retry_point().await;
-    let in_atomic_region = store.data().current_in_atomic_region();
-    let atomic_region_had_side_effects = store.data().current_atomic_region_had_side_effects();
     let agent_mode = store.data().agent_mode();
     let err: anyhow::Error = err.into();
     if let Some(error) = replay_divergence_from_trap(&err, store.data().is_live()) {
@@ -952,8 +942,6 @@ pub(crate) async fn invoke_result_from_trap<Ctx: WorkerCtx>(
         consumed_fuel,
         &err,
         retry_from,
-        in_atomic_region,
-        atomic_region_had_side_effects,
         agent_mode,
     ))
 }
@@ -998,8 +986,6 @@ fn invoke_result_from_agent_error<Ctx: WorkerCtx>(
         timed_out: false,
         error: OplogAgentError::InternalError(agent_error.to_string()),
         retry_from: OplogIndex::INITIAL,
-        in_atomic_region: false,
-        atomic_region_had_side_effects: false,
         semantic_trap_retry_override: None,
     })
 }
@@ -1211,13 +1197,6 @@ pub enum InvokeResult {
         /// that a restored snapshot disagrees with recorded execution.
         timed_out: bool,
         retry_from: OplogIndex,
-        /// Whether the trapping call was inside an atomic region (membership). Round-tripped via
-        /// `as_trap_type` into `TrapType::Error` so the post-trap recovery decision uses the call's
-        /// own region rather than "any region currently active".
-        in_atomic_region: bool,
-        /// Whether the trapping call's atomic region had recorded side effects. Round-tripped into
-        /// the persisted `OplogEntry::Error.inside_atomic_region`.
-        atomic_region_had_side_effects: bool,
         /// Ephemeral semantic-retry override extracted from the failing
         /// `anyhow::Error` chain. Round-tripped via `as_trap_type` so the
         /// post-trap recovery path can honour it.
@@ -1247,16 +1226,12 @@ impl InvokeResult {
             TrapType::Error {
                 error,
                 retry_from,
-                in_atomic_region,
-                atomic_region_had_side_effects,
                 semantic_trap_retry_override,
             } => Self::Failed {
                 consumed_fuel,
                 timed_out: false,
                 error,
                 retry_from,
-                in_atomic_region,
-                atomic_region_had_side_effects,
                 semantic_trap_retry_override,
             },
         }
@@ -1266,17 +1241,9 @@ impl InvokeResult {
         consumed_fuel: u64,
         error: &anyhow::Error,
         fallback_retry_from: OplogIndex,
-        fallback_in_atomic_region: bool,
-        fallback_atomic_region_had_side_effects: bool,
         agent_mode: AgentMode,
     ) -> Self {
-        match TrapType::from_error::<Ctx>(
-            error,
-            fallback_retry_from,
-            fallback_in_atomic_region,
-            fallback_atomic_region_had_side_effects,
-            agent_mode,
-        ) {
+        match TrapType::from_error::<Ctx>(error, fallback_retry_from, agent_mode) {
             TrapType::Interrupt(kind) => InvokeResult::Interrupted {
                 consumed_fuel,
                 interrupt_kind: kind,
@@ -1285,16 +1252,12 @@ impl InvokeResult {
             TrapType::Error {
                 error,
                 retry_from,
-                in_atomic_region,
-                atomic_region_had_side_effects,
                 semantic_trap_retry_override,
             } => InvokeResult::Failed {
                 consumed_fuel,
                 timed_out: false,
                 error,
                 retry_from,
-                in_atomic_region,
-                atomic_region_had_side_effects,
                 semantic_trap_retry_override,
             },
         }
@@ -1329,15 +1292,11 @@ impl InvokeResult {
             InvokeResult::Failed {
                 error,
                 retry_from,
-                in_atomic_region,
-                atomic_region_had_side_effects,
                 semantic_trap_retry_override,
                 ..
             } => Some(TrapType::Error {
                 error: error.clone(),
                 retry_from: *retry_from,
-                in_atomic_region: *in_atomic_region,
-                atomic_region_had_side_effects: *atomic_region_had_side_effects,
                 semantic_trap_retry_override: semantic_trap_retry_override.clone(),
             }),
             InvokeResult::Interrupted { interrupt_kind, .. } => {
@@ -1886,8 +1845,6 @@ mod tests {
                 error,
                 timed_out,
                 retry_from: OplogIndex::INITIAL,
-                in_atomic_region: false,
-                atomic_region_had_side_effects: false,
                 semantic_trap_retry_override: None,
             };
             assert_eq!(
@@ -1907,7 +1864,7 @@ mod tests {
 
     #[test]
     fn unexpected_oplog_trap_is_propagated_during_replay_only() {
-        let divergence = WorkerExecutorError::unexpected_oplog_entry("End", "NoOp");
+        let divergence = WorkerExecutorError::unexpected_oplog_entry("End", "Start");
         let error = anyhow::Error::new(divergence.clone()).context("guest call failed");
 
         assert_eq!(replay_divergence_from_trap(&error, false), Some(divergence));
@@ -2552,29 +2509,37 @@ mod tests {
             "#,
         )
         .unwrap();
-        let mut linker = wasmtime::Linker::new(&engine);
-        linker
-            .func_wrap("host", "fail", || -> wasmtime::Result<()> {
-                Err(wasmtime::Error::from_anyhow(
-                    WorkerExecutorError::runtime("registry unavailable").into(),
-                ))
-            })
-            .unwrap();
-        let mut store = wasmtime::Store::new(&engine, ());
-        let instance = linker.instantiate(&mut store, &module).unwrap();
-        let run = instance
-            .get_typed_func::<(), ()>(&mut store, "run")
-            .unwrap();
-        let error = run.call(&mut store, ()).unwrap_err();
+        for failure in [
+            WorkerExecutorError::runtime("registry unavailable"),
+            crate::durable_host::tool_attachment_live_admission_rejected_error(),
+        ] {
+            let mut linker = wasmtime::Linker::new(&engine);
+            let host_failure = failure.clone();
+            linker
+                .func_wrap("host", "fail", move || -> wasmtime::Result<()> {
+                    Err(wasmtime::Error::from_anyhow(host_failure.clone().into()))
+                })
+                .unwrap();
+            let mut store = wasmtime::Store::new(&engine, ());
+            let instance = linker.instantiate(&mut store, &module).unwrap();
+            let run = instance
+                .get_typed_func::<(), ()>(&mut store, "run")
+                .unwrap();
+            let error = run.call(&mut store, ()).unwrap_err();
 
-        assert!(
-            error.downcast_ref::<wasmtime::WasmBacktrace>().is_some(),
-            "the reproducer must exercise Wasmtime's attached backtrace context"
-        );
-        assert!(matches!(
-            classify_guest_call_settlement::<()>(Err(error), None, false),
-            Err(GuestCallSettlementError::Infrastructure(_))
-        ));
+            assert!(
+                error.downcast_ref::<wasmtime::WasmBacktrace>().is_some(),
+                "the reproducer must exercise Wasmtime's attached backtrace context"
+            );
+            let Err(GuestCallSettlementError::Infrastructure(classified)) =
+                classify_guest_call_settlement::<()>(Err(error), None, false)
+            else {
+                panic!("host failure must remain infrastructure");
+            };
+            if crate::durable_host::is_tool_attachment_live_admission_rejection(&failure) {
+                assert_eq!(classified, failure);
+            }
+        }
     }
 
     #[test]
@@ -2588,7 +2553,6 @@ mod tests {
             )),
             DurableCallTrapContext {
                 retry_from: OplogIndex::from_u64(17),
-                in_atomic_region: false,
             },
         );
         let result = classify_guest_call_settlement::<()>(

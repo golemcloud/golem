@@ -12,6 +12,16 @@ type RunIn struct {
 	Fail bool
 }
 
+type RetryOutcome struct {
+	Attempts        uint32
+	Compensations   uint32
+	Exhausted       bool
+	RolledBackFully bool
+	PolicyError     bool
+	Error           string
+	ElapsedNanos    uint64
+}
+
 var Agent = golem.DefineAgent[Id](golem.Spec{
 	Name: "SagaAgent", Description: "Exercises the Go SDK transaction (saga) helpers", Mode: golem.Durable,
 })
@@ -21,5 +31,6 @@ var (
 	// in state. It returns "committed" or "rolled-back".
 	Run = Agent.Method[RunIn, string]("run", golem.Description("Run a two-step saga; roll back when Fail is set"))
 	// Log returns the recorded step/compensation names in order.
-	Log = Agent.Method[golem.Unit, []string]("log", golem.Description("Return the recorded step and compensation names"))
+	Log            = Agent.Method[golem.Unit, []string]("log", golem.Description("Return the recorded step and compensation names"))
+	ExhaustRetries = Agent.Method[golem.Unit, RetryOutcome]("exhaustRetries", golem.Description("Compensate each failed attempt until the saga retry policy is exhausted"))
 )

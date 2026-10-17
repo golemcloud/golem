@@ -133,15 +133,15 @@ not under `-c`; the tool always runs a script as `bash -c` would.
 | `cases/test_operands.py` (`test` and `[` over long operand lists and nested parentheses) | 9 |
 | `cases/text_tools.py` (grep, diff, sed, jq, patch, cmp) | 69 |
 | `cases/tilde.py` (`~` with and without a home directory, in assignment-like words) | 12 |
-| `cases/tool_layer.py` (resource bounds, `/dev`, the utilities' streams and environment) | 151 |
+| `cases/tool_layer.py` (resource bounds, `/dev`, the utilities' streams and environment) | 152 |
 | `cases/traps.py` (EXIT, ERR, DEBUG, RETURN) | 18 |
 | `cases/xargs.py` | 32 |
-| **Total, per PR** | **2253** |
+| **Total, per PR** | **2254** |
 | `cases/sweep_options_*.py` (sweep tier: every option of every registered command; 7 modules) | 4103 |
 | `cases/sweep_grammar_*.py` (sweep tier: Bash grammar, generated from fixed seeds; 10 modules) | 4224 |
 | `cases/sweep_realworld_*.py` (sweep tier: tldr-pages examples and coding-agent command shapes, see `cases/NOTICE`; 5 modules) | 3488 |
 | `cases/sweep_edge_*.py` (sweep tier: Unicode, invalid UTF-8, binary, empty and large input, `/dev` paths, separate calls, error paths; 7 modules) | 3940 |
-| **Total, sweep job** | **18008** |
+| **Total, sweep job** | **18009** |
 
 ## Two tiers
 

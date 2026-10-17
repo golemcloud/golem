@@ -12,6 +12,11 @@ import {
   "moonbitlang/core/strconv",
 }
 
+import {
+  "golemcloud/golem_sdk/internal/permission_card" @card,
+  "golemcloud/golem_sdk/internal/test_support",
+} for "wbtest"
+
 warnings = "-44"
 
 supported_targets = "+wasm"

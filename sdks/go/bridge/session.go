@@ -51,11 +51,17 @@ func (e *SessionError) Error() string {
 	return fmt.Sprintf("golem: invocation session failed (%s): %s", e.Code, e.Message)
 }
 
+var (
+	pingInterval = time.Second
+	pingTimeout  = 3 * time.Second
+)
+
 const (
-	pingInterval    = time.Second
-	pingTimeout     = 3 * time.Second
 	firstRetryDelay = 50 * time.Millisecond
 	maxRetryDelay   = 3 * time.Second
+	// stableConnection is how long a connection must stay up for the next
+	// reconnect to start without a delay.
+	stableConnection = 5 * time.Second
 	// reconnectWindow bounds how long a session keeps trying to reach the
 	// server before it gives up.
 	reconnectWindow = 5 * time.Minute
@@ -65,6 +71,9 @@ type session struct {
 	agent  *Agent
 	method string
 	idem   string
+
+	// pingEvery and pingWait are the keepalive interval and timeout.
+	pingEvery, pingWait time.Duration
 
 	// life ends when the session does; it bounds every dial and read.
 	life    context.Context
@@ -88,6 +97,9 @@ type session struct {
 	accepted     bool
 	everAccepted bool
 	sessionToken string
+	// nextDelay is the delay the next connection attempt waits after a
+	// connection that did not stay up.
+	nextDelay time.Duration
 	// resumeOp is the operation of the pending resume: "resume", or
 	// "takeover" once the server refused a resume because the old
 	// attachment is still live. It stays "takeover" until a resume is
@@ -128,6 +140,8 @@ func openSession(a *Agent, method string, params schema.SchemaValue) (*session, 
 		agent:         a,
 		method:        method,
 		idem:          newUUID(),
+		pingEvery:     pingInterval,
+		pingWait:      pingTimeout,
 		life:          life,
 		endLife:       end,
 		byProvisional: map[string]*inputStream{},
@@ -254,11 +268,74 @@ type outFrame struct {
 // whatever it carried is resent after the session resumes.
 type sessionConn struct {
 	ws     *websocket.Conn
+	opened time.Time
 	mu     sync.Mutex
 	queue  []outFrame
 	wake   chan struct{}
 	closed chan struct{}
 	once   sync.Once
+	// parked is set while the read loop waits for queue space, and parks
+	// counts those waits. A pong is read only by the read loop, so a ping
+	// cannot succeed while it is parked.
+	parked bool
+	parks  uint64
+	// writing is set while the write loop writes a frame, and writes counts
+	// the frames it started. A ping waits for the write in progress.
+	writing bool
+	writes  uint64
+}
+
+// activity is what the read and write loops were doing at one moment.
+type activity struct {
+	parked  bool
+	parks   uint64
+	writing bool
+	writes  uint64
+}
+
+// park marks the read loop as waiting for queue space.
+func (c *sessionConn) park() {
+	c.mu.Lock()
+	c.parked = true
+	c.parks++
+	c.mu.Unlock()
+}
+
+func (c *sessionConn) unpark() {
+	c.mu.Lock()
+	c.parked = false
+	c.mu.Unlock()
+}
+
+// beginWrite and endWrite mark a frame the write loop writes.
+func (c *sessionConn) beginWrite() {
+	c.mu.Lock()
+	c.writing = true
+	c.writes++
+	c.mu.Unlock()
+}
+
+func (c *sessionConn) endWrite() {
+	c.mu.Lock()
+	c.writing = false
+	c.mu.Unlock()
+}
+
+func (c *sessionConn) activity() activity {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return activity{parked: c.parked, parks: c.parks, writing: c.writing, writes: c.writes}
+}
+
+// pongMissedWhileParked reports whether the parked read loop explains a ping
+// that timed out between before and after. A frame write that lasted the
+// whole ping held the frame-write lock, so the ping frame may never have been
+// written: the connection stalls, whatever the read loop does.
+func pongMissedWhileParked(before, after activity) bool {
+	if before.writing && after.writing && before.writes == after.writes {
+		return false
+	}
+	return before.parked || after.parked || before.parks != after.parks
 }
 
 func (c *sessionConn) enqueue(f outFrame) {
@@ -348,7 +425,7 @@ func (s *session) connect(delay time.Duration) {
 			return
 		}
 		ws.SetReadLimit(maxMessageBytes + 64)
-		c := &sessionConn{ws: ws, wake: make(chan struct{}, 1), closed: make(chan struct{})}
+		c := &sessionConn{ws: ws, opened: time.Now(), wake: make(chan struct{}, 1), closed: make(chan struct{})}
 		s.mu.Lock()
 		if s.over {
 			s.mu.Unlock()
@@ -356,6 +433,7 @@ func (s *session) connect(delay time.Duration) {
 			return
 		}
 		s.conn = c
+		s.nextDelay = delay
 		c.queue = append(c.queue, outFrame{data: s.descriptor})
 		s.mu.Unlock()
 		go s.write(c)
@@ -386,7 +464,10 @@ func (s *session) write(c *sessionConn) {
 			if f.binary {
 				kind = websocket.MessageBinary
 			}
-			if err := c.ws.Write(s.life, kind, f.data); err != nil {
+			c.beginWrite()
+			err := c.ws.Write(s.life, kind, f.data)
+			c.endWrite()
+			if err != nil {
 				s.lost(c)
 				return
 			}
@@ -422,7 +503,7 @@ func (s *session) read(c *sessionConn) {
 }
 
 func (s *session) ping(c *sessionConn) {
-	ticker := time.NewTicker(pingInterval)
+	ticker := time.NewTicker(s.pingEvery)
 	defer ticker.Stop()
 	for {
 		select {
@@ -430,10 +511,19 @@ func (s *session) ping(c *sessionConn) {
 			return
 		case <-ticker.C:
 		}
-		ctx, cancel := context.WithTimeout(s.life, pingTimeout)
+		before := c.activity()
+		ctx, cancel := context.WithTimeout(s.life, s.pingWait)
 		err := c.ws.Ping(ctx)
 		cancel()
 		if err != nil {
+			// Only the read loop reads a pong. While it waits for a slow
+			// reader, a missing pong does not mean the connection is lost;
+			// the parked read keeps the server from sending more. A ping
+			// that cannot be written still means it is.
+			if errors.Is(err, context.DeadlineExceeded) && s.life.Err() == nil &&
+				pongMissedWhileParked(before, c.activity()) {
+				continue
+			}
 			s.lost(c)
 			return
 		}
@@ -450,13 +540,25 @@ func (s *session) lost(c *sessionConn) {
 		return
 	}
 	err := s.detach()
+	delay := s.retryDelay(c)
 	s.mu.Unlock()
 	c.shut()
 	if err != nil {
 		s.fail(err)
 		return
 	}
-	go s.connect(0)
+	go s.connect(delay)
+}
+
+// retryDelay is the delay before reconnecting after c ended: none after a
+// connection that stayed up, otherwise the delay the attempts before it
+// reached, so a server that accepts and then closes at once is not dialed
+// in a tight loop. Called with s.mu held.
+func (s *session) retryDelay(c *sessionConn) time.Duration {
+	if time.Since(c.opened) >= stableConnection {
+		return 0
+	}
+	return s.nextDelay
 }
 
 // detach forgets the connection-local channel table and freezes the next
@@ -776,9 +878,10 @@ func (s *session) rejected(c *sessionConn, m message) error {
 			s.mu.Unlock()
 			return err
 		}
+		delay := max(s.retryDelay(c), firstRetryDelay)
 		s.mu.Unlock()
 		c.shut()
-		go s.connect(firstRetryDelay)
+		go s.connect(delay)
 		return nil
 	}
 	if !retryable {
@@ -797,9 +900,10 @@ func (s *session) rejected(c *sessionConn, m message) error {
 			return err
 		}
 	}
+	delay := max(s.retryDelay(c), firstRetryDelay)
 	s.mu.Unlock()
 	c.shut()
-	go s.connect(firstRetryDelay)
+	go s.connect(delay)
 	return nil
 }
 

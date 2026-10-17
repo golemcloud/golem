@@ -20,6 +20,7 @@ import type {
   SchemaTypeBody,
   SchemaValue,
 } from "../schema-model/model.js"
+import { cloneSchemaValue } from "../schema-model/model.js"
 import { floatFromBits } from "../schema-model/validation.js"
 import { parseUuid, uuidToString } from "golem:core/types@2.0.0"
 
@@ -101,6 +102,7 @@ export function fromCanonicalJson(
   type: SchemaType,
   json: JsonValue,
   path: Path = [],
+  fieldDefaults?: ReadonlyMap<string, SchemaValue>,
 ): SchemaValue {
   const body = resolve(graph, type).body
   switch (body.tag) {
@@ -162,8 +164,10 @@ export function fromCanonicalJson(
         tag: "record",
         fields: body.fields.map((field) => {
           if (!Object.prototype.hasOwnProperty.call(object, field.name)) {
+            const fallback = fieldDefaults?.get(field.name)
+            if (fallback !== undefined) return cloneSchemaValue(fallback)
             if (resolve(graph, field.body).body.tag === "option") return { tag: "option" }
-            fail([...path, field.name], "missing field")
+            fail([...path, field.name], `missing field '${field.name}'`)
           }
           return fromCanonicalJson(graph, field.body, object[field.name], [...path, field.name])
         }),
@@ -467,9 +471,13 @@ export function toCanonicalJsonSchema(
   graph: SchemaGraph,
   type: SchemaType,
   includeDraftMarker: boolean,
+  fieldDefaults?: ReadonlyMap<string, SchemaValue>,
 ): JsonValue {
   const referencedDefinitions = assertCanonicalJsonEligible(graph, type, true)
-  const root = renderSchema(graph, type)
+  const rendered = renderSchema(graph, type)
+  const root = fieldDefaults?.size
+    ? withFieldDefaults(graph, type, rendered, fieldDefaults)
+    : rendered
   const defs = Object.fromEntries(
     [...referencedDefinitions].map((id) => {
       const definition = graph.defs.get(id)!
@@ -486,6 +494,38 @@ export function toCanonicalJsonSchema(
     ...(includeDraftMarker ? { $schema: "https://json-schema.org/draft/2020-12/schema" } : {}),
     ...root,
     ...(Object.keys(defs).length ? { $defs: defs } : {}),
+  }
+}
+
+function withFieldDefaults(
+  graph: SchemaGraph,
+  type: SchemaType,
+  rendered: Record<string, JsonValue>,
+  fieldDefaults: ReadonlyMap<string, SchemaValue>,
+): Record<string, JsonValue> {
+  const body = type.body
+  if (body.tag !== "record") return rendered
+  const properties = { ...(rendered.properties as Record<string, JsonValue>) }
+  for (const field of body.fields) {
+    const value = fieldDefaults.get(field.name)
+    if (value === undefined) continue
+    let json: JsonValue
+    try {
+      json = toCanonicalJson(graph, field.body, value)
+    } catch {
+      continue
+    }
+    properties[field.name] = {
+      ...(properties[field.name] as Record<string, JsonValue>),
+      default: json,
+    }
+  }
+  return {
+    ...rendered,
+    properties,
+    required: (rendered.required as JsonValue[]).filter(
+      (name) => !fieldDefaults.has(name as string),
+    ),
   }
 }
 
@@ -1021,7 +1061,7 @@ const CANONICAL_UNSIGNED_PATTERN = "^(?:0|[1-9][0-9]*)$"
 function decodeDuration(value: JsonValue, path: Path): bigint {
   const object = expectObject(value, path)
   rejectUnknownFields(object, ["nanoseconds"], path)
-  if (!("nanoseconds" in object)) fail([...path, "nanoseconds"], "missing field")
+  if (!("nanoseconds" in object)) fail([...path, "nanoseconds"], "missing field 'nanoseconds'")
   return expectCanonicalInteger(
     object.nanoseconds,
     [...path, "nanoseconds"],

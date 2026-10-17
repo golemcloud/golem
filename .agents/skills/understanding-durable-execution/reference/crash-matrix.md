@@ -18,13 +18,37 @@ below for what that leaves behind.
 | Crash window | Oplog shape left behind | Reconstruction behaviour | Durable fact relied on |
 |---|---|---|---|
 | Before `Start` is appended | nothing | Guest replays to this point and issues the call live for the first time | Guest determinism reaches the same call |
-| After `Start`, before the live effect | `Start` only | `Incomplete`: re-executable types (`ReadLocal`/`ReadRemote`/`WriteLocal`, `WriteRemote` while idempotence mode is on) run the action under the existing `Start`; non-idempotent / batched / transactional writes hard-error into durable-scope recovery (`ScopeReplayRecovery`) | `DurableFunctionType` chosen at the call site |
+| After `Start`, before the live effect | `Start` only | `ReadLocal`/`ReadRemote`/`WriteLocal`/`WriteRemote` repair the existing `Start`. Explicit protocol children require owner authorization for repair or typed loss; nonresumable resources return typed loss | `DurableFunctionType` and owning protocol |
+| P3 HTTP response body partly delivered | send `Start`/`End`, consume-body parent `Start`, delivered chunk children | The parent is retained and delivered chunks replay. Without a reconstructable resend, complete with `HttpResponseIncomplete`. Otherwise, after owner readiness the live tail re-sends with `Range: bytes=<delivered>-`; a `206` at that offset or a byte-identical full response continues the stream, anything else ends it with `HttpResponseIncomplete` after the delivered prefix | Owner recovery decision, `resume_recorded_response`, the delivered-bytes digest |
 | After the effect, before `End` | `Start` only | Same as above. For external peers this is the ambiguous window: the effect may have happened; the peer must be idempotent | Peer-side idempotency, not Golem |
 | After `End`, before guest observation (including a Store unload or executor shutdown that tears the armed delivery token or terminal guard) | `Start`, `End` | `Delivered`/`AtReplayTail`: result withheld until the cursor drains, then delivered live-armed; no re-execution. The tear must not record `CompletionDiscarded` (`TeardownProbe`) | `End` payload |
 | After `CompletionDelivered` | `Start`, `End`, marker | `Delivered`: result released at the recorded boundary | Marker position |
 | Guest dropped the future before completion | `Start`, `Cancelled { partial }` | `partial: Some` → `Delivered`/`Immediate`; `partial: None` → `Undelivered` (parked for the guest's deterministic drop) | `Cancelled` entry |
 | Guest dropped the completion after `End` without reading it | `Start`, `End`, `CompletionDiscarded` | `Undelivered`: parked, the guest drops at the same point | Marker |
 | Guest trapped mid-call | `Start` only | Same as "after Start" — trap is never `Cancelled` | `abandon_for_trap` |
+
+Repair never rewinds or discards sibling history. Resolve explicit-child authorization and
+protocol readiness before publishing live; terminal refusal abandons replay for failure through
+`authoritative_replay_failure`, rather than publishing over sibling history. Typed loss records
+an `End` for the original `Start`: HTTP without resend uses `http-response-incomplete`, RDBMS
+uses `resource-lost`, and TCP uses `connection-broken`. UDP `ReadRemote` instead re-executes
+receive after rebind. Ambient entity lineage grants no protocol-child ownership.
+
+All P3 HTTP methods use `Cancellable` for guest drops: record `Cancelled`, never resend.
+Crash-only incomplete sends repair in place while body intake continues during replay resolution,
+so a streamed writer cannot deadlock before its next durable call. P2 HTTP is removed.
+Guest panic and deterministic traps permanently fail the invocation; generic infrastructure
+retry handling is unchanged.
+
+Saga attempts append history rather than rewinding it. After complete compensation, resolve
+the semantic `saga` policy with the agent URN, attempt number and error kind. The shared host
+evaluator advances the opaque continuation, and durable clocks/timers preserve backoff across
+reconstruction. When no rule matches, use the agent default; reject unbounded saga policies.
+Count/time/never exhaustion and policy errors return typed failures retaining the original
+failure. Partial compensation stops retries and retains both failures. TS, Effect, Scala and Go
+compensate catchable failures in reverse order; Rust WASM panic aborts without compensation.
+The finite policy bound limits the history that attempts and compensations append. See
+`retries.md` for cancellation and SDK details.
 
 Native guest stream reads append one existing `ConsumerItemValue` or `ConsumerTerminal` record
 when Wasmtime's per-read observer confirms consumption. The observer reserves its oplog position
@@ -40,7 +64,6 @@ distinguishes the two uses because source bindings alone do not identify the con
 | Guest consumes part of a packed byte batch | One guest `ConsumerItemValue` covering only the delivered bytes | Recover the unconsumed remainder by source offset; later reads record their own portions | No take-time batch plus separate marker |
 | Guest cancels a pending native read with zero progress | No consumer record for the cancelled transfer | The resident producer retains its receive and prepared observation for the next read; Store loss reconstructs from the last consumed source offset | Native read cancellation does not cancel the durable source |
 | Guest cancels a read whose recorded delivery replay cannot retain | Guest consumer observation | Fail with `UnexpectedOplogEntry` and poison the shared cursor; do not discard the recorded value or remain parked | A recorded guest delivery cannot become an unread cancellation |
-| Atomic rollback deletes the physical guest-read boundary, then the region reads again | Original consumer record, `Jump`, one consumer record with `reobserves` pointing to the original | Validate identical logical content, replay the replacement boundary; do not advance progress twice or introduce nested readers again | Ordinal, source offset and nested identities retain the original logical input |
 
 Native read cancellation does not reconstruct whether the canonical cancellation returned
 inline or blocked. Successful cancellation replay across those different return dispositions
@@ -81,7 +104,7 @@ concurrent-agent permit.
 | After caller `Start`, before target accepted | `Start` | Re-dispatch with same key (`MayExist`); target sees it as new and executes once | Same key |
 | After target accepted, before caller `End` | `Start` | Re-dispatch with same key; target's `lookup_invocation_result` attaches to the existing invocation/result | Target `PendingAgentInvocation` |
 | After caller `End` | `Start`, `End` | Recorded response returned; no dispatch | `End` payload |
-| Atomic-region rollback around the call | `Jump` + re-executed `Start` | Streaming and non-streaming calls reuse the logical counter's key; the target reuses its invocation/result. Streaming descriptors retain semantic configuration, not retry tracing or environment-map ordering. | `next_idempotency_key_oplog_index`, target invocation/session identity |
+| Incomplete-call repair | Original `Start` | Streaming and non-streaming calls retain the physical `Start` and key; the target reuses its invocation/result | Physical call identity, target invocation/session identity |
 
 | Crash window (target) | Target behaviour | Durable fact |
 |---|---|---|
@@ -159,7 +182,7 @@ concurrent-agent permit.
 | After entity `Start`, before body terminal | entity `Start` (+ body's own `Start`/`End` pairs with `parent_start_index`) | `ReplayingIncomplete`: body Store recreated sharing the owner cursor; body's completed calls replay, then the body goes live after `activate_live_attachment_memory_accounting` admits it; terminal appended under the original `Start` | `LeaveIncompleteOnDrop` leaves no fake terminal |
 | After body terminal, before the owner observed it | entity `Start` … `End`/`Cancelled` | `ReplayingCompleted`: the body's guest export runs again with its host calls replayed from the owner oplog; recorded terminal released by `drive_access` after reconstruction validates the claim; no repeated external effect | `StartClaim::owned_tool_invocation` |
 | Dynamic MCP `tools/call` response committed, before projection/stdout/401 feedback | entity `Start` + MCP `WriteRemote` `Start`/`End` | Completed call replays offline from its encoded response; projection and stdout resume without another remote call; 401 feedback is best-effort and is not replayed as part of the call | Response commit precedes all post-processing |
-| MCP returns `-32602`, presence read incomplete or quota-suspended | committed MCP call + incomplete `ReadRemote` presence `Start` | Repair the forced exact-source presence read without resending `tools/call`; ordinary atomic rollback remains able to roll both calls back | Separate durable presence observation |
+| MCP returns `-32602`, presence read incomplete or quota-suspended | committed MCP call + incomplete `ReadRemote` presence `Start` | Repair the forced exact-source presence read at its own `Start` without resending `tools/call` | Separate durable presence observation |
 | Live attachment memory exhausted during incomplete replay | rejection persisted | The rejection is durable; later replays do not retry admission | `incomplete_tool_replay_persists_attachment_upgrade_rejection` |
 | Body traps | no entity terminal | Owner invocation fails; owner group drains; siblings blocked on the lane are fenced | `guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group` |
 | Owner reaches replay tail while a body is still reconstructing | — | `HistoricalReconstruction` fences keep `PendingReplayToLive` closed until every active body validates | `primary_publication_requires_completed_reconstruction_validation`, `incomplete_custom_durability_waits_for_completed_reconstruction` |
@@ -177,7 +200,7 @@ stages do not.
 | Crash window | Oplog shape left behind | What happens here | Durable fact relied on |
 |---|---|---|---|
 | Assignment revoked/reassigned, before any write is attempted | whatever was already committed, plus any buffered entries the stop commits while storage still accepts this executor's epoch | `give_up_matching` retires matching agents through `interrupt_and_retire`; no status blob, checkpoint or recovery-index row is written (`record_retirement` stops the flusher and checkpointer) | `ShardService::check_worker` / the delivered assignment, not the oplog |
-| The shard moves while a live call's `Start` is only buffered | nothing from this call | Its effect has already run here (an idempotent `WriteRemote` opens no committed scope); the next commit is refused and the agent is retired; the owner runs the call again | Idempotence mode, as for a crash before the commit; non-idempotent, batched and transactional calls commit their scope `Start` first |
+| The shard moves while a live call's `Start` is only buffered | nothing from this call | The effect may have run; the next commit is refused and the agent is retired; the new owner runs the call again | Peer deduplication for remote writes; socket sends, DemandStream parents, and RDBMS protocol owners commit their actual `Start` first |
 | A write is attempted after the shard actually moved | nothing new; the attempted batch is refused, not partially written | The refusal is returned (`OplogError::Fenced`), not retried or swallowed; the agent is retired | Epoch asserted inside the storage transaction |
 | An earlier attempt of the refused batch ended indeterminate | that attempt's entries, if it landed before the takeover | The refusal is still returned, so the batch is never acknowledged here; the owner replays it like any committed entry | Nothing is acknowledged that the owner cannot see |
 | Any later write on the same oplog handle | still nothing new | The fence latches: every later add/commit is refused immediately, without a second storage round trip | The oplog's own latched `OplogFence` |
@@ -199,14 +222,13 @@ stages do not.
 
 | Effect | Ambiguous window | What Golem provides | What the application must provide |
 |---|---|---|---|
-| HTTP request | Between send and `End` | Re-execution policy via `DurableFunctionType`; atomic regions to group calls; an `idempotency-key` header derived from the call's durable position (`http/policy.rs`, on unless the guest set one) or minted via `golem:api/host.generate-idempotency-key` | A peer that deduplicates on the key; otherwise a safe-to-retry design |
+| HTTP request | Between send and `End` | Call-local re-execution policy via `DurableFunctionType`; an `idempotency-key` header derived from the call's own `Start` (`http/policy.rs`, on unless the guest set one) or minted via `golem:api/host.generate-idempotency-key` | A peer that deduplicates on the key; otherwise a safe-to-retry design |
 | TCP connection | Any reconstruction | Recreated socket; recorded bytes replay to the guest | Reconnect / resume protocol |
 | WebSocket connection | Suspend, restart, or crash | Recorded outcomes replay unchanged; optional third connect parameter defaults to `reconnect-automatically`, or `report-connection-loss` terminalizes a reconstructed successful handle with `SessionLost` at live access without a handshake | Reconnect / resume protocol, or supervise a new guest session generation with explicit connect and initialization; loss is not proof an earlier send was undelivered |
 | Filesystem, stdio | Any crash | Recorded stream chunks replay; live tail continues | Nothing for replay; effects outside the worker filesystem are the app's problem |
 | Key-value / blob store | Between write and `End` | Same as HTTP; writes are re-executable when idempotent by construction | Value-level idempotency for non-idempotent writes |
 
 WebSocket reconstruction policy does not change ordinary live disconnect retries. `close` on a
-lost handle returns loss without reconnecting, and drop only releases the resource. Incomplete
-non-idempotent scopes trap through the central recovery guard before either policy; an `End`
-entry alone does not complete an unfinished scope. Atomic rollback can remove the recorded
-connect and legitimately execute a fresh handshake.
+lost handle returns loss without reconnecting, and drop only releases the resource. An `End`
+entry alone does not complete an unfinished scope. Nonresumable operations report typed loss;
+they do not erase the connection or neighboring history.

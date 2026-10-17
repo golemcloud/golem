@@ -255,9 +255,7 @@ test "recursive owned capability cleanup canonicalizes duplicate raw handles" {
   let quota_token = @model.GuestQuotaTokenHandle::new(
     @types.QuotaToken::QuotaToken(102),
   )
-  let permission_card = @model.GuestPermissionCardHandle::new(
-    @types.PermissionCard::PermissionCard(103),
-  )
+  let permission_card = @card.adopt(@types.PermissionCard::PermissionCard(103))
   let recursive = @model.SchemaValue::Tuple([
     @model.SchemaValue::Secret(shared_secret),
     @model.SchemaValue::List([
@@ -388,9 +386,7 @@ test "failed custom error encoding drops untransferred capabilities" {
     graph: unit.graph,
     value: @model.SchemaValue::Tuple([
       @model.SchemaValue::PermissionCard(
-        @model.GuestPermissionCardHandle::new(
-          @types.PermissionCard::PermissionCard(401),
-        ),
+        @card.adopt(@types.PermissionCard::PermissionCard(401)),
       ),
       @model.SchemaValue::S8(128),
     ]),

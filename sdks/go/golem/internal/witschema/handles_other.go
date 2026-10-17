@@ -30,6 +30,9 @@ import (
 
 var errNoHandles = fmt.Errorf("golem: host-managed handles are only available inside a component")
 
+// Native values contain no host-owned capabilities.
+var releaseNode = func(types.SchemaValueNode) {}
+
 func handleToCore(types.SchemaValueNode) (core.SchemaValue, error) { return nil, errNoHandles }
 
 func handleToWit(core.SchemaValue) (types.SchemaValueNode, error) {

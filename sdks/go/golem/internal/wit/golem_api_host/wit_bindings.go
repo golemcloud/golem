@@ -10,6 +10,7 @@
 //     golem:durability@1.6.0
 //     golem:quota@1.5.0
 //     golem:secrets@0.1.0
+//     golem:permissions@0.1.0
 //     wasi:filesystem@0.3.0
 //     wasi:sockets@0.3.0
 //     wasi:random@0.3.0
@@ -21,7 +22,6 @@
 //     golem:websocket@1.5.0
 //     wasi:http@0.3.0
 //     golem:agent-guest
-//     golem:permissions@0.1.0
 //     wasi:io@0.2.6
 //     wasi:clocks@0.2.6
 //     wasi:filesystem@0.2.6
@@ -711,50 +711,12 @@ func CompletePromise(promiseId golem_core_types.PromiseId, data []uint8) bool {
 
 }
 
-//go:wasmimport golem:api/host@1.5.0 get-oplog-index
-func wasm_import_get_oplog_index() int64
-
-func GetOplogIndex() uint64 {
-
-	result := wasm_import_get_oplog_index()
-	return uint64(result)
-
-}
-
-//go:wasmimport golem:api/host@1.5.0 set-oplog-index
-func wasm_import_set_oplog_index(arg0 int64)
-
-func SetOplogIndex(oplogIdx uint64) {
-
-	wasm_import_set_oplog_index(int64(oplogIdx))
-
-}
-
 //go:wasmimport golem:api/host@1.5.0 oplog-commit
 func wasm_import_oplog_commit(arg0 int32)
 
 func OplogCommit(replicas uint8) {
 
 	wasm_import_oplog_commit(int32(replicas))
-
-}
-
-//go:wasmimport golem:api/host@1.5.0 mark-begin-operation
-func wasm_import_mark_begin_operation() int64
-
-func MarkBeginOperation() uint64 {
-
-	result := wasm_import_mark_begin_operation()
-	return uint64(result)
-
-}
-
-//go:wasmimport golem:api/host@1.5.0 mark-end-operation
-func wasm_import_mark_end_operation(arg0 int64)
-
-func MarkEndOperation(begin uint64) {
-
-	wasm_import_mark_end_operation(int64(begin))
 
 }
 
@@ -768,31 +730,6 @@ func Trap(reason string) {
 	utf8 := unsafe.Pointer(unsafe.StringData(reason))
 	pinner.Pin(utf8)
 	wasm_import_trap(uintptr(utf8), uint32(len(reason)))
-
-}
-
-//go:wasmimport golem:api/host@1.5.0 get-idempotence-mode
-func wasm_import_get_idempotence_mode() int32
-
-func GetIdempotenceMode() bool {
-
-	result := wasm_import_get_idempotence_mode()
-	return (result != 0)
-
-}
-
-//go:wasmimport golem:api/host@1.5.0 set-idempotence-mode
-func wasm_import_set_idempotence_mode(arg0 int32)
-
-func SetIdempotenceMode(idempotent bool) {
-
-	var result int32
-	if idempotent {
-		result = 1
-	} else {
-		result = 0
-	}
-	wasm_import_set_idempotence_mode(result)
 
 }
 

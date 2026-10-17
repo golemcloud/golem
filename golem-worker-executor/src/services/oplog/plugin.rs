@@ -2872,7 +2872,7 @@ mod tests {
             )
             .await,
         );
-        oplog.add(OplogEntry::no_op(None)).await.unwrap();
+        oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
         let commit = tokio::spawn({
             let oplog = oplog.clone();
             async move { oplog.commit(CommitLevel::Always).await }
@@ -2887,7 +2887,7 @@ mod tests {
                 if *confirmed_up_to == OplogIndex::NONE && *sending_up_to == OplogIndex::INITIAL));
         oplog.jobs.send(ForwardingJob::Tick).unwrap();
         assert_eq!(
-            oplog.add(OplogEntry::no_op(None)).await.unwrap(),
+            oplog.add(OplogEntry::recovery_succeeded()).await.unwrap(),
             OplogIndex::from_u64(4)
         );
         let cleanup = oplog.commit(CommitLevel::Always).await.unwrap();
@@ -2943,7 +2943,10 @@ mod tests {
 
         assert!(!replacement.forwarding_retired.is_cancelled());
         assert_eq!(
-            replacement.add(OplogEntry::no_op(None)).await.unwrap(),
+            replacement
+                .add(OplogEntry::recovery_succeeded())
+                .await
+                .unwrap(),
             OplogIndex::INITIAL
         );
         replacement.commit(CommitLevel::Always).await.unwrap();
@@ -2979,7 +2982,7 @@ mod tests {
                 Duration::from_secs(3600),
             )
             .await;
-            oplog.add(OplogEntry::no_op(None)).await.unwrap();
+            oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
             oplog.commit(CommitLevel::Always).await.unwrap();
             oplog.jobs.send(ForwardingJob::Tick).unwrap();
             entered.notified().await;
@@ -3023,7 +3026,7 @@ mod tests {
             Duration::from_secs(3600),
         )
         .await;
-        oplog.add(OplogEntry::no_op(None)).await.unwrap();
+        oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
         oplog.commit(CommitLevel::Always).await.unwrap();
 
         let shutdown = oplog.executor_shutdown_handle();
@@ -3059,7 +3062,7 @@ mod tests {
         )
         .await;
         oplog.drain_forwarding().await;
-        oplog.add(OplogEntry::no_op(None)).await.unwrap();
+        oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
         oplog.commit(CommitLevel::Always).await.unwrap();
         assert_eq!(plugin.send_count().await, 1);
     }
@@ -3819,17 +3822,8 @@ mod tests {
         )
         .await;
 
-        let first = oplog.enqueue_add(OplogEntry::NoOp {
-            timestamp: Timestamp::now_utc(),
-            entity_parent_start_index: None,
-        });
-        let second = oplog
-            .add(OplogEntry::NoOp {
-                timestamp: Timestamp::now_utc(),
-                entity_parent_start_index: None,
-            })
-            .await
-            .unwrap();
+        let first = oplog.enqueue_add(grow_memory(1));
+        let second = oplog.add(grow_memory(2)).await.unwrap();
 
         assert_eq!(first.await.unwrap(), OplogIndex::INITIAL);
         assert_eq!(second, OplogIndex::INITIAL.next());

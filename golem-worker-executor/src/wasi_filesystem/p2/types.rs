@@ -43,22 +43,23 @@ use crate::services::agent_filesystem::{
 use crate::workerctx::WorkerCtx;
 use golem_common::model::card::FilesystemVerb;
 use golem_common::model::oplog::host_functions::{
-    FilesystemTypesDescriptorStat, FilesystemTypesDescriptorStatAt,
+    FilesystemPermissionCheck, FilesystemTypesDescriptorStat, FilesystemTypesDescriptorStatAt,
 };
 use golem_common::model::oplog::types::{
     FileSystemError, SerializableDateTime, SerializableFileTimes,
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestFileSystemPath, HostResponseFileSystemStat,
+    HostResponsePermissionCheck,
 };
 
 use crate::wasi_filesystem::{
     AgentDescriptor, AgentOpenRequest, AgentOpenRouteError, advance_write_placement,
     agent_descriptor_guest_path, calculate_metadata_hash_parts, delete_agent_descriptor,
-    filesystem_permission_targets, flush_level, get_agent_descriptor, push_agent_descriptor,
-    resize_attribute_changes, route_agent_flush, route_agent_namespace_edit, route_agent_open,
-    route_agent_set_attributes, route_agent_write, route_replay_timestamp_restoration,
-    run_agent_filesystem_call,
+    flush_level, get_agent_descriptor, live_permission_decision, permission_check_request,
+    push_agent_descriptor, resize_attribute_changes, route_agent_flush, route_agent_namespace_edit,
+    route_agent_open, route_agent_set_attributes, route_agent_write,
+    route_replay_timestamp_restoration, run_agent_filesystem_call,
 };
 
 fn p2_descriptor_guest_path(
@@ -97,17 +98,54 @@ fn p2_stable_initial_file_stat(mut stat: DescriptorStat) -> DescriptorStat {
     stat
 }
 
+/// Checks the filesystem permissions of a protected guest import in a durable call, so that
+/// replay returns the recorded decision instead of checking again.
 async fn authorize_paths<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     requests: &[(FilesystemVerb, CanonicalGuestPath)],
 ) -> Result<Option<LiveAuthorizationPermit>, FsError> {
-    if !ctx.is_live() {
-        return Ok(None);
+    let mut permit = None;
+    let response = DurableCallSession::<FilesystemPermissionCheck, NotCancellable>::invoke(
+        ctx,
+        permission_check_request(requests),
+        DurableFunctionType::ReadLocal,
+        async |ctx| -> wasmtime::Result<_> {
+            let result = live_permission_decision(ctx, requests)
+                .await?
+                .map(|decision| permit = decision);
+            Ok(HostResponsePermissionCheck { result })
+        },
+    )
+    .await
+    .map_err(FsError::trap)?;
+    match response.result {
+        Ok(()) => Ok(permit),
+        Err(_) => Err(ErrorCode::NotPermitted.into()),
     }
-    let targets = filesystem_permission_targets(ctx, requests);
-    match ctx.authorize_live_permissions(&targets).await {
-        Ok(Ok(permit)) => Ok(Some(permit)),
-        Ok(Err(_)) | Err(_) => Err(ErrorCode::NotPermitted.into()),
+}
+
+/// The recorded response of a `stat` or `stat-at` that the live permission check denies.
+fn p2_stat_denied() -> HostResponseFileSystemStat {
+    HostResponseFileSystemStat {
+        result: Err(FileSystemError::from_result(Ok(ErrorCode::NotPermitted))),
+    }
+}
+
+/// Runs the local stat of a `stat` or `stat-at`: in the live action, or after the replay of a
+/// recorded success.
+async fn p2_local_stat(
+    call: Result<agent_filesystem::FilesystemCall<AgentAttributes>, FsError>,
+) -> Result<DescriptorStat, Result<ErrorCode, String>> {
+    let stat = match call {
+        Ok(call) => call.await.map_err(p2_agent_error),
+        Err(error) => Err(error),
+    };
+    match stat.and_then(p2_agent_stat) {
+        Ok(stat) => Ok(stat),
+        Err(fs_error) => Err(fs_error
+            .downcast_ref()
+            .cloned()
+            .ok_or_else(|| fs_error.to_string())),
     }
 }
 
@@ -1018,8 +1056,6 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let descriptor = p2_agent_descriptor(self, &self_)?;
         let guest_path = p2_descriptor_guest_path(&descriptor, "")?;
         let root_relative_path = p2_root_relative_path(&guest_path);
-        let _authorization_permit =
-            authorize_paths(self, &[(FilesystemVerb::Stat, guest_path)]).await?;
         let path = descriptor.path().to_path_buf();
         let immutable_initial_file = p2_is_immutable_initial_file(descriptor.with_node(|node| {
             agent_filesystem::is_immutable_initial_file(
@@ -1029,8 +1065,10 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             )
         }))
         .await?;
+        let permissions = [(FilesystemVerb::Stat, guest_path)];
 
         if immutable_initial_file {
+            let _authorization_permit = authorize_paths(self, &permissions).await?;
             let call = descriptor
                 .with_node(|node| {
                     agent_filesystem::attributes(&generation_handle, AgentTarget::Open(node))
@@ -1055,7 +1093,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         }
 
         // `ReadLocal`: the local stat always runs (its timestamps are then overridden by the durable
-        // value), so only the file-times are made durable via `DurableCallSession::run`.
+        // value), so only the file-times and a permission denial are made durable via
+        // `DurableCallSession::run`.
         let handle = DurableCallSession::<FilesystemTypesDescriptorStat, NotCancellable>::start(
             self,
             HostRequestFileSystemPath {
@@ -1066,36 +1105,38 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         .await
         .map_err(FsError::trap)?;
 
-        let call = descriptor.with_node(|node| {
-            agent_filesystem::attributes(&generation_handle, AgentTarget::Open(node))
-                .map_err(|error| p2_agent_error(AgentFilesystemError::Access(error)))
-        })?;
-        let stat = match call.await.map_err(p2_agent_error).and_then(p2_agent_stat) {
-            Ok(stat) => Ok(stat),
-            Err(fs_error) => Err(fs_error
-                .downcast_ref()
-                .cloned()
-                .ok_or_else(|| fs_error.to_string())),
+        let call = || {
+            descriptor.with_node(|node| {
+                agent_filesystem::attributes(&generation_handle, AgentTarget::Open(node))
+                    .map_err(|error| p2_agent_error(AgentFilesystemError::Access(error)))
+            })
         };
+        let mut live_stat = None;
 
         let result = handle
-            .run(self, async |_ctx| -> wasmtime::Result<_> {
-                let result = stat
-                    .clone()
-                    .map(|stat| SerializableFileTimes {
-                        data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
-                        data_modification_timestamp: stat
-                            .data_modification_timestamp
-                            .map(|t| t.into()),
-                    })
-                    .map_err(FileSystemError::from_result);
-                Ok(HostResponseFileSystemStat { result })
+            .run(self, async |ctx| -> wasmtime::Result<_> {
+                if live_permission_decision(ctx, &permissions).await?.is_err() {
+                    return Ok(p2_stat_denied());
+                }
+                let stat = p2_local_stat(call()).await;
+                let result = stat.clone().map(|stat| SerializableFileTimes {
+                    data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
+                    data_modification_timestamp: stat.data_modification_timestamp.map(|t| t.into()),
+                });
+                live_stat = Some(stat);
+                Ok(HostResponseFileSystemStat {
+                    result: result.map_err(FileSystemError::from_result),
+                })
             })
             .await
             .map_err(FsError::trap)?;
 
         match result.result {
             Ok(times) => {
+                let stat = match live_stat {
+                    Some(stat) => stat,
+                    None => p2_local_stat(call()).await,
+                };
                 let accessed = times
                     .data_access_timestamp
                     .as_ref()
@@ -1136,8 +1177,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let descriptor = p2_agent_descriptor(self, &self_)?;
         let guest_path = p2_descriptor_guest_path(&descriptor, &path)?;
         let root_relative_path = p2_root_relative_path(&guest_path);
-        let _authorization_permit =
-            authorize_paths(self, &[(FilesystemVerb::Stat, guest_path)]).await?;
+        let permissions = [(FilesystemVerb::Stat, guest_path)];
         let full_path = descriptor.path().join(path.clone());
         let target = p2_agent_path_target(&descriptor, path.clone())?;
         let follow = if path_flags.contains(PathFlags::SYMLINK_FOLLOW) {
@@ -1154,6 +1194,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             .await?;
 
         if immutable_initial_file {
+            let _authorization_permit = authorize_paths(self, &permissions).await?;
             let call = agent_filesystem::attributes(
                 &generation_handle,
                 AgentTarget::Path(&target, follow),
@@ -1178,7 +1219,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         }
 
         // `ReadLocal`: the local stat always runs (its timestamps are then overridden by the durable
-        // value), so only the file-times are made durable via `DurableCallSession::run`.
+        // value), so only the file-times and a permission denial are made durable via
+        // `DurableCallSession::run`.
         let handle = DurableCallSession::<FilesystemTypesDescriptorStatAt, NotCancellable>::start(
             self,
             HostRequestFileSystemPath {
@@ -1189,35 +1231,36 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         .await
         .map_err(FsError::trap)?;
 
-        let call =
+        let call = || {
             agent_filesystem::attributes(&generation_handle, AgentTarget::Path(&target, follow))
-                .map_err(|error| p2_agent_error(AgentFilesystemError::Access(error)))?;
-        let stat = match call.await.map_err(p2_agent_error).and_then(p2_agent_stat) {
-            Ok(stat) => Ok(stat),
-            Err(fs_error) => Err(fs_error
-                .downcast_ref()
-                .cloned()
-                .ok_or_else(|| fs_error.to_string())),
+                .map_err(|error| p2_agent_error(AgentFilesystemError::Access(error)))
         };
+        let mut live_stat = None;
 
         let result = handle
-            .run(self, async |_ctx| -> wasmtime::Result<_> {
-                let result = stat
-                    .clone()
-                    .map(|stat| SerializableFileTimes {
-                        data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
-                        data_modification_timestamp: stat
-                            .data_modification_timestamp
-                            .map(|t| t.into()),
-                    })
-                    .map_err(FileSystemError::from_result);
-                Ok(HostResponseFileSystemStat { result })
+            .run(self, async |ctx| -> wasmtime::Result<_> {
+                if live_permission_decision(ctx, &permissions).await?.is_err() {
+                    return Ok(p2_stat_denied());
+                }
+                let stat = p2_local_stat(call()).await;
+                let result = stat.clone().map(|stat| SerializableFileTimes {
+                    data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
+                    data_modification_timestamp: stat.data_modification_timestamp.map(|t| t.into()),
+                });
+                live_stat = Some(stat);
+                Ok(HostResponseFileSystemStat {
+                    result: result.map_err(FileSystemError::from_result),
+                })
             })
             .await
             .map_err(FsError::trap)?;
 
         match result.result {
             Ok(times) => {
+                let stat = match live_stat {
+                    Some(stat) => stat,
+                    None => p2_local_stat(call()).await,
+                };
                 let accessed = times
                     .data_access_timestamp
                     .as_ref()

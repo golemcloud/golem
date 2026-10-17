@@ -721,6 +721,8 @@ fn synthesize_invoke_arms(ir: &ToolDefinitionIr) -> Vec<proc_macro2::TokenStream
             } else {
                 quote! { __impl.#method_ident(#(#arg_idents),*) }
             };
+            // Implicit output completion must not replace the handler's outcome.
+            // These awaits run after a returned outcome, not after a panic.
             let call = if let Some(stdout_writer) = stdout_writer.as_ref() {
                 if stdout_required == Some(true) {
                     quote! {{
@@ -1270,6 +1272,29 @@ mod tests {
             fresh_tool_trait_method_ident(&definition, "__tool_invoke_decoded").to_string(),
             "__tool_invoke_decoded_"
         );
+    }
+
+    #[test]
+    fn implicit_output_finishes_preserve_returned_outcomes_without_catching_panics() {
+        for output in ["u32", "Result<u32, MyError>"] {
+            for stream in ["OutputStream", "Option<OutputStream>"] {
+                let definition = ir(&format!(
+                    r#"
+                    trait T {{
+                        #[arg(diagnostics, channel = "stderr")]
+                        async fn run(&self, stdout: {stream}, diagnostics: {stream}) -> {output};
+                    }}
+                "#
+                ))
+                .unwrap();
+                let generated = synthesize_invoke_arms(&definition)[0].to_string();
+                assert_eq!(generated.matches(". finish () . await").count(), 2);
+                assert_eq!(generated.matches("let _ =").count(), 2);
+                assert!(!generated.contains(". finish () . await ?"));
+                assert!(!generated.contains("catch_unwind"));
+                assert!(!generated.contains("InvalidResult"));
+            }
+        }
     }
 
     #[test]

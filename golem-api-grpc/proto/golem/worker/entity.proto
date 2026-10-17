@@ -112,7 +112,6 @@ message EntityInvocationScope {
   golem.component.Principal calling_principal = 4;
   InvocationExecutionMode mode = 5;
   IdempotencyKey idempotency_key = 6;
-  bool assume_idempotence = 7;
   bool logical_key_positions = 8;
   IdempotencyKey stream_session_idempotency_key = 9;
 }

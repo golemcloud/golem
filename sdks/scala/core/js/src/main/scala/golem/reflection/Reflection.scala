@@ -10,6 +10,7 @@
 
 package golem.reflection
 
+import golem.host.PermissionsApi.ScopeCard
 import golem.host.SchemaWireInterop
 import golem.host.js.{JsComponentId, JsUuid}
 import golem.host.js.schema.{
@@ -26,7 +27,7 @@ import golem.runtime.tool.host.ToolHostApi
 import golem.schema._
 import golem.schema.SchemaTypeBody.RecordType
 import golem.schema.validation.ValueValidation
-import golem.schema.wire.SchemaWire
+import golem.schema.wire.{SchemaWire, WitSchemaValueTree}
 import golem.config.ConfigOverride
 import golem.tool.{ToolGraphs, ToolRpcFailure}
 import golem.{Datetime, FutureInterop, Uuid}
@@ -36,6 +37,7 @@ import scala.concurrent.Future
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import scala.util.{Failure, Success}
 import scala.util.control.NonFatal
 
 import ReflectionInternals._
@@ -418,13 +420,22 @@ final class ReflectedAgentClient private[reflection] (agentType: AgentType, tran
 }
 
 final class ReflectedAgentMethod private[reflection] (val definition: AgentMethod, transport: Transport) {
-  def invoke(input: Json): Future[Either[GolemReflectError, Invocation[Json]]] = invokeJson(input)
 
-  def invokeJson(input: Json): Future[Either[GolemReflectError, Invocation[Json]]] =
+  /**
+   * The awaited invocation variants take an optional `scopeCard`, which the
+   * call borrows; see [[golem.host.PermissionsApi.ScopeCard]].
+   */
+  def invoke(input: Json, scopeCard: Option[ScopeCard] = None): Future[Either[GolemReflectError, Invocation[Json]]] =
+    invokeJson(input, scopeCard)
+
+  def invokeJson(
+    input: Json,
+    scopeCard: Option[ScopeCard] = None
+  ): Future[Either[GolemReflectError, Invocation[Json]]] =
     definition.input.packJson(input) match {
       case Left(error)  => Future.successful(Left(GolemReflectError.Validation(error.message)))
       case Right(value) =>
-        invokeValue(value).map(_.flatMap { invocation =>
+        invokeValue(value, scopeCard).map(_.flatMap { invocation =>
           invocation.value match {
             case None         => Right(Invocation(invocation.metadata, None))
             case Some(result) =>
@@ -436,11 +447,16 @@ final class ReflectedAgentMethod private[reflection] (val definition: AgentMetho
         })
     }
 
-  def invokeValue(input: SchemaValue): Future[Either[GolemReflectError, Invocation[SchemaValue]]] =
+  def invokeValue(
+    input: SchemaValue,
+    scopeCard: Option[ScopeCard] = None
+  ): Future[Either[GolemReflectError, Invocation[SchemaValue]]] =
     validate(definition.input, input) match {
       case Left(error) => Future.successful(Left(error))
       case Right(_)    =>
-        transport.invokeAndAwait(definition.name, input).map(_.flatMap(validateInvocationOutput(definition, _)))
+        transport
+          .invokeAndAwait(definition.name, input, scopeCard)
+          .map(_.flatMap(validateInvocationOutput(definition, _)))
     }
 
   def triggerValue(input: SchemaValue): Either[GolemReflectError, InvocationMetadata] =
@@ -500,31 +516,72 @@ object DynamicAgentClient {
 }
 
 final class DynamicAgentMethod private[reflection] (val name: String, transport: Transport) {
-  def invokeValue(input: SchemaValue): Future[Either[GolemReflectError, Invocation[SchemaValue]]] =
-    transport.invokeAndAwait(name, input)
+
+  /**
+   * `scopeCard` is borrowed by the awaited call; see
+   * [[golem.host.PermissionsApi.ScopeCard]].
+   */
+  def invokeValue(
+    input: SchemaValue,
+    scopeCard: Option[ScopeCard] = None
+  ): Future[Either[GolemReflectError, Invocation[SchemaValue]]] =
+    transport.invokeAndAwait(name, input, scopeCard)
   def triggerValue(input: SchemaValue): Either[GolemReflectError, InvocationMetadata]                 = transport.trigger(name, input)
   def scheduleValue(at: Datetime, input: SchemaValue): Either[GolemReflectError, ScheduledInvocation] =
     transport.schedule(at, name, input)
 }
 
 private[reflection] final class Transport private (raw: WasmRpcApi.WasmRpcClient) {
-  def invokeAndAwait(method: String, input: SchemaValue): Future[Either[GolemReflectError, Invocation[SchemaValue]]] =
-    encodeAsync(input).flatMap { payload =>
-      raw.asyncInvokeAndAwaitWithMetadata(method, payload) match {
-        case Left(error)                => Future.successful(Left(remoteError(error)))
-        case Right((metadata, pending)) =>
-          FutureInterop
-            .fromPromise(pending.get())
-            .map { result =>
-              decodeOptional(result.toOption).map(value => Invocation(toMetadata(metadata), value))
-            }
-            .recover {
-              case js.JavaScriptException(error) => Left(remoteError(WasmRpcApi.decodeRpcError(error)))
-              case NonFatal(error)               =>
-                Left(GolemReflectError.Remote(AgentRpcError.Unknown("unknown", Option(error.getMessage))))
+  def invokeAndAwait(
+    method: String,
+    input: SchemaValue,
+    scopeCard: Option[ScopeCard]
+  ): Future[Either[GolemReflectError, Invocation[SchemaValue]]] =
+    if (scopeCard.exists(!_.isPresent)) Future.successful(Left(GolemReflectError.Validation(ScopeCardMoved)))
+    else
+      encodeWithWireAsync(input).transformWith {
+        case Failure(NonFatal(error)) => Future.successful(Left(GolemReflectError.SchemaEncode(error.getMessage)))
+        case Failure(error)           => Future.failed(error)
+        case Success((wit, payload))  =>
+          // Check again in the same turn as the host call; give the argument
+          // handles back if the scope card is gone.
+          if (scopeCard.exists(!_.isPresent)) {
+            SchemaWireInterop.returnCapabilityHandles(wit, payload)
+            Future.successful(Left(GolemReflectError.Validation(ScopeCardMoved)))
+          } else
+            try invokeEncoded(method, payload, scopeCard)
+            catch {
+              case NonFatal(error) =>
+                Future.successful(
+                  Left(GolemReflectError.Remote(AgentRpcError.Unknown("unknown", Option(error.getMessage))))
+                )
             }
       }
-    }.recover { case NonFatal(error) => Left(GolemReflectError.SchemaEncode(error.getMessage)) }
+
+  private def invokeEncoded(
+    method: String,
+    payload: JsSchemaValueTree,
+    scopeCard: Option[ScopeCard]
+  ): Future[Either[GolemReflectError, Invocation[SchemaValue]]] = {
+    val call = scopeCard match {
+      case Some(card) => card.borrowRaw(raw.asyncInvokeAndAwaitWithMetadata(method, payload, _))
+      case None       => raw.asyncInvokeAndAwaitWithMetadata(method, payload, js.undefined)
+    }
+    call match {
+      case Left(error)                => Future.successful(Left(remoteError(error)))
+      case Right((metadata, pending)) =>
+        FutureInterop
+          .fromPromise(pending.get())
+          .map { result =>
+            decodeOptional(result.toOption).map(value => Invocation(toMetadata(metadata), value))
+          }
+          .recover {
+            case js.JavaScriptException(error) => Left(remoteError(WasmRpcApi.decodeRpcError(error)))
+            case NonFatal(error)               =>
+              Left(GolemReflectError.Remote(AgentRpcError.Unknown("unknown", Option(error.getMessage))))
+          }
+    }
+  }
 
   def trigger(method: String, input: SchemaValue): Either[GolemReflectError, InvocationMetadata] =
     encode(input).flatMap(payload =>
@@ -631,8 +688,14 @@ private[reflection] object ReflectionInternals {
     try Right(SchemaWireInterop.valueTreeToJs(SchemaWire.schemaValueToWit(value)))
     catch { case NonFatal(error) => Left(GolemReflectError.SchemaEncode(error.getMessage)) }
 
-  def encodeAsync(value: SchemaValue): Future[JsSchemaValueTree] =
-    SchemaWireInterop.valueTreeToJsAsync(SchemaWire.schemaValueToWit(value))
+  def encodeWithWireAsync(value: SchemaValue): Future[(WitSchemaValueTree, JsSchemaValueTree)] =
+    try {
+      val wit = SchemaWire.schemaValueToWit(value)
+      SchemaWireInterop.valueTreeToJsAsync(wit).map(lowered => (wit, lowered))
+    } catch { case NonFatal(error) => Future.failed(error) }
+
+  val ScopeCardMoved: String =
+    "the scope card has been released or moved; derive a new scope card in this invocation"
 
   def decodeOptional(value: Option[JsSchemaValueTree]): Either[GolemReflectError, Option[SchemaValue]] =
     try Right(value.map(tree => SchemaWire.schemaValueFromWit(SchemaWireInterop.valueTreeFromJs(tree))))

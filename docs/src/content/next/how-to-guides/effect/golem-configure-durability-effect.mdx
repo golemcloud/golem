@@ -121,6 +121,18 @@ for a mode change. Run `golem build` after editing; do not edit generated files 
 Import `Durability` as a namespace from `@golemcloud/effect-golem`. It is not an Effect service tag
 and must not be yielded as `yield* Durability`.
 
+**Sequential execution only.** `Durability.wrap` and `wrapInfallible` support sequential and
+properly nested operations. The body may await host calls when no unrelated guest work runs during
+the wait. Do not overlap a custom operation with other fibers, concurrent effects, or JavaScript
+promises, even if they only use ordinary host APIs. Its scope remains installed while the body
+waits; sibling effects can be attributed to the wrong operation and cause incorrect replay or
+invocation failure. This misuse is not reliably detected.
+
+Await each nested operation before continuing its parent. Do not detach fibers or let work outlive
+the body. On failure or interruption, stop and join outstanding work before the operation closes.
+Structured finalization alone does not make concurrent custom scopes supported. This restriction
+does not apply to ordinary built-in durability when no custom operation is active.
+
 Library code that performs an effect Golem does not already record (for example, a call through a
 custom transport) can make it durable with `Durability.wrap`. On a live run, the body executes and
 its schema-encoded result is recorded in the oplog. On replay, the recorded result is returned and
@@ -145,10 +157,12 @@ const stockLevel = (sku: string) =>
 ```
 
 Pass an `error` schema to also record typed failures; without it, only successes are recorded.
-Defects and interruption leave the invocation unfinished, so it runs again on recovery. Use
+Defects and interruption leave the resource unfinished. That does not make a deterministic guest
+defect retryable: it remains permanent. Eligible recovery may reconstruct incomplete work. Use
 `Durability.wrapInfallible` for bodies that cannot fail. Choose `functionType`
-(`readLocal`, `writeLocal`, `readRemote`, `writeRemote`, `writeRemoteBatched`,
-`writeRemoteTransaction`) by whether re-executing the call after a crash is safe.
+(`readLocal`, `writeLocal`, `readRemote`, or `writeRemote`) by whether the operation
+reads or writes local or remote state. Nesting is recorded by the host in
+`Start.parent_start_index`, not in the function type.
 
 Golem's built-in host APIs (HTTP, RPC, key-value, blob storage, databases) are already durable;
 do not wrap them again.

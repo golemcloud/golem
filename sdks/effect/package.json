@@ -100,6 +100,24 @@
       "golem:durability/durability@1.6.0": [
         "golem-types/golem_durability_1_6_0_durability.d.ts"
       ],
+      "golem:permissions/derive@0.1.0": [
+        "golem-types/golem_permissions_0_1_0_derive.d.ts"
+      ],
+      "golem:permissions/inspect@0.1.0": [
+        "golem-types/golem_permissions_0_1_0_inspect.d.ts"
+      ],
+      "golem:permissions/kernel-introspection@0.1.0": [
+        "golem-types/golem_permissions_0_1_0_kernel_introspection.d.ts"
+      ],
+      "golem:permissions/revoke@0.1.0": [
+        "golem-types/golem_permissions_0_1_0_revoke.d.ts"
+      ],
+      "golem:permissions/types@0.1.0": [
+        "golem-types/golem_permissions_0_1_0_types.d.ts"
+      ],
+      "golem:permissions/wallet@0.1.0": [
+        "golem-types/golem_permissions_0_1_0_wallet.d.ts"
+      ],
       "golem:secrets/reveal@0.1.0": [
         "golem-types/golem_secrets_0_1_0_reveal.d.ts"
       ],
