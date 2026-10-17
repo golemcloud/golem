@@ -14,7 +14,7 @@
 
 mod client;
 mod connect;
-mod connect_proxy;
+pub(crate) mod connect_proxy;
 mod error;
 mod routing_logic;
 mod service;

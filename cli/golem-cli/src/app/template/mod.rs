@@ -27,9 +27,9 @@ pub use generator::InMemoryFs;
 pub use list_view::TemplateListView;
 pub use metadata::AppTemplateMetadata;
 pub use plan::{
-    MultiComponentLayoutUpgradePlan, MultiComponentLayoutUpgradePlanStep, SafeTemplatePlan,
-    SafeTemplatePlanStep, TemplatePlan, TemplatePlanBuilder, TemplatePlanStep, TextEdit,
-    UnsafeTemplatePlan, UnsafeTemplatePlanStep,
+    MovedPathKind, MultiComponentLayoutUpgradePlan, MultiComponentLayoutUpgradePlanStep,
+    SafeTemplatePlan, SafeTemplatePlanStep, TemplatePlan, TemplatePlanBuilder, TemplatePlanStep,
+    TextEdit, UnsafeTemplatePlan, UnsafeTemplatePlanStep,
 };
 pub use repo::AppTemplateRepo;
 pub use repo::TEMPLATES_DIR;
