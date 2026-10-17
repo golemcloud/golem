@@ -452,7 +452,7 @@ impl From<OplogError> for StreamStoreError {
             OplogError::Unreadable(unreadable) => Self::Unreadable(unreadable),
             error @ (OplogError::Payload(_)
             | OplogError::Maintenance(_)
-            | OplogError::ArchiveWrite { .. }) => Self::Oplog(error.to_string()),
+            | OplogError::ArchiveWrite(_)) => Self::Oplog(error.to_string()),
         }
     }
 }
@@ -554,7 +554,7 @@ impl From<OplogError> for SessionError {
             OplogError::Unreadable(unreadable) => Self::Unreadable(unreadable),
             error @ (OplogError::Payload(_)
             | OplogError::Maintenance(_)
-            | OplogError::ArchiveWrite { .. }) => Self::Failed(error.to_string()),
+            | OplogError::ArchiveWrite(_)) => Self::Failed(error.to_string()),
         }
     }
 }

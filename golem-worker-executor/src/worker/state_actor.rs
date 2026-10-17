@@ -1570,7 +1570,13 @@ mod tests {
             Some(CommitReceipt::Refusable(receipt)),
         );
 
-        let Err(refusal @ OplogRefusal::ArchiveWrite { level: 0, .. }) = settled else {
+        let Err(
+            refusal @ OplogRefusal::ArchiveWrite(crate::services::oplog::ArchiveWriteFailure {
+                level: 0,
+                ..
+            }),
+        ) = settled
+        else {
             panic!("the commit must be refused by the archive write: {settled:?}");
         };
         assert_eq!(answer.await.unwrap(), Err(refusal));
@@ -1581,7 +1587,7 @@ mod tests {
                 .await
                 .is_err_and(|error| matches!(
                     error,
-                    crate::services::oplog::OplogError::ArchiveWrite { .. }
+                    crate::services::oplog::OplogError::ArchiveWrite(_)
                 ))
         );
     }

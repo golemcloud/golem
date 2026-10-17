@@ -656,7 +656,7 @@ async fn a_batch_queued_behind_a_failed_one_is_not_written() {
 
     assert!(matches!(
         fixture.oplog.commit(CommitLevel::Always).await,
-        Err(OplogError::ArchiveWrite { .. })
+        Err(OplogError::ArchiveWrite(_))
     ));
     assert_eq!(fixture.archive.append_calls.load(Ordering::Relaxed), 1);
 }

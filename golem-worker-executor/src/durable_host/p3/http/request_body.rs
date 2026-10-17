@@ -696,17 +696,12 @@ pub(super) enum RecordedFrameError {
 impl From<OplogError> for RecordedFrameError {
     fn from(error: OplogError) -> Self {
         use golem_service_base::error::worker_executor::WorkerExecutorError;
-        match error {
-            OplogError::Fenced(fence) => Self::Fenced(fence),
-            error @ (OplogError::ArchiveWrite { .. } | OplogError::Unreadable(_)) => {
-                match WorkerExecutorError::from(error) {
-                    error @ WorkerExecutorError::OplogFailed { .. } => Self::OplogFailed(error),
-                    error => Self::Infrastructure(error.to_string()),
-                }
+        match (error.agent_failure(), error) {
+            (_, OplogError::Fenced(fence)) => Self::Fenced(fence),
+            (Some(failure @ WorkerExecutorError::OplogFailed { .. }), _) => {
+                Self::OplogFailed(failure)
             }
-            error @ (OplogError::Payload(_) | OplogError::Maintenance(_)) => {
-                Self::Infrastructure(error.to_string())
-            }
+            (_, error) => Self::Infrastructure(error.to_string()),
         }
     }
 }
@@ -2343,11 +2338,13 @@ mod tests {
             component_id: golem_common::model::component::ComponentId::new(),
             agent_id: "request-body".to_string(),
         };
-        let archive_write = RecordedFrameError::from(OplogError::ArchiveWrite {
-            agent_id: agent_id.clone(),
-            level: 1,
-            details: "archive refused the write".to_string(),
-        });
+        let archive_write = RecordedFrameError::from(OplogError::ArchiveWrite(
+            crate::services::oplog::ArchiveWriteFailure {
+                agent_id: agent_id.clone(),
+                level: 1,
+                details: "archive refused the write".to_string(),
+            },
+        ));
         let corrupt = RecordedFrameError::from(UnreadableOplog::new(
             &agent_id,
             OplogReadError::corruption(OplogReadSource::Archive(1), "bad chunk"),

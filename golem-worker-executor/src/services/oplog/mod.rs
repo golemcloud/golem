@@ -922,12 +922,53 @@ pub enum OplogError {
     Fenced(OplogFence),
     Payload(String),
     Maintenance(String),
-    ArchiveWrite {
-        agent_id: AgentId,
-        level: usize,
-        details: String,
-    },
+    ArchiveWrite(ArchiveWriteFailure),
     Unreadable(UnreadableOplog),
+}
+
+/// A write of the oplog of `agent_id` to the archive layer `level` that failed after its retries.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArchiveWriteFailure {
+    pub agent_id: AgentId,
+    pub level: usize,
+    pub details: String,
+}
+
+impl Display for ArchiveWriteFailure {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "failed to write oplog data of {} to archive layer {}: {}",
+            self.agent_id, self.level, self.details
+        )
+    }
+}
+
+/// An archive layer that did not store the oplog fails the agent for good.
+impl From<ArchiveWriteFailure> for WorkerExecutorError {
+    fn from(failure: ArchiveWriteFailure) -> Self {
+        WorkerExecutorError::oplog_failed(
+            failure.agent_id,
+            format!(
+                "failed to write oplog data to archive layer {}: {}",
+                failure.level, failure.details
+            ),
+        )
+    }
+}
+
+impl OplogError {
+    /// The failure of the agent that this error is: an archive layer that did not store the oplog,
+    /// or an oplog that does not read. It is `OplogFailed` for good, or `RecoveryRequired` when a
+    /// later read can pass. A fence, which moves the agent to the new owner of its shard, and a
+    /// write that failed alone give `None`.
+    pub fn agent_failure(&self) -> Option<WorkerExecutorError> {
+        match self {
+            Self::ArchiveWrite(failure) => Some(failure.clone().into()),
+            Self::Unreadable(unreadable) => Some(unreadable.clone().into()),
+            Self::Fenced(_) | Self::Payload(_) | Self::Maintenance(_) => None,
+        }
+    }
 }
 
 impl From<String> for OplogError {
@@ -946,14 +987,7 @@ impl From<OplogError> for WorkerExecutorError {
             ),
             OplogError::Payload(details) => WorkerExecutorError::runtime(details),
             OplogError::Maintenance(details) => WorkerExecutorError::runtime(details),
-            OplogError::ArchiveWrite {
-                agent_id,
-                level,
-                details,
-            } => WorkerExecutorError::oplog_failed(
-                agent_id,
-                format!("failed to write oplog data to archive layer {level}: {details}"),
-            ),
+            OplogError::ArchiveWrite(failure) => WorkerExecutorError::from(failure),
             OplogError::Unreadable(unreadable) => WorkerExecutorError::from(unreadable),
         }
     }
@@ -974,14 +1008,7 @@ impl Display for OplogError {
             ),
             OplogError::Payload(details) => write!(f, "oplog payload error: {details}"),
             OplogError::Maintenance(details) => write!(f, "oplog maintenance error: {details}"),
-            OplogError::ArchiveWrite {
-                agent_id,
-                level,
-                details,
-            } => write!(
-                f,
-                "failed to write oplog data of {agent_id} to archive layer {level}: {details}"
-            ),
+            OplogError::ArchiveWrite(failure) => write!(f, "{failure}"),
             OplogError::Unreadable(unreadable) => write!(f, "{unreadable}"),
         }
     }
@@ -1002,11 +1029,7 @@ impl std::error::Error for OplogError {}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OplogRefusal {
     Fenced(OplogFence),
-    ArchiveWrite {
-        agent_id: AgentId,
-        level: usize,
-        details: String,
-    },
+    ArchiveWrite(ArchiveWriteFailure),
     Unreadable(UnreadableOplog),
 }
 
@@ -1015,7 +1038,7 @@ impl OplogRefusal {
     pub fn fence(&self) -> Option<&OplogFence> {
         match self {
             Self::Fenced(fence) => Some(fence),
-            Self::ArchiveWrite { .. } | Self::Unreadable(_) => None,
+            Self::ArchiveWrite(_) | Self::Unreadable(_) => None,
         }
     }
 }
@@ -1025,15 +1048,7 @@ impl OplogError {
     pub fn into_refusal(self) -> Result<OplogRefusal, OplogError> {
         match self {
             Self::Fenced(fence) => Ok(OplogRefusal::Fenced(fence)),
-            Self::ArchiveWrite {
-                agent_id,
-                level,
-                details,
-            } => Ok(OplogRefusal::ArchiveWrite {
-                agent_id,
-                level,
-                details,
-            }),
+            Self::ArchiveWrite(failure) => Ok(OplogRefusal::ArchiveWrite(failure)),
             Self::Unreadable(unreadable) => Ok(OplogRefusal::Unreadable(unreadable)),
             error @ (Self::Payload(_) | Self::Maintenance(_)) => Err(error),
         }
@@ -1044,15 +1059,7 @@ impl From<OplogRefusal> for OplogError {
     fn from(refusal: OplogRefusal) -> Self {
         match refusal {
             OplogRefusal::Fenced(fence) => Self::Fenced(fence),
-            OplogRefusal::ArchiveWrite {
-                agent_id,
-                level,
-                details,
-            } => Self::ArchiveWrite {
-                agent_id,
-                level,
-                details,
-            },
+            OplogRefusal::ArchiveWrite(failure) => Self::ArchiveWrite(failure),
             OplogRefusal::Unreadable(unreadable) => Self::Unreadable(unreadable),
         }
     }

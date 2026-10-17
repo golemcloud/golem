@@ -4128,18 +4128,15 @@ async fn measured_check<Ctx: WorkerCtx>(
 fn periodic_failure_outcome(failure: &PeriodicFailure) -> CommandOutcome {
     match failure {
         PeriodicFailure::Entry(_) => CommandOutcome::Continue,
-        PeriodicFailure::Write(OplogError::Unreadable(unreadable)) if unreadable.is_transient() => {
-            CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
-        }
         PeriodicFailure::Write(OplogError::Fenced(_)) => {
             CommandOutcome::BreakInnerLoop(RetryDecision::None)
         }
-        PeriodicFailure::Write(
-            error @ (OplogError::ArchiveWrite { .. } | OplogError::Unreadable(_)),
-        ) => CommandOutcome::BreakOuterLoop(Some(WorkerExecutorError::from(error.clone()))),
-        PeriodicFailure::Write(OplogError::Payload(_) | OplogError::Maintenance(_)) => {
-            CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
-        }
+        PeriodicFailure::Write(error) => match error.agent_failure() {
+            Some(failure @ WorkerExecutorError::OplogFailed { .. }) => {
+                CommandOutcome::BreakOuterLoop(Some(failure))
+            }
+            Some(_) | None => CommandOutcome::BreakInnerLoop(RetryDecision::Immediate),
+        },
     }
 }
 
@@ -4381,14 +4378,16 @@ mod tests {
             expected_epoch: golem_common::model::ShardEpoch(2),
             actual_epoch: Some(golem_common::model::ShardEpoch(3)),
         };
-        let archive_write = crate::services::oplog::OplogError::ArchiveWrite {
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: "archive-write".to_string(),
+        let archive_write = crate::services::oplog::OplogError::ArchiveWrite(
+            crate::services::oplog::ArchiveWriteFailure {
+                agent_id: golem_common::model::AgentId {
+                    component_id: golem_common::model::component::ComponentId::new(),
+                    agent_id: "archive-write".to_string(),
+                },
+                level: 0,
+                details: "failed".to_string(),
             },
-            level: 0,
-            details: "failed".to_string(),
-        };
+        );
         assert_eq!(
             [
                 PeriodicFailure::Entry("no payload".to_string()),

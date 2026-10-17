@@ -119,17 +119,12 @@ pub(crate) enum TerminalEntryRefusal {
 pub(crate) fn terminal_entry_refusal(
     error: &crate::services::oplog::OplogError,
 ) -> TerminalEntryRefusal {
-    match error {
-        crate::services::oplog::OplogError::ArchiveWrite { .. }
-        | crate::services::oplog::OplogError::Unreadable(_) => {
-            match WorkerExecutorError::from(error.clone()) {
-                error @ WorkerExecutorError::RecoveryRequired { .. } => {
-                    TerminalEntryRefusal::RecoveryRequired(error)
-                }
-                error => TerminalEntryRefusal::OplogFailed(error),
-            }
+    match error.agent_failure() {
+        Some(error @ WorkerExecutorError::RecoveryRequired { .. }) => {
+            TerminalEntryRefusal::RecoveryRequired(error)
         }
-        _ => TerminalEntryRefusal::Unpublished,
+        Some(error) => TerminalEntryRefusal::OplogFailed(error),
+        None => TerminalEntryRefusal::Unpublished,
     }
 }
 
@@ -6642,7 +6637,7 @@ fn recovered_status(
         // No retry reads the oplog, so failing the assignment would keep every other agent from
         // being resumed. The agent is left as it is, with its oplog, for an operator to inspect.
         Err(StatusError::Unreadable(error)) if !error.is_transient() => {
-            error!(agent_id = %owned_agent_id, error = %error, "Worker oplog is unreadable during shard-assignment recovery; skipping agent");
+            log_unreadable_recovered_agent(owned_agent_id, &error);
             Ok(None)
         }
         Err(error) => Err(anyhow!(
@@ -6674,13 +6669,18 @@ fn recovered_restart<W>(
         }
         // As for a status that does not fold: no retry of the assignment reads the oplog.
         Err(error) if is_failed_oplog(&error) => {
-            error!(agent_id = %owned_agent_id, error = %error, "Worker oplog is unreadable during shard-assignment recovery; skipping agent");
+            log_unreadable_recovered_agent(owned_agent_id, &error);
             Ok(())
         }
         Err(error) => Err(anyhow!(
             "failed to restart {owned_agent_id} during shard-assignment recovery: {error}"
         )),
     }
+}
+
+/// Logs an agent that shard-assignment recovery skips because its oplog does not read.
+fn log_unreadable_recovered_agent(owned_agent_id: &OwnedAgentId, error: &dyn std::fmt::Display) {
+    error!(agent_id = %owned_agent_id, error = %error, "Worker oplog is unreadable during shard-assignment recovery; skipping agent");
 }
 
 /// Whether `error` is an oplog that failed, also when a failed resume carries it.
@@ -7490,11 +7490,13 @@ mod tests {
             agent_id: "terminal-entry".to_string(),
         };
         assert!(matches!(
-            terminal_entry_refusal(&OplogError::ArchiveWrite {
-                agent_id: agent_id.clone(),
-                level: 0,
-                details: "injected archive failure".to_string(),
-            }),
+            terminal_entry_refusal(&OplogError::ArchiveWrite(
+                crate::services::oplog::ArchiveWriteFailure {
+                    agent_id: agent_id.clone(),
+                    level: 0,
+                    details: "injected archive failure".to_string(),
+                }
+            )),
             TerminalEntryRefusal::OplogFailed(WorkerExecutorError::OplogFailed { .. })
         ));
         assert!(matches!(

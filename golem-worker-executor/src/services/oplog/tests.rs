@@ -9014,11 +9014,11 @@ fn an_archive_write_failure_names_the_agent_and_the_layer() {
         component_id: ComponentId::new(),
         agent_id: "archive-write".to_string(),
     };
-    let error = OplogError::ArchiveWrite {
+    let error = OplogError::ArchiveWrite(crate::services::oplog::ArchiveWriteFailure {
         agent_id: agent_id.clone(),
         level: 2,
         details: "boom".to_string(),
-    };
+    });
     assert_eq!(
         error.to_string(),
         format!("failed to write oplog data of {agent_id} to archive layer 2: boom")

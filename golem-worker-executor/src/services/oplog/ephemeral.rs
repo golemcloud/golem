@@ -604,11 +604,13 @@ impl EphemeralOplog {
                                     error = %error,
                                     "Failed to write ephemeral oplog entries to the archive; the agent stops"
                                 );
-                                let _ = failure.set(OplogError::ArchiveWrite {
-                                    agent_id: agent_id.clone(),
-                                    level: 0,
-                                    details: error.to_string(),
-                                });
+                                let _ = failure.set(OplogError::ArchiveWrite(
+                                    crate::services::oplog::ArchiveWriteFailure {
+                                        agent_id: agent_id.clone(),
+                                        level: 0,
+                                        details: error.to_string(),
+                                    },
+                                ));
                             }
                         }
                     }

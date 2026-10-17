@@ -13241,11 +13241,11 @@ mod tests {
             agent_id: "terminal-write".to_string(),
         };
         assert!(matches!(
-            terminal_write_failure(OplogError::ArchiveWrite {
+            terminal_write_failure(OplogError::ArchiveWrite(crate::services::oplog::ArchiveWriteFailure {
                 agent_id: agent_id.clone(),
                 level: 0,
                 details: "injected archive failure".to_string(),
-            }),
+            })),
             Ok(WorkerExecutorError::OplogFailed { details, .. })
                 if details.contains("injected archive failure")
         ));
