@@ -279,6 +279,16 @@ Findings 11-14 have separate linked comments.
     identity, history, accounting, timeout and concurrency assertions. Baseline and ordinary-timer
     native batches plus scoped strict lint pass. This is an unused-freeze consumer cleanup only;
     the clock producer and genuinely time-driving consumers remain open.
+    The retry case now uses the normal timer. Exact no-early/update-rearm/two-period
+    properties pass on the actual MonthlyMemoryCheck and queue functions with standard Tokio
+    virtual time. The native case passes real contention, repeated applied-check rejection and
+    subsequent real-timer acceptance without changing its timeout. It retains window/policy facts,
+    result/history/accounting/cleanup and adds an explicit key with complete stored raw prefixes.
+    An initial timeout was a test-side refresh-join deadlock: the full batch awaited a filesystem
+    command blocked behind the silent invocation. Both joins now follow physical cleanup; policy
+    application remains proved by exact rejection snapshots. Failed runs remain recorded. Final
+    strict lint, monthly library checks and the small custom-suspension composition batch pass.
+    No timer interface or production change was added; the clock family and this checkbox remain open.
   - [ ] Address the keyed filesystem metadata gate and remaining protocol ordering controls.
   - [ ] For any hook proposed to remain, document the otherwise untestable guarantee, minimal scope
     and why its scheduling changes do not invalidate the test. Existing main-owned hooks are not

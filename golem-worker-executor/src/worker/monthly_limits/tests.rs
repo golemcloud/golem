@@ -172,6 +172,110 @@ fn trace_context_requires_the_actual_active_monthly_target() {
 }
 
 #[test]
+fn normal_tokio_ticks_are_not_early_and_rearm_after_a_rejected_proposal() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(async {
+            let (entry, owner, _other) = prepaid_stop_owners().await;
+            let mut policy = stop_fuel_policy();
+            policy.available_memory_gb_seconds = 0;
+            assert!(entry.apply_monthly_snapshot_for_test(1, policy, 0));
+            let proposed = owner.sample();
+            let mut check = MonthlyMemoryCheck::new(entry, None);
+            let started = tokio::time::Instant::now();
+
+            let duration = check.duration();
+            assert_eq!(duration, Duration::from_secs(30));
+            {
+                let wait = check.wait(tokio::time::sleep(duration));
+                tokio::pin!(wait);
+                assert!(futures::poll!(wait.as_mut()).is_pending());
+                tokio::time::advance(Duration::from_secs(29)).await;
+                assert!(futures::poll!(wait.as_mut()).is_pending());
+                tokio::time::advance(Duration::from_secs(1)).await;
+                assert!(wait.await.is_ok());
+            }
+
+            let original_tail = owner.tail.lock().unwrap().clone();
+            let mut stale = proposed;
+            stale.policy_revision += 1;
+            {
+                let mut guard = owner.interrupts.lock().await;
+                assert!(owner.register(stale, &mut guard).is_none());
+                assert!(!guard.has_interrupt());
+            }
+            assert!(owner.monthly.lock().unwrap().is_none());
+            assert!(Arc::ptr_eq(&original_tail, &owner.tail.lock().unwrap()));
+
+            let duration = check.duration();
+            assert_eq!(duration, Duration::from_secs(30));
+            {
+                let wait = check.wait(tokio::time::sleep(duration));
+                tokio::pin!(wait);
+                assert!(futures::poll!(wait.as_mut()).is_pending());
+                tokio::time::advance(Duration::from_secs(29)).await;
+                assert!(futures::poll!(wait.as_mut()).is_pending());
+                tokio::time::advance(Duration::from_secs(1)).await;
+                assert!(wait.await.is_ok());
+            }
+            assert_eq!(started.elapsed(), Duration::from_secs(60));
+            assert_eq!(owner.sample(), proposed);
+            let mut guard = owner.interrupts.lock().await;
+            let accepted = owner.register(proposed, &mut guard).unwrap();
+            assert!(matches!(accepted.kind, InterruptKind::Suspend(_)));
+            assert!(guard.has_interrupt());
+            assert_eq!(
+                owner.monthly.lock().unwrap().as_ref().unwrap().0,
+                accepted.kind
+            );
+        });
+}
+
+#[test]
+fn a_capacity_update_rearms_the_normal_tokio_timer_from_the_update() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(async {
+            let (entry, _owner, _other) = prepaid_stop_owners().await;
+            let mut policy = stop_fuel_policy();
+            policy.available_memory_gb_seconds = 0;
+            assert!(entry.apply_monthly_snapshot_for_test(1, policy.clone(), 0));
+            let mut check = MonthlyMemoryCheck::new(entry.clone(), None);
+            let started = tokio::time::Instant::now();
+            let duration = check.duration();
+            assert_eq!(duration, Duration::from_secs(30));
+            {
+                let wait = check.wait(tokio::time::sleep(duration));
+                tokio::pin!(wait);
+                assert!(futures::poll!(wait.as_mut()).is_pending());
+                tokio::time::advance(Duration::from_secs(11)).await;
+                assert!(futures::poll!(wait.as_mut()).is_pending());
+                assert!(entry.apply_monthly_snapshot_for_test(2, policy, 0));
+                assert!(wait.await.is_ok());
+            }
+            let duration = check.duration();
+            assert_eq!(duration, Duration::from_secs(30));
+            let wait = check.wait(tokio::time::sleep(duration));
+            tokio::pin!(wait);
+            assert!(futures::poll!(wait.as_mut()).is_pending());
+            // Neither the original deadline at 30 nor the instant before 41 may fire it.
+            tokio::time::advance(Duration::from_secs(19)).await;
+            assert!(futures::poll!(wait.as_mut()).is_pending());
+            tokio::time::advance(Duration::from_secs(10)).await;
+            assert!(futures::poll!(wait.as_mut()).is_pending());
+            tokio::time::advance(Duration::from_secs(1)).await;
+            assert!(wait.await.is_ok());
+            assert_eq!(started.elapsed(), Duration::from_secs(41));
+        });
+}
+
+#[test]
 #[timeout("5s")]
 async fn monthly_supersedes_restart_without_reclassifying_an_already_observed_deadline() {
     use crate::model::TrapType;

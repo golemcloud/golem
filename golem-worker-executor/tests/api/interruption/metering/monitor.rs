@@ -267,9 +267,8 @@ monitor_control!(silent_tcp_monitor_111, true, true, true);
 mod retries {
     use super::*;
     use anyhow::Context as _;
-    use golem_common::model::oplog::PublicOplogEntry;
+    use golem_common::model::oplog::{PublicAgentInvocation, PublicOplogEntry};
     use golem_service_base::error::worker_executor::InterruptKind;
-    use golem_worker_executor::worker::{MonthlyClockForTest, MonthlyTimerPollForTest};
     use pretty_assertions::assert_eq;
     use test_r::test;
     use tokio::io::AsyncReadExt;
@@ -334,34 +333,40 @@ mod retries {
         })
         .await
         .context("initial idle release")?;
-        let (clock, mut polls) = MonthlyClockForTest::new();
-        worker.set_monthly_clock_for_test(clock.clone());
         let mut attempts =
             crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
         let account = limits.initialize_account(context.account_id).await?;
-        assert_eq!(clock.active_sleeps(), 0);
+        assert!(!worker.monthly_window_active_for_test());
         assert_eq!(account.monthly_observer_count_for_test(), 0);
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let port = listener.local_addr()?.port();
         let (connected_tx, connected_rx) = tokio::sync::oneshot::channel();
         let (closed_tx, mut closed_rx) = tokio::sync::oneshot::channel();
-        let server = tokio::spawn(async move {
+        let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let _ = connected_tx.send(());
             let mut byte = [0];
             let _ = closed_tx.send(matches!(socket.read(&mut byte).await, Ok(0)));
-        });
-        let invocation = tokio::spawn({
+        }));
+        let key = IdempotencyKey::fresh();
+        let invocation = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
             let executor = executor.clone();
             let component = component.clone();
             let name = name.clone();
+            let key = key.clone();
             async move {
                 executor
-                    .invoke_and_await_agent(&component, &name, "tcp_collect_p3", data_value!(port))
+                    .invoke_and_await_agent_with_key(
+                        &component,
+                        &name,
+                        &key,
+                        "tcp_collect_p3",
+                        data_value!(port),
+                    )
                     .await
             }
-        });
+        }));
         tokio::time::timeout(Duration::from_secs(10), connected_rx).await??;
         // Connection acceptance precedes the guest's receive call. Require its open durable chunk.
         let chunk = tokio::time::timeout(Duration::from_secs(10), async {
@@ -381,34 +386,36 @@ mod retries {
             }
         })
         .await??;
-        expect_poll(&mut polls, 0, 30).await?;
-        assert_eq!(clock.active_sleeps(), 1);
         assert_eq!(account.monthly_observer_count_for_test(), 1);
         let acquisitions = worker.permit_acquisitions_for_test();
         let initial = worker.current_monthly_proposal_for_test();
+        let original_raw = executor.stored_oplog(&id).await;
         let mut raw = worker.raw_interrupt_for_test();
-        clock.advance(Duration::from_secs(11));
-        expect_poll(&mut polls, 11, 30).await?;
 
         let interrupts = worker.hold_interrupt_lock_for_test().await;
         let mut exhausted = available.clone();
         exhausted.available_memory_gb_seconds = 0;
-        registry.set_policy(exhausted);
-        let refresh = tokio::spawn({
+        registry.set_policy(exhausted.clone());
+        let first_refresh = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
             let limits = limits.clone();
             async move { limits.run_batch_for_test().await }
-        });
+        }));
         let missed = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
             .await?
             .context("Registry-triggered attempt")?;
-        let current = worker.current_monthly_proposal_for_test();
-        assert_eq!(current, missed.proposal);
-        assert_eq!(current.diagnostic_window_id, initial.diagnostic_window_id);
-        assert_eq!(current.start_attempt, initial.start_attempt);
-        assert_eq!(current.resident_generation, initial.resident_generation);
-        assert_eq!(current.exhaustion, Some("monthly memory exhausted"));
+        let first_rejected = worker.current_monthly_proposal_for_test();
+        assert_eq!(first_rejected, missed.proposal);
+        assert_eq!(
+            first_rejected.diagnostic_window_id,
+            initial.diagnostic_window_id
+        );
+        assert_eq!(first_rejected.start_attempt, initial.start_attempt);
+        assert_eq!(
+            first_rejected.resident_generation,
+            initial.resident_generation
+        );
+        assert_eq!(first_rejected.exhaustion, Some("monthly memory exhausted"));
         assert!(!missed.accepted);
-        expect_poll(&mut polls, 11, 41).await?;
         assert_eq!(worker.monthly_stop_for_test(), None);
         assert_eq!(worker.owner_stop_for_test().await, None);
         assert!(matches!(
@@ -423,31 +430,38 @@ mod retries {
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
         let usage_after_update = account.hard_limit_memory_overshoot_for_test();
         eprintln!(
-            "[monthly-tick] rejected Registry check before acceptance, same window {current:?}, overshoot={usage_after_update}"
+            "[monthly-tick] rejected Registry check before acceptance, same window {first_rejected:?}, overshoot={usage_after_update}"
         );
 
-        // Applied updates restart the existing select-loop sleep; the old 30s deadline is gone.
-        clock.advance(Duration::from_secs(19));
-        expect_poll(&mut polls, 30, 41).await?;
-        clock.advance(Duration::from_secs(10));
-        expect_poll(&mut polls, 40, 41).await?;
-        worker.drain_lifecycle_for_test().await?;
-        assert!(matches!(
-            attempts.try_recv(),
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
-        ));
-        assert_eq!(worker.monthly_stop_for_test(), None);
-        assert_eq!(worker.current_monthly_proposal_for_test(), current);
-        assert!(worker.concurrent_agent_permit_is_held().await);
-
-        clock.advance(Duration::from_secs(1));
-        expect_poll(&mut polls, 41, 41).await?;
-        let missed_tick = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
+        // Keep a second real contended check and settlement, without consuming two real
+        // 30-second periods inside the unchanged 60-second test budget. Exact cadence and
+        // rearm timing are checked on MonthlyMemoryCheck with normal Tokio virtual time.
+        let final_update_started = tokio::time::Instant::now();
+        registry.set_policy(exhausted);
+        let second_refresh = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
+            let limits = limits.clone();
+            async move { limits.run_batch_for_test().await }
+        }));
+        let missed_again = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
             .await?
-            .context("contended tick proposal")?;
-        assert_eq!(missed_tick.proposal, current);
-        assert!(!missed_tick.accepted);
-        expect_poll(&mut polls, 41, 71).await?;
+            .context("second real contended check")?;
+        let current = worker.current_monthly_proposal_for_test();
+        assert_eq!(missed_again.proposal, current);
+        assert!(!missed_again.accepted);
+        assert_eq!(current.policy_revision, first_rejected.policy_revision + 1);
+        assert_eq!(current.period, first_rejected.period);
+        assert_eq!(current.fuel_generation, first_rejected.fuel_generation);
+        assert_eq!(current.fingerprint, first_rejected.fingerprint);
+        assert_eq!(
+            current.diagnostic_window_id,
+            first_rejected.diagnostic_window_id
+        );
+        assert_eq!(current.start_attempt, first_rejected.start_attempt);
+        assert_eq!(
+            current.resident_generation,
+            first_rejected.resident_generation
+        );
+        assert_eq!(current.exhaustion, first_rejected.exhaustion);
         assert_eq!(worker.monthly_stop_for_test(), None);
         assert_eq!(worker.owner_stop_for_test().await, None);
         assert!(matches!(
@@ -461,34 +475,28 @@ mod retries {
         assert!(worker.concurrent_agent_permit_is_held().await);
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
         assert_eq!(account.monthly_observer_count_for_test(), 1);
-        assert_eq!(clock.active_sleeps(), 1);
+        assert!(worker.monthly_window_active_for_test());
         let usage_after_miss = account.hard_limit_memory_overshoot_for_test();
         assert!(usage_after_miss > usage_after_update);
         eprintln!(
-            "[monthly-tick] rejected first tick at 41s while interrupt lock remains held, overshoot={usage_after_miss}"
+            "[monthly-tick] rejected repeated applied check while interrupt lock remains held, overshoot={usage_after_miss}"
         );
         drop(interrupts);
         assert_eq!(worker.pending_stop_for_test().await, None);
 
-        clock.advance(Duration::from_secs(29));
-        expect_poll(&mut polls, 70, 71).await?;
-        worker.drain_lifecycle_for_test().await?;
-        assert!(matches!(
-            attempts.try_recv(),
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
-        ));
         assert_eq!(worker.monthly_stop_for_test(), None);
         assert_eq!(worker.current_monthly_proposal_for_test(), current);
         let (selected, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
-        clock.advance(Duration::from_secs(1));
-        expect_poll(&mut polls, 71, 71).await?;
-        let retried = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
-            .await?
-            .context("next tick proposal after contention ends")?;
+        // This waits for one ordinary monitor period under the original overall test bound,
+        // not an ordering sleep or a larger timeout after a virtual-clock advance.
+        let retried = attempts
+            .recv()
+            .await
+            .context("normal tick after contention ends")?;
+        assert!(final_update_started.elapsed() >= Duration::from_secs(30));
         assert_eq!(retried.proposal, current);
         assert!(retried.accepted);
         tokio::time::timeout(Duration::from_secs(10), selected).await??;
-        expect_poll(&mut polls, 71, 101).await?;
         let quota_stop = worker.monthly_stop_for_test().expect("accepted tick stop");
         assert!(matches!(quota_stop, InterruptKind::Suspend(_)));
         assert!(worker.terminal_stop_claimed_for_test().await);
@@ -496,7 +504,7 @@ mod retries {
         assert_eq!(worker.current_monthly_proposal_for_test(), current);
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
         assert_eq!(account.monthly_observer_count_for_test(), 1);
-        assert_eq!(clock.active_sleeps(), 1);
+        assert!(worker.monthly_window_active_for_test());
         assert!(worker.concurrent_agent_permit_is_held().await);
         assert!(!invocation.is_finished());
         assert!(matches!(
@@ -509,7 +517,7 @@ mod retries {
             "the still-held window must settle more byte-time on the retry tick"
         );
         eprintln!(
-            "[monthly-tick] accepted next tick at 71s, identical target and capacity, overshoot={usage_at_tick}"
+            "[monthly-tick] accepted ordinary tick, identical latest target and capacity, overshoot={usage_at_tick}"
         );
 
         let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
@@ -534,7 +542,7 @@ mod retries {
             Err(tokio::sync::broadcast::error::TryRecvError::Empty
                 | tokio::sync::broadcast::error::TryRecvError::Closed)
         ));
-        assert_eq!(clock.active_sleeps(), 0);
+        assert!(!worker.monthly_window_active_for_test());
         assert_eq!(account.monthly_observer_count_for_test(), 0);
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
         assert_eq!(
@@ -546,17 +554,17 @@ mod retries {
             settled > usage_at_tick,
             "accounting continues through physical release, not only stop acceptance"
         );
-        clock.advance(Duration::from_secs(60));
-        assert_eq!(clock.active_sleeps(), 0);
-        assert!(matches!(
-            polls.try_recv(),
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
-        ));
         assert!(matches!(
             attempts.try_recv(),
             Err(tokio::sync::mpsc::error::TryRecvError::Empty)
         ));
-        tokio::time::timeout(Duration::from_secs(10), refresh).await??;
+        // Monthly capacity is already applied at each rejection above. The whole batches
+        // also await filesystem-limit replies from the resident invocation loop, so join
+        // those unrelated replies only after the silent TCP invocation has unloaded.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::try_join!(first_refresh, second_refresh)
+        })
+        .await??;
         limits.run_batch_for_test().await;
         assert_eq!(account.hard_limit_memory_overshoot_for_test(), settled);
         let billed = registry.applied_memory_byte_nanoseconds();
@@ -572,6 +580,16 @@ mod retries {
             .wait_for_status(&id, AgentStatus::Suspended, Duration::from_secs(10))
             .await?;
         let oplog = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(|entry| matches!(&entry.entry,
+            PublicOplogEntry::AgentInvocationStarted(start)
+                if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                    if method.idempotency_key == key)))
+                .count(),
+            1
+        );
         assert_eq!(
             count_agent_invocation_pair_since(&oplog, OplogIndex::INITIAL),
             (2, 1)
@@ -591,6 +609,9 @@ mod retries {
             |entry| !matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == chunk)
         ));
         assert!(oplog.iter().all(|entry| !matches!(&entry.entry, PublicOplogEntry::Cancelled(cancelled) if cancelled.start_index == chunk)));
+        let stopped_raw = executor.stored_oplog(&id).await;
+        assert!(stopped_raw.len() >= original_raw.len());
+        assert_eq!(&stopped_raw[..original_raw.len()], original_raw.as_slice());
         server.await?;
 
         registry.set_policy(available);
@@ -608,27 +629,27 @@ mod retries {
             }
         })
         .await?;
-        assert_eq!(clock.active_sleeps(), 0);
+        assert!(!worker.monthly_window_active_for_test());
         assert_eq!(account.monthly_observer_count_for_test(), 0);
-        shutdown.cancel();
-        Ok(())
-    }
-
-    async fn expect_poll(
-        polls: &mut tokio::sync::mpsc::UnboundedReceiver<MonthlyTimerPollForTest>,
-        now: u64,
-        deadline: u64,
-    ) -> anyhow::Result<()> {
+        let recovered_raw = executor.stored_oplog(&id).await;
+        assert!(recovered_raw.len() >= stopped_raw.len());
+        assert_eq!(&recovered_raw[..stopped_raw.len()], stopped_raw.as_slice());
+        let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         assert_eq!(
-            tokio::time::timeout(Duration::from_secs(10), polls.recv())
-                .await
-                .with_context(|| format!("timer poll at {now}s for deadline {deadline}s"))?
-                .context("timer poll")?,
-            MonthlyTimerPollForTest {
-                now: Duration::from_secs(now),
-                deadline: Duration::from_secs(deadline),
-            }
+            count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL),
+            (2, 2)
         );
+        assert_eq!(
+            recovered
+                .iter()
+                .filter(|entry| matches!(&entry.entry,
+            PublicOplogEntry::AgentInvocationStarted(start)
+                if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                    if method.idempotency_key == key)))
+                .count(),
+            1
+        );
+        shutdown.cancel();
         Ok(())
     }
 }

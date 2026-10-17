@@ -300,6 +300,28 @@ monthly target to be inactive and capacity subscriptions to be gone. A virtual c
 count is not an additional physical-release guarantee. The P2 input/splice/multi-poll and P3
 promise/UDP completion cases retain their other oracles unchanged without those unused freezes.
 
+### Monitor cadence with the normal timer
+
+Check exact deadlines on `MonthlyMemoryCheck::duration` and `wait` in a standard paused Tokio
+runtime. The colocated tests poll the actual normal sleep before advancing time, reject early
+completion and verify rearming after an applied update and a rejected proposal. They exercise the
+existing queue function, not a copied monitor loop. This keeps two-period timing proofs independent
+of native test setup time.
+
+The real-Worker retry case uses actual interrupt-lock contention, two rejected applied revisions
+with unchanged exhausted amounts, then one normal timer tick. The accepted tick must have the exact
+latest rejected window/policy snapshot, with no intervening revision. Its elapsed lower bound comes
+from the final update, not an ordering sleep. Exact tick-rejection cadence belongs to the colocated
+proof; the native case proves applied-check rejection followed by real-timer retry, accounting,
+terminal ownership, physical release and same-key recovery within its original timeout. It also
+retains the complete stored raw prefix and checks invocation counts independently of the result.
+
+Join full Registry refresh tasks after the silent invocation unloads. Monthly policy application
+precedes the batch's unrelated filesystem-limit reply, which requires the occupied invocation loop.
+The completed rejection diagnostic proves that the policy applied; joining the whole batch before
+allowing interruption deadlocks the test. Keep both full joins after physical cleanup. The other
+time-driving consumers and Worker clock support remain separate open work.
+
 ### Native wait observations without Worker hooks
 
 Use production tracing fields for real-Worker native Pending observations, including P2, RPC, UDP
