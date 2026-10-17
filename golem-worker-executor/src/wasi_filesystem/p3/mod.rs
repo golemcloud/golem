@@ -1214,21 +1214,23 @@ where
         accessor,
         durable_worker_ctx::<Ctx, U>,
         DurableFunctionType::ReadLocal,
-        async move |start| {
-            if start.is_live {
-                let result = match descriptor_guest_path_from_accessor::<Ctx, U>(
-                    accessor,
-                    &Resource::new_borrow(fd_rep),
-                    "",
-                ) {
-                    Ok(path) => authorize_paths(accessor, &[(FilesystemVerb::Write, path)])
-                        .await
-                        .map_err(|_| ()),
-                    Err(_) => Err(()),
-                };
-                *authorization_for_start.lock().unwrap() = Some(result);
-            }
-            Ok(HostRequestNoInput {})
+        move |start, accessor| {
+            Box::pin(async move {
+                if start.is_live {
+                    let result = match descriptor_guest_path_from_accessor::<Ctx, U>(
+                        accessor,
+                        &Resource::new_borrow(fd_rep),
+                        "",
+                    ) {
+                        Ok(path) => authorize_paths(accessor, &[(FilesystemVerb::Write, path)])
+                            .await
+                            .map_err(|_| ()),
+                        Err(_) => Err(()),
+                    };
+                    *authorization_for_start.lock().unwrap() = Some(result);
+                }
+                Ok(HostRequestNoInput {})
+            })
         },
     )
     .await
