@@ -2052,9 +2052,26 @@ async fn a_leader_whose_lease_lapsed_before_its_startup_ended_is_never_marked_re
         !belief.held(),
         "the gate must stop serving once the lease is lost"
     );
-    // The watchdog gives the lease up before etcd does. Waiting out one more TTL without renewals
-    // is what makes the lease lapse in etcd too, and the key go away.
-    tokio::time::sleep(granted_ttl + Duration::from_millis(500)).await;
+    // The watchdog gives the lease up before etcd does. Reading through the direct connection, not
+    // the proxy, until the lapsed leader's key is gone is what makes the lease lapse in etcd too,
+    // however late its expiry scan runs.
+    let locator = LeaderLocator::new(
+        inspection_client(etcd).await,
+        election_name.clone(),
+        TEST_REQUEST_TIMEOUT,
+    );
+    timeout(CAMPAIGN_TIMEOUT, async {
+        while locator
+            .leader()
+            .await
+            .expect("the inspection read succeeds")
+            .is_some()
+        {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("etcd should expire the lease once renewals stop");
     proxy.restore();
 
     elected
@@ -2062,11 +2079,6 @@ async fn a_leader_whose_lease_lapsed_before_its_startup_ended_is_never_marked_re
         .publish_ready()
         .await
         .expect_err("a leader whose lease lapsed must not mark itself ready");
-    let locator = LeaderLocator::new(
-        inspection_client(etcd).await,
-        election_name,
-        TEST_REQUEST_TIMEOUT,
-    );
     assert!(
         locator
             .leader()

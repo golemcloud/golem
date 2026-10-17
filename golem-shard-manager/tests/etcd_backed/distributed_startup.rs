@@ -2387,13 +2387,11 @@ async fn a_client_that_cannot_reach_the_named_leader_recovers_when_the_leadershi
 ) {
     wipe_state(etcd).await;
     await_election_idle(etcd).await;
-    // A port that was bound and dropped refuses connections.
-    let unreachable_port = {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.local_addr().unwrap().port()
-    };
     let mut leader_config = distributed_config(etcd);
-    leader_config.grpc.advertised_port = Some(unreachable_port);
+    // A documentation address (RFC 5737) that no network routes: a connection to it gets no answer
+    // at all, like one to the IP of a pod that clients cannot reach. A refused port would fail at
+    // once and not exercise the client's connect timeout.
+    leader_config.grpc.advertised_host = Some("192.0.2.1".to_string());
     let leader_token = CancellationToken::new();
     let (leader_task, leader_started) = spawn_serving_replica(leader_config, leader_token.clone());
     timeout(STARTUP_TIMEOUT, leader_started)
@@ -2421,14 +2419,17 @@ async fn a_client_that_cannot_reach_the_named_leader_recovers_when_the_leadershi
         ..GrpcShardManagerConfig::default()
     });
     let started = Instant::now();
-    client
-        .get_routing_table()
+    timeout(STARTUP_TIMEOUT, client.get_routing_table())
         .await
+        .expect("the call must end within its budget instead of hanging")
         .expect_err("nothing serves at the address the standby names");
+    // The client's connect timeout is 10 s by default, but towards a named leader it is capped at
+    // 2 s, and a pass that failed on the named leader skips it once. Two tries cost about 4 s; two
+    // 10 s connects would cost 20 s.
     assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "the call took {:?}; an unreachable leader must cost the short connect timeout at most \
-         once per pass",
+        started.elapsed() < Duration::from_secs(9),
+        "the call took {:?}; an unreachable leader must cost the short leader connect timeout, \
+         not the configured one",
         started.elapsed()
     );
 
@@ -2437,9 +2438,9 @@ async fn a_client_that_cannot_reach_the_named_leader_recovers_when_the_leadershi
         .await
         .unwrap()
         .unwrap();
-    client
-        .get_routing_table()
+    timeout(STARTUP_TIMEOUT, client.get_routing_table())
         .await
+        .expect("the call must end within the startup timeout")
         .expect("the promoted standby serves the same client");
     let _ = leader_task.await;
     standby_task.abort();
