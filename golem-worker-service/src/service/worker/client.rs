@@ -3509,7 +3509,7 @@ mod rejection_mapping_tests {
         /// ended, which happens after the call returned its response stream.
         tail_frames: Option<tokio::sync::mpsc::UnboundedSender<(usize, usize)>>,
         /// With this set, `get_oplog_entry` counts the call in `calls`, waits for one permit of
-        /// the semaphore, and returns a `NoOp` entry at the requested index.
+        /// the semaphore, and returns a `Log` entry at the requested index.
         oplog_entry_release: Option<Arc<tokio::sync::Semaphore>>,
     }
 
@@ -3687,9 +3687,13 @@ mod rejection_mapping_tests {
                 PublicOplogEntryWithIndex {
                     oplog_index: OplogIndex::from_u64(request.into_inner().oplog_index),
                     attribution: golem_common::model::oplog::PublicOplogEntryAttribution::agent(),
-                    entry: golem_common::model::oplog::PublicOplogEntry::NoOp(
-                        golem_common::model::oplog::public_oplog_entry::NoOpParams {
+                    entry: golem_common::model::oplog::PublicOplogEntry::Log(
+                        golem_common::model::oplog::public_oplog_entry::LogParams {
                             timestamp: golem_common::model::Timestamp::now_utc(),
+                            level: golem_common::model::oplog::LogLevel::Info,
+                            context: String::new(),
+                            message: String::new(),
+                            trace_context: None,
                         },
                     ),
                 }

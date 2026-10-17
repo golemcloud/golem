@@ -31,15 +31,14 @@ use golem_common::model::lucene::Query;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, CardDerivedParams, CardEventQueuedParams, CardExpiredParams,
-    CardInstallFailedParams, CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams,
-    CardTransferConfirmedParams, CardTransferStartedParams, CardTransferredParams,
-    CommittedRemoteTransactionParams, CompletionDeliveredParams, CompletionDiscardedParams,
-    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
-    EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams,
-    GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
-    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    BeginRemoteTransactionParams, CancelPendingInvocationParams, CancelledParams,
+    CardDerivedParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams,
+    CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams, CardTransferConfirmedParams,
+    CardTransferStartedParams, CardTransferredParams, CommittedRemoteTransactionParams,
+    CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
+    DeactivatePluginParams, DropResourceParams, EndParams, ErrorParams, ExitedParams,
+    FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
+    LogParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
     PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RecoverySucceededParams,
     RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
     RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
@@ -374,19 +373,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
                 entity_parent_start_index,
                 ..
             }
-            | OplogEntry::NoOp {
-                entity_parent_start_index,
-                ..
-            }
             | OplogEntry::Jump {
-                entity_parent_start_index,
-                ..
-            }
-            | OplogEntry::BeginAtomicRegion {
-                entity_parent_start_index,
-                ..
-            }
-            | OplogEntry::EndAtomicRegion {
                 entity_parent_start_index,
                 ..
             }
@@ -471,13 +458,9 @@ impl<'a> PublicOplogAttributionResolver<'a> {
                 ..
             } => *entity_parent_start_index,
             OplogEntry::BeginRemoteTransaction {
-                original_begin_index: Some(begin_index),
+                original_begin_index: begin_index,
                 ..
             } => Some(*begin_index),
-            OplogEntry::BeginRemoteTransaction {
-                original_begin_index: None,
-                ..
-            } => Some(index.previous()),
             OplogEntry::PreCommitRemoteTransaction { begin_index, .. }
             | OplogEntry::PreRollbackRemoteTransaction { begin_index, .. }
             | OplogEntry::CommittedRemoteTransaction { begin_index, .. }
@@ -604,6 +587,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
             .oplog_service
             .read_exact(self.owned_agent_id, self.agent_mode, index, 1)
             .await
+            .map_err(|error| error.to_string())?
             .remove(&index);
         let start = entry
             .as_ref()
@@ -747,7 +731,7 @@ pub async fn get_public_oplog_entry(
 ) -> Result<PublicOplogEntryWithIndex, WorkerExecutorError> {
     let last_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
-        .await;
+        .await?;
     if oplog_index < OplogIndex::INITIAL || oplog_index > last_index {
         return Err(WorkerExecutorError::invalid_request(format!(
             "agent {owned_agent_id} has no oplog entry at index {oplog_index}"
@@ -804,7 +788,8 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
     let initial_oplog_index = initial_oplog_index.max(OplogIndex::INITIAL);
     let last_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
-        .await;
+        .await
+        .map_err(|error| error.to_string())?;
     let available = if initial_oplog_index <= last_index {
         last_index.as_u64() - initial_oplog_index.as_u64() + 1
     } else {
@@ -817,7 +802,8 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
             initial_oplog_index,
             (count as u64).min(available),
         )
-        .await;
+        .await
+        .map_err(|error| error.to_string())?;
 
     let mut entries = Vec::new();
     let mut current_component_revision = initial_component_revision;
@@ -1008,7 +994,7 @@ pub async fn find_component_revision_at(
     let mut initial_component_revision = ComponentRevision::INITIAL;
     let last_oplog_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
-        .await;
+        .await?;
     const BATCH_SIZE: u64 = 256;
     let end = start.min(last_oplog_index.next());
     let mut current = OplogIndex::INITIAL;
@@ -1016,7 +1002,7 @@ pub async fn find_component_revision_at(
         let count = (end.as_u64() - current.as_u64()).min(BATCH_SIZE);
         let entries = oplog_service
             .read_exact(owned_agent_id, agent_mode, current, count)
-            .await;
+            .await?;
         for entry in entries.into_values() {
             if let Some(revision) = entry.specifies_component_revision() {
                 initial_component_revision = revision;
@@ -1336,7 +1322,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 kind,
                 error,
                 retry_from,
-                inside_atomic_region,
                 retry_policy_state,
                 ..
             } => Ok(PublicOplogEntry::Error(ErrorParams {
@@ -1344,15 +1329,11 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 kind,
                 error: error.to_string(""),
                 retry_from,
-                inside_atomic_region,
                 retry_policy_state: retry_policy_state.map(Into::into),
             })),
             OplogEntry::RecoverySucceeded { timestamp } => Ok(PublicOplogEntry::RecoverySucceeded(
                 RecoverySucceededParams { timestamp },
             )),
-            OplogEntry::NoOp { timestamp, .. } => {
-                Ok(PublicOplogEntry::NoOp(NoOpParams { timestamp }))
-            }
             OplogEntry::Jump {
                 timestamp, jump, ..
             } => Ok(PublicOplogEntry::Jump(JumpParams { timestamp, jump })),
@@ -1364,17 +1345,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::Exited { timestamp } => {
                 Ok(PublicOplogEntry::Exited(ExitedParams { timestamp }))
             }
-            OplogEntry::BeginAtomicRegion { timestamp, .. } => Ok(
-                PublicOplogEntry::BeginAtomicRegion(BeginAtomicRegionParams { timestamp }),
-            ),
-            OplogEntry::EndAtomicRegion {
-                timestamp,
-                begin_index,
-                ..
-            } => Ok(PublicOplogEntry::EndAtomicRegion(EndAtomicRegionParams {
-                timestamp,
-                begin_index,
-            })),
             OplogEntry::PendingAgentInvocation {
                 timestamp,
                 idempotency_key,

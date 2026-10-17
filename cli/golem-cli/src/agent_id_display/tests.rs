@@ -1028,11 +1028,8 @@ fn go_options_are_bare_or_nil_and_nested_options_use_some() {
     );
 }
 
-/// The inner option reached through a named definition is recognised on both
-/// sides, so the value round-trips. The TypeScript dialect does not recognise it
-/// there, so the same value does not round-trip in TypeScript syntax.
 #[test]
-fn go_nested_option_behind_a_named_type_round_trips() {
+fn nested_option_behind_a_named_type_round_trips() {
     let inner_id = TypeId::new("maybe-count");
     let graph = SchemaGraph {
         defs: vec![SchemaTypeDef {
@@ -1042,15 +1039,51 @@ fn go_nested_option_behind_a_named_type_round_trips() {
         }],
         root: SchemaType::option(SchemaType::ref_to(inner_id)),
     };
-    for (value, expected) in [
-        (some(some(SchemaValue::U32(5))), "Some(5)"),
-        (some(none()), "Some(nil)"),
-        (none(), "nil"),
+    for (value, go_expected, ts_expected) in [
+        (some(some(SchemaValue::U32(5))), "Some(5)", "{ some: 5 }"),
+        (some(none()), "Some(nil)", "{ some: undefined }"),
+        (none(), "nil", "undefined"),
     ] {
-        let rendered = render_schema_value(&graph, &graph.root, &value, &SourceLanguage::Go);
+        for (lang, expected) in [
+            (SourceLanguage::Go, go_expected),
+            (SourceLanguage::TypeScript, ts_expected),
+        ] {
+            let rendered = render_schema_value(&graph, &graph.root, &value, &lang);
+            assert_eq!(rendered, expected);
+            let parsed = parse_value_for_language(&rendered, &graph, &graph.root, &lang).unwrap();
+            assert_eq!(parsed, value);
+        }
+    }
+}
+
+#[test]
+fn ts_nested_option_behind_an_alias_chain_round_trips() {
+    let alias_id = TypeId::new("maybe-count-alias");
+    let inner_id = TypeId::new("maybe-count");
+    let graph = SchemaGraph {
+        defs: vec![
+            SchemaTypeDef {
+                id: alias_id.clone(),
+                name: Some("maybe-count-alias".into()),
+                body: SchemaType::ref_to(inner_id.clone()),
+            },
+            SchemaTypeDef {
+                id: inner_id,
+                name: Some("maybe-count".into()),
+                body: SchemaType::option(SchemaType::u32()),
+            },
+        ],
+        root: SchemaType::option(SchemaType::ref_to(alias_id)),
+    };
+    for (value, expected) in [
+        (some(some(SchemaValue::U32(5))), "{ some: 5 }"),
+        (some(none()), "{ some: undefined }"),
+        (none(), "undefined"),
+    ] {
+        let lang = SourceLanguage::TypeScript;
+        let rendered = render_schema_value(&graph, &graph.root, &value, &lang);
         assert_eq!(rendered, expected);
-        let parsed =
-            parse_value_for_language(&rendered, &graph, &graph.root, &SourceLanguage::Go).unwrap();
+        let parsed = parse_value_for_language(&rendered, &graph, &graph.root, &lang).unwrap();
         assert_eq!(parsed, value);
     }
 }

@@ -32,6 +32,7 @@ import type {
   ValueNodeIndex,
   DefIndex,
   TypedSchemaValue as WitTypedSchemaValue,
+  PermissionCard as RawPermissionCard,
 } from "golem:core/types@2.0.0"
 
 import {
@@ -52,6 +53,7 @@ import {
   isGuestSecretHandle,
   liftGuestSecretHandleFromWire,
   peekGuestSecretHandle,
+  restoreGuestSecretHandleFromWire,
   takeGuestSecretHandleToWire,
 } from "./secretHandle.js"
 import { SECRET_INTERNAL } from "./secretInternal.js"
@@ -61,6 +63,7 @@ import {
   isGuestQuotaTokenHandle,
   liftGuestQuotaTokenHandleFromWire,
   peekGuestQuotaTokenHandle,
+  restoreGuestQuotaTokenHandleFromWire,
   takeGuestQuotaTokenHandleToWire,
 } from "./quotaTokenHandle.js"
 import { QUOTA_INTERNAL } from "./quotaInternal.js"
@@ -72,6 +75,7 @@ import {
   isGuestPermissionCardHandle,
   liftGuestPermissionCardHandleFromWire,
   peekGuestPermissionCardHandle,
+  restoreGuestPermissionCardHandleFromWire,
   takeGuestPermissionCardHandleToWire,
 } from "./permissionCardHandle.js"
 import { PERMISSION_CARD_INTERNAL } from "./permissionCardInternal.js"
@@ -1702,6 +1706,71 @@ export function drainUnconsumedQuotaAndPermissionCardHandles(
     }
   }
   return first
+}
+
+/**
+ * Give every permission card, secret, and quota token that an encoder moved into `tree` back to
+ * its handle, for a tree that never reached the host. A resource whose handle was released while
+ * it was on the wire is dropped instead. Resources without a known origin stay in the tree.
+ *
+ * Streams are not restored: the encoder has already committed a moved stream to its wire
+ * wrapper, so a stream in an unsent tree stays moved. Its wire wrapper is dropped. Call this only
+ * for trees that the SDK encoded.
+ */
+export function restoreEncodedCapabilities(tree: WitSchemaValueTree): void {
+  for (const node of tree.valueNodes) {
+    if (typeof node !== "object" || node === null) continue
+    const carrier = node as { tag: string; val: unknown }
+    if (carrier.val === undefined) continue
+    let result: "restored" | "released" | "unknown"
+    switch (carrier.tag) {
+      case "permission-card-handle":
+        result = restoreGuestPermissionCardHandleFromWire(
+          PERMISSION_CARD_INTERNAL,
+          carrier.val as RawPermissionCard,
+          node,
+        )
+        break
+      case "secret-value":
+        result = restoreGuestSecretHandleFromWire(SECRET_INTERNAL, carrier.val as never, node)
+        break
+      case "quota-token-handle":
+        result = restoreGuestQuotaTokenHandleFromWire(QUOTA_INTERNAL, carrier.val as never, node)
+        break
+      case "stream-value":
+        result = "released"
+        break
+      default:
+        continue
+    }
+    if (result === "unknown") continue
+    if (result === "released") {
+      const drop = (carrier.val as { [Symbol.dispose]?: () => void })[Symbol.dispose]
+      try {
+        drop?.call(carrier.val)
+      } catch {
+        // A failed drop must not stop the remaining restores.
+      }
+    }
+    carrier.val = undefined
+  }
+}
+
+/**
+ * Return `encoding` unchanged, and give its moved capabilities back when `signal` aborts before
+ * the awaiting fiber resumes with the tree. Register this before the caller awaits `encoding`.
+ */
+export function restoreEncodedCapabilitiesOnAbort(
+  signal: AbortSignal,
+  encoding: Promise<WitSchemaValueTree>,
+): Promise<WitSchemaValueTree> {
+  encoding.then(
+    (tree) => {
+      if (signal.aborted) restoreEncodedCapabilities(tree)
+    },
+    () => {},
+  )
+  return encoding
 }
 
 // ============================================================

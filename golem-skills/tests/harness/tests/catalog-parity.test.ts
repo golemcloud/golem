@@ -80,7 +80,7 @@ describe("catalog Effect parity", () => {
     );
   });
 
-  it("retains Effect semantic requirements and atomic result parity", async () => {
+  it("retains Effect semantic requirements", async () => {
     const scenariosWithRequirements: string[] = [];
     for (const file of (await fs.readdir(scenariosRoot)).filter((name) => name.endsWith(".yaml"))) {
       const document = yaml.parse(await fs.readFile(path.join(scenariosRoot, file), "utf8"));
@@ -90,14 +90,6 @@ describe("catalog Effect parity", () => {
       }
     }
     assert.ok(scenariosWithRequirements.length > 0);
-
-    const atomic = yaml.parse(
-      await fs.readFile(path.join(scenariosRoot, "atomic-block.yaml"), "utf8"),
-    );
-    const verification = atomic.steps.find(
-      (step: { id?: string }) => step.id === "verify-event-sequence",
-    );
-    assert.deepEqual(verification.expect.effect, verification.expect.ts);
   });
 });
 

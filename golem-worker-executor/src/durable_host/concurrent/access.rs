@@ -97,8 +97,6 @@ enum AccessTerminalGuardState {
         call: DroppedCall,
     },
     CleanupAfterTerminal {
-        atomic_lease: Option<Arc<AtomicRegionLease>>,
-        successful_end: bool,
         function_type: DurableFunctionType,
         durable_begin_index: OplogIndex,
         terminal: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
@@ -143,21 +141,6 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
         }
     }
 
-    /// Releases the armed call's atomic-region lease (idempotent, store-free). A no-op once the
-    /// guard is disarmed.
-    pub(super) fn release_atomic_lease(&self) {
-        let lease = match &self.state {
-            AccessTerminalGuardState::BeforeTerminal { call } => call.atomic_lease.as_ref(),
-            AccessTerminalGuardState::CleanupAfterTerminal { atomic_lease, .. } => {
-                atomic_lease.as_ref()
-            }
-            AccessTerminalGuardState::Disarmed => None,
-        };
-        if let Some(lease) = lease {
-            lease.release();
-        }
-    }
-
     pub(super) fn call(&self) -> Option<&DroppedCall> {
         match &self.state {
             AccessTerminalGuardState::BeforeTerminal { call } => Some(call),
@@ -172,15 +155,12 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
         &mut self,
         terminal: tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
         discard_marker: Option<CompletionMarkerRecord>,
-        successful_end: bool,
     ) {
         let call = match std::mem::replace(&mut self.state, AccessTerminalGuardState::Disarmed) {
             AccessTerminalGuardState::BeforeTerminal { call } => call,
             _ => panic!("cleanup_after_terminal called before the terminal is armed"),
         };
         self.state = AccessTerminalGuardState::CleanupAfterTerminal {
-            atomic_lease: call.atomic_lease.clone(),
-            successful_end,
             function_type: call.function_type().clone(),
             durable_begin_index: call.begin_index(),
             terminal: Some(terminal),
@@ -192,26 +172,9 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
         };
     }
 
-    pub(super) fn finish_atomic_region(
-        &self,
-        regions: &mut [crate::durable_host::ActiveAtomicRegion],
-    ) -> Result<(), WorkerExecutorError> {
-        match &self.state {
-            AccessTerminalGuardState::CleanupAfterTerminal {
-                atomic_lease,
-                successful_end,
-                ..
-            } => finish_terminal_atomic_region(regions, atomic_lease.as_deref(), *successful_end),
-            AccessTerminalGuardState::BeforeTerminal { call } => {
-                finish_terminal_atomic_region(regions, call.atomic_lease.as_deref(), true)
-            }
-            AccessTerminalGuardState::Disarmed => Ok(()),
-        }
-    }
-
     /// Disarms only the `CompletionDiscarded` marker while keeping the terminal cleanup armed.
-    /// Called on internal-error returns *after* the `End` was persisted (atomic-region close
-    /// failure, durable-scope close failure): the caller observes the error and the worker traps,
+    /// Called on internal-error returns *after* the `End` was persisted (durable-scope close
+    /// failure): the caller observes the error and the worker traps,
     /// so the completion was not silently discarded by the guest and no marker may be recorded —
     /// but the pending terminal join / permit release must still reach the drain.
     pub(super) fn suppress_discard_marker(&mut self) {
@@ -276,7 +239,6 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
         match std::mem::replace(&mut self.state, AccessTerminalGuardState::Disarmed) {
             AccessTerminalGuardState::BeforeTerminal { mut call } => {
                 if self.teardown.is_executor_shutting_down() {
-                    call.release_atomic_lease();
                     tracing::debug!(
                         start_idx = %call.start_idx(),
                         "durable call terminal abandoned during executor shutdown"
@@ -284,7 +246,6 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
                 } else if self.teardown.is_runtime_tearing_down() {
                     // Runtime abandonment is structural: release resident ownership without
                     // applying the guest-drop policy or recording a semantic terminal.
-                    call.release_atomic_lease();
                     call.span_finished = None;
                 } else {
                     if let Some(span) = &mut call.span_finished {
@@ -294,8 +255,6 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
                 }
             }
             AccessTerminalGuardState::CleanupAfterTerminal {
-                atomic_lease,
-                successful_end,
                 function_type,
                 durable_begin_index,
                 terminal,
@@ -326,8 +285,6 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
                 };
                 if let Some(sink) = &self.cleanup_sink {
                     let _ = sink.send(DropEvent::CleanupAfterTerminal {
-                        atomic_lease,
-                        successful_end,
                         function_type,
                         durable_begin_index,
                         terminal,

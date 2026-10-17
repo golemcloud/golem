@@ -2265,11 +2265,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             invocation_id: Some(DurableInvocationId::new(OplogIndex::from_u64(1), 3)),
             observational_owner: Some(OplogIndex::from_u64(2)),
             request: Some(typed_string_value("request")),
-            durable_function_type: PublicDurableFunctionType::WriteRemoteBatched(
-                WriteRemoteBatchedParameters {
-                    index: Some(OplogIndex::from_u64(1)),
-                },
-            ),
+            durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
             span_started: Some(PublicSpanStarted {
                 span_id: span_id("0000000000000001"),
                 trace_id: trace_id("00000000000000000000000000000002"),
@@ -2338,13 +2334,9 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             kind: OplogErrorKind::Invocation,
             error: "generated error".to_string(),
             retry_from: OplogIndex::INITIAL,
-            inside_atomic_region: false,
             retry_policy_state: Some(retry_policy_state),
         }),
         PublicOplogEntry::RecoverySucceeded(RecoverySucceededParams {
-            timestamp: timestamp(),
-        }),
-        PublicOplogEntry::NoOp(NoOpParams {
             timestamp: timestamp(),
         }),
         PublicOplogEntry::Jump(JumpParams {
@@ -2359,13 +2351,6 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::Exited(ExitedParams {
             timestamp: timestamp(),
-        }),
-        PublicOplogEntry::BeginAtomicRegion(BeginAtomicRegionParams {
-            timestamp: timestamp(),
-        }),
-        PublicOplogEntry::EndAtomicRegion(EndAtomicRegionParams {
-            timestamp: timestamp(),
-            begin_index: OplogIndex::from_u64(1),
         }),
         PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
             timestamp: timestamp(),

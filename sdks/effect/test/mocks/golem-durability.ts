@@ -1,13 +1,10 @@
 import type { TypedSchemaValue } from "golem:core/types@2.0.0"
-import type { OplogIndex } from "./golem-core-types.js"
 
 export type DurableFunctionType =
   | { tag: "read-local" }
   | { tag: "write-local" }
   | { tag: "read-remote" }
   | { tag: "write-remote" }
-  | { tag: "write-remote-batched"; val: OplogIndex | undefined }
-  | { tag: "write-remote-transaction"; val: OplogIndex | undefined }
 export type OplogEntryVersion = "v1" | "v2"
 export type PersistedDurableFunctionInvocation = {
   timestamp: { seconds: bigint; nanoseconds: number }

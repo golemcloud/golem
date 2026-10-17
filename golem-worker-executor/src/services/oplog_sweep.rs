@@ -785,7 +785,7 @@ impl OplogSweeper {
 
         let current = match route
             .source
-            .try_get_last_index(&owned_agent_id, AgentMode::Ephemeral)
+            .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
             .await
         {
             Ok(current) => current,
@@ -1071,10 +1071,11 @@ mod tests {
     use super::*;
     use crate::model::ExecutionStatus;
 
+    use crate::services::oplog::OplogArchiveResult;
     use crate::services::oplog::{
         BlobOplogArchiveService, CommitLevel, CompressedOplogArchiveService, EphemeralOplog,
-        MultiLayerOplog, MultiLayerOplogService, OplogArchive, OplogError, OplogService,
-        PrimaryOplogService,
+        MultiLayerOplog, MultiLayerOplogService, OplogArchive, OplogError, OplogReadError,
+        OplogService, PrimaryOplogService,
     };
     use crate::services::shard::ShardServiceDefault;
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
@@ -1960,6 +1961,7 @@ mod tests {
                 archive
                     .open(&owned_agent_id, AgentMode::Ephemeral, None)
                     .await
+                    .unwrap()
                     .append(&[(at, OplogEntry::suspend())])
                     .await
                     .unwrap();
@@ -2099,7 +2101,8 @@ mod tests {
                     execution_lock(),
                     None,
                 )
-                .await;
+                .await
+                .unwrap();
             Ok(match MultiLayerOplog::try_archive_blocking(&oplog).await {
                 Ok(Some(more)) => Some(more),
                 Ok(None) => EphemeralOplog::try_archive_blocking(&oplog)
@@ -2228,7 +2231,8 @@ mod tests {
                 execution_lock(),
                 None,
             )
-            .await;
+            .await
+            .unwrap();
         oplog.add(OplogEntry::suspend()).await.unwrap();
         oplog.add(OplogEntry::exited()).await.unwrap();
         oplog.commit(CommitLevel::Always).await.unwrap();
@@ -2271,13 +2275,15 @@ mod tests {
         assert_eq!(
             layers.archives[0]
                 .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
-                .await,
+                .await
+                .unwrap(),
             OplogIndex::from_u64(3)
         );
         assert_eq!(
             layers.archives[1]
                 .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
-                .await,
+                .await
+                .unwrap(),
             OplogIndex::NONE
         );
 
@@ -2295,13 +2301,15 @@ mod tests {
         assert_eq!(
             layers.archives[0]
                 .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
-                .await,
+                .await
+                .unwrap(),
             OplogIndex::NONE
         );
         assert_eq!(
             layers.archives[1]
                 .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
-                .await,
+                .await
+                .unwrap(),
             OplogIndex::from_u64(3)
         );
 
@@ -2321,7 +2329,8 @@ mod tests {
                 OplogIndex::INITIAL,
                 3,
             )
-            .await;
+            .await
+            .unwrap();
         assert_eq!(entries.len(), 3);
         assert!(matches!(
             entries.get(&OplogIndex::INITIAL),
@@ -2364,13 +2373,15 @@ mod tests {
         assert_eq!(
             layers.archives[0]
                 .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
-                .await,
+                .await
+                .unwrap(),
             OplogIndex::NONE
         );
         assert_eq!(
             layers.archives[1]
                 .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
-                .await,
+                .await
+                .unwrap(),
             OplogIndex::from_u64(3)
         );
     }
@@ -2422,14 +2433,16 @@ mod tests {
             assert_eq!(
                 layers.archives[0]
                     .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
-                    .await,
+                    .await
+                    .unwrap(),
                 OplogIndex::NONE,
                 "{agent_id} is still in the layer"
             );
             assert_eq!(
                 layers.archives[1]
                     .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
-                    .await,
+                    .await
+                    .unwrap(),
                 OplogIndex::from_u64(3)
             );
         }
@@ -2726,7 +2739,8 @@ mod tests {
         assert_eq!(
             layers.archives[0]
                 .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
-                .await,
+                .await
+                .unwrap(),
             OplogIndex::from_u64(4),
             "and nothing was moved out from under the writer"
         );
@@ -2771,7 +2785,8 @@ mod tests {
         assert_eq!(
             layers.archives[0]
                 .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
-                .await,
+                .await
+                .unwrap(),
             OplogIndex::from_u64(3),
             "the entries stay where the running agent expects them"
         );
@@ -2806,7 +2821,8 @@ mod tests {
         let owned_agent_id = OwnedAgentId::new(environment_id, agent_id);
         let layer = archive
             .open(&owned_agent_id, AgentMode::Ephemeral, None)
-            .await;
+            .await
+            .unwrap();
         layer
             .append(&[
                 (OplogIndex::INITIAL, create_entry(agent_id, environment_id)),
@@ -3079,7 +3095,8 @@ mod tests {
                 execution_lock(),
                 None,
             )
-            .await;
+            .await
+            .unwrap();
         oplog.add(OplogEntry::suspend()).await.unwrap();
         oplog.add(OplogEntry::exited()).await.unwrap();
         oplog.commit(CommitLevel::Always).await.unwrap();
@@ -3092,7 +3109,8 @@ mod tests {
                 OplogIndex::INITIAL,
                 1,
             )
-            .await;
+            .await
+            .unwrap();
         assert!(
             stranded.is_empty(),
             "the second lifetime must not start at OplogIndex::INITIAL, or this proves nothing"
@@ -3105,7 +3123,8 @@ mod tests {
         assert_eq!(
             layers.archives[0]
                 .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
-                .await,
+                .await
+                .unwrap(),
             OplogIndex::NONE
         );
     }
@@ -3181,7 +3200,8 @@ mod tests {
         assert_eq!(
             layers.archives[0]
                 .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
-                .await,
+                .await
+                .unwrap(),
             OplogIndex::NONE
         );
     }
@@ -3316,7 +3336,8 @@ mod tests {
                     &OwnedAgentId::new(environment_id, &agent_id),
                     AgentMode::Ephemeral
                 )
-                .await,
+                .await
+                .unwrap(),
             OplogIndex::NONE,
             "the entries stay in the layer"
         );
@@ -3363,7 +3384,8 @@ mod tests {
                 execution_lock(),
                 None,
             )
-            .await;
+            .await
+            .unwrap();
         oplog.add(OplogEntry::suspend()).await.unwrap();
         oplog.commit(CommitLevel::Always).await.unwrap();
         drop(oplog);
@@ -3689,15 +3711,15 @@ mod tests {
             owned_agent_id: &OwnedAgentId,
             agent_mode: AgentMode,
             shard_epoch: Option<ShardEpoch>,
-        ) -> Arc<dyn OplogArchive + Send + Sync> {
-            Arc::new(MiscountingArchive {
+        ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
+            Ok(Arc::new(MiscountingArchive {
                 inner: self
                     .inner
                     .open(owned_agent_id, agent_mode, shard_epoch)
-                    .await,
+                    .await?,
                 keeps_entries: self.keeps_entries,
                 appends: self.appends.clone(),
-            })
+            }))
         }
 
         async fn open_fresh(
@@ -3705,22 +3727,22 @@ mod tests {
             owned_agent_id: &OwnedAgentId,
             agent_mode: AgentMode,
             shard_epoch: Option<ShardEpoch>,
-        ) -> Arc<dyn OplogArchive + Send + Sync> {
-            Arc::new(MiscountingArchive {
+        ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
+            Ok(Arc::new(MiscountingArchive {
                 inner: self
                     .inner
                     .open_fresh(owned_agent_id, agent_mode, shard_epoch)
-                    .await,
+                    .await?,
                 keeps_entries: self.keeps_entries,
                 appends: self.appends.clone(),
-            })
+            }))
         }
 
         async fn delete(
             &self,
             owned_agent_id: &OwnedAgentId,
             agent_mode: AgentMode,
-        ) -> Result<(), String> {
+        ) -> OplogArchiveResult<()> {
             self.inner.delete(owned_agent_id, agent_mode).await
         }
 
@@ -3730,13 +3752,17 @@ mod tests {
             agent_mode: AgentMode,
             idx: OplogIndex,
             n: u64,
-        ) -> BTreeMap<OplogIndex, OplogEntry> {
+        ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
             self.inner
                 .read_source(owned_agent_id, agent_mode, idx, n)
                 .await
         }
 
-        async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
+        async fn exists(
+            &self,
+            owned_agent_id: &OwnedAgentId,
+            agent_mode: AgentMode,
+        ) -> OplogArchiveResult<bool> {
             self.inner.exists(owned_agent_id, agent_mode).await
         }
 
@@ -3758,7 +3784,7 @@ mod tests {
             &self,
             owned_agent_id: &OwnedAgentId,
             agent_mode: AgentMode,
-        ) -> OplogIndex {
+        ) -> OplogArchiveResult<OplogIndex> {
             self.inner.get_last_index(owned_agent_id, agent_mode).await
         }
 
@@ -3780,7 +3806,7 @@ mod tests {
             &self,
             idx: OplogIndex,
             n: u64,
-        ) -> Result<BTreeMap<OplogIndex, OplogEntry>, String> {
+        ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
             self.inner.read_source(idx, n).await
         }
 
@@ -3797,7 +3823,7 @@ mod tests {
         async fn verify_persisted(
             &self,
             entries: &[(OplogIndex, OplogEntry)],
-        ) -> Result<(), String> {
+        ) -> OplogArchiveResult<()> {
             if self.keeps_entries {
                 self.inner.verify_persisted(entries).await
             } else {
@@ -3805,7 +3831,7 @@ mod tests {
             }
         }
 
-        async fn current_oplog_index(&self) -> Result<OplogIndex, String> {
+        async fn current_oplog_index(&self) -> OplogArchiveResult<OplogIndex> {
             self.inner.current_oplog_index().await
         }
 
@@ -3817,11 +3843,11 @@ mod tests {
             }
         }
 
-        async fn length(&self) -> Result<u64, String> {
+        async fn length(&self) -> OplogArchiveResult<u64> {
             self.inner.length().await
         }
 
-        async fn get_last_index(&self) -> Result<OplogIndex, String> {
+        async fn get_last_index(&self) -> OplogArchiveResult<OplogIndex> {
             self.inner.get_last_index().await
         }
     }
@@ -3935,7 +3961,8 @@ mod tests {
             assert_eq!(
                 archive
                     .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
-                    .await,
+                    .await
+                    .unwrap(),
                 OplogIndex::NONE,
                 "layer {level} still holds entries for an agent reported as archived"
             );
@@ -4162,7 +4189,8 @@ mod tests {
         assert_eq!(
             layers.archives[0]
                 .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
-                .await,
+                .await
+                .unwrap(),
             OplogIndex::from_u64(3),
             "the entries stay in the layer"
         );
@@ -4265,6 +4293,7 @@ mod tests {
             if layers.archives[1]
                 .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
                 .await
+                .unwrap()
                 != OplogIndex::NONE
             {
                 break;
@@ -4281,7 +4310,8 @@ mod tests {
         assert_eq!(
             layers.archives[1]
                 .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
-                .await,
+                .await
+                .unwrap(),
             OplogIndex::from_u64(3),
             "the loop should have archived before it was asked to stop"
         );

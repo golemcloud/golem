@@ -68,12 +68,15 @@ pub(crate) struct StartClaim {
     /// The `Start` opens a custom durable invocation. Replay returns its persisted result without
     /// executing its body, so the records under it are drained instead of claimed.
     custom_invocation: bool,
+    /// The call makes host-internal calls under its own `Start` (see
+    /// `DurableCallSession::invoke_host_internal_access`). When its recorded terminal is a
+    /// `Cancelled` without a partial result, the guest never observed the call, and the records
+    /// of those host-internal calls are drained instead of claimed.
+    host_internal_calls: bool,
 }
 
 impl StartClaim {
-    /// A durable call `Start` that is not owned by another record. The expected recorded
-    /// `parent_start_index` is still the scope encoded in the durable function type when there is
-    /// one (batched / transaction `Some(begin_index)`), mirroring how the write side derives it.
+    /// A durable call `Start` with no parent record.
     pub(crate) fn unowned(
         function_name: &HostFunctionName,
         function_type: &DurableFunctionType,
@@ -83,10 +86,11 @@ impl StartClaim {
             tool_rejection_function_name: None,
             function_type: function_type.clone(),
             kind: StartKind::Call,
-            parent_start_index: parent_start_index_of(function_type),
+            parent_start_index: None,
             observational_owner: None,
             invocation_id: None,
             custom_invocation: false,
+            host_internal_calls: false,
         }
     }
 
@@ -161,14 +165,14 @@ impl StartClaim {
         self
     }
 
-    /// The invocation id the recorded `Start` must carry.
-    pub(super) fn expected_invocation_id(&self) -> Option<DurableInvocationId> {
-        self.invocation_id
+    /// Marks the call as one that makes host-internal calls under its own `Start`.
+    pub(crate) fn with_host_internal_calls(mut self, host_internal_calls: bool) -> Self {
+        self.host_internal_calls = host_internal_calls;
+        self
     }
 
-    /// The expected recorded host function name of the accepted `Start`.
-    pub(super) fn expected_function_name(&self) -> &HostFunctionName {
-        &self.function_name
+    pub(super) fn makes_host_internal_calls(&self) -> bool {
+        self.host_internal_calls
     }
 
     pub(super) fn matches_function_name(&self, actual: &HostFunctionName) -> bool {
@@ -194,6 +198,10 @@ impl StartClaim {
 
     pub(super) fn is_custom_invocation(&self) -> bool {
         self.custom_invocation
+    }
+
+    pub(super) fn expected_invocation_id(&self) -> Option<DurableInvocationId> {
+        self.invocation_id
     }
 
     pub(super) fn matches_start_identity(&self, entry: &OplogEntry) -> bool {
@@ -256,7 +264,7 @@ impl ReplayState {
         start_index: OplogIndex,
     ) -> Result<bool, WorkerExecutorError> {
         self.run_owned_cursor_op(move |state| async move {
-            if state.has_visible_terminal(start_index).await {
+            if state.has_visible_terminal(start_index).await? {
                 return Ok(false);
             }
             let mut st = state.cursor.state.lock().await;
@@ -432,9 +440,8 @@ impl ReplayState {
                                 }
                                 match tx.deleted_region_contains_start(&owned_claim).await? {
                                     Some(index) if index > tx.cursor.last_replayed_index() => {
-                                        // The entity's atomic mask is installed before its body
-                                        // starts. A host subtask must not publish local liveness
-                                        // before the guest consumes the retained atomic Begin.
+                                        // A host subtask must not publish local liveness before
+                                        // the guest consumes the surviving positional prefix.
                                         Ok((None, Some(BlockedOn::CursorProgress), None))
                                     }
                                     Some(_) => Ok((None, None, Some(Missing::DeletedRegion))),
@@ -446,9 +453,6 @@ impl ReplayState {
                                     },
                                 }
                             }
-                            Ok(StartClaimAttempt::MissingSettling { .. }) => unreachable!(
-                                "ordinary Start claims never enter missing-scope settlement"
-                            ),
                             Err(error) => Err(error),
                         }
                     };
@@ -572,134 +576,6 @@ impl ReplayState {
         Ok((handle.start_idx(), handle))
     }
 
-    /// Claims an exact synthetic scope `Start`. If no such entry was committed, atomically proves
-    /// that the remaining replay suffix has no competing claim, scope `Start` with the same
-    /// invocation id, delivery boundary, or concurrent side effect before entering replay
-    /// settlement.
-    pub(crate) async fn claim_scope_start_or_recover_missing(
-        &self,
-        expected_function_name: &HostFunctionName,
-        expected_function_type: &DurableFunctionType,
-        parent_start_index: Option<OplogIndex>,
-        invocation_id: Option<DurableInvocationId>,
-    ) -> Result<ScopeStartClaimOutcome, WorkerExecutorError> {
-        self.claim_scope_start_with_missing_recovery(
-            expected_function_name,
-            expected_function_type,
-            parent_start_index,
-            invocation_id,
-            true,
-        )
-        .await
-    }
-
-    /// Claims an exact synthetic scope `Start`, reporting absence without switching replay to live.
-    pub(crate) async fn claim_scope_start_if_present(
-        &self,
-        expected_function_name: &HostFunctionName,
-        expected_function_type: &DurableFunctionType,
-        parent_start_index: Option<OplogIndex>,
-        invocation_id: Option<DurableInvocationId>,
-    ) -> Result<ScopeStartClaimOutcome, WorkerExecutorError> {
-        self.claim_scope_start_with_missing_recovery(
-            expected_function_name,
-            expected_function_type,
-            parent_start_index,
-            invocation_id,
-            false,
-        )
-        .await
-    }
-
-    /// Claims an exact synthetic scope `Start` without polling `readiness` when the scope exists.
-    /// If it is missing, waits for the caller's recovery precondition and then atomically repeats
-    /// the exact claim and missing-scope safety checks before switching replay to live.
-    pub(crate) async fn claim_scope_start_or_recover_missing_when_ready(
-        &self,
-        expected_function_name: &HostFunctionName,
-        expected_function_type: &DurableFunctionType,
-        parent_start_index: Option<OplogIndex>,
-        invocation_id: Option<DurableInvocationId>,
-        readiness: impl Future<Output = Result<(), WorkerExecutorError>>,
-    ) -> Result<ScopeStartClaimOutcome, WorkerExecutorError> {
-        match self
-            .claim_scope_start_if_present(
-                expected_function_name,
-                expected_function_type,
-                parent_start_index,
-                invocation_id,
-            )
-            .await?
-        {
-            claimed @ ScopeStartClaimOutcome::Claimed { .. } => Ok(claimed),
-            ScopeStartClaimOutcome::Missing => {
-                readiness.await?;
-                self.claim_scope_start_or_recover_missing(
-                    expected_function_name,
-                    expected_function_type,
-                    parent_start_index,
-                    invocation_id,
-                )
-                .await
-            }
-            ScopeStartClaimOutcome::MissingSettling { .. } => {
-                unreachable!("presence-only scope claim never enters replay settlement")
-            }
-        }
-    }
-
-    async fn claim_scope_start_with_missing_recovery(
-        &self,
-        expected_function_name: &HostFunctionName,
-        expected_function_type: &DurableFunctionType,
-        parent_start_index: Option<OplogIndex>,
-        invocation_id: Option<DurableInvocationId>,
-        recover_missing: bool,
-    ) -> Result<ScopeStartClaimOutcome, WorkerExecutorError> {
-        let claim = StartClaim::scope(
-            expected_function_name,
-            expected_function_type,
-            parent_start_index,
-        )
-        .with_invocation_id(invocation_id);
-        loop {
-            let progress = self.cursor.progress.notified();
-            tokio::pin!(progress);
-            progress.as_mut().enable();
-
-            let owned_claim = claim.clone();
-            let outcome = self
-                .run_owned_cursor_op(move |state| async move {
-                    let gated = async |tx: &mut super::cursor::CursorTx<'_>| {
-                        tx.claim_scope_start_with_missing_recovery(&owned_claim, recover_missing)
-                            .await
-                    };
-                    state
-                        .with_claim_tx(&owned_claim, StartClaimAttempt::Claimed, gated)
-                        .await
-                })
-                .await?;
-
-            match outcome {
-                StartClaimAttempt::Claimed(handle, _) => {
-                    return Ok(ScopeStartClaimOutcome::Claimed {
-                        begin_index: handle.start_idx(),
-                        handle,
-                    });
-                }
-                StartClaimAttempt::Missing => {
-                    debug_assert!(!recover_missing);
-                    return Ok(ScopeStartClaimOutcome::Missing);
-                }
-                StartClaimAttempt::MissingSettling { replay_target } => {
-                    debug_assert!(recover_missing);
-                    return Ok(ScopeStartClaimOutcome::MissingSettling { replay_target });
-                }
-                StartClaimAttempt::Blocked(on) => self.wait_while_blocked(on, progress).await?,
-            }
-        }
-    }
-
     /// Claims the `Start` of a custom durable invocation by its invocation id and marks it as a
     /// replay-inert subtree root: replay returns the root's persisted result without executing its
     /// body, so the records under it are drained while its resolution is awaited.
@@ -757,16 +633,4 @@ pub(crate) enum CustomStartClaimOutcome {
     /// Store already continued live locally, or the `Start` belongs to a deleted replay region, so
     /// the invocation is new for that Store.
     StoreAlreadyLive,
-}
-
-/// The `parent_start_index` a durable call's `Start` entry is recorded with when the caller does
-/// not open its own durable scope: the scope explicitly encoded in the durable function type
-/// (batched / transaction `Some(begin_index)`), or `None` for top-level calls. This mirrors the
-/// derivation on the write side, so claims can reproduce the recorded value.
-pub(super) fn parent_start_index_of(function_type: &DurableFunctionType) -> Option<OplogIndex> {
-    match function_type {
-        DurableFunctionType::WriteRemoteBatched(Some(idx))
-        | DurableFunctionType::WriteRemoteTransaction(Some(idx)) => Some(*idx),
-        _ => None,
-    }
 }

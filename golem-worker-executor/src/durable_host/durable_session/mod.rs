@@ -75,9 +75,9 @@ use golem_common::base_model::durable_stream::{
 use golem_common::base_model::oplog::OplogEntry;
 use golem_common::model::Timestamp;
 use golem_common::model::entity::OwnerRuntime;
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::payload::OplogPayload;
 use golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal;
-use golem_common::model::oplog::{DurableFunctionType, OplogIndex};
 use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_schema::schema::wit::{encode_value_with_streams, wire};
 use golem_schema::schema::{SchemaFingerprintV1, SchemaGraph, SchemaType, schema_fingerprint_v1};
@@ -1301,7 +1301,7 @@ impl StreamSession {
                                 "durable initial attachment has no pending invocation".to_string()
                             })?
                         )
-                        .await,
+                        .await?,
                     OplogEntry::PendingAgentInvocation { idempotency_key, .. }
                         if idempotency_key == self.session_key.idempotency_key
                 ))
@@ -5389,7 +5389,7 @@ impl StreamSession {
         let horizon = self.oplog.current_oplog_index().await;
         while covered < horizon {
             let count = (horizon.as_u64() - covered.as_u64()).min(1024);
-            for (index, entry) in self.oplog.read_exact(covered.next(), count).await {
+            for (index, entry) in self.oplog.read_exact(covered.next(), count).await? {
                 if self
                     .producer
                     .fork_lineage
@@ -7309,7 +7309,6 @@ impl DurableInputProducer {
                     .expect("worker cleanup queue"),
                 trap_context: DurableCallTrapContext {
                     retry_from: InFunctionRetryHost::current_retry_point(ctx),
-                    in_atomic_region: InFunctionRetryHost::in_atomic_region(ctx),
                 },
                 live_call_permit: LiveCallPermit::new(ctx.state.live_host_call_counter()),
             };
@@ -7391,10 +7390,7 @@ impl DurableInputProducer {
                 if !ctx.is_live() {
                     let observation = if guest {
                         StreamConsumerObservation::Guest {
-                            parent_start_index: ctx.child_parent_start_index(
-                                &DurableFunctionType::ReadLocal,
-                                OplogIndex::INITIAL,
-                            ),
+                            parent_start_index: ctx.entity_parent_start_index(),
                         }
                     } else {
                         StreamConsumerObservation::Host
@@ -7455,10 +7451,7 @@ impl DurableInputProducer {
                 suspension,
                 if guest {
                     StreamConsumerObservation::Guest {
-                        parent_start_index: ctx.child_parent_start_index(
-                            &DurableFunctionType::ReadLocal,
-                            OplogIndex::INITIAL,
-                        ),
+                        parent_start_index: ctx.entity_parent_start_index(),
                     }
                 } else {
                     StreamConsumerObservation::Host

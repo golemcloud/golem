@@ -97,8 +97,7 @@ export * as Datetime from "./Datetime.js"
 
 /**
  * Effect-typed wrappers around the execution-mode controls on
- * `golem:api/host@1.5.0` (persistence level, idempotence mode, atomic
- * regions, oplog commit, idempotency-key generation), plus the high-level
+ * `golem:api/host@1.5.0` (oplog commit and idempotency-key generation), plus the high-level
  * `wrap` / `wrapInfallible` durable-function combinator.
  *
  * @since 1.5.0
@@ -186,13 +185,22 @@ export * as Middleware from "./Middleware.js"
 export * as Multimodal from "./Multimodal.js"
 
 /**
- * Effect-typed wrappers around `golem:api/oplog@1.5.0` plus
- * `getOplogIndex` / `setOplogIndex`.
+ * Effect-typed read and search wrappers around `golem:api/oplog@1.5.0`.
  *
  * @since 1.5.0
  * @category modules
  */
 export * as Oplog from "./Oplog.js"
+
+/**
+ * Effect-typed permission-card management over `golem:permissions@0.1.0`:
+ * inspection, derivation, scope cards, revocation, installation, the wallet,
+ * and kernel introspection.
+ *
+ * @since 1.6.0
+ * @category modules
+ */
+export * as Permissions from "./Permissions.js"
 
 /** Runtime agent-type discovery. @since 1.6.0 @category modules */
 export * as Reflection from "./Reflection.js"

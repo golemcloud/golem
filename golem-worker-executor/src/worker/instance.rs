@@ -23,7 +23,7 @@ use crate::durable_host::tool::operation::{DeferredAdmissionTable, OwnerToolOper
 use crate::model::ExecutionStatus;
 use crate::services::active_agents::WorkerComponentCharge;
 use crate::services::agent_filesystem::FilesystemGenerationHandle;
-use crate::services::oplog::{CommitLevel, Oplog, OplogFence};
+use crate::services::oplog::{CommitLevel, Oplog, OplogRefusal};
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::{HasActiveAgents, HasComponentService, HasWasmtimeEngine};
 use crate::workerctx::WorkerCtx;
@@ -42,7 +42,7 @@ use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 #[cfg(feature = "test-utils")]
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, Weak};
 use tracing::warn;
 use wasmtime::component::{Component, Instance};
@@ -128,7 +128,6 @@ pub struct OwnerExecution {
     primary_tail_work: crate::durable_host::tail_work::TailWorkTracker,
     tool_operations: Arc<OwnerToolOperations>,
     deferred_tool_admission: Arc<DeferredAdmissionTable>,
-    reached_oplog_marker: AtomicU64,
     #[cfg(feature = "test-utils")]
     monotonic_clock_start_gate: Mutex<Option<Arc<ClockNowGate>>>,
 }
@@ -200,7 +199,6 @@ impl OwnerExecution {
             tool_operations: OwnerToolOperations::new(),
             primary_tail_work,
             deferred_tool_admission: Arc::new(DeferredAdmissionTable::default()),
-            reached_oplog_marker: AtomicU64::new(OplogIndex::NONE.into()),
             #[cfg(feature = "test-utils")]
             monotonic_clock_start_gate: Mutex::new(None),
         }
@@ -240,16 +238,6 @@ impl OwnerExecution {
         self.deferred_tool_admission.clone()
     }
 
-    pub(crate) fn mark_reached_oplog_marker(&self, marker: OplogIndex) {
-        self.reached_oplog_marker
-            .store(marker.into(), Ordering::Release);
-    }
-
-    pub fn reached_oplog_marker(&self) -> Option<OplogIndex> {
-        let marker = OplogIndex::from_u64(self.reached_oplog_marker.load(Ordering::Acquire));
-        (marker != OplogIndex::NONE).then_some(marker)
-    }
-
     /// Installs a fresh owner replay cursor. Lifecycle recovery uses the returned cursor through
     /// [`Self::replay`]; exposing the installation step also lets integration tests reconstruct
     /// transient entity Stores without inventing a persistent child runtime.
@@ -261,9 +249,7 @@ impl OwnerExecution {
         let old_append_tasks = self.append_tasks.lock().unwrap().clone();
         old_append_tasks.seal_and_wait().await;
         let boundary = self.card_boundary.clone().lock_owned().await;
-        self.commit(CommitLevel::Always)
-            .await
-            .map_err(crate::services::oplog::OplogError::Fenced)?;
+        self.commit(CommitLevel::Always).await?;
         let baseline = self
             .wallet()
             .await?
@@ -306,8 +292,6 @@ impl OwnerExecution {
         self.tool_operations.join_owner_failure_cleanup().await?;
         self.tool_operations.begin_generation()?;
         self.deferred_tool_admission.begin_generation()?;
-        self.reached_oplog_marker
-            .store(OplogIndex::NONE.into(), Ordering::Release);
         let mut generation = self.generation.write().await;
         wallet.activate_interest().await;
         if let Some(old) = generation.as_ref() {
@@ -379,6 +363,7 @@ impl OwnerExecution {
         Ok(())
     }
 
+    #[cfg(feature = "test-utils")]
     pub(crate) async fn replay(&self) -> Result<ReplayState, WorkerExecutorError> {
         self.generation
             .read()
@@ -498,7 +483,7 @@ impl OwnerExecution {
         Ok(())
     }
 
-    pub async fn commit(&self, level: CommitLevel) -> Result<OplogIndex, OplogFence> {
+    pub async fn commit(&self, level: CommitLevel) -> Result<OplogIndex, OplogRefusal> {
         self.commit
             .commit_and_update_state(level)
             .await

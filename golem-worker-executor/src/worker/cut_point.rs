@@ -18,8 +18,8 @@
 //! entries at or before the cut survive, everything after it is dropped (revert) or never copied
 //! (fork). A retained `Start` without its terminal uses ordinary incomplete-call recovery;
 //! a retained accessor `End` without its completion marker is delivered at the replay tail.
-//! Outcomes beyond the cut do not constrain these calls. Atomic regions and remote transactions
-//! still require a cut that preserves their committed/rolled-back outcome.
+//! Outcomes beyond the cut do not constrain these calls. Remote transactions still require a
+//! cut that preserves their committed/rolled-back outcome.
 
 use crate::worker::status::update_queue::UpdateQueue;
 use golem_common::base_model::OplogIndex;
@@ -90,11 +90,6 @@ pub fn validate_snapshot_update_boundaries(
 /// A paired durable construct whose two halves lie on opposite sides of a cut point.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpanningConstruct {
-    /// An atomic region begun at or before the cut whose `EndAtomicRegion` lies after it.
-    AtomicRegion {
-        begin_index: OplogIndex,
-        end_index: OplogIndex,
-    },
     /// A remote transaction begun at or before the cut with a pre-commit/pre-rollback,
     /// committed/rolled-back, or retried-begin entry after it.
     RemoteTransaction {
@@ -106,13 +101,6 @@ pub enum SpanningConstruct {
 impl Display for SpanningConstruct {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            SpanningConstruct::AtomicRegion {
-                begin_index,
-                end_index,
-            } => write!(
-                f,
-                "an open atomic region (begun at oplog index {begin_index}, ended at {end_index})"
-            ),
             SpanningConstruct::RemoteTransaction {
                 begin_index,
                 reference_index,
@@ -124,36 +112,30 @@ impl Display for SpanningConstruct {
     }
 }
 
-/// Scans `(cut_point, scan_end]` for an atomic-region or remote-transaction outcome that
+/// Scans `(cut_point, scan_end]` for a remote-transaction outcome that
 /// references an opening entry at or before the cut. Ordinary call terminals and completion
 /// markers may lie beyond the cut: replay recovers from precisely the retained prefix.
 ///
 /// Entries inside `skipped_regions` are ignored on both sides: a terminal inside an
 /// already-deleted region is dead, and a terminal whose referenced opening entry lies in a
-/// deleted region is an orphan that replay drains without effect.
-pub async fn find_construct_spanning_cut_point<Read, ReadFut>(
+/// deleted region is an orphan that replay drains without effect. A failed `read` ends the scan
+/// with its error.
+pub async fn find_construct_spanning_cut_point<Read, ReadFut, E>(
     read: Read,
     cut_point: OplogIndex,
     scan_end: OplogIndex,
     skipped_regions: &DeletedRegions,
-) -> Option<SpanningConstruct>
+) -> Result<Option<SpanningConstruct>, E>
 where
     Read: Fn(OplogIndex) -> ReadFut,
-    ReadFut: Future<Output = OplogEntry>,
+    ReadFut: Future<Output = Result<OplogEntry, E>>,
 {
     for idx in OplogIndexRange::new(cut_point.next(), scan_end) {
         if skipped_regions.is_in_deleted_region(idx) {
             continue;
         }
-        let entry = read(idx).await;
+        let entry = read(idx).await?;
         let spanning = match &entry {
-            OplogEntry::EndAtomicRegion { begin_index, .. } => Some((
-                *begin_index,
-                SpanningConstruct::AtomicRegion {
-                    begin_index: *begin_index,
-                    end_index: idx,
-                },
-            )),
             OplogEntry::PreCommitRemoteTransaction { begin_index, .. }
             | OplogEntry::PreRollbackRemoteTransaction { begin_index, .. }
             | OplogEntry::CommittedRemoteTransaction { begin_index, .. }
@@ -165,7 +147,7 @@ where
                 },
             )),
             OplogEntry::BeginRemoteTransaction {
-                original_begin_index: Some(original_begin_index),
+                original_begin_index,
                 ..
             } => Some((
                 *original_begin_index,
@@ -187,11 +169,9 @@ where
             | OplogEntry::Suspend { .. }
             | OplogEntry::Error { .. }
             | OplogEntry::RecoverySucceeded { .. }
-            | OplogEntry::NoOp { .. }
             | OplogEntry::Jump { .. }
             | OplogEntry::Interrupted { .. }
             | OplogEntry::Exited { .. }
-            | OplogEntry::BeginAtomicRegion { .. }
             | OplogEntry::PendingAgentInvocation { .. }
             | OplogEntry::PendingUpdate { .. }
             | OplogEntry::SuccessfulUpdate { .. }
@@ -206,10 +186,6 @@ where
             | OplogEntry::DeactivatePlugin { .. }
             | OplogEntry::Revert { .. }
             | OplogEntry::CancelPendingInvocation { .. }
-            | OplogEntry::BeginRemoteTransaction {
-                original_begin_index: None,
-                ..
-            }
             | OplogEntry::Snapshot { .. }
             | OplogEntry::SnapshotConfirmed { .. }
             | OplogEntry::OplogProcessorCheckpoint { .. }
@@ -239,10 +215,10 @@ where
             && opening_index <= cut_point
             && !skipped_regions.is_in_deleted_region(opening_index)
         {
-            return Some(construct);
+            return Ok(Some(construct));
         }
     }
-    None
+    Ok(None)
 }
 
 /// A streaming acceptance owns its input registrations, preparation, queued invocation and
@@ -258,12 +234,15 @@ pub(crate) async fn streaming_acceptance_spans_cut(
     if cut >= horizon {
         return Ok(false);
     }
-    let left = oplog.read(cut).await;
-    let right = oplog.read(cut.next()).await;
+    let left = oplog.read(cut).await.map_err(|error| error.to_string())?;
+    let right = oplog
+        .read(cut.next())
+        .await
+        .map_err(|error| error.to_string())?;
     match (left, right) {
         (OplogEntry::StreamRegistered { .. }, _) => {
             for index in OplogIndexRange::new(cut.next(), horizon) {
-                match oplog.read(index).await {
+                match oplog.read(index).await.map_err(|error| error.to_string())? {
                     OplogEntry::StreamRegistered { .. } => continue,
                     OplogEntry::StreamSession { record, .. } => {
                         return Ok(matches!(oplog.download_payload(record).await?,
@@ -383,14 +362,15 @@ mod tests {
                 let entry = entries
                     .get(&u64::from(i))
                     .cloned()
-                    .unwrap_or_else(|| OplogEntry::no_op(None));
-                async move { entry }
+                    .unwrap_or_else(|| OplogEntry::grow_memory(0));
+                async move { Ok::<_, std::convert::Infallible>(entry) }
             },
             idx(cut),
             idx(end),
             skipped,
         )
         .await
+        .unwrap()
     }
 
     async fn scan_stream_history(
@@ -403,7 +383,7 @@ mod tests {
                 let entry = entries
                     .get(&u64::from(i))
                     .cloned()
-                    .unwrap_or_else(|| OplogEntry::no_op(None));
+                    .unwrap_or_else(|| OplogEntry::grow_memory(0));
                 async move { entry }
             },
             idx(start),
@@ -777,18 +757,6 @@ mod tests {
     }
 
     #[test]
-    async fn end_atomic_region_after_cut_is_rejected() {
-        let entries = HashMap::from([(6, OplogEntry::end_atomic_region(None, idx(2)))]);
-        assert_eq!(
-            scan(&entries, 4, 6, &deleted(vec![])).await,
-            Some(SpanningConstruct::AtomicRegion {
-                begin_index: idx(2),
-                end_index: idx(6),
-            })
-        );
-    }
-
-    #[test]
     async fn remote_transaction_terminal_after_cut_is_rejected() {
         let entries = HashMap::from([(9, OplogEntry::committed_remote_transaction(idx(4)))]);
         assert_eq!(
@@ -816,7 +784,7 @@ mod tests {
     async fn retried_transaction_begin_after_cut_is_rejected() {
         let entries = HashMap::from([(
             10,
-            OplogEntry::begin_remote_transaction(TransactionId::new(Uuid::nil()), Some(idx(3))),
+            OplogEntry::begin_remote_transaction(TransactionId::new(Uuid::nil()), idx(3)),
         )]);
         assert_eq!(
             scan(&entries, 7, 10, &deleted(vec![])).await,
@@ -831,7 +799,7 @@ mod tests {
     async fn original_transaction_begin_after_cut_is_accepted() {
         let entries = HashMap::from([(
             10,
-            OplogEntry::begin_remote_transaction(TransactionId::new(Uuid::nil()), None),
+            OplogEntry::begin_remote_transaction(TransactionId::new(Uuid::nil()), idx(9)),
         )]);
         assert_eq!(scan(&entries, 7, 10, &deleted(vec![])).await, None);
     }
@@ -896,14 +864,14 @@ mod tests {
     #[test]
     async fn first_spanning_construct_is_reported() {
         let entries = HashMap::from([
-            (5, OplogEntry::end_atomic_region(None, idx(2))),
+            (5, OplogEntry::pre_commit_remote_transaction(idx(2))),
             (6, OplogEntry::committed_remote_transaction(idx(3))),
         ]);
         assert_eq!(
             scan(&entries, 4, 6, &deleted(vec![])).await,
-            Some(SpanningConstruct::AtomicRegion {
+            Some(SpanningConstruct::RemoteTransaction {
                 begin_index: idx(2),
-                end_index: idx(5),
+                reference_index: idx(5),
             })
         );
     }

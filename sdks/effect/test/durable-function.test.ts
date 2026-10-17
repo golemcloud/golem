@@ -152,7 +152,7 @@ describe("Durability.wrap 1.6", () => {
     }).pipe(Effect.provide(TestLayer)),
   )
 
-  it.effect("rejects replay name and full batched kind mismatches", () =>
+  it.effect("rejects replay name and function type mismatches", () =>
     Effect.gen(function* () {
       Host.__setIsLive(false)
       const payload = yield* response(Result.succeed({ price: 1 }))
@@ -171,12 +171,12 @@ describe("Durability.wrap 1.6", () => {
         timestamp: { seconds: 0n, nanoseconds: 0 },
         functionName: "quotes::get",
         response: payload,
-        functionType: Durability.FunctionType.writeRemoteBatched(1n),
+        functionType: Durability.FunctionType.readRemote,
         entryVersion: "v2",
       })
       const kindExit = yield* Effect.exit(
         Durability.wrap(
-          { ...options, functionType: Durability.FunctionType.writeRemoteBatched(2n) },
+          { ...options, functionType: Durability.FunctionType.writeRemote },
           { symbol: "A" },
           Effect.succeed({ price: 0 }),
         ),
@@ -185,13 +185,13 @@ describe("Durability.wrap 1.6", () => {
     }).pipe(Effect.provide(TestLayer)),
   )
 
-  it.effect("supports nested and transaction invocations with independent owned lifecycles", () =>
+  it.effect("supports nested invocations with independent owned lifecycles", () =>
     Effect.gen(function* () {
       const inner = Durability.wrap(
         {
           ...options,
           function: "inner",
-          functionType: Durability.FunctionType.writeRemoteTransaction(),
+          functionType: Durability.FunctionType.writeRemote,
         },
         { symbol: "I" },
         Effect.succeed({ price: 1 }),
@@ -201,7 +201,7 @@ describe("Durability.wrap 1.6", () => {
           {
             ...options,
             function: "outer",
-            functionType: Durability.FunctionType.writeRemoteBatched(),
+            functionType: Durability.FunctionType.writeRemote,
           },
           { symbol: "O" },
           inner,

@@ -306,7 +306,8 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
             suspended_status(),
             None,
         )
-        .await;
+        .await
+        .unwrap();
     let mapping = StreamSessionMappingRecord {
         transport_stream_id: 7,
         role: SessionStreamRole::Output,
@@ -441,7 +442,8 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
             suspended_status(),
             None,
         )
-        .await;
+        .await
+        .unwrap();
     let foreign_attachment = StreamAttachmentKey {
         consumer_environment_id: foreign.environment_id,
         consumer: foreign.agent_id.clone(),
@@ -738,6 +740,7 @@ async fn create_oplog_with_identity(
             None,
         )
         .await
+        .unwrap()
 }
 
 async fn append_session(oplog: &dyn Oplog, record: StreamSessionRecord) -> OplogIndex {
@@ -747,12 +750,9 @@ async fn append_session(oplog: &dyn Oplog, record: StreamSessionRecord) -> Oplog
         .expect("oplog write")
 }
 
-async fn append_noop(oplog: &dyn Oplog) -> OplogIndex {
+async fn append_memory_hint(oplog: &dyn Oplog) -> OplogIndex {
     oplog
-        .add(OplogEntry::NoOp {
-            timestamp: Timestamp::now_utc(),
-            entity_parent_start_index: None,
-        })
+        .add(OplogEntry::grow_memory(0))
         .await
         .expect("oplog write")
 }
@@ -994,10 +994,11 @@ async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chun
                 suspended_status(),
                 None,
             )
-            .await;
+            .await
+            .unwrap();
         append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
         for _ in 0..2050 {
-            append_noop(oplog.as_ref()).await;
+            append_memory_hint(oplog.as_ref()).await;
         }
         oplog.commit(CommitLevel::Always).await.unwrap();
         let end = oplog.current_oplog_index().await;
@@ -1103,7 +1104,8 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
             suspended_status(),
             None,
         )
-        .await;
+        .await
+        .unwrap();
     append_session(
         oplog.as_ref(),
         prepared_with_reader(&foreign, &foreign_session.idempotency_key),
@@ -1310,7 +1312,8 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
             suspended_status(),
             None,
         )
-        .await;
+        .await
+        .unwrap();
     append_session(oplog.as_ref(), prepared_with_reader(&owner, &key)).await;
     let reader = local_reader(OplogIndex::from_u64(2), 0);
     let mut retained = Vec::new();
@@ -1642,7 +1645,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let key = session_key(&id, &IdempotencyKey::new("result".into()));
     for _ in 0..2050 {
-        append_noop(oplog.as_ref()).await;
+        append_memory_hint(oplog.as_ref()).await;
     }
     let result = append_session(
         oplog.as_ref(),
@@ -2532,7 +2535,7 @@ async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
     );
     assert!(expired.expired);
 
-    append_noop(oplog.as_ref()).await;
+    append_memory_hint(oplog.as_ref()).await;
     let cut = StreamSessionRecord::ForkCut(StreamForkCutRecord {
         format_version: 1,
         request_hash: vec![1; 32],
@@ -2648,7 +2651,7 @@ async fn fork_cut_clears_public_bindings_after_partial_catch_up() {
         Some(DurableStreamPublicBinding::Live { session_key, .. }) if session_key == key
     ));
 
-    append_noop(oplog.as_ref()).await;
+    append_memory_hint(oplog.as_ref()).await;
     let cut = StreamSessionRecord::ForkCut(StreamForkCutRecord {
         format_version: 1,
         request_hash: vec![1; 32],
@@ -2742,7 +2745,7 @@ async fn self_revert_preserves_retained_public_binding_in_warm_and_cold_indexes(
     record.expiry_policy = StreamSessionExpiryPolicy::Sliding { ttl_seconds: 30 };
     record.expiry_deadline_millis = Some(40_000);
     append_session(oplog.as_ref(), prepared).await;
-    let discarded = append_noop(oplog.as_ref()).await;
+    let discarded = append_memory_hint(oplog.as_ref()).await;
     oplog.commit(CommitLevel::Always).await.unwrap();
 
     let expected = DurableStreamPublicBinding::Live {
@@ -3214,16 +3217,14 @@ async fn identity_resolution_distinguishes_absent_and_malformed_oplogs() {
             &mut oplog_service.lock_lifecycle(&malformed.agent_id).await,
             &malformed,
             AgentMode::Durable,
-            OplogEntry::NoOp {
-                timestamp: Timestamp::now_utc(),
-                entity_parent_start_index: None,
-            },
+            OplogEntry::grow_memory(0),
             metadata,
             stale_status(),
             suspended_status(),
             None,
         )
-        .await;
+        .await
+        .unwrap();
     oplog.commit(CommitLevel::Always).await.unwrap();
     assert!(service.resolve_agent_identity(&malformed).await.is_err());
 }
@@ -3498,7 +3499,7 @@ async fn catchup_scans_multiple_chunks_and_recovers_evicted_completed_session() 
     )
     .await;
     for _ in 0..1050 {
-        append_noop(oplog.as_ref()).await;
+        append_memory_hint(oplog.as_ref()).await;
     }
     let mut bounded = DurableStreamSessionIndex::default();
     for n in 0..129 {
@@ -3653,13 +3654,7 @@ fn status_fold_tracks_local_lifecycle_without_retaining_caller_results() {
     status = update_status_with_new_entries(
         AgentMode::Durable,
         status,
-        BTreeMap::from([(
-            OplogIndex::INITIAL,
-            OplogEntry::NoOp {
-                timestamp: Timestamp::now_utc(),
-                entity_parent_start_index: None,
-            },
-        )]),
+        BTreeMap::from([(OplogIndex::INITIAL, OplogEntry::grow_memory(0))]),
         &RetryConfig::default(),
     )
     .unwrap()
@@ -3799,7 +3794,10 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
     assert!(resume.has_supported_format());
     let resumed = append_session(oplog.as_ref(), resume).await;
     assert_eq!(
-        oplog_service.get_last_index(&id, AgentMode::Durable).await,
+        oplog_service
+            .get_last_index(&id, AgentMode::Durable)
+            .await
+            .unwrap(),
         attached
     );
     let new = StreamSession::new(
@@ -3819,7 +3817,10 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
         .await
         .expect("oplog write");
     assert_eq!(
-        oplog_service.get_last_index(&id, AgentMode::Durable).await,
+        oplog_service
+            .get_last_index(&id, AgentMode::Durable)
+            .await
+            .unwrap(),
         resumed
     );
     assert!(old.ensure_current_attachment().await.is_err());
@@ -3917,7 +3918,8 @@ async fn raw_cold_reopen_ignores_stale_supplied_status_and_recovers_committed_re
             suspended_status(),
             None,
         )
-        .await;
+        .await
+        .unwrap();
     let raw = reopened
         .raw_durable_stream_session_status(&session_key)
         .await;
@@ -3980,7 +3982,8 @@ async fn raw_cached_lookup_observes_takeover_committed_by_another_oplog_actor() 
             suspended_status(),
             None,
         )
-        .await;
+        .await
+        .unwrap();
     let takeover_attempt = AttemptId::fresh();
     append_session(
         second.as_ref(),
@@ -4279,7 +4282,8 @@ async fn raw_lookup_catches_up_archived_history_after_full_multilayer_reopen() {
             suspended_status(),
             None,
         )
-        .await;
+        .await
+        .unwrap();
     let raw = reopened
         .raw_durable_stream_session_status(&session_key)
         .await;
@@ -4331,7 +4335,7 @@ async fn indexed_raw_authority_cold_and_warm_lookups_do_not_read_oplog_history()
     )
     .await;
     for _ in 0..2048 {
-        append_noop(oplog.as_ref()).await;
+        append_memory_hint(oplog.as_ref()).await;
     }
     oplog
         .commit(CommitLevel::Always)
@@ -4355,7 +4359,8 @@ async fn indexed_raw_authority_cold_and_warm_lookups_do_not_read_oplog_history()
             suspended_status(),
             None,
         )
-        .await;
+        .await
+        .unwrap();
     storage.reset();
     assert_eq!(
         reopened
@@ -4480,6 +4485,348 @@ async fn raw_authority_ignores_foreign_results_sharing_an_idempotency_key() {
                     .unwrap()
                     .is_none()
             );
+        }
+    }
+}
+
+/// Stores `chunk` as the chunk ending at `last_idx` of the compressed archive level 1 of the agent.
+async fn store_archived_chunk(
+    storage: &InMemoryIndexedStorage,
+    id: &OwnedAgentId,
+    last_idx: u64,
+    chunk: &crate::services::oplog::CompressedOplogChunk,
+) {
+    crate::storage::indexed::IndexedStorageLabelledApi::with_entity(
+        storage,
+        "compressed_oplog",
+        "append",
+        "compressed_entry",
+    )
+    .append(
+        crate::storage::indexed::IndexedStorageNamespace::CompressedOpLog {
+            agent_id: id.agent_id(),
+            agent_mode: AgentMode::Durable,
+            level: 1,
+        },
+        &id.agent_id().to_redis_key(),
+        last_idx,
+        chunk,
+        None,
+    )
+    .await
+    .unwrap();
+}
+
+/// An agent whose `Create` reads, but whose later archived chunk does not decode: rebuilding its
+/// stream session index fails with the unreadable oplog itself, not with its text, so the start
+/// and the shard-assignment recovery can fail and skip that agent alone.
+#[test]
+async fn a_stream_index_rebuild_over_an_undecodable_later_chunk_keeps_the_unreadable_oplog() {
+    use crate::services::oplog::CompressedOplogChunk;
+
+    let indexed = Arc::new(InMemoryIndexedStorage::new());
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            indexed.clone(),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let archive: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+        indexed.clone(),
+        1,
+        RetryConfig::default(),
+    ));
+    let oplog: Arc<dyn OplogService> =
+        Arc::new(MultiLayerOplogService::new(primary, nev![archive], 10, 10));
+    let id = owned_agent("unreadable-later-chunk", ComponentId::new());
+    let create = create_entry(
+        &id,
+        AgentMode::Durable,
+        AccountId::new(),
+        test_fingerprint(),
+    );
+    store_archived_chunk(
+        &indexed,
+        &id,
+        1,
+        &CompressedOplogChunk::compress(vec![create]).unwrap(),
+    )
+    .await;
+    let later = vec![
+        OplogEntry::recovery_succeeded(),
+        OplogEntry::recovery_succeeded(),
+    ];
+    let encoded = golem_common::serialization::serialize(&later).unwrap();
+    store_archived_chunk(
+        &indexed,
+        &id,
+        3,
+        &CompressedOplogChunk {
+            count: 2,
+            compressed_data: zstd::encode_all(&encoded[..encoded.len() / 2], 0).unwrap(),
+        },
+    )
+    .await;
+    let service = Arc::new(DefaultWorkerService::new(
+        Arc::new(InMemoryKeyValueStorage::new()),
+        Arc::new(ShardServiceDefault::new()),
+        oplog.clone(),
+        Arc::new(UnusedComponentService),
+        Arc::new(GolemConfig::default()),
+    ));
+
+    let error = service
+        .lookup_durable_stream_producer_metadata(
+            &id,
+            AgentMode::Durable,
+            test_fingerprint(),
+            vec![ProducerMetadataKey::Global],
+        )
+        .await
+        .err()
+        .expect("the rebuild over an undecodable chunk must fail");
+
+    let SessionError::Unreadable(unreadable) = &error else {
+        panic!("the unreadable oplog lost its type: {error:?}");
+    };
+    assert_eq!(unreadable.agent_id, id.agent_id);
+    assert!(
+        matches!(
+            WorkerExecutorError::from(unreadable.clone()),
+            WorkerExecutorError::OplogFailed { details, .. }
+                if details.contains("archive layer 1") && details.contains("ending at 3")
+        ),
+        "{error}"
+    );
+
+    // The producer load of the agent start reaches the same rebuild and reports it as the failure
+    // of that agent, which the start and the shard-assignment recovery skip.
+    let metadata = agent_metadata_with_identity(&id, AgentMode::Durable, test_fingerprint());
+    let opened = oplog
+        .open(
+            &mut oplog.lock_lifecycle(&id.agent_id).await,
+            &id,
+            AgentMode::Durable,
+            None,
+            metadata,
+            stale_status(),
+            suspended_status(),
+            None,
+        )
+        .await
+        .expect("the open reads only the last index");
+    let commit: crate::durable_host::durable_stream::DurableStreamCommit =
+        Arc::new(|_| Box::pin(async {}));
+    let producer =
+        crate::durable_host::durable_stream::DurableStreamStore::load_indexed_with_commit(
+            opened,
+            id.clone(),
+            test_fingerprint(),
+            None,
+            commit,
+            service,
+            AgentMode::Durable,
+        )
+        .await
+        .err()
+        .expect("the producer load over an undecodable chunk must fail")
+        .into_worker_executor_error(WorkerExecutorError::runtime);
+    assert!(
+        matches!(&producer, WorkerExecutorError::OplogFailed { agent_id, details }
+            if agent_id == &id.agent_id && details.contains("archive layer 1")),
+        "{producer:?}"
+    );
+}
+
+/// A multilayer oplog service over one in-memory indexed storage, with one compressed archive
+/// layer, and a worker service over it that finds every component.
+async fn archived_services() -> (
+    Arc<InMemoryIndexedStorage>,
+    Arc<dyn OplogService>,
+    Arc<DefaultWorkerService>,
+) {
+    let indexed = Arc::new(InMemoryIndexedStorage::new());
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            indexed.clone(),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let archive: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+        indexed.clone(),
+        1,
+        RetryConfig::default(),
+    ));
+    let oplog: Arc<dyn OplogService> =
+        Arc::new(MultiLayerOplogService::new(primary, nev![archive], 10, 10));
+    let service = Arc::new(DefaultWorkerService::new(
+        Arc::new(InMemoryKeyValueStorage::new()),
+        Arc::new(ShardServiceDefault::new()),
+        oplog.clone(),
+        Arc::new(super::tests::IndexTestComponentService),
+        Arc::new(GolemConfig::default()),
+    ));
+    (indexed, oplog, service)
+}
+
+/// Stores `entries` of the agent as an archived chunk ending at `last_idx` whose data does not
+/// decode.
+async fn store_undecodable_chunk(
+    storage: &InMemoryIndexedStorage,
+    id: &OwnedAgentId,
+    last_idx: u64,
+    entries: Vec<OplogEntry>,
+) {
+    let count = entries.len() as u64;
+    let encoded = golem_common::serialization::serialize(&entries).unwrap();
+    store_archived_chunk(
+        storage,
+        id,
+        last_idx,
+        &crate::services::oplog::CompressedOplogChunk {
+            count,
+            compressed_data: zstd::encode_all(&encoded[..encoded.len() / 2], 0).unwrap(),
+        },
+    )
+    .await;
+}
+
+/// Stores an agent whose `Create` reads from the archive, but whose later archived chunk, ending
+/// at index 3, does not decode.
+async fn store_agent_with_undecodable_later_chunk(
+    storage: &InMemoryIndexedStorage,
+    id: &OwnedAgentId,
+) {
+    let create = create_entry(id, AgentMode::Durable, AccountId::new(), test_fingerprint());
+    store_archived_chunk(
+        storage,
+        id,
+        1,
+        &crate::services::oplog::CompressedOplogChunk::compress(vec![create]).unwrap(),
+    )
+    .await;
+    store_undecodable_chunk(
+        storage,
+        id,
+        3,
+        vec![
+            OplogEntry::recovery_succeeded(),
+            OplogEntry::recovery_succeeded(),
+        ],
+    )
+    .await;
+}
+
+/// A cached status write whose index catch-up meets an oplog that does not read for good fails
+/// with `OplogFailed`, which callers skip or fail the agent with, not with a runtime error that
+/// fails every agent of the shard assignment. This holds for the invocation-result index and for
+/// the stream session index.
+#[test]
+async fn a_cached_status_write_over_an_undecodable_chunk_keeps_the_oplog_failure() {
+    let (indexed, _oplog, service) = archived_services().await;
+    let id = owned_agent("status-cache-undecodable", ComponentId::new());
+    store_agent_with_undecodable_later_chunk(&indexed, &id).await;
+
+    for has_durable_stream_history in [false, true] {
+        let status = AgentStatusRecord {
+            oplog_idx: OplogIndex::from_u64(3),
+            agent_mode: AgentMode::Durable,
+            has_durable_stream_history,
+            ..Default::default()
+        };
+        let error = service
+            .write_cached_status(&id, test_fingerprint(), None, status)
+            .await
+            .expect_err("the catch-up over an undecodable chunk must fail");
+        assert!(
+            matches!(&error, WorkerExecutorError::OplogFailed { agent_id, details }
+                if agent_id == &id.agent_id && details.contains("archive layer 1")),
+            "stream history {has_durable_stream_history}: {error:?}"
+        );
+    }
+}
+
+/// An agent whose `Create` does not read is left out of the listing, and an agent whose status
+/// does not fold is listed as failed in a precise listing. Every other agent of the component is
+/// listed.
+#[test]
+async fn a_listing_skips_or_fails_only_the_agents_whose_oplog_does_not_read() {
+    use crate::services::worker_enumeration::{
+        DefaultWorkerEnumerationService, WorkerEnumerationService,
+    };
+    use golem_common::model::AgentStatus;
+
+    let (indexed, oplog, service) = archived_services().await;
+    let environment_id = EnvironmentId::new();
+    let component_id = ComponentId::new();
+    let agent = |name: &str| {
+        OwnedAgentId::new(
+            environment_id,
+            &AgentId {
+                component_id,
+                agent_id: name.to_string(),
+            },
+        )
+    };
+    let healthy = agent("healthy");
+    let unreadable_create = agent("unreadable-create");
+    let unreadable_status = agent("unreadable-status");
+    create_oplog(oplog.as_ref(), &healthy).await;
+    store_undecodable_chunk(
+        &indexed,
+        &unreadable_create,
+        1,
+        vec![create_entry(
+            &unreadable_create,
+            AgentMode::Durable,
+            AccountId::new(),
+            test_fingerprint(),
+        )],
+    )
+    .await;
+    store_agent_with_undecodable_later_chunk(&indexed, &unreadable_status).await;
+    let enumeration = DefaultWorkerEnumerationService::new(
+        service,
+        oplog,
+        Arc::new(super::tests::IndexTestComponentService),
+        Arc::new(GolemConfig::default()),
+    );
+
+    for precise in [false, true] {
+        let mut listed = Vec::new();
+        let mut cursor = Some(golem_common::model::ScanCursor::default());
+        while let Some(current) = cursor {
+            let (next, page) = enumeration
+                .get(&environment_id, &component_id, None, current, 100, precise)
+                .await
+                .expect("one agent's unreadable oplog must not fail the listing");
+            listed.extend(page);
+            cursor = next;
+        }
+        let mut names = listed
+            .iter()
+            .map(|metadata| metadata.agent_id.agent_id.clone())
+            .collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(names, ["healthy", "unreadable-status"], "precise {precise}");
+        let status = listed
+            .iter()
+            .find(|metadata| metadata.agent_id == unreadable_status.agent_id)
+            .unwrap()
+            .last_known_status
+            .status;
+        if precise {
+            assert_eq!(status, AgentStatus::Failed);
         }
     }
 }

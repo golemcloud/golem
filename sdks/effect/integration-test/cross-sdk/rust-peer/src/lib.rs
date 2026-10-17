@@ -3,11 +3,11 @@ use effect_fixture_guest_client::{
     TransformStreamInRequestItems, new_transform_stream_in_request_items_stream,
 };
 use golem_rust::agentic::{DynamicToolClient, get_tool_type, spawn_local};
-use golem_rust::bindings::golem::permissions::{derive, types};
+use golem_rust::permissions;
 use golem_rust::schema::wit::GuestPermissionCardHandle;
 use golem_rust::{
-    GolemReflectError, IntoSchema, MethodOnlyAgentClientDefinition, SchemaValue, TypedSchemaValue,
-    agent_definition, agent_implementation, get_agent_type, get_agent_type_for,
+    FromSchema, GolemReflectError, IntoSchema, MethodOnlyAgentClientDefinition, SchemaValue,
+    TypedSchemaValue, agent_definition, agent_implementation, get_agent_type, get_agent_type_for,
 };
 use std::cell::Cell;
 use std::rc::Rc;
@@ -331,21 +331,18 @@ impl RustPeer for RustPeerImpl {
         )
     }
     async fn permission_card_through_effect(&self, tenant: String) -> String {
-        let card = GuestPermissionCardHandle::new(
-            derive::derive_from_wallet(&[], &[], &[], &[], None).expect("derive permission card"),
-        );
-        let expected = card
-            .with_handle(|card| format!("{:?}", types::id(card).uuid))
-            .expect("new permission card is usable");
+        let card = permissions::derive_from_wallet(&Default::default(), None)
+            .expect("derive permission card");
+        let expected = card.id();
+        let alias = GuestPermissionCardHandle::from_value(&card.to_value())
+            .expect("permission card lowers to a card handle");
         let client = EffectFixture::get(tenant).expect("generated Effect client");
         let returned = client
-            .echo_permission_card(card.clone())
+            .echo_permission_card(card)
             .await
             .expect("Effect permission card echo");
-        let returned_id = returned
-            .with_handle(|card| format!("{:?}", types::id(card).uuid))
-            .expect("returned permission card is usable");
-        let old_consumed = card.with_handle(|card| types::id(card).uuid).is_none();
+        let returned_id = returned.id();
+        let old_consumed = !alias.is_present();
         format!(
             "same:{}:old-consumed:{}",
             expected == returned_id,

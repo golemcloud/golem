@@ -61,6 +61,7 @@ pub trait Networking {
     async fn probe_udp_p3(&self, operation: String, port: u16, data: Vec<u8>)
     -> Result<(), String>;
     async fn udp_send_p3(&self, port: u16, data: Vec<u8>) -> Result<(), String>;
+    async fn udp_receive_p3(&self, port: u16, ready_port: u16) -> Result<String, String>;
 }
 
 pub struct NetworkingImpl {
@@ -228,5 +229,35 @@ impl Networking for NetworkingImpl {
             )
             .await
             .map_err(|error| format!("{error:?}"))
+    }
+
+    async fn udp_receive_p3(&self, port: u16, ready_port: u16) -> Result<String, String> {
+        use golem_rust::wasip3::sockets::types::{
+            IpAddressFamily, IpSocketAddress, Ipv4SocketAddress, UdpSocket,
+        };
+
+        let socket =
+            UdpSocket::create(IpAddressFamily::Ipv4).map_err(|error| format!("{error:?}"))?;
+        socket
+            .bind(IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                address: (127, 0, 0, 1),
+                port,
+            }))
+            .map_err(|error| format!("{error:?}"))?;
+        socket
+            .send(
+                b"ready".to_vec(),
+                Some(IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                    address: (127, 0, 0, 1),
+                    port: ready_port,
+                })),
+            )
+            .await
+            .map_err(|error| format!("{error:?}"))?;
+        let (data, _) = socket
+            .receive()
+            .await
+            .map_err(|error| format!("{error:?}"))?;
+        Ok(String::from_utf8_lossy(&data).to_string())
     }
 }

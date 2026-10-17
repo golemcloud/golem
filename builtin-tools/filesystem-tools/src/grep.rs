@@ -81,7 +81,7 @@ pub struct GrepResult {
     pub next_cursor: Option<GrepCursor>,
 }
 
-#[tool_definition(version = "0.1.1", requires_filesystem = true)]
+#[tool_definition(version = "0.1.2", requires_filesystem = true)]
 pub trait Grep {
     /// Searches one UTF-8 file or a directory tree by complete logical lines without following
     /// symbolic links. Literal, case-sensitive matching is the default. Filters use globset
@@ -202,7 +202,15 @@ pub async fn grep(
         }
     }
 
+    let walker = TreeWalker::new(
+        &root,
+        path,
+        query.max_depth,
+        TreeCursor { frames: Vec::new() },
+    );
     let mut state = GrepState {
+        root: &root,
+        walker,
         query,
         regex,
         includes,
@@ -235,7 +243,10 @@ pub async fn grep(
     })
 }
 
-struct GrepState {
+struct GrepState<'a> {
+    root: &'a FsNode,
+    /// One walker for the whole call, so that each directory is read only once.
+    walker: TreeWalker<'a>,
     query: GrepQuery,
     regex: Regex,
     includes: GlobSet,
@@ -250,7 +261,7 @@ struct GrepState {
     remaining_entries: usize,
 }
 
-impl GrepState {
+impl GrepState<'_> {
     async fn run(
         &mut self,
         mut position: GrepPosition,
@@ -272,11 +283,10 @@ impl GrepState {
                     FileProgress::Done(None) => return Ok(None),
                 },
                 GrepPosition::Tree(tree) => {
-                    let tree = self.prune_excluded_ancestors(tree);
-                    let mut walker =
-                        TreeWalker::new(self.query.path.clone(), self.query.max_depth, tree);
-                    let checkpoint = walker.cursor.clone();
-                    match walker
+                    self.walker.cursor = self.prune_excluded_ancestors(tree);
+                    let checkpoint = self.walker.cursor.clone();
+                    match self
+                        .walker
                         .next(
                             |relative| !self.excludes.is_match(relative),
                             &mut self.remaining_entries,
@@ -286,12 +296,12 @@ impl GrepState {
                         Ok(Some((relative, kind))) => {
                             self.traversal_entries += 1;
                             let full_path = join_path(&self.query.path, &relative);
-                            let filtered_non_directory = !matches!(kind, NodeKind::Directory)
+                            let filtered_non_directory = !matches!(kind, ChildKind::Directory)
                                 && (self.excludes.is_match(&relative)
                                     || (!self.query.include_globs.is_empty()
                                         && !self.includes.is_match(&relative)));
                             if filtered_non_directory {
-                                GrepPosition::Tree(walker.cursor)
+                                GrepPosition::Tree(self.walker.cursor.clone())
                             } else if full_path.len() > MAX_PATH_BYTES {
                                 if !self.diagnostic(
                                     full_path,
@@ -300,17 +310,19 @@ impl GrepState {
                                 ) {
                                     return Ok(Some(GrepPosition::Tree(checkpoint)));
                                 }
-                                GrepPosition::Tree(walker.cursor)
+                                GrepPosition::Tree(self.walker.cursor.clone())
                             } else {
                                 match kind {
-                                    NodeKind::File(_) => GrepPosition::File(GrepFileCursor {
-                                        tree: Some(walker.cursor),
+                                    ChildKind::File => GrepPosition::File(GrepFileCursor {
+                                        tree: Some(self.walker.cursor.clone()),
                                         next_byte: 0,
                                         next_line: 1,
                                         content_sha256: String::new(),
                                     }),
-                                    NodeKind::Directory => GrepPosition::Tree(walker.cursor),
-                                    NodeKind::Symlink => {
+                                    ChildKind::Directory => {
+                                        GrepPosition::Tree(self.walker.cursor.clone())
+                                    }
+                                    ChildKind::Symlink => {
                                         if !self.diagnostic(
                                             full_path,
                                             DiagnosticKind::SymlinkSkipped,
@@ -318,9 +330,9 @@ impl GrepState {
                                         ) {
                                             return Ok(Some(GrepPosition::Tree(checkpoint)));
                                         }
-                                        GrepPosition::Tree(walker.cursor)
+                                        GrepPosition::Tree(self.walker.cursor.clone())
                                     }
-                                    NodeKind::Other => {
+                                    ChildKind::Other => {
                                         if !self.diagnostic(
                                             full_path,
                                             DiagnosticKind::Unsupported,
@@ -328,7 +340,7 @@ impl GrepState {
                                         ) {
                                             return Ok(Some(GrepPosition::Tree(checkpoint)));
                                         }
-                                        GrepPosition::Tree(walker.cursor)
+                                        GrepPosition::Tree(self.walker.cursor.clone())
                                     }
                                 }
                             }
@@ -336,16 +348,16 @@ impl GrepState {
                         Ok(None) => return Ok(None),
                         Err(error) => {
                             if error.budget_exhausted {
-                                return Ok(Some(GrepPosition::Tree(walker.cursor)));
+                                return Ok(Some(GrepPosition::Tree(self.walker.cursor.clone())));
                             }
                             if !self.walker_diagnostic(&error) {
                                 return Ok(Some(GrepPosition::Tree(checkpoint)));
                             }
-                            walker.cursor.frames.pop();
-                            if walker.cursor.frames.is_empty() {
+                            self.walker.cursor.frames.pop();
+                            if self.walker.cursor.frames.is_empty() {
                                 return Ok(None);
                             }
-                            GrepPosition::Tree(walker.cursor)
+                            GrepPosition::Tree(self.walker.cursor.clone())
                         }
                     }
                 }
@@ -399,8 +411,20 @@ impl GrepState {
         {
             return Ok(FileProgress::Done(cursor.tree));
         }
-        let node = match self.open_file_node(&names).await {
-            Ok(node) => node,
+        let opened = match &cursor.tree {
+            // A file root was opened for the type check of the call.
+            None => Ok(None),
+            Some(tree) => {
+                self.walker.cursor = tree.clone();
+                self.walker
+                    .open_selected()
+                    .await
+                    .map(Some)
+                    .map_err(|error| error.error)
+            }
+        };
+        let opened = match opened {
+            Ok(opened) => opened,
             Err(error) if !cursor.content_sha256.is_empty() => {
                 return Err(FilesystemToolError::InvalidCursor(format!(
                     "cannot reopen continued file '{}': {}",
@@ -415,6 +439,7 @@ impl GrepState {
                 return Ok(FileProgress::Done(cursor.tree));
             }
         };
+        let node = opened.as_ref().unwrap_or(self.root);
         let NodeKind::File(size) = node.kind() else {
             if !cursor.content_sha256.is_empty() {
                 return self.changed_file(cursor, display_path);
@@ -601,14 +626,6 @@ impl GrepState {
                 Ok((join_path(&self.query.path, &relative), relative, names))
             }
         }
-    }
-
-    async fn open_file_node(&self, names: &[String]) -> Result<FsNode, FsError> {
-        let mut node = FsNode::open_root(&self.query.path).await?;
-        for name in names {
-            node = node.open_child(name).await?;
-        }
-        Ok(node)
     }
 
     fn changed_file(

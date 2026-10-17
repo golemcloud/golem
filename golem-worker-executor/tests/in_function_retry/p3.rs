@@ -17,9 +17,8 @@ use crate::Tracing;
 // P3-specific retry and streaming regression coverage retained from the
 // pre-split integration test module.
 use golem_common::model::RetryConfig;
-use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
-use golem_common::schema::{FromSchema, SchemaValue};
+use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
@@ -196,7 +195,7 @@ async fn keyvalue_set_retries_inline_when_idempotent(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    // set should succeed after 2 in-function retries (assume_idempotence defaults to true)
+    // set should succeed after 2 in-function retries.
     executor
         .invoke_and_await_agent(
             &component,
@@ -1594,128 +1593,7 @@ async fn http_awaiting_response_retry_resends_full_body_after_output_stream_retr
 
 #[test]
 #[tracing::instrument]
-async fn http_post_fails_permanently_when_idempotence_disabled(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-
-    let overrides = TestExecutorOverrides {
-        configure: Some(Arc::new(|config| {
-            config.retry = RetryConfig {
-                max_attempts: 5,
-                min_delay: Duration::from_millis(1),
-                max_delay: Duration::from_millis(5),
-                multiplier: 1.0,
-                max_jitter_factor: None,
-            };
-            config.max_in_function_retry_delay = Duration::from_secs(1);
-        })),
-        ..Default::default()
-    };
-
-    let executor = start_with_overrides(deps, &context, overrides).await?;
-
-    // 1 connection will be dropped; POST with assume_idempotence=false should NOT retry inline
-    let (port, connection_counter) = start_failing_http_server_any_method(1).await;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, http_tests)
-        .store()
-        .await?;
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), port.to_string());
-
-    let agent_id = agent_id!("HttpClient4");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
-        .await?;
-
-    // post_non_idempotent sets assume_idempotence=false and uses POST.
-    // POST is not idempotent, so inline retry should NOT happen.
-    // Trap+replay also cannot recover because the non-idempotent remote write
-    // was not completed — replay detects this and fails permanently with
-    // "Non-idempotent remote write operation was not completed, cannot retry".
-    let key = golem_common::model::IdempotencyKey::fresh();
-    let (_, input) = data_value!().into_parts();
-    let metadata = executor.get_worker_metadata(&worker_id).await?;
-    let result = executor
-        .invoke_agent_session(golem_api_grpc::proto::golem::worker::InvocationStart {
-            agent_id: Some(worker_id.clone().into()),
-            method_name: Some("post_non_idempotent_stream".to_string()),
-            input: Some(input.try_into().map_err(anyhow::Error::msg)?),
-            idempotency_key: Some(key.clone().into()),
-            auth_ctx: Some(executor.auth_ctx().into()),
-            environment_id: Some(component.environment_id.into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-            freshness_disposition:
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                    as i32,
-            attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
-            ..Default::default()
-        })
-        .await;
-
-    assert!(
-        result.is_err(),
-        "Expected the invocation to fail permanently, but it succeeded: {result:?}"
-    );
-    let err_msg = format!("{}", result.unwrap_err());
-    assert!(
-        err_msg.contains("cannot retry"),
-        "Expected error about non-idempotent write not being retryable, got: {err_msg}"
-    );
-
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-            let mut prepared = false;
-            let mut failures = 0;
-            for entry in oplog {
-                if let PublicOplogEntry::StreamSession(session) = entry.entry {
-                    match StreamSessionRecord::from_value(session.record.value())
-                        .map_err(anyhow::Error::msg)?
-                    {
-                        StreamSessionRecord::Prepared(record) if record.session_key == key => {
-                            prepared = true;
-                        }
-                        StreamSessionRecord::Finished(record)
-                            if record.session_key.idempotency_key() == &key =>
-                        {
-                            assert!(
-                                record.result.is_err(),
-                                "failed replay must not finish a session successfully"
-                            );
-                            failures += 1;
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            if failures != 0 {
-                assert!(
-                    prepared,
-                    "the streaming invocation must have a prepared session"
-                );
-                assert_eq!(failures, 1, "the failed session must finish exactly once");
-                return Ok::<_, anyhow::Error>(());
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await??;
-
-    assert_eq!(connection_counter.load(Ordering::SeqCst), 1);
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn http_get_retried_inline_even_when_idempotence_disabled(
+async fn http_get_retried_inline(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
@@ -1754,8 +1632,7 @@ async fn http_get_retried_inline_even_when_idempotence_disabled(
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
-    // get_idempotent sets assume_idempotence=false and uses GET.
-    // GET is inherently idempotent, so inline retry SHOULD still happen.
+    // GET is inherently idempotent, so inline retry should happen.
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "get_idempotent", data_value!())
         .await?;

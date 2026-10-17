@@ -1,0 +1,9 @@
+import {
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/internal/permission_card" @card,
+  "golemcloud/golem_sdk/permissions",
+}
+
+warnings = "-44"
+
+supported_targets = "+wasm"

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Package the locked Python application and library sources for offline relinking."""
 
+import gzip
 import hashlib
 import json
 import shutil
@@ -48,9 +49,18 @@ def main():
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
     )
 
+    def normalized(member):
+        member.mtime = 0
+        member.uid = member.gid = 0
+        member.uname = member.gname = ""
+        member.pax_headers = {}
+        return member
+
     asset = staging / "python-source.tar.gz"
-    with tarfile.open(asset, "w:gz") as archive:
-        archive.add(source, arcname="python-source")
+    with asset.open("wb") as output:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=output, mtime=0) as compressed:
+            with tarfile.open(fileobj=compressed, mode="w") as archive:
+                archive.add(source, arcname="python-source", filter=normalized)
     with asset.open("rb") as data:
         digest = hashlib.file_digest(data, "sha256").hexdigest()
     (staging / "python-source.tar.gz.sha256").write_text(f"{digest}  {asset.name}\n")

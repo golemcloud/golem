@@ -61,7 +61,7 @@ Snapshots can also be used for fast recovery during normal operation, not just f
 It is also possible to manually implement a pair of functions for saving and loading an agent's state into an arbitrary byte array. This is useful when making significant changes to the implementation of an agent, such that the automatic replay based update mechanism is no longer working.
 
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         Put `snapshot` inside `.implement({ ... })`. This fragment assumes the complete state is `{ value: number }`. `load` is a factory that returns fresh state; it does not mutate an instance created by `init`:
 
@@ -197,6 +197,34 @@ It is also possible to manually implement a pair of functions for saving and loa
           Ok({ name, value })
         }
         ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Implement `golem.Snapshotter` (`Save() ([]byte, error)` and `Load([]byte) error`) on the agent's state type in the implementation package. This fragment assumes the complete state is an unexported `value uint32`. On restore, the SDK does not run the `Implement` factory. It calls `Load` on the zero value of the state, then the optional `OnRestore` hook:
+
+        ```go
+        import (
+            "encoding/binary"
+            "errors"
+        )
+
+        type state struct{ value uint32 }
+
+        func (s *state) Save() ([]byte, error) {
+            return binary.LittleEndian.AppendUint32(nil, s.value), nil
+        }
+
+        func (s *state) Load(b []byte) error {
+            if len(b) != 4 {
+                return errors.New("expected a 4-byte snapshot")
+            }
+            s.value = binary.LittleEndian.Uint32(b)
+            return nil
+        }
+        ```
+
+        <Callout type="warning">
+        A Go agent cannot take a manual (snapshot-based) update: the Go runtime reads its environment through a durable host call when it starts, before the snapshot loads, and the executor rejects the pending update. Automatic updates and snapshot-based recovery work.
+        </Callout>
     </Tabs.Tab>
 </Tabs>
 

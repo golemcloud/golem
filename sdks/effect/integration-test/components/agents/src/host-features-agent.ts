@@ -5,14 +5,7 @@
  *
  * Each method is a small, focused probe of one wrapper:
  *
- * - `oplogIndex()` — `Oplog.currentIndex` returns the current oplog
- *   index as a string (so it round-trips cleanly through JSON).
- * - `withAtomic({ by })` — runs an increment inside
- *   `Durability.atomically` so the oplog gets surrounding
- *   `begin-atomic-region` / `end-atomic-region` markers.
- * - `withPersistNothing({ by })` — runs an increment inside
- *   `Durability.withPersistenceLevel(persistNothing, ...)`. Verifies
- *   that the wrapper restores the previous level on exit.
+ * - `increment({ by })` — updates the snapshotted counter.
  * - `idempotencyKey()` — `Durability.generateIdempotencyKey` returned
  *   as a canonical UUID string.
  * - `selfMetadata()` — selected fields from `Agents.getSelfMetadata`,
@@ -68,10 +61,7 @@ const HostFeaturesSpec = defineAgent({
     policy: Snapshot.policy.everyN(10),
   }),
   methods: {
-    oplogIndex: method({ input: {}, success: Schema.String }),
-    checkpointRollback: method({ input: { url: Schema.String }, success: Schema.Number }),
-    withAtomic: method({ input: { by: Schema.Number }, success: Schema.Number }),
-    withPersistNothing: method({ input: { by: Schema.Number }, success: Schema.Number }),
+    increment: method({ input: { by: Schema.Number }, success: Schema.Number }),
     idempotencyKey: method({ input: {}, success: Schema.String }),
     selfMetadata: method({
       input: {},
@@ -111,37 +101,8 @@ const HostFeaturesSpec = defineAgent({
 })
 
 const hostFeatureMethods = (state: Ref.Ref<{ count: number }>) => ({
-  checkpointRollback: ({ url }: { url: string }) =>
-    Effect.gen(function* () {
-      yield* Ref.update(state, (s) => ({ count: s.count + 13 }))
-      const cp = yield* Durability.checkpoint
-      return yield* cp.runOrRevert(
-        Effect.gen(function* () {
-          const updated = yield* Ref.updateAndGet(state, (s) => ({ count: s.count + 7 }))
-          const response = yield* Effect.promise(() => fetch(url))
-          const outcome = yield* Effect.promise(() => response.text())
-          if (outcome !== "ok") return yield* Effect.fail("retry checkpoint")
-          return updated.count
-        }),
-      )
-    }),
-
-  oplogIndex: () =>
-    Effect.gen(function* () {
-      const idx = yield* Oplog.currentIndex
-      return idx.toString()
-    }),
-
-  withAtomic: ({ by }: { by: number }) =>
-    Durability.atomically(
-      Ref.updateAndGet(state, (s) => ({ count: s.count + by })).pipe(Effect.map((s) => s.count)),
-    ),
-
-  withPersistNothing: ({ by }: { by: number }) =>
-    Durability.withIdempotenceMode(
-      false,
-      Ref.updateAndGet(state, (s) => ({ count: s.count + by })).pipe(Effect.map((s) => s.count)),
-    ),
+  increment: ({ by }: { by: number }) =>
+    Ref.updateAndGet(state, (s) => ({ count: s.count + by })).pipe(Effect.map((s) => s.count)),
 
   idempotencyKey: () =>
     Effect.gen(function* () {

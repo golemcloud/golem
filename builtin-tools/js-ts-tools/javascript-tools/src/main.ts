@@ -54,7 +54,7 @@ const nodeTool = toolDefinition('node', { requiresFilesystem: true })
   );
 
 const npmTool = toolDefinition('npm', { requiresFilesystem: true })
-  .version('10.9.9+golem.8')
+  .version('10.9.9+golem.9')
   .doc('Install and manage JavaScript packages and run package scripts with npm.')
   .annotations({ openWorld: false })
   .body((body) =>
@@ -80,7 +80,7 @@ const npmTool = toolDefinition('npm', { requiresFilesystem: true })
   );
 
 const npxTool = toolDefinition('npx', { requiresFilesystem: true })
-  .version('10.9.9+golem.8')
+  .version('10.9.9+golem.9')
   .doc('Run a command provided by a local or downloaded npm package.')
   .annotations({ openWorld: false })
   .body((body) =>
@@ -137,22 +137,26 @@ async function runNpm(
   const restorePrivateFiles = installPrivateReadOnlyFiles(NPM_ROOT, npmPrivateFiles);
   const invocation = npmInvocation(input.cwd, input.registry);
   try {
-    return await runCli({ argv, cwd: input.cwd, ...invocation }, streams, async (processFacade) => {
-      const loaded = await loadNpm();
-      if (name === 'npx') {
-        processFacade.argv.splice(
-          0,
-          processFacade.argv.length,
-          ...rewriteNpxArguments(
-            processFacade.argv,
-            loaded.definitions,
-            loaded.shorthands,
-            (message) => processFacade.stderr.write(`${message}\n`),
-          ),
-        );
-      }
-      await loaded.default(processFacade);
-    });
+    return await runCli(
+      { argv, cwd: input.cwd, ...invocation, npmExit: true },
+      streams,
+      async (processFacade) => {
+        const loaded = await loadNpm();
+        if (name === 'npx') {
+          processFacade.argv.splice(
+            0,
+            processFacade.argv.length,
+            ...rewriteNpxArguments(
+              processFacade.argv,
+              loaded.definitions,
+              loaded.shorthands,
+              (message) => processFacade.stderr.write(`${message}\n`),
+            ),
+          );
+        }
+        await loaded.default(processFacade);
+      },
+    );
   } finally {
     restorePrivateFiles();
     restore();

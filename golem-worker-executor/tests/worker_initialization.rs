@@ -231,10 +231,7 @@ async fn late_initialization_storage_failure_is_shared_then_retried(
         let original = original.clone();
         async move {
             original
-                .add_and_commit_oplog(OplogEntry::NoOp {
-                    timestamp: Timestamp::now_utc(),
-                    entity_parent_start_index: None,
-                })
+                .add_and_commit_oplog(OplogEntry::grow_memory(0))
                 .await
         }
     });
@@ -293,7 +290,8 @@ async fn late_initialization_storage_failure_is_shared_then_retried(
             OplogIndex::INITIAL,
             retry.oplog().current_oplog_index().await.as_u64(),
         )
-        .await;
+        .await
+        .unwrap();
     assert_eq!(
         entries
             .values()
@@ -402,7 +400,8 @@ async fn partial_creation_reloads_identity_and_original_initialization(
                 OplogIndex::INITIAL,
                 oplog.current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await
+            .unwrap();
         assert_eq!(
             entries
                 .values()
@@ -454,7 +453,13 @@ async fn cancelled_creator_keeps_original_context_and_serializes_existing_only(
     let all = seed.all().clone();
     Worker::interrupt(&all, &id, false, Principal::anonymous()).await?;
     assert!(!executor.worker_is_cached(&id).await);
-    assert!(!seed.oplog_service().exists(&id, AgentMode::Durable).await);
+    assert!(
+        !seed
+            .oplog_service()
+            .exists(&id, AgentMode::Durable)
+            .await
+            .unwrap()
+    );
     let mut enqueue = executor
         .gate_next_agent_initialization_enqueue(&id.agent_id)
         .await;
@@ -509,7 +514,8 @@ async fn cancelled_creator_keeps_original_context_and_serializes_existing_only(
             OplogIndex::INITIAL,
             oplog.current_oplog_index().await.as_u64(),
         )
-        .await;
+        .await
+        .unwrap();
     assert_eq!(
         entries
             .values()
@@ -594,7 +600,7 @@ async fn session_records(
             OplogIndex::INITIAL,
             oplog.current_oplog_index().await.as_u64(),
         )
-        .await;
+        .await?;
     let mut result = Vec::new();
     for entry in entries.into_values() {
         if let OplogEntry::StreamSession { record, .. } = entry {
@@ -924,7 +930,8 @@ async fn completion_receipt_precedes_fifo_status_fold(
             finished_index,
             1,
         )
-        .await;
+        .await
+        .unwrap();
     assert!(matches!(
         persisted.get(&finished_index),
         Some(OplogEntry::AgentInvocationFinished { .. })
@@ -1235,7 +1242,8 @@ async fn jump_projection_finishes_without_its_producer(
             worker
                 .oplog_service()
                 .get_last_index(&owned, AgentMode::Durable)
-                .await,
+                .await
+                .unwrap(),
             jump_index
         );
         worker
@@ -1251,43 +1259,11 @@ async fn jump_projection_finishes_without_its_producer(
             worker
                 .oplog_service()
                 .get_last_index(&owned, AgentMode::Durable)
-                .await,
+                .await
+                .unwrap(),
             sentinel
         );
     }
-    let before = worker.get_last_known_status().await;
-    let first = worker
-        .add_and_commit_oplog(OplogEntry::grow_memory(13))
-        .await?;
-    let second = worker
-        .add_and_commit_oplog(OplogEntry::grow_memory(17))
-        .await?;
-    let regions = vec![
-        OplogRegion {
-            start: first,
-            end: first,
-        },
-        OplogRegion {
-            start: second,
-            end: second,
-        },
-    ];
-    let error = golem_worker_executor::durable_host::test_commit_jumps_with_failed_registration(
-        worker.as_ref(),
-        regions,
-    )
-    .await
-    .unwrap_err();
-    assert!(error.to_string().contains("test registration failure"));
-    // Both Jumps were accepted even though replay registration failed.
-    let status = worker.get_last_known_status().await;
-    assert_eq!(status.oplog_idx, second.next().next());
-    assert_eq!(
-        status.total_linear_memory_size,
-        before.total_linear_memory_size
-    );
-    assert!(status.skipped_regions.is_in_deleted_region(first));
-    assert!(status.skipped_regions.is_in_deleted_region(second));
     Ok(())
 }
 
@@ -1341,7 +1317,7 @@ async fn failure_handler_status_read_follows_concurrent_jump(
             tokio::time::timeout(Duration::from_secs(20), failure_fold.entered()).await?;
             let error_index = worker.oplog().current_oplog_index().await;
             assert!(matches!(
-                worker.oplog().read(error_index).await,
+                worker.oplog().read(error_index).await.unwrap(),
                 OplogEntry::Error { .. }
             ));
             let jump_index = worker

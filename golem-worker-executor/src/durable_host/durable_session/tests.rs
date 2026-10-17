@@ -236,9 +236,10 @@ async fn recorded_input_observation() -> (
     });
     for _ in 0..2 {
         oplog
-            .add(OplogEntry::NoOp {
+            .add(OplogEntry::RemoveRetryPolicy {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
+                name: "test-policy".to_string(),
             })
             .await
             .unwrap();
@@ -253,9 +254,10 @@ async fn recorded_input_observation() -> (
         .await
         .unwrap();
     oplog
-        .add(OplogEntry::NoOp {
+        .add(OplogEntry::RemoveRetryPolicy {
             timestamp: Timestamp::now_utc(),
             entity_parent_start_index: None,
+            name: "test-policy".to_string(),
         })
         .await
         .unwrap();
@@ -304,7 +306,6 @@ async fn recorded_input_observation() -> (
             cleanup_sink,
             trap_context: DurableCallTrapContext {
                 retry_from: OplogIndex::INITIAL,
-                in_atomic_region: false,
             },
             live_call_permit: LiveCallPermit::new(Arc::new(std::sync::atomic::AtomicUsize::new(0))),
         },
@@ -313,6 +314,7 @@ async fn recorded_input_observation() -> (
 }
 
 #[test]
+#[test_r::timeout("10s")]
 async fn cancelled_stream_read_reports_divergence_before_and_after_preparation() {
     for prepared in [false, true] {
         let (task, receiver) = recorded_input_observation().await;
@@ -1006,9 +1008,8 @@ async fn session_payload_reader_rejects_malformed_records_and_wrong_locators() {
             .contains("malformed")
     );
     let wrong = oplog
-        .add(OplogEntry::NoOp {
+        .add(OplogEntry::RecoverySucceeded {
             timestamp: golem_common::model::Timestamp::now_utc(),
-            entity_parent_start_index: None,
         })
         .await
         .unwrap();
@@ -1684,7 +1685,7 @@ async fn guest_owned_u8_output_uses_the_packed_durable_path() {
         .await
         .unwrap()
         .value;
-    let entries_before_output = oplog.length().await;
+    let entries_before_output = oplog.length().await.unwrap();
     let streams = StreamSession::new(
         producer.clone(),
         oplog.clone(),
@@ -1715,7 +1716,7 @@ async fn guest_owned_u8_output_uses_the_packed_durable_path() {
     publisher.publish_end().await.unwrap();
     drain_task.await.unwrap().unwrap();
     assert_eq!(
-        oplog.length().await,
+        oplog.length().await.unwrap(),
         entries_before_output + 2,
         "consecutive guest u8 values must share one durable item batch"
     );
@@ -1847,6 +1848,7 @@ async fn guest_byte_drain_after_partial_fork_replays_prefix_and_resumes_suffix()
             cut_index.as_u64() - OplogIndex::INITIAL.as_u64() + 1,
         )
         .await
+        .unwrap()
     {
         fork_oplog.add(entry).await.unwrap();
     }
@@ -3473,7 +3475,8 @@ async fn foreign_cancellation_recovery_applies_persisted_intent_without_delete_r
             .unwrap();
         let after = remote_oplog.current_oplog_index().await;
         assert_eq!(after, before.next());
-        let OplogEntry::StreamCancel { record, .. } = remote_oplog.read(after).await else {
+        let OplogEntry::StreamCancel { record, .. } = remote_oplog.read(after).await.unwrap()
+        else {
             panic!("remote cancellation was not committed");
         };
         let record = remote_oplog.download_payload(record).await.unwrap();
@@ -4126,7 +4129,7 @@ async fn local_cancellation_intent_recovers_without_retry_and_preserves_terminal
             after.as_u64(),
             before.as_u64() + u64::from(!already_ended) + 1
         );
-        let OplogEntry::StreamSession { record, .. } = oplog.read(after).await else {
+        let OplogEntry::StreamSession { record, .. } = oplog.read(after).await.unwrap() else {
             panic!("missing cancellation applied receipt");
         };
         let StreamSessionRecord::ConsumerCancelApplied(receipt) =
@@ -4143,7 +4146,8 @@ async fn local_cancellation_intent_recovers_without_retry_and_preserves_terminal
                 .has_cancellation_intents()
         );
         if !already_ended {
-            let OplogEntry::StreamCancel { record, .. } = oplog.read(before.next()).await else {
+            let OplogEntry::StreamCancel { record, .. } = oplog.read(before.next()).await.unwrap()
+            else {
                 panic!("missing recovered cancellation terminal");
             };
             let record = oplog.download_payload(record).await.unwrap();
@@ -6003,7 +6007,6 @@ async fn guest_byte_journal_covers_only_observed_bytes_after_reconstruction() {
         cleanup_sink: cleanup_sink.clone(),
         trap_context: DurableCallTrapContext {
             retry_from: OplogIndex::INITIAL,
-            in_atomic_region: false,
         },
         live_call_permit: LiveCallPermit::new(live_calls.clone()),
     }
@@ -6084,7 +6087,6 @@ async fn guest_byte_journal_covers_only_observed_bytes_after_reconstruction() {
         cleanup_sink,
         trap_context: DurableCallTrapContext {
             retry_from: OplogIndex::INITIAL,
-            in_atomic_region: false,
         },
         live_call_permit: LiveCallPermit::new(live_calls),
     }
@@ -6374,6 +6376,7 @@ async fn check_dropped_input_cancellation(unread_resource: bool) {
     for (_, entry) in oplog
         .read_exact(OplogIndex::INITIAL, current.as_u64())
         .await
+        .unwrap()
     {
         match entry {
             OplogEntry::StreamSession { record, .. } => {
@@ -6641,6 +6644,7 @@ async fn guest_authored_input_cancellation_targets_the_current_attachment_epoch(
     for (_, entry) in oplog
         .read_exact(OplogIndex::INITIAL, current.as_u64())
         .await
+        .unwrap()
     {
         if let OplogEntry::StreamSession { record, .. } = entry
             && let StreamSessionRecord::ConsumerCancelIntent(record) =
@@ -6802,7 +6806,7 @@ async fn reverted_caller_reestablishes_foreign_reader_without_repeating_invocati
         consumer.invocation.callee_fingerprint = consumer.fingerprint;
         let owner = OwnedAgentId::new(consumer.environment_id, &consumer.agent_id);
         let oplog = Arc::new(TestOplog::default());
-        oplog.add(OplogEntry::no_op(None)).await.unwrap();
+        oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
         let local = DurableStreamStore::load(
             oplog.clone(),
             consumer.environment_id,
@@ -7056,7 +7060,7 @@ async fn detached_continuation_activates_prepared_and_new_foreign_inputs() {
             read_requests: Mutex::default(),
         });
         let oplog = Arc::new(TestOplog::default());
-        oplog.add(OplogEntry::no_op(None)).await.unwrap();
+        oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
         let local = DurableStreamStore::load(
             oplog.clone(),
             consumer.environment_id,
@@ -7125,7 +7129,7 @@ async fn detached_continuation_activates_prepared_and_new_foreign_inputs() {
             target.callee.agent_id = "forked-callee".into();
             target.callee_fingerprint = AgentFingerprint::new();
         } else {
-            oplog.add(OplogEntry::no_op(None)).await.unwrap();
+            oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
         }
         let owner = OwnedAgentId::new(target.callee_environment_id, &target.callee);
         let cut = DurableStreamStore::prepare_fork_cut(
@@ -8447,6 +8451,7 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
     for (index, entry) in oplog
         .read_exact(OplogIndex::INITIAL, current.as_u64())
         .await
+        .unwrap()
     {
         match entry {
             OplogEntry::StreamSession { record, .. } => {
@@ -8618,6 +8623,7 @@ async fn nested_consumer_mappings_preserve_the_parent_input_or_output_role() {
     for (index, entry) in oplog
         .read_exact(OplogIndex::INITIAL, current.as_u64())
         .await
+        .unwrap()
     {
         let OplogEntry::StreamSession { record, .. } = entry else {
             continue;
@@ -11211,7 +11217,7 @@ async fn local_reader_forwarding_reuses_only_retained_destinations_after_fork_an
                     1 => intent_index,
                     _ => oplog.current_oplog_index().await,
                 };
-                oplog.add(OplogEntry::no_op(None)).await.unwrap();
+                oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
                 oplog.commit(CommitLevel::Always).await.unwrap();
                 let source_owner = OwnedAgentId::new(owner.environment_id, &owner.agent_id);
                 let mut target_owner = source_owner.clone();
@@ -11252,6 +11258,7 @@ async fn local_reader_forwarding_reuses_only_retained_destinations_after_fork_an
                     for (_, entry) in oplog
                         .read_exact(OplogIndex::INITIAL, cut_index.as_u64())
                         .await
+                        .unwrap()
                     {
                         copied.add(entry).await.unwrap();
                     }
@@ -11568,7 +11575,7 @@ async fn forwarded_output_intents_survive_result_and_nested_publication_cuts() {
                     after_value,
                     after_item,
                 ][retained_stage];
-                oplog.add(OplogEntry::no_op(None)).await.unwrap();
+                oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
                 oplog.commit(CommitLevel::Always).await.unwrap();
                 let source_owner = OwnedAgentId::new(owner.environment_id, &owner.agent_id);
                 let mut target_owner = source_owner.clone();
@@ -11609,6 +11616,7 @@ async fn forwarded_output_intents_survive_result_and_nested_publication_cuts() {
                     for (_, entry) in oplog
                         .read_exact(OplogIndex::INITIAL, cut_index.as_u64())
                         .await
+                        .unwrap()
                     {
                         copied.add(entry).await.unwrap();
                     }

@@ -31,11 +31,14 @@ import { QUOTA_INTERNAL, type QuotaInternal } from "./quotaInternal.js"
 interface QuotaTokenHandleState {
   raw: RawQuotaToken | undefined
   readonly tracked: boolean
+  /** Set by release, including while the resource is on the wire, so a restore cannot revive it. */
+  released?: boolean
 }
 
 interface QuotaTokenHandleRegistry {
   readonly states: WeakMap<object, QuotaTokenHandleState>
   readonly owners: WeakMap<RawQuotaToken, object>
+  readonly wireOrigins: WeakMap<object, GuestQuotaTokenHandle>
   readonly transferredOwner: object
 }
 
@@ -46,9 +49,10 @@ const globals = globalThis as typeof globalThis & {
 const registry = (globals[registryKey] ??= {
   states: new WeakMap<object, QuotaTokenHandleState>(),
   owners: new WeakMap<RawQuotaToken, object>(),
+  wireOrigins: new WeakMap<object, GuestQuotaTokenHandle>(),
   transferredOwner: Object.freeze({}),
 })
-const { states, owners, transferredOwner } = registry
+const { states, owners, wireOrigins, transferredOwner } = registry
 
 export class GuestQuotaTokenHandle {
   constructor(key: QuotaInternal, raw: RawQuotaToken, tracked = true) {
@@ -156,8 +160,35 @@ export function takeGuestQuotaTokenHandleToWire(
     throw new Error("quota-token handle ownership is invalid")
   }
   state.raw = undefined
-  if (raw !== undefined && state.tracked) owners.set(raw, wireOwner)
+  if (raw !== undefined && state.tracked) {
+    owners.set(raw, wireOwner)
+    wireOrigins.set(wireOwner, handle)
+  }
   return raw
+}
+
+/**
+ * Give a raw token that `wireOwner` still holds back to the handle it was taken from. Use it only
+ * when the host never received the wire value. See `restoreGuestPermissionCardHandleFromWire`.
+ */
+export function restoreGuestQuotaTokenHandleFromWire(
+  key: QuotaInternal,
+  raw: RawQuotaToken,
+  wireOwner: object,
+): "restored" | "released" | "unknown" {
+  requireQuotaInternal(key)
+  const handle = wireOrigins.get(wireOwner)
+  if (handle === undefined || owners.get(raw) !== wireOwner) return "unknown"
+  const state = stateOf(handle)
+  if (state.raw !== undefined) return "unknown"
+  wireOrigins.delete(wireOwner)
+  if (state.released) {
+    owners.delete(raw)
+    return "released"
+  }
+  state.raw = raw
+  owners.set(raw, handle)
+  return "restored"
 }
 
 export function assertGuestQuotaTokenHandleCanLiftFromWire(
@@ -206,6 +237,7 @@ export function releaseGuestQuotaTokenHandle(
     throw new Error("quota-token handle ownership is invalid")
   }
   state.raw = undefined
+  state.released = true
   if (raw !== undefined && state.tracked) owners.delete(raw)
   return raw
 }

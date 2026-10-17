@@ -211,7 +211,7 @@ impl DurableStreamStore {
         &self,
         oplog_index: OplogIndex,
     ) -> Result<StreamSessionRecord, StreamStoreError> {
-        let OplogEntry::StreamSession { record, .. } = self.oplog.read(oplog_index).await else {
+        let OplogEntry::StreamSession { record, .. } = self.oplog.read(oplog_index).await? else {
             return Err(StreamStoreError::CorruptHistory(
                 "session metadata points at a non-session record".into(),
             ));
@@ -233,7 +233,7 @@ impl DurableStreamStore {
         &self,
         oplog_index: OplogIndex,
     ) -> Result<MaterializedStreamItemsRecord, StreamStoreError> {
-        let OplogEntry::StreamItems { record, .. } = self.oplog.read(oplog_index).await else {
+        let OplogEntry::StreamItems { record, .. } = self.oplog.read(oplog_index).await? else {
             return Err(StreamStoreError::CorruptHistory(
                 "stream batch index points at a non-item record".into(),
             ));

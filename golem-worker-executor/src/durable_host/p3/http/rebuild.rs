@@ -15,7 +15,7 @@
 use super::replay::ReplayedRequestBodyDrainReadiness;
 use super::request_body::{
     DurableRequestBody, DurableRequestBodyDrainOutcome, RecordedRequestBodyTerminal,
-    recorded_request_body_replay, scan_recorded_request_body_frames,
+    RequestBodyRecovery, recorded_request_body_replay, scan_recorded_request_body_frames,
 };
 use crate::durable_host::p3::{DurableP3, durable_worker_ctx, wasi_http_view};
 use crate::workerctx::WorkerCtx;
@@ -24,6 +24,7 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::payload::types::{
     SerializableHttpMethod, SerializableP3HttpClientSend, SerializableP3HttpScheme,
 };
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use http::{HeaderMap, HeaderName, HeaderValue};
 use http_body_util::BodyExt as _;
 use http_body_util::combinators::UnsyncBoxBody;
@@ -58,7 +59,10 @@ pub(crate) struct P3HttpSendRebuild {
 /// its lifetime to the consume-body task that reads the rebuilt body
 /// (mirroring the abort-on-drop handle the built-in `WasiHttp::send` attaches
 /// to live response bodies).
-pub(super) struct AbortOnDropIoTask(pub(super) tokio::task::JoinHandle<()>);
+pub(super) struct AbortOnDropIoTask(
+    pub(super) tokio::task::JoinHandle<()>,
+    pub(super) RequestBodyRecovery,
+);
 
 impl Drop for AbortOnDropIoTask {
     fn drop(&mut self) {
@@ -69,6 +73,7 @@ impl Drop for AbortOnDropIoTask {
 /// Result of attempting to re-issue a recorded send for an incomplete
 /// consume-body scope.
 pub(super) enum RebuildOutcome {
+    RecoveryRequired(golem_service_base::error::worker_executor::WorkerExecutorError),
     /// The request was re-issued: stream the fresh response body. The recorded
     /// response head stays authoritative for the guest — the rebuild only
     /// supplies a replacement body stream.
@@ -89,6 +94,7 @@ pub(super) enum RebuildOutcome {
 /// head available for the caller to classify (used by the response-body
 /// resume path, which must inspect the fresh status and `Content-Range`).
 pub(super) enum ResendOutcome {
+    RecoveryRequired(golem_service_base::error::worker_executor::WorkerExecutorError),
     Sent {
         response: http::Response<UnsyncBoxBody<Bytes, ErrorCode>>,
         io_guard: AbortOnDropIoTask,
@@ -106,7 +112,9 @@ pub(super) enum ResendOutcome {
 pub(super) fn recorded_request_body_replayability<Ctx: WorkerCtx, U: 'static>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     rebuild: &mut P3HttpSendRebuild,
-) -> impl std::future::Future<Output = Result<(), String>> + Send + 'static {
+    recovery: RequestBodyRecovery,
+    has_live_continuation: bool,
+) -> impl std::future::Future<Output = Result<(), WorkerExecutorError>> + Send + 'static {
     let durable_body_present = rebuild.durable_body.is_some();
     let replayed_request_body_drain = rebuild.replayed_request_body_drain.take();
     let send_start_index = rebuild.recorded_request_body;
@@ -122,54 +130,36 @@ pub(super) fn recorded_request_body_replayability<Ctx: WorkerCtx, U: 'static>(
         }
 
         let reproduced = match replayed_request_body_drain {
-            Some(drain) => Some(drain.proof.await.map_err(|_| {
-                "the replayed request-body drain ended before proving recording health".to_string()
-            })??),
+            Some(drain) => Some(
+                drain
+                    .proof
+                    .await
+                    .map_err(|_| {
+                        WorkerExecutorError::runtime(
+                            "the replayed request-body drain ended before proving recording health",
+                        )
+                    })?
+                    .map_err(|error| {
+                        let cause = error
+                            .recovery_error()
+                            .unwrap_or_else(|| WorkerExecutorError::runtime(error.to_string()));
+                        recovery.transport_error(error);
+                        cause
+                    })?,
+            ),
             None => None,
         };
         let scan = scan_recorded_request_body_frames(oplog, send_start_index)
             .await
             .map_err(|error| {
-                format!("the recorded request-body frames could not be read: {error}")
+                let cause = error
+                    .recovery_error()
+                    .unwrap_or_else(|| WorkerExecutorError::runtime(error.to_string()));
+                recovery.transport_error(error);
+                cause
             })?;
-        match &scan.terminal {
-            Some(RecordedRequestBodyTerminal::End) => {}
-            Some(RecordedRequestBodyTerminal::Error(error)) => Err(format!(
-                "the recorded request body ended with a guest body error: {error:?}"
-            ))?,
-            None => {
-                return Err(
-                    "the recorded request body is incomplete (no terminal frame was recorded)"
-                        .to_string(),
-                );
-            }
-        }
-        if let Some(reproduced) = reproduced {
-            if scan.covered_len != reproduced.final_length {
-                return Err(format!(
-                    "the healed request-body recording covers {} bytes, but replay reproduced {} bytes",
-                    scan.covered_len, reproduced.final_length
-                ));
-            }
-            if scan
-                .data_frames
-                .iter()
-                .any(|frame| frame.offset.saturating_add(frame.len) > reproduced.final_length)
-            {
-                return Err(
-                    "the request-body recording contains data beyond the length reproduced during replay"
-                        .to_string(),
-                );
-            }
-            if scan.trailers_recorded() != reproduced.trailers_present {
-                return Err(format!(
-                    "the healed request-body recording's trailer presence does not match replay (recorded: {}, reproduced: {})",
-                    scan.trailers_recorded(),
-                    reproduced.trailers_present
-                ));
-            }
-        }
-        Ok(())
+        scan.validate_reproduction(reproduced, has_live_continuation)
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
     }
 }
 
@@ -301,6 +291,7 @@ pub(super) async fn reissue_recorded_request<Ctx: WorkerCtx, U: 'static>(
     rebuild: &P3HttpSendRebuild,
 ) -> RebuildOutcome {
     match resend_recorded_request(accessor, rebuild, &[]).await {
+        ResendOutcome::RecoveryRequired(error) => RebuildOutcome::RecoveryRequired(error),
         ResendOutcome::Sent { response, io_guard } => {
             if response.status().as_u16() != rebuild.recorded_status {
                 debug!(
@@ -333,6 +324,11 @@ pub(super) async fn resend_recorded_request<Ctx: WorkerCtx, U: 'static>(
     rebuild: &P3HttpSendRebuild,
     extra_headers: &[(String, String)],
 ) -> ResendOutcome {
+    let recovery = rebuild
+        .durable_body
+        .as_ref()
+        .map(|body| body.recovery.clone())
+        .unwrap_or_default();
     let body = if let Some(durable_body) = &rebuild.durable_body {
         // Same-session resend: drain the guest body to its terminal through
         // the live recorder (completing a recording whose terminal frame has
@@ -340,7 +336,11 @@ pub(super) async fn resend_recorded_request<Ctx: WorkerCtx, U: 'static>(
         // live view may still be registered if its connection was torn down
         // without dropping the body — abandon it so the drain can proceed.
         durable_body.abandon_active_live_view();
-        match durable_body.drain_to_terminal().await {
+        let drained = durable_body.drain_to_terminal().await;
+        if let Some(error) = recovery.error() {
+            return ResendOutcome::RecoveryRequired(error);
+        }
+        match drained {
             DurableRequestBodyDrainOutcome::Replayable => durable_body.replayer().boxed_unsync(),
             DurableRequestBodyDrainOutcome::NotReplayable => {
                 return ResendOutcome::Refused(
@@ -358,6 +358,15 @@ pub(super) async fn resend_recorded_request<Ctx: WorkerCtx, U: 'static>(
         });
         let scan = match scan_recorded_request_body_frames(oplog.clone(), send_start_index).await {
             Ok(scan) => scan,
+            Err(super::request_body::RecordedFrameError::Infrastructure(message)) => {
+                return ResendOutcome::RecoveryRequired(
+                    golem_service_base::error::worker_executor::WorkerExecutorError::recovery_required(message),
+                );
+            }
+            // The oplog failed for good: the agent fails with it.
+            Err(super::request_body::RecordedFrameError::OplogFailed(error)) => {
+                return ResendOutcome::RecoveryRequired(error);
+            }
             Err(error) => {
                 return ResendOutcome::Refused(format!(
                     "the recorded request-body frames could not be read back: {error}"
@@ -365,7 +374,9 @@ pub(super) async fn resend_recorded_request<Ctx: WorkerCtx, U: 'static>(
             }
         };
         match scan.terminal {
-            Some(RecordedRequestBodyTerminal::End) => recorded_request_body_replay(oplog, &scan),
+            Some(RecordedRequestBodyTerminal::End) => {
+                recorded_request_body_replay(oplog, &scan, recovery.clone())
+            }
             Some(RecordedRequestBodyTerminal::Error(error)) => {
                 return ResendOutcome::Refused(format!(
                     "the recorded request body ended with a guest body error: {error:?}"
@@ -424,6 +435,9 @@ pub(super) async fn resend_recorded_request<Ctx: WorkerCtx, U: 'static>(
             Err(error) => Err(error),
         },
     };
+    if let Some(error) = recovery.error() {
+        return ResendOutcome::RecoveryRequired(error);
+    }
     match sent {
         Ok((response, io)) => {
             let io = Box::into_pin(io);
@@ -433,7 +447,7 @@ pub(super) async fn resend_recorded_request<Ctx: WorkerCtx, U: 'static>(
             });
             ResendOutcome::Sent {
                 response,
-                io_guard: AbortOnDropIoTask(io_task),
+                io_guard: AbortOnDropIoTask(io_task, recovery),
             }
         }
         Err(code) => ResendOutcome::Failed(code),

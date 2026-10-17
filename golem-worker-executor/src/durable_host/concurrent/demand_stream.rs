@@ -19,6 +19,8 @@ use super::{
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::durability::{DurableCallTrapContext, TerminalCallError};
 use crate::durable_host::tail_work::TailActivity;
+use crate::services::HasWorker;
+use crate::services::oplog::CommitLevel;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{DurableFunctionType, HostPayloadPair, OplogIndex};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -59,7 +61,7 @@ pub(crate) enum DemandDeliveryMode {
 }
 
 /// Durable parent/child protocol shared by byte streams whose source advances only on guest
-/// demand. It owns the batched parent, creates exactly one durable child per requested item, and
+/// demand. It owns the parent call, creates exactly one durable child per requested item, and
 /// exposes the parent terminal only as a consuming operation so no children can be started after
 /// it.
 ///
@@ -86,39 +88,50 @@ where
     Parent: HostPayloadPair,
     Child: HostPayloadPair,
 {
-    pub(crate) async fn start<T, D, Ctx, F>(
+    pub(crate) async fn start<T, D, Ctx>(
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         demands: mpsc::Receiver<Demand>,
         claim_options: AccessClaimOptions,
         delivery_mode: DemandDeliveryMode,
-        build_request: F,
+        request: Parent::Req,
     ) -> Result<Self, WorkerExecutorError>
     where
         T: 'static,
-        D: HasData + ?Sized,
+        D: HasData + ?Sized + 'static,
         Ctx: WorkerCtx,
-        F: AsyncFnOnce(super::AccessStartContext) -> Result<Parent::Req, WorkerExecutorError>,
     {
         let observational_owner = claim_options.observational_owner;
         let children_repair_incomplete = matches!(
             claim_options.scope_replay_recovery,
-            ScopeReplayRecovery::Reexecute { .. }
+            ScopeReplayRecovery::Reexecute { .. } | ScopeReplayRecovery::CompleteWithLoss
         );
         // The parent's own `Start` is completed in place as well: when every recorded child
         // replayed but the crash preceded the parent's terminal, the stream finishes live under
-        // the recorded parent `Start` instead of refusing the batched replay.
-        let parent = DurableCallSession::<Parent, Cancellable>::start_access_with_options(
+        // the recorded parent `Start`.
+        let mut parent = DurableCallSession::<Parent, Cancellable>::start_access_with_options(
             store,
             get_ctx,
-            DurableFunctionType::WriteRemoteBatched(None),
+            DurableFunctionType::WriteRemote,
             AccessClaimOptions {
                 incomplete_repair_authorized_by_scope: children_repair_incomplete,
                 ..claim_options
             },
-            build_request,
+            request,
         )
         .await?;
+        if parent.is_live() && parent.is_persisted() {
+            let public_state =
+                store.with(|mut access| get_ctx(access.data_mut()).public_state.clone());
+            if let Err(error) = public_state
+                .worker()
+                .commit_oplog_and_update_state(CommitLevel::Always)
+                .await
+            {
+                parent.abandon_for_trap();
+                return Err(error.into());
+            }
+        }
         Ok(Self {
             parent,
             demands,
@@ -171,17 +184,19 @@ where
         let child = DurableCallSession::<Child, NotCancellable>::start_access_with_options(
             store,
             get_ctx,
-            DurableFunctionType::WriteRemoteBatched(Some(self.parent.begin_index())),
+            DurableFunctionType::WriteRemote,
             AccessClaimOptions {
+                parent_start_index: Some(self.parent.start_index()),
                 observational_owner: self.observational_owner,
                 incomplete_repair_authorized_by_scope: self.children_repair_incomplete,
+                scope_replay_recovery: self.parent.child_replay_recovery(),
                 ..Default::default()
             },
-            async move |_| Ok(request),
+            request,
         )
         .await?;
 
-        if child.is_live() {
+        let item = if child.is_live() {
             Ok(DurableDemandItem::Live(child))
         } else {
             match self.delivery_mode {
@@ -191,9 +206,7 @@ where
                             response,
                             delivery: CompletionDelivery::unarmed(),
                         }),
-                        CallReplayOutcome::Incomplete(child) => {
-                            self.incomplete_child(store, get_ctx, child).await
-                        }
+                        CallReplayOutcome::Incomplete(child) => self.incomplete_child(child),
                     }
                 }
                 DemandDeliveryMode::Deferred => {
@@ -202,47 +215,48 @@ where
                             Ok(DurableDemandItem::Replayed { response, delivery })
                         }
                         DeferredCallReplayOutcome::Incomplete(child) => {
-                            self.incomplete_child(store, get_ctx, child).await
+                            self.incomplete_child(child)
                         }
                     }
                 }
             }
+        }?;
+        if matches!(&item, DurableDemandItem::Live(_))
+            && self.children_repair_incomplete
+            && !self.parent.is_live()
+            && let Err(error) = self
+                .parent
+                .resume_incomplete_scope_access(store, get_ctx)
+                .await
+        {
+            if let DurableDemandItem::Live(mut child) = item {
+                child.abandon_for_trap();
+            }
+            return Err(error);
         }
+        Ok(item)
     }
 
     /// A child whose `Start` is recorded without a terminal: the crash happened while its item was
     /// produced. Under a call-locally re-executing parent the child is the live tail of the stream
     /// and is completed under its recorded `Start`; otherwise it is a replay failure.
-    ///
-    /// The parent is repaired in the same step. The owner writes the parent terminal only after
-    /// every child has reached its delivery boundary, so an incomplete child proves the parent
-    /// `Start` has no terminal, and from here on the parent owns a live tail: the adapter routes
-    /// the tail's transient failures to the parent's retry point, which requires a live handle.
-    async fn incomplete_child<T, D, Ctx>(
-        &mut self,
-        store: &Accessor<T, D>,
-        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    fn incomplete_child(
+        &self,
         mut child: DurableCallSession<Child, NotCancellable>,
-    ) -> Result<DurableDemandItem<Child>, WorkerExecutorError>
-    where
-        T: 'static,
-        D: HasData + ?Sized,
-        Ctx: WorkerCtx,
-    {
-        if !self.children_repair_incomplete {
+    ) -> Result<DurableDemandItem<Child>, WorkerExecutorError> {
+        if self.children_repair_incomplete {
+            Ok(DurableDemandItem::Live(child))
+        } else {
             child.abandon_for_trap();
-            return Err(incomplete_child_error());
+            Err(WorkerExecutorError::unexpected_oplog_entry(
+                "completed demand-stream child",
+                format!(
+                    "invariant: {} child at Start {} has no owner authorization for incomplete repair",
+                    Child::FQFN,
+                    child.start_index()
+                ),
+            ))
         }
-        if !self.parent.is_live()
-            && let Err(error) = self
-                .parent
-                .repair_incomplete_parent_access(store, get_ctx)
-                .await
-        {
-            child.abandon_for_trap();
-            return Err(error);
-        }
-        Ok(DurableDemandItem::Live(child))
     }
 
     pub(crate) async fn complete_item<T, D, Ctx>(
@@ -287,7 +301,7 @@ where
         self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-        response: Parent::Resp,
+        response: impl FnOnce() -> Parent::Resp,
     ) -> Result<(Parent::Resp, CompletionDelivery), TerminalCallError>
     where
         T: 'static,
@@ -303,8 +317,7 @@ where
         self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-        response: Parent::Resp,
-        span_finished: golem_common::model::oplog::SpanFinished,
+        response: impl FnOnce() -> (Parent::Resp, golem_common::model::oplog::SpanFinished),
     ) -> Result<(Parent::Resp, CompletionDelivery), TerminalCallError>
     where
         T: 'static,
@@ -312,16 +325,9 @@ where
         Ctx: WorkerCtx,
     {
         self.parent
-            .finish_access_deferred_with_span(store, get_ctx, response, span_finished)
+            .finish_access_deferred_with_span(store, get_ctx, response)
             .await
     }
-}
-
-fn incomplete_child_error() -> WorkerExecutorError {
-    WorkerExecutorError::unexpected_oplog_entry(
-        "completed batched demand-stream child",
-        "incomplete batched demand-stream child".to_string(),
-    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

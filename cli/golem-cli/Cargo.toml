@@ -159,6 +159,7 @@ reqwest = { workspace = true }
 sqlx = { workspace = true }
 syn = { workspace = true, features = ["full", "parsing"] }
 test-r = { workspace = true }
+tokio-rustls = { workspace = true }
 wat = { workspace = true }
 
 [build-dependencies]

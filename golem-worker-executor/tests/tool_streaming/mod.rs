@@ -100,6 +100,7 @@ async fn start_with_agent_sockets(
 mod attachment_cost_contract;
 mod chunk_f_policy_acceptance;
 mod chunk_m_stream_deltas;
+mod dropped_waits;
 mod gol40_k1_audit_acceptance;
 mod held_http_crash_recovery;
 mod matrix_client_resource_acceptance;
@@ -267,8 +268,7 @@ enum SingleStoreProbePrefix {
     Complete,
     /// The prefix ending with the first direct idempotency-key `Start` (its `End` is discarded).
     FirstDirectStart,
-    /// The prefix ending with the first direct idempotency-key `End`; the following direct atomic
-    /// region and all later guest calls are discarded.
+    /// The prefix ending with the first direct idempotency-key `End`; later calls are discarded.
     FirstDirectEnd,
 }
 
@@ -281,20 +281,18 @@ enum SingleStoreProbeGate {
 
 /// Records a single-Store history in which a host-side response body read (an accessor durable
 /// call whose scope, `Start` and `End` are appended by a host task) interleaves with direct,
-/// Store-holding guest durable calls (an idempotency key, then nested atomic regions with keys
-/// and oplog index reads), reverts the worker to the requested prefix, and replays it on a fresh
-/// executor while the replayed body admission is optionally paused at `gate` until the direct
-/// call has started waiting for its recorded resolution.
+/// Store-holding guest durable calls (idempotency keys), reverts the worker to the requested
+/// prefix, and replays it on a fresh executor while the replayed body admission is optionally
+/// paused at `gate` until the direct call has started waiting for its recorded resolution.
 ///
-/// A correct replay must neither consume the body scope or body `Start` for a positional direct
-/// read, nor let the Store-holding direct call wait for progress that only the paused body task
+/// A correct replay must neither consume the body scope or body `Start` for a direct call,
+/// nor let the Store-holding direct call wait for progress that only the paused body task
 /// can make.
-async fn run_single_store_http_atomic_probe(
+async fn run_single_store_http_probe(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     caller: &PrecompiledComponent,
     agent_name: &str,
-    atomic_first: bool,
     prefix: SingleStoreProbePrefix,
     gate: SingleStoreProbeGate,
 ) -> anyhow::Result<()> {
@@ -312,16 +310,13 @@ async fn run_single_store_http_atomic_probe(
         .store()
         .await?;
     let (port, gate_port, server, mut checkpoints) = start_crash_checkpoint_server().await;
-    let mut env = HashMap::from([
+    let env = HashMap::from([
         ("CALLER_CRASH_CHECKPOINT_PORT".to_string(), port.to_string()),
         (
             "CALLER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
             gate_port.to_string(),
         ),
     ]);
-    if atomic_first {
-        env.insert("GOL581_ATOMIC_FIRST".to_string(), "1".to_string());
-    }
     // The shape under test has the host-side body scope complete before the guest's first
     // direct call, so that the gates below (not the recording) decide how the two interleave on
     // replay. The fixture only yields between dropping the body and the first direct call; a
@@ -449,15 +444,9 @@ async fn run_single_store_http_atomic_probe(
             Some(executor.gate_next_replay_access_admission(&worker_id, "consume-body", stage))
         }
     };
-    // The first direct call after the body read is either a strictly matched idempotency key or
-    // the positional atomic-region marker; the signal proves that it waits for replay progress
-    // while the body admission is paused.
-    let first_direct_call = if atomic_first {
-        "BeginAtomicRegion"
-    } else {
-        "generate_idempotency-key"
-    };
-    let mut direct_wait = executor.signal_next_direct_replay_wait(&worker_id, first_direct_call);
+    // The direct idempotency-key call waits for replay progress while body admission is paused.
+    let mut direct_wait =
+        executor.signal_next_direct_replay_wait(&worker_id, "generate_idempotency-key");
     let replay = async {
         let invoke = executor.invoke_and_await_agent(
             &component,
@@ -477,7 +466,7 @@ async fn run_single_store_http_atomic_probe(
                         .await
                         .map_err(|_| {
                             anyhow::anyhow!(
-                                "the guest's first direct call `{first_direct_call}` did not reach its replay wait while consume-body admission was paused"
+                                "the guest's direct call did not reach its replay wait while consume-body admission was paused"
                             )
                         })?;
                 eprintln!(
@@ -631,12 +620,11 @@ async fn single_store_body_read_and_direct_calls_replay_complete_history(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
+    run_single_store_http_probe(
         last_unique_id,
         deps,
         caller,
         "single-store-complete-control",
-        false,
         SingleStoreProbePrefix::Complete,
         SingleStoreProbeGate::None,
     )
@@ -652,12 +640,11 @@ async fn direct_call_waits_without_blocking_body_admission_paused_before_scope(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
+    run_single_store_http_probe(
         last_unique_id,
         deps,
         caller,
         "single-store-direct-before-scope",
-        false,
         SingleStoreProbePrefix::Complete,
         SingleStoreProbeGate::Admission(ReplayAdmissionStage::BeforeScope),
     )
@@ -673,54 +660,11 @@ async fn direct_call_waits_without_blocking_body_admission_paused_after_scope(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
+    run_single_store_http_probe(
         last_unique_id,
         deps,
         caller,
         "single-store-direct-after-scope",
-        false,
-        SingleStoreProbePrefix::Complete,
-        SingleStoreProbeGate::Admission(ReplayAdmissionStage::AfterScope),
-    )
-    .await
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("3m")]
-async fn positional_atomic_marker_does_not_consume_unclaimed_body_scope_start(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
-        last_unique_id,
-        deps,
-        caller,
-        "single-store-atomic-before-scope",
-        true,
-        SingleStoreProbePrefix::Complete,
-        SingleStoreProbeGate::Admission(ReplayAdmissionStage::BeforeScope),
-    )
-    .await
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("3m")]
-async fn positional_atomic_marker_does_not_consume_unclaimed_body_start(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
-        last_unique_id,
-        deps,
-        caller,
-        "single-store-atomic-after-scope",
-        true,
         SingleStoreProbePrefix::Complete,
         SingleStoreProbeGate::Admission(ReplayAdmissionStage::AfterScope),
     )
@@ -736,12 +680,11 @@ async fn retained_prefix_ending_at_direct_start_replays_with_paused_body_admissi
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
+    run_single_store_http_probe(
         last_unique_id,
         deps,
         caller,
         "single-store-prefix-direct-start",
-        false,
         SingleStoreProbePrefix::FirstDirectStart,
         SingleStoreProbeGate::Admission(ReplayAdmissionStage::AfterScope),
     )
@@ -757,12 +700,11 @@ async fn retained_prefix_ending_at_direct_end_replays_with_paused_body_admission
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
+    run_single_store_http_probe(
         last_unique_id,
         deps,
         caller,
         "single-store-prefix-direct-end",
-        false,
         SingleStoreProbePrefix::FirstDirectEnd,
         SingleStoreProbeGate::Admission(ReplayAdmissionStage::AfterScope),
     )
@@ -778,12 +720,11 @@ async fn retained_prefix_ending_at_direct_start_replays_under_natural_scheduling
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
+    run_single_store_http_probe(
         last_unique_id,
         deps,
         caller,
         "single-store-prefix-direct-start-control",
-        false,
         SingleStoreProbePrefix::FirstDirectStart,
         SingleStoreProbeGate::None,
     )
@@ -799,12 +740,11 @@ async fn retained_prefix_ending_at_direct_end_replays_under_natural_scheduling(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
+    run_single_store_http_probe(
         last_unique_id,
         deps,
         caller,
         "single-store-prefix-direct-end-control",
-        false,
         SingleStoreProbePrefix::FirstDirectEnd,
         SingleStoreProbeGate::None,
     )
@@ -1258,6 +1198,172 @@ async fn invoke_cli_tool(
         )
         .await?
         .into_typed()
+}
+
+async fn exercise_npm_lifecycle_completion(
+    executor: &TestWorkerExecutor,
+    caller_component: &golem_common::model::component::ComponentDto,
+) -> anyhow::Result<()> {
+    for (name, extension, source, expected_code, expected_stdout, expected_stderr) in [
+        (
+            "missing-ts",
+            "ts",
+            "import './normalizeWhitespace.test.ts';",
+            1,
+            "",
+            "ERR_MODULE_NOT_FOUND",
+        ),
+        (
+            "missing-cjs",
+            "cjs",
+            "require('./normalizeWhitespace.test.cjs');",
+            1,
+            "",
+            "MODULE_NOT_FOUND",
+        ),
+        (
+            "missing-esm",
+            "mjs",
+            "import './normalizeWhitespace.test.mjs';",
+            1,
+            "",
+            "ERR_MODULE_NOT_FOUND",
+        ),
+        (
+            "throw",
+            "cjs",
+            "throw new Error('controlled child failure');",
+            1,
+            "",
+            "controlled child failure",
+        ),
+        (
+            "exit-seven",
+            "cjs",
+            "process.stdout.write('before exit\\n'); process.exit(7);",
+            7,
+            "before exit\n",
+            "",
+        ),
+        (
+            "exit-code-seven",
+            "cjs",
+            "process.stderr.write('diagnostic\\n'); process.exitCode = 7;",
+            7,
+            "",
+            "diagnostic\n",
+        ),
+        (
+            "success",
+            "cjs",
+            "process.stdout.write('child success\\n');",
+            0,
+            "child success\n",
+            "",
+        ),
+        (
+            "warning",
+            "cjs",
+            "process.stderr.write('successful warning\\n');",
+            0,
+            "",
+            "successful warning\n",
+        ),
+    ] {
+        let owner = format!("npm-lifecycle-{name}");
+        let fixture = serde_json::json!({ "extension": extension, "source": source });
+        let setup = format!(
+            r##"
+const fs = require('node:fs');
+const fixture = {fixture};
+fs.mkdirSync('tests', {{ recursive: true }});
+fs.writeFileSync('tests/run.' + fixture.extension, fixture.source);
+fs.writeFileSync('package.json', JSON.stringify({{
+  name: 'npm-status-fixture', version: '1.0.0', private: true, type: 'module',
+  scripts: {{
+    test: 'node tests/run.' + fixture.extension,
+    posttest: `node -e "require('node:fs').writeFileSync('posttest-ran', 'yes')"`
+  }}
+}}));
+"##
+        );
+        let setup_result = invoke_cli_tool(
+            executor,
+            caller_component,
+            &owner,
+            "node",
+            "/workspace",
+            vec!["-e", &setup],
+        )
+        .await?;
+        assert_eq!(setup_result.exit_code, 0, "{name}: {setup_result:?}");
+        assert!(setup_result.stdout.is_empty());
+        assert!(setup_result.stderr.is_empty());
+
+        let result = invoke_cli_tool(
+            executor,
+            caller_component,
+            &owner,
+            "npm",
+            "/workspace",
+            vec!["test"],
+        )
+        .await?;
+        let stdout = String::from_utf8(result.stdout)?;
+        let stderr = String::from_utf8(result.stderr)?;
+        assert_eq!(
+            result.exit_code, expected_code,
+            "{name}: stdout={stdout}; stderr={stderr}"
+        );
+        if !expected_stdout.is_empty() {
+            assert!(stdout.contains(expected_stdout), "{name}: {stdout}");
+        }
+        if expected_stderr.is_empty() {
+            assert!(stderr.is_empty(), "{name}: {stderr}");
+        } else {
+            assert!(stderr.contains(expected_stderr), "{name}: {stderr}");
+        }
+
+        // Check the lifecycle effect separately from the command's return value.
+        let posttest = invoke_cli_tool(
+            executor,
+            caller_component,
+            &owner,
+            "node",
+            "/workspace",
+            vec![
+                "-e",
+                "console.log(require('node:fs').existsSync('posttest-ran'))",
+            ],
+        )
+        .await?;
+        assert_eq!(posttest.exit_code, 0, "{name}: {posttest:?}");
+        assert_eq!(
+            posttest.stdout,
+            if expected_code == 0 {
+                b"true\n".as_slice()
+            } else {
+                b"false\n".as_slice()
+            },
+            "{name}"
+        );
+        assert!(posttest.stderr.is_empty());
+
+        // A failed child must not poison the next tool invocation on the same owner.
+        let followup = invoke_cli_tool(
+            executor,
+            caller_component,
+            &owner,
+            "npm",
+            "/workspace",
+            vec!["--version"],
+        )
+        .await?;
+        assert_eq!(followup.exit_code, 0, "{name}: {followup:?}");
+        assert_eq!(followup.stdout, b"10.9.9\n", "{name}");
+        assert!(followup.stderr.is_empty());
+    }
+    Ok(())
 }
 
 async fn invoke_git_tool_success(
@@ -9191,7 +9297,6 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
     let original_start = tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
             if let Some(active) = executor.active_entity_metadata(&overflow_owner).await
-                && active.reached_oplog_marker.is_some()
                 && active.tool_operations.operations.is_empty()
                 && matches!(active.lane.holder, Some(OwnerInvocationId::Agent(_)))
                 && active.lane.active_invocation_count == 1
@@ -9231,7 +9336,6 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
             if let Some(active) = executor.active_entity_metadata(&overflow_owner).await
-                && active.reached_oplog_marker.is_some()
                 && active.tool_operations.operations.is_empty()
                 && matches!(active.lane.holder, Some(OwnerInvocationId::Agent(_)))
                 && active.lane.active_invocation_count == 1
@@ -9802,37 +9906,15 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
             .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
         "attachment admission rejection must be an ordinary durable tool outcome"
     );
-    let (terminal_index, terminal_response) = oplog
+    let terminal_response = oplog
         .iter()
         .find_map(|entry| match &entry.entry {
-            PublicOplogEntry::End(params) if params.start_index == original_start => params
-                .response
-                .clone()
-                .map(|response| (entry.oplog_index, response)),
-            _ => None,
-        })
-        .expect("incomplete attachment upgrade rejection has one durable terminal");
-    let (jump_index, jump) = oplog
-        .iter()
-        .find_map(|entry| match &entry.entry {
-            PublicOplogEntry::Jump(params) if entry.oplog_index < terminal_index => {
-                Some((entry.oplog_index, params.jump.clone()))
+            PublicOplogEntry::End(params) if params.start_index == original_start => {
+                params.response.clone()
             }
             _ => None,
         })
-        .expect("incomplete atomic tail is jumped before the outer tool terminal");
-    assert!(
-        jump.start > original_start,
-        "the recovery Jump must preserve the outer tool Start"
-    );
-    assert!(
-        jump.end < jump_index,
-        "the recovery Jump must follow the abandoned atomic interval"
-    );
-    assert!(
-        jump.start <= jump.end,
-        "the recovery Jump must identify a non-empty abandoned atomic interval"
-    );
+        .expect("incomplete attachment upgrade rejection has one durable terminal");
     let terminal = SerializableToolOperationTerminal::from_value(terminal_response.value())?;
     assert_eq!(
         terminal.body_execution,
@@ -10137,6 +10219,7 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
+        expires_at: None,
     };
     let input = b"retained-before-store".to_vec();
     let (_, value) = data_value!(input.clone()).into_parts();
@@ -10650,231 +10733,6 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
     checkpoint_server.abort();
     provider_checkpoint_server.abort();
     caller_checkpoint_server.abort();
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("3m")]
-async fn incomplete_entity_atomic_rollback_recovers_dependent_sibling(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
-    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_agent_sockets(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            environment_state_service: Some(environment_state.clone()),
-            ..Default::default()
-        },
-    )
-    .await?;
-    let (provider_port, provider_gate_port, _provider_server, mut provider_arrivals) =
-        start_crash_checkpoint_server().await;
-    let (trap_port, trap_server, trap_attempts) = start_trap_attempt_server().await;
-    let _trap_server = tokio_util::task::AbortOnDropHandle::new(trap_server);
-
-    let provider_component = executor
-        .component_dep(&context.default_environment_id, provider)
-        .store()
-        .await?;
-    let caller_component = executor
-        .component_dep(&context.default_environment_id, caller)
-        .store()
-        .await?;
-    let provider_path = deps
-        .component_directory
-        .join(format!("{}.wasm", provider.wasm_name));
-    let metadata = extract_component_metadata(&provider_path, false, true).await?;
-    environment_state.set_tool_deployment(
-        context.default_environment_id,
-        caller_component.id,
-        caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
-    );
-
-    let agent_id = agent_id!("ToolStreamingCaller", "entity-ownership-rollback");
-    let worker_id = executor
-        .start_agent_with(
-            &caller_component.id,
-            agent_id.clone(),
-            HashMap::from([
-                ("TRAP_ONCE_PORT".to_string(), trap_port.to_string()),
-                (
-                    "PROVIDER_CRASH_CHECKPOINT_PORT".to_string(),
-                    provider_port.to_string(),
-                ),
-                (
-                    "PROVIDER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    provider_gate_port.to_string(),
-                ),
-            ]),
-            Vec::new(),
-        )
-        .await?;
-    let invocation = tokio::time::timeout(
-        std::time::Duration::from_secs(60),
-        executor.invoke_and_await_agent(
-            &caller_component,
-            &agent_id,
-            "dependent_sibling_after_unjournaled_stdout",
-            data_value!(),
-        ),
-    );
-    let recover = async {
-        let provider_checkpoint =
-            tokio::time::timeout(std::time::Duration::from_secs(30), provider_arrivals.recv())
-                .await
-                .map_err(|_| anyhow::anyhow!("provider changing-stdout checkpoint timed out"))?
-                .ok_or_else(|| anyhow::anyhow!("provider checkpoint server stopped"))?;
-        assert_eq!(provider_checkpoint.name, "provider-changing-stdout");
-        let before_crash = tokio::time::timeout(std::time::Duration::from_secs(30), async {
-            loop {
-                executor.commit_oplog(&worker_id).await?;
-                let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-                let sibling = entries
-                    .iter()
-                    .filter_map(|entry| match &entry.entry {
-                        PublicOplogEntry::Start(params)
-                            if params.function_name == "golem::entity::invoke" =>
-                        {
-                            Some(entry.oplog_index)
-                        }
-                        _ => None,
-                    })
-                    .nth(1);
-                if sibling.is_some_and(|start| {
-                    entries.iter().any(|entry| matches!(
-                    &entry.entry, PublicOplogEntry::End(params) if params.start_index == start
-                ))
-                }) {
-                    break anyhow::Ok(entries);
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .map_err(|_| anyhow::anyhow!("dependent sibling did not complete"))??;
-        let entity_starts = before_crash
-            .iter()
-            .filter_map(|entry| match &entry.entry {
-                PublicOplogEntry::Start(params)
-                    if params.function_name == "golem::entity::invoke" =>
-                {
-                    Some(entry.oplog_index)
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(entity_starts.len(), 2, "outer and dependent sibling Starts");
-        assert!(before_crash.iter().all(|entry| !matches!(
-            &entry.entry,
-            PublicOplogEntry::End(params) if params.start_index == entity_starts[0]
-        )));
-        before_crash
-            .iter()
-            .find(|entry| {
-                matches!(
-                    &entry.entry,
-                    PublicOplogEntry::End(params) if params.start_index == entity_starts[1]
-                )
-            })
-            .expect("dependent sibling End is durable");
-        assert!(
-            before_crash
-                .iter()
-                .filter(|entry| matches!(entry.entry, PublicOplogEntry::BeginAtomicRegion(_)))
-                .count()
-                > before_crash
-                    .iter()
-                    .filter(|entry| matches!(entry.entry, PublicOplogEntry::EndAtomicRegion(_)))
-                    .count(),
-            "the provider's outer atomic region must still be incomplete"
-        );
-
-        executor.simulated_crash(&worker_id).await?;
-        Ok::<_, anyhow::Error>(entity_starts)
-    };
-    let (result, recovery) = tokio::join!(invocation, recover);
-    let original_starts = recovery?;
-    let replayed = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    if result.is_err() {
-        assert!(
-            replayed
-                .iter()
-                .any(|entry| matches!(entry.entry, PublicOplogEntry::Jump(_))),
-            "incomplete entity recovery must record its rollback Jump"
-        );
-        assert!(replayed.iter().any(|entry| matches!(
-            &entry.entry,
-            PublicOplogEntry::End(params) if params.start_index == original_starts[1]
-        )));
-        anyhow::bail!(
-            "recovery did not settle with the original dependent sibling Start/End at {} retained; external attempt reads={}, expected recovery to reread `second` after the original caller completed the sibling from `first`",
-            original_starts[1],
-            trap_attempts.load(Ordering::SeqCst)
-        );
-    }
-    let evidence: Vec<String> = result.expect("timeout handled above")?.into_typed()?;
-    assert_eq!(evidence, ["second", "no-stream:second"]);
-    assert_eq!(trap_attempts.load(Ordering::SeqCst), 2);
-
-    drop(executor);
-    let executor = start_with_agent_sockets(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            environment_state_service: Some(environment_state),
-            ..Default::default()
-        },
-    )
-    .await?;
-    let reconstructed: String = tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        executor.invoke_and_await_agent(
-            &caller_component,
-            &agent_id,
-            "replay_probe",
-            data_value!(),
-        ),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("second reconstruction did not settle"))??
-    .into_typed()?;
-    assert_eq!(reconstructed, "replayed");
-    assert_eq!(trap_attempts.load(Ordering::SeqCst), 2);
-
-    let original_sibling_end = replayed
-        .iter()
-        .find(|entry| {
-            matches!(
-                &entry.entry,
-                PublicOplogEntry::End(params) if params.start_index == original_starts[1]
-            )
-        })
-        .unwrap()
-        .oplog_index;
-    assert!(
-        replayed.iter().any(|entry| matches!(
-            &entry.entry,
-            PublicOplogEntry::Jump(params)
-                if params.jump.contains(original_starts[1])
-                    && params.jump.contains(original_sibling_end)
-        )),
-        "the old sibling's complete history must be logically deleted, not merely left unclaimed"
-    );
     Ok(())
 }
 
@@ -12813,10 +12671,6 @@ async fn deterministic_stream_crash_checkpoint_matrix(
             )
         }
 
-        fn expects_marker(self) -> bool {
-            self.checkpoint_file().is_some()
-        }
-
         fn attachment_progress_ready(self, operation: &ToolOperationMetadata) -> bool {
             let (Some(stdin), Some(stdout)) = (&operation.stdin, &operation.stdout) else {
                 return false;
@@ -13053,10 +12907,10 @@ async fn deterministic_stream_crash_checkpoint_matrix(
         .ok_or_else(|| anyhow::anyhow!("crash checkpoint server stopped"))?;
         assert_eq!(original_checkpoint.name, checkpoint.name());
 
-        let (original_start, original_marker) = if let Some((expected_admission, expected_lane)) =
+        let original_start = if let Some((expected_admission, expected_lane)) =
             checkpoint.expected_operation()
         {
-            let (start, marker, admission, lane, attachment_count) =
+            let (start, admission, lane, attachment_count) =
                 tokio::time::timeout(std::time::Duration::from_secs(30), async {
                     loop {
                         if let Some(active) = executor.active_entity_metadata(&owned_agent_id).await
@@ -13066,8 +12920,6 @@ async fn deterministic_stream_crash_checkpoint_matrix(
                             && operation.lane == expected_lane
                             && operation.attachment_count == 2
                             && checkpoint.attachment_progress_ready(operation)
-                            && (!checkpoint.expects_marker()
-                                || active.reached_oplog_marker.is_some())
                             && (expected_admission != ToolBodyAdmissionMetadata::Running
                                 || active.slots.iter().any(|slot| {
                                     slot.invocations.iter().any(|invocation| {
@@ -13078,7 +12930,6 @@ async fn deterministic_stream_crash_checkpoint_matrix(
                         {
                             break (
                                 start,
-                                active.reached_oplog_marker,
                                 operation.admission,
                                 operation.lane,
                                 operation.attachment_count,
@@ -13112,14 +12963,12 @@ async fn deterministic_stream_crash_checkpoint_matrix(
                 "both fresh attachments must remain active at `{}`",
                 checkpoint.name()
             );
-            (start, marker)
+            start
         } else {
             let terminal_checkpoint =
                 tokio::time::timeout(std::time::Duration::from_secs(30), async {
                     loop {
                         if let Some(active) = executor.active_entity_metadata(&owned_agent_id).await
-                            && (!checkpoint.expects_marker()
-                                || active.reached_oplog_marker.is_some())
                             && active.tool_operations.operations.is_empty()
                             && active.slots.iter().all(|slot| slot.invocations.is_empty())
                         {
@@ -13139,7 +12988,7 @@ async fn deterministic_stream_crash_checkpoint_matrix(
                                 })
                                 .collect::<Vec<_>>();
                             if entity_starts.len() == 1 {
-                                break (entity_starts[0], active.reached_oplog_marker);
+                                break entity_starts[0];
                             }
                         }
                         tokio::task::yield_now().await;
@@ -13201,32 +13050,27 @@ async fn deterministic_stream_crash_checkpoint_matrix(
                 let checkpoint_ready = executor
                     .active_entity_metadata(&owned_agent_id)
                     .await
-                    .is_some_and(|active| {
-                        let marker_ready = original_marker
-                            .is_none_or(|marker| active.reached_oplog_marker == Some(marker));
-                        marker_ready
-                            && match checkpoint.expected_operation() {
-                                Some((admission, lane)) => {
-                                    active.tool_operations.operations.first().is_some_and(
-                                        |operation| {
-                                            operation.start_index == Some(original_start)
-                                                && operation.admission == admission
-                                                && operation.lane == lane
-                                                && operation.attachment_count == 2
-                                                && checkpoint.attachment_progress_ready(operation)
-                                                && (admission != ToolBodyAdmissionMetadata::Running
-                                                    || active.slots.iter().any(|slot| {
-                                                        slot.invocations.iter().any(|invocation| {
-                                                            invocation.invocation_id.start_index()
-                                                                == original_start
-                                                                && invocation.store_attached
-                                                        })
-                                                    }))
-                                        },
-                                    )
-                                }
-                                None => active.tool_operations.operations.is_empty(),
-                            }
+                    .is_some_and(|active| match checkpoint.expected_operation() {
+                        Some((admission, lane)) => active
+                            .tool_operations
+                            .operations
+                            .first()
+                            .is_some_and(|operation| {
+                                operation.start_index == Some(original_start)
+                                    && operation.admission == admission
+                                    && operation.lane == lane
+                                    && operation.attachment_count == 2
+                                    && checkpoint.attachment_progress_ready(operation)
+                                    && (admission != ToolBodyAdmissionMetadata::Running
+                                        || active.slots.iter().any(|slot| {
+                                            slot.invocations.iter().any(|invocation| {
+                                                invocation.invocation_id.start_index()
+                                                    == original_start
+                                                    && invocation.store_attached
+                                            })
+                                        }))
+                            }),
+                        None => active.tool_operations.operations.is_empty(),
                     });
                 if checkpoint_ready {
                     break;
@@ -13981,12 +13825,6 @@ async fn entity_generated_key_replay_reserves_position_for_incomplete_http_retry
         else {
             unreachable!()
         };
-        assert!(
-            oplog
-                .iter()
-                .any(|entry| matches!(&entry.entry, PublicOplogEntry::EndAtomicRegion(_))),
-            "the admitting atomic scope must close before the crash"
-        );
 
         executor.simulated_crash(&worker_id).await?;
         let retry_key = tokio::time::timeout(std::time::Duration::from_secs(30), attempts.recv())
@@ -14010,11 +13848,6 @@ async fn entity_generated_key_replay_reserves_position_for_incomplete_http_retry
     );
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert!(
-        oplog
-            .iter()
-            .any(|entry| matches!(&entry.entry, PublicOplogEntry::EndAtomicRegion(_)))
-    );
     assert_eq!(
         oplog
             .iter()
@@ -15717,24 +15550,509 @@ async fn builtin_filesystem_tools_have_expected_behavior(
 
 #[test]
 #[tracing::instrument]
-#[timeout("10m")]
-async fn builtin_javascript_and_typescript_tools_run_in_sidecars(
+#[timeout("5m")]
+async fn builtin_filesystem_discovery_reads_each_directory_once(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
-    #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
-    #[tagged_as("typescript_tools")] typescript_tools: &PrecompiledComponent,
+    #[tagged_as("filesystem_tools")] filesystem_tools: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    exercise_javascript_and_typescript_tools(
-        last_unique_id,
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
         deps,
-        caller,
-        javascript_tools,
-        typescript_tools,
-        false,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
     )
-    .await
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, filesystem_tools)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", filesystem_tools.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let definitions = metadata
+        .tools
+        .iter()
+        .map(|definition| {
+            let name = definition
+                .name()
+                .expect("filesystem tool has a root command");
+            (ToolName::try_from(name).unwrap(), definition.clone())
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem:filesystem-tools",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let agent_id = agent_id!("ToolStreamingCaller", "filesystem-discovery");
+    let worker_id = executor
+        .start_agent(&caller_component.id, agent_id.clone())
+        .await?;
+    let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+    let principal = Principal::GolemUser(GolemUserPrincipal {
+        account_id: context.account_id,
+    });
+
+    // One call lists or searches the whole flat directory, so its oplog growth must follow the
+    // number of names, not the number of names squared.
+    let mut growth = Vec::new();
+    for count in [20usize, 40] {
+        let directory = format!("workspace/discovery-cost-{count}");
+        for index in 0..count {
+            write_filesystem_tool_file(
+                &executor,
+                &worker_id,
+                fingerprint,
+                principal.clone(),
+                &definitions,
+                format!("{directory}/{index:02}.txt"),
+            )
+            .await?;
+        }
+        let (ls, ls_growth) = invoke_filesystem_tool_measuring_oplog(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &definitions,
+            "ls",
+            ls_tool_input(&directory, None, None, Some(500)),
+        )
+        .await?;
+        let (grep, grep_growth) = invoke_filesystem_tool_measuring_oplog(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &definitions,
+            "grep",
+            grep_tool_input(&directory, "x", None, &[]),
+        )
+        .await?;
+        for (tool_name, result) in [("ls", &ls), ("grep", &grep)] {
+            let (items, diagnostics, more) = discovery_result_parts(result)?;
+            assert!(
+                items.len() == count && diagnostics.is_empty() && !more,
+                "{tool_name} did not return all {count} files in one call: {result:?}"
+            );
+        }
+        eprintln!(
+            "FILESYSTEM_DISCOVERY_COST names={count} ls_oplog_entries={ls_growth} grep_oplog_entries={grep_growth}"
+        );
+        growth.push((ls_growth, grep_growth));
+    }
+    let [(small_ls, small_grep), (large_ls, large_grep)] = growth.as_slice() else {
+        anyhow::bail!("expected two measured directories");
+    };
+    assert!(
+        large_ls * 2 < small_ls * 5,
+        "ls oplog growth went from {small_ls} entries for 20 names to {large_ls} for 40 names"
+    );
+    assert!(
+        large_grep * 2 < small_grep * 5,
+        "grep oplog growth went from {small_grep} entries for 20 names to {large_grep} for 40 names"
+    );
+
+    // One call examines at most 16,384 directory entries. A walk that reads the directory again
+    // for each name runs out of them after 126 of these 130 names.
+    let directory = "workspace/discovery-budget";
+    for index in 0..130 {
+        write_filesystem_tool_file(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &definitions,
+            format!("{directory}/{index:03}.txt"),
+        )
+        .await?;
+    }
+    let (ls, ls_all_growth) = invoke_filesystem_tool_measuring_oplog(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        "ls",
+        ls_tool_input(directory, None, None, Some(500)),
+    )
+    .await?;
+    let (items, diagnostics, more) = discovery_result_parts(&ls)?;
+    assert!(
+        items.len() == 130 && diagnostics.is_empty() && !more,
+        "ls did not return all 130 files in one call: {ls:?}"
+    );
+    let grep = invoke_filesystem_tool_success(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        "grep",
+        grep_tool_input(directory, "x", None, &["*.none"]),
+    )
+    .await?;
+    let (matches, diagnostics, more) = discovery_result_parts(&grep)?;
+    assert!(
+        matches.is_empty() && diagnostics.is_empty() && !more,
+        "grep did not walk all 130 names in one call: {grep:?}"
+    );
+
+    // `ls` reads the size only of a file that it returns.
+    let (ls, ls_one_growth) = invoke_filesystem_tool_measuring_oplog(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        "ls",
+        ls_tool_input(directory, None, Some("007.txt"), Some(500)),
+    )
+    .await?;
+    let (items, diagnostics, more) = discovery_result_parts(&ls)?;
+    assert!(
+        items.len() == 1 && diagnostics.is_empty() && !more,
+        "ls of one matching file returned {ls:?}"
+    );
+    assert!(
+        ls_one_growth * 10 < ls_all_growth,
+        "ls of 1 of 130 files grew the oplog by {ls_one_growth} entries, ls of all 130 by {ls_all_growth}"
+    );
+
+    // One call goes into `mid` and back to the listing of the root that it read before, and it
+    // continues in the root after a subdirectory that it cannot read.
+    executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "prepare_filesystem_limit_fixtures",
+            data_value!(),
+        )
+        .await?;
+    let root = "workspace/filesystem-tools";
+    for path in ["mid/x.txt", "z.txt"] {
+        write_filesystem_tool_file(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &definitions,
+            format!("{root}/{path}"),
+        )
+        .await?;
+    }
+    let oversized = format!("{root}/oversized-directory");
+    let tree = invoke_filesystem_tool_success(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        "ls",
+        ls_tool_input(root, Some(2), None, Some(500)),
+    )
+    .await?;
+    let entry = |path: &str, size: Option<u64>| SchemaValue::Record {
+        fields: vec![
+            SchemaValue::String(format!("{root}/{path}")),
+            SchemaValue::Variant(match size {
+                Some(size) => VariantValuePayload {
+                    case: 0,
+                    payload: Some(Box::new(SchemaValue::U64(size))),
+                },
+                None => VariantValuePayload {
+                    case: 1,
+                    payload: None,
+                },
+            }),
+        ],
+    };
+    let (entries, diagnostics, more) = discovery_result_parts(&tree)?;
+    assert!(!more, "ls did not finish the tree in one call: {tree:?}");
+    assert_eq!(
+        entries,
+        [
+            entry("bounded-read.txt", Some(1024 * 1024)),
+            entry("mid", None),
+            entry("mid/x.txt", Some(1)),
+            entry("oversized-directory", None),
+            entry("z.txt", Some(1)),
+        ]
+    );
+    assert!(
+        is_only_directory_too_large(diagnostics, &oversized),
+        "ls diagnostics: {diagnostics:?}"
+    );
+    let tree_matches = invoke_filesystem_tool_success(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        "grep",
+        grep_tool_input(root, "x", Some(2), &["mid/*.txt", "z.txt"]),
+    )
+    .await?;
+    let line_match = |path: &str| SchemaValue::Record {
+        fields: vec![
+            SchemaValue::String(format!("{root}/{path}")),
+            SchemaValue::U64(1),
+            SchemaValue::String("x".to_string()),
+            SchemaValue::Bool(false),
+        ],
+    };
+    let (matches, diagnostics, more) = discovery_result_parts(&tree_matches)?;
+    assert!(
+        !more,
+        "grep did not finish the tree in one call: {tree_matches:?}"
+    );
+    assert_eq!(matches, [line_match("mid/x.txt"), line_match("z.txt")]);
+    assert!(
+        is_only_directory_too_large(diagnostics, &oversized),
+        "grep diagnostics: {diagnostics:?}"
+    );
+
+    // A replay runs each completed tool body again, and the body must claim the same durable
+    // calls as when it was recorded.
+    drop(executor);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let replayed_tree = invoke_filesystem_tool_success(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        "ls",
+        ls_tool_input(root, Some(2), None, Some(500)),
+    )
+    .await?;
+    assert_eq!(replayed_tree, tree);
+    Ok(())
+}
+
+async fn write_filesystem_tool_file(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    fingerprint: golem_common::model::AgentFingerprint,
+    principal: Principal,
+    definitions: &BTreeMap<ToolName, golem_common::schema::tool::Tool>,
+    path: String,
+) -> anyhow::Result<()> {
+    invoke_filesystem_tool_success(
+        executor,
+        worker_id,
+        fingerprint,
+        principal,
+        definitions,
+        "write-file",
+        filesystem_tool_input(vec![
+            ("path", SchemaType::string(), SchemaValue::String(path)),
+            (
+                "content",
+                SchemaType::string(),
+                SchemaValue::String("x".to_string()),
+            ),
+            (
+                "create-parent-directories",
+                SchemaType::bool(),
+                SchemaValue::Bool(true),
+            ),
+        ]),
+    )
+    .await?;
+    Ok(())
+}
+
+fn ls_tool_input(
+    path: &str,
+    max_depth: Option<u32>,
+    glob: Option<&str>,
+    limit: Option<u32>,
+) -> TypedSchemaValue {
+    filesystem_tool_input(vec![
+        (
+            "path",
+            SchemaType::string(),
+            SchemaValue::String(path.to_string()),
+        ),
+        {
+            let (schema, value) = optional_u32(max_depth);
+            ("max-depth", schema, value)
+        },
+        (
+            "glob",
+            SchemaType::option(SchemaType::string()),
+            SchemaValue::Option {
+                inner: glob.map(|glob| Box::new(SchemaValue::String(glob.to_string()))),
+            },
+        ),
+        {
+            let (schema, value) = optional_u32(limit);
+            ("limit", schema, value)
+        },
+        (
+            "cursor",
+            SchemaType::option(SchemaType::string()),
+            SchemaValue::Option { inner: None },
+        ),
+    ])
+}
+
+fn grep_tool_input(
+    path: &str,
+    pattern: &str,
+    max_depth: Option<u32>,
+    include_globs: &[&str],
+) -> TypedSchemaValue {
+    filesystem_tool_input(vec![
+        (
+            "path",
+            SchemaType::string(),
+            SchemaValue::String(path.to_string()),
+        ),
+        (
+            "pattern",
+            SchemaType::string(),
+            SchemaValue::String(pattern.to_string()),
+        ),
+        (
+            "mode",
+            SchemaType::option(SchemaType::string()),
+            SchemaValue::Option { inner: None },
+        ),
+        {
+            let (schema, value) = optional_u32(max_depth);
+            ("max-depth", schema, value)
+        },
+        {
+            let (schema, value) = optional_u32(None);
+            ("limit", schema, value)
+        },
+        (
+            "cursor",
+            SchemaType::option(SchemaType::string()),
+            SchemaValue::Option { inner: None },
+        ),
+        (
+            "include-globs",
+            SchemaType::list(SchemaType::string()),
+            SchemaValue::List {
+                elements: include_globs
+                    .iter()
+                    .map(|glob| SchemaValue::String(glob.to_string()))
+                    .collect(),
+            },
+        ),
+        (
+            "exclude-globs",
+            SchemaType::list(SchemaType::string()),
+            SchemaValue::List {
+                elements: Vec::new(),
+            },
+        ),
+        (
+            "case-insensitive",
+            SchemaType::bool(),
+            SchemaValue::Bool(false),
+        ),
+    ])
+}
+
+/// Splits an `ls` or `grep` result into its items, its diagnostics, and whether it has a cursor.
+fn discovery_result_parts(
+    result: &SchemaValue,
+) -> anyhow::Result<(&[SchemaValue], &[SchemaValue], bool)> {
+    let SchemaValue::Record { fields } = result else {
+        anyhow::bail!("discovery tool returned a non-record result: {result:?}");
+    };
+    let [
+        SchemaValue::List { elements: items },
+        SchemaValue::List {
+            elements: diagnostics,
+        },
+        SchemaValue::Option { inner: cursor },
+    ] = fields.as_slice()
+    else {
+        anyhow::bail!("discovery tool returned an unexpected result shape: {result:?}");
+    };
+    Ok((items, diagnostics, cursor.is_some()))
+}
+
+fn is_only_directory_too_large(diagnostics: &[SchemaValue], path: &str) -> bool {
+    matches!(
+        diagnostics,
+        [SchemaValue::Record { fields }]
+            if fields.first() == Some(&SchemaValue::String(path.to_string()))
+                && matches!(fields.get(1), Some(SchemaValue::Enum { case: 4 }))
+    )
+}
+
+async fn invoke_filesystem_tool_measuring_oplog(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    fingerprint: golem_common::model::AgentFingerprint,
+    principal: Principal,
+    definitions: &BTreeMap<ToolName, golem_common::schema::tool::Tool>,
+    tool_name: &str,
+    input: TypedSchemaValue,
+) -> anyhow::Result<(SchemaValue, usize)> {
+    executor.commit_oplog(worker_id).await?;
+    let start = executor
+        .get_oplog(worker_id, OplogIndex::INITIAL)
+        .await?
+        .last()
+        .map_or(OplogIndex::INITIAL, |entry| entry.oplog_index.next());
+    let result = invoke_filesystem_tool_success(
+        executor,
+        worker_id,
+        fingerprint,
+        principal,
+        definitions,
+        tool_name,
+        input,
+    )
+    .await?;
+    executor.commit_oplog(worker_id).await?;
+    let growth = executor.get_oplog(worker_id, start).await?.len();
+    Ok((result, growth))
 }
 
 #[test]
@@ -16153,36 +16471,164 @@ async fn typescript_guest_recursive_rm_removes_tool_created_output(
     Ok(())
 }
 
+/// Node exits once only unreferenced timers remain: the runtime cancels the pending `wait-for` of
+/// the interval after a short wait of its own completed. The next rebuild of the owner replays the
+/// completed body with that cancelled wait.
 #[test]
-#[ignore = "GOL-714: completed JavaScript tool calls do not reconstruct deterministically"]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn builtin_node_unreferenced_timer_is_replayed_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = || TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let javascript_component = executor
+        .component_dep(&context.default_environment_id, javascript_tools)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", javascript_tools.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        javascript_component.id,
+        javascript_component.revision,
+        "golem:javascript-tools",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let agent_name = "node-unreferenced-timer";
+    let worker_id = executor
+        .start_agent(
+            &caller_component.id,
+            agent_id!("ToolStreamingCaller", agent_name),
+        )
+        .await?;
+
+    let unreferenced = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        agent_name,
+        "node",
+        "/workspace",
+        vec![
+            "-e",
+            "setInterval(() => {}, 60_000).unref(); console.log('done')",
+        ],
+    )
+    .await?;
+    assert_eq!(unreferenced.exit_code, 0, "{unreferenced:?}");
+    assert_eq!(unreferenced.stdout, b"done\n");
+    assert!(unreferenced.stderr.is_empty());
+
+    executor.commit_oplog(&worker_id).await?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let terminal_of = |start: OplogIndex| {
+        oplog.iter().find_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(end) if end.start_index == start => Some("End"),
+            PublicOplogEntry::Cancelled(cancelled) if cancelled.start_index == start => {
+                Some("Cancelled")
+            }
+            _ => None,
+        })
+    };
+    let waits = oplog
+        .iter()
+        .filter(|wait| {
+            matches!(&wait.entry, PublicOplogEntry::Start(start)
+                if start.function_name.ends_with("monotonic-clock::wait-for"))
+        })
+        .map(|wait| {
+            let reads = oplog
+                .iter()
+                .filter(|read| {
+                    matches!(&read.entry, PublicOplogEntry::Start(start)
+                        if start.parent_start_index == Some(wait.oplog_index))
+                })
+                .map(|read| terminal_of(read.oplog_index))
+                .collect::<Vec<_>>();
+            (terminal_of(wait.oplog_index), reads)
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        waits.contains(&(Some("Cancelled"), vec![Some("End")])),
+        "the body must cancel the wait of its unreferenced interval after the wait's clock read: {waits:?}"
+    );
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let next = tokio::time::timeout(
+        Duration::from_secs(120),
+        invoke_cli_tool(
+            &executor,
+            &caller_component,
+            agent_name,
+            "node",
+            "/workspace",
+            vec!["-e", "console.log('replayed')"],
+        ),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("waited 120 s for the call after the restart"))??;
+    assert_eq!(next.exit_code, 0, "{next:?}");
+    assert_eq!(next.stdout, b"replayed\n");
+    assert!(next.stderr.is_empty());
+    assert_ne!(
+        executor.get_worker_metadata(&worker_id).await?.status,
+        AgentStatus::Failed
+    );
+    let errors = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+        .collect::<Vec<_>>();
+    assert!(
+        errors.is_empty(),
+        "the replay of the earlier body must not fail: {errors:?}"
+    );
+    Ok(())
+}
+
+#[test]
 #[tracing::instrument]
 #[timeout("10m")]
-async fn builtin_javascript_and_typescript_tools_reconstruct_after_restart(
+async fn builtin_javascript_and_typescript_tools_run_in_sidecars_and_reconstruct_after_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
     #[tagged_as("typescript_tools")] typescript_tools: &PrecompiledComponent,
     _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    exercise_javascript_and_typescript_tools(
-        last_unique_id,
-        deps,
-        caller,
-        javascript_tools,
-        typescript_tools,
-        true,
-    )
-    .await
-}
-
-async fn exercise_javascript_and_typescript_tools(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    caller: &PrecompiledComponent,
-    javascript_tools: &PrecompiledComponent,
-    typescript_tools: &PrecompiledComponent,
-    verify_reconstruction: bool,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
@@ -16402,6 +16848,20 @@ fs.writeFileSync('invalid.ts', 'const value: number = "wrong";\n');
     assert!(String::from_utf8(npm_script.stdout)?.contains("npm-script-ok"));
     assert!(npm_script.stderr.is_empty());
 
+    let npm_invalid = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "npm",
+        "/workspace",
+        vec!["not-a-real-npm-command"],
+    )
+    .await?;
+    assert_eq!(npm_invalid.exit_code, 1);
+    assert!(String::from_utf8(npm_invalid.stdout)?.contains("Unknown command"));
+
+    exercise_npm_lifecycle_completion(&executor, &caller_component).await?;
+
     let npx = invoke_cli_tool(
         &executor,
         &caller_component,
@@ -16447,25 +16907,57 @@ fs.writeFileSync('invalid.ts', 'const value: number = "wrong";\n');
     assert_ne!(tsc_failure.exit_code, 0);
     assert!(String::from_utf8(tsc_failure.stdout)?.contains("error TS2322"));
 
-    if verify_reconstruction {
-        drop(executor);
-        let executor = start_with_overrides(deps, &context, overrides).await?;
-        let reconstructed = invoke_cli_tool(
-            &executor,
-            &caller_component,
-            behavior_agent,
-            "node",
-            "/workspace",
-            vec![
-                "-e",
-                "const fs = require('node:fs'); console.log(fs.readFileSync('dist/valid.js', 'utf8').includes('const value = 42'))",
-            ],
-        )
-        .await?;
-        assert_eq!(reconstructed.exit_code, 0);
-        assert_eq!(reconstructed.stdout, b"true\n");
-        assert!(reconstructed.stderr.is_empty());
-    }
+    // The inspector facade completes synchronously. The compiler must stop at
+    // its first exit instead of falling through to parse build flags again.
+    let tsc_build_config = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "node",
+        "/workspace",
+        vec![
+            "-e",
+            "require('node:fs').writeFileSync('tsconfig.json', JSON.stringify({compilerOptions:{skipLibCheck:true,outDir:'build'},files:['valid.ts']}))",
+        ],
+    )
+    .await?;
+    assert_eq!(tsc_build_config.exit_code, 0);
+    let tsc_build = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "tsc",
+        "/workspace",
+        vec![
+            "--build",
+            "--generateCpuProfile",
+            "profile.json",
+            "--pretty",
+            "false",
+        ],
+    )
+    .await?;
+    assert_eq!(tsc_build.exit_code, 0);
+    assert!(tsc_build.stdout.is_empty());
+    assert!(tsc_build.stderr.is_empty());
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let reconstructed = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "node",
+        "/workspace",
+        vec![
+            "-e",
+            "const fs = require('node:fs'); console.log(fs.readFileSync('dist/valid.js', 'utf8').includes('const value = 42'))",
+        ],
+    )
+    .await?;
+    assert_eq!(reconstructed.exit_code, 0);
+    assert_eq!(reconstructed.stdout, b"true\n");
+    assert!(reconstructed.stderr.is_empty());
     Ok(())
 }
 

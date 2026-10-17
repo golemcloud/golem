@@ -39,7 +39,7 @@ fn render_cm_value(buf: &mut String, graph: &SchemaGraph, ty: &SchemaType, value
         return;
     }
 
-    let (resolved, _) = resolve_named_ref(graph, ty);
+    let resolved = graph.resolve_ref(ty).unwrap_or(ty);
     match (resolved, value) {
         (SchemaType::Bool { .. }, SchemaValue::Bool(b)) => {
             buf.push_str(if *b { "true" } else { "false" });
@@ -133,8 +133,7 @@ fn render_cm_value(buf: &mut String, graph: &SchemaGraph, ty: &SchemaType, value
         }
         (SchemaType::Option { inner, .. }, SchemaValue::Option { inner: v }) => match v {
             Some(payload) => {
-                let (inner_resolved, _) = resolve_named_ref(graph, inner);
-                if matches!(inner_resolved, SchemaType::Option { .. }) {
+                if matches!(graph.resolve_ref(inner), Ok(SchemaType::Option { .. })) {
                     buf.push_str("{ some: ");
                     render_cm_value(buf, graph, inner, payload);
                     buf.push_str(" }");

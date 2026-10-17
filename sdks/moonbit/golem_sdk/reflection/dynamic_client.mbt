@@ -80,12 +80,26 @@ pub fn DynamicAgentClient::ephemeral(
 }
 
 ///|
+/// Sets the scope card that awaited invocations of this client attach when the
+/// call does not pass its own `scope_card`. `None` removes the default. The
+/// client borrows the card; trigger and schedule invocations never attach it.
+pub fn DynamicAgentClient::set_default_scope_card(
+  self : DynamicAgentClient,
+  card : @permissions.ScopeCard?,
+) -> Unit {
+  self.transport.default_scope_card = card
+}
+
+///|
+/// `scope_card` lends an invocation-local scope card to the callee for this
+/// call and overrides the client default. The card is borrowed, not consumed.
 pub async fn DynamicAgentClient::invoke_value(
   self : DynamicAgentClient,
   method_name : String,
   input : @model.SchemaValue,
+  scope_card? : @permissions.ScopeCard,
 ) -> Invocation[@model.SchemaValue?] {
-  self.transport.invoke_value(method_name, input)
+  self.transport.invoke_value(method_name, input, scope_card)
 }
 
 ///|

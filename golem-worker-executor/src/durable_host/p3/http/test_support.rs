@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::services::oplog::UnreadableOplog;
 use crate::services::oplog::{CommitLevel, Oplog, OplogAddReceipt, OrderedOplogStart};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -77,6 +78,19 @@ impl FrameTestOplog {
     /// All appended entries, in oplog order.
     pub(super) fn entries(&self) -> Vec<OplogEntry> {
         self.entries.lock().unwrap().clone()
+    }
+
+    pub(super) fn make_frame_payload_unavailable(&self, index: OplogIndex) {
+        let mut entries = self.entries.lock().unwrap();
+        let OplogEntry::HostStreamFrame { payload, .. } = &mut entries[index.as_u64() as usize - 1]
+        else {
+            panic!("expected a request-body frame");
+        };
+        *payload = OplogPayload::External {
+            payload_id: PayloadId::new(),
+            md5_hash: Vec::new(),
+            cached: None,
+        };
     }
 
     /// The request-body frames recorded for `parent`, in oplog order. Frames
@@ -194,7 +208,7 @@ impl Oplog for FrameTestOplog {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         let entries = self.entries.lock().unwrap();
         let start: u64 = oplog_index.into();
         let mut result = BTreeMap::new();
@@ -207,11 +221,11 @@ impl Oplog for FrameTestOplog {
             });
             result.insert(OplogIndex::from_u64(i), entry.clone());
         }
-        result
+        Ok(result)
     }
 
-    async fn length(&self) -> u64 {
-        self.entries.lock().unwrap().len() as u64
+    async fn length(&self) -> Result<u64, UnreadableOplog> {
+        Ok(self.entries.lock().unwrap().len() as u64)
     }
 
     async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {
@@ -229,7 +243,7 @@ impl Oplog for FrameTestOplog {
         _payload_id: PayloadId,
         _md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
-        unimplemented!()
+        Err("test payload storage is unavailable".to_string())
     }
 }
 

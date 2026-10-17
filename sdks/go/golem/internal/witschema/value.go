@@ -38,11 +38,17 @@ func ValueToCore(tree types.SchemaValueTree) (core.SchemaValue, error) {
 
 // ReleaseTree drops capabilities in an unclaimed raw value, before decoding
 // can transfer ownership. Scan the pool, including unreachable malformed nodes.
+// A permission-card node without a handle was taken by a decode or a send, or
+// already released, and holds nothing to drop.
 func ReleaseTree(tree types.SchemaValueTree) {
 	for _, n := range tree.ValueNodes {
 		switch n.Tag() {
+		case types.SchemaValueNodePermissionCardHandle:
+			if n.PermissionCardHandle() != nil {
+				releaseNode(n)
+			}
 		case types.SchemaValueNodeSecretValue, types.SchemaValueNodeQuotaTokenHandle,
-			types.SchemaValueNodePermissionCardHandle, types.SchemaValueNodeStreamValue:
+			types.SchemaValueNodeStreamValue:
 			releaseNode(n)
 		}
 	}

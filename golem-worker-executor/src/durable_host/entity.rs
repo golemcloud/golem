@@ -135,7 +135,6 @@ pub struct EntityInvocationDurability {
 pub(crate) struct EntityInvocationKeyContext {
     caller_key: golem_common::model::IdempotencyKey,
     logical_position: Option<OplogIndex>,
-    assume_idempotence: bool,
     stream_session_idempotency_key: golem_common::model::IdempotencyKey,
 }
 
@@ -147,13 +146,17 @@ impl EntityInvocationKeyContext {
         let caller_key = ctx.state.get_current_idempotency_key().ok_or_else(|| {
             WorkerExecutorError::runtime("entity invocation requires an active caller key")
         })?;
-        let logical_position = ctx
-            .state
-            .current_atomic_region_idempotency_key_oplog_index()
-            .map(|_| {
+        let logical_position = if ctx
+            .entity_invocation_scope()
+            .is_some_and(|scope| scope.logical_key_positions())
+        {
+            Some(
                 ctx.state
-                    .current_idempotency_key_oplog_index(OplogIndex::NONE)
-            });
+                    .current_idempotency_key_oplog_index(OplogIndex::NONE),
+            )
+        } else {
+            None
+        };
         let stream_parent_key = ctx
             .entity_invocation_scope()
             .map(|scope| scope.stream_session_idempotency_key().clone())
@@ -163,7 +166,6 @@ impl EntityInvocationKeyContext {
         Ok(Self {
             caller_key,
             logical_position,
-            assume_idempotence: ctx.state.assume_idempotence,
             stream_session_idempotency_key,
         })
     }
@@ -322,7 +324,6 @@ impl EntityInvocationDurability {
             operation,
             principal,
             plan,
-            assume_idempotence: key_context.assume_idempotence,
             authority_wallet: store
                 .with(|mut access| get_ctx(access.data_mut()).agent_wallet_cards_snapshot()),
         };
@@ -358,9 +359,10 @@ impl EntityInvocationDurability {
                 DurableFunctionType::WriteLocal,
                 AccessClaimOptions {
                     parent_start_index: Some(parent_start_index),
+                    incomplete_repair_authorized_by_scope: true,
                     ..AccessClaimOptions::default()
                 },
-                async move |_| Ok(request),
+                request,
                 span_started.clone(),
             )
             .await?;
@@ -399,6 +401,7 @@ impl EntityInvocationDurability {
                         GolemToolInvocationRejected::HOST_FUNCTION_NAME,
                     ),
                     parent_start_index: Some(parent_start_index),
+                    incomplete_repair_authorized_by_scope: true,
                     ..AccessClaimOptions::default()
                 },
             )
@@ -569,7 +572,7 @@ impl EntityInvocationDurability {
         } else {
             let replay =
                 store.with(|mut access| get_ctx(access.data_mut()).state.replay_state.clone());
-            if replay.has_visible_terminal(handle.start_index()).await {
+            if replay.has_visible_terminal(handle.start_index()).await? {
                 InvocationExecutionMode::ReplayingCompleted
             } else {
                 InvocationExecutionMode::ReplayingIncomplete
@@ -592,7 +595,6 @@ impl EntityInvocationDurability {
             calling_principal,
             execution_mode,
             idempotency_key,
-            metadata.assume_idempotence,
             true,
             stream_session_idempotency_key,
         )
@@ -667,7 +669,7 @@ impl EntityInvocationDurability {
         let replay = store.with(|mut access| get_ctx(access.data_mut()).state.replay_state.clone());
         if replay
             .has_visible_scope_descendant(self.handle.start_index())
-            .await
+            .await?
         {
             return Ok(IncompleteLiveRepairBeforeBody::Ready(self));
         }
@@ -711,7 +713,6 @@ impl EntityInvocationDurability {
             scope.calling_principal().clone(),
             InvocationExecutionMode::Live,
             scope.idempotency_key().clone(),
-            scope.assume_idempotence(),
             scope.logical_key_positions(),
             scope.stream_session_idempotency_key().clone(),
         )
@@ -771,7 +772,7 @@ impl EntityInvocationDurability {
         });
         let entry = replay
             .visible_terminal_entry(self.handle.start_index())
-            .await
+            .await?
             .ok_or_else(|| {
                 WorkerExecutorError::unexpected_oplog_entry(
                     format!(
@@ -1455,9 +1456,10 @@ where
         DurableFunctionType::WriteLocal,
         AccessClaimOptions {
             parent_start_index: Some(parent.start_index()),
+            incomplete_repair_authorized_by_scope: true,
             ..AccessClaimOptions::default()
         },
-        async move |_| Ok(request),
+        request,
         span_started,
     )
     .await?;
@@ -1630,7 +1632,7 @@ where
     Ctx: WorkerCtx,
 {
     let oplog = store.with(|mut access| get_ctx(access.data_mut()).state.oplog.clone());
-    let entry = oplog.read(start_index).await;
+    let entry = oplog.read(start_index).await?;
     let OplogEntry::Start {
         request: Some(request),
         ..
@@ -2155,7 +2157,6 @@ mod tests {
                 agent_id: owner.agent_id,
             }),
             plan,
-            assume_idempotence: true,
             authority_wallet: Vec::new(),
         })
         .unwrap()

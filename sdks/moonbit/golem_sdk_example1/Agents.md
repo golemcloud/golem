@@ -360,6 +360,14 @@ response, and returns that response without evaluating the body during replay. I
 unfinished, recovery retries the whole custom operation, so repeated attempts must be safe through
 the correct operation type, an external idempotency key, or a transaction.
 
+**Custom durability is sequential-only.** Both combinators support properly nested calls. An async
+body may await host calls when no unrelated guest work runs during the wait. Do not overlap it with
+other tasks, including ordinary host calls: sibling effects can acquire the wrong scope and cause
+incorrect replay or invocation failure. Misuse is not reliably detected. Await each nested
+operation; do not detach tasks. Stop and join outstanding work before the body exits, including on
+failure or cancellation. Joining at the end does not make concurrent custom scopes supported.
+Ordinary built-in durability is not subject to this restriction when no custom operation is active.
+
 ## Environments and Build Presets
 
 The `golem.yaml` defines two environments:
@@ -471,7 +479,6 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-wait-for-external-input-moonbit` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
 | `golem-add-webhook-moonbit` | Creating and awaiting webhooks for integrating with webhook-driven external APIs |
 | `golem-multi-instance-agent-moonbit` | Creating multiple agent instances with the same constructor parameters using phantom agents |
-| `golem-atomic-block-moonbit` | Atomic blocks and idempotency |
 | `golem-add-transactions-moonbit` | Saga-pattern transactions with compensation |
 | `golem-add-http-endpoint-moonbit` | Exposing an agent over HTTP with mount paths and endpoint annotations |
 | `golem-http-params-moonbit` | Mapping path, query, header, and body parameters for HTTP endpoints |
@@ -535,7 +542,7 @@ Retryable failures in the following operations are handled transparently:
 - **RPC calls** between agents
 - **Database / storage calls** — `golem:rdbms/postgres`, `golem:rdbms/mysql`, `golem:rdbms/ignite2`, `wasi:blobstore`, `wasi:keyvalue`
 
-An uncaught `raise`, abort, or panic outside an atomic region fails the agent without retry. Inside an atomic region, a deterministic trap is retried according to the applicable retry policy; if the policy gives up, the agent becomes failed.
+An uncaught `raise`, abort, or panic is a deterministic guest trap and fails the invocation without retry. Recovery replays completed outcomes and repairs only an eligible incomplete call at its own `Start`. MoonBit has no public saga helper. For domain compensation, implement ordinary guest control flow that compensates completed steps before appending fresh calls. Such an application loop has no SDK-provided attempt bound or backoff guarantee.
 
 Only customize when the *strategy* needs to change (different backoff, give-up conditions, per-status-code policies). For that, see the `golem-retry-policies-moonbit` skill.
 

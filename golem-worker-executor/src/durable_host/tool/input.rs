@@ -182,7 +182,6 @@ impl<U: 'static, Ctx: WorkerCtx> StreamProducer<U> for AttachmentInputProducer<U
                         .expect("worker cleanup queue"),
                     trap_context: DurableCallTrapContext {
                         retry_from: InFunctionRetryHost::current_retry_point(ctx),
-                        in_atomic_region: InFunctionRetryHost::in_atomic_region(ctx),
                     },
                     live_call_permit: LiveCallPermit::new(ctx.state.live_host_call_counter()),
                 };
@@ -325,7 +324,7 @@ impl<Ctx: WorkerCtx> PrepareAttachmentObservation<Ctx> {
                 )
                 .await?;
             if let Some((index, _)) = boundary {
-                let entry = self.oplog.read(index).await;
+                let entry = self.oplog.read(index).await?;
                 if read.observation != self.observation
                     || entry.entity_parent_start_index() != self.parent
                 {
@@ -558,7 +557,6 @@ impl NativeAttachmentInput {
                             .expect("worker cleanup queue"),
                         trap_context: DurableCallTrapContext {
                             retry_from: InFunctionRetryHost::current_retry_point(ctx),
-                            in_atomic_region: InFunctionRetryHost::in_atomic_region(ctx),
                         },
                         live_call_permit: LiveCallPermit::new(ctx.state.live_host_call_counter()),
                     },

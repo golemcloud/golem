@@ -69,11 +69,6 @@ pub trait ExternalDurableStreams {
         producer_a: String,
         producer_b: String,
     ) -> Result<Vec<Option<String>>, String>;
-    async fn append_non_idempotent(
-        &self,
-        url: String,
-        producer_id: String,
-    ) -> Result<Option<String>, String>;
     async fn cancelled_append(
         &self,
         url: String,
@@ -356,20 +351,6 @@ impl ExternalDurableStreams for ExternalDurableStreamsImpl {
             a.map_err(|e| e.to_string())?.next_offset,
             b.map_err(|e| e.to_string())?.next_offset,
         ])
-    }
-
-    async fn append_non_idempotent(
-        &self,
-        url: String,
-        producer_id: String,
-    ) -> Result<Option<String>, String> {
-        let mut writer = writer(url, producer_id, "application/json")?;
-        let _guard = golem_rust::use_idempotence_mode(false);
-        writer
-            .append_json(&["non-idempotent"], true)
-            .await
-            .map(|r| r.next_offset)
-            .map_err(|e| e.to_string())
     }
 
     async fn cancelled_append(
