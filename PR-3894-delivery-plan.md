@@ -72,13 +72,19 @@ This section records the state at plan capture, not the status of every later ex
 
 ## Authorized work and integration boundary
 
-#4195 has now merged after the main revision integrated here. Its Rust custom-scope and async
-completion changes are not yet in this branch. The static impact review is in
-`PR-3894-pr4195-impact.md`. It finds a required composition check for automatic suspension and
+#4195 merged after the previously integrated main revision. Local integration of fetched
+main, including #4195/#4220/#4223/#4224, now passes its selected combined-source checks. The impact
+review and verification scope are in `PR-3894-pr4195-impact.md`. They cover automatic suspension and
 quota-forced Suspend during custom bodies and pending async finish. The upstream "suspended sibling"
 case uses simulated crash, not Worker auto-suspension. Keep SDK/WIT/host integration coherent and
-preserve this branch's InterruptSources behavior. No merge, build or test was performed for this
-review; cooling and host-guard setup keep execution paused. Earlier receipts do not validate #4195.
+preserve this branch's InterruptSources behavior and #4220's owned Start/claim and declared
+host-internal-read contracts. The observer removal has since passed its guarded small-batch checks
+and is checkpointed. Cooling and the thermal/CI-time watchdog are in place. Fresh binaries and rebuilt
+fixtures pass the scoped native checks, including both custom-finish completion orders. A
+reverse-order baseline exposed and corrected an ambiguous test gate through the existing oplog
+fixture, without a runtime hook or weaker assertion. Library checks, strict executor/test-utility lint,
+production compilation and browser checks pass separately. Earlier receipts remain tied to their
+own source trees. A1/F10/F11 and the owned-Start guest-drop/quota conjunction remain open.
 
 The user approved independent implementation, then local recovery integration, and now directs
 the branch to current main after #4207 merged. Keep #4212's merged stdin fixes.

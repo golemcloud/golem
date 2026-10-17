@@ -306,10 +306,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostUdpSocketWithStore<U> for Dur
                     incomplete_repair_authorized_by_scope: true,
                     ..Default::default()
                 },
-                async |_| Ok(HostRequestP3SocketsUdpSend {
+                HostRequestP3SocketsUdpSend {
                     data: data.clone(),
                     remote_address: remote_address.map(Into::into),
-                }),
+                },
             )
             .await
             .map_err(SocketError::trap)?;
@@ -381,7 +381,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostUdpSocketWithStore<U> for Dur
             durable_worker_ctx::<Ctx, U>,
             DurableFunctionType::ReadRemote,
             AccessClaimOptions::default(),
-            async |_| Ok(HostRequestNoInput {}),
+            HostRequestNoInput {},
         )
         .await
         .map_err(SocketError::trap)?;

@@ -185,18 +185,20 @@ before relying on it for native tests. If an observer fails under this logging p
 that one case; do not enable global debug logging for the whole queue. Keep one filtered local log and
 do not enable additional file or OTLP outputs for this runbook without approval.
 
-## Initial queue for the current observer change
+## Observer verification and subsequent main integration
 
 #4195 has since merged and changes Rust custom-durability scope and completion behavior. Before
 final composition validation, follow `../PR-3894-pr4195-impact.md` for coherent SDK/WIT/host
 integration and the focused suspension/custom-completion cases. Do not reuse pre-merge binaries or
-fixtures as proof of that composition. First finish the pending observer-removal verification on its
-existing source and binary, then checkpoint it before integrating #4195.
+fixtures as proof of that composition. The observer removal has now passed its exact-name batches
+and is checkpointed locally. The earlier broad failures and killed run remain failed/aborted
+evidence, not proof that the large parallel cohort is fixed.
 
 The user has approved continuation. Inspect each batch result before starting the next; stop on
-failure or abort. The capture-only canary has passed, and the acceptance/refund batch is the first
-native batch. Revisit earlier timed-out cases through explicit small manifests, not the old broad
-selector.
+failure or abort. The canary, acceptance/refund cases and every earlier timeout case passed in
+small explicit batches. Main integration has separate fresh-binary and rebuilt-fixture receipts;
+its native tests use the same guard. Revisit cases through explicit small manifests, not the old
+broad selector. The original observer queue was:
 
 1. **Capture-only canary, no Wasm executor.** Run one exact test:
    `monthly_acceptance::acceptance_capture_keeps_exact_fields_both_results_and_optional_fuel`.

@@ -60,7 +60,24 @@ The merge keeps #4212's consumer and producer cancellation branches. Removed P2 
 and their dedicated tests are retired together. Non-HTTP P2 support and P3 HTTP retry remain.
 Monthly HTTP/TCP expectations now use the original Starts, exact typed results and full raw-prefix
 checks instead of suffix repair. The canonical wallet installer resets the owner generation once;
-the early tool-admission reset is removed. Generic stop publication and progress remain open A1 work.
+the early tool-admission reset is removed. The broader retained-change review remains open A1 work.
+
+The next main integration includes #4195's Rust custom scopes and owned async finish, plus #4220's
+owned accessor Starts and dropped-wait recovery. The merge retains InterruptSources and both tool
+test modules. Rebuilt host-API, HTTP and Rust tool fixtures validate against the combined SDK/WIT.
+Guarded native batches pass the upstream custom-scope/recovery proofs, dropped-wait restart cases
+and changed HTTP/clock cancellation cases. New production-Context promise tests also pass automatic
+suspension and a monthly-memory stop during an accepted custom End. Additional stopped-prefix and
+generation assertions now pass in both completion orders. A final-cohort timeout first led to a
+reverse-order regression that reproduced a test-targeting bug: the function-name
+gate selected the other sibling's Start, so the intended End completed instead of remaining held.
+The correction binds the same oplog fixture to the exact recorded Start after both waits enter, with
+no Worker hook or runtime change. Both completion orders and the existing gate consumer pass after
+that correction. Failed baselines remain recorded. Combined library, strict executor/test-utility
+lint, production compilation and offline browser checks pass on the integrated source. This is a
+local integration checkpoint, not completion of the open feedback. The guest-drop plus quota-stop conjunction for an owned
+Start remains a separate gap, as do the existing A1/F10/F11 dispositions. Details are in
+[the custom-scope integration assessment](PR-3894-pr4195-impact.md).
 
 The combined library scope and native P2/P3 socket and P3 HTTP cases now pass. Raw-socket fixtures
 explicitly opt into main's new socket setting; the production security default is unchanged. The

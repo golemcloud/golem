@@ -951,6 +951,34 @@ impl TestWorkerExecutor {
         tokio::sync::oneshot::Receiver<()>,
         tokio::sync::oneshot::Sender<()>,
     ) {
+        self.gate_oplog_function_end(agent_id, function, None, fail)
+    }
+
+    /// Holds the End receipt of an already-started call. Concurrent calls with the same
+    /// function name must select their recorded Start, not whichever Start is observed first.
+    pub fn gate_oplog_function_end_at(
+        &self,
+        agent_id: &AgentId,
+        function: HostFunctionName,
+        start: OplogIndex,
+        fail: bool,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        self.gate_oplog_function_end(agent_id, function, Some(start), fail)
+    }
+
+    fn gate_oplog_function_end(
+        &self,
+        agent_id: &AgentId,
+        function: HostFunctionName,
+        start: Option<OplogIndex>,
+        fail: bool,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
         let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = tokio::sync::oneshot::channel();
         self.additional_test_deps
@@ -961,7 +989,7 @@ impl TestWorkerExecutor {
                 agent_id.clone(),
                 (
                     function,
-                    None,
+                    start,
                     fail,
                     OplogReadGate {
                         entered_tx,
@@ -4963,10 +4991,12 @@ impl MutableFilesystemStorageQuota {
     }
 }
 
+#[cfg(target_os = "linux")]
 struct MutableFilesystemStorageQuotaResourceLimits {
     entry: Arc<AtomicResourceEntry>,
 }
 
+#[cfg(target_os = "linux")]
 #[async_trait]
 impl ResourceLimits for MutableFilesystemStorageQuotaResourceLimits {
     async fn initialize_account(

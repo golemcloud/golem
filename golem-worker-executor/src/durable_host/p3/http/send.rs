@@ -232,7 +232,7 @@ where
             durable_worker_ctx::<Ctx, U>,
             function_type.clone(),
             claim_options,
-            async |_| Ok(host_request),
+            host_request,
             move |start_index| {
                 let (owned_agent_id, trace_id, trace_states, parent_span_id) = span_seed;
                 Ok(SpanStarted {

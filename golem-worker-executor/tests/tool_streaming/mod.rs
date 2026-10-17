@@ -100,6 +100,7 @@ async fn start_with_agent_sockets(
 mod attachment_cost_contract;
 mod chunk_f_policy_acceptance;
 mod chunk_m_stream_deltas;
+mod dropped_waits;
 mod durable_entity_blob;
 mod gol40_k1_audit_acceptance;
 mod held_http_crash_recovery;

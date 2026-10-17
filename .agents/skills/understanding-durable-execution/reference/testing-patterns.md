@@ -191,6 +191,28 @@ Copy: `tests/rpc.rs::reacquire_permits_restart_preserves_accepted_queued_live_in
 `tests/api/mod.rs::pending_self_card_transfer_recovery_does_not_deadlock`,
 `lost_card_transfer_response_converges_after_source_and_target_restart`.
 
+### Custom scopes compose with suspension
+
+`tests/api/interruption/lifecycle/custom_durability.rs` uses production Context and real SDK
+promise waits. Its automatic case observes Suspended, Store disposal and permit release before
+completing either promise. Reconstruction must retain both sibling Starts and the later root call's
+ordinal. The quota cases hold either sibling's custom End receipt at the existing oplog boundary, apply
+a monthly memory-policy update and observe actual acceptance. The permit and pending finish remain
+owned until that receipt is released. Whole-Store teardown retains the End without a delivery/discard
+marker, while the other sibling remains incomplete. Ordinary reconstruction skips the completed
+body and repairs the sibling under its original Start.
+
+Keep exact terminals, invocation acceptance/result counts, the complete committed raw prefix and
+closed-window settlement separate. Bind dependency gates to the recorded Start after both sibling
+waits enter. A function-name gate can select the wrong sibling when Start observation order differs
+from logical initiation order; the reverse-completion case reproduced that test-targeting defect.
+Keep both completion orders instead of serializing the bodies. Promise values prove continuation,
+not external mutation deduplication. The upstream custom HTTP sibling test supplies a separate
+provider-effect counter.
+CompletionDelivery body tests separately cover accepted terminal ownership and call-specific error
+attribution, including a failed terminal during teardown. Neither layer alone proves every custom
+operation, agent mode or resource meter.
+
 ## Pattern 10: streams and tool bodies at named crash checkpoints
 
 Mistake caught: stream liveness inferred from the bus/socket; tool bodies repeating their

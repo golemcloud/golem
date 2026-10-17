@@ -178,6 +178,12 @@ object DurabilityApi {
     }
   }
 
+  /**
+   * Runs a custom operation sequentially. Properly nested calls are supported;
+   * do not start detached futures or callbacks that outlive the body, including
+   * on failure. See [[durableAsync]] for the concurrency restriction, which
+   * also applies if synchronous code starts asynchronous work.
+   */
   def durable[Request, Response](
     iface: String,
     function: String,
@@ -207,6 +213,16 @@ object DurabilityApi {
     }
   }
 
+  /**
+   * Runs a custom operation with sequential, properly nested execution only.
+   * The body may await host calls when no unrelated guest work runs during the
+   * wait. Do not overlap it with other futures or callbacks, including ordinary
+   * host calls: sibling effects can acquire the wrong scope and cause incorrect
+   * replay or invocation failure. Misuse is not reliably detected. Await each
+   * nested operation and do not detach work. All outstanding work must
+   * terminate before the body exits, including on failure; a failed Future does
+   * not cancel its siblings.
+   */
   def durableAsync[Request, Response](
     iface: String,
     function: String,
