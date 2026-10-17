@@ -4487,6 +4487,7 @@ dependencies = [
  "conditional-trait-gen",
  "desert_rust",
  "etcd-client",
+ "figment",
  "futures",
  "golem-api-grpc",
  "golem-common",

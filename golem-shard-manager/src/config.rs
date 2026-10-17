@@ -318,10 +318,83 @@ pub struct EtcdTlsConfig {
     pub server_name: Option<String>,
 }
 
-/// The password of an etcd user. Neither its `Debug` form nor the configuration display shows it.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The password of an etcd user. Neither its `Debug` form, the configuration display nor a refused
+/// configuration shows it.
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub struct EtcdPassword(String);
+
+const PASSWORD_NOT_TEXT: &str = "persistence.config.password must be text, but its value was read \
+     as a number, a boolean or a list; in an environment variable, wrap the whole value in double \
+     quotes";
+
+impl<'de> Deserialize<'de> for EtcdPassword {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_string(PasswordVisitor)
+    }
+}
+
+/// Accepts text only. The environment provider types a value of digits as a number and `true` or
+/// `false` as a boolean, and serde's own message for such a value would print it, in a refusal that
+/// the service prints at startup. Every other kind of value is refused with a message that does
+/// not hold it; turning it back into text would guess (`0123` was read as `123`).
+struct PasswordVisitor;
+
+impl<'de> serde::de::Visitor<'de> for PasswordVisitor {
+    type Value = EtcdPassword;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("the etcd password as text")
+    }
+
+    fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<EtcdPassword, E> {
+        Ok(EtcdPassword(value.to_string()))
+    }
+
+    fn visit_string<E: serde::de::Error>(self, value: String) -> Result<EtcdPassword, E> {
+        Ok(EtcdPassword(value))
+    }
+
+    fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<EtcdPassword, E> {
+        Err(E::custom(PASSWORD_NOT_TEXT))
+    }
+
+    fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<EtcdPassword, E> {
+        Err(E::custom(PASSWORD_NOT_TEXT))
+    }
+
+    fn visit_i128<E: serde::de::Error>(self, _: i128) -> Result<EtcdPassword, E> {
+        Err(E::custom(PASSWORD_NOT_TEXT))
+    }
+
+    fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<EtcdPassword, E> {
+        Err(E::custom(PASSWORD_NOT_TEXT))
+    }
+
+    fn visit_u128<E: serde::de::Error>(self, _: u128) -> Result<EtcdPassword, E> {
+        Err(E::custom(PASSWORD_NOT_TEXT))
+    }
+
+    fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<EtcdPassword, E> {
+        Err(E::custom(PASSWORD_NOT_TEXT))
+    }
+
+    fn visit_char<E: serde::de::Error>(self, _: char) -> Result<EtcdPassword, E> {
+        Err(E::custom(PASSWORD_NOT_TEXT))
+    }
+
+    fn visit_bytes<E: serde::de::Error>(self, _: &[u8]) -> Result<EtcdPassword, E> {
+        Err(E::custom(PASSWORD_NOT_TEXT))
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, _: A) -> Result<EtcdPassword, A::Error> {
+        Err(serde::de::Error::custom(PASSWORD_NOT_TEXT))
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, _: A) -> Result<EtcdPassword, A::Error> {
+        Err(serde::de::Error::custom(PASSWORD_NOT_TEXT))
+    }
+}
 
 impl EtcdPassword {
     pub fn expose(&self) -> &str {
@@ -714,7 +787,7 @@ pub fn reject_legacy_db_env_vars() -> Result<(), String> {
 mod tests {
     use test_r::test;
 
-    use crate::config::{legacy_db_env_vars, make_config_loader};
+    use crate::config::{EtcdConfig, legacy_db_env_vars, make_config_loader};
 
     #[test]
     pub fn config_is_loadable() {
@@ -746,5 +819,46 @@ mod tests {
         );
 
         assert!(found.is_empty(), "unexpected legacy variables: {found:?}");
+    }
+
+    /// Loads an etcd configuration whose password is `raw` as the environment provider reads it:
+    /// it parses every value with `Value::from_str`, which types digits as a number and `true` or
+    /// `false` as a boolean.
+    fn with_password_from_env(raw: &str) -> Result<EtcdConfig, figment::Error> {
+        let value: figment::value::Value = raw.parse().expect("parsing a value cannot fail");
+        figment::Figment::from(figment::providers::Serialized::defaults(
+            EtcdConfig::default(),
+        ))
+        .merge(("password", value))
+        .extract::<EtcdConfig>()
+    }
+
+    #[test]
+    pub fn a_password_read_as_a_number_or_a_boolean_is_refused_without_showing_it() {
+        for (raw, shown) in [
+            ("123456", "123456"),
+            ("-42", "42"),
+            ("1.50", "1.5"),
+            ("true", "true"),
+        ] {
+            let message = with_password_from_env(raw)
+                .map(|_| ())
+                .expect_err("a password that is not text must be refused")
+                .to_string();
+            assert!(
+                message.contains("persistence.config.password must be text"),
+                "{message}"
+            );
+            assert!(!message.contains(shown), "{message}");
+        }
+    }
+
+    #[test]
+    pub fn a_password_in_double_quotes_is_read_as_text() {
+        let config = with_password_from_env("\"123456\"").expect("a quoted value is text");
+        assert_eq!(config.password.expect("a password").expose(), "123456");
+
+        let config = with_password_from_env("s3cr3t-value").expect("text is accepted");
+        assert_eq!(config.password.expect("a password").expose(), "s3cr3t-value");
     }
 }
