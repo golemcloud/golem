@@ -649,6 +649,31 @@ custom invocation of an entity body records the entity invocation `Start` as its
 can tell it from a top-level call of the primary; the custom tree itself (invocation ids, child
 initiation) keeps using the custom parent.
 
+**Asynchronous custom completion uses the ordinary delivery protocol.** Rust async combinators
+await `begin-custom-durable-invocation-async`, which reserves the identity before yielding but
+does not install a live execution scope. The borrowing guest wrapper installs that scope around
+each body and finish poll, response conversion, and destruction. Once the body completes, `finish-async`
+borrows the live resource and persists `End` through an owned append/commit task. Its
+`CompletionDelivery` retains the terminal receipt across cancellation: guest cancellation records
+`CompletionDiscarded` only after a successful `End`; Store teardown leaves it markerless and
+drains accepted persistence. The SDK retains the resource and scope until finish completes or is
+cancelled, destroying any undelivered result before dropping that resource.
+Completed replay returns the recorded bytes through `AtMarker` or `AtReplayTail` without running
+the body. This reproduces outward completion order, not the skipped body's polls or internal
+entries. A completed sibling therefore cannot return early and change a later root call's ordinal
+while another sibling remains incomplete. Sync combinators retain the direct begin/finish path.
+
+**Non-Rust SDK limitation:** TypeScript, Effect, Scala, MoonBit, and Go custom combinators support
+sequential and properly nested execution only. Their scope remains installed across suspension.
+An async/blocking body may wait for host calls when no unrelated guest work runs during the wait.
+Do not overlap it with sibling continuations, including ordinary host calls: their effects can
+become observational entries owned by the wrong custom operation, causing incorrect replay or
+invocation failure. Misuse is not reliably detected. Await nested operations; do not detach work.
+Stop and join outstanding work before the body exits, including on failure or cancellation. A
+fail-fast join does not necessarily wait for surviving siblings, and eventual joining does not
+make concurrent custom scopes supported. This restriction does not apply to ordinary built-in
+durability outside custom operations or to the Rust poll/drop scope integration.
+
 `Incomplete` (`prepare_incomplete_live_repair`): the handle switches to live completion of the
 *existing* `Start` — no second `Start` is appended. The four function types are `ReadLocal`,
 `WriteLocal`, `ReadRemote`, and `WriteRemote`; nesting comes only from explicit
@@ -728,6 +753,26 @@ calls. The id (`DurableInvocationId`) is an anchor and an ordinal: the anchor is
 the current agent invocation (`AgentInvocationStarted`), entity invocation (`Start`) or parent
 custom durable invocation (`Start`), and the ordinal counts the calls numbered under that anchor.
 Root custom durable invocations share the counter with ordinary calls.
+
+**Custom execution scopes.** Attribution follows the context installed on the current guest
+task, not the lifetime of a live custom resource. `begin_custom_durable_invocation` installs a
+scope. The synchronous `exchange_custom_invocation_context` captures without changing it for
+`None`, or consumes and installs a snapshot for `Some`, returning the actual previous context.
+An empty snapshot clears attribution. Snapshots are resident-only, journal nothing, and do not
+keep scopes alive. Before installation the host validates the invocation anchor and every scope
+registration and live resource; a stale ancestor invalidates the whole snapshot.
+
+Rust `Durability::new` prepares the request; async runners observe and begin on first poll.
+Their wrapper saves the outgoing context and restores the dynamic caller after each poll and
+after destruction. Body futures, including completed-body resources, are destroyed before
+finish; cancellation destroys descendants before the enclosing live resource and writes no End.
+Closing a resource absent from the current stack is normal and leaves that stack unchanged.
+Finish validates active children and response decoding before removing the resource or scope.
+Nested work must complete or be dropped before its parent finishes. Detached work does not
+automatically acquire the scope. Other SDKs have synchronized bindings but do not yet propagate
+custom scopes across concurrent continuations; do not infer a cross-SDK concurrency fix.
+The synchronous exchange binding (`store | trappable`, not async) is essential: an async import
+would capture host-task context too early for the per-poll switch.
 
 - A concurrent guest import reserves its id (`reserve_invocation_id`, `durability.rs`) before the
   guest can make another import call. `RuntimeStore` (`worker/suspension.rs`) records the Store's

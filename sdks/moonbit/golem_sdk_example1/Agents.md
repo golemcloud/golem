@@ -360,6 +360,14 @@ response, and returns that response without evaluating the body during replay. I
 unfinished, recovery retries the whole custom operation, so repeated attempts must be safe through
 the correct operation type, an external idempotency key, or a transaction.
 
+**Custom durability is sequential-only.** Both combinators support properly nested calls. An async
+body may await host calls when no unrelated guest work runs during the wait. Do not overlap it with
+other tasks, including ordinary host calls: sibling effects can acquire the wrong scope and cause
+incorrect replay or invocation failure. Misuse is not reliably detected. Await each nested
+operation; do not detach tasks. Stop and join outstanding work before the body exits, including on
+failure or cancellation. Joining at the end does not make concurrent custom scopes supported.
+Ordinary built-in durability is not subject to this restriction when no custom operation is active.
+
 ## Environments and Build Presets
 
 The `golem.yaml` defines two environments:
