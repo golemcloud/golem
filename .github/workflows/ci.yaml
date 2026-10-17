@@ -1974,7 +1974,7 @@ jobs:
 
   docker-publish-router:
     runs-on: blacksmith
-    if: github.event_name == 'push' && github.ref_type == 'tag'
+    if: github.event_name == 'release' && github.ref_type == 'tag'
     steps:
       - uses: actions/checkout@v5
         with:
