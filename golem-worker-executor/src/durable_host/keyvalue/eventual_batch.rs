@@ -272,6 +272,24 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                                 .map(denial),
                             Err(error) => Some(denial(error)),
                         };
+                        if let Some(denial) = denied {
+                            let keys = key_values
+                                .into_iter()
+                                .map(|(key, outgoing_value)| {
+                                    let length = self
+                                        .as_wasi_view()
+                                        .table()
+                                        .get::<OutgoingValueEntry>(&outgoing_value)?
+                                        .body
+                                        .read()
+                                        .unwrap()
+                                        .len();
+                                    Ok((key, length))
+                                })
+                                .collect::<Result<Vec<(String, usize)>, ResourceTableError>>()?;
+                            let request = HostRequestKVBucketAndKeySizePairs { bucket, keys };
+                            break 'resp begun.start_live_denied(self, request, denial).await?;
+                        }
                         let key_values = key_values
                             .into_iter()
                             .map(|(key, outgoing_value)| {
@@ -295,9 +313,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                                 .map(|(k, v)| (k.clone(), v.len()))
                                 .collect(),
                         };
-                        if let Some(denial) = denied {
-                            break 'resp begun.start_live_denied(self, request, denial).await?;
-                        }
                         (
                             begun.start_live(self, request).await?,
                             environment_id,

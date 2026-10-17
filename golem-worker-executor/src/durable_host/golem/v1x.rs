@@ -1316,6 +1316,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .await?;
                     let request = HostRequestNoInput {};
                     if let Some(denial) = agent_operation_denial(denied) {
+                        // The replay of the denied call reserves the logical counter below, so
+                        // the live denial reserves it too.
+                        let _ = self.derive_idempotency_key(begun.begin_index());
                         break 'result begun.start_live_denied(self, request, denial).await?;
                     }
                     begun.start_live(self, request).await?

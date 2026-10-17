@@ -167,23 +167,27 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                                 .map(denial),
                             Err(error) => Some(denial(error)),
                         };
-                        let outgoing_value = self
+                        let body = self
                             .as_wasi_view()
                             .table()
                             .get::<OutgoingValueEntry>(&outgoing_value)?
                             .body
-                            .read()
-                            .unwrap()
                             .clone();
+                        if let Some(denial) = denied {
+                            let request = HostRequestKVBucketKeyAndSize {
+                                bucket,
+                                key,
+                                length: body.read().unwrap().len(),
+                            };
+                            break 'resp begun.start_live_denied(self, request, denial).await?;
+                        }
+                        let outgoing_value = body.read().unwrap().clone();
                         let length = outgoing_value.len() as u64;
                         let request = HostRequestKVBucketKeyAndSize {
                             bucket: bucket.clone(),
                             key: key.clone(),
                             length: outgoing_value.len(),
                         };
-                        if let Some(denial) = denied {
-                            break 'resp begun.start_live_denied(self, request, denial).await?;
-                        }
                         (
                             begun.start_live(self, request).await?,
                             environment_id,

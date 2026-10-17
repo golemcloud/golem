@@ -343,7 +343,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureResultWithStore<U>
                     handle: handle.take().ok_or_else(|| missing_handle("set"))?,
                     environment_id: *environment_id,
                     key: key.clone(),
-                    value: value.clone(),
+                    value: std::mem::take(value),
                     denied: denied.take(),
                 },
                 CacheFutureResultOperation::Delete {
@@ -717,12 +717,21 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         } else {
             None
         };
-        let value = accessor.with(|mut access| {
-            Ok::<_, anyhow::Error>(access.get().table().get(&v)?.body.read().unwrap().clone())
+        // A denied call records only the length. A replayed call keeps the bytes, because its
+        // `Start` may have no `End`, and the repair writes the value the guest passed.
+        let (value, length) = accessor.with(|mut access| {
+            let body = access.get().table().get(&v)?.body.read().unwrap();
+            let length = body.len();
+            let value = if denial.is_some() {
+                Vec::new()
+            } else {
+                body.clone()
+            };
+            Ok::<_, anyhow::Error>((value, length))
         })?;
         let request = HostRequestKVCacheKeyValueAndTtl {
             key: k.clone(),
-            length: value.len(),
+            length,
             ttl_ms,
         };
         let denied = denial

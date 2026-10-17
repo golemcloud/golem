@@ -264,20 +264,27 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                             Ok(target) => authorize_targets(self, &[target]).await?.err(),
                             Err(err) => Some(err),
                         };
-                        let data = self
+                        let body = self
                             .as_wasi_view()
                             .table()
-                            .get::<OutgoingValueEntry>(&data)
-                            .map(|entry| entry.body.read().unwrap().clone())?;
+                            .get::<OutgoingValueEntry>(&data)?
+                            .body
+                            .clone();
+                        if let Some(denial) = denied {
+                            let request = HostRequestBlobStoreWriteData {
+                                container: container_name,
+                                object: name,
+                                length: body.read().unwrap().len() as u64,
+                            };
+                            break 'resp begun.start_live_denied(self, request, denial).await?;
+                        }
+                        let data = body.read().unwrap().clone();
                         let length = data.len() as u64;
                         let request = HostRequestBlobStoreWriteData {
                             container: container_name.clone(),
                             object: name.clone(),
                             length,
                         };
-                        if let Some(denial) = denied {
-                            break 'resp begun.start_live_denied(self, request, denial).await?;
-                        }
                         // Persist Start before quota admission and storage I/O. A completed call
                         // replays its recorded response without charging again, while an incomplete
                         // retry resumes under the same Start before repeating the live effect.
