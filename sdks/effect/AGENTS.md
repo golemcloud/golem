@@ -51,6 +51,12 @@ QuickJS-backed WASI Preview 3 components.
   marks a handle so a restore drops it.
 - Durability uses `golem:durability/durability@1.6.0`. Successful/typed-failure wrappers finish the
   live resource exactly once; defects, interruption, and encode failures drop it unfinished.
+  Custom durability is sequential-only, including properly nested operations. A body may await
+  host calls only when no unrelated guest work runs during the wait. Do not overlap wrappers with
+  other fibers, concurrent effects, or promises, including ordinary host calls: sibling effects can
+  acquire the wrong scope and cause incorrect replay or invocation failure. Misuse is not reliably
+  detected. Await nested operations; do not detach work. Stop and join children before the body
+  exits, including on failure or interruption. Structured finalization alone does not isolate scopes.
 - Do not add Golem 1.5 compatibility shims or claims. Complete cross-language acceptance is still a
   final parity gate. Runtime discovery is in `Reflection`, immutable schema views in `SchemaRef`,
   and value-only identity binding in `DynamicClient`. Parse strings through `AgentIdentity.parse`

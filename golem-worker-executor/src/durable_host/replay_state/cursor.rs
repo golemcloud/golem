@@ -227,18 +227,21 @@ impl CursorTx<'_> {
         }
     }
 
-    /// Marks a claimed custom invocation `Start` as a replay-inert subtree root. Descendants the
-    /// cursor already committed past and retained (a physical call recorded under this owner, a
-    /// nested call under such a call) are observational records of the root's persisted result:
-    /// they are moved out of the retained map into the subtree so no later claim can take them,
-    /// exactly as the cursor consumes not-yet-reached descendants when it gets to them.
-    pub(super) fn register_custom_subtree_root(&mut self, root: OplogIndex) {
-        self.retained_claims().register_custom_subtree_root(root);
+    /// Marks a claimed `Start` as a replay-inert subtree root: a custom invocation `Start`, or the
+    /// `Start` of a call that the guest cancelled before it delivered anything, whose host-internal
+    /// calls replay never makes again. Descendants the cursor already committed past and retained
+    /// (a physical call recorded under this owner, a nested call under such a call) are records
+    /// of the root's recorded outcome: they are moved out of the retained map into the subtree so
+    /// no later claim can take them, exactly as the cursor consumes not-yet-reached descendants
+    /// when it gets to them.
+    pub(super) fn register_replay_inert_subtree_root(&mut self, root: OplogIndex) {
+        self.retained_claims()
+            .register_replay_inert_subtree_root(root);
     }
 }
 
 impl RetainedClaims<'_> {
-    pub(super) fn register_custom_subtree_root(&mut self, root: OplogIndex) {
+    pub(super) fn register_replay_inert_subtree_root(&mut self, root: OplogIndex) {
         let mut members = HashSet::from([root]);
         let adopted: Vec<OplogIndex> = self
             .st
@@ -457,22 +460,26 @@ impl RetainedClaims<'_> {
         &mut self,
         claim: &StartClaim,
     ) -> Result<Option<(ReplayCallHandle, Box<OplogEntry>)>, WorkerExecutorError> {
-        let result = self
+        let Some((mut handle, entry)) = self
             .claim_retained_start(&|entry| claim.matches_start_identity(entry))
-            .await?;
-        Ok(result.map(|(mut handle, entry)| {
-            if claim.is_reconstruction_claim() {
-                let reconstruction = self.st.concurrent_resolver.register_reconstruction(
-                    handle.start_idx(),
-                    self.cursor.wallet.as_ref().map(Arc::downgrade),
-                );
-                handle.attach_historical_reconstruction(reconstruction);
-            }
-            if claim.is_custom_invocation() {
-                self.register_custom_subtree_root(handle.start_idx());
-            }
-            (handle, entry)
-        }))
+            .await?
+        else {
+            return Ok(None);
+        };
+        if claim.is_reconstruction_claim() {
+            let reconstruction = self.st.concurrent_resolver.register_reconstruction(
+                handle.start_idx(),
+                self.cursor.wallet.as_ref().map(Arc::downgrade),
+            );
+            handle.attach_historical_reconstruction(reconstruction);
+        }
+        if claim.is_custom_invocation()
+            || (claim.makes_host_internal_calls()
+                && cancelled_before_delivery(self.cursor, self.st, handle.start_idx()).await)
+        {
+            self.register_replay_inert_subtree_root(handle.start_idx());
+        }
+        Ok(Some((handle, entry)))
     }
 
     async fn claim_retained_start(
@@ -2426,8 +2433,11 @@ impl CursorTx<'_> {
             );
             handle.attach_historical_reconstruction(reconstruction);
         }
-        if claim.is_custom_invocation() {
-            self.register_custom_subtree_root(handle.start_idx());
+        if claim.is_custom_invocation()
+            || (claim.makes_host_internal_calls()
+                && cancelled_before_delivery(self.cursor, &self.st, handle.start_idx()).await)
+        {
+            self.register_replay_inert_subtree_root(handle.start_idx());
         }
         // Every `Start` claim registers a resolver awaiter atomically with the consume/claim, so
         // its terminal is always a resolver-routed *awaited terminal* — never an orphan a parked
@@ -5013,6 +5023,35 @@ impl ReplayState {
             progress.await;
         }
     }
+}
+
+/// Whether the replay-visible terminal of the call started at `start_index` is a `Cancelled`
+/// without a partial result: the guest dropped the call before it delivered anything. The scan
+/// reads the oplog up to the replay target and skips deleted regions; nothing is consumed.
+async fn cancelled_before_delivery(
+    cursor: &ReplayCursor,
+    state: &CursorState,
+    start_index: OplogIndex,
+) -> bool {
+    let replay_target = cursor.replay_target();
+    let mut next = start_index.next();
+    while next <= replay_target {
+        let available = u64::from(replay_target) - u64::from(next) + 1;
+        let entries = cursor
+            .oplog
+            .read_exact(next, CHUNK_SIZE.min(available))
+            .await;
+        let last_read = *entries.last_key_value().unwrap().0;
+        if let Some((_, terminal)) = entries.into_iter().find(|(index, entry)| {
+            *index <= replay_target
+                && !state.skipped_regions.is_in_deleted_region(*index)
+                && terminal_start_index(entry) == Some(start_index)
+        }) {
+            return matches!(terminal, OplogEntry::Cancelled { partial: None, .. });
+        }
+        next = last_read.next();
+    }
+    false
 }
 
 fn custom_subtree_entry_is_drainable(state: &CursorState, entry: &OplogEntry) -> bool {

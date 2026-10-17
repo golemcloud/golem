@@ -540,6 +540,14 @@ SDK and library code should normally use `@api.durable` or `@api.durable_async`.
 own the live resource, run the body only for a live invocation, finish it after the body completes,
 and decode the recorded response during replay.
 
+**Custom durability is sequential-only.** Both combinators support properly nested calls. An async
+body may await host calls when no unrelated guest work runs during the wait. Do not overlap it with
+other tasks, including ordinary host calls: sibling effects can acquire the wrong scope and cause
+incorrect replay or invocation failure. Misuse is not reliably detected. Await each nested
+operation; do not detach tasks. Stop and join outstanding work before the body exits, including on
+failure or cancellation. Joining at the end does not make concurrent custom scopes supported.
+Ordinary built-in durability is not subject to this restriction when no custom operation is active.
+
 ## Current State & What Works
 
 - WIT bindings are generated in one pass against `golem:core/types@2.0.0` +

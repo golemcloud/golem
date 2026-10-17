@@ -68,6 +68,11 @@ pub(crate) struct StartClaim {
     /// The `Start` opens a custom durable invocation. Replay returns its persisted result without
     /// executing its body, so the records under it are drained instead of claimed.
     custom_invocation: bool,
+    /// The call makes host-internal calls under its own `Start` (see
+    /// `DurableCallSession::invoke_host_internal_access`). When its recorded terminal is a
+    /// `Cancelled` without a partial result, the guest never observed the call, and the records
+    /// of those host-internal calls are drained instead of claimed.
+    host_internal_calls: bool,
 }
 
 impl StartClaim {
@@ -85,6 +90,7 @@ impl StartClaim {
             observational_owner: None,
             invocation_id: None,
             custom_invocation: false,
+            host_internal_calls: false,
         }
     }
 
@@ -157,6 +163,16 @@ impl StartClaim {
     pub(crate) fn with_invocation_id(mut self, invocation_id: Option<DurableInvocationId>) -> Self {
         self.invocation_id = invocation_id;
         self
+    }
+
+    /// Marks the call as one that makes host-internal calls under its own `Start`.
+    pub(crate) fn with_host_internal_calls(mut self, host_internal_calls: bool) -> Self {
+        self.host_internal_calls = host_internal_calls;
+        self
+    }
+
+    pub(super) fn makes_host_internal_calls(&self) -> bool {
+        self.host_internal_calls
     }
 
     pub(super) fn matches_function_name(&self, actual: &HostFunctionName) -> bool {

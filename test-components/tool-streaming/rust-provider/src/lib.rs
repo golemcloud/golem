@@ -28,6 +28,24 @@ mod wallet_recovery;
 
 const MARKER: &[u8] = b"marker:";
 
+// Polls `call` once, lets the host run for `turns` turns, and drops `call` while it is pending.
+// Then it makes the host call of `checkpoint`, which a test can observe: the test knows that the
+// guest dropped `call` when the checkpoint call starts.
+async fn drop_pending_early(call: impl Future, turns: u64, checkpoint: impl AsyncFnOnce()) -> u64 {
+    let mut call = Box::pin(call);
+    std::future::poll_fn(|cx| {
+        let _ = call.as_mut().poll(cx);
+        std::task::Poll::Ready(())
+    })
+    .await;
+    for _ in 0..turns {
+        golem_rust::wasip3::wit_bindgen::yield_async().await;
+    }
+    drop(call);
+    checkpoint().await;
+    turns
+}
+
 async fn race_p3_sleeps(secs: Vec<u64>) -> u64 {
     let waits: Vec<_> = secs
         .into_iter()
@@ -159,6 +177,9 @@ pub enum ClockRaceError {
 #[tool_definition(version = "1.0.0")]
 pub trait ClockRace {
     async fn race_p3_sleeps(&self, secs: Vec<u64>) -> Result<u64, ClockRaceError>;
+    async fn drop_p3_sleep_early(&self, secs: u64, turns: u64) -> Result<u64, ClockRaceError>;
+    async fn drop_p3_sleep_until_early(&self, secs: u64, turns: u64)
+    -> Result<u64, ClockRaceError>;
     async fn race_promise_and_p3_sleep(&self, secs: u64) -> Result<String, ClockRaceError>;
     async fn polling_loop_vs_watchdog(&self) -> Result<String, ClockRaceError>;
     async fn nap_then_fetch(
@@ -177,6 +198,35 @@ struct ClockRaceImpl;
 impl ClockRace for ClockRaceImpl {
     async fn race_p3_sleeps(&self, secs: Vec<u64>) -> Result<u64, ClockRaceError> {
         Ok(race_p3_sleeps(secs).await)
+    }
+
+    // Starts a wait, lets the host run for `turns` turns, drops the wait while it is pending, and
+    // waits until now.
+    async fn drop_p3_sleep_early(&self, secs: u64, turns: u64) -> Result<u64, ClockRaceError> {
+        let wait = golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+            secs.saturating_mul(1_000_000_000),
+        );
+        let checkpoint = async || {
+            golem_rust::wasip3::clocks::monotonic_clock::wait_until(
+                golem_rust::wasip3::clocks::monotonic_clock::now(),
+            )
+            .await
+        };
+        Ok(drop_pending_early(wait, turns, checkpoint).await)
+    }
+
+    // Starts a wait until `secs` from now, lets the host run for `turns` turns, drops the wait
+    // while it is pending, and waits for no time.
+    async fn drop_p3_sleep_until_early(
+        &self,
+        secs: u64,
+        turns: u64,
+    ) -> Result<u64, ClockRaceError> {
+        let deadline = golem_rust::wasip3::clocks::monotonic_clock::now()
+            .saturating_add(secs.saturating_mul(1_000_000_000));
+        let wait = golem_rust::wasip3::clocks::monotonic_clock::wait_until(deadline);
+        let checkpoint = async || golem_rust::wasip3::clocks::monotonic_clock::wait_for(0).await;
+        Ok(drop_pending_early(wait, turns, checkpoint).await)
     }
 
     async fn race_promise_and_p3_sleep(&self, secs: u64) -> Result<String, ClockRaceError> {

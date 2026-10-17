@@ -16,6 +16,7 @@ use super::*;
 use crate::services::oplog::UnreadableOplog;
 use std::collections::BTreeMap;
 
+use crate::durable_host::durability::find_durable_call_trap_context;
 use golem_common::model::oplog::host_functions;
 use golem_common::model::oplog::{
     HostRequestNoInput, HostResponseMonotonicClockTimestamp, LogLevel,
@@ -183,6 +184,7 @@ fn live_unfinished_handle<P: DropPolicy>(
         cancellation_span_id: None,
         span_observer: None,
         parked_undelivered_replay: false,
+        host_internal_calls: false,
         execution_scope: CallExecutionScope {
             retry_from: start_idx,
             durable_scope: None,
@@ -235,6 +237,7 @@ fn synthetic_finished_handle_with_scope<P: DropPolicy>(
         cancellation_span_id: None,
         span_observer: None,
         parked_undelivered_replay: false,
+        host_internal_calls: false,
         execution_scope: scope,
         retry: InFunctionRetryController::new(
             DurableFunctionType::ReadLocal,
@@ -659,6 +662,110 @@ async fn completion_delivery_armed_drop_records_marker_via_drain() {
             assert_eq!(counter.load(Ordering::Acquire), 0);
         }
         other => panic!("expected an AwaitCompletionMarker drop event, got {other:?}"),
+    }
+}
+
+#[test]
+async fn completion_delivery_terminal_failure_retains_call_attribution() {
+    let oplog = Arc::new(InMemoryOplog::new());
+    let counter = Arc::new(AtomicUsize::new(0));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let recorder = marker_record_over(oplog.clone()).await.recorder;
+    let context = DurableCallTrapContext {
+        retry_from: idx(47),
+    };
+    let mut delivery = CompletionDelivery::live(
+        idx(47),
+        recorder,
+        context,
+        tx,
+        LiveCallPermit::new(counter.clone()),
+        TeardownProbe::never(),
+    );
+    let terminal = tokio::spawn(async { Err(WorkerExecutorError::runtime("terminal refused")) });
+    let error: anyhow::Error = delivery.wait_terminal(terminal).await.unwrap_err().into();
+    assert_eq!(find_durable_call_trap_context(&error), Some(context));
+    assert!(matches!(
+        error.root_cause().downcast_ref::<WorkerExecutorError>(),
+        Some(WorkerExecutorError::Runtime { details }) if details == "terminal refused"
+    ));
+    drop(delivery);
+    assert_eq!(counter.load(Ordering::Acquire), 0);
+    assert!(rx.try_recv().is_err());
+    assert!(oplog.entries.lock().await.is_empty());
+}
+
+#[test]
+async fn completion_delivery_cancelled_terminal_wait_preserves_append_ownership() {
+    for (teardown, terminal_fails) in [(false, false), (true, false), (false, true)] {
+        let oplog = Arc::new(InMemoryOplog::new());
+        let counter = Arc::new(AtomicUsize::new(0));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let mut token = live_delivery_token_with_teardown(
+            oplog.clone(),
+            counter.clone(),
+            tx,
+            TeardownProbe::new(shutdown.clone(), Arc::new(|| false)),
+        )
+        .await;
+        let (release, gate) = tokio::sync::oneshot::channel();
+        let terminal_oplog = oplog.clone();
+        let terminal = tokio::spawn(async move {
+            gate.await.unwrap();
+            if terminal_fails {
+                return Err(WorkerExecutorError::runtime("terminal refused"));
+            }
+            terminal_oplog
+                .add(OplogEntry::End {
+                    timestamp: Timestamp::now_utc(),
+                    start_index: idx(1),
+                    response: None,
+                    forced_commit: false,
+                    span_finished: None,
+                    span_attributes: None,
+                })
+                .await?;
+            Ok(())
+        });
+        let mut finishing = Box::pin(token.wait_terminal(terminal));
+        assert!(futures::poll!(finishing.as_mut()).is_pending());
+        drop(finishing);
+        if teardown {
+            shutdown.cancel();
+        }
+        drop(token);
+        assert_eq!(counter.load(Ordering::Acquire), 1);
+        let DropEvent::AwaitCompletionMarker {
+            mut receipt,
+            live_call_permit,
+            ..
+        } = rx.try_recv().expect("settlement must retain the terminal")
+        else {
+            panic!("expected terminal settlement receipt");
+        };
+        let mut settlement = Box::pin(await_marker_receipt(receipt.as_mut().unwrap()));
+        assert!(futures::poll!(settlement.as_mut()).is_pending());
+        assert!(oplog.entries.lock().await.is_empty());
+        release.send(()).unwrap();
+        let result = settlement.await;
+        assert_eq!(result.is_err(), terminal_fails);
+        let entries = oplog.entries.lock().await;
+        if terminal_fails {
+            assert!(
+                entries.is_empty(),
+                "a failed End must not leave a discard marker"
+            );
+        } else if teardown {
+            assert!(matches!(entries.as_slice(), [OplogEntry::End { .. }]));
+        } else {
+            assert!(matches!(entries.as_slice(), [
+                OplogEntry::End { .. },
+                OplogEntry::CompletionDiscarded { start_index, .. }
+            ] if *start_index == idx(1)));
+        }
+        drop(live_call_permit);
+        assert_eq!(counter.load(Ordering::Acquire), 0);
     }
 }
 
