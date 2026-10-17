@@ -1426,25 +1426,25 @@ async fn only_a_failure_to_connect_counts_as_never_reaching_etcd(etcd: &Arc<Dock
     );
     proxy.restore();
 
-    // The established connection is closed under the client, as an etcd member going away does.
-    // That must fail the next request on it, and the failure may have come after etcd received
-    // the request.
-    let mut failures_on_a_closed_connection = 0;
-    for _ in 0..5 {
-        proxy.drop_all_connections().await;
-        if let Err(err) = through_proxy.kv_client().txn(a_read_only_txn()).await {
-            assert!(
-                !never_reached_etcd(&err),
-                "A request on a connection that was reset was taken for an unsent one: {err:?}"
-            );
-            failures_on_a_closed_connection += 1;
-        }
-    }
+    // The established connection is closed under a request that is waiting for its answer, as an
+    // etcd member going away does. The black hole keeps the answer from arriving first, so the
+    // request must fail, and etcd may have received it.
+    proxy.black_hole();
+    let in_flight = tokio::spawn({
+        let through_proxy = through_proxy.clone();
+        async move { through_proxy.kv_client().txn(a_read_only_txn()).await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    proxy.drop_all_connections().await;
+    let reset = in_flight
+        .await
+        .expect("The request task should not panic")
+        .expect_err("A request whose connection was closed while it waited must fail");
     assert!(
-        failures_on_a_closed_connection > 0,
-        "No request failed after its connection was closed, so the classifier was never shown a \
-         failure on an established connection"
+        !never_reached_etcd(&reset),
+        "A request on a connection that was closed was taken for an unsent one: {reset:?}"
     );
+    proxy.restore();
 }
 
 /// An etcd store, the sentinel leader key it is fenced on, and a persistence over `endpoints`
