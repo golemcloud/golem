@@ -137,22 +137,26 @@ async function runNpm(
   const restorePrivateFiles = installPrivateReadOnlyFiles(NPM_ROOT, npmPrivateFiles);
   const invocation = npmInvocation(input.cwd, input.registry);
   try {
-    return await runCli({ argv, cwd: input.cwd, ...invocation }, streams, async (processFacade) => {
-      const loaded = await loadNpm();
-      if (name === 'npx') {
-        processFacade.argv.splice(
-          0,
-          processFacade.argv.length,
-          ...rewriteNpxArguments(
-            processFacade.argv,
-            loaded.definitions,
-            loaded.shorthands,
-            (message) => processFacade.stderr.write(`${message}\n`),
-          ),
-        );
-      }
-      await loaded.default(processFacade);
-    });
+    return await runCli(
+      { argv, cwd: input.cwd, ...invocation, npmExit: true },
+      streams,
+      async (processFacade) => {
+        const loaded = await loadNpm();
+        if (name === 'npx') {
+          processFacade.argv.splice(
+            0,
+            processFacade.argv.length,
+            ...rewriteNpxArguments(
+              processFacade.argv,
+              loaded.definitions,
+              loaded.shorthands,
+              (message) => processFacade.stderr.write(`${message}\n`),
+            ),
+          );
+        }
+        await loaded.default(processFacade);
+      },
+    );
   } finally {
     restorePrivateFiles();
     restore();
