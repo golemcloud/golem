@@ -20,8 +20,9 @@ use crate::bridge_gen::fixtures::{
 use crate::bridge_gen::type_naming::test_type_naming;
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_cli::bridge_gen::rust::{
-    RustBridgeGenerator, RustBridgeGeneratorConfig, RustBridgeMode, RustTypeName,
+    RustBridgeGenerator, RustBridgeGeneratorConfig, RustBridgeMode, RustRemappedType, RustTypeName,
 };
+use golem_cli::bridge_gen::type_naming::TypeName;
 use golem_cli::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
 use golem_cli::model::language::GuestLanguage;
 use golem_common::model::Empty;
@@ -868,6 +869,8 @@ fn external_type_only_crate_is_portable_serializable_and_client_free() {
             "bare-binary",
             SchemaType::binary(BinaryRestrictions::default()),
         ),
+        named_field("native-id", SchemaType::uuid()),
+        named_field("remapped-id", ref_to("uuid.Uuid")),
     ]);
     let media = multimodal(vec![
         variant_case("caption", Some(restricted_text)),
@@ -905,6 +908,13 @@ fn external_type_only_crate_is_portable_serializable_and_client_free() {
                 SchemaType::r#enum(vec!["ready".to_string(), "waiting".to_string()]),
             ),
             def("portable-envelope", envelope),
+            def(
+                "uuid.Uuid",
+                SchemaType::record(vec![
+                    named_field("high-bits", SchemaType::u64()),
+                    named_field("low-bits", SchemaType::u64()),
+                ]),
+            ),
         ],
         AgentMode::Durable,
     );
@@ -955,6 +965,7 @@ edition = "2021"
 [dependencies]
 portable-agent-client = {{ path = {package_dir:?}, default-features = false, features = ["serde"] }}
 serde_json = "1"
+uuid = "1"
 "#
         ),
     )
@@ -981,6 +992,8 @@ fn main() {
         ),
         unrestricted_binary: UnstructuredBinary::from_inline(vec![4, 5], "data/test".to_string()),
         bare_binary: AgentBinary { bytes: vec![6, 7], mime_type: None },
+        native_id: uuid::Uuid::from_u64_pair(1, 2),
+        remapped_id: uuid::Uuid::from_u64_pair(3, 4),
     };
     let media = vec![
         Multimodal0::caption(UnstructuredText::from_inline(
@@ -2667,4 +2680,250 @@ fn colliding_names_tool() -> Tool {
         },
         schema: SchemaGraph::empty(),
     }
+}
+
+fn uuid_remap_agent() -> AgentTypeSchema {
+    agent(
+        "UuidAgent",
+        "scala",
+        vec![field("id", ref_to("uuid.Uuid"))],
+        vec![
+            method(
+                "lookup",
+                vec![
+                    field("maybe-id", SchemaType::option(ref_to("uuid.Uuid"))),
+                    field("ids", SchemaType::list(ref_to("uuid.Uuid"))),
+                    field("holder", ref_to("id-holder")),
+                ],
+                Some(ref_to("uuid.Uuid")),
+            ),
+            method("holder", vec![], Some(ref_to("id-holder"))),
+            method(
+                "shapes",
+                vec![
+                    field(
+                        "by-name",
+                        SchemaType::map(SchemaType::string(), ref_to("uuid.Uuid")),
+                    ),
+                    field(
+                        "by-id",
+                        SchemaType::map(ref_to("uuid.Uuid"), SchemaType::u32()),
+                    ),
+                    field(
+                        "pair",
+                        SchemaType::tuple(vec![ref_to("uuid.Uuid"), SchemaType::u32()]),
+                    ),
+                    field("choice", ref_to("id-choice")),
+                ],
+                Some(SchemaType::result(
+                    golem_common::schema::schema_type::ResultSpec {
+                        ok: Some(Box::new(ref_to("uuid.Uuid"))),
+                        err: Some(Box::new(ref_to("uuid.Uuid"))),
+                    },
+                )),
+            ),
+        ],
+        vec![
+            def(
+                "uuid.Uuid",
+                SchemaType::record(vec![
+                    named_field("high-bits", SchemaType::u64()),
+                    named_field("low-bits", SchemaType::u64()),
+                ]),
+            ),
+            def(
+                "id-choice",
+                SchemaType::variant(vec![
+                    variant_case("id", Some(ref_to("uuid.Uuid"))),
+                    variant_case("none", None),
+                ]),
+            ),
+            def(
+                "id-holder",
+                SchemaType::record(vec![
+                    named_field("id", ref_to("uuid.Uuid")),
+                    named_field("native-id", SchemaType::uuid()),
+                ]),
+            ),
+        ],
+        AgentMode::Durable,
+    )
+}
+
+#[test]
+fn uuid_ref_is_remapped_to_the_native_uuid() {
+    let uuid_ref = SchemaType::ref_to(TypeId::new("uuid.Uuid"));
+    let mapped = RustTypeName::from_schema_type(&uuid_ref);
+    assert_eq!(mapped, Some(RustTypeName::Remapped(RustRemappedType::Uuid)));
+    assert_eq!(mapped.unwrap().to_string(), "uuid::Uuid");
+
+    let other_ref = SchemaType::ref_to(TypeId::new("my.OtherType"));
+    assert_eq!(RustTypeName::from_schema_type(&other_ref), None);
+}
+
+#[test]
+fn external_uuid_record_is_remapped_to_the_native_uuid() {
+    let dir = TempDir::new().unwrap();
+    let package_dir = Utf8Path::from_path(dir.path())
+        .unwrap()
+        .join("uuid-agent-client");
+    RustBridgeGenerator::new(uuid_remap_agent(), &package_dir, true)
+        .unwrap()
+        .generate()
+        .unwrap();
+
+    let lib_path = package_dir.join("src/lib.rs");
+    let source = std::fs::read_to_string(&lib_path).unwrap();
+    assert!(!source.contains("UuidUuid"), "{source}");
+    assert!(source.contains("pub id: uuid::Uuid"), "{source}");
+
+    let client_module = "mod __golem_bridge_client {\n    use super::*;\n";
+    assert!(source.contains(client_module), "{source}");
+    let source = source.replacen(
+        client_module,
+        &format!(
+            "{client_module}{}",
+            r#"
+    #[cfg(test)]
+    mod uuid_remap_codec {
+        use super::*;
+        use crate::__golem_bridge_runtime::schema::SchemaValue;
+
+        #[test]
+        fn id_holder_round_trips_through_the_uuid_record() {
+            let id = uuid::Uuid::from_u64_pair(1, 2);
+            let native_id = uuid::Uuid::from_u64_pair(3, 4);
+            let encoded = encode_IdHolder(IdHolder { id, native_id }).unwrap();
+            let SchemaValue::Record { fields } = &encoded else { panic!("{encoded:?}") };
+            assert!(matches!(
+                fields[0],
+                SchemaValue::Record { ref fields } if matches!(fields.as_slice(), [SchemaValue::U64(1), SchemaValue::U64(2)])
+            ), "{encoded:?}");
+            assert!(matches!(fields[1], SchemaValue::Uuid(uuid) if uuid == native_id), "{encoded:?}");
+            let decoded = decode_IdHolder(encoded).unwrap();
+            assert_eq!(decoded.id, id);
+            assert_eq!(decoded.native_id, native_id);
+            assert!(decode_IdHolder(SchemaValue::Record { fields: vec![SchemaValue::Uuid(id), SchemaValue::Uuid(native_id)] }).is_err());
+        }
+    }
+"#
+        ),
+        1,
+    );
+    std::fs::write(&lib_path, source).unwrap();
+
+    cargo_check_with_args(&package_dir, &[]);
+    cargo_check_with_args(&package_dir, &["--no-default-features"]);
+    cargo_check_with_args(
+        &package_dir,
+        &["--no-default-features", "--features", "serde"],
+    );
+    cargo_test_lib(&package_dir);
+}
+
+#[test]
+fn guest_uuid_record_is_remapped_to_the_native_uuid() {
+    let dir = TempDir::new().unwrap();
+    let package_dir = Utf8Path::from_path(dir.path())
+        .unwrap()
+        .join("uuid-agent-guest");
+    let mut agent_type = uuid_remap_agent();
+    agent_type.methods.push(method(
+        "ids-stream",
+        vec![],
+        Some(SchemaType::stream(Some(ref_to("uuid.Uuid")))),
+    ));
+    RustBridgeGenerator::new_with_mode(
+        agent_type,
+        &package_dir,
+        true,
+        RustBridgeMode::GuestWasmRpc,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+
+    let lib_path = package_dir.join("src/lib.rs");
+    let mut source = std::fs::read_to_string(&lib_path).unwrap();
+    assert!(!source.contains("UuidUuid"), "{source}");
+    assert!(source.contains("pub id: golem_rust::Uuid"), "{source}");
+    assert!(source.contains("fn new_uuid_stream"), "{source}");
+    source.push_str(
+        r#"
+#[cfg(test)]
+mod uuid_remap_codec {
+    use super::*;
+
+    #[test]
+    fn id_holder_round_trips_through_the_uuid_record() {
+        let id = golem_rust::Uuid::from_u64_pair(1, 2);
+        let native_id = golem_rust::Uuid::from_u64_pair(3, 4);
+        let mut writer = golem_rust::schema::wit::direct::WireWriter::default();
+        let root = encode_IdHolder(&IdHolder { id, native_id }, &mut writer).unwrap();
+        let tree = writer.finish(root);
+        let nodes = &tree.value_nodes;
+        let __wire::SchemaValueNode::RecordValue(fields) = &nodes[tree.root as usize] else { panic!("{nodes:?}") };
+        let __wire::SchemaValueNode::RecordValue(halves) = &nodes[fields[0] as usize] else { panic!("{nodes:?}") };
+        assert!(matches!(nodes[halves[0] as usize], __wire::SchemaValueNode::U64Value(1)), "{nodes:?}");
+        assert!(matches!(nodes[halves[1] as usize], __wire::SchemaValueNode::U64Value(2)), "{nodes:?}");
+        let mut reader = golem_rust::schema::wit::direct::WireReader::new(tree.value_nodes);
+        let decoded = decode_IdHolder(tree.root, &mut reader).unwrap();
+        assert_eq!(decoded.id, id);
+        assert_eq!(decoded.native_id, native_id);
+
+        let malformed = vec![
+            __wire::SchemaValueNode::U64Value(1),
+            __wire::SchemaValueNode::StringValue("low".to_string()),
+            __wire::SchemaValueNode::RecordValue(vec![0, 1]),
+            __wire::SchemaValueNode::RecordValue(vec![2, 2]),
+        ];
+        let mut reader = golem_rust::schema::wit::direct::WireReader::new(malformed);
+        assert!(decode_IdHolder(3, &mut reader).is_err());
+    }
+}
+"#,
+    );
+    std::fs::write(&lib_path, source).unwrap();
+
+    cargo_check(&package_dir);
+    cargo_test_lib(&package_dir);
+}
+
+#[test]
+fn uuid_ref_with_another_body_is_rejected() {
+    let wrong = agent(
+        "UuidAgent",
+        "scala",
+        vec![field("id", ref_to("uuid.Uuid"))],
+        vec![],
+        vec![def(
+            "uuid.Uuid",
+            SchemaType::record(vec![named_field("value", SchemaType::string())]),
+        )],
+        AgentMode::Durable,
+    );
+    let dir = TempDir::new().unwrap();
+    let error = RustBridgeGenerator::new(wrong, Utf8Path::from_path(dir.path()).unwrap(), true)
+        .err()
+        .expect("a uuid.Uuid ref with another body must be rejected");
+    assert!(
+        error.to_string().contains("high-bits and low-bits"),
+        "{error}"
+    );
+}
+
+fn cargo_test_lib(target_path: &Utf8Path) {
+    let output = std::process::Command::new("cargo")
+        .args(["test", "--lib"])
+        .arg("--target-dir")
+        .arg(crate::workspace_path().join("target/shared_bridge_tests"))
+        .current_dir(target_path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "generated crate tests failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

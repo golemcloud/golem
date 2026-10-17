@@ -53,8 +53,6 @@ export interface SchemaCodec<T = any> {
   readonly fromValue: (value: SchemaValue) => T
 }
 
-/** Result representation used by generated bridge methods. @since 1.6.0 @category models */
-export type JsonResult<A, E> = { readonly ok: A } | { readonly err: E }
 /** Secret capability used in generated schemas. @since 1.6.0 @category capabilities */
 export type SecretHandle = GuestSecretHandle
 /**

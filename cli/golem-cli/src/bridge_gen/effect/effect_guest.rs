@@ -23,14 +23,14 @@ impl BridgeGenerator for EffectGuestBridgeGenerator {
         testing: bool,
     ) -> anyhow::Result<Self> {
         let stream_alias = effect_stream_alias(&agent_type.type_name.0);
-        Ok(Self {
-            inner: TypeScriptBridgeGenerator::new_guest_with_extra_reserved_names(
-                agent_type,
-                target_path,
-                testing,
-                vec!["Effect".into(), stream_alias],
-            )?,
-        })
+        let mut inner = TypeScriptBridgeGenerator::new_guest_with_extra_reserved_names(
+            agent_type,
+            target_path,
+            testing,
+            vec!["Effect".into(), "Result".into(), stream_alias],
+        )?;
+        inner.set_guest_result_repr(GuestResultRepr::Effect);
+        Ok(Self { inner })
     }
 
     fn generate(&mut self) -> anyhow::Result<()> {
@@ -43,7 +43,7 @@ impl BridgeGenerator for EffectGuestBridgeGenerator {
         let mut writer = TsWriter::new();
         let stream_alias = effect_stream_alias(&inner.agent_type.type_name.0);
         writer.write_line(format!(
-            "import {{ Effect, Stream as {stream_alias} }} from 'effect';"
+            "import {{ Effect, Result, Stream as {stream_alias} }} from 'effect';"
         ));
         writer.write_line("import { Bridge as base } from '@golemcloud/effect-golem';");
         writer.write_line(inner.schema_graphs.borrow().definitions());
