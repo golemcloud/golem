@@ -356,8 +356,6 @@ enum MeterLifecycle {
 pub struct ResourceUsageMeteringWindow {
     shared: Option<Arc<WindowShared>>,
     permit: Option<ConcurrentAgentPermit>,
-    #[cfg(feature = "test-utils")]
-    lose_settlement_observer: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -407,11 +405,6 @@ impl ResourceUsageMeteringWindow {
         if let Some(permit) = &mut self.permit {
             permit.observe_release(scope);
         }
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub(crate) fn lose_settlement_observer_for_test(&mut self) {
-        self.lose_settlement_observer = true;
     }
 
     #[cfg(test)]
@@ -753,8 +746,6 @@ pub(crate) fn open_window(
             Ok(ResourceUsageMeteringWindow {
                 shared: None,
                 permit: Some(permit),
-                #[cfg(feature = "test-utils")]
-                lose_settlement_observer: false,
             })
         });
     };
@@ -829,8 +820,6 @@ pub(crate) fn open_window(
         Ok(ResourceUsageMeteringWindow {
             shared: Some(shared),
             permit: Some(permit),
-            #[cfg(feature = "test-utils")]
-            lose_settlement_observer: false,
         })
     })
 }
@@ -869,21 +858,12 @@ pub(crate) fn close_window_retaining_permit(
         .permit
         .take()
         .expect("metering window lost its permit");
-    #[cfg(feature = "test-utils")]
-    let lose_observer = window.lose_settlement_observer;
     shared.begin_close();
     let (sender, receiver) = tokio::sync::oneshot::channel();
     spawn_metering_task(async move {
         let result = Arc::clone(&shared).complete_close(deadline).await;
         if let Err(error) = &result {
             permit.release_failed(error.release_failure());
-        }
-        #[cfg(feature = "test-utils")]
-        if lose_observer {
-            permit.release_failed(crate::metrics::resource_release::Failure::ObserverLost);
-            drop(permit);
-            drop(sender);
-            return;
         }
         let _ = sender.send((result, Some(permit)));
     });

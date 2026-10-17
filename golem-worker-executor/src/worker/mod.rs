@@ -840,8 +840,6 @@ struct ExecutionTestSupport {
     tail_drain_observer:
         Option<tokio::sync::oneshot::Sender<crate::durable_host::tail_work::TailWorkTracker>>,
     #[cfg(feature = "test-utils")]
-    lose_settlement_observer: bool,
-    #[cfg(feature = "test-utils")]
     idle_close_gate: Option<StopTestGate>,
     #[cfg(feature = "test-utils")]
     unload_succeeded: bool,

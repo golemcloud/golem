@@ -272,7 +272,7 @@ pub struct MonthlyAcceptanceForTest {
 pub(super) struct ExecutionWindow {
     window: Option<ResourceUsageMeteringWindow>,
     monitor: Option<MonthlyMonitor>,
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(test)]
     test_support: Arc<Mutex<super::ExecutionTestSupport>>,
     pub(super) release_scope: crate::metrics::resource_release::ReleaseScope,
 }
@@ -310,7 +310,7 @@ impl ExecutionWindow {
         Self {
             window: Some(window),
             monitor: None,
-            #[cfg(any(test, feature = "test-utils"))]
+            #[cfg(test)]
             test_support: Arc::default(),
             release_scope,
         }
@@ -345,7 +345,7 @@ impl ExecutionWindow {
             return Self {
                 window: Some(window),
                 monitor: None,
-                #[cfg(any(test, feature = "test-utils"))]
+                #[cfg(test)]
                 test_support: worker.test_support.clone(),
                 release_scope,
             };
@@ -471,7 +471,7 @@ impl ExecutionWindow {
         Self {
             window: Some(window),
             monitor,
-            #[cfg(any(test, feature = "test-utils"))]
+            #[cfg(test)]
             test_support: worker.test_support.clone(),
             release_scope,
         }
@@ -500,13 +500,6 @@ impl ExecutionWindow {
         deadline: Instant,
     ) -> impl Future<Output = Result<ResourceUsageSettlement, WorkerExecutorError>> + Send + 'static
     {
-        #[cfg(feature = "test-utils")]
-        if std::mem::take(&mut self.test_support.lock().unwrap().lose_settlement_observer) {
-            self.window
-                .as_mut()
-                .unwrap()
-                .lose_settlement_observer_for_test();
-        }
         close_owned_window(
             self.window.take().unwrap(),
             self.monitor.take(),
@@ -747,11 +740,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     #[cfg(feature = "test-utils")]
     pub fn unload_succeeded_for_test(&self) -> bool {
         self.test_support.lock().unwrap().unload_succeeded
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn lose_window_settlement_for_test(&self) {
-        self.test_support.lock().unwrap().lose_settlement_observer = true;
     }
 
     #[cfg(feature = "test-utils")]

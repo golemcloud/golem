@@ -31,6 +31,85 @@ async fn disabled_filesystem_health_wait_does_not_create_a_failure() {
 }
 
 #[test]
+#[timeout("5s")]
+async fn close_task_panic_reports_observer_loss_and_returns_physical_capacity() {
+    struct FailingCloseClock {
+        inner: Arc<TestClock>,
+        fail: AtomicBool,
+    }
+
+    impl MeteringClock for FailingCloseClock {
+        fn now(&self) -> Instant {
+            self.inner.now()
+        }
+
+        fn utc_now(&self) -> DateTime<Utc> {
+            assert!(
+                !self.fail.load(Ordering::Acquire),
+                "injected settlement clock failure"
+            );
+            self.inner.utc_now()
+        }
+
+        fn sleep_until(&self, deadline: Instant) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            self.inner.sleep_until(deadline)
+        }
+    }
+
+    let clock = Arc::new(FailingCloseClock {
+        inner: TestClock::new(Instant::now()),
+        fail: AtomicBool::new(false),
+    });
+    let entry = Arc::new(AtomicResourceEntry::new(
+        u64::MAX,
+        usize::MAX,
+        usize::MAX,
+        u64::MAX,
+        1,
+    ));
+    let (account, _memory) = configured_account(&entry, 65_536, true, clock.now());
+    let meter = create_unbound_meter_with_clock(
+        ResourceUsageMeteringConfig {
+            compute: false,
+            memory: true,
+            filesystem: false,
+        },
+        account,
+        clock.clone(),
+    );
+    let (scheduler, account_id, owned) = permit(&entry).await;
+    let window = open_window(&meter, owned).await.unwrap();
+    let settled = window.settlement_observer();
+    let mut contender = Box::pin(scheduler.acquire(
+        account_id,
+        AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "after-close-task-panic".into(),
+        },
+    ));
+    assert!(futures::poll!(contender.as_mut()).is_pending());
+
+    // The memory-only window has no sampler. This faults complete_close in the actual spawned
+    // task, before settlement, rather than dropping a successful reply through a runtime flag.
+    clock.fail.store(true, Ordering::Release);
+    let (result, returned) =
+        close_window_retaining_permit(window, clock.now() + Duration::from_secs(1)).await;
+    let error = result.unwrap_err();
+    assert!(matches!(error, MeteringCloseError::ObserverLost));
+    assert_eq!(error.to_string(), "resource usage close task was lost");
+    assert!(returned.is_none());
+    assert!(
+        !settled(),
+        "a lost close task must not report successful settlement"
+    );
+    // Receiver loss and physical release are different facts. This same queued contender must
+    // acquire the real account slot, without treating a failed reply as a physical receipt.
+    let acquired = contender.await;
+    drop(acquired);
+    clock.fail.store(false, Ordering::Release);
+}
+
+#[test]
 fn window_open_failures_keep_bounded_typed_reasons() {
     use crate::metrics::resource_release::Failure;
     for (error, expected) in [

@@ -218,8 +218,16 @@ Findings 11-14 have separate linked comments.
     setter and test-feature timer branch are removed. Native selection tests use the configured
     timer and preserve their original assertions, with complete raw-prefix and exact timeout-text
     checks added. Those cases, the ordinary parked-P3 deadline case, strict lint and the production
-    check pass locally. Monthly time and the generic stop protocol remain separate open work.
-  - [ ] Address remaining actor/settlement fault controls and monthly time controls.
+    check pass locally. Ordinary establishment is now restored; monthly time remains open.
+  - [x] Remove the complete settlement-loss selector. The local change deletes
+    its Worker/window flags, setters, constructor wiring and post-success reply-drop branch.
+    The real close-task proof first passes without that selector: the existing clock dependency
+    panics in the spawned close task, which returns exact ObserverLost, reports no successful
+    settlement and releases capacity to the same queued contender. The two native fake reply-drop
+    cells retire with their producer. This is a body proof, not native settlement-panic evidence;
+    the native health suite retains its other exact cleanup, startup and generation assertions.
+    Post-removal library, combined native, strict lint, production and browser checks pass locally.
+  - [ ] Address remaining actor-loss controls and monthly time controls.
   - [ ] Address the keyed filesystem metadata gate and remaining protocol ordering controls.
   - [ ] For any hook proposed to remain, document the otherwise untestable guarantee, minimal scope
     and why its scheduling changes do not invalidate the test. Existing main-owned hooks are not

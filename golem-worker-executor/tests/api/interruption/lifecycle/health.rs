@@ -408,7 +408,7 @@ async fn quota_monitor_cleanup_health_survives_initial_and_later_idle(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     for later in [false, true] {
-        for failure in ["monitor", "actor", "settlement"] {
+        for failure in ["monitor", "actor"] {
             let context = TestContext::new(last_unique_id);
             let metering = ResourceUsageMeteringConfig {
                 compute: false,
@@ -522,10 +522,6 @@ async fn quota_monitor_cleanup_health_survives_initial_and_later_idle(
                             .contains("Monthly monitor lost the lifecycle actor")
                     );
                     "Monthly monitor lost the lifecycle actor"
-                }
-                "settlement" => {
-                    worker.lose_window_settlement_for_test();
-                    "resource usage close task was lost"
                 }
                 _ => unreachable!(),
             };

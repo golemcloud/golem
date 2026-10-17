@@ -380,7 +380,19 @@ The monitor has no test-only panic selector or panic token on its target. Native
 a panicking adapter through the existing weak owner-usage-flusher interface and wake the normal
 capacity watch with a policy revision. A test-side unwind witness establishes the fault before idle
 release. Cleanup, startup refusal and the original error remain asserted without changing the
-monitor's await graph. Actor-loss, settlement and time controls remain separate unfinished support.
+monitor's await graph. Actor-loss and time controls remain separate unfinished support.
+
+The settlement-loss selector is removed. It previously completed settlement
+successfully, then dropped the reply through Worker and window flags. The ordinary ObserverLost
+fallback remains. A colocated test faults the actual spawned close task through its existing
+MeteringClock dependency, requires the exact error and no successful settlement, and then requires
+the same real FIFO contender to acquire capacity. It adds no runtime selector or Worker interface.
+Missing acknowledgement alone does not prove that settlement failed or authorize settling again;
+this test's known clock fault occurs before settlement.
+The native fake reply-drop cells retire with their producer; the native health helper retains its
+other exact cleanup and startup assertions. This is not native settlement-task panic coverage.
+Post-removal library, combined native, strict lint, production and browser checks pass locally.
+Idle, actor, replay and monthly-time controls remain open.
 
 A temporary Registry policy outage is an execution failure, not a disposal failure. The monitor
 requests the same cooperative stop and retains this error separately from cleanup health. After
