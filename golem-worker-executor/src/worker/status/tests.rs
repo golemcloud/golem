@@ -992,14 +992,6 @@ async fn empty() {
 }
 
 #[test]
-fn a_status_error_converts_to_its_text() {
-    assert_eq!(
-        String::from(super::StatusError::Other("boom".to_string())),
-        "boom"
-    );
-}
-
-#[test]
 async fn the_status_reader_reads_nothing_past_its_horizon() {
     let test_case = TestCase::builder(0)
         .add(OplogEntry::recovery_succeeded(), |status| status)

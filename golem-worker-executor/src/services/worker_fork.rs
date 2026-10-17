@@ -649,7 +649,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             source.last_known_status,
         )
         .await
-        .map_err(WorkerExecutorError::runtime)?
+        .map_err(WorkerExecutorError::from)?
         .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_source_agent_id.agent_id()))?;
 
         // The stage id also identifies the target incarnation while it is hidden. This lets

@@ -266,7 +266,10 @@ pub trait OplogService: Debug + Send + Sync {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
     ) -> Result<OplogIndex, String> {
-        Ok(self.get_last_index(owned_agent_id, agent_mode).await?)
+        Ok(self
+            .get_last_index(owned_agent_id, agent_mode)
+            .await
+            .map_err(|error| error.to_string())?)
     }
 
     /// Deletes the agent's oplog, in every layer. With `expected_epoch` - the epoch the caller's
@@ -330,7 +333,10 @@ pub trait OplogService: Debug + Send + Sync {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
     ) -> Result<bool, String> {
-        Ok(self.exists(owned_agent_id, agent_mode).await?)
+        Ok(self
+            .exists(owned_agent_id, agent_mode)
+            .await
+            .map_err(|error| error.to_string())?)
     }
 
     /// Scans the oplog for all workers belonging to the given component, in a paginated way.
@@ -1271,7 +1277,10 @@ pub trait Oplog: Any + Debug + Send + Sync {
         oplog_index: OplogIndex,
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, String> {
-        Ok(self.read_source(oplog_index, n).await?)
+        Ok(self
+            .read_source(oplog_index, n)
+            .await
+            .map_err(|error| error.to_string())?)
     }
 
     /// Reads the entry at the given oplog index.
@@ -1291,7 +1300,7 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// The length for archive maintenance: every storage failure is returned, not only an
     /// unreadable archive.
     async fn try_length(&self) -> Result<u64, String> {
-        Ok(self.length().await?)
+        Ok(self.length().await.map_err(|error| error.to_string())?)
     }
 
     /// Adds an entry to the oplog and immediately commits it

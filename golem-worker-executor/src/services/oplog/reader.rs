@@ -180,12 +180,6 @@ impl From<UnreadableOplog> for WorkerExecutorError {
     }
 }
 
-impl From<UnreadableOplog> for String {
-    fn from(value: UnreadableOplog) -> Self {
-        value.to_string()
-    }
-}
-
 /// Merges contiguous suffixes returned by oplog storage tiers into one exact logical range.
 ///
 /// Callers own source ordering and snapshot acquisition. Each successive source is asked for
@@ -439,7 +433,6 @@ mod tests {
             text,
             format!("oplog of {agent_id} is unreadable: {}", error.error)
         );
-        assert_eq!(String::from(error), text);
     }
 
     /// A storage that did not answer is a recovery the agent retries; corrupt data fails the

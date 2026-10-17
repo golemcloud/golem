@@ -586,7 +586,8 @@ impl<'a> PublicOplogAttributionResolver<'a> {
         let entry = self
             .oplog_service
             .read_exact(self.owned_agent_id, self.agent_mode, index, 1)
-            .await?
+            .await
+            .map_err(|error| error.to_string())?
             .remove(&index);
         let start = entry
             .as_ref()
@@ -787,7 +788,8 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
     let initial_oplog_index = initial_oplog_index.max(OplogIndex::INITIAL);
     let last_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
-        .await?;
+        .await
+        .map_err(|error| error.to_string())?;
     let available = if initial_oplog_index <= last_index {
         last_index.as_u64() - initial_oplog_index.as_u64() + 1
     } else {
@@ -800,7 +802,8 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
             initial_oplog_index,
             (count as u64).min(available),
         )
-        .await?;
+        .await
+        .map_err(|error| error.to_string())?;
 
     let mut entries = Vec::new();
     let mut current_component_revision = initial_component_revision;

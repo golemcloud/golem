@@ -1114,7 +1114,10 @@ pub(crate) async fn project_producer_metadata(
                             "consumer re-observation must reference an earlier record".into()
                         );
                     }
-                    let original = oplog.read_exact(owner, mode, original_index, 1).await?;
+                    let original = oplog
+                        .read_exact(owner, mode, original_index, 1)
+                        .await
+                        .map_err(|error| error.to_string())?;
                     let Some(OplogEntry::StreamSession {
                         record: original, ..
                     }) = original.get(&original_index)

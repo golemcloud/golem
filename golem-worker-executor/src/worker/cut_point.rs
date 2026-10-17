@@ -234,12 +234,15 @@ pub(crate) async fn streaming_acceptance_spans_cut(
     if cut >= horizon {
         return Ok(false);
     }
-    let left = oplog.read(cut).await?;
-    let right = oplog.read(cut.next()).await?;
+    let left = oplog.read(cut).await.map_err(|error| error.to_string())?;
+    let right = oplog
+        .read(cut.next())
+        .await
+        .map_err(|error| error.to_string())?;
     match (left, right) {
         (OplogEntry::StreamRegistered { .. }, _) => {
             for index in OplogIndexRange::new(cut.next(), horizon) {
-                match oplog.read(index).await? {
+                match oplog.read(index).await.map_err(|error| error.to_string())? {
                     OplogEntry::StreamRegistered { .. } => continue,
                     OplogEntry::StreamSession { record, .. } => {
                         return Ok(matches!(oplog.download_payload(record).await?,

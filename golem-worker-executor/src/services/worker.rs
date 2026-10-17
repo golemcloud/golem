@@ -571,7 +571,7 @@ pub trait WorkerService: Send + Sync {
         _agent_mode: AgentMode,
         _fingerprint: AgentFingerprint,
         _status: &AgentStatusRecord,
-    ) -> Result<(), String> {
+    ) -> Result<(), WorkerExecutorError> {
         Ok(())
     }
 
@@ -618,7 +618,7 @@ pub trait WorkerService: Send + Sync {
         fingerprint: AgentFingerprint,
         previous_status: Option<&AgentStatusRecord>,
         status_value: AgentStatusRecord,
-    ) -> Result<AgentStatusRecord, String>;
+    ) -> Result<AgentStatusRecord, WorkerExecutorError>;
 
     /// Reads the worker's *clean* status checkpoint, if any.
     ///
@@ -651,7 +651,7 @@ pub trait WorkerService: Send + Sync {
         fingerprint: AgentFingerprint,
         previous_checkpoint: Option<&AgentStatusRecord>,
         checkpoint: AgentStatusRecord,
-    ) -> Result<AgentStatusRecord, String>;
+    ) -> Result<AgentStatusRecord, WorkerExecutorError>;
 
     /// Updates the `RunningWorkers` recovery index for the worker according to `status_value`.
     ///
@@ -703,9 +703,10 @@ pub trait WorkerService: Send + Sync {
         fingerprint: AgentFingerprint,
         previous_status: Option<&AgentStatusRecord>,
         status_value: AgentStatusRecord,
-    ) -> Result<(), String> {
+    ) -> Result<(), WorkerExecutorError> {
         self.set_assignment_tracking(owned_agent_id, fingerprint, &status_value)
-            .await?;
+            .await
+            .map_err(WorkerExecutorError::runtime)?;
         self.write_cached_status(owned_agent_id, fingerprint, previous_status, status_value)
             .await
             .map(|_| ())
@@ -1724,8 +1725,7 @@ impl WorkerService for DefaultWorkerService {
                             None,
                             last_known_status.clone(),
                         )
-                        .await
-                        .map_err(WorkerExecutorError::runtime)?;
+                        .await?;
 
                         Some(last_known_status)
                     }
@@ -1983,7 +1983,7 @@ impl WorkerService for DefaultWorkerService {
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
         status: &AgentStatusRecord,
-    ) -> Result<(), String> {
+    ) -> Result<(), WorkerExecutorError> {
         if agent_mode == AgentMode::Ephemeral {
             return Ok(());
         }
@@ -2002,7 +2002,7 @@ impl WorkerService for DefaultWorkerService {
                         namespace.clone(),
                         INVOCATION_RESULT_INDEX_METADATA_FIELD,
                     )
-                    .await?
+                    .await.map_err(WorkerExecutorError::runtime)?
                     .map(|value| value.to_vec());
                 let persisted = observed_metadata
                     .as_deref()
@@ -2026,7 +2026,7 @@ impl WorkerService for DefaultWorkerService {
                             .key_value_storage
                             .with_entity("worker", "snapshot_invocation_result_index", "metadata")
                             .get_all_raw(namespace.clone())
-                            .await?;
+                            .await.map_err(WorkerExecutorError::runtime)?;
                         let snapshot_metadata = snapshot
                             .iter()
                             .find(|(field, _)| field == INVOCATION_RESULT_INDEX_METADATA_FIELD)
@@ -2056,7 +2056,7 @@ impl WorkerService for DefaultWorkerService {
                                     current_idempotency_key: None,
                                     cancelled_idempotency_key: None,
                                 };
-                                let encoded = serialize(&metadata)?;
+                                let encoded = serialize(&metadata).map_err(WorkerExecutorError::runtime)?;
                                 let deletions: Vec<&str> = snapshot
                                     .iter()
                                     .map(|(field, _)| field.as_str())
@@ -2087,7 +2087,7 @@ impl WorkerService for DefaultWorkerService {
                                         record_derived_cache_publication_failed(
                                             "invocation_result_index",
                                         );
-                                    })?;
+                                    }).map_err(WorkerExecutorError::runtime)?;
                                 if !installed {
                                     continue 'reload;
                                 }
@@ -2117,10 +2117,10 @@ impl WorkerService for DefaultWorkerService {
                         )
                         .await?;
                     if entries.is_empty() {
-                        return Err(format!(
+                        return Err(WorkerExecutorError::runtime(format!(
                             "failed to advance invocation result index for {owned_agent_id}: oplog range starting at {} was empty",
                             metadata.covered_through.next()
-                        ));
+                        )));
                     }
 
                     let mut mappings = HashMap::new();
@@ -2143,12 +2143,12 @@ impl WorkerService for DefaultWorkerService {
                             serialize(&PersistedInvocationResult {
                                 revert_generation: advanced.revert_generation,
                                 oplog_index,
-                            })?,
+                            }).map_err(WorkerExecutorError::runtime)?,
                         ));
                     }
                     fields.push((
                         INVOCATION_RESULT_INDEX_METADATA_FIELD.to_string(),
-                        serialize(&advanced)?,
+                        serialize(&advanced).map_err(WorkerExecutorError::runtime)?,
                     ));
                     let pairs: Vec<(&str, &[u8])> = fields
                         .iter()
@@ -2172,7 +2172,7 @@ impl WorkerService for DefaultWorkerService {
                         .await
                         .inspect_err(|_err| {
                             record_derived_cache_publication_failed("invocation_result_index");
-                        })?;
+                        }).map_err(WorkerExecutorError::runtime)?;
                     if !updated {
                         continue 'reload;
                     }
@@ -2305,7 +2305,7 @@ impl WorkerService for DefaultWorkerService {
         fingerprint: AgentFingerprint,
         previous_status: Option<&AgentStatusRecord>,
         status_value: AgentStatusRecord,
-    ) -> Result<AgentStatusRecord, String> {
+    ) -> Result<AgentStatusRecord, WorkerExecutorError> {
         record_worker_call("write_status");
 
         debug!("Writing cached agent status for {owned_agent_id} to {status_value:?}");
@@ -2319,7 +2319,7 @@ impl WorkerService for DefaultWorkerService {
                     status_value.oplog_idx,
                 )
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         }
 
         self.catch_up_invocation_result_index(
@@ -2336,6 +2336,7 @@ impl WorkerService for DefaultWorkerService {
             status_value,
         )
         .await
+        .map_err(WorkerExecutorError::runtime)
     }
 
     async fn read_status_checkpoint(
@@ -2365,7 +2366,7 @@ impl WorkerService for DefaultWorkerService {
         fingerprint: AgentFingerprint,
         previous_checkpoint: Option<&AgentStatusRecord>,
         checkpoint: AgentStatusRecord,
-    ) -> Result<AgentStatusRecord, String> {
+    ) -> Result<AgentStatusRecord, WorkerExecutorError> {
         record_worker_call("write_status_checkpoint");
 
         debug!(
@@ -2382,7 +2383,7 @@ impl WorkerService for DefaultWorkerService {
                     checkpoint.oplog_idx,
                 )
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         }
         self.write_split_status(
             owned_agent_id,
@@ -2391,6 +2392,7 @@ impl WorkerService for DefaultWorkerService {
             checkpoint,
         )
         .await
+        .map_err(WorkerExecutorError::runtime)
     }
 
     async fn set_assignment_tracking(

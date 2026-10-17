@@ -885,7 +885,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         result.last_known_status,
                     )
                     .await
-                    .map_err(anyhow::Error::msg)?
+                    .map_err(|error| anyhow::Error::from(WorkerExecutorError::from(error)))?
                     {
                         metadata.last_known_status = status;
                     }

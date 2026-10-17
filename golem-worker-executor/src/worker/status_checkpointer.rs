@@ -331,7 +331,7 @@ mod tests {
             _fingerprint: AgentFingerprint,
             _previous_status: Option<&AgentStatusRecord>,
             status_value: AgentStatusRecord,
-        ) -> Result<AgentStatusRecord, String> {
+        ) -> Result<AgentStatusRecord, WorkerExecutorError> {
             Ok(status_value)
         }
 
@@ -350,7 +350,7 @@ mod tests {
             _fingerprint: AgentFingerprint,
             _previous_checkpoint: Option<&AgentStatusRecord>,
             checkpoint: AgentStatusRecord,
-        ) -> Result<AgentStatusRecord, String> {
+        ) -> Result<AgentStatusRecord, WorkerExecutorError> {
             self.writes.lock().unwrap().push(checkpoint.oplog_idx);
             Ok(checkpoint)
         }

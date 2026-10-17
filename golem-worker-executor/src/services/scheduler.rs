@@ -1645,7 +1645,7 @@ mod tests {
             _fingerprint: golem_common::model::AgentFingerprint,
             _previous_status: Option<&AgentStatusRecord>,
             status_value: AgentStatusRecord,
-        ) -> Result<AgentStatusRecord, String> {
+        ) -> Result<AgentStatusRecord, WorkerExecutorError> {
             Ok(status_value)
         }
 
@@ -1664,7 +1664,7 @@ mod tests {
             _fingerprint: golem_common::model::AgentFingerprint,
             _previous_checkpoint: Option<&AgentStatusRecord>,
             checkpoint: AgentStatusRecord,
-        ) -> Result<AgentStatusRecord, String> {
+        ) -> Result<AgentStatusRecord, WorkerExecutorError> {
             Ok(checkpoint)
         }
 

@@ -104,7 +104,10 @@ impl StreamForkLineage {
         let mut covered = from.previous();
         while covered < horizon {
             let count = (horizon.as_u64() - covered.as_u64()).min(1024);
-            let entries = source.read_exact(covered.next(), count).await?;
+            let entries = source
+                .read_exact(covered.next(), count)
+                .await
+                .map_err(|error| error.to_string())?;
             if entries.len() as u64 != count {
                 return Err("missing oplog entries while discovering stream fork lineage".into());
             }
@@ -185,7 +188,10 @@ impl StreamForkLineage {
         let mut covered = OplogIndex::NONE;
         while covered < horizon {
             let count = (horizon.as_u64() - covered.as_u64()).min(1024);
-            let entries = source.read_exact(covered.next(), count).await?;
+            let entries = source
+                .read_exact(covered.next(), count)
+                .await
+                .map_err(|error| error.to_string())?;
             if entries.len() as u64 != count {
                 return Err(
                     "missing oplog entries while discovering reverted stream history".into(),
@@ -223,7 +229,10 @@ impl StreamForkLineage {
         let mut covered = OplogIndex::NONE;
         while covered < horizon {
             let count = (horizon.as_u64() - covered.as_u64()).min(1024);
-            let entries = source.read_exact(covered.next(), count).await?;
+            let entries = source
+                .read_exact(covered.next(), count)
+                .await
+                .map_err(|error| error.to_string())?;
             if entries.len() as u64 != count {
                 return Err("missing oplog entries while loading stream fork lineage".into());
             }

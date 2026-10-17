@@ -67,12 +67,6 @@ impl From<&str> for StatusError {
     }
 }
 
-impl From<StatusError> for String {
-    fn from(error: StatusError) -> Self {
-        error.to_string()
-    }
-}
-
 /// An unreadable oplog keeps its type, so the agent fails with it; any other failure is a
 /// runtime error.
 impl From<StatusError> for WorkerExecutorError {
@@ -448,6 +442,7 @@ where
                 true,
                 finalize_oplog_processor_checkpoints,
             )
+            .map_err(StatusError::from)
         }
         .await;
         baseline = match next {

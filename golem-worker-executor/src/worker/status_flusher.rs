@@ -244,7 +244,10 @@ impl AgentStatusFlusher {
     /// a later retry). A failure is never fatal — the blob is fully reconstructable from the oplog —
     /// so lifecycle callers treat it as best-effort, but the `Result` is surfaced so callers can
     /// log/observe it rather than silently assuming the flush succeeded.
-    pub async fn flush(&self, reason: FlushReason) -> Result<(), String> {
+    pub async fn flush(
+        &self,
+        reason: FlushReason,
+    ) -> Result<(), golem_service_base::error::worker_executor::WorkerExecutorError> {
         if self.is_ephemeral {
             return Ok(());
         }
@@ -555,10 +558,14 @@ mod tests {
             _fingerprint: AgentFingerprint,
             previous_status: Option<&AgentStatusRecord>,
             status_value: AgentStatusRecord,
-        ) -> Result<AgentStatusRecord, String> {
+        ) -> Result<AgentStatusRecord, WorkerExecutorError> {
             let mut state = self.state.lock().unwrap();
             if state.fail_writes {
-                return Err("injected failure".to_string());
+                return Err(
+                    golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+                        "injected failure",
+                    ),
+                );
             }
             state.writes.push(RecordedWrite {
                 previous_was_some: previous_status.is_some(),
@@ -580,7 +587,7 @@ mod tests {
             _fingerprint: AgentFingerprint,
             _previous_checkpoint: Option<&AgentStatusRecord>,
             checkpoint: AgentStatusRecord,
-        ) -> Result<AgentStatusRecord, String> {
+        ) -> Result<AgentStatusRecord, WorkerExecutorError> {
             Ok(checkpoint)
         }
         async fn set_assignment_tracking(
@@ -1038,7 +1045,14 @@ mod tests {
             )
             .await;
 
-        assert_eq!(result, Err("injected tracking failure".to_string()));
+        assert_eq!(
+            result,
+            Err(
+                golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+                    "injected tracking failure"
+                )
+            )
+        );
         assert_eq!(service.tracking_count(), 1);
         assert_eq!(service.write_count(), 0);
     }

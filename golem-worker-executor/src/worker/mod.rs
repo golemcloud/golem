@@ -2198,7 +2198,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 last_known_status,
             )
             .await
-            .map_err(WorkerExecutorError::runtime)?
+            .map_err(WorkerExecutorError::from)?
             else {
                 return Ok(None);
             };
@@ -2540,8 +2540,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     None,
                     initial_status.clone(),
                 )
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
+                .await?;
             persisted_status = Some(initial_status);
         } else {
             let reconstructed_status = current_status.load_full();
@@ -10494,7 +10493,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             last_known_status,
         )
         .await
-        .map_err(WorkerExecutorError::runtime)?
+        .map_err(WorkerExecutorError::from)?
         .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
 
         // Reconstruction is pinned to the revision and mode recorded by the Create entry.
