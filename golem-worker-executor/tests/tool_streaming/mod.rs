@@ -100,6 +100,7 @@ async fn start_with_agent_sockets(
 mod attachment_cost_contract;
 mod chunk_f_policy_acceptance;
 mod chunk_m_stream_deltas;
+mod dropped_waits;
 mod gol40_k1_audit_acceptance;
 mod held_http_crash_recovery;
 mod matrix_client_resource_acceptance;
@@ -15383,28 +15384,6 @@ async fn builtin_filesystem_tools_have_expected_behavior(
 
 #[test]
 #[tracing::instrument]
-#[timeout("10m")]
-async fn builtin_javascript_and_typescript_tools_run_in_sidecars(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
-    #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
-    #[tagged_as("typescript_tools")] typescript_tools: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    exercise_javascript_and_typescript_tools(
-        last_unique_id,
-        deps,
-        caller,
-        javascript_tools,
-        typescript_tools,
-        false,
-    )
-    .await
-}
-
-#[test]
-#[tracing::instrument]
 #[timeout("5m")]
 async fn builtin_node_recursive_rm_removes_typescript_output(
     last_unique_id: &LastUniqueId,
@@ -15819,36 +15798,164 @@ async fn typescript_guest_recursive_rm_removes_tool_created_output(
     Ok(())
 }
 
+/// Node exits once only unreferenced timers remain: the runtime cancels the pending `wait-for` of
+/// the interval after a short wait of its own completed. The next rebuild of the owner replays the
+/// completed body with that cancelled wait.
 #[test]
-#[ignore = "GOL-714: completed JavaScript tool calls do not reconstruct deterministically"]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn builtin_node_unreferenced_timer_is_replayed_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = || TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let javascript_component = executor
+        .component_dep(&context.default_environment_id, javascript_tools)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", javascript_tools.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        javascript_component.id,
+        javascript_component.revision,
+        "golem:javascript-tools",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let agent_name = "node-unreferenced-timer";
+    let worker_id = executor
+        .start_agent(
+            &caller_component.id,
+            agent_id!("ToolStreamingCaller", agent_name),
+        )
+        .await?;
+
+    let unreferenced = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        agent_name,
+        "node",
+        "/workspace",
+        vec![
+            "-e",
+            "setInterval(() => {}, 60_000).unref(); console.log('done')",
+        ],
+    )
+    .await?;
+    assert_eq!(unreferenced.exit_code, 0, "{unreferenced:?}");
+    assert_eq!(unreferenced.stdout, b"done\n");
+    assert!(unreferenced.stderr.is_empty());
+
+    executor.commit_oplog(&worker_id).await?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let terminal_of = |start: OplogIndex| {
+        oplog.iter().find_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(end) if end.start_index == start => Some("End"),
+            PublicOplogEntry::Cancelled(cancelled) if cancelled.start_index == start => {
+                Some("Cancelled")
+            }
+            _ => None,
+        })
+    };
+    let waits = oplog
+        .iter()
+        .filter(|wait| {
+            matches!(&wait.entry, PublicOplogEntry::Start(start)
+                if start.function_name.ends_with("monotonic-clock::wait-for"))
+        })
+        .map(|wait| {
+            let reads = oplog
+                .iter()
+                .filter(|read| {
+                    matches!(&read.entry, PublicOplogEntry::Start(start)
+                        if start.parent_start_index == Some(wait.oplog_index))
+                })
+                .map(|read| terminal_of(read.oplog_index))
+                .collect::<Vec<_>>();
+            (terminal_of(wait.oplog_index), reads)
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        waits.contains(&(Some("Cancelled"), vec![Some("End")])),
+        "the body must cancel the wait of its unreferenced interval after the wait's clock read: {waits:?}"
+    );
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let next = tokio::time::timeout(
+        Duration::from_secs(120),
+        invoke_cli_tool(
+            &executor,
+            &caller_component,
+            agent_name,
+            "node",
+            "/workspace",
+            vec!["-e", "console.log('replayed')"],
+        ),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("waited 120 s for the call after the restart"))??;
+    assert_eq!(next.exit_code, 0, "{next:?}");
+    assert_eq!(next.stdout, b"replayed\n");
+    assert!(next.stderr.is_empty());
+    assert_ne!(
+        executor.get_worker_metadata(&worker_id).await?.status,
+        AgentStatus::Failed
+    );
+    let errors = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+        .collect::<Vec<_>>();
+    assert!(
+        errors.is_empty(),
+        "the replay of the earlier body must not fail: {errors:?}"
+    );
+    Ok(())
+}
+
+#[test]
 #[tracing::instrument]
 #[timeout("10m")]
-async fn builtin_javascript_and_typescript_tools_reconstruct_after_restart(
+async fn builtin_javascript_and_typescript_tools_run_in_sidecars_and_reconstruct_after_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
     #[tagged_as("typescript_tools")] typescript_tools: &PrecompiledComponent,
     _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    exercise_javascript_and_typescript_tools(
-        last_unique_id,
-        deps,
-        caller,
-        javascript_tools,
-        typescript_tools,
-        true,
-    )
-    .await
-}
-
-async fn exercise_javascript_and_typescript_tools(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    caller: &PrecompiledComponent,
-    javascript_tools: &PrecompiledComponent,
-    typescript_tools: &PrecompiledComponent,
-    verify_reconstruction: bool,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
@@ -16113,25 +16220,23 @@ fs.writeFileSync('invalid.ts', 'const value: number = "wrong";\n');
     assert_ne!(tsc_failure.exit_code, 0);
     assert!(String::from_utf8(tsc_failure.stdout)?.contains("error TS2322"));
 
-    if verify_reconstruction {
-        drop(executor);
-        let executor = start_with_overrides(deps, &context, overrides).await?;
-        let reconstructed = invoke_cli_tool(
-            &executor,
-            &caller_component,
-            behavior_agent,
-            "node",
-            "/workspace",
-            vec![
-                "-e",
-                "const fs = require('node:fs'); console.log(fs.readFileSync('dist/valid.js', 'utf8').includes('const value = 42'))",
-            ],
-        )
-        .await?;
-        assert_eq!(reconstructed.exit_code, 0);
-        assert_eq!(reconstructed.stdout, b"true\n");
-        assert!(reconstructed.stderr.is_empty());
-    }
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let reconstructed = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "node",
+        "/workspace",
+        vec![
+            "-e",
+            "const fs = require('node:fs'); console.log(fs.readFileSync('dist/valid.js', 'utf8').includes('const value = 42'))",
+        ],
+    )
+    .await?;
+    assert_eq!(reconstructed.exit_code, 0);
+    assert_eq!(reconstructed.stdout, b"true\n");
+    assert!(reconstructed.stderr.is_empty());
     Ok(())
 }
 

@@ -147,29 +147,39 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
             headers: headers.clone(),
             reconstruction_policy,
         };
+        let live_denial = Arc::new(std::sync::Mutex::new(None));
+        let live_denial_for_start = Arc::clone(&live_denial);
+        let target_url = url.clone();
         let mut call = DurableCallSession::<
             host_functions::WebsocketClientConnect,
             NotCancellable,
-        >::start_access_with_options(
+        >::start_access_with(
             accessor,
             accessor.getter(),
             DurableFunctionType::WriteRemote,
-                AccessClaimOptions::default(),
-            async |start| {
-                if start.is_live {
-                    authorization_checked = true;
-                    denied = match websocket_target(&url) {
-                        Ok(normalized) => authorize_live_permissions_at_serialized_access(
-                            accessor,
-                            accessor.getter(),
-                            &[normalized.permission],
-                        ).await?.is_err(),
-                        Err(_) => true,
-                    };
-                }
-                Ok(request)
+            move |start, accessor| {
+                Box::pin(async move {
+                    if start.is_live {
+                        let denied = match websocket_target(&target_url) {
+                            Ok(normalized) => authorize_live_permissions_at_serialized_access(
+                                accessor,
+                                accessor.getter(),
+                                &[normalized.permission],
+                            )
+                            .await?
+                            .is_err(),
+                            Err(_) => true,
+                        };
+                        *live_denial_for_start.lock().unwrap() = Some(denied);
+                    }
+                    Ok(request)
+                })
             },
         ).await?;
+        if let Some(live_denied) = live_denial.lock().unwrap().take() {
+            authorization_checked = true;
+            denied = live_denied;
+        }
         if !call.is_live() {
             match call
                 .replay_access_deferred(accessor, accessor.getter())
@@ -327,7 +337,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
                 accessor.getter(),
                 DurableFunctionType::WriteRemote,
                 AccessClaimOptions::default(),
-                async move |_| Ok(request),
+                request,
             )
             .await?;
 
@@ -422,7 +432,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
                 accessor.getter(),
                 DurableFunctionType::WriteRemote,
                 AccessClaimOptions::default(),
-                async move |_| Ok(request),
+                request,
             )
             .await?;
 

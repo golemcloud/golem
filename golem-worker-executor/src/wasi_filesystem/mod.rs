@@ -16,10 +16,10 @@ use std::hash::Hasher;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::authorization::targets::{
     CanonicalGuestPath, TargetError, agent_owner, filesystem_target,
 };
+use crate::durable_host::{DurableWorkerCtx, LiveAuthorizationPermit};
 use crate::services::agent_filesystem::{
     self as agent_filesystem, AccessMode, AttributeChanges, Error as AgentFilesystemError,
     File as AgentFile, FileDisposition, FilesystemCall, FilesystemGenerationHandle, FlushLevel,
@@ -28,7 +28,10 @@ use crate::services::agent_filesystem::{
 };
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
+use golem_common::SafeDisplay;
 use golem_common::model::card::{FilesystemVerb, PermissionTarget};
+use golem_common::model::oplog::HostRequestFileSystemPermissionCheck;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use metrohash::MetroHash128;
 use wasmtime::component::{Resource, ResourceTableError};
 
@@ -106,6 +109,45 @@ fn canonical_guest_path_from_descriptor_path(
         path => format!("/{path}"),
     };
     CanonicalGuestPath::new(&absolute)?.resolve(relative)
+}
+
+/// The decision of a filesystem permission check that runs as the live action of a durable call.
+/// `Err` holds the reason of a denial. The repair of an incomplete check during replay cannot
+/// authorize, so it completes as allowed.
+pub(crate) async fn live_permission_decision<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    requests: &[(FilesystemVerb, CanonicalGuestPath)],
+) -> Result<Result<Option<LiveAuthorizationPermit>, String>, WorkerExecutorError> {
+    if !ctx.is_live() {
+        return Ok(Ok(None));
+    }
+    let targets = filesystem_permission_targets(ctx, requests);
+    Ok(ctx
+        .authorize_live_permissions(&targets)
+        .await?
+        .map(Some)
+        .map_err(|error| error.to_safe_string()))
+}
+
+/// The request of the durable call that records a filesystem permission check.
+pub(crate) fn permission_check_request(
+    requests: &[(FilesystemVerb, CanonicalGuestPath)],
+) -> HostRequestFileSystemPermissionCheck {
+    HostRequestFileSystemPermissionCheck {
+        requests: requests
+            .iter()
+            .map(|(verb, path)| {
+                let verb = match verb {
+                    FilesystemVerb::Read => "read",
+                    FilesystemVerb::Write => "write",
+                    FilesystemVerb::List => "list",
+                    FilesystemVerb::Stat => "stat",
+                    FilesystemVerb::Delete => "delete",
+                };
+                (verb.to_string(), path.as_str().to_string())
+            })
+            .collect(),
+    }
 }
 
 pub(crate) fn filesystem_permission_targets<Ctx: WorkerCtx>(

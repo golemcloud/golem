@@ -20,7 +20,7 @@
 //! over RPC.
 
 use crate::Tracing;
-use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::model::{AgentId, OwnedAgentId};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_type::SchemaType;
@@ -95,6 +95,24 @@ async fn wait_oplog_settled<E: TestDsl + Sync>(
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+/// Types of the oplog entries after `since`, in oplog order, without
+/// `GrowMemory` entries.
+///
+/// The worker persists `GrowMemory` hints asynchronously and merges them, so
+/// their number and their position relative to a baseline depend on
+/// scheduling.
+fn entry_types_since(
+    entries: &[PublicOplogEntryWithIndex],
+    since: OplogIndex,
+) -> Vec<&'static str> {
+    entries
+        .iter()
+        .filter(|entry| entry.oplog_index > since)
+        .filter(|entry| !matches!(&entry.entry, PublicOplogEntry::GrowMemory(_)))
+        .map(|entry| entry.entry.entry_type())
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -836,7 +854,7 @@ async fn t6b_principal_method_public_oplog_input_is_well_formed(
 /// Find the `function_input` of the first `AgentMethodInvocation` oplog entry
 /// for `method_name`.
 fn method_invocation_input(
-    entries: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
+    entries: &[PublicOplogEntryWithIndex],
     method_name: &str,
 ) -> Option<golem_common::schema::TypedSchemaValue> {
     use golem_common::model::oplog::{PublicAgentInvocation, PublicOplogEntry};
@@ -1851,12 +1869,7 @@ async fn coalesced_read_only_followers_persist_no_durable_entries(
     let control_entries = executor
         .get_oplog(&control_worker_id, OplogIndex::INITIAL)
         .await?;
-    // Initialization memory-growth hints are persisted asynchronously and can land after the baseline.
-    let single_invocation_entries = control_entries
-        .iter()
-        .filter(|entry| entry.oplog_index > control_before)
-        .filter(|entry| !matches!(&entry.entry, PublicOplogEntry::GrowMemory(_)))
-        .count();
+    let single_invocation_entries = entry_types_since(&control_entries, control_before);
 
     let agent_id = agent_id!(
         AGENT_TYPE,
@@ -1885,18 +1898,12 @@ async fn coalesced_read_only_followers_persist_no_durable_entries(
     wait_oplog_settled(&executor, &worker_id).await?;
 
     let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let appended = entries
-        .iter()
-        .filter(|entry| entry.oplog_index > before)
-        .filter(|entry| !matches!(&entry.entry, PublicOplogEntry::GrowMemory(_)))
-        .count();
+    let appended = entry_types_since(&entries, before);
     let (started, finished) = count_agent_invocation_pair_since(&entries, before);
     assert_eq!((started, finished), (1, 1));
     assert_eq!(
         appended, single_invocation_entries,
-        "coalesced followers must not persist durable aliases, keys, or queue entries; \
-         control_before={control_before}, before={before}, \
-         control_entries={control_entries:#?}, entries={entries:#?}"
+        "coalesced followers must not persist durable aliases, keys, or queue entries"
     );
 
     Ok(())

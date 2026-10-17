@@ -427,6 +427,14 @@ oplog_payload! {
         ToolAttachmentEndpoint { attachment: ToolAttachmentId, operation_ordinal: u64 },
         ToolAttachmentFail { attachment: ToolAttachmentId, operation_ordinal: u64, reason: ByteStreamFailure },
         ToolAttachmentFinish { attachment: ToolAttachmentId, operation_ordinal: u64 },
+        FileSystemPermissionCheck {
+            /// The `(verb, guest path)` pairs that the check covers.
+            requests: Vec<(String, String)>
+        },
+        SocketsTcpConnectPermissionCheck {
+            /// The remote socket address of the connect.
+            address: String
+        },
     }
 }
 
@@ -760,6 +768,10 @@ oplog_payload! {
         ToolAttachmentWrite { outcome: ToolAttachmentWriteOutcome },
         ToolAttachmentTerminalResult { outcome: ToolAttachmentTerminalOutcome },
         ToolAttachmentClosed { cause: ByteStreamCloseCause },
+        PermissionCheck {
+            /// `Err` holds the reason of a denial.
+            result: Result<(), String>
+        },
     }
 }
 
@@ -802,8 +814,8 @@ impl TryFrom<HostResponse> for HostResponseGolemRpcScheduledInvocationCompat {
     }
 }
 
-pub trait HostPayloadPair {
-    type Req: Into<HostRequest>;
+pub trait HostPayloadPair: Send + 'static {
+    type Req: Into<HostRequest> + Send + 'static;
     type Resp: Into<HostResponse> + TryFrom<HostResponse, Error = String> + Send + 'static;
 
     const INTERFACE: &'static str;
@@ -1012,7 +1024,9 @@ pub mod host_functions {
         (GolemToolStdinWait => "golem::tool::host::tool-stdin-closed", "wait", ToolAttachmentEndpoint, ToolAttachmentClosed),
         (GolemToolOutputWrite => "golem::tool::streams::tool-output-writer", "write", ToolAttachmentWrite, ToolAttachmentWrite),
         (GolemToolOutputFinish => "golem::tool::streams::tool-output-writer", "finish", ToolAttachmentFinish, ToolAttachmentTerminalResult),
-        (GolemToolOutputFail => "golem::tool::streams::tool-output-writer", "fail", ToolAttachmentFail, ToolAttachmentTerminalResult)
+        (GolemToolOutputFail => "golem::tool::streams::tool-output-writer", "fail", ToolAttachmentFail, ToolAttachmentTerminalResult),
+        (FilesystemPermissionCheck => "filesystem::permissions", "check", FileSystemPermissionCheck, PermissionCheck),
+        (SocketsTcpConnectPermissionCheck => "sockets::tcp::permissions", "check-connect", SocketsTcpConnectPermissionCheck, PermissionCheck)
     }
 }
 
