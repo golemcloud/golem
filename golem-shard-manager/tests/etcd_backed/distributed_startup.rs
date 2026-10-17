@@ -2132,6 +2132,105 @@ async fn a_leader_cut_off_from_etcd_stops_serving_within_one_lease_ttl(etcd: &Ar
 
 #[test]
 #[tracing::instrument(skip_all)]
+// The leadership lease can lapse while the new leader is still starting. The keepalive reports
+// that into the task set, which nobody reads until the startup is over, so without supervision a
+// replica that lost its lease would finish a slow startup, mark itself ready and only then stop.
+async fn a_leader_that_loses_its_lease_during_its_startup_stops_at_once(etcd: &Arc<DockerEtcd>) {
+    wipe_state(etcd).await;
+    await_election_idle(etcd).await;
+
+    // Accepts and then says nothing, so the initial health check against it runs out its whole
+    // timeout, and its lease was granted long ago, so the check cannot be skipped.
+    let silent_executor = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("Cannot bind the stand-in executor");
+    let silent_addr = silent_executor
+        .local_addr()
+        .expect("The stand-in executor should report its address");
+    write_state_with_executor(
+        etcd,
+        ExecutorAddr {
+            ip: silent_addr.ip(),
+            port: silent_addr.port(),
+        },
+    )
+    .await;
+
+    let proxy = BreakableProxy::start(&etcd.client_url()).await;
+    let health_check_timeout = Duration::from_secs(10);
+    let mut config = ShardManagerConfig {
+        initial_health_check_timeout: health_check_timeout,
+        ..distributed_config(etcd)
+    };
+    if let PersistenceConfig::Etcd(etcd_config) = &mut config.persistence {
+        etcd_config.endpoints = vec![proxy.url()];
+    }
+
+    let replica = tokio::spawn(async move {
+        let mut join_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
+        let result = golem_shard_manager::run(
+            &config,
+            Deployment::Standalone {
+                shutdown: CancellationToken::new(),
+            },
+            prometheus::Registry::new(),
+            &mut join_set,
+        )
+        .await;
+        join_set.abort_all();
+        (result.map(|_| ()), Instant::now())
+    });
+
+    // The health check reaching the stand-in executor is what proves the replica won the
+    // election and is now in its startup, which is the state this test breaks.
+    timeout(STARTUP_TIMEOUT, silent_executor.accept())
+        .await
+        .expect("The new leader should reach its initial health check")
+        .expect("The stand-in executor should accept the health check");
+    assert_eq!(
+        campaigner_values(etcd).await.len(),
+        1,
+        "Exactly this replica should be in the election"
+    );
+
+    proxy.black_hole();
+    let cut_at = Instant::now();
+
+    // Detection is bounded by the lease TTL, and the step-down that follows goes into the same
+    // black hole and costs one more request timeout before it gives up. The health check would
+    // hold the startup for ten seconds if nothing watched the task that reports the loss.
+    let budget = LEASE_TTL + REQUEST_TIMEOUT + Duration::from_secs(1);
+    let (result, returned_at) = timeout(budget + health_check_timeout, replica)
+        .await
+        .expect("The replica should stop at the latest when its health check ends")
+        .expect("The replica task should not panic");
+    let stopped_after = returned_at.duration_since(cut_at);
+    assert!(
+        stopped_after <= budget,
+        "The replica needed {stopped_after:?} to stop after it lost its lease, longer than \
+         {budget:?}. It kept starting on a leadership it no longer held."
+    );
+
+    let err = result.expect_err("A replica that lost its lease during its startup must fail");
+    assert!(
+        err.chain()
+            .any(|cause| cause.downcast_ref::<LeaseLost>().is_some()),
+        "The replica stopped, but not over the lease it lost: {err:#}"
+    );
+
+    proxy.restore();
+    assert!(
+        campaigner_values(etcd)
+            .await
+            .values()
+            .all(|value| !value.ready),
+        "The replica marked itself ready after it had lost its leadership, so standbys would \
+         name a leader that no longer leads."
+    );
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
 // Two replicas that advertise one address would each name the other as the leader, and clients
 // would never find the real one: the second must refuse to go on, and say why.
 async fn a_replica_that_advertises_another_live_replicas_address_is_refused(

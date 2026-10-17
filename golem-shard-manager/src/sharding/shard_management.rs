@@ -81,6 +81,42 @@ pub struct ShardManagement {
     fatal: Arc<Mutex<Option<ShardManagerError>>>,
 }
 
+/// A [`ShardManagement`] whose state is loaded and whose executors are checked, but whose worker
+/// is not running yet. Built by [`ShardManagement::prepare`].
+pub struct PreparedShardManagement {
+    shard_management: ShardManagement,
+    worker_executors: Arc<dyn WorkerExecutorService>,
+    threshold: f64,
+}
+
+impl PreparedShardManagement {
+    /// Spawns the worker into `join_set`. Synchronous, so nothing can interrupt it half done.
+    pub fn start(self, join_set: &mut JoinSet<anyhow::Result<()>>) -> ShardManagement {
+        let Self {
+            shard_management,
+            worker_executors,
+            threshold,
+        } = self;
+
+        {
+            let shard_management = shard_management.clone();
+            join_set.spawn(
+                async move {
+                    shard_management
+                        .worker(worker_executors, threshold)
+                        .await
+                        .map_err(anyhow::Error::from)
+                }
+                .in_current_span(),
+            );
+        }
+
+        shard_management.change.notify_one();
+
+        shard_management
+    }
+}
+
 impl ShardManagement {
     /// Initializes the shard management with the persisted shard lease state.
     ///
@@ -122,7 +158,7 @@ impl ShardManagement {
         number_of_shards: usize,
         join_set: &mut JoinSet<anyhow::Result<()>>,
     ) -> Result<Self, ShardManagerError> {
-        Self::new_inner(
+        Ok(Self::prepare(
             persistence_service,
             worker_executors,
             health_check,
@@ -130,11 +166,11 @@ impl ShardManagement {
             lease_ttl,
             state_read_timeout,
             state_write_timeout,
-            number_of_shards,
-            join_set,
             initial_health_check_timeout,
+            number_of_shards,
         )
-        .await
+        .await?
+        .start(join_set))
     }
 
     /// [`Self::new`] with the startup health check bound taken as a parameter, so that a test does
@@ -150,7 +186,7 @@ impl ShardManagement {
         join_set: &mut JoinSet<anyhow::Result<()>>,
         initial_health_check_timeout: Duration,
     ) -> Result<Self, ShardManagerError> {
-        Self::new_inner(
+        Self::new_with_timeouts(
             persistence_service,
             worker_executors,
             health_check,
@@ -158,15 +194,20 @@ impl ShardManagement {
             lease_ttl,
             DEFAULT_STATE_READ_TIMEOUT,
             shard_lease::default_state_write_timeout(),
+            initial_health_check_timeout,
             number_of_shards,
             join_set,
-            initial_health_check_timeout,
         )
         .await
     }
 
+    /// Everything [`Self::new_with_timeouts`] does before it spawns the worker: reads the state,
+    /// health checks the executors and restarts their leases.
+    ///
+    /// Split from [`PreparedShardManagement::start`] so that a caller can await this under its own
+    /// supervision, which it cannot do while this holds the task set.
     #[allow(clippy::too_many_arguments)]
-    async fn new_inner(
+    pub async fn prepare(
         persistence_service: Arc<dyn RoutingTablePersistence>,
         worker_executors: Arc<dyn WorkerExecutorService>,
         health_check: Arc<dyn HealthCheck>,
@@ -174,10 +215,9 @@ impl ShardManagement {
         lease_ttl: Duration,
         state_read_timeout: Duration,
         state_write_timeout: Duration,
-        number_of_shards: usize,
-        join_set: &mut JoinSet<anyhow::Result<()>>,
         initial_health_check_timeout: Duration,
-    ) -> Result<Self, ShardManagerError> {
+        number_of_shards: usize,
+    ) -> Result<PreparedShardManagement, ShardManagerError> {
         let (shard_state, external_revision) =
             match timeout(state_read_timeout, persistence_service.read()).await {
                 Ok(read) => read?,
@@ -265,22 +305,11 @@ impl ShardManagement {
             );
         }
 
-        {
-            let shard_management = shard_management.clone();
-            join_set.spawn(
-                async move {
-                    shard_management
-                        .worker(worker_executors, threshold)
-                        .await
-                        .map_err(anyhow::Error::from)
-                }
-                .in_current_span(),
-            );
-        }
-
-        shard_management.change.notify_one();
-
-        Ok(shard_management)
+        Ok(PreparedShardManagement {
+            shard_management,
+            worker_executors,
+            threshold,
+        })
     }
 
     /// Registers the executor instance `executor_id`, listening at `addr`, and grants it a lease.

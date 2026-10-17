@@ -456,6 +456,36 @@ async fn campaign_watching_startup(
     outcome
 }
 
+/// Runs one step of the startup, failing it as soon as an already-running task fails: a lost
+/// leadership lease, reported by the keepalive task, must end the startup at once rather than
+/// after the step completes.
+async fn unless_a_task_fails<T>(
+    join_set: &mut JoinSet<anyhow::Result<()>>,
+    step: impl Future<Output = anyhow::Result<T>>,
+) -> anyhow::Result<T> {
+    let mut step = std::pin::pin!(step);
+    loop {
+        // Biased towards the tasks: a failure that is already there must win over a step that
+        // completes in the same poll, or a lost lease could still be followed by a successful
+        // readiness publication.
+        tokio::select! {
+            biased;
+            joined = join_set.join_next(), if !join_set.is_empty() => match joined {
+                Some(Err(err)) => {
+                    return Err(anyhow::Error::new(err)
+                        .context("a shard manager task panicked during startup"));
+                }
+                Some(Ok(Err(err))) => {
+                    return Err(err.context("a shard manager task failed during startup"));
+                }
+                Some(Ok(Ok(()))) => warn!("A shard manager task finished during startup"),
+                None => {}
+            },
+            done = &mut step => return done,
+        }
+    }
+}
+
 pub(crate) fn ensure_shard_count_matches(
     stored: usize,
     configured: usize,
@@ -927,7 +957,11 @@ pub async fn run(
             fetcher.clone(),
             quota_repo,
         );
-        quota_service.restore_state().await?;
+        unless_a_task_fails(join_set, async {
+            quota_service.restore_state().await?;
+            anyhow::Ok(())
+        })
+        .await?;
 
         join_set.spawn({
             let quota_service = quota_service.clone();
@@ -942,8 +976,10 @@ pub async fn run(
             }
         });
 
-        let shard_management = Arc::new(
-            ShardManagement::new_with_timeouts(
+        // Awaited under supervision; only the spawn of the worker, which cannot be interrupted
+        // half done, takes the task set.
+        let prepared = unless_a_task_fails(join_set, async {
+            Ok(ShardManagement::prepare(
                 persistence_service.clone(),
                 worker_executors.clone(),
                 health_check.clone(),
@@ -953,10 +989,11 @@ pub async fn run(
                 shard_manager_config.state_write_timeout,
                 shard_manager_config.initial_health_check_timeout,
                 shard_manager_config.number_of_shards,
-                join_set,
             )
-            .await?,
-        );
+            .await?)
+        })
+        .await?;
+        let shard_management = Arc::new(prepared.start(join_set));
 
         self::sharding::healthcheck_loop::start_health_check_loop(
             shard_management.clone(),
@@ -974,14 +1011,29 @@ pub async fn run(
             .send_compressed(CompressionEncoding::Gzip),
             lease_belief.clone(),
         );
-        health_reporter
-            .set_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
-            .await;
+        unless_a_task_fails(join_set, async {
+            health_reporter
+                .set_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
+                .await;
+            anyhow::Ok(())
+        })
+        .await?;
 
         // After `serve`: a standby names this leader from the moment its value is ready, and the
         // leader must already serve by then.
         if let Some(leadership) = &leadership {
-            leadership.publish_ready().await?;
+            // The keepalive reports a lost lease too, but only once it next runs; this closes the
+            // instant before it does, so that a lapsed leader never announces itself.
+            anyhow::ensure!(
+                lease_belief.as_ref().is_none_or(|belief| belief.held()),
+                "the leadership lease lapsed during startup, so this replica does not publish \
+                 itself as the leader"
+            );
+            unless_a_task_fails(join_set, async {
+                leadership.publish_ready().await?;
+                anyhow::Ok(())
+            })
+            .await?;
         }
         metrics::record_serving();
 
