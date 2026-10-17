@@ -56,9 +56,9 @@ async function collect(mode, effectUrl) {
         await writer.finish();
         writer[Symbol.dispose]?.();
         closed[Symbol.dispose]?.();
-        const [target, stdout] = createCollectedOutput();
+        const [target, stdout] = createCollectedOutput(65536n);
         const future = new ToolRpc('streaming').asyncInvokeAndAwait(path, wireInput, stdin, target, undefined);
-        collected = future.collect(stdout, undefined, 65536n);
+        collected = future.collect(stdout, undefined);
         future[Symbol.dispose]?.();
     } else {
         const request = JSON.stringify({ path, input: wireInput, stderr: !pressure });

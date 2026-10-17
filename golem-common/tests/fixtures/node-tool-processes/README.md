@@ -352,7 +352,7 @@ the JavaScript forwarding pump that the current generated bindings introduce whe
 stream reader is passed back to the host. The synchronous wait drains both output channels while
 awaiting the existing tracked tool execution. It does not introduce another tool dispatcher.
 
-The ordinary and collected constructors share the existing durable attachment creation. They
+The ordinary and collected constructors use durable attachment creation. They
 materialize their endpoints before arming guest completion delivery. Collection uses
 `AttachmentInputProducer`, retaining the reader's original invocation identity and journaled host
 observations; it does not read a raw attachment. Final secret-result admission follows output
@@ -362,9 +362,10 @@ at construction, rather than by an unrecorded current configuration read during 
 The executor library typecheck, generated probe build and Wizer initialization pass. The
 real-tool modes `streams-collect`, `streams-echo-collect` and `streams-pressure-collect` also pass
 in the native executor. The last mode retains a 4-KiB prefix and observes the child's cancelled
-terminal. An echo afterward succeeds on the same owner. Both collector unit tests also pass.
-This is not a completed Node command adapter. In particular, retained-prefix memory accounting,
-finite-input pumping, timeout/cancellation crash windows, admission refusal, result policy and
+terminal. An echo afterward succeeds on the same owner. The pre-accounting checkpoint also
+passed its two collector unit tests; the accounting changes have separate pending checks below.
+This is not a completed Node command adapter. In particular,
+finite-input pumping, timeout/cancellation crash windows, native admission-refusal coverage, result policy and
 the SDK/runtime integration still need implementation or validation before production use.
 
 Only approved idle Cargo artifacts were cleaned; sources and reports were preserved. The native
@@ -411,3 +412,31 @@ PR [#4235](https://github.com/golemcloud/golem/pull/4235) supplies the built-in 
 `PWD` metadata, root-directory defaults, and full environment restoration. Reuse those changes
 when they land rather than duplicating them in the process adapter. The new collector does not
 change those tool contracts.
+
+### Retained-prefix memory accounting
+
+The current contract takes `max-bytes` at `create-collected-output`, not at `collect`.
+The constructor reserves the capped prefix before the child can start. A new durable constructor
+response records the attachment capacity, prefix limit, and admission outcome. A refusal creates
+no endpoints. The ordinary `create-output` contract is unchanged.
+
+The prefix uses the attachment's existing `AttachmentMemory`. Completed reconstruction restores
+historical charges instead of checking current pressure again. If an unfinished child becomes
+live, its ordinary attachment activation also upgrades the retained prefix. The collector keeps
+the reservation through result assembly. It allocates the exact prefix capacity before recording
+admission, so a non-power-of-two limit cannot cause geometric vector growth beyond the charge.
+
+The new generated component builds and passes Wizer initialization with the released 0.4.13
+compiler plus the same five WRQJS skeleton overlays. This iteration embeds the bundled source
+directly rather than using the older injection slot. The real executor test passes all three
+collected modes, then passes five interleaved repetitions with completed replay, the effect server
+stopped before reconstruction, unchanged raw history, and a successful post-restart call.
+The timings are transport observations, not a performance comparison: native compiler work was
+running concurrently, and dual-output/overflow cases invoke both a main-runtime and a fresh-job child.
+
+The executor library and integration binary built. Initial unit-test compilation stopped at the
+local 95% disk guard. After disk cleanup, all seven collector/accounting tests and the three
+updated WIT/payload contract tests pass.
+The [memory checkpoint](observations-2026-10-17-collector-memory.json) records the exact scope.
+End-to-end constructor refusal under changed replay pressure and mid-collection crashes are still
+required. The binary echo is still the prewritten-input control, not proof of Node stdin support.

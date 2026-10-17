@@ -134,13 +134,13 @@ async function probeCollectedStreams(mode) {
         closed[Symbol.dispose]?.();
         stdin = source;
     }
-    const [stdoutTarget, stdout] = createCollectedOutput();
-    const stderr = !echo && !pressure ? createCollectedOutput() : undefined;
+    const [stdoutTarget, stdout] = createCollectedOutput(pressure ? 4096n : 65536n);
+    const stderr = !echo && !pressure ? createCollectedOutput(65536n) : undefined;
     const rpc = new ToolRpc('streaming');
     const future = rpc.asyncInvokeAndAwait(path, wireInput, stdin, stdoutTarget, stderr?.[0]);
     // A regular synchronous WIT import: no experimental lowering override,
     // Promise continuation or JavaScript output pump participates in this wait.
-    const collected = future.collect(stdout, stderr?.[1], pressure ? 4096n : 65536n);
+    const collected = future.collect(stdout, stderr?.[1]);
     if (collected && typeof collected.then === 'function') {
         throw new Error('Expected synchronous native output collection');
     }

@@ -6,11 +6,18 @@ setProcessBackend({
     spawnSync(command, args, options) {
         if (command !== 'streaming') return undefined;
         const request = JSON.parse(args[0]);
-        const [target, stdout] = createCollectedOutput();
-        const stderr = request.stderr ? createCollectedOutput() : undefined;
+        const [target, stdout] = createCollectedOutput(BigInt(options.maxBuffer));
+        let stderr;
+        try {
+            stderr = request.stderr ? createCollectedOutput(BigInt(options.maxBuffer)) : undefined;
+        } catch (error) {
+            target[Symbol.dispose]?.();
+            stdout[Symbol.dispose]?.();
+            throw error;
+        }
         const rpc = new ToolRpc(command);
         const future = rpc.asyncInvokeAndAwait(request.path, request.input, undefined, target, stderr?.[0]);
-        const collected = future.collect(stdout, stderr?.[1], BigInt(options.maxBuffer));
+        const collected = future.collect(stdout, stderr?.[1]);
         future[Symbol.dispose]?.();
         return {
             pid: 1,

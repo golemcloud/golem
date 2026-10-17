@@ -111,7 +111,11 @@ interface host {
   /// stream reader, it does not need a caller-side forwarding pump.
   resource output-collection;
 
-  create-collected-output: func() -> tuple<own<tool-output>, own<output-collection>>;
+  /// Reserves the retained prefix before dispatch. The limit is capped by the
+  /// host's attachment byte limit. Admission failure creates no endpoints.
+  create-collected-output: func(max-bytes: u64) -> result<
+    tuple<own<tool-output>, own<output-collection>>, tool-rpc-error
+  >;
 
   resource tool-rpc {
     /// Binds an ordinary tool client to its configured tool name.
@@ -159,14 +163,12 @@ interface host {
     /// Waits for the terminal while the host drains both supplied streams.
     /// This does not require concurrent progress in the calling guest. Pass
     /// collection handles created before async-invoke-and-await. Each channel
-    /// retains at most max-bytes, additionally
-    /// capped by the host's attachment byte limit. Exceeding either limit
+    /// retains at most the limit reserved at creation. Exceeding that limit
     /// cancels the invocation and reports overflow on that channel.
     /// Dropping the wait does not itself cancel the invocation.
     collect: func(
       stdout: option<own<output-collection>>,
       stderr: option<own<output-collection>>,
-      max-bytes: u64,
     ) -> collected-invocation;
     /// Explicitly cancels the operation. Dropping this resource only detaches
     /// result observation and does not cancel accepted work.

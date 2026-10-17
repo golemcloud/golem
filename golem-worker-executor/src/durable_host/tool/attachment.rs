@@ -125,6 +125,29 @@ impl AttachmentMemory {
         (self.reserve_tracked)(bytes).await
     }
 
+    /// Called before the new attachment is registered or exposed, so live
+    /// activation cannot race admission of its retained output buffer.
+    pub(super) async fn collection_buffer(
+        &self,
+        limit: usize,
+    ) -> anyhow::Result<Option<CollectionBuffer>> {
+        let reservation = match self.reserve(limit).await {
+            AttachmentReservationOutcome::Reserved(reservation) => reservation,
+            AttachmentReservationOutcome::Rejected => return Ok(None),
+            AttachmentReservationOutcome::Pending => {
+                anyhow::bail!("new output collection has pending memory activation")
+            }
+        };
+        let mut bytes = Vec::new();
+        if bytes.try_reserve_exact(limit).is_err() || bytes.capacity() > limit {
+            return Ok(None);
+        }
+        Ok(Some(CollectionBuffer {
+            bytes,
+            _reservation: reservation,
+        }))
+    }
+
     fn tracking_enabled(&self) -> bool {
         self.tracking_enabled.load(Ordering::Acquire)
     }
@@ -280,6 +303,11 @@ enum AttachmentReservationOutcome {
 struct AttachmentReservation {
     grant: MemoryGrant,
     historical_reservation: Option<HistoricalAttachmentReservation>,
+}
+
+pub(super) struct CollectionBuffer {
+    pub(super) bytes: Vec<u8>,
+    _reservation: AttachmentReservation,
 }
 
 struct BufferedChunk {
@@ -4696,6 +4724,87 @@ mod tests {
                 .unwrap()
                 .host_resource_exhausted
         );
+    }
+
+    #[test]
+    async fn collected_prefix_refuses_live_memory_pressure_before_allocating() {
+        let requested = Arc::new(AtomicU64::new(0));
+        let requested_for_memory = requested.clone();
+        let memory = AttachmentMemory::with_test_reservation(true, move |bytes| {
+            requested_for_memory.fetch_add(bytes, Ordering::AcqRel);
+            async { None }
+        });
+        assert!(memory.collection_buffer(13).await.unwrap().is_none());
+        assert_eq!(requested.load(Ordering::Acquire), 13);
+        assert_eq!(memory.historical_charges.bytes(), 0);
+    }
+
+    #[test]
+    async fn collected_prefix_reconstruction_is_charged_at_live_activation() {
+        let requested = Arc::new(AtomicU64::new(0));
+        let requested_for_memory = requested.clone();
+        let memory = AttachmentMemory::with_test_reservation(false, move |bytes| {
+            requested_for_memory.fetch_add(bytes, Ordering::AcqRel);
+            async move { Some(MemoryGrant::inert(bytes)) }
+        });
+        let buffer = memory.collection_buffer(13).await.unwrap().unwrap();
+        assert_eq!(buffer.bytes.capacity(), 13);
+        let (producer, consumer, _) = attachment_pair(8, memory.clone());
+        producer.write(vec![1, 2, 3]).await.unwrap();
+        assert_eq!(requested.load(Ordering::Acquire), 0);
+        assert_eq!(memory.historical_charges.bytes(), 16);
+        let controller = producer.controller();
+        assert!(controller.prepare_live_memory_accounting().await);
+        assert_eq!(requested.load(Ordering::Acquire), 16);
+        controller.commit_live_memory_accounting();
+        assert!(controller.prepare_live_memory_accounting().await);
+        assert_eq!(requested.load(Ordering::Acquire), 16);
+        drop(buffer);
+        assert_eq!(memory.historical_charges.bytes(), 3);
+        drop(consumer);
+        assert_eq!(memory.historical_charges.bytes(), 0);
+        assert!(
+            memory
+                .historical_charges
+                .state
+                .lock()
+                .unwrap()
+                .upgrade_grant
+                .is_none()
+        );
+    }
+
+    #[test]
+    async fn collected_prefix_replays_admission_before_refusing_live_activation() {
+        let memory = AttachmentMemory::with_test_reservation(false, |_| async { None });
+        let buffer = memory.collection_buffer(13).await.unwrap().unwrap();
+        let (producer, consumer, observer) = attachment_pair(8, memory.clone());
+        let controller = producer.controller();
+        assert_eq!(memory.historical_charges.bytes(), 13);
+        assert!(!controller.prepare_live_memory_accounting().await);
+        controller.complete_rejected_live_memory_accounting();
+        assert!(matches!(
+            observer.wait_terminal().await,
+            ByteStreamCloseCause::Failed(ByteStreamFailure::ResourceExhausted)
+        ));
+        // The retained prefix still owns its charge until its observer is gone.
+        assert_eq!(memory.historical_charges.bytes(), 13);
+        drop(buffer);
+        assert_eq!(memory.historical_charges.bytes(), 0);
+        drop(consumer);
+    }
+
+    #[test]
+    async fn collected_prefix_failed_allocation_releases_its_reservation() {
+        let memory = AttachmentMemory::with_test_reservation(false, |_| async { None });
+        assert!(
+            memory
+                .collection_buffer(usize::MAX)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(memory.historical_charges.bytes(), 0);
     }
 
     #[test]

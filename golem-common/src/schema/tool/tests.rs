@@ -72,7 +72,9 @@ fn middleware_bypass_wit_exposes_only_definition_discovery_and_runtime_owned_und
         [
             "async-invoke-and-await",
             "cancel",
+            "collect",
             "create",
+            "create-collected-output",
             "create-output",
             "create-stdin",
             "create-stdin-from-stream",

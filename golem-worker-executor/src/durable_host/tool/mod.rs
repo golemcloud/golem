@@ -200,6 +200,7 @@ pub struct FutureInvokeResultEntry {
 pub struct OutputCollectionEntry {
     consumer: AttachmentConsumer,
     invocation: Option<golem_common::model::IdempotencyKey>,
+    buffer: attachment::CollectionBuffer,
 }
 
 /// Invocation-scoped capability for the next layer of a recorded middleware chain.
@@ -6587,24 +6588,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
 
     async fn create_collected_output(
         accessor: &Accessor<U, Self>,
-    ) -> anyhow::Result<(Resource<ToolOutputEntry>, Resource<OutputCollectionEntry>)> {
-        output_creation::create(accessor, |accessor, target, consumer| {
-            accessor.with(|mut access| {
-                let ctx = access.get();
-                let invocation = ctx.state.get_current_idempotency_key();
-                match ctx.table().push(OutputCollectionEntry {
-                    consumer,
-                    invocation,
-                }) {
-                    Ok(collection) => Ok((target, collection)),
-                    Err(error) => {
-                        ctx.table().delete(target)?;
-                        Err(error.into())
-                    }
-                }
-            })
-        })
-        .await
+        max_bytes: u64,
+    ) -> anyhow::Result<
+        Result<(Resource<ToolOutputEntry>, Resource<OutputCollectionEntry>), ToolRpcError>,
+    > {
+        output_creation::create_collected(accessor, max_bytes).await
     }
 
     async fn get_invoke_results(
@@ -7005,7 +6993,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
         self_: Resource<FutureInvokeResultEntry>,
         stdout: Option<Resource<OutputCollectionEntry>>,
         stderr: Option<Resource<OutputCollectionEntry>>,
-        max_bytes: u64,
     ) -> anyhow::Result<CollectedInvocation> {
         reserve_invocation_id_before_await(accessor, accessor.getter())?;
         let (plan, stdout, stderr) = accessor.with(|mut access| -> anyhow::Result<_> {
@@ -7023,12 +7010,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 source
                     .map(|source| {
                         let entry = access.get().table().delete(source)?;
-                        let limit =
-                            usize::try_from(max_bytes)
-                                .unwrap_or(usize::MAX)
-                                .min(usize::try_from(
-                                    entry.consumer.controller().metadata().capacity_bytes,
-                                )?);
                         let source = if entry.consumer.controller().observer().identity().is_some()
                         {
                             let producer = input::AttachmentInputProducer::for_invocation(
@@ -7044,7 +7025,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                         };
                         let execution = execution.clone();
                         let (consumer, received) =
-                            collect::OutputCollector::new(limit, move || {
+                            collect::OutputCollector::new(entry.buffer, move || {
                                 if let Some(execution) = &execution {
                                     execution.cancel();
                                 }
@@ -7076,6 +7057,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
             results.pop().expect("one tool invocation has one result"),
         )
         .await?;
+        let (stdout, _stdout_memory) = stdout
+            .map(collect::CollectedOutputBuffer::into_parts)
+            .unzip();
+        let (stderr, _stderr_memory) = stderr
+            .map(collect::CollectedOutputBuffer::into_parts)
+            .unzip();
         Ok(CollectedInvocation {
             result: project_tool_response(accessor, response),
             stdout,

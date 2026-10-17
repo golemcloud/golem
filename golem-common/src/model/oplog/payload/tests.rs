@@ -786,6 +786,23 @@ mod tool_attachment {
                 },
             },
         );
+        for admitted in [false, true] {
+            super::assert_host_payload_pair_schema_roundtrip::<
+                host_functions::GolemToolCreateCollectedOutput,
+            >(
+                HostRequestToolCollectedOutputCreate { max_bytes: 13 },
+                HostResponseToolCollectedOutputCreated {
+                    created: ToolCollectedOutputCreated {
+                        attachment: ToolAttachmentCreated {
+                            attachment: read.attachment,
+                            capacity_bytes: 7919,
+                        },
+                        limit_bytes: 13,
+                        admitted,
+                    },
+                },
+            );
+        }
         super::assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolStdinFinish>(
             HostRequestToolAttachmentFinish {
                 attachment: read.attachment,
