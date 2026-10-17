@@ -906,9 +906,10 @@ async fn write_state_with_executor(etcd: &DockerEtcd, addr: ExecutorAddr) {
 // Winning and then failing leaves the deployment down twice over: this replica is gone but its
 // lease still names it the leader, and every replica shares the configuration that failed.
 //
-// The failure is a task of the caller's that dies once etcd names this replica the leader, while
-// the startup is held by the initial health check: that is a failure after the win, and the only
-// way out of the held startup is the supervision of the tasks.
+// The failure is a task of the caller's that dies once the initial health check has reached its
+// executor, which only a replica that has won the election does. The startup is then held by that
+// check: that is a failure after the win, and the only way out of the held startup before the
+// check ends is the supervision of the tasks.
 async fn a_startup_failure_after_winning_releases_the_leadership(etcd: &Arc<DockerEtcd>) {
     wipe_state(etcd).await;
     await_election_idle(etcd).await;
@@ -930,8 +931,9 @@ async fn a_startup_failure_after_winning_releases_the_leadership(etcd: &Arc<Dock
     )
     .await;
 
+    let health_check_timeout = Duration::from_secs(8);
     let config = ShardManagerConfig {
-        initial_health_check_timeout: Duration::from_secs(5),
+        initial_health_check_timeout: health_check_timeout,
         ..distributed_config(etcd)
     };
 
@@ -966,8 +968,10 @@ async fn a_startup_failure_after_winning_releases_the_leadership(etcd: &Arc<Dock
         }
     });
 
+    // Shorter than the health check: a startup that ended only when the check did would not have
+    // been ended by the failed task.
     let result = timeout(
-        STARTUP_TIMEOUT,
+        health_check_timeout - Duration::from_secs(3),
         golem_shard_manager::run(
             &config,
             Deployment::Standalone {
