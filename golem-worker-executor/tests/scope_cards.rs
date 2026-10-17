@@ -1294,10 +1294,9 @@ impl CardDecision {
 /// `remember_card_decisions_around_gap`.
 const CARD_DECISION_GAP_MARKER: &str = "card-decision-gap";
 
-/// Busy-loop iterations between the two calls of `remember_card_decisions_around_gap`. The card
-/// event must be queued in this gap; it takes seconds, while the test queues the event within
-/// milliseconds of the logged marker.
-const CARD_DECISION_GAP_SPIN: u64 = 3_000_000_000;
+fn is_card_decision_gap_marker(entry: &OplogEntry) -> bool {
+    matches!(entry, OplogEntry::Log { message, .. } if message == CARD_DECISION_GAP_MARKER)
+}
 
 /// A concrete card derived from `parent` that grants `card:<verb>`.
 fn concrete_card_granting(parent: CardId, verb: &str) -> StoredCard {
@@ -1319,11 +1318,11 @@ fn concrete_card_granting(parent: CardId, verb: &str) -> StoredCard {
 
 /// Makes `decision`'s operation twice in one invocation and changes the caller's wallet between
 /// the two calls, where no recorded entry separates them: the agent logs a marker, which is a
-/// hint, and busy-loops while the test queues the card event. The live run applies the event at
-/// the second call only, so the two calls return different outcomes. Then a new executor
-/// reconstructs the agent, which must keep both outcomes: replay commits the entry before the
-/// first call and publishes every card event up to the next recorded entry, so a first decision
-/// that records nothing would observe the event.
+/// hint, and the test queues the card event while a gate holds the guest in the marker's append.
+/// The live run applies the event at the second call only, so the two calls return different
+/// outcomes. Then a new executor reconstructs the agent, which must keep both outcomes: replay
+/// commits the entry before the first call and publishes every card event up to the next
+/// recorded entry, so a first decision that records nothing would observe the event.
 async fn card_decisions_survive_reconstruction(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1357,6 +1356,9 @@ async fn card_decisions_survive_reconstruction(
         .await
         .ok_or_else(|| anyhow::anyhow!("the agent is not active"))?;
     let key = IdempotencyKey::fresh();
+    let mut gap = executor
+        .gate_after_next_append(&worker, is_card_decision_gap_marker)
+        .await;
     let live_call = executor.invoke_and_await_agent_with_key(
         &component,
         &caller,
@@ -1364,17 +1366,12 @@ async fn card_decisions_survive_reconstruction(
         "remember_card_decisions_around_gap",
         data_value!(
             decision.operation().to_string(),
-            CARD_DECISION_GAP_SPIN,
             component.id,
             target.to_string()
         ),
     );
     let change_wallet_in_gap = async {
-        while RecordedCardDecisions::find(&read_whole_oplog(&owner).await, &key, decision)
-            .is_none_or(|recorded| recorded.marker.is_none())
-        {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        tokio::time::timeout(Duration::from_secs(60), gap.entered()).await?;
         match decision.installed_card_verb() {
             None => {
                 owner
@@ -1388,6 +1385,7 @@ async fn card_decisions_survive_reconstruction(
                 executor.queue_card_install(&worker, card).await?;
             }
         }
+        drop(gap);
         Ok::<_, anyhow::Error>(())
     };
     let (live, ()) = tokio::try_join!(live_call, change_wallet_in_gap)?;
