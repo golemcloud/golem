@@ -734,7 +734,7 @@ impl LeaderElection {
                 return Err(ShardManagerError::LeaseLostWhileCampaigning(lost));
             }
             won = campaign => won?,
-            refused = self.watch_campaign(lease_id) => return Err(refused),
+            refused = self.watch_campaign(lease_id, granted_ttl) => return Err(refused),
             _ = self.shutdown.cancelled() => return Err(ShardManagerError::ShutdownRequested),
             never = self.announce_standby() => match never {},
         };
@@ -868,16 +868,17 @@ impl LeaderElection {
     ///
     /// A key of an earlier process of the same pod also carries this address, but nothing renews
     /// its lease, so it is gone within one TTL. A key still present two TTLs after this replica
-    /// first saw it belongs to a live replica.
-    async fn watch_campaign(&self, own_lease: i64) -> ShardManagerError {
+    /// first saw it belongs to a live replica. The TTL is the one etcd granted, which can exceed
+    /// the configured one, and the earlier process's key was granted the same.
+    async fn watch_campaign(&self, own_lease: i64, granted_ttl: Duration) -> ShardManagerError {
         let Some(mut watch) = self.watch.clone() else {
             return std::future::pending().await;
         };
         let own = self.value.grpc_address.clone();
-        let patience = self.lease_ttl.saturating_mul(2);
+        let patience = granted_ttl.saturating_mul(2);
         let mut duplicate: Option<(Vec<u8>, Instant)> = None;
         // Wakes the loop with no change in the view, so that the patience is measured.
-        let mut recheck = interval(self.lease_ttl / 4);
+        let mut recheck = interval(granted_ttl / 4);
         recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             if let Some(view) = watch.view() {
