@@ -65,11 +65,14 @@ pub struct Services {
     pub identity_provider: Arc<dyn IdentityProvider>,
     pub session_store: Arc<dyn SessionStore>,
     pub invocation_session_token_keyring: Arc<InvocationSessionTokenKeyring>,
+    pub invocation_session_config: crate::config::InvocationSessionConfig,
+    pub mcp_config: crate::config::McpConfig,
 }
 
 impl Services {
     pub async fn new(config: &WorkerServiceConfig) -> anyhow::Result<Self> {
         config.http_session.validate().map_err(anyhow::Error::msg)?;
+        config.validate_keep_alive().map_err(anyhow::Error::msg)?;
         config
             .worker_executor
             .validate()
@@ -236,6 +239,8 @@ impl Services {
             identity_provider,
             session_store,
             invocation_session_token_keyring,
+            invocation_session_config: config.invocation_session.clone(),
+            mcp_config: config.mcp.clone(),
         })
     }
 }

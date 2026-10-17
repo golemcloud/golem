@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use super::AgentsApi;
-use crate::config::{InvocationSessionTokenConfig, WebSocketTransportLimits};
+use crate::config::{
+    InvocationSessionConfig, InvocationSessionTokenConfig, WebSocketTransportLimits,
+};
 use crate::invocation_session_token::InvocationSessionTokenKeyring;
 use crate::service::auth::{AuthService, AuthServiceError};
 use async_trait::async_trait;
@@ -77,6 +79,7 @@ async fn spawn_agents_api(
         Arc::new(
             InvocationSessionTokenKeyring::new(&InvocationSessionTokenConfig::default()).unwrap(),
         ),
+        InvocationSessionConfig::default(),
     );
     let service = OpenApiService::new(api, "test", "1.0");
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -106,13 +109,12 @@ async fn open_invocation_session(address: SocketAddr) -> TcpStream {
     socket
 }
 
-/// Sends one masked text frame. A zero masking key leaves the payload unchanged.
-async fn send_text_frame(socket: &mut TcpStream, size: usize) {
+/// Sends the header of one masked text frame. A zero masking key leaves the payload unchanged.
+async fn send_text_frame_header(socket: &mut TcpStream, size: usize) {
     let mut header = vec![0x81, 0x80 | 127];
     header.extend_from_slice(&(size as u64).to_be_bytes());
     header.extend_from_slice(&[0; 4]);
     socket.write_all(&header).await.unwrap();
-    socket.write_all(&vec![b'x'; size]).await.unwrap();
 }
 
 /// Reads frames until a close frame, and returns its close code.
@@ -138,7 +140,7 @@ async fn message_above_the_session_limit_gets_close_code_1009() {
     let (address, server) = spawn_agents_api(WebSocketTransportLimits::default()).await;
     let mut socket = open_invocation_session(address).await;
 
-    send_text_frame(&mut socket, MAX_WEBSOCKET_MESSAGE_SIZE + 1).await;
+    send_text_frame_header(&mut socket, MAX_WEBSOCKET_MESSAGE_SIZE + 1).await;
 
     assert_eq!(read_close_code(&mut socket).await, CLOSE_MESSAGE_TOO_BIG);
     server.abort();
@@ -150,7 +152,11 @@ async fn message_at_the_session_limit_reaches_the_session() {
     let (address, server) = spawn_agents_api(WebSocketTransportLimits::default()).await;
     let mut socket = open_invocation_session(address).await;
 
-    send_text_frame(&mut socket, MAX_WEBSOCKET_MESSAGE_SIZE).await;
+    send_text_frame_header(&mut socket, MAX_WEBSOCKET_MESSAGE_SIZE).await;
+    socket
+        .write_all(&vec![b'x'; MAX_WEBSOCKET_MESSAGE_SIZE])
+        .await
+        .unwrap();
 
     // The session decodes the message, which is not valid JSON.
     assert_eq!(read_close_code(&mut socket).await, CLOSE_PROTOCOL_ERROR);

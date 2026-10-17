@@ -81,6 +81,7 @@ pub struct AgentsApi {
     invocation_session_websocket_limits: WebSocketTransportLimits,
     auth_service: Arc<dyn AuthService>,
     invocation_session_token_keyring: Arc<InvocationSessionTokenKeyring>,
+    invocation_session_config: crate::config::InvocationSessionConfig,
 }
 
 #[OpenApi(prefix_path = "/v1/agents", tag = ApiTags::Agent)]
@@ -90,12 +91,14 @@ impl AgentsApi {
         invocation_session_websocket_limits: WebSocketTransportLimits,
         auth_service: Arc<dyn AuthService>,
         invocation_session_token_keyring: Arc<InvocationSessionTokenKeyring>,
+        invocation_session_config: crate::config::InvocationSessionConfig,
     ) -> Self {
         Self {
             worker_service,
             invocation_session_websocket_limits,
             auth_service,
             invocation_session_token_keyring,
+            invocation_session_config,
         }
     }
 
@@ -223,6 +226,7 @@ impl AgentsApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
         let worker_service = self.worker_service.clone();
         let keyring = self.invocation_session_token_keyring.clone();
+        let config = self.invocation_session_config.clone();
 
         Ok(websocket
             .protocols([INVOCATION_SESSION_SUBPROTOCOL])
@@ -230,7 +234,8 @@ impl AgentsApi {
             .on_upgrade(Box::new(move |socket| {
                 Box::pin(async move {
                     let _active = ActiveHttpApiStream::open(HttpApiStreamKind::InvocationSession);
-                    serve_public_invocation_session(socket, worker_service, keyring, auth).await
+                    serve_public_invocation_session(socket, worker_service, keyring, auth, config)
+                        .await
                 })
             })))
     }

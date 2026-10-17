@@ -97,6 +97,10 @@ retained_input_frames = 32
 retry_deadline = "10s"
 retry_delay = "100ms"
 
+[invocation_session]
+keep_alive_interval = "30s"
+max_pong_timeout = "0s"
+
 [invocation_session_tokens]
 issuer = "local-worker-service"
 verify_only_keys = []
@@ -104,6 +108,9 @@ verify_only_keys = []
 [invocation_session_tokens.active_key]
 id = "local-development"
 key = "0udALeSRcimBmmLXm6iKY1jg4+IZNXv6LaFkdIQ4hLA="
+
+[mcp]
+sse_keep_alive_interval = "15s"
 
 [registry_service]
 connect_timeout = "10s"
@@ -222,13 +229,13 @@ without_time = false
 hmac_key = "K34Co4pRMDl7dB3cYB+1/N0J3tMzJWI4FyPNOsmGHkE="
 
 [websocket_limits.connect]
-max_frame_size = 33619968
-max_message_size = 33619968
+max_frame_size = 33554432
+max_message_size = 33554432
 max_write_buffer_size = 67108864
 
 [websocket_limits.invocation_session]
-max_frame_size = 33619968
-max_message_size = 33619968
+max_frame_size = 33554432
+max_message_size = 33554432
 max_write_buffer_size = 67108864
 
 [worker_executor]

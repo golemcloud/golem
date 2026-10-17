@@ -112,6 +112,7 @@ uuid = { workspace = true }
 
 
 [dev-dependencies]
+golem-client = { workspace = true }
 golem-common = { workspace = true, features = ["proptest"] }
 golem-test-framework.workspace = true
 
@@ -132,4 +133,5 @@ rustls-pemfile = { workspace = true }
 tempfile.workspace = true
 test-r = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
+tokio-tungstenite = { workspace = true }
 tryhard = { workspace = true }

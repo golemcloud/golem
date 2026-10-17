@@ -18,7 +18,6 @@ use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
 use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
 use golem_common::model::RetryConfig;
 use golem_common::model::base64::Base64;
-use golem_common::model::invocation_session_public::MAX_WEBSOCKET_MESSAGE_SIZE;
 use golem_common::tracing::TracingConfig;
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::clients::shard_manager::GrpcShardManagerConfig;
@@ -60,6 +59,8 @@ pub struct WorkerServiceConfig {
     pub auth_service: AuthServiceConfig,
     pub webhook_callback_handler: WebhookCallbackHandlerConfig,
     pub invocation_session_tokens: InvocationSessionTokenConfig,
+    pub invocation_session: InvocationSessionConfig,
+    pub mcp: McpConfig,
     #[serde(default)]
     pub agent_resolution_cache: AgentResolutionCacheConfig,
     #[serde(default)]
@@ -87,6 +88,15 @@ impl WorkerServiceConfig {
 
     pub fn is_local_env(&self) -> bool {
         self.environment.to_lowercase() == "local"
+    }
+
+    pub fn validate_keep_alive(&self) -> Result<(), String> {
+        if self.invocation_session.keep_alive_interval.is_zero()
+            || self.mcp.sse_keep_alive_interval.is_zero()
+        {
+            return Err("Invocation session and MCP keep-alive intervals must be non-zero".into());
+        }
+        Ok(())
     }
 }
 
@@ -191,6 +201,12 @@ impl SafeDisplay for WorkerServiceConfig {
             "{}",
             self.agent_resolution_cache.to_safe_string_indented()
         );
+        let _ = writeln!(
+            &mut result,
+            "invocation session: {:?}",
+            self.invocation_session
+        );
+        let _ = writeln!(&mut result, "MCP: {:?}", self.mcp);
 
         let _ = writeln!(&mut result, "HTTP session:");
         let _ = writeln!(
@@ -243,6 +259,8 @@ impl Default for WorkerServiceConfig {
             auth_service: AuthServiceConfig::default(),
             webhook_callback_handler: WebhookCallbackHandlerConfig::default(),
             invocation_session_tokens: InvocationSessionTokenConfig::default(),
+            invocation_session: InvocationSessionConfig::default(),
+            mcp: McpConfig::default(),
             agent_resolution_cache: AgentResolutionCacheConfig::default(),
             http_session: HttpSessionLimits::default(),
             durable_streams: DurableStreamsConfig::default(),
@@ -285,9 +303,8 @@ impl Default for RequestBodyLimits {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WebSocketLimits {
-    /// The invocation session (`/v1/agents/invoke-agent-session`). Its message and frame
-    /// limits must be above the 32 MiB message limit of the session protocol, so that the
-    /// session itself rejects a larger message with close code 1009.
+    /// The invocation session (`/v1/agents/invoke-agent-session`). The session answers a
+    /// message or frame above its limit with close code 1009.
     pub invocation_session: WebSocketTransportLimits,
     /// The agent event stream (`/v1/components/:component_id/workers/:agent_name/connect`).
     pub connect: WebSocketTransportLimits,
@@ -296,21 +313,11 @@ pub struct WebSocketLimits {
 impl WebSocketLimits {
     pub fn validate(&self) -> Result<(), String> {
         self.invocation_session.validate("invocation_session")?;
-        self.connect.validate("connect")?;
-        let session = &self.invocation_session;
-        if session.max_message_size <= MAX_WEBSOCKET_MESSAGE_SIZE
-            || session.max_frame_size <= MAX_WEBSOCKET_MESSAGE_SIZE
-        {
-            return Err(format!(
-                "websocket_limits.invocation_session.max_message_size and max_frame_size must be above the session message limit of {MAX_WEBSOCKET_MESSAGE_SIZE} bytes"
-            ));
-        }
-        Ok(())
+        self.connect.validate("connect")
     }
 }
 
-/// Limits, in bytes, of a WebSocket connection. An inbound message or frame above its limit
-/// ends the connection without a close frame.
+/// Limits, in bytes, of a WebSocket connection.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WebSocketTransportLimits {
@@ -341,13 +348,43 @@ impl WebSocketTransportLimits {
 
 impl Default for WebSocketTransportLimits {
     fn default() -> Self {
-        // A little above the payload limit, so that the invocation session receives an
-        // oversized message and answers it with close code 1009.
-        let message_limit = AGENT_PAYLOAD_LIMIT + 64 * 1024;
         Self {
-            max_message_size: message_limit,
-            max_frame_size: message_limit,
+            max_message_size: AGENT_PAYLOAD_LIMIT,
+            max_frame_size: AGENT_PAYLOAD_LIMIT,
             max_write_buffer_size: 2 * AGENT_PAYLOAD_LIMIT,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InvocationSessionConfig {
+    #[serde(with = "humantime_serde")]
+    pub keep_alive_interval: Duration,
+    /// Zero disables the Pong deadline without disabling periodic Pings.
+    /// A positive deadline can disconnect a live peer when either endpoint is backpressured.
+    #[serde(with = "humantime_serde")]
+    pub max_pong_timeout: Duration,
+}
+
+impl Default for InvocationSessionConfig {
+    fn default() -> Self {
+        Self {
+            keep_alive_interval: Duration::from_secs(30),
+            max_pong_timeout: Duration::ZERO,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct McpConfig {
+    #[serde(with = "humantime_serde")]
+    pub sse_keep_alive_interval: Duration,
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            sse_keep_alive_interval: Duration::from_secs(15),
         }
     }
 }
@@ -1065,6 +1102,55 @@ mod tests {
     }
 
     #[test]
+    fn keep_alive_defaults_and_overrides() {
+        let defaults = WorkerServiceConfig::default();
+        assert!(defaults.validate_keep_alive().is_ok());
+        assert_eq!(
+            defaults.invocation_session.keep_alive_interval,
+            Duration::from_secs(30)
+        );
+        assert_eq!(defaults.invocation_session.max_pong_timeout, Duration::ZERO);
+        assert_eq!(
+            defaults.mcp.sse_keep_alive_interval,
+            Duration::from_secs(15)
+        );
+        let config: WorkerServiceConfig = make_worker_service_config_loader()
+            .figment()
+            .merge(Toml::string(
+                r#"
+                [invocation_session]
+                keep_alive_interval = "1s"
+                max_pong_timeout = "2s"
+                [mcp]
+                sse_keep_alive_interval = "3s"
+            "#,
+            ))
+            .extract()
+            .unwrap();
+        assert_eq!(
+            config.invocation_session.keep_alive_interval,
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            config.invocation_session.max_pong_timeout,
+            Duration::from_secs(2)
+        );
+        assert_eq!(config.mcp.sse_keep_alive_interval, Duration::from_secs(3));
+    }
+
+    #[test]
+    fn keep_alive_rejects_zero_intervals() {
+        for setting in 0..2 {
+            let mut config = WorkerServiceConfig::default();
+            match setting {
+                0 => config.invocation_session.keep_alive_interval = Duration::ZERO,
+                _ => config.mcp.sse_keep_alive_interval = Duration::ZERO,
+            }
+            assert!(config.validate_keep_alive().is_err());
+        }
+    }
+
+    #[test]
     fn postgres_session_store_overrides_the_default_redis_session_store() {
         let config: WorkerServiceConfig = make_worker_service_config_loader()
             .figment()
@@ -1273,8 +1359,8 @@ mod tests {
             &config.websocket_limits.invocation_session,
             &config.websocket_limits.connect,
         ] {
-            assert_eq!(limits.max_message_size, 32 * 1024 * 1024 + 64 * 1024);
-            assert_eq!(limits.max_frame_size, 32 * 1024 * 1024 + 64 * 1024);
+            assert_eq!(limits.max_message_size, 32 * 1024 * 1024);
+            assert_eq!(limits.max_frame_size, 32 * 1024 * 1024);
             assert_eq!(limits.max_write_buffer_size, 64 * 1024 * 1024);
             let websocket = limits.websocket_config();
             assert_eq!(websocket.max_message_size, Some(limits.max_message_size));
@@ -1318,23 +1404,8 @@ mod tests {
         assert_eq!(config.websocket_limits.connect.max_message_size, 4000);
         assert_eq!(
             config.websocket_limits.connect.max_frame_size,
-            32 * 1024 * 1024 + 64 * 1024
+            32 * 1024 * 1024
         );
-    }
-
-    #[test]
-    fn invocation_session_transport_limits_must_be_above_the_session_message_limit() {
-        let mut config = WorkerServiceConfig::default();
-        config.websocket_limits.invocation_session.max_message_size = 32 * 1024 * 1024;
-        assert!(config.validate_http_limits().is_err());
-
-        let mut config = WorkerServiceConfig::default();
-        config.websocket_limits.invocation_session.max_frame_size = 32 * 1024 * 1024;
-        assert!(config.validate_http_limits().is_err());
-
-        let mut config = WorkerServiceConfig::default();
-        config.websocket_limits.connect.max_message_size = 1024;
-        assert!(config.validate_http_limits().is_ok());
     }
 
     #[test]
