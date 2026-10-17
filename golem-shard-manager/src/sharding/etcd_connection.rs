@@ -69,7 +69,14 @@ fn check_endpoints(config: &EtcdConfig) -> Result<(), ShardManagerError> {
 
 fn check_credentials(config: &EtcdConfig) -> Result<(), ShardManagerError> {
     match (&config.username, &config.password) {
-        (Some(_), Some(_)) | (None, None) => Ok(()),
+        (None, None) => Ok(()),
+        (Some(_), Some(_)) if config.tls.is_some() => Ok(()),
+        (Some(_), Some(_)) => Err(refused(
+            "persistence.config.username and persistence.config.password need \
+             persistence.config.tls: over http:// the password, and then the auth token on every \
+             request, would cross the network in plain text"
+                .to_string(),
+        )),
         _ => Err(refused(
             "persistence.config.username and persistence.config.password must be set together"
                 .to_string(),
@@ -327,17 +334,39 @@ mod tests {
                 password,
                 ..config("http://etcd:2379", None)
             });
-            assert!(message.contains("username"), "{message}");
-            assert!(message.contains("password"), "{message}");
+            assert!(
+                message.contains(
+                    "persistence.config.username and persistence.config.password must be set \
+                     together"
+                ),
+                "{message}"
+            );
         }
     }
 
     #[test]
+    fn a_user_without_tls_is_refused() {
+        let message = refusal(&EtcdConfig {
+            username: Some("golem".to_string()),
+            password: Some(EtcdPassword::from("secret")),
+            ..config("http://etcd:2379", None)
+        });
+        assert!(
+            message.contains(
+                "persistence.config.username and persistence.config.password need \
+                 persistence.config.tls"
+            ),
+            "{message}"
+        );
+    }
+
+    #[test]
     fn the_password_never_appears_in_debug_or_display_output() {
+        let files = PemFiles::new();
         let config = EtcdConfig {
             username: Some("golem".to_string()),
             password: Some(EtcdPassword::from("s3cr3t-value")),
-            ..config("http://etcd:2379", None)
+            ..config("https://etcd:2379", Some(files.mtls()))
         };
         connect_options(&config).expect("a user with a password is accepted");
         let debug = format!("{config:?}");
