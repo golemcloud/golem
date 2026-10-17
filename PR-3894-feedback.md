@@ -297,6 +297,11 @@ Findings 11-14 have separate linked comments.
     Unchanged baselines, ordinary-timer native batches, scoped strict lint and formatting pass.
     No production or fixture change is included. The filesystem case remains adapter evidence,
     not a native metadata-future Pending proof.
+    The WebSocket native-lock and timeout-first proofs also no longer install never-advanced
+    monthly clocks. Actual target/subscription observations replace virtual-sleep observations;
+    an exact source audit retains the WebSocket timers, existing timing checks, peer counts,
+    results, histories, cleanup and the separate active-clock helpers. Their unchanged baseline,
+    ordinary-timer cases, scoped strict lint and formatting pass. WebSocket replay remains deferred.
   - [ ] Address the keyed filesystem metadata gate and remaining protocol ordering controls.
   - [ ] For any hook proposed to remain, document the otherwise untestable guarantee, minimal scope
     and why its scheduling changes do not invalidate the test. Existing main-owned hooks are not

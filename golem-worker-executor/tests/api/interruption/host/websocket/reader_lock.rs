@@ -118,8 +118,6 @@ async fn durable_websocket_timed_reader_lock_native_pending(
         Principal::anonymous(),
     )
     .await?;
-    let (clock, mut polls) = MonthlyClockForTest::new();
-    worker.set_monthly_clock_for_test(clock.clone());
     let fingerprint = worker.get_initial_worker_metadata().fingerprint;
     let mut pending = crate::native_waits::websocket_timed_reader_lock(fingerprint);
     let mut first_pending = crate::native_waits::websocket_receive(fingerprint);
@@ -146,7 +144,8 @@ async fn durable_websocket_timed_reader_lock_native_pending(
         let handshake = peer.handshake().await?;
         ensure!(handshake.number == 1);
         let (guard, observed) = establish_reader_order(&executor, &mut first_pending, &mut pending, &id, &key).await?;
-        tokio::time::timeout(Duration::from_secs(10), polls.recv()).await?.context("monthly clock closed")?;
+        ensure!(worker.monthly_window_active_for_test());
+        ensure!(limits.initialize_account(context.account_id).await?.monthly_observer_count_for_test() == 1);
         let initial = worker.current_monthly_proposal_for_test();
         executor.commit_oplog(&id).await?;
         let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
@@ -894,8 +893,6 @@ async fn durable_websocket_reader_lock_timeout_starts_after_acquire(
         Principal::anonymous(),
     )
     .await?;
-    let (clock, mut polls) = MonthlyClockForTest::new();
-    worker.set_monthly_clock_for_test(clock.clone());
     let fingerprint = worker.get_initial_worker_metadata().fingerprint;
     let mut pending = crate::native_waits::websocket_timed_reader_lock(fingerprint);
     let mut first_pending = crate::native_waits::websocket_receive(fingerprint);
@@ -927,7 +924,8 @@ async fn durable_websocket_reader_lock_timeout_starts_after_acquire(
         let handshake = peer.handshake().await?;
         ensure!(handshake.number == 1);
         let (guard, lock) = establish_reader_order(&executor, &mut first_pending, &mut pending, &id, &key).await?;
-        tokio::time::timeout(Duration::from_secs(10), polls.recv()).await?.context("monthly timer closed")?;
+        ensure!(worker.monthly_window_active_for_test());
+        ensure!(limits.initialize_account(context.account_id).await?.monthly_observer_count_for_test() == 1);
         let initial = worker.current_monthly_proposal_for_test();
         let mut raw = worker.raw_interrupt_for_test();
         executor.commit_oplog(&id).await?;
@@ -977,7 +975,7 @@ async fn durable_websocket_reader_lock_timeout_starts_after_acquire(
         ensure!(!worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await);
         let account = limits.initialize_account(context.account_id).await?;
         ensure!(account.monthly_observer_count_for_test() == 0);
-        ensure!(clock.active_sleeps() == 0);
+        ensure!(!worker.monthly_window_active_for_test());
         let slot = tokio::time::timeout(Duration::from_secs(5), worker.websocket_connection_pool().acquire()).await??;
         drop(slot);
         drop(handshake.send_second);

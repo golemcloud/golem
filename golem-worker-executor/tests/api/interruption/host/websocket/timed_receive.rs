@@ -756,8 +756,6 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
         Principal::anonymous(),
     )
     .await?;
-    let (clock, mut polls) = MonthlyClockForTest::new();
-    worker.set_monthly_clock_for_test(clock.clone());
     let mut accepted =
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let pool = worker.websocket_connection_pool();
@@ -809,9 +807,14 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
         })
         .await
         .context("committed timed Start before timeout")??;
-        tokio::time::timeout(Duration::from_secs(5), polls.recv())
-            .await?
-            .context("monthly timer closed")?;
+        ensure!(worker.monthly_window_active_for_test());
+        ensure!(
+            limits
+                .initialize_account(context.account_id)
+                .await?
+                .monthly_observer_count_for_test()
+                == 1
+        );
         let initial = worker.current_monthly_proposal_for_test();
         ensure!(initial.exhaustion.is_none());
         ensure!(
@@ -857,7 +860,7 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
         .await??;
         tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
         ensure!(!worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await);
-        ensure!(clock.active_sleeps() == 0);
+        ensure!(!worker.monthly_window_active_for_test());
         let account = limits.initialize_account(context.account_id).await?;
         ensure!(account.monthly_observer_count_for_test() == 0);
         let free = tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await??;
