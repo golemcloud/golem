@@ -700,20 +700,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 &idempotency_key,
             )?;
             let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
-            if !handle.is_live()
-                && let Some(details) = handle.recorded_request(self).await?.local_denial
-            {
-                replay_local_rpc_denial(
-                    self,
-                    handle,
-                    HostResponseGolemRpcInvokeAndAwait {
-                        result: Err(SerializableRpcError::Denied {
-                            details: details.clone(),
-                        }),
-                    },
-                )
-                .await?;
-                return Ok(Err(RpcError::Denied(details)));
+            if !handle.is_live() && recorded_rpc_denial(self, &handle).await?.is_some() {
+                let response = replay_rpc_denial(self, handle).await?;
+                return Ok(Err(denied_rpc_failure(response.result)?.into()));
             }
             let started = handle.recorded_span_started(self).await?.ok_or_else(|| {
                 WorkerExecutorError::unexpected_oplog_entry(
@@ -973,18 +962,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 (handle, span)
             }
             Either::Right(handle) => {
-                if let Some(details) = handle.recorded_request(self).await?.local_denial {
-                    replay_local_rpc_denial(
-                        self,
-                        handle,
-                        HostResponseGolemRpcInvokeAndAwait {
-                            result: Err(SerializableRpcError::Denied {
-                                details: details.clone(),
-                            }),
-                        },
-                    )
-                    .await?;
-                    return Ok(Err(RpcError::Denied(details)));
+                if recorded_rpc_denial(self, &handle).await?.is_some() {
+                    let response = replay_rpc_denial(self, handle).await?;
+                    return Ok(Err(denied_rpc_failure(response.result)?.into()));
                 }
                 let started = handle.recorded_span_started(self).await?.ok_or_else(|| {
                     WorkerExecutorError::unexpected_oplog_entry(
@@ -1114,18 +1094,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 )
             }
             Either::Right(handle) => {
-                if let Some(details) = handle.recorded_request(self).await?.local_denial {
-                    replay_local_rpc_denial(
-                        self,
-                        handle,
-                        HostResponseGolemRpcUnitOrFailure {
-                            result: Err(SerializableRpcError::Denied {
-                                details: details.clone(),
-                            }),
-                        },
-                    )
-                    .await?;
-                    return Ok(Err(RpcError::Denied(details)));
+                if recorded_rpc_denial(self, &handle).await?.is_some() {
+                    let response = replay_rpc_denial(self, handle).await?;
+                    return Ok(Err(denied_rpc_failure(response.result)?.into()));
                 }
                 let started = handle.recorded_span_started(self).await?.ok_or_else(|| {
                     WorkerExecutorError::unexpected_oplog_entry(
@@ -1344,7 +1315,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                                     idempotency_key,
                                     method_name: request_method_name,
                                     input: request_input,
-                                    local_denial: None,
                                     logical_streaming_origin: Some(request_streaming_origin),
                                     remote_agent_type: None,
                                     remote_agent_parameters: None,
@@ -1365,28 +1335,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 &idempotency_key,
             )?;
             let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
-            if !handle.is_live()
-                && let request = handle.recorded_request(self).await?
-                && let Some(details) = request.local_denial
-            {
-                let metadata = invocation_metadata(
-                    &OwnedAgentId::new(
-                        self.owned_agent_id.environment_id,
-                        &request.remote_agent_id,
-                    ),
-                    &request.idempotency_key,
-                );
-                replay_local_rpc_denial(
-                    self,
-                    handle,
-                    HostResponseGolemRpcInvokeAndAwait {
-                        result: Err(SerializableRpcError::Denied {
-                            details: details.clone(),
-                        }),
-                    },
-                )
-                .await?;
-                return bake_closed_async_denial(self, metadata, details);
+            if !handle.is_live() && recorded_rpc_denial(self, &handle).await?.is_some() {
+                return replay_async_rpc_denial(self, handle).await;
             }
             let started = handle.recorded_span_started(self).await?.ok_or_else(|| {
                 WorkerExecutorError::unexpected_oplog_entry(
@@ -1428,7 +1378,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 idempotency_key: idempotency_key.clone(),
                 method_name: method_name.clone(),
                 input: strip_streams(input_value.clone()),
-                local_denial: None,
                 logical_streaming_origin: Some(logical_streaming_origin.clone()),
                 remote_agent_type: None,
                 remote_agent_parameters: None,
@@ -1577,26 +1526,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 Either::Left(begun)
             }
             ResolvedCall::Replay(handle) => {
-                let request = handle.recorded_request(self).await?;
-                if let Some(details) = request.local_denial {
-                    let metadata = invocation_metadata(
-                        &OwnedAgentId::new(
-                            self.owned_agent_id.environment_id,
-                            &request.remote_agent_id,
-                        ),
-                        &request.idempotency_key,
-                    );
-                    replay_local_rpc_denial(
-                        self,
-                        handle,
-                        HostResponseGolemRpcInvokeAndAwait {
-                            result: Err(SerializableRpcError::Denied {
-                                details: details.clone(),
-                            }),
-                        },
-                    )
-                    .await?;
-                    return bake_closed_async_denial(self, metadata, details);
+                if recorded_rpc_denial(self, &handle).await?.is_some() {
+                    return replay_async_rpc_denial(self, handle).await;
                 }
                 Either::Right(handle)
             }
@@ -1650,7 +1581,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             idempotency_key: idempotency_key.clone(),
             method_name: method_name.clone(),
             input: input_value.clone(),
-            local_denial: None,
             logical_streaming_origin: None,
             remote_agent_type: None,
             remote_agent_parameters: None,
@@ -2230,18 +2160,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let input = match reject_non_await_scope_card(&scope_card, input, function_name, self) {
             Ok(input) => input,
             Err(details) => {
-                return if self.state.is_live() {
-                    persist_schedule_denial(
-                        self,
-                        logical_remote_agent_id,
-                        datetime,
-                        method_name,
-                        RpcError::Denied(details),
-                    )
-                    .await
-                } else {
-                    Ok(Err(RpcError::Denied(details)))
-                };
+                return persist_schedule_denial(
+                    self,
+                    logical_remote_agent_id,
+                    datetime,
+                    method_name,
+                    RpcError::Denied(details),
+                )
+                .await;
             }
         };
 
@@ -2501,15 +2427,12 @@ fn denied_rpc_request(
     remote_agent_id: &OwnedAgentId,
     idempotency_key: &IdempotencyKey,
     method_name: String,
-    details: String,
 ) -> HostRequestGolemRpcInvoke {
     HostRequestGolemRpcInvoke {
         remote_agent_id: remote_agent_id.agent_id(),
         idempotency_key: idempotency_key.clone(),
         method_name,
-        // The recorded denial forbids dispatch even if recovery retains only the Start.
         input: SchemaValue::Tuple { elements: vec![] },
-        local_denial: Some(details),
         logical_streaming_origin: None,
         remote_agent_type: None,
         remote_agent_parameters: None,
@@ -2524,14 +2447,33 @@ fn rpc_denied_details(error: RpcError) -> String {
     }
 }
 
-async fn replay_local_rpc_denial<Pair, P, Ctx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    handle: DurableCallSession<Pair, P>,
-    expected: Pair::Resp,
-) -> anyhow::Result<()>
+/// The denial recorded in the claimed `Start` of an RPC call. A denied call never dispatches.
+async fn recorded_rpc_denial<Pair, P, Ctx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    handle: &DurableCallSession<Pair, P>,
+) -> Result<Option<String>, WorkerExecutorError>
 where
     Pair: HostPayloadPair,
-    Pair::Resp: PartialEq + Debug,
+    P: DropPolicy,
+    Ctx: WorkerCtx,
+{
+    match ctx.state.oplog.read(handle.start_index()).await? {
+        OplogEntry::Start { denial, .. } => Ok(denial),
+        entry => Err(WorkerExecutorError::unexpected_oplog_entry(
+            format!("Start at {}", handle.start_index()),
+            format!("{entry:?}"),
+        )),
+    }
+}
+
+/// Replays an RPC call whose `Start` records a denial. Replay completes an incomplete denied
+/// `Start` with the denied response, so the call is never repaired by dispatching it.
+async fn replay_rpc_denial<Pair, P, Ctx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    handle: DurableCallSession<Pair, P>,
+) -> anyhow::Result<Pair::Resp>
+where
+    Pair: HostPayloadPair,
     P: DropPolicy,
     Ctx: WorkerCtx,
 {
@@ -2540,37 +2482,48 @@ where
         .as_ref()
         .map(|started| restore_embedded_span(ctx, started))
         .transpose()?;
-    match handle.replay(ctx).await? {
-        CallReplayOutcome::Replayed(response) if response == expected => {}
-        CallReplayOutcome::Replayed(response) => {
-            return Err(WorkerExecutorError::unexpected_oplog_entry(
-                format!("recorded local RPC denial {expected:?}"),
-                format!("{response:?}"),
-            )
-            .into());
+    let response = match handle.replay(ctx).await? {
+        CallReplayOutcome::Replayed(response) => response,
+        CallReplayOutcome::Incomplete(mut handle) => {
+            let start_index = handle.start_index();
+            return Err(handle.trap(WorkerExecutorError::unexpected_oplog_entry(
+                format!(
+                    "denied {} Start completed with its denied response",
+                    Pair::FQFN
+                ),
+                format!("incomplete denied Start at {start_index}"),
+            )));
         }
-        CallReplayOutcome::Incomplete(handle) => {
-            if let Some(span) = &span {
-                handle
-                    .complete_with_span(
-                        ctx,
-                        expected,
-                        SpanFinished {
-                            span_id: span.span_id().clone(),
-                            finished_at: golem_common::model::Timestamp::now_utc(),
-                            outcome: SpanOutcome::Denied,
-                        },
-                    )
-                    .await?;
-            } else {
-                handle.complete(ctx, expected).await?;
-            }
-        }
-    }
+    };
     if let Some(span) = span {
         finish_span_in_memory(ctx, span.span_id())?;
     }
-    Ok(())
+    Ok(response)
+}
+
+fn denied_rpc_failure<T: Debug>(
+    result: Result<T, SerializableRpcError>,
+) -> Result<InternalRpcError, WorkerExecutorError> {
+    match result {
+        Err(error) => Ok(InternalRpcError::from(error)),
+        Ok(value) => Err(WorkerExecutorError::unexpected_oplog_entry(
+            "denied RPC response",
+            format!("{value:?}"),
+        )),
+    }
+}
+
+async fn replay_async_rpc_denial<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    handle: DurableCallSession<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>,
+) -> anyhow::Result<AsyncInvocationWithMetadata> {
+    let request = handle.recorded_request(ctx).await?;
+    let metadata = invocation_metadata(
+        &OwnedAgentId::new(ctx.owned_agent_id.environment_id, &request.remote_agent_id),
+        &request.idempotency_key,
+    );
+    let response = replay_rpc_denial(ctx, handle).await?;
+    bake_closed_async_error(ctx, metadata, denied_rpc_failure(response.result)?)
 }
 
 async fn persist_invoke_and_await_denial<Ctx: WorkerCtx>(
@@ -2606,25 +2559,9 @@ async fn persist_invoke_and_await_denial_from_begun<Ctx: WorkerCtx>(
     let details = rpc_denied_details(error);
     let idempotency_key =
         reserved_idempotency_key.unwrap_or_else(|| ctx.derive_idempotency_key(begun.begin_index()));
-    let request = denied_rpc_request(
-        &remote_agent_id,
-        &idempotency_key,
-        method_name,
-        details.clone(),
-    );
-    begun
-        .start_live(ctx, request)
-        .await?
-        .complete(
-            ctx,
-            HostResponseGolemRpcInvokeAndAwait {
-                result: Err(SerializableRpcError::Denied {
-                    details: details.clone(),
-                }),
-            },
-        )
-        .await?;
-    Ok(Err(RpcError::Denied(details)))
+    let request = denied_rpc_request(&remote_agent_id, &idempotency_key, method_name);
+    let response = begun.start_live_denied(ctx, request, details).await?;
+    Ok(Err(denied_rpc_failure(response.result)?.into()))
 }
 
 async fn persist_invoke_denial<Ctx: WorkerCtx>(
@@ -2650,25 +2587,9 @@ async fn persist_invoke_denial_from_begun<Ctx: WorkerCtx>(
 ) -> anyhow::Result<Result<InvocationMetadata, RpcError>> {
     let details = rpc_denied_details(error);
     let idempotency_key = ctx.derive_idempotency_key(begun.begin_index());
-    let request = denied_rpc_request(
-        &remote_agent_id,
-        &idempotency_key,
-        method_name,
-        details.clone(),
-    );
-    begun
-        .start_live(ctx, request)
-        .await?
-        .complete(
-            ctx,
-            HostResponseGolemRpcUnitOrFailure {
-                result: Err(SerializableRpcError::Denied {
-                    details: details.clone(),
-                }),
-            },
-        )
-        .await?;
-    Ok(Err(RpcError::Denied(details)))
+    let request = denied_rpc_request(&remote_agent_id, &idempotency_key, method_name);
+    let response = begun.start_live_denied(ctx, request, details).await?;
+    Ok(Err(denied_rpc_failure(response.result)?.into()))
 }
 
 async fn persist_async_invoke_denial<Ctx: WorkerCtx>(
@@ -2834,33 +2755,14 @@ async fn persist_async_invoke_denial_from_begun<Ctx: WorkerCtx>(
         &idempotency_key,
     )?;
     let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
-    let request = denied_rpc_request(
-        &remote_agent_id,
-        &idempotency_key,
-        method_name.clone(),
-        details.clone(),
-    );
+    let request = denied_rpc_request(&remote_agent_id, &idempotency_key, method_name.clone());
     let (span, started) =
         create_embedded_invocation_span(ctx, &connection_span_id, &method_name, &idempotency_key)?;
-    begun
-        .start_live_with_span(ctx, request, started)
-        .await?
-        .complete_with_span(
-            ctx,
-            HostResponseGolemRpcInvokeAndAwait {
-                result: Err(SerializableRpcError::Denied {
-                    details: details.clone(),
-                }),
-            },
-            SpanFinished {
-                span_id: span.span_id().clone(),
-                finished_at: golem_common::model::Timestamp::now_utc(),
-                outcome: SpanOutcome::Denied,
-            },
-        )
+    let response = begun
+        .start_live_denied_with_span(ctx, request, details, started)
         .await?;
     finish_span_in_memory(ctx, span.span_id())?;
-    bake_closed_async_denial(ctx, metadata, details)
+    bake_closed_async_error(ctx, metadata, denied_rpc_failure(response.result)?)
 }
 
 fn bake_closed_async_denial<Ctx: WorkerCtx>(
@@ -2916,8 +2818,23 @@ async fn persist_schedule_denial<Ctx: WorkerCtx>(
         DurableFunctionType::WriteRemote,
     )
     .await?;
-    persist_schedule_denial_from_begun(ctx, begun, remote_agent_id, datetime, method_name, error)
-        .await
+    match begun.resolve(ctx).await? {
+        ResolvedCall::Live(begun) => {
+            persist_schedule_denial_from_begun(
+                ctx,
+                begun,
+                remote_agent_id,
+                datetime,
+                method_name,
+                error,
+            )
+            .await
+        }
+        ResolvedCall::Replay(handle) => {
+            let response = replay_rpc_denial(ctx, handle).await?;
+            Ok(Err(denied_rpc_failure(response.result)?.into()))
+        }
+    }
 }
 
 async fn persist_schedule_denial_from_begun<Ctx: WorkerCtx>(
@@ -2939,19 +2856,8 @@ async fn persist_schedule_denial_from_begun<Ctx: WorkerCtx>(
         remote_agent_type: None,
         remote_agent_parameters: None,
     };
-    begun
-        .start_live(ctx, request)
-        .await?
-        .complete(
-            ctx,
-            HostResponseGolemRpcScheduledInvocationCompat {
-                result: Err(SerializableRpcError::Denied {
-                    details: details.clone(),
-                }),
-            },
-        )
-        .await?;
-    Ok(Err(RpcError::Denied(details)))
+    let response = begun.start_live_denied(ctx, request, details).await?;
+    Ok(Err(denied_rpc_failure(response.result)?.into()))
 }
 
 impl PreparedRpcInvocation {
@@ -2967,7 +2873,6 @@ impl PreparedRpcInvocation {
             idempotency_key: idempotency_key.clone(),
             method_name: self.method_name.clone(),
             input: strip_streams(self.input_value.clone()),
-            local_denial: None,
             logical_streaming_origin,
             remote_agent_type: None,
             remote_agent_parameters: None,

@@ -133,6 +133,9 @@ interface oplog {
     /// and blobstore operations — surfaces as a generic `typed-schema-value`
     /// tree, identified by `function-name`; there are no per-interface named WIT
     /// variants for the payload shapes.
+    ///
+    /// `denial` is the reason the host denied the call before it ran. A denied
+    /// call never runs its operation, and its `end` holds the denied response.
     record start-parameters {
         timestamp: datetime,
         parent-start-index: option<oplog-index>,
@@ -142,6 +145,7 @@ interface oplog {
         request: option<typed-schema-value>,
         durable-function-type: wrapped-function-type,
         span-started: option<span-started>,
+        denial: option<string>,
     }
 
     /// Parameters of an enriched durable host-call `end` entry. Like the
@@ -743,6 +747,7 @@ interface oplog {
         request: option<oplog-payload>,
         durable-function-type: wrapped-function-type,
         span-started: option<span-started>,
+        denial: option<string>,
     }
 
     record raw-end-parameters {

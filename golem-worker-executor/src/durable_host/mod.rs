@@ -1927,6 +1927,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         targets: &[PermissionTarget],
     ) -> Result<Result<LiveAuthorizationPermit, AuthorizationError>, WorkerExecutorError> {
         self.process_pending_replay_events().await?;
+        if self.state.durability_is_suppressed() && !self.state.is_live() {
+            // In snapshotting mode a durable call resolves as live and records nothing, also while
+            // the Store still replays, as the load of a snapshot during recovery does. Such a call
+            // is not checked: no recorded decision exists for it, and replay must not decide one.
+            return Ok(Ok(LiveAuthorizationPermit { _private: () }));
+        }
         assert_live_authorization(self.state.is_live());
 
         if self.operator_authorizes_current_invocation() {
@@ -3455,6 +3461,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 request: None,
                 durable_function_type: DurableFunctionType::WriteRemote,
                 span_started: None,
+                denial: None,
             };
             let begin_index = self
                 .public_state

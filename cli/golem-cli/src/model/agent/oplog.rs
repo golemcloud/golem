@@ -245,6 +245,9 @@ impl TextOutput for PublicOplogEntry {
                 if let Some(span) = &params.span_started {
                     logln(format!("{pad}span started:      {span:?}"));
                 }
+                if let Some(denial) = &params.denial {
+                    logln(format!("{pad}denied:            {denial}"));
+                }
             }
             PublicOplogEntry::End(params) => {
                 logln(format_message_highlight("END"));
