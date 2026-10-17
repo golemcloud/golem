@@ -70,8 +70,8 @@ services:
       GOLEM__DB__CONFIG__USERNAME: golem_user
       GOLEM__DB__CONFIG__PASSWORD: golem_password
 
-      GOLEM__COMPILATION__CONFIG__HOST: golem-component-compilation-service
-      GOLEM__COMPILATION__CONFIG__PORT: ${COMPONENT_COMPILATION_SERVICE_GRPC_PORT}
+      GOLEM__COMPONENT_COMPILATION__CONFIG__HOST: golem-component-compilation-service
+      GOLEM__COMPONENT_COMPILATION__CONFIG__PORT: ${COMPONENT_COMPILATION_SERVICE_GRPC_PORT}
     volumes:
       - blob_storage:/data/blob_storage
     depends_on:

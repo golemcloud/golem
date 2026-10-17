@@ -1,0 +1,127 @@
+import { Callout, Steps } from "nextra/components"
+
+# Deploy on Fly.io
+
+Fly.io runs the [all-in-one image](/next/deploy/server#container-image) on one Machine in the [single node](/next/deploy/modes#single-node) and [managed Postgres](/next/deploy/modes#managed-postgres) modes, with the blobs in Tigris, Fly.io's S3-compatible object storage. Go through the [production checklist](/next/deploy/production-checklist) too.
+
+## What Fly.io decides
+
+- **One Machine.** Run exactly one Machine: two servers on one database can run the same agent twice. Create the app with `--ha=false`, keep `fly scale count 1`, and keep the Machine running with `auto_stop_machines = "off"`. The `rolling` deploy strategy, the default, replaces the Machine in place: it stops the old one before the new one starts. Do not use `bluegreen` or `canary`, which start new Machines next to the old ones.
+- **Volumes.** A volume belongs to one Machine on one server. If that server fails, the Machine is down until the server comes back, and a lost volume loses what only the volume had. Fly.io snapshots volumes once a day and keeps the snapshots for five days by default. Turn on [Litestream](/next/deploy/server#litestream) in mode 1, or use mode 2.
+- **Forwarded headers.** The Fly Proxy does not document `X-Forwarded-Host` or the address it connects from, so the server does not trust it. The server routes by the `Host` header and sees `http` as the scheme. This affects the URLs it builds from the request, such as the address an OIDC login returns to.
+
+## Single node
+
+<Steps>
+
+### Create the app, the volume and the bucket
+
+```shell filename="Terminal" copy
+fly apps create my-golem
+fly volumes create golem_data --app my-golem --region fra --size 10
+fly storage create --app my-golem
+```
+
+The image runs the server as uid 65534. Fly.io staff describe in the community forum that Fly.io gives the mount directory of a volume to the user of the image, so the volume needs nothing; the Fly.io documentation does not say so. If the server does not start because `/var/lib/golem` is not writable by uid 65534, build the image that [Volume ownership](/next/deploy/server#volume-ownership) describes and set `[build] dockerfile` in `fly.toml` instead of `image`.
+
+`fly storage create` creates a Tigris bucket and sets `BUCKET_NAME`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_ENDPOINT_URL_S3` as secrets of the app. Note the bucket name.
+
+### Set the secrets
+
+Run the [`generate-env.sh` script](/next/deploy/server#environment-file) and import its output as secrets:
+
+```shell filename="Terminal" copy
+curl -fsSLO https://raw.githubusercontent.com/golemcloud/golem/main/docker-examples/single-node/generate-env.sh
+chmod +x generate-env.sh
+umask 077
+GOLEM_S3_BUCKET=<bucket name> GOLEM_S3_REGION=auto \
+GOLEM_S3_ENDPOINT=https://fly.storage.tigris.dev \
+  ./generate-env.sh > golem.env
+fly secrets import --app my-golem --stage < golem.env
+```
+
+`golem.env` contains the admin token, `GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN`. Keep it, and delete the file when the app runs.
+
+### Write `fly.toml`
+
+```toml filename="fly.toml" copy
+app = "my-golem"
+primary_region = "fra"
+
+[build]
+  image = "golemservices/golem:<version>"
+
+[deploy]
+  strategy = "rolling"
+
+[env]
+  GOLEM__ROUTER__MANAGEMENT_HOST = "golem.example.com"
+  GOLEM_LITESTREAM = "true"
+  GOLEM_LITESTREAM_REPLICA_URL = "s3://<bucket name>/litestream?endpoint=https://fly.storage.tigris.dev&region=auto"
+
+[mounts]
+  source = "golem_data"
+  destination = "/var/lib/golem"
+
+[http_service]
+  internal_port = 9881
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "120s"
+    interval = "15s"
+    timeout = "5s"
+    method = "GET"
+    path = "/healthcheck"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "4gb"
+```
+
+A start that downloads the [built-in plugins and tools](/next/deploy/server#built-in-plugins-and-tools) takes about a minute, so the health check has a grace period. The volume keeps them, so only the first start on a new volume downloads.
+
+### Deploy and add the domains
+
+```shell filename="Terminal" copy
+fly deploy --ha=false
+fly certs add golem.example.com --app my-golem
+fly certs add api.example.com --app my-golem
+```
+
+Add a certificate for the management host and for each domain of an HTTP API or MCP deployment, and create the DNS records that `fly certs` shows.
+
+### Deploy an application
+
+Check `https://golem.example.com/healthcheck`, and deploy an application with the admin token. See [Connect the CLI](/next/deploy/server#connect-the-cli).
+
+</Steps>
+
+To upgrade, change the image tag in `fly.toml` and run `fly deploy`. To restore after the loss of the volume, create a new volume named `golem_data` and deploy: the image restores the databases from the Litestream replica before the server starts. The new volume has no cache of the [built-in plugins and tools](/next/deploy/server#built-in-plugins-and-tools), so that start downloads them again from GitHub.
+
+<Callout type="warning">
+  Litestream is off by default; turn it on from the first start of a new volume. This guide turns it on because the platform's volumes belong to one host and are backed up only once a day; with a reliable persistent volume, it is not needed. Litestream is backup and restore for one server, not high availability. Exactly one container may write to a replica URL: two containers on the same replica corrupt it. Replication is asynchronous, about once a second, so losing the volume can lose the newest oplog writes, and agents then replay from an earlier point and may run side effects again. Litestream replicates only the SQLite databases, so the blobs must be in S3. It does not replicate the cache of the built-in plugins and tools either, so a restore onto a new volume downloads them again and needs HTTPS connections to GitHub. At startup, the image restores only the databases that are missing from the volume, so a restart with its data restores nothing. For production durability, use the managed Postgres mode. See [Litestream limits](/next/deploy/server#litestream-limits).
+</Callout>
+
+## Managed Postgres
+
+Create a Fly.io Managed Postgres cluster in the region of the app, and pass the host, database, user and password of its connection URL to the script, together with the bucket:
+
+```shell filename="Terminal" copy
+GOLEM_S3_BUCKET=<bucket name> GOLEM_S3_REGION=auto \
+GOLEM_S3_ENDPOINT=https://fly.storage.tigris.dev \
+GOLEM_POSTGRES_HOST=<host> GOLEM_POSTGRES_DB=<database> \
+GOLEM_POSTGRES_USER=<user> GOLEM_POSTGRES_PASSWORD=<password> \
+  ./generate-env.sh > golem.env
+```
+
+Leave out the `[mounts]` section and the Litestream variables: the state is in Postgres. The single Machine and the `rolling` strategy still keep one server at a time.
+
+## Fixed cluster
+
+<Callout type="warning">
+  A [fixed cluster](/next/deploy/cluster) on Fly.io is not supported yet. The private network is IPv6-only, so every service needs `GOLEM__BIND_ADDRESS=::`, and each executor needs `GOLEM__GRPC__ADVERTISED_IP` set to its `FLY_PRIVATE_IP`. The settings exist, but the cluster has not been tested on Fly.io.
+</Callout>

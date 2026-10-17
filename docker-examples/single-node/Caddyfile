@@ -1,0 +1,5 @@
+# The server routes by host: the management host to the management API, every other host to the
+# HTTP API and MCP deployments. Caddy only terminates TLS for the names it serves.
+{$GOLEM_MANAGEMENT_HOST}, {$GOLEM_APP_DOMAINS} {
+	reverse_proxy golem:9881
+}

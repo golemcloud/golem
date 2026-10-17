@@ -2,6 +2,8 @@ import { Cards } from "nextra/components"
 
 # Deployment
 
+To run Golem in production, choose one of the [deployment modes](/next/deploy/modes) and go through the [production checklist](/next/deploy/production-checklist). This page describes the services that the deployments are made of.
+
 Golem Services are distributed as Docker images. They are available in [Golem Services Docker Hub](https://hub.docker.com/u/golemservices). Each Docker image is built for the following architectures:
 
 - linux/amd64
@@ -10,7 +12,7 @@ Golem Services are distributed as Docker images. They are available in [Golem Se
 The services are using the following storage backends:
 
 - Relational Database (RDB) - [PostgreSQL](https://www.postgresql.org/) or SQLite (for running locally)
-- [Redis](https://redis.io/)
+- [Redis](https://redis.io/) - optional, for the worker executor's storage or the worker service's sessions
 - Blob storage - Shared File System or S3
 - [etcd](https://etcd.io/) - optional, only for the shard manager's distributed mode
 
@@ -151,6 +153,16 @@ The shard manager identifies a worker executor by the address it reaches it at, 
 For deployment variants, see the following sections:
 
 <Cards num={3}>
+  <Cards.Card title="Production Checklist" href="/next/deploy/production-checklist" />
+  <Cards.Card title="Deployment Modes" href="/next/deploy/modes" />
+  <Cards.Card title="All-in-one Server" href="/next/deploy/server" />
+  <Cards.Card title="Fixed Cluster" href="/next/deploy/cluster" />
+  <Cards.Card title="VM" href="/next/deploy/vm" />
+  <Cards.Card title="Railway" href="/next/deploy/railway" />
+  <Cards.Card title="Render" href="/next/deploy/render" />
+  <Cards.Card title="Fly.io" href="/next/deploy/fly" />
+  <Cards.Card title="AWS ECS" href="/next/deploy/ecs" />
+  <Cards.Card title="Google Cloud Run" href="/next/deploy/cloud-run" />
   <Cards.Card title="Docker" href="/next/deploy/docker" />
   <Cards.Card title="Kubernetes" href="/next/deploy/kubernetes" />
   <Cards.Card title="Golem Cloud" href="/next/deploy/golem-cloud" />
