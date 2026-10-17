@@ -162,7 +162,7 @@ spec:
     matchLabels: { app: golem-shard-manager }
 ```
 
-Point the executors' and worker services' `shard_manager.host` at the Service. A rolling update that replaces the leader's pod sends it SIGTERM, and the leader releases its lease, so a standby takes over within milliseconds and serves once its startup completes. The replica identity falls back to `HOSTNAME`, which Kubernetes sets to the pod name, so the example needs no extra identity variable.
+Point the executors' and worker services' `shard_manager.host` (`GOLEM__SHARD_MANAGER__HOST`) at the Service name, and set their `shard_manager.port` (`GOLEM__SHARD_MANAGER__PORT`) to the Service's gRPC port, 9092 in this example. The host alone is not enough: the client's default port is 9002, which the Service does not expose. A rolling update that replaces the leader's pod sends it SIGTERM, and the leader releases its lease, so a standby takes over within milliseconds and serves once its startup completes. The replica identity falls back to `HOSTNAME`, which Kubernetes sets to the pod name, so the example needs no extra identity variable.
 
 `minReadySeconds: 20` matters for rollouts. A new pod is Ready at once, because a standby is ready while etcd answers it. Without a pause, Kubernetes then stops the next old pod while a just-elected leader is still running its startup, and several startups can follow in a row. A Deployment's ReplicaSet deletes the newest old pods first, so the leader, which is usually the oldest pod, goes last.
 
