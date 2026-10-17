@@ -25,6 +25,7 @@ use golem_shard_manager::{
     DbRoutingTablePersistence, EtcdRoutingTablePersistence, ExecutorAddr, ExecutorId,
     ExternalRevision, LeaderFence, NO_REVISION, ReadRetry, RoutingTablePersistence, STATE_KEY,
     ShardAssignmentEntry, ShardEpoch, ShardLeaseRevision, ShardLeaseState, ShardManagerError,
+    never_reached_etcd,
 };
 use golem_test_framework::components::etcd::docker_etcd::DockerEtcd;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
@@ -1314,4 +1315,166 @@ fn replacement_shard_state(number_of_shards: usize) -> ShardLeaseState {
         number_of_shards,
         &[(executor(3), addr(3, 9012), None, &[5, 6, 7])],
     )
+}
+
+/// Refuses connections rather than black-holing them: tonic keeps a refusing member in the
+/// balancer's rotation and fails each request that lands on it at once.
+pub(crate) const DEAD_MEMBER: &str = "http://127.0.0.1:1";
+
+/// How many requests to send through an endpoint list with a dead member. Each one lands on the
+/// dead member with a chance of about one in two, so a run this long meets it many times over.
+const REQUESTS_THROUGH_DEAD_MEMBER: usize = 30;
+
+/// A client built the way `connect_for_requests` builds one, over `endpoints`.
+pub(crate) async fn request_client(endpoints: &[String]) -> etcd_client::Client {
+    etcd_client::Client::connect(
+        endpoints,
+        Some(etcd_client::ConnectOptions::new().with_timeout(Duration::from_millis(500))),
+    )
+    .await
+    .expect("Cannot connect a client to the endpoint list")
+}
+
+fn a_read_only_txn() -> etcd_client::Txn {
+    etcd_client::Txn::new().and_then([etcd_client::TxnOp::get("/golem/test/classifier", None)])
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// The retry of a write is safe only for a request that was never sent. Anything that may have
+// been sent has to stay a fail-stop, or an attempt that landed would be sent again and come back
+// as a conflict with itself.
+async fn only_a_failure_to_connect_counts_as_never_reaching_etcd(etcd: &Arc<DockerEtcd>) {
+    let through_dead_member = request_client(&[etcd.client_url(), DEAD_MEMBER.to_string()]).await;
+    let mut connect_failures = 0;
+    for _ in 0..REQUESTS_THROUGH_DEAD_MEMBER {
+        if let Err(err) = through_dead_member.kv_client().txn(a_read_only_txn()).await {
+            assert!(
+                never_reached_etcd(&err),
+                "A request that failed to connect to a dead member was not recognized as unsent: \
+                 {err:?}"
+            );
+            connect_failures += 1;
+        }
+    }
+    assert!(
+        connect_failures > 0,
+        "No request in {REQUESTS_THROUGH_DEAD_MEMBER} met the dead member, so the classifier was \
+         never shown a connect failure"
+    );
+
+    // etcd answered, and said no: the request was received.
+    // etcd answered, and said no: the request was received.
+    let live = request_client(&[etcd.client_url()]).await;
+    let err = live
+        .kv_client()
+        .get(Vec::<u8>::new(), None)
+        .await
+        .expect_err("etcd must refuse a get without a key");
+    assert!(
+        !never_reached_etcd(&err),
+        "A status etcd answered with was taken for an unsent request: {err:?}"
+    );
+
+    // An established connection that goes away, and a request that outran its timeout: either
+    // may have been received.
+    let proxy = super::proxy::BreakableProxy::start(&etcd.client_url()).await;
+    let through_proxy = request_client(&[proxy.url()]).await;
+    through_proxy
+        .kv_client()
+        .txn(a_read_only_txn())
+        .await
+        .expect("A request through an unbroken proxy should succeed");
+
+    proxy.black_hole();
+    let timed_out = through_proxy
+        .kv_client()
+        .txn(a_read_only_txn())
+        .await
+        .expect_err("A request into a black hole must time out");
+    assert!(
+        !never_reached_etcd(&timed_out),
+        "A request that timed out was taken for an unsent one: {timed_out:?}"
+    );
+    proxy.restore();
+
+    for _ in 0..5 {
+        proxy.drop_all_connections().await;
+        if let Err(err) = through_proxy.kv_client().txn(a_read_only_txn()).await {
+            assert!(
+                !never_reached_etcd(&err),
+                "A request on a connection that was reset was taken for an unsent one: {err:?}"
+            );
+        }
+    }
+}
+
+/// An etcd store, the sentinel leader key it is fenced on, and a persistence over `endpoints`.
+async fn fenced_persistence_over(
+    etcd: &Arc<DockerEtcd>,
+    endpoints: &[String],
+) -> EtcdRoutingTablePersistence {
+    let store = EtcdRoutingTablePersistenceFactory { etcd: etcd.clone() }
+        .new_etcd_store()
+        .await;
+    let (_, fence) = store.mint_leader_key().await;
+    EtcdRoutingTablePersistence::with_client(
+        request_client(endpoints).await,
+        NUMBER_OF_SHARDS,
+        fence,
+        0,
+        store.read_retry(),
+    )
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// One member of an etcd cluster is down routinely, and tonic keeps it in the balancer's rotation,
+// so a share of the writes fail at once with a connect error. Nothing was sent, so sending the
+// write again is safe, and giving up on it would stop the leader.
+async fn writes_survive_a_dead_member_in_the_endpoint_list(etcd: &Arc<DockerEtcd>) {
+    let persistence =
+        fenced_persistence_over(etcd, &[etcd.client_url(), DEAD_MEMBER.to_string()]).await;
+
+    let mut revision = NO_REVISION;
+    for write in 0..REQUESTS_THROUGH_DEAD_MEMBER {
+        revision = persistence
+            .write(&sample_shard_state(NUMBER_OF_SHARDS), revision)
+            .await
+            .unwrap_or_else(|err| {
+                panic!(
+                    "Write {write} of {REQUESTS_THROUGH_DEAD_MEMBER} through the endpoint list \
+                     failed: {err}. The leader's worker stops on a failed write, so this is an \
+                     etcd member being restarted taking the leader down."
+                )
+            });
+    }
+    persistence
+        .compact(revision)
+        .await
+        .expect("Compaction through the endpoint list should succeed");
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// Sending a write again must not turn a refusal into something that is tried repeatedly: etcd
+// answering "the revision is not what you expected" is an answer, and it is final.
+async fn a_refused_write_is_not_sent_again_through_a_dead_member(etcd: &Arc<DockerEtcd>) {
+    let persistence =
+        fenced_persistence_over(etcd, &[etcd.client_url(), DEAD_MEMBER.to_string()]).await;
+    let revision = persistence
+        .write(&sample_shard_state(NUMBER_OF_SHARDS), NO_REVISION)
+        .await
+        .expect("The first write should succeed");
+
+    for _ in 0..10 {
+        let result = persistence
+            .write(&replacement_shard_state(NUMBER_OF_SHARDS), revision + 1000)
+            .await;
+        assert!(
+            matches!(result, Err(ShardManagerError::ConcurrentModification)),
+            "A write with a revision etcd does not hold must be refused as a conflict, once. \
+             Got {result:?}"
+        );
+    }
 }
