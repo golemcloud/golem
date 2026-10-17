@@ -33,7 +33,8 @@ use golem_common::model::oplog::{
     HostRequestGolemRpcActivate, HostResponse, HostResponseFileSystemStat,
     HostResponseGolemRpcActivate, HostResponseP3FileSystemStat,
     HostResponseP3FileSystemWriteAdmission, HostResponseP3SocketsConnect,
-    HostResponsePermissionCheck, OplogEntry, OplogIndex, PublicOplogEntry, PublicQueuedCardEvent,
+    HostResponsePermissionCheck, OplogEntry, OplogIndex, PublicOplogEntry,
+    PublicOplogEntryWithIndex, PublicQueuedCardEvent,
 };
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, PendingCardEventRef, PromiseId};
@@ -53,7 +54,7 @@ use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, registry_test_card, start_with_overrides,
 };
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -160,6 +161,11 @@ struct ScopeCardAuthority {
     revoke_card_count: AtomicUsize,
     root_card: RwLock<Option<StoredCard>>,
     additional_cards: RwLock<HashMap<CardId, StoredCard>>,
+    /// Runtime cards that the registry no longer reports as live.
+    revoked_cards: RwLock<HashSet<CardId>>,
+    /// The number of `check_cards` calls naming a runtime card that answer before every runtime
+    /// card is revoked externally.
+    runtime_card_checks_before_revocation: std::sync::Mutex<Option<usize>>,
     revoke_card_gate: std::sync::Mutex<Option<CardServiceGate>>,
     record_revoked_cards_gate: std::sync::Mutex<Option<CardServiceGate>>,
     check_cards_gate: std::sync::Mutex<Option<CheckCardsGate>>,
@@ -261,6 +267,103 @@ impl ScopeCardAuthority {
         self.revoked.store(true, Ordering::SeqCst);
     }
 
+    fn is_revoked_card(&self, card_id: CardId) -> bool {
+        self.revoked_cards
+            .read()
+            .expect("revoked-card lock poisoned")
+            .contains(&card_id)
+    }
+
+    /// Revokes `card_id` and every runtime card derived from it, as the registry does, and
+    /// returns the revoked cards.
+    fn revoke_subtree(&self, card_id: CardId) -> Vec<CardId> {
+        let cards = self
+            .additional_cards
+            .read()
+            .expect("additional-card lock poisoned")
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut revoked = self
+            .revoked_cards
+            .write()
+            .expect("revoked-card lock poisoned");
+        let mut subtree = vec![card_id];
+        let mut index = 0;
+        while index < subtree.len() {
+            let parent = subtree[index];
+            for child in cards
+                .iter()
+                .filter(|card| card.parent_ids().contains(&parent))
+                .map(StoredCard::card_id)
+            {
+                if !subtree.contains(&child) {
+                    subtree.push(child);
+                }
+            }
+            index += 1;
+        }
+        subtree.retain(|card_id| revoked.insert(*card_id));
+        subtree
+    }
+
+    /// Revokes every runtime card externally right after the `checks`-th later `check_cards` call
+    /// that names a runtime card has answered.
+    fn revoke_runtime_cards_after_checks(&self, checks: usize) {
+        *self
+            .runtime_card_checks_before_revocation
+            .lock()
+            .expect("revocation countdown lock poisoned") = Some(checks);
+    }
+
+    fn count_runtime_card_check(&self, card_ids: &[CardId]) {
+        let names_runtime_card = {
+            let cards = self
+                .additional_cards
+                .read()
+                .expect("additional-card lock poisoned");
+            card_ids.iter().any(|card_id| cards.contains_key(card_id))
+        };
+        if !names_runtime_card {
+            return;
+        }
+        let revoke = {
+            let mut remaining = self
+                .runtime_card_checks_before_revocation
+                .lock()
+                .expect("revocation countdown lock poisoned");
+            match remaining.as_mut() {
+                Some(1) => {
+                    *remaining = None;
+                    true
+                }
+                Some(checks) => {
+                    *checks -= 1;
+                    false
+                }
+                None => false,
+            }
+        };
+        if revoke {
+            self.revoke_runtime_cards_externally();
+        }
+    }
+
+    /// Revokes every runtime card outside the agent's wallets, without notifying any holder.
+    fn revoke_runtime_cards_externally(&self) {
+        let card_ids = self
+            .additional_cards
+            .read()
+            .expect("additional-card lock poisoned")
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        self.revoked_cards
+            .write()
+            .expect("revoked-card lock poisoned")
+            .extend(card_ids);
+    }
+
     fn reset_check_cards_count(&self) {
         self.check_cards_count.store(0, Ordering::SeqCst);
     }
@@ -350,6 +453,15 @@ impl CardService for ScopeCardService {
         self.authority
             .create_card_count
             .fetch_add(1, Ordering::SeqCst);
+        if let Some(parent_id) = card
+            .parent_ids()
+            .iter()
+            .find(|parent_id| self.authority.is_revoked_card(**parent_id))
+        {
+            return Err(WorkerExecutorError::runtime(format!(
+                "Failed creating runtime permission card: parent card {parent_id} not found"
+            )));
+        }
         self.authority.add_card(card.clone());
         Ok(card)
     }
@@ -359,7 +471,9 @@ impl CardService for ScopeCardService {
             .revoke_card_count
             .fetch_add(1, Ordering::SeqCst);
         CardServiceGate::pass(&self.authority.revoke_card_gate).await;
-        Ok(CardRevokeResult::Revoked(vec![card_id]))
+        Ok(CardRevokeResult::Revoked(
+            self.authority.revoke_subtree(card_id),
+        ))
     }
 
     async fn live_ancestor_ids_including_self(
@@ -393,8 +507,9 @@ impl CardService for ScopeCardService {
         })?;
         let root_card_id = root_card.card_id();
         let root_is_revoked = self.authority.revoked.load(Ordering::SeqCst);
-        Ok(card_ids
-            .into_iter()
+        let states = card_ids
+            .iter()
+            .copied()
             .map(|card_id| {
                 let state = if card_id == root_card_id {
                     if root_is_revoked {
@@ -402,6 +517,8 @@ impl CardService for ScopeCardService {
                     } else {
                         CardState::Live(Box::new(root_card.clone()))
                     }
+                } else if self.authority.is_revoked_card(card_id) {
+                    CardState::Revoked
                 } else if let Some(card) = self.authority.card(card_id) {
                     CardState::Live(Box::new(card))
                 } else {
@@ -409,7 +526,9 @@ impl CardService for ScopeCardService {
                 };
                 (card_id, state)
             })
-            .collect())
+            .collect();
+        self.authority.count_runtime_card_check(&card_ids);
+        Ok(states)
     }
 }
 
@@ -2648,9 +2767,11 @@ async fn repeated_authorization_does_not_revalidate_wallet_or_scope_roots(
             .await?
             .into_typed::<bool>()?
     );
+    // The inspection that selects the retained grant and each of the five repeated inspections
+    // record one liveness check of their own handle.
     assert_eq!(
         authority.check_cards_count(),
-        introspection_checks,
+        introspection_checks + 6,
         "repeated inspect and derive authorization must add no full-wallet liveness checks"
     );
 
@@ -2681,9 +2802,10 @@ async fn repeated_authorization_does_not_revalidate_wallet_or_scope_roots(
             .await?
             .into_typed::<bool>()?
     );
+    // Each of the five inspections records one liveness check of its own handle.
     assert_eq!(
         authority.check_cards_count(),
-        scope_admission_checks,
+        scope_admission_checks + 5,
         "repeated scoped authorization must add no root-card liveness checks after admission"
     );
     Ok(())
@@ -6315,3 +6437,378 @@ async fn p2_and_p3_environment_replay_uses_the_recorded_filtered_result(
 }
 
 mod moonbit;
+
+const CARD_LIVENESS_FUNCTION: &str = "golem::permissions::types::card-liveness";
+
+async fn start_card_handle_agent(
+    executor: &TestWorkerExecutor,
+    authority: &ScopeCardAuthority,
+    context: &TestContext,
+    host_api_tests: &PrecompiledComponent,
+    agent_name: &str,
+) -> anyhow::Result<(
+    golem_common::model::component::ComponentDto,
+    golem_common::model::agent::ParsedAgentId,
+    AgentId,
+)> {
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            let positive = &mut config.initial_permissions.lower_bound.positive;
+            positive.extend(scope_card_initial_permissions());
+            positive.push(parse_polymorphic_permission("card(*) @ * : revoke : *").unwrap());
+            positive.push(parse_polymorphic_permission("card(*) @ * : install : *").unwrap());
+        })
+        .store()
+        .await?;
+    let agent = agent_id!("ScopeCardAgent", agent_name);
+    configure_scope_card_root(authority, &component, &agent)?;
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    Ok((component, agent, worker))
+}
+
+async fn use_kept_child(
+    executor: &TestWorkerExecutor,
+    component: &golem_common::model::component::ComponentDto,
+    agent: &golem_common::model::agent::ParsedAgentId,
+) -> anyhow::Result<Vec<String>> {
+    executor
+        .invoke_and_await_agent(component, agent, "use_kept_child", data_value!())
+        .await?
+        .into_typed::<Vec<String>>()
+}
+
+fn count_starts(oplog: &[PublicOplogEntryWithIndex], function_name: &str) -> usize {
+    oplog
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params) if params.function_name == function_name
+            )
+        })
+        .count()
+}
+
+#[test]
+#[timeout("3m")]
+#[tracing::instrument]
+async fn cached_child_handle_reports_its_self_revoked_card_before_and_after_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let (component, holder, holder_worker) = start_card_handle_agent(
+        &executor,
+        &authority,
+        &context,
+        host_api_tests,
+        "self-revoked-handle-holder",
+    )
+    .await?;
+    let (parent_id, child_id) = executor
+        .invoke_and_await_agent(
+            &component,
+            &holder,
+            "keep_derived_cards",
+            data_value!(None::<String>),
+        )
+        .await?
+        .into_typed::<(SchemaCardId, SchemaCardId)>()?;
+    assert_ne!(parent_id, child_id);
+    assert_eq!(
+        use_kept_child(&executor, &component, &holder).await?,
+        vec!["ok", "ok"],
+        "a live child handle must be usable"
+    );
+
+    // The parent's subtree is the parent, the kept child and the grandchild that the first use
+    // derived.
+    let revoked = executor
+        .invoke_and_await_agent(&component, &holder, "revoke_kept_parent", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(revoked, 3);
+    assert_eq!(
+        use_kept_child(&executor, &component, &holder).await?,
+        vec!["card-revoked", "card-revoked"],
+        "the cached handle of a child revoked by the parent's cascade must report card-revoked"
+    );
+
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    assert_eq!(
+        use_kept_child(&executor, &component, &holder).await?,
+        vec!["card-revoked", "card-revoked"],
+        "the recreated handle must keep reporting its revoked card after replay"
+    );
+
+    let target = agent_id!("ScopeCardAgent", "self-revoked-handle-target");
+    let install = executor
+        .invoke_and_await_agent(
+            &component,
+            &holder,
+            "install_kept_child",
+            data_value!(component.id, target.to_string()),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(
+        install, "card-revoked",
+        "installing a revoked card must fail before the transfer starts"
+    );
+
+    let oplog = executor
+        .get_oplog(&holder_worker, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        count_starts(&oplog, "golem::permissions::wallet::install-card-transfer"),
+        0,
+        "a refused install must not start a transfer"
+    );
+    // Every operation on a persistent handle records one liveness check: keeping the cards
+    // inspects the template and the parent, derives from the parent and reads both ids, each of
+    // the three uses inspects and derives from the child, and the install checks the child.
+    assert_eq!(count_starts(&oplog, CARD_LIVENESS_FUNCTION), 12);
+    executor.check_oplog_is_queryable(&holder_worker).await?;
+    Ok(())
+}
+
+#[test]
+#[timeout("3m")]
+#[tracing::instrument]
+async fn received_card_replays_its_recorded_liveness_after_an_external_revocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let (component, sender, _sender_worker) = start_card_handle_agent(
+        &executor,
+        &authority,
+        &context,
+        host_api_tests,
+        "received-card-sender",
+    )
+    .await?;
+    let receiver_name = "received-card-receiver";
+    let receiver = agent_id!("ScopeCardAgent", receiver_name);
+    let receiver_worker = executor
+        .start_agent(&component.id, receiver.clone())
+        .await?;
+
+    let received = executor
+        .invoke_and_await_agent(
+            &component,
+            &sender,
+            "send_derived_card",
+            data_value!(receiver_name),
+        )
+        .await?
+        .into_typed::<Vec<String>>()?;
+    assert_eq!(received, vec!["ok", "ok"]);
+
+    authority.revoke_runtime_cards_externally();
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+
+    // Reconstructing the receiver replays its use of the received card against the recorded
+    // liveness. A registry lookup during replay would now report the card revoked, so the
+    // replayed invocation would diverge from its recorded result.
+    let wallet_cards = executor
+        .invoke_and_await_agent(&component, &receiver, "wallet_card_count", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(wallet_cards, 1);
+    let oplog = executor
+        .get_oplog(&receiver_worker, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(count_starts(&oplog, CARD_LIVENESS_FUNCTION), 2);
+    executor.check_oplog_is_queryable(&receiver_worker).await?;
+    Ok(())
+}
+
+#[test]
+#[timeout("3m")]
+#[tracing::instrument]
+async fn externally_revoked_cached_handle_returns_typed_errors_and_its_accessors_trap(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let (component, holder, _holder_worker) = start_card_handle_agent(
+        &executor,
+        &authority,
+        &context,
+        host_api_tests,
+        "externally-revoked-handle-holder",
+    )
+    .await?;
+    let (_, child_id) = executor
+        .invoke_and_await_agent(
+            &component,
+            &holder,
+            "keep_derived_cards",
+            data_value!(None::<String>),
+        )
+        .await?
+        .into_typed::<(SchemaCardId, SchemaCardId)>()?;
+    let kept_id = executor
+        .invoke_and_await_agent(&component, &holder, "kept_child_id", data_value!())
+        .await?
+        .into_typed::<SchemaCardId>()?;
+    assert_eq!(kept_id, child_id);
+
+    authority.revoke_runtime_cards_externally();
+    assert_eq!(
+        use_kept_child(&executor, &component, &holder).await?,
+        vec!["card-revoked", "card-revoked"],
+        "a revocation that no holder was notified of must reach the cached handle"
+    );
+    let accessor = executor
+        .invoke_and_await_agent(&component, &holder, "kept_child_id", data_value!())
+        .await;
+    let error = format!(
+        "{:?}",
+        accessor.expect_err("the id accessor of a revoked card must trap")
+    );
+    assert!(
+        normalized_error_contains(&error, "cardrevoked"),
+        "the accessor trap must name the revocation: {error}"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn derive_from_a_card_revoked_after_its_liveness_check_records_a_typed_refusal(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let (component, holder, holder_worker) = start_card_handle_agent(
+        &executor,
+        &authority,
+        &context,
+        host_api_tests,
+        "late-revoked-derive-parent-holder",
+    )
+    .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &holder,
+            "keep_derived_cards",
+            data_value!(None::<String>),
+        )
+        .await?
+        .into_typed::<(SchemaCardId, SchemaCardId)>()?;
+    let created_before = authority.create_card_count.load(Ordering::SeqCst);
+
+    // The inspection and the derive each check the child's liveness; the card service then revokes
+    // the child, so it refuses the derived card although the derive saw a live parent.
+    authority.revoke_runtime_cards_after_checks(2);
+    assert_eq!(
+        use_kept_child(&executor, &component, &holder).await?,
+        vec!["ok", "card-revoked"],
+        "a parent revoked between the liveness check and the creation must give card-revoked"
+    );
+    assert_eq!(
+        authority.create_card_count.load(Ordering::SeqCst),
+        created_before + 1,
+        "a refused creation must be recorded, not retried"
+    );
+
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    assert_eq!(
+        use_kept_child(&executor, &component, &holder).await?,
+        vec!["card-revoked", "card-revoked"],
+        "replay must return the recorded refusal"
+    );
+    assert_eq!(
+        authority.create_card_count.load(Ordering::SeqCst),
+        created_before + 1,
+        "replay of a recorded refusal must not create the card again"
+    );
+    let oplog = executor
+        .get_oplog(&holder_worker, OplogIndex::INITIAL)
+        .await?;
+    let derived_cards = oplog
+        .iter()
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::CardDerived(_)))
+        .count();
+    assert_eq!(
+        derived_cards, 2,
+        "the kept parent and child are audited; the refused derive adds no audit"
+    );
+    executor.check_oplog_is_queryable(&holder_worker).await?;
+    Ok(())
+}
+
+#[test]
+#[timeout("3m")]
+#[tracing::instrument]
+async fn cached_handle_reports_card_expired_after_its_lifespan(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let (component, holder, _holder_worker) = start_card_handle_agent(
+        &executor,
+        &authority,
+        &context,
+        host_api_tests,
+        "expiring-handle-holder",
+    )
+    .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &holder,
+            "keep_derived_cards",
+            data_value!(Some("PT10S".to_string())),
+        )
+        .await?
+        .into_typed::<(SchemaCardId, SchemaCardId)>()?;
+    // An indefinite child would outlive the expiring child, so the derive is refused with
+    // card-expired even while the child is live; the inspection tells the two states apart.
+    assert_eq!(
+        use_kept_child(&executor, &component, &holder).await?,
+        vec!["ok", "card-expired"]
+    );
+
+    tokio::time::sleep(Duration::from_secs(11)).await;
+    assert_eq!(
+        use_kept_child(&executor, &component, &holder).await?,
+        vec!["card-expired", "card-expired"]
+    );
+
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    assert_eq!(
+        use_kept_child(&executor, &component, &holder).await?,
+        vec!["card-expired", "card-expired"]
+    );
+    Ok(())
+}

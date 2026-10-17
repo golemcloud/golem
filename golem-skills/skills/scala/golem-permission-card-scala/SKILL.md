@@ -82,10 +82,12 @@ wallet().foreach {
   example one that `inspect()` returned from a template card, is rejected with `InvalidPattern`.
   Deriving a new template card, with slot variables in its grants, is not supported yet.
 - An expected failure is a `Left(PermissionError)`. A host trap is not converted: `id`, `parents`
-  and `expiresAt` trap when the host does not know the handle.
+  and `expiresAt` trap when the host does not know the handle, or when its card is revoked or
+  expired.
 - Revocation removes authority: a revoked card and the cards derived from it leave the holders'
-  wallets. A handle that the agent still holds may keep reporting its cached view; do not use
-  `inspect` on such a handle to decide whether authority is still present.
+  wallets. `inspect`, `derive`, `deriveScope` and `install` on a handle whose card is revoked or
+  expired return `Left(PermissionError.CardRevoked)` or `Left(PermissionError.CardExpired)`, so
+  `inspect` detects revocation.
 - After a card is moved (revoked, installed, released or sent), every use throws
   `IllegalStateException`.
 - `revoke` and `install` move the card before they call the host, also when the host returns an
