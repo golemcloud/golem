@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Builds the linux/amd64 images of the Golem services, of the golem executable and of xfs-quotad
-# without pushing them, and checks the contract of each image:
+# Builds the linux/amd64 images of the Golem services, of the golem executable, of xfs-quotad and of
+# the router without pushing them, and checks the contract of each image:
 #
 # - The image runs as uid and gid 65534, and that user can write the directories of the image
 #   where the default configuration keeps data.
 # - No file in the image has a setuid or setgid bit.
 # - The golem image starts with GOLEM_LITESTREAM=true on a new volume.
+# - Envoy accepts the configuration that the router image writes.
 # - The binary of xfs-quotad has the file capability cap_sys_admin+ep.
 # - xfs-quotad starts only when the container adds SYS_ADMIN and allows privilege escalation.
 #
@@ -40,11 +41,12 @@ services=(
     "golem-component-compilation-service golem-component-compilation-service /home/golem /data /data/blob_storage"
     "cli/golem golem /home/golem /var/lib/golem"
     "golem-xfs-quotad golem-xfs-quotad /run/golem-quota"
+    "golem-router - /home/golem"
 )
 
 for service in "${services[@]}"; do
     read -r directory binary _ <<<"$service"
-    if [ ! -e "$release/$binary" ]; then
+    if [ "$binary" != - ] && [ ! -e "$release/$binary" ]; then
         printf '#!/bin/sh\nexit 0\n' >"$release/$binary"
         chmod +x "$release/$binary"
     fi
@@ -83,6 +85,14 @@ databases=$(grep -c '^  - path:' cli/golem/docker/litestream.yml)
 restores=$(grep -c "no matching backups found" <<<"$output" || true)
 [ "$restores" = "$databases" ] ||
     fail "$golem with GOLEM_LITESTREAM=true restored $restores databases, not $databases: $output"
+
+# The entrypoint writes the Envoy configuration from the variables, and Envoy validates it.
+router="$tag_prefix/golem-router"
+echo "== $router: configuration"
+output=$("$engine" run --rm --cap-drop ALL --security-opt no-new-privileges \
+    -e GOLEM_ROUTER_MANAGEMENT_HOST=golem.example -e GOLEM_ROUTER_REGISTRY_SERVICE_HOST=registry \
+    -e GOLEM_ROUTER_WORKER_SERVICE_HOST=worker "$router" --mode validate 2>&1) ||
+    fail "$router: $output"
 
 quotad="$tag_prefix/golem-xfs-quotad"
 echo "== $quotad: file capability"
