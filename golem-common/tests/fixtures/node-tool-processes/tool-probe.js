@@ -1,7 +1,7 @@
-// Feasibility fixture only: invoke-and-await is synchronously lowered by the
-// generated native binding. This is not the proposed child_process API.
+// Feasibility fixture only. The original sync modes use an experimental
+// invoke-and-await lowering; collect modes use ordinary native bindings.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { ToolRpc, createOutput, createStdin } from 'golem:tool/host@0.1.0';
+import { ToolRpc, createOutput, createCollectedOutput, createStdin } from 'golem:tool/host@0.1.0';
 import { runJavaScript } from 'wasm-rquickjs:execution';
 import {
     ok,
@@ -114,6 +114,58 @@ async function probeStreams(mode) {
     return `${mode}:${out.bytes}:${out.checksum}:${err.bytes}:${err.checksum}${cancel ? ':cancelled' : ''}\n`;
 }
 
+async function probeCollectedStreams(mode) {
+    const echo = mode.includes('echo');
+    const pressure = mode.includes('pressure');
+    const path = [echo ? 'run' : pressure ? 'produce' : 'dual-reconstruct'];
+    const command = getToolType('streaming').command(path);
+    const wireInput = typedSchemaValueToWit({
+        graph: command.inputSchema.graph,
+        value: command.packJson(echo ? { mode: 'echo' } : pressure
+            ? { 'chunk-count': 512, 'chunk-size': 65536 }
+            : { mode: 'redaction-terminals' }),
+    });
+    let stdin;
+    if (echo) {
+        const [writer, source, closed] = createStdin();
+        await writer.write(new Uint8Array([0, 255, 1, 128, 0, 13, 10, 254]));
+        await writer.finish();
+        writer[Symbol.dispose]?.();
+        closed[Symbol.dispose]?.();
+        stdin = source;
+    }
+    const [stdoutTarget, stdout] = createCollectedOutput();
+    const stderr = !echo && !pressure ? createCollectedOutput() : undefined;
+    const rpc = new ToolRpc('streaming');
+    const future = rpc.asyncInvokeAndAwait(path, wireInput, stdin, stdoutTarget, stderr?.[0]);
+    // A regular synchronous WIT import: no experimental lowering override,
+    // Promise continuation or JavaScript output pump participates in this wait.
+    const collected = future.collect(stdout, stderr?.[1], pressure ? 4096n : 65536n);
+    if (collected && typeof collected.then === 'function') {
+        throw new Error('Expected synchronous native output collection');
+    }
+    future[Symbol.dispose]?.();
+    if (!collected.stdout) throw new Error('Missing collected stdout');
+    if (pressure) {
+        if (!collected.stdout.overflow || collected.stdout.bytes.length !== 4096) {
+            throw new Error(`Unexpected bounded output: ${JSON.stringify(collected)}`);
+        }
+        if (collected.result.tag !== 'err' || collected.result.val.tag !== 'cancelled') {
+            throw new Error(`Output overflow did not cancel the child: ${JSON.stringify(collected.result)}`);
+        }
+        return `${mode}:overflow:4096\n`;
+    }
+    if (collected.result.tag !== 'ok' || !collected.result.val.result) {
+        throw new Error(`Unexpected child result: ${JSON.stringify(collected.result)}`);
+    }
+    const describe = output => {
+        if (!output) return [0, 0];
+        if (output.failure || output.overflow) throw new Error('Unexpected collected output failure');
+        return [output.bytes.length, output.bytes.reduce((sum, byte) => sum + byte, 0)];
+    };
+    return `${mode}:${[...describe(collected.stdout), ...describe(collected.stderr)].join(':')}\n`;
+}
+
 probe.implement({
     async 'node-tool-probe'(input, context) {
         if (globalThis.nodeToolProbeInvoked || process.env.GOLEM_NODE_TOOL_PROBE_INVOCATION) {
@@ -122,6 +174,13 @@ probe.implement({
         globalThis.nodeToolProbeInvoked = true;
         process.env.GOLEM_NODE_TOOL_PROBE_INVOCATION = 'active';
         const [mode, content = 'nested-owner-data'] = input.args;
+        if (['streams-collect', 'streams-echo-collect', 'streams-pressure-collect'].includes(mode)) {
+            const text = await probeCollectedStreams(mode);
+            const writer = context.stdout.getWriter();
+            try { await writer.write(new TextEncoder().encode(text)); }
+            finally { writer.releaseLock(); }
+            return ok({ exit_code: 0 });
+        }
         if (/^streams-(echo-|pressure-)?(sync|async)$/.test(mode) || mode === 'streams-cancel-async') {
             const text = await probeStreams(mode);
             const writer = context.stdout.getWriter();

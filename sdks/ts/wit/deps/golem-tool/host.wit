@@ -93,6 +93,26 @@ interface host {
   /// Dropping the reader cancels only this attachment's consumer role.
   create-output: func() -> tuple<own<tool-output>, stream<byte-stream-item>>;
 
+  /// Bounded bytes collected from one output channel. A stream failure is
+  /// separate from the tool's structured result. Overflow retains the prefix.
+  record collected-output {
+    bytes: list<u8>,
+    failure: option<byte-stream-failure>,
+    overflow: bool,
+  }
+
+  record collected-invocation {
+    %result: result<invocation-result, tool-rpc-error>,
+    stdout: option<collected-output>,
+    stderr: option<collected-output>,
+  }
+
+  /// Host-owned reader, consumed by one result collection. Unlike an ordinary
+  /// stream reader, it does not need a caller-side forwarding pump.
+  resource output-collection;
+
+  create-collected-output: func() -> tuple<own<tool-output>, own<output-collection>>;
+
   resource tool-rpc {
     /// Binds an ordinary tool client to its configured tool name.
     constructor(tool-name: string);
@@ -136,6 +156,18 @@ interface host {
     /// Sequential calls return the same immutable terminal. Only one call may
     /// be outstanding at a time.
     get: async func() -> result<invocation-result, tool-rpc-error>;
+    /// Waits for the terminal while the host drains both supplied streams.
+    /// This does not require concurrent progress in the calling guest. Pass
+    /// collection handles created before async-invoke-and-await. Each channel
+    /// retains at most max-bytes, additionally
+    /// capped by the host's attachment byte limit. Exceeding either limit
+    /// cancels the invocation and reports overflow on that channel.
+    /// Dropping the wait does not itself cancel the invocation.
+    collect: func(
+      stdout: option<own<output-collection>>,
+      stderr: option<own<output-collection>>,
+      max-bytes: u64,
+    ) -> collected-invocation;
     /// Explicitly cancels the operation. Dropping this resource only detaches
     /// result observation and does not cancel accepted work.
     cancel: func();

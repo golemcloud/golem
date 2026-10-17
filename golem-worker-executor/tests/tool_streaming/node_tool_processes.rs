@@ -24,18 +24,19 @@ async fn node_native_tool_stream_scheduling_probe(
         std::path::PathBuf::from(std::env::var("GOLEM_NODE_TOOL_EXECUTOR_PROBE_WASM")?)
             .canonicalize()?;
     let cases = std::env::var("GOLEM_NODE_TOOL_STREAM_PROBE_CASES")?;
+    let replay_probe = std::env::var_os("GOLEM_NODE_TOOL_STREAM_REPLAY_PROBE").is_some();
     let context = TestContext::new(last_unique_id);
     let environment = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            environment_state_service: Some(environment.clone()),
-            configure: Some(Arc::new(|config| config.retry.max_attempts = 0)),
-            ..Default::default()
-        },
-    )
-    .await?;
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment.clone()),
+        configure: Some(Arc::new(|config| {
+            config.retry.max_attempts = 0;
+            config.oplog.default_snapshotting =
+                golem_worker_executor::services::golem_config::SnapshotPolicy::Disabled;
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
     let caller_component = executor
         .component_dep(&context.default_environment_id, caller)
         .store()
@@ -100,6 +101,22 @@ async fn node_native_tool_stream_scheduling_probe(
         caller_component.revision,
         Some(deployment),
     );
+    let agent = agent_id!("ToolStreamingCaller", "node-stream-scheduling");
+    let worker = executor
+        .start_agent(&caller_component.id, agent.clone())
+        .await?;
+    let mut effect_probe = if replay_probe {
+        anyhow::ensure!(cases.split(',').all(|mode| matches!(
+            mode,
+            "streams-collect" | "streams-echo-collect" | "streams-pressure-collect"
+        )));
+        Some(middleware_acceptance::start_probe_effect_server().await)
+    } else {
+        None
+    };
+    let effect_url = effect_probe
+        .as_ref()
+        .map(|(port, _, _)| format!("http://127.0.0.1:{port}"));
     for mode in cases.split(',') {
         anyhow::ensure!(matches!(
             mode,
@@ -110,9 +127,16 @@ async fn node_native_tool_stream_scheduling_probe(
                 | "streams-pressure-sync"
                 | "streams-pressure-async"
                 | "streams-cancel-async"
+                | "streams-collect"
+                | "streams-echo-collect"
+                | "streams-pressure-collect"
         ));
         println!("node-tool-stream starting mode={mode}");
         let started = Instant::now();
+        let mut args = vec![mode];
+        if let Some(url) = &effect_url {
+            args.push(url);
+        }
         let result = tokio::time::timeout(
             Duration::from_secs(30),
             invoke_cli_tool(
@@ -121,13 +145,24 @@ async fn node_native_tool_stream_scheduling_probe(
                 "node-stream-scheduling",
                 "node-tool-probe",
                 "/workspace",
-                vec![mode],
+                args,
             ),
         )
         .await
         .map_err(|_| anyhow::anyhow!("stream scheduling probe timed out: {mode}"))??;
         assert_eq!(result.exit_code, 0, "{mode}: {result:?}");
         assert!(result.stderr.is_empty(), "{mode}: {result:?}");
+        if mode == "streams-pressure-collect" {
+            assert_eq!(
+                String::from_utf8(result.stdout)?,
+                "streams-pressure-collect:overflow:4096\n"
+            );
+            println!(
+                "node-tool-stream completed mode={mode} elapsed_us={}",
+                started.elapsed().as_micros()
+            );
+            continue;
+        }
         let (bytes, checksum, stderr_bytes, stderr_checksum) = if mode.contains("cancel") {
             (7, 700, 0, 0)
         } else if mode.contains("echo") {
@@ -154,7 +189,135 @@ async fn node_native_tool_stream_scheduling_probe(
             started.elapsed().as_micros()
         );
     }
+    if let Some((_, effects, server)) = effect_probe.as_mut() {
+        for mode in cases.split(',') {
+            for runtime in if mode.contains("echo") {
+                ["main"].as_slice()
+            } else {
+                ["main", "job"].as_slice()
+            } {
+                let effect = tokio::time::timeout(Duration::from_secs(5), effects.recv()).await?;
+                assert_eq!(effect, Some(format!("{mode}-{runtime}")));
+            }
+        }
+        assert!(
+            effects.try_recv().is_err(),
+            "unexpected additional live effect"
+        );
+        let before = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        assert_collector_history_settled(&before);
+        let recorded_before = executor.stored_oplog(&worker).await;
+        server.abort();
+        let _ = server.await;
+        drop(executor);
+        let executor = start_with_overrides(deps, &context, overrides).await?;
+        let replayed: String = tokio::time::timeout(
+            Duration::from_secs(30),
+            executor.invoke_and_await_agent(
+                &caller_component,
+                &agent,
+                "replay_probe",
+                data_value!(),
+            ),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("collector reconstruction timed out"))??
+        .into_typed()?;
+        assert_eq!(replayed, "replayed");
+        assert!(
+            effects.try_recv().is_err(),
+            "completed replay repeated an external effect"
+        );
+        let after = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        // Public span attributes come from maps and have no display order.
+        // Compare the authoritative records, not that presentation order.
+        let recorded_after = executor.stored_oplog(&worker).await;
+        assert!(recorded_after.len() >= recorded_before.len());
+        for (index, (before, after)) in recorded_before.iter().zip(&recorded_after).enumerate() {
+            assert_eq!(
+                before,
+                after,
+                "recorded prefix changed at entry {}",
+                index + 1
+            );
+        }
+        assert_collector_history_settled(&after);
+        let next = invoke_cli_tool(
+            &executor,
+            &caller_component,
+            "node-stream-scheduling",
+            "node-tool-probe",
+            "/workspace",
+            vec!["streams-collect"],
+        )
+        .await?;
+        assert_eq!(next.exit_code, 0, "after restart: {next:?}");
+        assert_eq!(next.stdout, b"streams-collect:7:700:14:1455\n");
+        assert!(next.stderr.is_empty());
+        assert_collector_history_settled(&executor.get_oplog(&worker, OplogIndex::INITIAL).await?);
+        println!("node-tool-stream reconstruction completed with the effect server stopped");
+    }
     Ok(())
+}
+
+fn assert_collector_history_settled(history: &[PublicOplogEntryWithIndex]) {
+    let last_finished = history
+        .iter()
+        .rfind(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+        .expect("the owner has completed an invocation")
+        .oplog_index;
+    let mut open_invocation = None;
+    for entry in history {
+        match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(_) => {
+                assert!(open_invocation.replace(entry.oplog_index).is_none());
+            }
+            PublicOplogEntry::AgentInvocationFinished(_) => {
+                assert!(open_invocation.take().is_some());
+            }
+            PublicOplogEntry::Start(start) => {
+                let terminals = history
+                    .iter()
+                    .filter(|terminal| match &terminal.entry {
+                        PublicOplogEntry::End(end) => end.start_index == entry.oplog_index,
+                        PublicOplogEntry::Cancelled(cancelled) => {
+                            cancelled.start_index == entry.oplog_index
+                        }
+                        _ => false,
+                    })
+                    .count();
+                if terminals == 0 {
+                    // Cancelling an entity tears down its pending write. That
+                    // write stays incomplete; the entity's Cancelled terminal
+                    // owns the abandoned subtree during reconstruction.
+                    assert_eq!(
+                        start.function_name,
+                        "golem::tool::streams::tool-output-writer::write"
+                    );
+                    let parent = start
+                        .parent_start_index
+                        .expect("an abandoned write belongs to a body");
+                    assert!(history.iter().any(|entry| entry.oplog_index == parent &&
+                        matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "golem::entity::invoke")));
+                    assert!(history.iter().any(|terminal| terminal.oplog_index > entry.oplog_index &&
+                        matches!(&terminal.entry, PublicOplogEntry::Cancelled(cancelled) if cancelled.start_index == parent)),
+                        "an incomplete write requires its enclosing entity's cancellation");
+                } else {
+                    assert_eq!(
+                        terminals, 1,
+                        "duplicated terminal for Start {}",
+                        entry.oplog_index
+                    );
+                }
+                assert!(entry.oplog_index < last_finished);
+            }
+            PublicOplogEntry::End(_) | PublicOplogEntry::Cancelled(_) => {
+                assert!(entry.oplog_index < last_finished);
+            }
+            _ => {}
+        }
+    }
+    assert!(open_invocation.is_none());
 }
 
 /// Opt-in feasibility probe, built before the test. There are no linker overrides or

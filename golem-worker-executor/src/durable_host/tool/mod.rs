@@ -22,10 +22,12 @@
 
 pub(crate) mod attachment;
 pub(crate) mod boundary;
+mod collect;
 pub(crate) mod durability;
 pub(crate) mod input;
 mod mcp;
 pub(crate) mod operation;
+mod output_creation;
 mod streams;
 
 pub use attachment::{
@@ -64,10 +66,10 @@ use crate::durable_host::{
 };
 use crate::native_tool::{NativeToolInvocation, NativeToolKey, NativeToolOutput, NativeToolStdin};
 use crate::preview2::golem::tool::host::{
-    ByteStreamCloseCause, ByteStreamFailure, Host, HostFutureInvokeResult,
-    HostFutureInvokeResultWithStore, HostToolOutput, HostToolRpc, HostToolRpcWithStore,
-    HostToolStdin, HostToolStdinClosed, HostToolStdinClosedWithStore, HostToolStdinWriter,
-    HostToolStdinWriterWithStore, HostWithStore, InvocationResult,
+    ByteStreamCloseCause, ByteStreamFailure, CollectedInvocation, Host, HostFutureInvokeResult,
+    HostFutureInvokeResultWithStore, HostOutputCollection, HostToolOutput, HostToolRpc,
+    HostToolRpcWithStore, HostToolStdin, HostToolStdinClosed, HostToolStdinClosedWithStore,
+    HostToolStdinWriter, HostToolStdinWriterWithStore, HostWithStore, InvocationResult,
     RegisteredTool as WitRegisteredTool, StreamWriteError, ToolRpcError, TypedSchemaValue,
 };
 use crate::preview2::golem::tool::streams::{
@@ -193,6 +195,11 @@ struct ToolRpcOwnerContext {
 /// `golem:tool/host.future-invoke-result` resource.
 pub struct FutureInvokeResultEntry {
     state: FutureToolInvokeState,
+}
+
+pub struct OutputCollectionEntry {
+    consumer: AttachmentConsumer,
+    invocation: Option<golem_common::model::IdempotencyKey>,
 }
 
 /// Invocation-scoped capability for the next layer of a recorded middleware chain.
@@ -6554,105 +6561,50 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         Resource<ToolOutputEntry>,
         StreamReader<Result<Vec<u8>, ByteStreamFailure>>,
     )> {
-        use crate::durable_host::concurrent::DeferredCallReplayOutcome;
-        use golem_common::model::oplog::HostResponseToolAttachmentCreated;
-        use golem_common::model::oplog::attachment::{ToolAttachmentId, ToolAttachmentSlot};
-        use golem_common::model::oplog::host_functions::GolemToolCreateOutput;
-        use golem_common::model::oplog::payload::tool_attachment::ToolAttachmentCreated;
-
-        if accessor.with(|mut access| access.get().state.durability_is_suppressed()) {
-            let (target, consumer) = create_output_attachment(accessor, false)?;
-            return accessor.with(|mut access| {
-                match StreamReader::new(&mut access, consumer.into_stream_producer()) {
+        output_creation::create(accessor, |accessor, target, consumer| {
+            accessor.with(|mut access| {
+                let reader = if access.get().state.durability_is_suppressed() {
+                    StreamReader::new(&mut access, consumer.into_stream_producer())
+                } else {
+                    let input = input::AttachmentInputProducer::new(
+                        consumer,
+                        accessor.getter(),
+                        access.get(),
+                    )?;
+                    StreamReader::new(&mut access, input)
+                };
+                match reader {
                     Ok(reader) => Ok((target, reader)),
                     Err(error) => {
                         access.get().table().delete(target)?;
                         Err(error.into())
                     }
                 }
-            });
-        }
-        let mut call = DurableCallSession::<GolemToolCreateOutput, NotCancellable>::start_access(
-            accessor,
-            accessor.getter(),
-            HostRequestNoInput {},
-            DurableFunctionType::WriteLocal,
-        )
-        .await?;
-        let identity = ToolAttachmentId {
-            creation_start: call.start_index(),
-            slot: ToolAttachmentSlot::Output,
-        };
-        let (created, delivery) = 'creation: {
-            if !call.is_live() {
-                match call
-                    .replay_access_deferred(accessor, accessor.getter())
-                    .await?
-                {
-                    DeferredCallReplayOutcome::Replayed(response, delivery) => {
-                        anyhow::ensure!(
-                            response.created.attachment == identity,
-                            "tool output identity changed during replay"
-                        );
-                        break 'creation (response.created, delivery);
+            })
+        })
+        .await
+    }
+
+    async fn create_collected_output(
+        accessor: &Accessor<U, Self>,
+    ) -> anyhow::Result<(Resource<ToolOutputEntry>, Resource<OutputCollectionEntry>)> {
+        output_creation::create(accessor, |accessor, target, consumer| {
+            accessor.with(|mut access| {
+                let ctx = access.get();
+                let invocation = ctx.state.get_current_idempotency_key();
+                match ctx.table().push(OutputCollectionEntry {
+                    consumer,
+                    invocation,
+                }) {
+                    Ok(collection) => Ok((target, collection)),
+                    Err(error) => {
+                        ctx.table().delete(target)?;
+                        Err(error.into())
                     }
-                    DeferredCallReplayOutcome::Incomplete(live) => call = live,
                 }
-            }
-            let capacity_bytes = accessor.with(|mut access| {
-                access.get().state.config.limits.max_tool_attachment_bytes as u64
-            });
-            let (response, delivery) = call
-                .complete_access_deferred(
-                    accessor,
-                    accessor.getter(),
-                    HostResponseToolAttachmentCreated {
-                        created: ToolAttachmentCreated {
-                            attachment: identity,
-                            capacity_bytes,
-                        },
-                    },
-                )
-                .await?;
-            (response.created, delivery)
-        };
-        let output = accessor.with(|mut access| -> anyhow::Result<_> {
-            let capacity = usize::try_from(created.capacity_bytes)?;
-            let ctx = access.get();
-            let memory = AttachmentMemory::for_store(
-                ctx.public_state.worker().active_agents(),
-                ctx.state.is_live(),
-            );
-            let (producer, consumer, _) = attachment_pair(capacity, memory);
-            producer.writer().set_identity(created.attachment);
-            ctx.state
-                .replay_state
-                .register_tool_attachment(created.attachment, &consumer.controller())?;
-            let target = ctx.table().push(ToolOutputEntry {
-                producer: Some(producer),
-                completion_only: false,
-            })?;
-            let input = input::AttachmentInputProducer::new(consumer, accessor.getter(), ctx)?;
-            match StreamReader::new(&mut access, input) {
-                Ok(reader) => Ok((target, reader)),
-                Err(error) => {
-                    access.get().table().delete(target)?;
-                    Err(error.into())
-                }
-            }
-        });
-        let output = match output {
-            Ok(output) => output,
-            Err(error) => {
-                delivery.suppress();
-                return Err(error);
-            }
-        };
-        if delivery.is_replay_discarded() {
-            std::future::pending::<()>().await;
-        }
-        delivery.deliver_at_accessor_terminal(accessor).await?;
-        Ok(output)
+            })
+        })
+        .await
     }
 
     async fn get_invoke_results(
@@ -7048,6 +7000,89 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
 impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
     for HasSelf<DurableWorkerCtx<Ctx>>
 {
+    async fn collect(
+        accessor: &Accessor<U, Self>,
+        self_: Resource<FutureInvokeResultEntry>,
+        stdout: Option<Resource<OutputCollectionEntry>>,
+        stderr: Option<Resource<OutputCollectionEntry>>,
+        max_bytes: u64,
+    ) -> anyhow::Result<CollectedInvocation> {
+        reserve_invocation_id_before_await(accessor, accessor.getter())?;
+        let (plan, stdout, stderr) = accessor.with(|mut access| -> anyhow::Result<_> {
+            let ctx = access.get();
+            ctx.observe_function_call("golem::tool::host::future-invoke-result", "collect");
+            let (plan, execution) = match &ctx.table().get(&self_)?.state {
+                FutureToolInvokeState::Active(execution) => {
+                    (execution.get_plan(), Some(execution.clone()))
+                }
+                FutureToolInvokeState::Ready(response) => {
+                    (FutureToolInvokeGet::Ready(response.clone()), None)
+                }
+            };
+            let mut start = |source: Option<Resource<OutputCollectionEntry>>| {
+                source
+                    .map(|source| {
+                        let entry = access.get().table().delete(source)?;
+                        let limit =
+                            usize::try_from(max_bytes)
+                                .unwrap_or(usize::MAX)
+                                .min(usize::try_from(
+                                    entry.consumer.controller().metadata().capacity_bytes,
+                                )?);
+                        let source = if entry.consumer.controller().observer().identity().is_some()
+                        {
+                            let producer = input::AttachmentInputProducer::for_invocation(
+                                entry.consumer,
+                                accessor.getter(),
+                                entry.invocation.ok_or_else(|| {
+                                    anyhow!("attachment consumer has no invocation")
+                                })?,
+                            )?;
+                            StreamReader::new(&mut access, producer)?
+                        } else {
+                            StreamReader::new(&mut access, entry.consumer.into_stream_producer())?
+                        };
+                        let execution = execution.clone();
+                        let (consumer, received) =
+                            collect::OutputCollector::new(limit, move || {
+                                if let Some(execution) = &execution {
+                                    execution.cancel();
+                                }
+                            });
+                        source.pipe(&mut access, consumer)?;
+                        Ok::<_, anyhow::Error>(received)
+                    })
+                    .transpose()
+            };
+            Ok((plan, start(stdout)?, start(stderr)?))
+        })?;
+        let receive = async |output: Option<oneshot::Receiver<_>>| match output {
+            Some(output) => Ok::<_, anyhow::Error>(Some(
+                output
+                    .await
+                    .map_err(|_| anyhow!("tool output collector stopped without a result"))?,
+            )),
+            None => Ok(None),
+        };
+        let (mut results, stdout, stderr) = futures::try_join!(
+            await_tool_invoke_plans(accessor, vec![plan]),
+            receive(stdout),
+            receive(stderr),
+        )?;
+        // Secret admission can arm a guest-terminal delivery receipt. No more
+        // stream observations may follow that final admission boundary.
+        let response = admit_tool_response_secret_holds(
+            accessor,
+            results.pop().expect("one tool invocation has one result"),
+        )
+        .await?;
+        Ok(CollectedInvocation {
+            result: project_tool_response(accessor, response),
+            stdout,
+            stderr,
+        })
+    }
+
     async fn get(
         accessor: &Accessor<U, Self>,
         self_: Resource<FutureInvokeResultEntry>,
@@ -7076,6 +7111,13 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 
     async fn drop(&mut self, rep: Resource<FutureInvokeResultEntry>) -> anyhow::Result<()> {
         self.observe_function_call("golem::tool::host::future-invoke-result", "drop");
+        self.table().delete(rep)?;
+        Ok(())
+    }
+}
+
+impl<Ctx: WorkerCtx> HostOutputCollection for DurableWorkerCtx<Ctx> {
+    async fn drop(&mut self, rep: Resource<OutputCollectionEntry>) -> anyhow::Result<()> {
         self.table().delete(rep)?;
         Ok(())
     }

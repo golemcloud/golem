@@ -1,0 +1,135 @@
+{
+  "date": "2026-10-17",
+  "scope": "Feasibility gates for synchronous host-owned tool output collection, not a production Node command adapter.",
+  "nativeProfile": "dev-ci",
+  "compiler": "Released wasm-rquickjs CLI 0.4.13. The process probe overlays the changed skeleton sources from wasm-rquickjs-alt-02; no compiler was installed or rebuilt.",
+  "wasmProfile": "release; p3,encoding; Wizer pre-initialized",
+  "hostSources": {
+    "collect.rs": "d6f17dd5d2b7f33c209eb5d00e4c9204322c6dc4ce97995718da78c0084296da",
+    "output_creation.rs": "1cf9903932d8cc2365bfa6a201adf6881fe6cbd2c6c9317456d59aa9292a13e6",
+    "tool/mod.rs": "813faa4922d2ca8331831215dce2579446f41470643524927afd319ba10f1414",
+    "tool/input.rs": "b4b885c125f123103f13b294960b0fc969b9c269d746bdd8b9f4c5473111e8cd",
+    "host.wit": "e5a93e2c1a668ef7675d231e31a7cfa289863d70e5885fef7ab42c247fc88f56"
+  },
+  "directCollector": {
+    "passed": true,
+    "log": "/private/tmp/node-tool-processes-collect-real-tool-v1.log",
+    "sequence": ["streams-collect", "streams-echo-collect", "streams-pressure-collect", "streams-echo-collect"],
+    "artifactSha256": "05bade356e0140aca30ec5863cd57e2e11125ff85e6dc12287522c66a371a264",
+    "checks": ["Independent stdout and stderr", "Eight prewritten binary stdin bytes", "4096-byte retained prefix with child cancellation on overflow", "Successful echo afterward on the same owner"],
+    "doesNotProve": ["Node stdin pumping", "Reconstruction", "External-effect deduplication"]
+  },
+  "processCollector": {
+    "passed": true,
+    "log": "/private/tmp/node-tool-processes-collector-process-repo-v1-test.log",
+    "probe": "collector-process-probe.js",
+    "probeSha256": "235035433f572a4fd07acc57c9e8e5d0ae1cc81bdda71da468084dc57bc17086",
+    "initializer": "collector-process-init.js as wasm-rquickjs-runtime-init",
+    "initializerSha256": "090f793c7ee50cffec8a1cf585dd682d651aed54ba63f099645cd8ab655a3229",
+    "artifact": {
+      "bytes": 19516617,
+      "sha256": "5e4f76e56c93b0064610725e93a2ceab7ffbdfbd7afeb085e01df5c2af3e25aa"
+    },
+    "backendChildProcessSourceSha256": "c92dba22ddb0ba592638fdf6cadcff94306dedb5920077798c162baf972344b3",
+    "interleavedRepetitions": 5,
+    "sequencePerRepetition": ["streams-collect", "streams-echo-collect", "streams-pressure-collect", "streams-collect"],
+    "elapsedMicroseconds": [2324073, 50268, 173562, 197463, 193668, 53179, 163522, 195993, 195714, 49115, 161024, 199665, 192122, 48229, 163715, 194535, 191647, 48695, 163474, 197845],
+    "timingScope": "Outer tool invocation. Non-echo modes run two child invocations, one in the parent runtime and one in a fresh JavaScript job. The first sample includes component preparation. Debug tracing is enabled; these numbers are not a performance comparison.",
+    "checks": [
+      "spawnSync reaches the real bound streaming tool through ordinary native bindings",
+      "Separate stdout and stderr preserve bytes",
+      "Main and fresh execution jobs return the same bytes, overflow flags and terminal kinds",
+      "Fresh jobs do not inherit the parent's global invocation marker",
+      "Output pressure retains 4096 bytes and returns a cancelled child terminal in both runtimes",
+      "A following spawnSync succeeds on the same owner",
+      "Repeated fresh sidecars do not inherit invocation globals or environment markers"
+    ],
+    "caveats": [
+      "This source snapshot predates the optional counted HTTP effects added for reconstruction testing",
+      "The binary echo is a direct-collector control with prewritten input, not a spawnSync input test",
+      "The fixture passes preconstructed typed wire inputs, not public CLI arguments",
+      "The raw collected field and simplified status mapping are fixture-only",
+      "No timeout, permission refusal, reconstruction or crash-window guarantee is claimed"
+    ]
+  },
+  "localShebangPriority": {
+    "red": "Removing only the local-shebang priority fix makes the corrected npm-style symlink fixture fail: Backend intercepted a local Node shebang.",
+    "redLog": "/private/tmp/node-tool-processes-backend-shebang-red-v2-test.log",
+    "p2Passed": true,
+    "p3Passed": true,
+    "checks": ["Absolute symlink", "Relative symlink with cwd", "PATH sync", "PATH async", "PATH in a fresh execution job", "No configured backend calls for local scripts"],
+    "p2ArtifactSha256": "3d6ef0446b630c1aeb9657720ddb20dd7a1008df3cdb35bb48e05ec8e2cc78fc",
+    "p3ArtifactSha256": "8d4a6e46f421abba5f7d1efb44a0e5ada9c4ab5c3c0fce1b79fb5f90dff774df",
+    "fixtureSha256": "50f48795569f7a98075d31cefd6577f1bec02ddef8f87aaa81be59759de76b23",
+    "initializerSha256": "41df872a8cfa645fa61f510d52179893ad2e8a9faaa337f2a5b2fb6e8142bc92",
+    "nativeRuntimeHarnessRun": false,
+    "completeClippyMatrixRun": false
+  },
+  "relatedWork": {
+    "pr4235": "https://github.com/golemcloud/golem/pull/4235",
+    "reuse": "Use its PWD metadata, cwd root defaults and complete environment restoration when merged. Do not duplicate those changes in the process adapter."
+  },
+  "reconstructionCheckpoint": {
+    "passed": true,
+    "log": "/private/tmp/node-tool-processes-collector-replay-native-v2.log",
+    "cases": ["streams-collect", "streams-pressure-collect", "streams-echo-collect"],
+    "probeSha256": "299861b13579f437160395aacd2f688895307b36fe3eae5de8ce9380dc1cd149",
+    "nativeHarnessSha256": "7269b829807fe9b1b1ed88938cbadeff198249ec0eb94a82e4b6bece796b1254",
+    "artifact": {
+      "bytes": 19525815,
+      "sha256": "6158a8f9f322b670b84c3a69f50416328d39424eb41e948acf54ac4e73013e5a"
+    },
+    "checks": [
+      "Five HTTP markers are observed: parent and fresh job for dual output and overflow, plus the parent echo control",
+      "The external effect server is stopped and joined before a real executor drop and recreation",
+      "A new replay_probe invocation completes without the server, proving completed HTTP effects are not repeated",
+      "The authoritative raw oplog prefix is unchanged after reconstruction",
+      "A following process-backed invocation succeeds on the same owner",
+      "Owner invocations pair with finishes; every entity Start has one terminal; positional calls precede the last finish"
+    ],
+    "cancelledWriteInvariant": "An incomplete output-write Start is accepted only when it belongs directly to an entity with a later Cancelled terminal. Entity teardown intentionally leaves that abandoned write incomplete. Other incomplete calls and duplicate terminals fail the test.",
+    "initialAssertionFindings": [
+      "Requiring a terminal for an in-flight write inside a cancelled body was stronger than the existing entity protocol",
+      "Public oplog span-attribute lists are rendered from maps and have no stable order; prefix equality must use stored OplogEntry values rather than public presentation lists"
+    ],
+    "notCovered": ["Mid-collection crash windows", "Timeout election", "Node stdin pumping", "Admission refusal"]
+  },
+  "verificationCheckpoint": {
+    "collectorUnitTests": {
+      "passed": true,
+      "count": 2,
+      "log": "/private/tmp/node-tool-processes-collector-unit-v1.log"
+    },
+    "wrqjsCommit": "f6734fac",
+    "wrqjsWorktreeClean": true,
+    "wrqjsP3RuntimeHarness": {
+      "passed": true,
+      "test": "process_backend_is_runtime_local_and_preserves_inline_execution",
+      "profile": "fast-start, unoptimized component, fresh mutable runtime state; native debug symbols disabled",
+      "log": "/private/tmp/node-tool-processes-wrqjs-runtime-p3-v1.log"
+    },
+    "wrqjsSkeletonClippy": {
+      "passed": true,
+      "lanes": 10,
+      "log": "/private/tmp/node-tool-processes-skeleton-clippy-v2.log"
+    },
+    "wrqjsRuntimeTestClippy": {
+      "passed": true,
+      "log": "/private/tmp/node-tool-processes-wrqjs-runtime-clippy-v1.log"
+    },
+    "formatChecksPassed": true,
+    "wrqjsP2NativeRuntimeHarnessRun": false,
+    "golemStrictClippyRun": false,
+    "runtimeServicesSourceSha256": "d1b256d4fcdca8ec2d90cd957382ffd173992579fb1b575662fdae0a57297ee9"
+  },
+  "remainingGates": [
+    "Normal WRQJS P2 runtime harness and final Golem lint checks",
+    "Retained-prefix memory accounting",
+    "Finite-input pumping without a paused JavaScript producer",
+    "Timeout and cancellation selection across reconstruction and crash windows",
+    "Permission refusal and result-policy integration",
+    "Shared CLI parser and SDK/runtime installation",
+    "Per-component configuration",
+    "Final-source unconfigured-runtime performance check and production npm/tsc workloads"
+  ]
+}

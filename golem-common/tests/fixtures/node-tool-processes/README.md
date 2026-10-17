@@ -334,6 +334,80 @@ The final API fixture under `examples/runtime/process-backend` in wasm-rquickjs 
 the existing Wasmtime CLI after Wizer, with an explicit root preopen. It covers byte/encoded
 output, nonzero exit, spawn error codes, execSync forwarding, invalid registration, async spawn
 delegation, local Node priority and independent fresh-runtime registration. Its normal runtime
-group6 test is added, but the native Rust harness, P2 lane and complete Clippy matrix remain
-pending. Disk reached 92%; further heavy builds are paused rather than cleaning other caches
-without permission.
+group6 test now also passes in the normal P3 native harness. The ten-lane P2/P3 skeleton Clippy
+matrix, runtime-test Clippy and formatting checks pass. These later checks are recorded in the
+collector checkpoint below; the earlier backend observations remain historical snapshots.
+
+The same API fixture now also passes through a P2 component after Wizer initialization, including
+the independent fresh-runtime assertions. It used the released compiler with the changed skeleton
+files copied into its generated crate and byte-compared with the active checkout. The
+`p2ApiSmoke` record above retains the artifact hash and source identities. This minimal
+`p2,encoding` lane does not replace the still-pending normal P2 runtime harness.
+
+### Host-owned output collection prototype
+
+The current Golem worktree adds `create-collected-output` and `future-invoke-result.collect`.
+The constructor returns an output target and a host-owned reader capability. The latter avoids
+the JavaScript forwarding pump that the current generated bindings introduce when an ordinary
+stream reader is passed back to the host. The synchronous wait drains both output channels while
+awaiting the existing tracked tool execution. It does not introduce another tool dispatcher.
+
+The ordinary and collected constructors share the existing durable attachment creation. They
+materialize their endpoints before arming guest completion delivery. Collection uses
+`AttachmentInputProducer`, retaining the reader's original invocation identity and journaled host
+observations; it does not read a raw attachment. Final secret-result admission follows output
+drainage. The per-channel prefix limit is additionally capped by the attachment capacity recorded
+at construction, rather than by an unrecorded current configuration read during replay.
+
+The executor library typecheck, generated probe build and Wizer initialization pass. The
+real-tool modes `streams-collect`, `streams-echo-collect` and `streams-pressure-collect` also pass
+in the native executor. The last mode retains a 4-KiB prefix and observes the child's cancelled
+terminal. An echo afterward succeeds on the same owner. Both collector unit tests also pass.
+This is not a completed Node command adapter. In particular, retained-prefix memory accounting,
+finite-input pumping, timeout/cancellation crash windows, admission refusal, result policy and
+the SDK/runtime integration still need implementation or validation before production use.
+
+Only approved idle Cargo artifacts were cleaned; sources and reports were preserved. The native
+integration rebuild completed. JS-only iterations now reuse that prebuilt harness.
+
+### Process-to-tool collection probe
+
+`collector-process-probe.js` uses `collector-process-init.js` as the
+`wasm-rquickjs-runtime-init` module. Bundle the former with the SDK runtime, inject it into the
+tool-world slot template, and embed the latter as the additional module. With the released
+0.4.13 compiler, overlay the changed skeleton files listed above before building the template.
+For subsequent JS-only iterations, keep the template and repeat inject-js/Wizer.
+
+Run the same stream harness and the same three collected modes. Independent stdout/stderr and
+output pressure go through `node:child_process.spawnSync` in both the parent runtime and a fresh
+execution job. The fresh job checks that it did not inherit the parent's global invocation marker.
+The binary echo remains a direct-collector control with prewritten input, not a Node stdin test.
+The fixture compares output bytes, overflow flags and terminal kinds across both runtimes, then
+checks the existing count/checksum assertions in the Rust harness. Registration itself does not
+make a host call, so it remains suitable for Wizer initialization.
+
+This adapter accepts fixture-prepared wire inputs, not a public CLI. Its `collected` result field
+exists only for assertions; its status mapping is not a proposed tool result policy. The
+[collector observations](observations-2026-10-17-collector.json) distinguish these transport
+results from the remaining production gates.
+
+Set `GOLEM_NODE_TOOL_STREAM_REPLAY_PROBE=1` with this fixture to enable counted HTTP effects and
+executor reconstruction. Use `streams-collect,streams-pressure-collect,streams-echo-collect` as
+the case list. The harness supplies a second argument with its effect server URL. It checks one
+parent marker per case and one fresh-job marker for each process-backed case, then stops and
+joins that server before dropping and recreating the executor. A new `replay_probe` method call
+must finish offline, the authoritative stored oplog prefix must be unchanged, and a following
+process-backed invocation must succeed. This completed-replay gate passes with output overflow
+and cancellation in its history. It does not test a crash in the middle of collection.
+
+Oplog assertions distinguish an abandoned write from an unfinished entity. An in-flight output
+write can remain incomplete inside a child whose enclosing entity has a recorded cancellation;
+that entity terminal owns the abandoned subtree during reconstruction. Every entity still needs
+one terminal. The check rejects other incomplete calls, duplicate terminals, and positional calls
+after the last owner finish. Prefix equality uses raw stored entries, because the public view's
+span attributes are rendered from maps and have no display order.
+
+PR [#4235](https://github.com/golemcloud/golem/pull/4235) supplies the built-in node/npm/npx/tsc
+`PWD` metadata, root-directory defaults, and full environment restoration. Reuse those changes
+when they land rather than duplicating them in the process adapter. The new collector does not
+change those tool contracts.

@@ -67,16 +67,27 @@ impl<U: 'static, Ctx: WorkerCtx> AttachmentInputProducer<U, Ctx> {
         getter: fn(&mut U) -> &mut DurableWorkerCtx<Ctx>,
         ctx: &DurableWorkerCtx<Ctx>,
     ) -> anyhow::Result<Self> {
+        Self::for_invocation(
+            consumer,
+            getter,
+            ctx.state
+                .get_current_idempotency_key()
+                .ok_or_else(|| anyhow::anyhow!("attachment consumer has no invocation"))?,
+        )
+    }
+
+    pub(super) fn for_invocation(
+        consumer: AttachmentConsumer,
+        getter: fn(&mut U) -> &mut DurableWorkerCtx<Ctx>,
+        invocation: IdempotencyKey,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
             attachment: consumer
                 .controller()
                 .observer()
                 .identity()
                 .expect("durable attachment identity"),
-            invocation: ctx
-                .state
-                .get_current_idempotency_key()
-                .ok_or_else(|| anyhow::anyhow!("attachment consumer has no invocation"))?,
+            invocation,
             controller: consumer.controller(),
             source: consumer.into_stream_producer(),
             getter,
