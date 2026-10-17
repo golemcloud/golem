@@ -50,6 +50,9 @@ use tokio::sync::oneshot;
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Instant, timeout};
 use tokio_util::sync::CancellationToken;
+use tonic_health::pb::HealthCheckRequest;
+use tonic_health::pb::health_check_response::ServingStatus;
+use tonic_health::pb::health_client::HealthClient;
 use tracing::info;
 use uuid::Uuid;
 
@@ -272,6 +275,23 @@ async fn routing_table_status(port: u16) -> Result<(), tonic::Status> {
         .map(|_| ())
 }
 
+/// The status `grpc.health.v1.Health/Check` reports for `service` on a replica's gRPC port.
+async fn health_status(port: u16, service: &str) -> i32 {
+    let channel = tonic::transport::Endpoint::from_shared(format!("http://127.0.0.1:{port}"))
+        .expect("The replica's address is a valid endpoint")
+        .connect()
+        .await
+        .expect("Every replica serves its gRPC port");
+    HealthClient::new(channel)
+        .check(HealthCheckRequest {
+            service: service.to_string(),
+        })
+        .await
+        .expect("The health service answers for a known service")
+        .into_inner()
+        .status
+}
+
 #[test]
 #[tracing::instrument(skip_all)]
 // The whole distributed path in one pass: the leader serves; the standby serves its port but
@@ -305,6 +325,22 @@ async fn a_standby_sends_callers_to_the_leader_until_the_leader_goes_away(etcd: 
         }),
         "The standby should name the ready leader, but answered {refusal:?}"
     );
+
+    // Load balancers that probe per service must send traffic only to the leader, while the
+    // process-wide status stays healthy on both replicas.
+    const SERVICE: &str = "golem.shardmanager.v1.ShardManagerService";
+    let serving = ServingStatus::Serving as i32;
+    let not_serving = ServingStatus::NotServing as i32;
+    assert_eq!(
+        health_status(leader_details.grpc_port, SERVICE).await,
+        serving
+    );
+    assert_eq!(
+        health_status(standby_address.port, SERVICE).await,
+        not_serving
+    );
+    assert_eq!(health_status(leader_details.grpc_port, "").await, serving);
+    assert_eq!(health_status(standby_address.port, "").await, serving);
 
     // Longer than one lease TTL: a standby that stopped renewing during its campaign would
     // already have lost its lease by now.

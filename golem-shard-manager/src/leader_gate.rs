@@ -408,6 +408,18 @@ mod tests {
             gate.is_ready(),
             "a local-mode replica is ready once it serves"
         );
+
+        let lapsed: LeaderGate<Served> = LeaderGate::new();
+        lapsed.serve(
+            Served,
+            Some(LeaseBelief::until(
+                Instant::now() - Duration::from_millis(1),
+            )),
+        );
+        assert!(
+            !lapsed.is_ready(),
+            "a serving replica whose lease has lapsed is not ready"
+        );
     }
 
     #[test]
