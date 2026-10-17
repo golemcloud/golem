@@ -40,6 +40,7 @@ fn trace_context_requires_the_actual_active_monthly_target() {
         start_attempt: Uuid::new_v4(),
         resident_generation: 1,
         active: Mutex::new(true),
+        failure: Mutex::new(None),
         #[cfg(feature = "test-utils")]
         exited: CancellationToken::new(),
     });
@@ -61,6 +62,7 @@ fn trace_context_requires_the_actual_active_monthly_target() {
         start_attempt: target.start_attempt,
         resident_generation: 2,
         active: Mutex::new(true),
+        failure: Mutex::new(None),
         #[cfg(feature = "test-utils")]
         exited: CancellationToken::new(),
     });
@@ -94,6 +96,7 @@ impl MonthlyStopOwner {
             start_attempt,
             resident_generation: generation,
             active: Mutex::new(true),
+            failure: Mutex::new(None),
             #[cfg(feature = "test-utils")]
             exited: CancellationToken::new(),
         });
@@ -646,6 +649,7 @@ async fn monthly_body_rejects_changed_identity_capacity_retirement_and_terminal_
         start_attempt: owner.start_attempt,
         resident_generation: owner.generation,
         active: Mutex::new(true),
+        failure: Mutex::new(None),
         #[cfg(feature = "test-utils")]
         exited: CancellationToken::new(),
     });
@@ -1576,22 +1580,76 @@ async fn real_driver_task_panic_keeps_failed_seal_and_readiness_not_success() {
 
 #[test]
 #[timeout("5s")]
-async fn orderly_seal_close_preserves_operational_enforcement_failure_separately() {
-    let (window, held, metrics) = unmetered_window().await;
+async fn window_close_preserves_policy_unavailability_without_cleanup_failure() {
+    let (mut window, held, metrics) = unmetered_window().await;
     let progress = window.stop_progress.clone();
-    let operational = WorkerExecutorError::runtime("policy unavailable during execution");
-    progress.lock().unwrap().enforcement_failure = Some(operational.clone());
+    let (_entry, owner, _other) = prepaid_stop_owners().await;
+    let target = owner.target.clone();
+    target.record_failure(MonthlyMonitorFailure::PolicyUnavailable);
+    window.monitor = Some(MonthlyMonitor {
+        target: target.clone(),
+        cancelled: CancellationToken::new(),
+        task: tokio::spawn(async { Ok(()) }),
+    });
     window
         .close(Instant::now() + Duration::from_secs(1))
         .await
         .unwrap();
     assert!(!held.load(Ordering::Acquire));
     assert!(progress.lock().unwrap().ready().unwrap().is_ok());
+    assert!(target.cleanup_failure().is_none());
+    assert!(!*target.active.lock().unwrap());
+    assert!(target.policy_is_unavailable());
     assert_eq!(
-        progress.lock().unwrap().enforcement_failure,
-        Some(operational)
+        target.take_policy_failure(),
+        Some(crate::services::resource_limits::MonthlyResourceCapacityError::unavailable_error())
     );
+    assert!(!target.policy_is_unavailable());
+    assert!(target.cleanup_failure().is_none());
     metrics.assert_finished("accepted_stop", "released");
+}
+
+#[test]
+async fn policy_outage_does_not_erase_or_create_window_cleanup_failure() {
+    for policy_first in [false, true] {
+        let (_entry, owner, _other) = prepaid_stop_owners().await;
+        let target = &owner.target;
+        if policy_first {
+            target.record_failure(MonthlyMonitorFailure::PolicyUnavailable);
+            assert!(target.cleanup_failure().is_none());
+        }
+        let first = WorkerExecutorError::runtime("first monitor failure");
+        target.record_failure(MonthlyMonitorFailure::Cleanup(first.clone()));
+        target.record_failure(MonthlyMonitorFailure::PolicyUnavailable);
+        target.record_failure(MonthlyMonitorFailure::Cleanup(
+            WorkerExecutorError::runtime("later monitor failure"),
+        ));
+        assert_eq!(target.cleanup_failure(), Some(first));
+        assert!(!target.policy_is_unavailable());
+        assert!(target.take_policy_failure().is_none());
+    }
+}
+
+#[test]
+#[timeout("5s")]
+async fn failed_monitor_join_retains_cleanup_failure_after_target_closure() {
+    let (_entry, owner, _other) = prepaid_stop_owners().await;
+    let target = owner.target.clone();
+    target.record_failure(MonthlyMonitorFailure::PolicyUnavailable);
+    *target.active.lock().unwrap() = false;
+    let monitor = MonthlyMonitor {
+        target: target.clone(),
+        cancelled: CancellationToken::new(),
+        task: tokio::spawn(async { panic!("monitor owner lost") }),
+    };
+    let error = join_monitor(Some(monitor)).await.unwrap_err();
+    assert!(error.to_string().contains("Monthly monitor failed:"));
+    assert!(error.to_string().contains("monitor owner lost"));
+    assert_eq!(target.cleanup_failure(), Some(error.clone()));
+    target.record_failure(MonthlyMonitorFailure::PolicyUnavailable);
+    assert_eq!(target.cleanup_failure(), Some(error));
+    assert!(target.take_policy_failure().is_none());
+    assert!(!*target.active.lock().unwrap());
 }
 
 #[test]
@@ -1722,6 +1780,7 @@ async fn replaced_monthly_target_cannot_match_otherwise_equal_capacity() {
         start_attempt: Uuid::new_v4(),
         resident_generation: owner.generation + 1,
         active: Mutex::new(true),
+        failure: Mutex::new(None),
         #[cfg(feature = "test-utils")]
         exited: CancellationToken::new(),
     });
@@ -1757,6 +1816,7 @@ async fn replaced_monthly_target_cannot_match_otherwise_equal_capacity() {
         start_attempt: replacement.start_attempt,
         resident_generation: replacement.resident_generation,
         active: Mutex::new(true),
+        failure: Mutex::new(None),
         #[cfg(feature = "test-utils")]
         exited: CancellationToken::new(),
     });
@@ -1961,6 +2021,7 @@ async fn monthly_running_owner_guard_checks_identity_generation_permit_and_targe
         start_attempt: owner.start_attempt,
         resident_generation: owner.generation,
         active: Mutex::new(true),
+        failure: Mutex::new(None),
         #[cfg(feature = "test-utils")]
         exited: CancellationToken::new(),
     });

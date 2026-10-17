@@ -840,8 +840,6 @@ type StopProgress = Arc<StdMutex<StopProgressState>>;
 struct StopProgressState {
     release_scope: crate::metrics::resource_release::ReleaseScope,
     tasks: Vec<StopCompletion>,
-    // An unavailable policy stops execution without proving that disposal failed.
-    enforcement_failure: Option<WorkerExecutorError>,
     // New drivers belong to the successor and cannot touch the resident runtime until
     // the preceding permit owner has physically finished. Errors remain retained here.
     release: Option<StopCompletion>,
@@ -3341,7 +3339,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let mut instance_guard = loop {
             let guard = this.lock_non_stopping_worker().await;
-            if let Some(error) = this.stop_progress.lock().unwrap().completed_failure() {
+            if let Some(error) = this
+                .stop_progress
+                .lock()
+                .unwrap()
+                .completed_failure()
+                .or_else(|| this.monthly_cleanup_failure())
+            {
                 return Err(error);
             }
             if matches!(&*guard, WorkerInstance::Unloaded { .. }) {
@@ -4664,7 +4668,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     async fn join_stop_progress(&self) -> Result<(), WorkerExecutorError> {
-        join_accepted_stops(&self.stop_progress).await
+        join_accepted_stops(&self.stop_progress).await?;
+        self.monthly_cleanup_failure().map_or(Ok(()), Err)
     }
 
     async fn begin_resident_attempt(
@@ -4678,6 +4683,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let ready = self.stop_progress.lock().unwrap().ready();
             if let Some(result) = ready {
                 result?;
+                if let Some(error) = self.monthly_cleanup_failure() {
+                    return Err(error);
+                }
                 match lifecycle.deletion_runtime() {
                     WorkerInstance::Running(running) if running.start_attempt != start_attempt => {
                         return Err(WorkerExecutorError::runtime(
@@ -16346,35 +16354,11 @@ mod resource_release_tests {
     use super::{ObservedPrimaryStore, StopProgressState, stop_cleanup_join_error};
     use crate::metrics::resource_release::{Cause, Origin, tests::TestMetrics};
     use futures::FutureExt;
-    use golem_service_base::error::worker_executor::WorkerExecutorError;
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     };
     use test_r::test;
-
-    #[test]
-    fn policy_outage_does_not_erase_or_create_cleanup_failure() {
-        let mut progress = StopProgressState {
-            enforcement_failure: Some(
-                crate::services::resource_limits::MonthlyResourceCapacityError::unavailable_error(),
-            ),
-            ..Default::default()
-        };
-        assert!(progress.ready().unwrap().is_ok());
-        assert!(progress.completed_failure().is_none());
-        let physical_failure = WorkerExecutorError::runtime("filesystem disposal failed");
-        progress.tasks.push(
-            std::future::ready(Err(physical_failure.clone()))
-                .boxed()
-                .shared(),
-        );
-        assert_eq!(
-            progress.ready().unwrap().unwrap_err().to_string(),
-            physical_failure.to_string()
-        );
-        assert!(progress.enforcement_failure.is_some());
-    }
 
     #[test]
     async fn completed_stop_failure_is_visible_while_another_driver_is_pending() {
@@ -16394,7 +16378,6 @@ mod resource_release_tests {
             progress.completed_failure().unwrap().to_string(),
             error.to_string()
         );
-        assert!(progress.enforcement_failure.is_none());
         assert_eq!(
             progress.completed_failure().unwrap().to_string(),
             error.to_string(),

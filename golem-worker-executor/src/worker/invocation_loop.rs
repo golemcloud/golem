@@ -1132,14 +1132,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 );
             }
 
-            if self
-                .parent
-                .stop_progress
-                .lock()
-                .unwrap()
-                .enforcement_failure
-                .is_some()
-            {
+            if self.parent.monthly_policy_is_unavailable() {
                 final_decision = Some(RetryDecision::None);
             }
             if let Some(interrupt) = unloaded_interrupt
@@ -1598,13 +1591,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         let owner_failure = startup_failure
             .clone()
             .map(OwnerFailureWinner::Infrastructure);
-        let enforcement_failure = self
-            .parent
-            .stop_progress
-            .lock()
-            .unwrap()
-            .enforcement_failure
-            .take();
+        let enforcement_failure = self.parent.take_monthly_policy_failure();
         // Report the outage to current waiters without storing it as a startup failure.
         let failure_for_waiters = startup_failure.clone().or(enforcement_failure);
         self.parent.complete_startup(

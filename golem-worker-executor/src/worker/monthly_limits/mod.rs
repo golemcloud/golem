@@ -93,11 +93,50 @@ pub(super) struct MonthlyWindowTarget {
     start_attempt: Uuid,
     resident_generation: u64,
     active: Mutex<bool>,
+    failure: Mutex<Option<MonthlyMonitorFailure>>,
     #[cfg(feature = "test-utils")]
     exited: CancellationToken,
 }
 
 impl MonthlyWindowTarget {
+    fn record_failure(&self, failure: MonthlyMonitorFailure) {
+        let mut current = self.failure.lock().unwrap();
+        if current.is_none()
+            || matches!(
+                current.as_ref(),
+                Some(MonthlyMonitorFailure::PolicyUnavailable)
+            ) && matches!(failure, MonthlyMonitorFailure::Cleanup(_))
+        {
+            *current = Some(failure);
+        }
+    }
+
+    pub(super) fn cleanup_failure(&self) -> Option<WorkerExecutorError> {
+        match self.failure.lock().unwrap().as_ref() {
+            Some(MonthlyMonitorFailure::Cleanup(error)) => Some(error.clone()),
+            _ => None,
+        }
+    }
+
+    fn policy_is_unavailable(&self) -> bool {
+        matches!(
+            *self.failure.lock().unwrap(),
+            Some(MonthlyMonitorFailure::PolicyUnavailable)
+        )
+    }
+
+    fn take_policy_failure(&self) -> Option<WorkerExecutorError> {
+        let mut failure = self.failure.lock().unwrap();
+        if matches!(*failure, Some(MonthlyMonitorFailure::PolicyUnavailable)) {
+            *failure = None;
+            Some(
+                crate::services::resource_limits::MonthlyResourceCapacityError::unavailable_error(),
+            )
+        } else {
+            None
+        }
+    }
+
     fn trace_if_current(
         self: &Arc<Self>,
         current: &Mutex<Option<Arc<Self>>>,
@@ -330,6 +369,7 @@ impl ExecutionWindow {
                 start_attempt,
                 resident_generation,
                 active: Mutex::new(true),
+                failure: Mutex::new(None),
                 #[cfg(feature = "test-utils")]
                 exited: CancellationToken::new(),
             });
@@ -606,18 +646,50 @@ fn stop_monitor(monitor: &Option<MonthlyMonitor>) {
 
 async fn join_monitor(monitor: Option<MonthlyMonitor>) -> Result<(), WorkerExecutorError> {
     match monitor {
-        Some(monitor) => monitor
-            .task
-            .await
-            .map_err(|error| {
-                WorkerExecutorError::runtime(format!("Monthly monitor failed: {error}"))
-            })
-            .and_then(|result| result),
+        Some(monitor) => {
+            let result = monitor
+                .task
+                .await
+                .map_err(|error| {
+                    WorkerExecutorError::runtime(format!("Monthly monitor failed: {error}"))
+                })
+                .and_then(|result| result);
+            if let Err(error) = &result {
+                monitor
+                    .target
+                    .record_failure(MonthlyMonitorFailure::Cleanup(error.clone()));
+            }
+            result
+        }
         None => Ok(()),
     }
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    pub(super) fn monthly_cleanup_failure(&self) -> Option<WorkerExecutorError> {
+        self.monthly_window
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|target| target.cleanup_failure())
+    }
+
+    pub(super) fn monthly_policy_is_unavailable(&self) -> bool {
+        self.monthly_window
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|target| target.policy_is_unavailable())
+    }
+
+    pub(super) fn take_monthly_policy_failure(&self) -> Option<WorkerExecutorError> {
+        self.monthly_window
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|target| target.take_policy_failure())
+    }
+
     pub(crate) fn resident_window_trace(
         &self,
     ) -> Option<crate::native_wait_diagnostics::WindowTrace> {
@@ -648,19 +720,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             {
                 return;
             }
-            let mut admission = self.stop_progress.lock().unwrap();
-            match failure {
-                MonthlyMonitorFailure::PolicyUnavailable => {
-                    admission.enforcement_failure.get_or_insert_with(
-                        crate::services::resource_limits::MonthlyResourceCapacityError::unavailable_error,
-                    );
-                }
-                MonthlyMonitorFailure::Cleanup(error) => {
-                    admission
-                        .tasks
-                        .push(std::future::ready(Err(error)).boxed().shared());
-                }
-            }
+            target.record_failure(failure);
+            let admission = self.stop_progress.lock().unwrap();
             let kind = InterruptKind::Suspend(Timestamp::now_utc());
             if !admission.retired
                 && interrupts.queue(PendingWorkerInterrupt {

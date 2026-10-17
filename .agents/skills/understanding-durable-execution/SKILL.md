@@ -389,6 +389,15 @@ infrastructure error. A valid policy refresh allows the same cached durable Work
 ordinary admission and reconstruction. Failed cleanup still prevents startup; policy recovery cannot
 erase it. Ephemeral agents remain fail-stop.
 
+Monitor health belongs to the existing monthly window target, as failure data rather than a stop
+task. Its first cleanup failure remains authoritative; a policy outage cannot replace it. A failed
+monitor join records that same health even after the target closes. Operational policy failure is
+consumed separately when the unloaded loop reports it to current waiters. A healthy settlement
+therefore does not turn a policy outage into failed cleanup, and policy recovery cannot erase a
+real monitor failure. Native health assertions remain unchanged; the affected body/native scopes,
+strict lint and production compilation pass locally. The remaining generic stop-task registry still
+coordinates drivers and must be removed separately.
+
 Worker stop registration and window closure share a synchronous admission lock. Closure seals
 its accepted drivers and installs a retained successor. Later accepted drivers wait for the old
 permit's physical release before touching the runtime. That release precedes filesystem deletion;

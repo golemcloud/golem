@@ -109,6 +109,12 @@ contract without accepting arbitrary errors or weakening identity, history or cl
     Only discarded private-writer projections and stricter signal ordering were retired; exact
     outcome/history assertions stayed. Stop publication, admission seals and early generation
     handoff remain open, so this does not close A1.
+  - [x] Separate monthly-window failure ownership before deleting the generic stop registry.
+    The existing monthly target stores monitor failure and operational policy-outage data,
+    rather than adding synthetic completed stop futures. A cleanup fault
+    cannot be erased by policy recovery; an outage alone cannot become failed cleanup. Native health
+    assertions are unchanged. Focused and consolidated library/native checks, strict lint and the
+    production check pass locally. This is preparation for A1; the general protocol still remains.
 
 - [x] **C1. Follow the CLI command-handler organization.** Done locally.
   [noise64's inline comment](https://github.com/golemcloud/golem/pull/3894#discussion_r4270447747).

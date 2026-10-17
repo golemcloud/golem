@@ -89,6 +89,12 @@ The canonical wallet installer now owns the one replay-generation reset. Startup
 successful installation, not the earlier attempt counter. Stop publication and progress still need
 restoration to the existing establishment owner; this intermediate merge does not close A1.
 
+Monthly monitor failures and operational policy outages now belong to the existing window target
+as failure data, not synthetic completed stop futures. Native health assertions remain unchanged;
+focused and consolidated checks, strict lint and the production check pass. This separates the
+monthly health obligation before removing the remaining generic driver registry and seals. It does
+not close A1 or the remaining F10/F11 requests.
+
 - Complete the surviving success-boundary simplification as one coherent candidate, not as a new
   recovery repair. The current #4207 implementation retains the same ordinary boundary and
   commit-before-notify contract. Its establishment owner remains the later integration target.
