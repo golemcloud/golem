@@ -96,7 +96,7 @@ Each replica must set **`grpc.advertised_host`** (`GOLEM__GRPC__ADVERTISED_HOST`
 
 The advertised port is `grpc.advertised_port` (`GOLEM__GRPC__ADVERTISED_PORT`). It is optional and defaults to the bound `grpc.port`. Set it when a port mapping or NAT puts the replica behind a different port. The value `0` is refused.
 
-Each replica needs its **own** advertised address, such as its pod IP. Never use the Service name. A replica that finds another live replica advertising its address waits for the lease of the other replica's key to run out, plus one lease TTL of its own, and stops with an error if the key is still there then. (A key left by an earlier process of the same pod is waited out in the same way, even if the lease TTL was changed before the restart.)
+Each replica needs its **own** advertised address, such as its pod IP. Never use the Service name. A replica that finds another live replica advertising its address waits for as long as the other replica's key was granted to live, plus one lease TTL of its own, counted from when it first saw the key. A live replica keeps renewing its lease, so a key that is still there after that wait belongs to a live replica, and the new replica stops with an error. (A key left by an earlier process of the same pod is waited out in the same way, even if the lease TTL was changed before the restart.)
 
 With gRPC TLS enabled, a client that has no `shard_manager.tls.server_domain_name` checks the leader's certificate against its configured `shard_manager.host`, when that host is a DNS name. The shard managers' certificate must then name that host, for example the Service name. A configured `server_domain_name` takes precedence.
 
