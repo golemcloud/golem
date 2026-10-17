@@ -35,7 +35,7 @@ use crate::preview2::golem::agent::host::{
     RpcError, ScheduledInvocationReceipt,
 };
 use crate::services::environment_state::EnvironmentStateService;
-use crate::services::oplog::{CommitLevel, OplogFence, OplogOps};
+use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{Rpc, RpcDemand, RpcError as InternalRpcError};
 use crate::services::{HasOplog, HasWorker};
 use crate::workerctx::{InvocationContextManagement, WorkerCtx};
@@ -859,8 +859,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 ));
                 match futures::future::select(call, interrupt_signal).await {
                     Either::Left((Ok(result), _)) => result,
-                    Either::Left((Err(fence), _)) => {
-                        return Err(handle.trap(SessionError::Fenced(fence).into_trap()));
+                    Either::Left((Err(error), _)) => {
+                        return Err(handle.trap(error.into_trap()));
                     }
                     Either::Right((error, _)) => {
                         return Err(handle.trap(error));
@@ -4878,8 +4878,8 @@ struct DurableStreamingTaskParams {
 }
 
 /// Awaits a streaming RPC and settles the inputs it did not bind. The outer error is this caller's
-/// own session write refused by the fence, which traps rather than reaching the guest as an RPC
-/// failure; the inner result is the RPC's.
+/// own session write refused by the fence, or its own oplog unreadable, which traps rather than
+/// reaching the guest as an RPC failure; the inner result is the RPC's.
 async fn await_streaming_rpc_acceptance(
     streams: &StreamSession,
     activity: Option<&crate::worker::suspension::RpcActivityRevoker>,
@@ -4889,7 +4889,7 @@ async fn await_streaming_rpc_acceptance(
     invocation: impl std::future::Future<
         Output = Result<crate::services::rpc::DurableRpcInvocationResult, InternalRpcError>,
     >,
-) -> Result<Result<crate::services::rpc::DurableRpcInvocationResult, InternalRpcError>, OplogFence>
+) -> Result<Result<crate::services::rpc::DurableRpcInvocationResult, InternalRpcError>, SessionError>
 {
     tokio::pin!(invocation);
     let (accepted, result) = tokio::select! {
@@ -4914,11 +4914,11 @@ async fn await_streaming_rpc_acceptance(
         };
         match streams.cancel_unbound_rpc_inputs(&mappings).await {
             Ok(()) => {}
-            Err(SessionError::Fenced(fence)) => return Err(fence),
-            Err(error @ (SessionError::Unreadable(_) | SessionError::Failed(_))) => {
-                return Ok(Err(InternalRpcError::ProtocolError {
-                    details: error.to_string(),
-                }));
+            Err(error @ (SessionError::Fenced(_) | SessionError::Unreadable(_))) => {
+                return Err(error);
+            }
+            Err(SessionError::Failed(details)) => {
+                return Ok(Err(InternalRpcError::ProtocolError { details }));
             }
         }
     }
@@ -5007,7 +5007,7 @@ fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
                     ),
                 )
                 .await
-                .map_err(|fence| SessionError::Fenced(fence).into_trap())?;
+                .map_err(SessionError::into_trap)?;
                 let result = match result {
                     Ok(result) => {
                         let mappings = result
@@ -5570,6 +5570,129 @@ mod tests {
     use test_r::test;
     use uuid::Uuid;
     use wasmtime::component::ResourceTable;
+
+    /// An accepted streaming RPC that leaves a caller-owned input unbound cancels that input. When
+    /// the commit of the cancellation meets an oplog whose storage did not answer, the caller
+    /// keeps the unreadable oplog and traps for recovery instead of receiving an RPC failure.
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn an_unreadable_oplog_while_cancelling_unbound_inputs_traps_for_recovery() {
+        use crate::durable_host::durable_stream::tests::{TestOplog, identity, registration};
+        use crate::durable_host::durable_stream::{DurableStreamCommit, DurableStreamStore};
+        use crate::services::oplog::{
+            Oplog, OplogReadError, OplogReadSource, OplogRefusal, UnreadableOplog,
+        };
+        use golem_common::base_model::durable_stream::{
+            SessionStreamRole, StreamBindingRecord, StreamRegistrationCoordinate,
+            StreamRegistrationInvocation, StreamRootKind, StreamSessionMappingRecord,
+            StreamSourceKind, StreamValuePathStep,
+        };
+        use golem_service_base::error::worker_executor::WorkerExecutorError;
+
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let refusal = Arc::new(Mutex::new(None::<UnreadableOplog>));
+        let commit: DurableStreamCommit = Arc::new({
+            let oplog = oplog.clone();
+            let refusal = refusal.clone();
+            move |committed| {
+                let oplog = oplog.clone();
+                let refusal = refusal.lock().unwrap().clone();
+                Box::pin(async move {
+                    let result = match refusal {
+                        Some(unreadable) => Err(OplogRefusal::Unreadable(unreadable)),
+                        None => {
+                            oplog
+                                .commit(CommitLevel::Always)
+                                .await
+                                .expect("oplog write");
+                            Ok(())
+                        }
+                    };
+                    if let Some(committed) = committed {
+                        let _ = committed.send(result);
+                    }
+                })
+            }
+        });
+        let producer = DurableStreamStore::load_with_commit(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+            commit,
+        )
+        .await
+        .unwrap();
+        let handle = producer
+            .register(
+                None,
+                registration(
+                    &identity,
+                    StreamRegistrationCoordinate::Root {
+                        invocation_id: identity.invocation.clone(),
+                        root_kind: StreamRootKind::MethodInput,
+                        recursive_value_path: vec![StreamValuePathStep::TupleElement(0)],
+                    },
+                    StreamSourceKind::AgentHostedInput,
+                ),
+            )
+            .await
+            .unwrap()
+            .value;
+        let mapping = StreamSessionMappingRecord {
+            transport_stream_id: 0,
+            handle,
+            role: SessionStreamRole::Input,
+        };
+        let binding: StreamBindingRecord = producer
+            .local_binding(mapping.transport_stream_id, &mapping.handle, mapping.role)
+            .await
+            .unwrap();
+        let streams = StreamSession::open(
+            producer.clone(),
+            oplog.clone(),
+            StreamRegistrationInvocation::Local(identity.invocation.idempotency_key.clone()),
+            vec![binding],
+        )
+        .await
+        .unwrap();
+        let unreadable = UnreadableOplog::new(
+            &identity.agent_id,
+            OplogReadError::source_unavailable(OplogReadSource::Archive(1), "outage"),
+        );
+        *refusal.lock().unwrap() = Some(unreadable.clone());
+        let (accepted, acceptance) = tokio::sync::oneshot::channel();
+        accepted
+            .send(golem_api_grpc::proto::golem::worker::InvocationAccepted::default())
+            .unwrap();
+
+        let result = await_streaming_rpc_acceptance(
+            &streams,
+            None,
+            acceptance,
+            std::future::pending::<
+                Result<crate::services::rpc::DurableRpcInvocationResult, ServiceRpcError>,
+            >(),
+        )
+        .await;
+
+        let error = match result {
+            Err(SessionError::Unreadable(error)) => error,
+            Err(other) => panic!("expected the unreadable oplog of the caller, got {other}"),
+            Ok(_) => panic!("expected the unreadable oplog of the caller, got an RPC result"),
+        };
+        assert_eq!(error, unreadable);
+        let trap = SessionError::Unreadable(error).into_trap();
+        assert!(
+            matches!(
+                trap.downcast_ref::<WorkerExecutorError>(),
+                Some(WorkerExecutorError::RecoveryRequired { .. })
+            ),
+            "a transient unreadable oplog must trap for recovery, got {trap:?}"
+        );
+    }
 
     #[test]
     async fn dropping_rpc_task_revokes_wait_before_task_cleanup() {
