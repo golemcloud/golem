@@ -173,8 +173,8 @@ async fn stop_order(
     let mut deleting = None;
     // This one native proof isolates the outer Deleting guard before any terminal is queued.
     // Interrupt-mutex contention would mask a missing outer guard rather than replace it.
-    let mut fence = (first == FirstStop::Deletion)
-        .then(|| worker.pause_next_deletion_stage_for_test(WorkerDeletionStage::ExecutionFenced));
+    let mut fence =
+        (first == FirstStop::Deletion).then(|| worker.pause_next_deletion_fence_for_test());
     let mut before_remove =
         (first != FirstStop::User).then(|| executor.gate_next_oplog_delete(&owned, mode));
     let delete = || {

@@ -819,7 +819,6 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
 
 #[cfg(feature = "test-utils")]
 struct DeletionStageTestGate {
-    stage: WorkerDeletionStage,
     entered: tokio::sync::oneshot::Sender<()>,
     release: tokio::sync::oneshot::Receiver<()>,
 }
@@ -3752,10 +3751,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(())
     }
 
+    /// Holds deletion after its resident claim, before ordinary execution fencing.
     #[cfg(feature = "test-utils")]
-    pub fn pause_next_deletion_stage_for_test(
+    pub fn pause_next_deletion_fence_for_test(
         &self,
-        stage: WorkerDeletionStage,
     ) -> (
         tokio::sync::oneshot::Receiver<()>,
         tokio::sync::oneshot::Sender<()>,
@@ -3767,7 +3766,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .lock()
                 .unwrap()
                 .replace(DeletionStageTestGate {
-                    stage,
                     entered,
                     release: wait,
                 })
@@ -3823,15 +3821,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         stage: WorkerDeletionStage,
     ) -> Result<(), WorkerExecutorError> {
         #[cfg(feature = "test-utils")]
-        {
-            let gate = {
-                let mut gate = self.deletion_stage_gate.lock().unwrap();
-                if gate.as_ref().is_some_and(|gate| gate.stage == stage) {
-                    gate.take()
-                } else {
-                    None
-                }
-            };
+        if stage == WorkerDeletionStage::ExecutionFenced {
+            let gate = self.deletion_stage_gate.lock().unwrap().take();
             if let Some(gate) = gate {
                 let _ = gate.entered.send(());
                 let _ = gate.release.await;

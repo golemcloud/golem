@@ -656,6 +656,12 @@ acceptance and could mask a missing production outer guard. The colocated guard 
 that whole transaction. Keep this narrow exception explicit; do not claim complete deletion-gate
 removal. All original first-cause, exact terminal/error/result, key, receipt, identity, accounting and
 physical-cleanup oracles stay strict. The user-only case retains its original resident history read.
+The remaining PR-added hook is restricted to `pause_next_deletion_fence_for_test`, with no
+stage argument or stored stage selector. It can hold only the same ExecutionFenced boundary.
+Main's stage enum and hook still cover every production stage. Separate selector-removal library,
+native retirement/replay/window/health, unchanged main stage-failure/retry and cache-removal/
+caller-cancellation, strict lint, production and formatting checks pass. This removes the unused
+selector, not the justified native fence itself.
 
 For prepaid RPC caller-first cases, an applied account update wakes both Stores. The target can stop
 and refund at invocation exit before the caller's proposal is validated. A terminal-append hold is

@@ -265,6 +265,12 @@ Findings 11-14 have separate linked comments.
     Retirement, metadata/replay/health/after-End and custom/quiet-stdin checks pass, along with
     colocated library checks, strict executor/test-utils lint, production compilation, formatting
     and browser verification. This is a proposed narrow retention, not complete deletion-gate removal.
+    The separate selector removal deletes the remaining hook's unused arbitrary-stage argument, stored
+    selector and generic matching branch. Its API is fixed to the existing deletion fence. Main's
+    WorkerDeletionStage/WorkerDeletionHook remain unchanged and still receive every stage. Separate
+    library, native retirement/replay/window/health, main stage-failure/retry and cache-removal/
+    cancellation, strict lint, production and formatting checks pass. The isolated native fence
+    and this checkbox remain open; only the unused selector is removed.
   - [x] Remove the completed-history replay-gate family. The local change deletes its Worker
     field, type, setter, history scan and pre-invocation await after both native consumers pass at
     the exact stored input-payload acquisition boundary. The supported external-payload setting
