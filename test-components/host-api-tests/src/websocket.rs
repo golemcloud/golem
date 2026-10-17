@@ -14,8 +14,6 @@ pub trait WebsocketTest {
     fn probe_both_policies(&self) -> (bool, String);
     fn receive_is_closed(&self) -> bool;
     fn live_disconnect_is_not_session_lost(&self) -> bool;
-    fn non_idempotent_report_connect(&self, url: String);
-    fn atomic_report_connect(&self, url: String) -> String;
     async fn probe_report_loss(&self) -> (bool, bool, bool, bool);
     async fn discard_report_loss(&self, cancel: PromiseId) -> bool;
     fn drop_persisted(&self);
@@ -39,6 +37,14 @@ pub trait WebsocketTest {
     async fn receive_lock_contention_from_persisted(&self, timeout_ms: u64) -> (String, String);
     /// Closes the persisted websocket and returns any close error to the caller.
     fn close_persisted_result(&self) -> Result<(), String>;
+    /// Connects to two peers and receives one message from each at the same time. Each result
+    /// is the received text or `"Receive error: ..."`. The peers decide when they send, so a
+    /// test can crash the agent while one receive is complete and the other is still pending.
+    async fn receive_from_two_sockets(
+        &self,
+        first_url: String,
+        second_url: String,
+    ) -> (String, String);
 
     /// Activates the agent without touching the persisted websocket.
     fn noop(&self) -> String;
@@ -162,6 +168,24 @@ impl WebsocketTest for WebsocketTestImpl {
             Err(e) => format!("Receive error: {e:?}"),
         };
         (received, timed)
+    }
+
+    async fn receive_from_two_sockets(
+        &self,
+        first_url: String,
+        second_url: String,
+    ) -> (String, String) {
+        let first = WebsocketConnection::connect(&first_url, None, None).expect("connect failed");
+        let second = WebsocketConnection::connect(&second_url, None, None).expect("connect failed");
+        fn text(result: Result<WebSocketMessage, WebSocketError>) -> String {
+            match result {
+                Ok(WebSocketMessage::Text(t)) => t,
+                Ok(WebSocketMessage::Binary(b)) => format!("{} bytes", b.len()),
+                Err(e) => format!("Receive error: {e:?}"),
+            }
+        }
+        let (first_message, second_message) = (first.receive(), second.receive()).join().await;
+        (text(first_message), text(second_message))
     }
 
     fn close_persisted_result(&self) -> Result<(), String> {
@@ -323,33 +347,6 @@ impl WebsocketTest for WebsocketTestImpl {
 
     fn create_promise(&self) -> PromiseId {
         golem_rust::create_promise()
-    }
-
-    fn non_idempotent_report_connect(&self, url: String) {
-        let _guard = golem_rust::use_idempotence_mode(false);
-        let _ws = WebsocketConnection::connect(
-            &url,
-            None,
-            Some(WebSocketReconstructionPolicy::ReportConnectionLoss),
-        )
-        .expect("connect failed");
-    }
-
-    fn atomic_report_connect(&self, url: String) -> String {
-        let _guard = golem_rust::use_idempotence_mode(false);
-        golem_rust::atomically(|| {
-            let ws = WebsocketConnection::connect(
-                &url,
-                None,
-                Some(WebSocketReconstructionPolicy::ReportConnectionLoss),
-            )
-            .expect("connect failed");
-            let WebSocketMessage::Text(first) = ws.blocking_receive().expect("receive failed")
-            else {
-                panic!("expected text greeting");
-            };
-            first
-        })
     }
 
     fn replay_reconnect_roundtrip(

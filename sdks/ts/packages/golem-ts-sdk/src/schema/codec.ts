@@ -54,7 +54,8 @@ import {
   GuestPermissionCardHandle,
   createUntrackedGuestPermissionCardHandle,
   peekGuestPermissionCardHandle,
-  releaseGuestPermissionCardHandle,
+  peekPermissionCardObjectResource,
+  relinquishGuestPermissionCardHandle,
   takeGuestPermissionCardHandle,
 } from '../internal/schema-model/permissionCardHandle';
 import { PERMISSION_CARD_INTERNAL } from '../internal/schema-model/permissionCardInternal';
@@ -789,7 +790,8 @@ export function sourceValueIsCanonical(
   try {
     return deepEqual(source, codec.fromValue(probe), (raw, sentinel) => {
       const identity = peekCapabilityHandle(raw) ?? raw;
-      return sentinels.has(identity) && sentinels.get(identity) === sentinel;
+      const decoded = peekCapabilityHandle(sentinel) ?? sentinel;
+      return sentinels.has(identity) && sentinels.get(identity) === decoded;
     });
   } finally {
     drainCapabilityHandles(probe);
@@ -830,6 +832,8 @@ function peekCapabilityHandle(value: unknown): unknown {
     return peekGuestQuotaTokenHandle(QUOTA_INTERNAL, value);
   if (value instanceof GuestPermissionCardHandle)
     return peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value);
+  const cardResource = peekPermissionCardObjectResource(PERMISSION_CARD_INTERNAL, value);
+  if (cardResource !== undefined) return cardResource;
   if (value instanceof GuestSchemaValueStreamHandle) return value.peek()?.value;
   return undefined;
 }
@@ -1058,6 +1062,19 @@ function drainCapabilityHandles(value: SchemaValue): void {
 
 export function relinquishSchemaValueCapabilities(value: SchemaValue): void {
   switch (value.tag) {
+    case 'stream': {
+      const endpoint = value.handle.take();
+      // Wrapped endpoints remain with the wire owner, just like raw capability
+      // handles below. Native streams have no wire owner to close their source.
+      if (endpoint?.kind === 'native') {
+        void Promise.resolve()
+          .then(() => endpoint.value[Symbol.asyncIterator]().return?.())
+          .catch(() => {
+            // Cleanup must not replace the conversion failure.
+          });
+      }
+      return;
+    }
     case 'secret':
       releaseGuestSecretHandle(SECRET_INTERNAL, value.handle);
       return;
@@ -1065,7 +1082,7 @@ export function relinquishSchemaValueCapabilities(value: SchemaValue): void {
       releaseGuestQuotaTokenHandle(QUOTA_INTERNAL, value.handle);
       return;
     case 'permission-card':
-      releaseGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value.handle);
+      relinquishGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value.handle);
       return;
     case 'record':
       value.fields.forEach(relinquishSchemaValueCapabilities);

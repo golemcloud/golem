@@ -1,6 +1,6 @@
 ---
 name: golem-generating-tool-clients
-description: "Generates typed clients for existing built-in tools and MCP imported tools. Use when selecting tool releases or imports, generating clients with golem build, or wiring generated clients into Rust, TypeScript, Effect, Scala, or MoonBit consumers."
+description: "Generates typed clients for existing built-in tools and MCP imported tools. Use when selecting tool releases or imports, generating clients with golem build, or wiring generated clients into Rust, TypeScript, Effect, Scala, MoonBit, or Go consumers."
 ---
 
 # Generate typed clients for existing tools
@@ -166,7 +166,8 @@ URL with the server's Streamable HTTP endpoint:
 mcp:
   imports:
     local:
-      - url: https://tools.example.com/mcp
+      - name: catalog
+        url: https://tools.example.com/mcp
         include: [catalog-lookup]
 
 components:
@@ -198,14 +199,22 @@ For an OAuth-protected import, configure its `securityScheme`, create the select
 environment and security scheme, and complete consent before generation:
 
 ```shell
-golem api mcp-import authorize 0 --manifest
+golem api mcp-import authorize catalog --manifest
 # Open the printed URL, then copy the full callback URL.
-golem api mcp-import complete 0 --manifest '<callback-url>'
-golem api mcp-import status 0 --manifest
+golem api mcp-import complete catalog --manifest '<callback-url>'
+golem api mcp-import status catalog --manifest
 ```
 
-The index is zero-based in the selected environment's import list. Keep the import
-and its rendered environment variables unchanged during consent. For bearer or
+The name is optional CLI metadata, unique within the environment. Without a name,
+select the import by its exact resolved full URL. If several imports use the same
+URL, add distinct names and select one. Output uses the declaration's name even
+when selected by URL; unnamed imports have `"import": null` in structured output.
+The CLI never echoes the import URL. For unnamed OAuth imports, replace
+`'<import-url>'` in the printed completion command with the original exact URL;
+keep the printed `--revision` or `--manifest` option.
+These commands do not add imports;
+declaring an OAuth-protected upstream does not authorize it. Keep the import
+configuration and its rendered environment variables unchanged during consent. For bearer or
 basic authentication, use environment-variable templates for secret values, not
 literal credentials in committed manifests. For example, set `auth.bearer` to
 `"{{ MCP_TOKEN }}"` and supply `MCP_TOKEN` in the CLI environment. Generated clients
@@ -249,7 +258,7 @@ consumer and deploy the import and binding with `golem deploy --yes`.
 ## Other supported languages
 
 Tool clients are internal guest bridges. The consumer's `rust`, `ts`, `effect`,
-`scala`, or `moonbit` language template selects its dependency client generator.
+`scala`, `moonbit`, or `go` language template selects its dependency client generator.
 With default paths, dependencies generate under
 `golem-temp/bridge-sdk/<language>/internal/<tool-name>-tool-guest-client/`.
 
@@ -260,10 +269,11 @@ With default paths, dependencies generate under
 | Rust | `Cargo.toml`, `src/lib.rs`; `bash_tool_guest_client::BashClient::new()` | Local Cargo path dependency |
 | Scala | sbt project; `golem.bridge.client.bash.BashClient()` | Include the generated Scala sources in the consumer build |
 | MoonBit | `moon.mod.json`, `client/moon.pkg`, `client/client.mbt`; `@bash.BashClient::new()` | Local module dependency and `bash-tool-guest-client/client` package import |
+| Go | Go module `golem.local/bridge/bash-tool-guest-client`; `bash.Run.Call(func(a *bash.RunArgs) { a.Script = ... })` | `require` and `replace` of the generated module in the consumer's `go.mod` |
 
 Use the language's call-tool guide for invocation and error handling:
 `golem-call-tool-ts`, `golem-tools-middleware-effect`, `golem-call-tool-rust`,
-`golem-call-tool-scala`, and `golem-call-tool-moonbit`.
+`golem-call-tool-scala`, `golem-call-tool-moonbit`, and `golem-call-tool-go`.
 
 ## Explicit bridge generation
 

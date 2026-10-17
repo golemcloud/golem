@@ -38,6 +38,7 @@ steps:
       ts: *configure-mcp-prompt
       scala: *configure-mcp-prompt
       moonbit: *configure-mcp-prompt
+      go: *configure-mcp-prompt
     expectedSkills:
       - "golem-configure-mcp-server"
     allowedExtraSkills:
@@ -59,6 +60,7 @@ steps:
       ts: *non-effect-mcp-config-expect
       scala: *non-effect-mcp-config-expect
       moonbit: *non-effect-mcp-config-expect
+      go: *non-effect-mcp-config-expect
 
   - id: "mcp-list-tools"
     mcp_call:
@@ -72,6 +74,7 @@ steps:
       ts: *non-effect-list-tools-expect
       scala: *non-effect-list-tools-expect
       moonbit: *non-effect-list-tools-expect
+      go: *non-effect-list-tools-expect
 
   - id: "mcp-call-increment-by"
     skip_if:

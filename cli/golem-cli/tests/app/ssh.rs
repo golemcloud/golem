@@ -2,7 +2,7 @@
 // Licensed under the Golem Source License v1.1
 
 use super::builtin_bash::{self, OWNER, invoke};
-use super::{InteractiveSession, Output, RawOutput, TestContext};
+use super::{CLOSED_OUTPUT_EXIT, InteractiveSession, Output, RawOutput, TestContext};
 use golem_cli::fs;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -178,6 +178,37 @@ impl BlockingCli {
             String::from_utf8_lossy(&output.stdout).into_owned(),
         ))
     }
+}
+
+/// The reader of the output of `golem ssh -c` takes the first bytes and leaves while the command
+/// goes on printing. The end of the process comes from the failed write of that output.
+#[test]
+#[timeout("20 minutes")]
+async fn a_reader_that_leaves_the_output_of_ssh_ends_the_command_with_the_exit_code_of_sigpipe() {
+    let ctx = context().await;
+
+    let output = tokio::time::timeout(
+        Duration::from_secs(90),
+        ctx.cli_closing_stdout_after_bytes(
+            [
+                "ssh",
+                OWNER,
+                "-c",
+                "i=0; while [ $i -lt 20000 ]; do echo output-line-for-the-reader-that-leaves-$i; i=$((i+1)); done",
+            ],
+            16,
+        ),
+    )
+    .await
+    .expect("golem ssh kept running after the reader had left");
+    assert_eq!(
+        output.exit_code(),
+        Some(CLOSED_OUTPUT_EXIT),
+        "golem ssh after the reader left did not end with the exit code of SIGPIPE: {}",
+        output.stderr_text()
+    );
+    assert!(!output.stderr_text().contains("panicked"));
+    assert!(!output.stderr_text().contains("Broken pipe"));
 }
 
 #[test]

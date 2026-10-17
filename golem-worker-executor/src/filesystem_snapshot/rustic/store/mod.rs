@@ -28,14 +28,14 @@ use super::clear;
 use super::clear::{ClearHook, NoHook};
 use super::fault::{
     Phase, RestoreError, SaveFault, is_file_missing, is_index_missing, is_snapshot_missing,
-    is_storage_failure, missing_blob, missing_file_path, restore_error, rustic_storage_end,
-    save_fault, storage_end,
+    is_storage_failure, missing_file_path, restore_error, rustic_storage_end, save_fault,
+    storage_end,
 };
 use super::files::{LateWrites, SnapshotFiles, lands_by, later};
 use super::priority::LowPriority;
 use super::prune::{
-    Percent, PrunePolicy, belongs_to_ledger, due_prune, read_ledger, record_freed, refresh_period,
-    remove_freed, remove_old_claims, remove_older_ledgers, write_ledger,
+    DueCheck, Percent, PrunePolicy, belongs_to_ledger, due_prune, read_ledger, record_freed,
+    refresh_period, remove_freed, remove_old_claims, remove_older_ledgers, write_ledger,
 };
 use super::publish::{
     PublishBound, Published, SnapshotStage, StagedSnapshot, backup_end, index_read_bound, publish,
@@ -56,9 +56,12 @@ use crate::filesystem_snapshot::agent_work::{
 };
 use crate::filesystem_snapshot::clock::{Clock, SystemClock};
 use crate::filesystem_snapshot::{
-    AgentSnapshots, CallError, ChangeDetection, Failed, FilesystemSnapshotStore, ReadError,
-    RestoreFailure, RunSlots, SaveError, SnapshotInfo, SnapshotName, Unlimited, Withdrawal,
-    newest_first, snapshot_time,
+    AgentSnapshots, CallError, ChangeDetection, FilesystemSnapshotStore, ReadError, RestoreFailure,
+    RunSlots, SaveError, SnapshotInfo, SnapshotName, Unlimited, Withdrawal, newest_first,
+    snapshot_time,
+};
+use crate::metrics::filesystem_snapshots::{
+    self, PruneOutcome, PruneSkip, RemovedSource, StoredSource,
 };
 use crate::sandbox_filesystem::{NativeOperation, NativeStorageProfile, execute_native};
 use crate::services::golem_config::FilesystemSnapshotStoreConfig;
@@ -104,8 +107,8 @@ const PRUNE_THRESHOLD: Percent = Percent(10);
 /// that a prune deleted, and the bound needs only that clocks differ by less than the skew margin,
 /// that a write or a delete lands within one deadline of the end of its call or never, and that the
 /// host does not suspend. A restore needs no bound: it answers a pack that a prune removed during
-/// it by reading the snapshots again, and a pack that a prune only marked with a `Failed` that a
-/// later restore can clear.
+/// it by reading the snapshots again, and it reads a pack that a prune only marked, because its
+/// index holds the marked packs.
 const PRUNE_GRACE: Duration = Duration::from_secs(15 * 60);
 
 /// The longest storage call deadline that the store accepts: one eighth of [`PRUNE_GRACE`], so a
@@ -529,11 +532,12 @@ impl RusticSnapshotStore {
         });
     }
 
-    /// Prunes the repository when a prune is due, and gives the failure of a prune that did not
-    /// end. The records of freed bytes stay until a prune succeeds, so a later prune counts them
-    /// again. It lists the packs only when their size can make a prune due. The claim protocol
-    /// makes one try of each blob call, because a try that lost its answer can still land, and the
-    /// protocol counts each such landing.
+    /// Prunes the repository when a prune is due, and tells whether the prune ran or why it did
+    /// not. It gives the failure of a prune that did not end. The records of freed bytes stay
+    /// until a prune succeeds, so a later prune counts them again. It lists the packs only when
+    /// their size can make a prune due. The claim protocol makes one try of each blob call,
+    /// because a try that lost its answer can still land, and the protocol counts each such
+    /// landing.
     ///
     /// A due prune runs only after the delete takes a claim of its ledger, and only when a second
     /// read of the ledger after the claim finds the time of the last prune of the first read. When
@@ -549,11 +553,13 @@ impl RusticSnapshotStore {
         work: &OperationWork,
         scope: &AgentSnapshots,
         token: &CancellationToken,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<PruneRan> {
         let files = self.files(work, scope, token).once();
         let policy = self.prune_policy();
-        let Some(due) = due_prune(&files, &*self.clock, &policy).await? else {
-            return Ok(());
+        let due = match due_prune(&files, &*self.clock, &policy).await? {
+            DueCheck::Due(due) => due,
+            DueCheck::NotDue => return Ok(PruneRan::Skipped(PruneSkip::NotDue)),
+            DueCheck::Held => return Ok(PruneRan::Skipped(PruneSkip::ClaimedElsewhere)),
         };
         // The token of the tracker comes before the check of the cancel, so either the delete sees
         // a shut down and makes no more storage calls, or `shut_down` waits for the claim and for
@@ -573,7 +579,7 @@ impl RusticSnapshotStore {
         )
         .await?
         else {
-            return Ok(());
+            return Ok(PruneRan::Skipped(PruneSkip::ClaimedElsewhere));
         };
         // Before the prune starts, an error releases the claim, so the next delete prunes again.
         // When the second read of the ledger finds another time of the last prune than the first
@@ -583,7 +589,7 @@ impl RusticSnapshotStore {
             Ok(Some(backend)) => backend,
             other => {
                 claim.release().await;
-                return other.map(|_| ());
+                return other.map(|_| PruneRan::Skipped(PruneSkip::ClaimedElsewhere));
             }
         };
         // No attempt of a prune that found a snapshot file gone changed the repository, so no
@@ -595,23 +601,24 @@ impl RusticSnapshotStore {
                     "a concurrent delete removed a snapshot file at each attempt of the prune"
                 );
             }
-            other => other.map(|marked| marked.unwrap_or_default()),
+            other => other.map(|report| report.flatten().unwrap_or_default()),
         };
         // The final marker holds the claim for the hold from the end of this prune, also when the
         // prune or its ledger write fails. It goes through the files of the claim, which no cancel
         // ends, so a prune that a shut down stopped also gets it.
         claim.finish().await;
-        let marked_packs = pruned?;
+        let report = pruned?;
+        filesystem_snapshots::record_removed_bytes(RemovedSource::Prune, report.bytes_removed);
         let ended = self.clock.now();
         // The lease fences the ledger write as it fences the calls of rustic. A write that would
         // start after the lease ran out is not sent, and a write that starts before is bounded by
         // the time left, so the entry never lands after another delete can take the claim over.
         // A prune whose ledger write the lease skipped keeps its claim and runs no cleanup.
-        write_ledger(&claim.leased(&files), ended, marked_packs).await?;
+        write_ledger(&claim.leased(&files), ended, leaves_marked_packs(&report)).await?;
         remove_older_ledgers(&files, ended).await;
         remove_freed(&files, &due.records).await;
         remove_old_claims(&files, ended).await;
-        Ok(())
+        Ok(PruneRan::Pruned)
     }
 
     /// Checks the ledger again and builds the backend of the prune. It gives `None` when the second
@@ -628,18 +635,22 @@ impl RusticSnapshotStore {
         if !belongs_to_ledger(claim.directory(), &again) {
             return Ok(None);
         }
-        Ok(Some(Arc::new(self.backend(claim.leased(files))?)))
+        Ok(Some(Arc::new(
+            self.backend(claim.leased(files))?
+                .storing(StoredSource::Prune),
+        )))
     }
 
-    /// Runs the prune with a new marker of the claim at each refresh period, and tells whether the
-    /// prune leaves marked packs. It gives `None` when each attempt found a snapshot file gone.
+    /// Runs the prune with a new marker of the claim at each refresh period, and gives its report.
+    /// A scope without a repository gives `Some(None)`. It gives `None` when each attempt found a
+    /// snapshot file gone.
     async fn run_prune(
         &self,
         work: &OperationWork,
         backend: Arc<BlobBackend>,
         files: &SnapshotFiles,
         claim: &Claim,
-    ) -> anyhow::Result<Option<bool>> {
+    ) -> anyhow::Result<Option<Option<PruneReport>>> {
         let key = self.key.clone();
         let settings = self.policy.prune;
         let low_priority = self.low_priority;
@@ -677,9 +688,7 @@ impl RusticSnapshotStore {
                 }
             })
             .await?;
-        attempts
-            .map(|report| report.map(|report| report.as_ref().is_some_and(leaves_marked_packs)))
-            .transpose()
+        attempts.transpose()
     }
 
     /// One run of a save: the backup, then the publish of its snapshot file. A backup that has not
@@ -709,7 +718,11 @@ impl RusticSnapshotStore {
             .recording(backend_late.clone())
             .held_by(run_calls.token());
         let backend = match self.backend(backend_files) {
-            Ok(backend) => Arc::new(backend.staging_in(stage.clone())),
+            Ok(backend) => Arc::new(
+                backend
+                    .staging_in(stage.clone())
+                    .storing(StoredSource::Save),
+            ),
             Err(error) => return Ran::Ended(Ended::new(RunEnd::Permanent, error)),
         };
         let key = self.key.clone();
@@ -1015,18 +1028,26 @@ impl RusticSnapshotStore {
         {
             return Ran::Ended(ended_by(error));
         }
-        if let Err(error) = self.prune_when_due(work, scope, &token).await {
-            warn!(
-                snapshots = ?scope,
-                error = %format!("{error:#}"),
-                "A prune of the filesystem snapshots of an agent failed; the next delete prunes again"
-            );
-            crate::metrics::filesystem_snapshots::record_failed_space_reclaim();
-            #[cfg(test)]
-            self.failed_prunes
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(error);
+        filesystem_snapshots::record_released_bytes(freed);
+        let started = Instant::now();
+        match self.prune_when_due(work, scope, &token).await {
+            Ok(PruneRan::Pruned) => {
+                filesystem_snapshots::record_prune(PruneOutcome::Pruned, started.elapsed());
+            }
+            Ok(PruneRan::Skipped(reason)) => filesystem_snapshots::record_prune_skipped(reason),
+            Err(error) => {
+                warn!(
+                    snapshots = ?scope,
+                    error = %format!("{error:#}"),
+                    "A prune of the filesystem snapshots of an agent failed; the next delete prunes again"
+                );
+                filesystem_snapshots::record_prune(PruneOutcome::Failed, started.elapsed());
+                #[cfg(test)]
+                self.failed_prunes
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(error);
+            }
         }
         Ran::Answered(Ok(()))
     }
@@ -1412,8 +1433,6 @@ struct Restoring {
     indexed: Option<RusticRepository<IndexedFullStatus>>,
     /// The error that the last step gave.
     last_error: Option<anyhow::Error>,
-    /// The error of the check, whose blob a read of the marked packs looks for.
-    check_error: Option<anyhow::Error>,
     /// The pack that a step found gone.
     missing_pack: Option<Id>,
     /// Whether the run wrote into the directory.
@@ -1444,7 +1463,6 @@ impl RestoreRun {
             found: None,
             indexed: None,
             last_error: None,
-            check_error: None,
             missing_pack: None,
             written: false,
             destination: None,
@@ -1475,7 +1493,6 @@ impl RestoreRun {
                 Step::ReadSnapshotsAgain(reason) => {
                     ControlFlow::Continue(self.read_snapshots(&mut restoring, reason))
                 }
-                Step::ReadMarked => ControlFlow::Continue(self.read_marked(&mut restoring)),
                 Step::LoadIndexAgain => ControlFlow::Continue(self.load_index(&mut restoring)),
                 Step::ClearAndEnd(end) => ControlFlow::Break(Some(match self.clear() {
                     Ok(()) => Ran::Ended(Ended::new(end, last_error(&mut restoring))),
@@ -1655,66 +1672,9 @@ impl RestoreRun {
         }
     }
 
-    /// Tells whether the blob that the check missed is only in packs that a prune marked for
-    /// deletion. It reads the listed index files that the run did not find gone. A listed index
-    /// file that is gone means that a prune wrote the index again after the listing, so the run
-    /// observes the missing file and loads again, as at a load. The error of the check names the
-    /// blob by the start of its id, so a marked blob whose id has that start counts. When the
-    /// error names no blob, any marked pack counts.
-    fn read_marked(&self, restoring: &mut Restoring) -> Stepped {
-        let blob = restoring
-            .check_error
-            .as_ref()
-            .and_then(|error| missing_blob(error.as_ref()));
-        // The files are read in the order of their paths, so a run reads them in the same order
-        // each time.
-        let mut listed = restoring
-            .listed
-            .difference(&restoring.missed)
-            .cloned()
-            .collect::<Vec<_>>();
-        listed.sort();
-        let read = (|| {
-            let Some(repository) = open_existing(self.backend.clone(), &self.key)? else {
-                return Ok(None);
-            };
-            listed
-                .iter()
-                .try_fold(false, |marked, path| {
-                    if marked {
-                        return Ok(true);
-                    }
-                    let Some(id) = path
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .and_then(|name| name.parse::<Id>().ok())
-                    else {
-                        return Ok(false);
-                    };
-                    let index = match repository.get_file::<IndexFile>(&IndexId::from(id)) {
-                        Ok(index) => index,
-                        Err(error) => return Err(anyhow::Error::from(error)),
-                    };
-                    Ok(index.packs_to_delete.iter().any(|pack| match &blob {
-                        Some(start) => pack
-                            .blobs
-                            .iter()
-                            .any(|indexed| indexed.id.to_hex().starts_with(&**start)),
-                        None => !pack.blobs.is_empty(),
-                    }))
-                })
-                .map(Some)
-        })();
-        match read {
-            // A delete of all snapshots removed the repository after the load.
-            Ok(None) => Stepped::Observed(Observed::ConfigMissing),
-            Ok(Some(only_marked)) => Stepped::Observed(Observed::MarkedRead { only_marked }),
-            Err(error) => Stepped::Observed(self.observed_error(restoring, error)),
-        }
-    }
-
-    /// Loads the index again, and tells whether it lists the pack that was gone. An index file that
-    /// is gone during the load counts as an index that does not list the pack.
+    /// Loads the index again, and tells whether it lists the pack that was gone, as a pack or as a
+    /// pack that a prune marked for deletion, as the index of a load does. An index file that is
+    /// gone during the load counts as an index that does not list the pack.
     fn load_index(&self, restoring: &mut Restoring) -> Stepped {
         let Some(pack) = restoring.missing_pack else {
             return Stepped::Observed(Observed::PackIndexed(false));
@@ -1730,7 +1690,11 @@ impl RestoreRun {
                         return Ok(true);
                     }
                     match repository.get_file::<IndexFile>(id) {
-                        Ok(index) => Ok(index.packs.iter().any(|listed| *listed.id == pack)),
+                        Ok(index) => Ok(index
+                            .packs
+                            .iter()
+                            .chain(&index.packs_to_delete)
+                            .any(|listed| *listed.id == pack)),
                         Err(error) if is_file_missing(&*error) => Ok(false),
                         Err(error) => Err(anyhow::Error::from(error)),
                     }
@@ -1784,10 +1748,7 @@ fn observe(restoring: &mut Restoring, error: anyhow::Error, phase: Phase) -> Obs
             restoring.destination = Some(std::io::Error::new(kind, format!("{error:#}")));
             Observed::Destination
         }
-        RestoreError::CheckFailed => {
-            restoring.check_error = Some(anyhow::anyhow!("{error:#}"));
-            Observed::CheckFailed
-        }
+        RestoreError::CheckFailed => Observed::CheckFailed,
         RestoreError::Corrupt => Observed::Permanent { range: true },
     };
     restoring.last_error = Some(error);
@@ -1807,9 +1768,6 @@ fn answer(outcome: Outcome, restoring: &mut Restoring) -> RestoreFailure {
     match outcome {
         Outcome::NotFound => RestoreFailure::NotFound,
         Outcome::Corrupt => RestoreFailure::Corrupt(last_error(restoring)),
-        Outcome::MarkedOnly => RestoreFailure::Failed(Failed::new(anyhow::anyhow!(
-            "a pack of the snapshot is marked for deletion; a later restore can succeed"
-        ))),
         Outcome::Destination => RestoreFailure::Destination(
             restoring
                 .destination
@@ -2113,6 +2071,14 @@ fn leaves_marked_packs(report: &PruneReport) -> bool {
         || report.packs_repacked > 0
         || report.packs_unindexed > 0
         || report.marked_packs_kept > 0
+}
+
+/// What a delete did about a prune.
+enum PruneRan {
+    /// The prune ran and wrote its ledger.
+    Pruned,
+    /// No prune ran, for this reason.
+    Skipped(PruneSkip),
 }
 
 /// Gives the packed bytes that the save of the snapshot added to the repository.

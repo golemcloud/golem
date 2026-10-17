@@ -15,7 +15,7 @@ import {
   type StreamOwnership,
 } from "./schema-model/schemaValueStreamHandle.js"
 import { STREAM_INTERNAL } from "./schema-model/streamInternal.js"
-import { schemaValueToWitAsync } from "./schema-model/wit.js"
+import { restoreEncodedCapabilitiesOnAbort, schemaValueToWitAsync } from "./schema-model/wit.js"
 
 type ItemCodec<T> = Schema.Codec<T, import("./schema-model/model.js").SchemaValue, any, any>
 
@@ -48,7 +48,8 @@ export function agentStreamToHandle<T, E, R>(
         Schema.encodeEffect(itemCodec)(item).pipe(
           Effect.flatMap((value) =>
             Effect.tryPromise({
-              try: (signal) => schemaValueToWitAsync(value, signal),
+              try: (signal) =>
+                restoreEncodedCapabilitiesOnAbort(signal, schemaValueToWitAsync(value, signal)),
               catch: (error) => error,
             }),
           ),
@@ -111,7 +112,8 @@ export function agentStreamFromHandle<T>(
         Schema.encodeEffect(itemCodec)(item).pipe(
           Effect.flatMap((value) =>
             Effect.tryPromise({
-              try: (signal) => schemaValueToWitAsync(value, signal),
+              try: (signal) =>
+                restoreEncodedCapabilitiesOnAbort(signal, schemaValueToWitAsync(value, signal)),
               catch: (error) => error,
             }),
           ),

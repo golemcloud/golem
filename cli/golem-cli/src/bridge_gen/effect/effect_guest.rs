@@ -79,12 +79,18 @@ impl EffectGuestBridgeGenerator {
         let class = &inner.agent_type.type_name.0;
         writer.begin_export_class(class);
         writer.write_line(
-            "private constructor(private readonly resolved: base.RemoteAgentHandle) {}",
+            "private constructor(private readonly resolved: base.RemoteAgentHandle, private readonly scopeCard?: base.ScopeCard) {}",
         );
         let durable = inner.agent_type.mode == AgentMode::Durable;
         if durable {
             writer.write_line("get agentId(): string { return this.resolved.agentId; }");
         }
+        writer.write_line(format!(
+            r#"
+/** A client for the same agent whose awaited calls borrow `scopeCard` by default; `undefined` sends none. Triggers and schedules never send a scope card. A scope card is valid only during the invocation that derived it. */
+withScopeCard(scopeCard: base.ScopeCard | undefined): {class} {{ return new {class}(this.resolved, scopeCard); }}
+"#
+        ));
         let configs: Vec<_> = inner
             .agent_type
             .config
@@ -114,7 +120,13 @@ impl EffectGuestBridgeGenerator {
             }
         }
         let mut naming = ParameterNaming::new();
-        naming.reserve_many(["resolved", "constructor", "agentId"]);
+        naming.reserve_many([
+            "resolved",
+            "constructor",
+            "agentId",
+            "scopeCard",
+            "withScopeCard",
+        ]);
         for method in &inner.agent_type.methods {
             let member = naming.fresh(inner.to_js_ident(&method.name));
             let stream_alias = effect_stream_alias(&inner.agent_type.type_name.0);
@@ -143,18 +155,21 @@ impl EffectGuestBridgeGenerator {
 readonly {member} = (() => {{
   const __encode = {encode};
   const __decode = {decode};
-  const __call = (...args: [{args}]) => base.attempt(() => __encode(args)).pipe(
-    Effect.flatMap(input => this.resolved.{await_name}({name}, input, __decode)));
+  const __await = (scopeCard: base.ScopeCard | undefined, ...args: [{args}]) => base.attempt(() => __encode(args)).pipe(
+    Effect.flatMap(input => this.resolved.{await_name}({name}, input, __decode, {{ scopeCard }})));
+  const __call = (...args: [{args}]) => __await(this.scopeCard, ...args);
+  const withScopeCard = (scopeCard: base.ScopeCard | undefined) => (...args: [{args}]) => __await(scopeCard, ...args);
 "#
             ));
             if method.uses_streams(&inner.agent_type.schema) {
-                writer.write_line("return __call; })();");
+                writer.write_line("return Object.assign(__call, { withScopeCard }); })();");
                 continue;
             }
             writer.write_line(format!(r#"
   const schedule = (at: Parameters<base.RemoteAgentHandle['scheduleCancelable']>[0], ...args: [{args}]) =>
     base.attempt(() => __encode(args)).pipe(Effect.flatMap(input => this.resolved.{schedule}(at, {name}, input)));
   return Object.assign(__call, {{
+    withScopeCard,
     trigger: (...args: [{args}]) => base.attempt(() => __encode(args)).pipe(
       Effect.flatMap(input => this.resolved.{trigger}({name}, input))),
     schedule,

@@ -1150,7 +1150,7 @@ pub mod shared_args {
         /// DESTRUCTIVE: Deletes and recreates existing agents, losing their state. This action is irreversible. Mutually exclusive with `--update-agents` and `--reset`.
         #[clap(long, group = "post_deploy_action")]
         pub redeploy_agents: bool,
-        /// DESTRUCTIVE: Deletes all agents and the environment, then deploys from scratch. All agent state is lost. This action is irreversible. Mutually exclusive with `--update-agents` and `--redeploy-agents`.
+        /// DESTRUCTIVE: Deploys, then deletes existing agents of the deployed components. All state of these agents is lost. The environment is retained: domains, HTTP and MCP deployments, secrets, retry policies, and plugins are not cleared. Deployment can still update these resources, including replacing incompatible agent secrets. This action is irreversible. Mutually exclusive with `--update-agents` and `--redeploy-agents`.
         #[clap(long, short, group = "post_deploy_action")]
         pub reset: bool,
     }
@@ -1838,6 +1838,12 @@ pub mod worker {
                 verbatim_doc_comment,
             )]
             query: Option<String>,
+            /// Show the entries that oplog pages omit only by their type, timestamp and size.
+            /// Oplog pages omit an entry whose encoded form is larger than a server limit (1 MiB by
+            /// default), for example an entry with a large snapshot, invocation input or host call
+            /// response. By default the CLI reads each omitted entry in full.
+            #[arg(long)]
+            omit_payloads: bool,
             #[command(flatten)]
             viewer: OplogViewerArgs,
         },
@@ -2004,6 +2010,7 @@ pub mod api {
             subcommand: ApiSecuritySchemeSubcommand,
         },
         /// Inspect, refresh and authorize MCP imports
+        #[command(after_help = crate::command_examples::MCP_IMPORT)]
         McpImport {
             #[clap(subcommand)]
             subcommand: McpImportSubcommand,
@@ -2018,25 +2025,31 @@ pub mod api {
     #[derive(Debug, Subcommand)]
     pub enum McpImportSubcommand {
         /// Inspect an import's projected tool definitions
+        #[command(after_help = crate::command_examples::MCP_IMPORT)]
         Tools {
-            /// Zero-based index in the target deployment's MCP imports
-            import_index: u32,
+            /// Import name or unique full URL from the selected environment's manifest
+            #[arg(value_name = "NAME_OR_URL")]
+            import: String,
             /// Deployment revision to target; defaults to the current deployment
             #[arg(long)]
             revision: Option<golem_common::model::deployment::DeploymentRevision>,
         },
         /// Fetch fresh upstream definitions for an import
+        #[command(after_help = crate::command_examples::MCP_IMPORT)]
         Refresh {
-            /// Zero-based index in the target deployment's MCP imports
-            import_index: u32,
+            /// Import name or unique full URL from the selected environment's manifest
+            #[arg(value_name = "NAME_OR_URL")]
+            import: String,
             /// Deployment revision to target; defaults to the current deployment
             #[arg(long)]
             revision: Option<golem_common::model::deployment::DeploymentRevision>,
         },
         /// Start authorization and print the provider consent URL
+        #[command(after_help = crate::command_examples::MCP_IMPORT)]
         Authorize {
-            /// Zero-based import index in the target deployment or selected manifest
-            import_index: u32,
+            /// Import name or unique full URL from the selected environment's manifest
+            #[arg(value_name = "NAME_OR_URL")]
+            import: String,
             /// Deployment revision; defaults to current. Mutually exclusive with --manifest
             #[arg(long)]
             revision: Option<golem_common::model::deployment::DeploymentRevision>,
@@ -2045,9 +2058,11 @@ pub mod api {
             manifest: bool,
         },
         /// Complete authorization from the exact provider callback URL
+        #[command(after_help = crate::command_examples::MCP_IMPORT)]
         Complete {
-            /// Zero-based import index in the target deployment or selected manifest
-            import_index: u32,
+            /// Import name or unique full URL from the selected environment's manifest
+            #[arg(value_name = "NAME_OR_URL")]
+            import: String,
             /// Exact provider callback URL received after consent, including query parameters
             callback_url: OAuthCallbackUrl,
             /// Deployment revision; defaults to current. Mutually exclusive with --manifest
@@ -2058,9 +2073,11 @@ pub mod api {
             manifest: bool,
         },
         /// Show non-secret authorization state
+        #[command(after_help = crate::command_examples::MCP_IMPORT)]
         Status {
-            /// Zero-based import index in the target deployment or selected manifest
-            import_index: u32,
+            /// Import name or unique full URL from the selected environment's manifest
+            #[arg(value_name = "NAME_OR_URL")]
+            import: String,
             /// Deployment revision; defaults to current. Mutually exclusive with --manifest
             #[arg(long)]
             revision: Option<golem_common::model::deployment::DeploymentRevision>,
@@ -2069,9 +2086,11 @@ pub mod api {
             manifest: bool,
         },
         /// Revoke the stored grant
+        #[command(after_help = crate::command_examples::MCP_IMPORT)]
         Disconnect {
-            /// Zero-based import index in the target deployment or selected manifest
-            import_index: u32,
+            /// Import name or unique full URL from the selected environment's manifest
+            #[arg(value_name = "NAME_OR_URL")]
+            import: String,
             /// Deployment revision; defaults to current. Mutually exclusive with --manifest
             #[arg(long)]
             revision: Option<golem_common::model::deployment::DeploymentRevision>,
@@ -3107,7 +3126,7 @@ pub mod server {
         #[clap(long, value_parser = golem_common::config::byte_size::parse_positive)]
         pub system_memory_override: Option<std::num::NonZeroU64>,
 
-        /// IPv4 address to serve the main API on, defaults to 127.0.0.1. The server refuses an
+        /// IP address to serve the main API on, defaults to 127.0.0.1. The server refuses an
         /// address that is not loopback while the configuration uses a well-known default secret,
         /// such as the local admin token.
         #[clap(long)]
@@ -3664,6 +3683,7 @@ mod test {
     }
 
     #[test]
+    #[allow(clippy::print_stdout)]
     fn builtin_app_subcommands_no_panic() {
         println!("{:?}", builtin_exec_subcommands())
     }

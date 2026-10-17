@@ -181,7 +181,7 @@ where
                     invocation_id: self.invocation_id,
                     ..Default::default()
                 },
-                async |_| Ok(HostRequestNoInput {}),
+                HostRequestNoInput {},
             )
             .await
             .map_err(wasmtime::Error::from)?;

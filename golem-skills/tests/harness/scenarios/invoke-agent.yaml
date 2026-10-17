@@ -21,6 +21,7 @@ steps:
         to invoke this Effect agent's `increment` method for a counter named "c1".
       scala: *non-effect-invoke-agent-prompt
       moonbit: *non-effect-invoke-agent-prompt
+      go: *non-effect-invoke-agent-prompt
     expectedSkills:
       rust:
         - "golem-invoke-agent-rust"
@@ -32,6 +33,8 @@ steps:
         - "golem-invoke-agent-scala"
       moonbit:
         - "golem-invoke-agent-moonbit"
+      go:
+        - "golem-invoke-agent-go"
 
   - id: "verify-counter-incremented"
     invoke_json:
@@ -41,6 +44,7 @@ steps:
         ts: *non-effect-counter-agent
         scala: *non-effect-counter-agent
         moonbit: *non-effect-counter-agent
+        go: *non-effect-counter-agent
       method: "increment"
     expect:
       result_json:

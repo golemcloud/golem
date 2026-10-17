@@ -16,7 +16,7 @@ use super::ErasedReplayableStream;
 use crate::storage::blob::{
     BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobRangeStream, BlobRefusal, BlobRefusedError,
     BlobStorageBackend, BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath,
-    PutIfAbsent, agent_path_segment, blob_positions, validate_range,
+    PutIfAbsent, blob_positions, validate_range,
 };
 use anyhow::{Context, Error, anyhow};
 use async_trait::async_trait;
@@ -136,60 +136,7 @@ impl FileSystemBlobStorage {
     /// Gives the directory of the namespace, which holds the blobs of the namespace.
     fn namespace_path(&self, namespace: &BlobStorageNamespace) -> PathBuf {
         let mut result = self.root.clone();
-
-        match namespace {
-            BlobStorageNamespace::CompilationCache { environment_id } => {
-                result.push("compilation_cache");
-                result.push(environment_id.to_string());
-            }
-            BlobStorageNamespace::CustomStorage { environment_id } => {
-                result.push("custom_data");
-                result.push(environment_id.to_string());
-            }
-            BlobStorageNamespace::OplogPayload {
-                environment_id,
-                agent_id,
-                agent_mode,
-            } => {
-                result.push("oplog_payload");
-                result.push(super::agent_mode_prefix(*agent_mode));
-                result.push(environment_id.to_string());
-                // The filesystem backend needs a bounded worker-derived path component because
-                // very long agent ids can exceed local filename limits on many operating systems.
-                result.push(agent_path_segment(agent_id));
-            }
-            BlobStorageNamespace::CompressedOplog {
-                environment_id,
-                component_id,
-                agent_mode,
-                level,
-            } => {
-                result.push("compressed_oplog");
-                result.push(super::agent_mode_prefix(*agent_mode));
-                result.push(environment_id.to_string());
-                result.push(component_id.to_string());
-                result.push(level.to_string());
-            }
-            BlobStorageNamespace::InitialAgentFiles { environment_id } => {
-                result.push("initial_agent_files");
-                result.push(environment_id.to_string());
-            }
-            BlobStorageNamespace::Components { environment_id } => {
-                result.push("component_store");
-                result.push(environment_id.to_string());
-            }
-            BlobStorageNamespace::FilesystemSnapshots {
-                environment_id,
-                agent_id,
-                fingerprint,
-            } => {
-                result.push("filesystem_snapshots");
-                result.push(environment_id.to_string());
-                result.push(agent_path_segment(agent_id));
-                result.push(fingerprint.0.to_string());
-            }
-        }
-
+        result.extend(super::namespace_segments(namespace));
         result
     }
 
@@ -598,7 +545,7 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
-    ) -> Result<bool, Error> {
+    ) -> Result<Option<u64>, Error> {
         let full_path = self.directory_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
         let namespace_root = self.namespace_path(&namespace);
@@ -1159,16 +1106,25 @@ fn holds_an_entry(directory: &Path) -> std::io::Result<bool> {
 }
 
 /// Removes `directory` and everything below it, and each directory above it, below `root`, that
-/// the remove left empty (`prune_empty_directories`). Tells if `directory` held a blob or a
-/// directory that `create_dir` made (`holds_an_entry`). A `directory` that does not exist gives
-/// false.
-fn remove_directory(directory: &Path, root: &Path) -> std::io::Result<bool> {
-    let held = holds_an_entry(directory)?;
+/// the remove left empty (`prune_empty_directories`). Gives the sum of the sizes of the blobs below
+/// `directory` when it held a blob or a directory that `create_dir` made (`holds_an_entry`). A
+/// `directory` that does not exist gives `None`.
+fn remove_directory(directory: &Path, root: &Path) -> std::io::Result<Option<u64>> {
+    let bytes = if holds_an_entry(directory)? {
+        Some(
+            list_files_below(directory, root)?
+                .iter()
+                .map(|blob| blob.size)
+                .sum(),
+        )
+    } else {
+        None
+    };
     absent_on_not_found(std::fs::remove_dir_all(directory))?;
     if let Some(parent) = directory.parent() {
         prune_empty_directories(parent, root);
     }
-    Ok(held)
+    Ok(bytes)
 }
 
 /// Makes the directory of `marker` and the marker in it, which tells that `create_dir` made the

@@ -37,6 +37,7 @@ final class DatabaseDemoImpl(@unused private val name: String) extends DatabaseD
           case DbError.QueryParameterFailure(msg) => sb.append(s"Param error: $msg\n")
           case DbError.QueryExecutionFailure(msg) => sb.append(s"Exec error: $msg\n")
           case DbError.QueryResponseFailure(msg)  => sb.append(s"Response error: $msg\n")
+          case DbError.ResourceLost(msg)          => sb.append(s"Resource lost: $msg\n")
           case DbError.Other(msg)                 => sb.append(s"Other error: $msg\n")
         }
 

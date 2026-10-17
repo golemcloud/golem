@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = ["."]
+
+[package]
+name = "golem_python"
+version = "0.1.0"
+edition = "2024"
+license-file = "../../LICENSE"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+strip = "symbols"
+
+[dependencies]
+golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
+rustpython = { git = "https://github.com/RustPython/RustPython", rev = "d79b41ba289844be0fe391bab5a083f6688af648", default-features = false, features = ["stdlib", "stdio", "importlib", "freeze-stdlib", "host_env"] }
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "wit-bindgen-golem-1.6", version = "=0.59.0", features = ["async", "async-spawn", "inter-task-wakeup"] }

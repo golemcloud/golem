@@ -29,6 +29,7 @@ export interface RpcConnection {
   readonly invokeAndAwait: (
     methodName: string,
     input: CoreTypes.SchemaValueTree,
+    scopeCard?: CoreTypes.PermissionCard,
   ) => AgentHost.InvocationResultWithMetadata
   readonly invoke: (
     methodName: string,
@@ -37,6 +38,7 @@ export interface RpcConnection {
   readonly asyncInvokeAndAwait: (
     methodName: string,
     input: CoreTypes.SchemaValueTree,
+    scopeCard?: CoreTypes.PermissionCard,
   ) => RpcInvocationHandle
   readonly scheduleInvocation: (
     scheduledAt: AgentHost.Datetime,
@@ -73,10 +75,11 @@ const dispose = (resource: unknown): void => {
 }
 
 const wrapWasmRpc = (rpc: WasmRpc): RpcConnection => ({
-  invokeAndAwait: (methodName, input) => rpc.invokeAndAwait(methodName, input, undefined),
+  invokeAndAwait: (methodName, input, scopeCard) =>
+    rpc.invokeAndAwait(methodName, input, scopeCard),
   invoke: (methodName, input) => rpc.invoke(methodName, input, undefined),
-  asyncInvokeAndAwait: (methodName, input) => {
-    const invocation = rpc.asyncInvokeAndAwait(methodName, input, undefined)
+  asyncInvokeAndAwait: (methodName, input, scopeCard) => {
+    const invocation = rpc.asyncInvokeAndAwait(methodName, input, scopeCard)
     return {
       metadata: invocation.metadata,
       get: () => invocation.future.get(),

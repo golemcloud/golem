@@ -363,6 +363,21 @@ declare_structs! {
         pub entry: PublicOplogEntry,
     }
 
+    /// An oplog entry that an oplog page leaves out because its encoded form is larger than the
+    /// limit of the server. The oplog entry endpoint returns the full entry for the oplog index.
+    pub struct OmittedOplogEntry {
+        pub oplog_index: OplogIndex,
+        pub attribution: PublicOplogEntryAttribution,
+        pub timestamp: Timestamp,
+        /// The type of the entry, the `type` field of its `PublicOplogEntry` form.
+        pub entry_type: String,
+        /// The size of the encoded entry in bytes.
+        pub size: u64,
+        /// The component revision the server decodes the entry with. Passing it to the oplog
+        /// entry endpoint saves the server from scanning the oplog for it.
+        pub component_revision: ComponentRevision,
+    }
+
     pub struct PublicAgentEntity {
         pub kind: PublicAgentEntityKind,
         pub name: String,
@@ -401,6 +416,14 @@ declare_structs! {
 }
 
 declare_unions! {
+    /// An item of an oplog page: a full oplog entry, or an entry that the page leaves out
+    /// because it is too large.
+    #[allow(clippy::large_enum_variant)]
+    pub enum PublicOplogPageEntry {
+        Included(PublicOplogEntryWithIndex),
+        Omitted(OmittedOplogEntry),
+    }
+
     pub enum PublicOplogEntryAttribution {
         Agent(Empty),
         Entity(PublicEntityInvocationContext),
@@ -430,6 +453,15 @@ pub enum PublicEntityCallMode {
     FireAndForget,
 }
 
+impl PublicOplogPageEntry {
+    pub fn oplog_index(&self) -> OplogIndex {
+        match self {
+            Self::Included(entry) => entry.oplog_index,
+            Self::Omitted(omitted) => omitted.oplog_index,
+        }
+    }
+}
+
 impl PublicOplogEntryAttribution {
     pub fn agent() -> Self {
         Self::Agent(Empty {})
@@ -453,22 +485,6 @@ pub struct PluginInstallationDescription {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct WriteRemoteBatchedParameters {
-    pub index: Option<OplogIndex>,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct WriteRemoteTransactionParameters {
-    pub index: Option<OplogIndex>,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
@@ -482,15 +498,6 @@ pub enum PublicDurableFunctionType {
     ReadRemote(Empty),
     /// The side-effect manipulates external state (for example an RPC call)
     WriteRemote(Empty),
-    /// The side-effect manipulates external state through multiple invoked functions (for example
-    /// a HTTP request where reading the response involves multiple host function calls)
-    ///
-    /// On the first invocation of the batch, the parameter should be `None` - this triggers
-    /// writing a scope `Start` entry in the oplog. Followup invocations should contain
-    /// this entry's index as the parameter. In batched remote writes it is the caller's responsibility
-    /// to manually write the matching scope `End` entry (using `end_function`) when the operation is completed.
-    WriteRemoteBatched(WriteRemoteBatchedParameters),
-    WriteRemoteTransaction(WriteRemoteTransactionParameters),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1046,6 +1053,7 @@ pub struct PublicRetryPolicyStateCountBox {
 /// API-facing and-then state tracking left/right sub-states and which side is active.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct PublicRetryPolicyStateAndThen {
     /// State of the first (left) policy.

@@ -262,12 +262,20 @@ final class CallerCodecBoundMethod[Input, Output] private[reflection] (
   definition: CallerCodecMethod[Input, Output],
   transport: Transport
 ) {
-  def invoke(input: Input): Future[Either[GolemReflectError, TypedInvocation[Output]]] =
+
+  /**
+   * `scopeCard` is borrowed by the awaited call; see
+   * [[golem.host.PermissionsApi.ScopeCard]].
+   */
+  def invoke(
+    input: Input,
+    scopeCard: Option[golem.host.PermissionsApi.ScopeCard] = None
+  ): Future[Either[GolemReflectError, TypedInvocation[Output]]] =
     encodeInput(input) match {
       case Left(error)  => Future.successful(Left(error))
       case Right(value) =>
         transport
-          .invokeAndAwait(definition.name, value)
+          .invokeAndAwait(definition.name, value, scopeCard)
           .map(_.flatMap { invocation =>
             decodeOutput(invocation.value).map(output => TypedInvocation(invocation.metadata, output))
           })

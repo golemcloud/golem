@@ -191,7 +191,7 @@ pub(all) enum SchemaValue {
   // native stream endpoint, retained without proxying or materialization
   Stream(GuestSchemaValueStreamHandle)
   // owned `permission-card` resource carried as an opaque, affine handle
-  PermissionCard(GuestPermissionCardHandle)
+  PermissionCard(@card.GuestPermissionCardHandle)
 } derive(Debug, Eq)
 
 ///|
@@ -230,25 +230,45 @@ pub fn SchemaValue::release_resources(
   self : SchemaValue,
   drops : SchemaValueResourceDrops,
 ) -> Unit {
+  self.release_owned(drops, false)
+}
+
+///|
+/// Rolls back a failed invocation-input encode: releases every resource still
+/// owned by this value except permission cards. The host never took the cards,
+/// so they stay with their holders and the caller keeps them.
+pub fn SchemaValue::rollback_input_resources(
+  self : SchemaValue,
+  drops : SchemaValueResourceDrops,
+) -> Unit {
+  self.release_owned(drops, true)
+}
+
+///|
+fn SchemaValue::release_owned(
+  self : SchemaValue,
+  drops : SchemaValueResourceDrops,
+  keep_permission_cards : Bool,
+) -> Unit {
   match self {
     Record(values) | Tuple(values) | List(values) | FixedList(values) =>
       for value in values {
-        value.release_resources(drops)
+        value.release_owned(drops, keep_permission_cards)
       }
     Variant(_, payload)
     | Option(payload)
     | ResultOk(payload)
     | ResultErr(payload) =>
       match payload {
-        Some(value) => value.release_resources(drops)
+        Some(value) => value.release_owned(drops, keep_permission_cards)
         None => ()
       }
     Map(entries) =>
       for entry in entries {
-        entry.key.release_resources(drops)
-        entry.value.release_resources(drops)
+        entry.key.release_owned(drops, keep_permission_cards)
+        entry.value.release_owned(drops, keep_permission_cards)
       }
-    Union(_, body) => body.release_resources(drops)
+    Union(_, body) => body.release_owned(drops, keep_permission_cards)
     Secret(handle) =>
       match handle.take() {
         Some(value) => (drops.drop_secret)(value)
@@ -260,9 +280,11 @@ pub fn SchemaValue::release_resources(
         None => ()
       }
     PermissionCard(handle) =>
-      match handle.take() {
-        Some(value) => value.drop()
-        None => ()
+      if !keep_permission_cards {
+        match @card.take(handle) {
+          Some(value) => value.drop()
+          None => ()
+        }
       }
     Stream(handle) =>
       handle.release(drops.drop_stream, drops.drop_native_stream)

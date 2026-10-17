@@ -15,6 +15,7 @@
 use crate::Tracing;
 use anyhow::anyhow;
 use futures::{SinkExt, StreamExt};
+use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
@@ -593,6 +594,175 @@ async fn websocket_report_loss_exact_send_and_receive_crash_prefixes(
     Ok(())
 }
 
+#[test]
+#[tracing::instrument]
+#[timeout("6m")]
+async fn websocket_report_loss_recovers_a_crash_prefix_with_one_sibling_start(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    const RECEIVE: &str = "::receive";
+    const TIMED: &str = "::receive-with-timeout";
+    let context = TestContext::new(last_unique_id);
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| config.max_websocket_connections = 1)),
+        ..Default::default()
+    };
+    let start_executor = || start_with_overrides(deps, &context, overrides.clone());
+    for (recorded, missing) in [(RECEIVE, TIMED), (TIMED, RECEIVE)] {
+        for after_end in [false, true] {
+            let mut executor = start_executor().await?;
+            let mut peer = ReconnectTestServer::start().await;
+            let component = executor
+                .component_dep(&context.default_environment_id, host_api_tests)
+                .store()
+                .await?;
+            let agent_id = agent_id!(
+                "WebsocketTest",
+                format!(
+                    "one-sibling-{}-{after_end}",
+                    recorded.trim_start_matches("::")
+                )
+            );
+            let worker_id = executor
+                .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+                .await?;
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &agent_id,
+                    "connect_report_loss",
+                    data_value!(peer.url()),
+                )
+                .await?;
+            executor.shutdown_and_wait_for_invocation_loops().await?;
+            drop(executor);
+
+            // Live: the missing sibling stops before appending its Start while the recorded
+            // sibling reaches its End, then the executor crashes.
+            executor = start_executor().await?;
+            executor
+                .invoke_and_await_agent(&component, &agent_id, "noop", data_value!())
+                .await?;
+            let pool = executor.websocket_connection_pool().expect("captured pool");
+            let permit = tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await??;
+            let mut live_hold = executor.gate_next_replay_access_admission(
+                &worker_id,
+                missing,
+                ReplayAdmissionStage::BeforeLiveStart,
+            );
+            let mut end_gate = executor.gate_next_call_end(&worker_id, after_end).await;
+            let key = IdempotencyKey::fresh();
+            executor
+                .invoke_agent_with_key(
+                    &component,
+                    &agent_id,
+                    &key,
+                    CONTENTION_METHOD,
+                    data_value!(CONTENTION_TIMEOUT_MS),
+                )
+                .await?;
+            tokio::time::timeout(Duration::from_secs(10), live_hold.entered()).await?;
+            tokio::time::timeout(Duration::from_secs(10), end_gate.entered()).await?;
+            end_gate.abort();
+            executor.shutdown_and_wait_for_invocation_loops().await?;
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let starts = oplog
+                .iter()
+                .filter(|entry| entry.oplog_index >= end_gate.start_index())
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Start(params)
+                        if params.function_name.ends_with(RECEIVE)
+                            || params.function_name.ends_with(TIMED) =>
+                    {
+                        Some(params.function_name.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(starts.len(), 1, "{}", describe_oplog(&oplog));
+            assert!(starts[0].ends_with(recorded), "{}", describe_oplog(&oplog));
+            let recorded_start = end_gate.start_index();
+            drop(live_hold);
+            drop(end_gate);
+            drop(permit);
+            drop(executor);
+
+            // Replay: the recorded sibling is held before its claim, and the missing sibling must
+            // continue live while the recorded Start is still unclaimed.
+            executor = start_executor().await?;
+            // The earlier `connect_report_loss` invocation replays the same function first.
+            let mut earlier_occurrence = executor.gate_next_replay_access_admission(
+                &worker_id,
+                recorded,
+                ReplayAdmissionStage::BeforeScope,
+            );
+            let mut recorded_hold = executor.gate_next_replay_access_admission(
+                &worker_id,
+                recorded,
+                ReplayAdmissionStage::BeforeScope,
+            );
+            let mut missing_live = executor.gate_next_replay_access_admission(
+                &worker_id,
+                missing,
+                ReplayAdmissionStage::BeforeLiveStart,
+            );
+            executor
+                .invoke_agent_with_key(
+                    &component,
+                    &agent_id,
+                    &key,
+                    CONTENTION_METHOD,
+                    data_value!(CONTENTION_TIMEOUT_MS),
+                )
+                .await?;
+            tokio::time::timeout(Duration::from_secs(10), earlier_occurrence.entered()).await?;
+            earlier_occurrence.release();
+            tokio::time::timeout(Duration::from_secs(10), recorded_hold.entered()).await?;
+            tokio::time::timeout(Duration::from_secs(10), missing_live.entered()).await?;
+            missing_live.release();
+            recorded_hold.release();
+            assert_eq!(
+                executor
+                    .invoke_and_await_agent_with_key(
+                        &component,
+                        &agent_id,
+                        &key,
+                        CONTENTION_METHOD,
+                        data_value!(CONTENTION_TIMEOUT_MS),
+                    )
+                    .await?
+                    .into_typed::<(String, String)>()?,
+                ("session-lost".to_string(), "session-lost".to_string())
+            );
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            assert_call_terminal_counts(&oplog, recorded_start, 1, 1);
+            let missing_starts = oplog
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Start(params)
+                        if entry.oplog_index > recorded_start
+                            && params.function_name.ends_with(missing) =>
+                    {
+                        Some(entry.oplog_index)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(missing_starts.len(), 1, "{}", describe_oplog(&oplog));
+            assert_call_terminal_counts(&oplog, missing_starts[0], 1, 1);
+            assert_eq!(peer.accepted(), 1);
+            assert_eq!(peer.completed_handshakes(), 1);
+            executor.shutdown_and_wait_for_invocation_loops().await?;
+            drop(executor);
+            peer.stop().await?;
+        }
+    }
+    Ok(())
+}
+
 fn assert_call_terminal_counts(
     oplog: &[PublicOplogEntryWithIndex],
     start: OplogIndex,
@@ -602,100 +772,6 @@ fn assert_call_terminal_counts(
     assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == start)).count(), ends, "{}", describe_oplog(oplog));
     assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(params) if params.start_index == start)).count(), delivered, "{}", describe_oplog(oplog));
     assert!(!oplog.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::CompletionDiscarded(params) if params.start_index == start) || matches!(&entry.entry, PublicOplogEntry::Cancelled(params) if params.start_index == start)), "{}", describe_oplog(oplog));
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("3m")]
-async fn websocket_report_loss_obeys_non_idempotent_guard_and_atomic_rollback(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let mut executor = start(deps, &context).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-    for atomic in [false, true] {
-        let mut peer = ReconnectTestServer::start().await;
-        peer.arm_hold();
-        let agent_id = agent_id!("WebsocketTest", format!("non-idempotent-atomic-{atomic}"));
-        let worker_id = executor
-            .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
-            .await?;
-        let key = IdempotencyKey::fresh();
-        let method = if atomic {
-            "atomic_report_connect"
-        } else {
-            "non_idempotent_report_connect"
-        };
-        executor
-            .invoke_agent_with_key(&component, &agent_id, &key, method, data_value!(peer.url()))
-            .await?;
-        peer.wait_for_count(
-            1,
-            |event| matches!(event, ReconnectServerEvent::UpgradeRequestRead),
-            "read initial held handshake",
-        )
-        .await?;
-        executor.commit_oplog(&worker_id).await?;
-        executor.shutdown_and_wait_for_invocation_loops().await?;
-        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-        assert_single_websocket_call_incomplete(&oplog, "golem:websocket/client::connect");
-        drop(executor);
-        peer.wait_for_count(
-            1,
-            |event| matches!(event, ReconnectServerEvent::ClientVanishedWhileHeld),
-            "observe abandoned handshake",
-        )
-        .await?;
-        executor = start(deps, &context).await?;
-        if atomic {
-            peer.release_hold();
-            assert_eq!(
-                executor
-                    .invoke_and_await_agent_with_key(
-                        &component,
-                        &agent_id,
-                        &key,
-                        method,
-                        data_value!(peer.url())
-                    )
-                    .await?
-                    .into_typed::<String>()?,
-                RECONNECT_FIRST_MESSAGE
-            );
-            assert_eq!(peer.accepted(), 2);
-            assert_eq!(peer.completed_handshakes(), 1);
-        } else {
-            let result = tokio::time::timeout(
-                Duration::from_secs(10),
-                executor.invoke_and_await_agent_with_key(
-                    &component,
-                    &agent_id,
-                    &key,
-                    method,
-                    data_value!(peer.url()),
-                ),
-            )
-            .await?;
-            let error = result.expect_err("incomplete non-idempotent connect must trap");
-            assert!(
-                format!("{error:?}").contains(
-                    "Non-idempotent remote write operation was not completed, cannot retry"
-                ),
-                "expected central retry guard, not guest connection failure: {error:?}"
-            );
-            assert_eq!(peer.accepted(), 1);
-            assert_eq!(peer.completed_handshakes(), 0);
-        }
-        peer.stop().await?;
-    }
-    drop(executor);
-    Ok(())
 }
 
 #[test]
@@ -1169,6 +1245,296 @@ async fn websocket_report_loss_pending_receives_after_restart(
     );
     drop(executor);
     peer.stop().await?;
+    Ok(())
+}
+
+/// The order in which two replayed receives reach their replay claims.
+#[derive(Debug, Clone, Copy)]
+enum TwoSocketClaimOrder {
+    /// The host tasks claim in whatever order they are scheduled.
+    Natural,
+    /// The receive admitted first is held before its claim until the other one has claimed.
+    Reversed,
+}
+
+/// A peer with two paths: `/first` greets every connection at once and `/second` greets its
+/// connections only after the test releases it.
+struct TwoPathPeer {
+    port: u16,
+    first_connections: Arc<AtomicUsize>,
+    second_connections: Arc<AtomicUsize>,
+    release_second: watch::Sender<bool>,
+    accept_loop: tokio::task::JoinHandle<()>,
+}
+
+impl TwoPathPeer {
+    async fn start() -> anyhow::Result<Self> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        let first_connections = Arc::new(AtomicUsize::new(0));
+        let second_connections = Arc::new(AtomicUsize::new(0));
+        let (release_second, released) = watch::channel(false);
+        let accept_loop = spawn({
+            let first_connections = Arc::clone(&first_connections);
+            let second_connections = Arc::clone(&second_connections);
+            async move {
+                loop {
+                    let Ok((socket, _)) = listener.accept().await else {
+                        break;
+                    };
+                    let first_connections = Arc::clone(&first_connections);
+                    let second_connections = Arc::clone(&second_connections);
+                    let mut released = released.clone();
+                    spawn(
+                        async move {
+                            let mut first = false;
+                            let Ok(mut socket) = tokio_tungstenite::accept_hdr_async(
+                                socket,
+                                |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                                 response| {
+                                    first = request.uri().path() == "/first";
+                                    Ok(response)
+                                },
+                            )
+                            .await
+                            else {
+                                return;
+                            };
+                            let greeting = if first {
+                                first_connections.fetch_add(1, Ordering::SeqCst);
+                                "first-hello"
+                            } else {
+                                second_connections.fetch_add(1, Ordering::SeqCst);
+                                if released.wait_for(|released| *released).await.is_err() {
+                                    return;
+                                }
+                                "second-hello"
+                            };
+                            let _ = socket
+                                .send(tokio_tungstenite::tungstenite::Message::Text(
+                                    greeting.into(),
+                                ))
+                                .await;
+                            while let Some(message) = socket.next().await {
+                                if matches!(
+                                    message,
+                                    Ok(tokio_tungstenite::tungstenite::Message::Close(_)) | Err(_)
+                                ) {
+                                    break;
+                                }
+                            }
+                        }
+                        .in_current_span(),
+                    );
+                }
+            }
+            .in_current_span()
+        });
+        Ok(Self {
+            port,
+            first_connections,
+            second_connections,
+            release_second,
+            accept_loop,
+        })
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("ws://127.0.0.1:{}{path}", self.port)
+    }
+
+    async fn wait_for_second_connections(&self, count: usize) -> anyhow::Result<()> {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while self.second_connections.load(Ordering::SeqCst) < count {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow!("the peer did not accept {count} connection(s) on /second"))
+    }
+}
+
+/// Two concurrent `receive` calls on different websocket handles record identical empty
+/// requests. A crash while the first socket's receive is complete and delivered but the
+/// second socket's receive is still pending must replay the recorded message to the socket
+/// that received it, in either host claim order. Routing it to the other socket's receive
+/// completes that receive with a foreign message and reconnects the wrong socket.
+async fn receive_from_two_sockets_after_crash(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    agent_name: &str,
+    claim_order: TwoSocketClaimOrder,
+) -> anyhow::Result<()> {
+    let peer = TwoPathPeer::start().await?;
+    let agent_id = agent_id!("WebsocketTest", agent_name);
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .await?;
+    let key = IdempotencyKey::fresh();
+    executor
+        .invoke_agent_with_key(
+            component,
+            &agent_id,
+            &key,
+            "receive_from_two_sockets",
+            data_value!(peer.url("/first"), peer.url("/second")),
+        )
+        .await?;
+
+    // Crash once the first socket's greeting is durable and delivered while the second
+    // socket's receive is still open.
+    let receive_starts = |oplog: &[PublicOplogEntryWithIndex]| {
+        starts_of_websocket_function(oplog, "golem:websocket/client::receive")
+    };
+    let has_end = |oplog: &[PublicOplogEntryWithIndex], start: OplogIndex| {
+        oplog.iter().any(
+            |entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start),
+        )
+    };
+    let delivered = |oplog: &[PublicOplogEntryWithIndex], start: OplogIndex| {
+        oplog.iter().any(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(marker)
+                if marker.start_index == start)
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            executor.commit_oplog(&worker_id).await?;
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let starts = receive_starts(&oplog);
+            if starts.len() == 2 {
+                let completed = starts
+                    .iter()
+                    .filter(|start| has_end(&oplog, **start) && delivered(&oplog, **start))
+                    .count();
+                let open = starts
+                    .iter()
+                    .filter(|start| !has_end(&oplog, **start))
+                    .count();
+                if completed == 1 && open == 1 {
+                    return Ok::<_, anyhow::Error>(());
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("the first receive did not complete while the second stayed open"))??;
+
+    let gates = match claim_order {
+        TwoSocketClaimOrder::Natural => None,
+        TwoSocketClaimOrder::Reversed => {
+            let gate = |stage| {
+                executor.gate_next_replay_access_admission(&worker_id, "client::receive", stage)
+            };
+            Some((
+                gate(ReplayAdmissionStage::BeforeScope),
+                gate(ReplayAdmissionStage::BeforeScope),
+                gate(ReplayAdmissionStage::AfterStart),
+            ))
+        }
+    };
+    executor.simulated_crash(&worker_id).await?;
+    if let Some((mut held, mut other, mut other_claimed)) = gates {
+        let gate_timeout = Duration::from_secs(10);
+        tokio::time::timeout(gate_timeout, held.entered())
+            .await
+            .map_err(|_| anyhow!("the first replayed receive did not reach its claim"))?;
+        tokio::time::timeout(gate_timeout, other.entered())
+            .await
+            .map_err(|_| anyhow!("the second replayed receive did not reach its claim"))?;
+        other.release();
+        tokio::time::timeout(gate_timeout, other_claimed.entered())
+            .await
+            .map_err(|_| anyhow!("the second replayed receive did not claim a Start"))?;
+        held.release();
+        other_claimed.release();
+    }
+
+    // The pending receive goes live on a reconnected second socket; only then may the peer
+    // send its greeting.
+    peer.wait_for_second_connections(2).await?;
+    peer.release_second.send_replace(true);
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(30),
+        executor.invoke_and_await_agent_with_key(
+            component,
+            &agent_id,
+            &key,
+            "receive_from_two_sockets",
+            data_value!(peer.url("/first"), peer.url("/second")),
+        ),
+    )
+    .await
+    .map_err(|_| anyhow!("the replayed invocation did not complete"))??
+    .into_typed::<(String, String)>()?;
+    assert_eq!(
+        result,
+        ("first-hello".to_string(), "second-hello".to_string()),
+        "{claim_order:?}: each socket must receive its own message after the crash"
+    );
+    assert_eq!(
+        peer.first_connections.load(Ordering::SeqCst),
+        1,
+        "{claim_order:?}: the completed receive must not reconnect the first socket"
+    );
+    assert_eq!(
+        peer.second_connections.load(Ordering::SeqCst),
+        2,
+        "{claim_order:?}: the pending receive must reconnect the second socket once"
+    );
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let starts = receive_starts(&oplog);
+    assert_eq!(
+        starts.len(),
+        2,
+        "{claim_order:?}: replay must reuse both recorded receive Starts"
+    );
+    for start in starts {
+        let ends = oplog
+            .iter()
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start))
+            .count();
+        assert_eq!(
+            ends, 1,
+            "{claim_order:?}: receive Start {start} must have exactly one End"
+        );
+        assert!(
+            delivered(&oplog, start),
+            "{claim_order:?}: receive Start {start} must have a delivery marker"
+        );
+    }
+    let status = executor.get_worker_metadata(&worker_id).await?.status;
+    assert_ne!(status, AgentStatus::Failed, "{claim_order:?}");
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    peer.accept_loop.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn websocket_receives_on_two_sockets_replay_to_their_own_socket_after_crash(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    for (name, claim_order) in [
+        ("two-sockets-natural", TwoSocketClaimOrder::Natural),
+        ("two-sockets-reversed", TwoSocketClaimOrder::Reversed),
+    ] {
+        receive_from_two_sockets_after_crash(&executor, &component, name, claim_order).await?;
+    }
+    drop(executor);
     Ok(())
 }
 

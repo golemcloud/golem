@@ -1375,7 +1375,8 @@ fn agent_oplog_structured_output_exposes_secret_metadata_without_stdout_bytes() 
             request: Some(request),
             durable_function_type: PublicDurableFunctionType::WriteLocal(Empty {}),
             span_started: None,
-        }),
+        })
+        .into(),
     })
     .expect("agent.oplog should serialize");
 
@@ -1439,7 +1440,8 @@ fn cli_output_schema_validates_schema_native_component_and_agent_outputs() {
             entry: sample_public_oplog_entries()
                 .into_iter()
                 .next()
-                .expect("sample oplog entries should not be empty"),
+                .expect("sample oplog entries should not be empty")
+                .into(),
         })
         .expect("agent.oplog should serialize"),
     ];
@@ -1503,6 +1505,37 @@ fn cli_output_schema_rejects_out_of_range_tool_command_index() {
     assert!(
         !validator.is_valid(&output),
         "schema must reject a command index that cannot deserialize as i32"
+    );
+}
+
+#[test]
+fn cli_output_schema_rejects_noncanonical_node_http_router_ports() {
+    let schema = load_command_output_schema();
+    let validator = jsonschema::options()
+        .build(&schema)
+        .expect("command output schema must be a valid JSON schema");
+    let mut output = (arb_component_manifest_trace_result())
+        .new_tree(&mut proptest::test_runner::TestRunner::deterministic())
+        .expect("component.manifest-trace strategy should produce a value")
+        .current();
+
+    let routers = output
+        .pointer_mut("/properties/nodeHttpRouters/value")
+        .expect("component.manifest-trace should contain node HTTP routers");
+    let router = routers["3000"].clone();
+    *routers = json!({ "03000": router });
+
+    assert!(
+        serde_json::from_value::<crate::model::app_raw::Application>(json!({
+            "app": "test-app",
+            "components": { "app:main": { "nodeHttpRouters": routers } }
+        }))
+        .is_err(),
+        "fixture must use a port rejected by the manifest contract"
+    );
+    assert!(
+        !validator.is_valid(&output),
+        "schema must reject trace router ports rejected by the manifest contract"
     );
 }
 
@@ -1996,6 +2029,11 @@ fn arb_agent_status() -> BoxedStrategy<golem_common::model::AgentStatus> {
 }
 
 fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogEntry> {
+    use golem_common::base_model::durable_stream::StreamConsumerObservation;
+    use golem_common::base_model::oplog::attachment::{
+        AcceptedAttachmentWriteEnd, ToolAttachmentId, ToolAttachmentReadObservation,
+        ToolAttachmentReadOutcome, ToolAttachmentSlot,
+    };
     use golem_common::base_model::retry_policy::{
         ApiImmediatePolicy, ApiPredicate, ApiPredicateTrue, ApiRetryPolicy,
     };
@@ -2007,7 +2045,9 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
     use golem_common::model::oplog::*;
     use golem_common::model::regions::OplogRegion;
     use golem_common::model::{AgentId, Empty, IdempotencyKey, Timestamp};
-    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+    use golem_common::schema::{
+        IntoTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
+    };
     use std::iter::FromIterator;
     use uuid::Uuid;
 
@@ -2147,7 +2187,55 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         policy: ApiRetryPolicy::Immediate(ApiImmediatePolicy {}),
     };
 
+    let attachment_read = ToolAttachmentReadObservation {
+        attachment: ToolAttachmentId {
+            creation_start: OplogIndex::from_u64(1),
+            slot: ToolAttachmentSlot::Stdout,
+        },
+        logical_invocation: IdempotencyKey::new("attachment-read-key".to_string()),
+        observation: StreamConsumerObservation::Guest {
+            parent_start_index: Some(OplogIndex::from_u64(4)),
+        },
+        ordinal: 0,
+        read_attempt_ordinal: 2,
+        outcome: ToolAttachmentReadOutcome::RawBytes {
+            end: AcceptedAttachmentWriteEnd(OplogIndex::from_u64(3)),
+            offset: 0,
+            length: 3,
+        },
+        reobserves: None,
+    };
+    let attachment_reobservation = ToolAttachmentReadObservation {
+        observation: StreamConsumerObservation::Guest {
+            parent_start_index: Some(OplogIndex::from_u64(6)),
+        },
+        read_attempt_ordinal: 1,
+        reobserves: Some(OplogIndex::from_u64(5)),
+        ..attachment_read.clone()
+    };
+
     vec![
+        PublicOplogEntry::ToolAttachmentControl(ToolAttachmentControlParams {
+            timestamp: timestamp(),
+            attachment: attachment_read
+                .attachment
+                .into_typed_schema_value()
+                .unwrap(),
+            transition:
+                golem_common::base_model::oplog::attachment::ToolAttachmentControl::ReaderDiscarded
+                    .into_typed_schema_value()
+                    .unwrap(),
+        }),
+        PublicOplogEntry::ToolAttachmentRead(ToolAttachmentReadParams {
+            timestamp: timestamp(),
+            observation: attachment_read.into_typed_schema_value().unwrap(),
+            payload: Some(vec![7, 8, 9]),
+        }),
+        PublicOplogEntry::ToolAttachmentRead(ToolAttachmentReadParams {
+            timestamp: timestamp(),
+            observation: attachment_reobservation.into_typed_schema_value().unwrap(),
+            payload: None,
+        }),
         PublicOplogEntry::Create(CreateParams {
             timestamp: timestamp(),
             agent_id: agent_id("generated-agent"),
@@ -2177,11 +2265,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             invocation_id: Some(DurableInvocationId::new(OplogIndex::from_u64(1), 3)),
             observational_owner: Some(OplogIndex::from_u64(2)),
             request: Some(typed_string_value("request")),
-            durable_function_type: PublicDurableFunctionType::WriteRemoteBatched(
-                WriteRemoteBatchedParameters {
-                    index: Some(OplogIndex::from_u64(1)),
-                },
-            ),
+            durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
             span_started: Some(PublicSpanStarted {
                 span_id: span_id("0000000000000001"),
                 trace_id: trace_id("00000000000000000000000000000002"),
@@ -2250,13 +2334,9 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             kind: OplogErrorKind::Invocation,
             error: "generated error".to_string(),
             retry_from: OplogIndex::INITIAL,
-            inside_atomic_region: false,
             retry_policy_state: Some(retry_policy_state),
         }),
         PublicOplogEntry::RecoverySucceeded(RecoverySucceededParams {
-            timestamp: timestamp(),
-        }),
-        PublicOplogEntry::NoOp(NoOpParams {
             timestamp: timestamp(),
         }),
         PublicOplogEntry::Jump(JumpParams {
@@ -2271,13 +2351,6 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::Exited(ExitedParams {
             timestamp: timestamp(),
-        }),
-        PublicOplogEntry::BeginAtomicRegion(BeginAtomicRegionParams {
-            timestamp: timestamp(),
-        }),
-        PublicOplogEntry::EndAtomicRegion(EndAtomicRegionParams {
-            timestamp: timestamp(),
-            begin_index: OplogIndex::from_u64(1),
         }),
         PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
             timestamp: timestamp(),
@@ -3321,8 +3394,17 @@ fn arb_agent_oplog_result() -> OutputDocumentStrategy {
             arb_small_u64(),
             arb_public_oplog_entry_attribution(),
             prop_oneof![
-                proptest::sample::select(sample_public_oplog_entries()),
-                arb_typed_value_oplog_entry(),
+                proptest::sample::select(sample_public_oplog_entries()).prop_map(Into::into),
+                arb_typed_value_oplog_entry().prop_map(Into::into),
+                (arb_small_u64(), "[A-Za-z]{1,24}").prop_map(|(size, entry_type)| {
+                    crate::model::agent::oplog::AgentOplogEntryContent::Omitted(
+                        crate::model::agent::oplog::OmittedOplogEntryContent::Omitted {
+                            entry_type,
+                            timestamp: golem_common::model::Timestamp::from(1_700_000_000_000),
+                            size,
+                        },
+                    )
+                }),
             ],
         )
             .prop_map(|(index, attribution, entry)| {
@@ -4961,6 +5043,19 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
                         value_type: golem_common::schema::SchemaType::string(),
                     }],
                 }),
+            );
+            properties.node_http_routers.apply_layer(
+                &layer_id,
+                selection,
+                Some(indexmap::IndexMap::from([(
+                    "3000".to_string(),
+                    crate::model::app_raw::NodeHttpRouter {
+                        name: "Web".to_string(),
+                        mount: "/web".to_string(),
+                        auth: Some(true),
+                        cors: Some(vec!["https://example.com".to_string()]),
+                    },
+                )])),
             );
             properties.env.apply_layer(
                 &layer_id,
@@ -6973,33 +7068,40 @@ fn arb_api_retry_policy_with_depth(
 }
 
 fn arb_mcp_import_authorize_result() -> OutputDocumentStrategy {
-    serialized_output((any::<u64>(), any::<Option<u64>>(), any::<u32>()).prop_map(
-        |(authorization_id, deployment_revision, import_index)| {
-            crate::model::mcp::McpImportAuthorizeView(crate::model::mcp::McpImportAuthorization {
-                authorization_url: format!(
-                    "https://provider.example/authorize?id={authorization_id}"
-                ),
-                deployment_revision,
-                import_index,
-            })
-        },
-    ))
+    serialized_output(
+        (
+            any::<u64>(),
+            any::<Option<u64>>(),
+            prop::option::of("[a-z][a-z0-9_-]{0,20}"),
+        )
+            .prop_map(|(authorization_id, deployment_revision, import)| {
+                crate::model::mcp::McpImportAuthorizeView(
+                    crate::model::mcp::McpImportAuthorization {
+                        authorization_url: format!(
+                            "https://provider.example/authorize?id={authorization_id}"
+                        ),
+                        deployment_revision,
+                        import,
+                    },
+                )
+            }),
+    )
 }
 
 fn arb_mcp_import_oauth_status() -> impl Strategy<Value = crate::model::mcp::McpImportOAuthStatus> {
     (
         any::<u128>(),
         any::<Option<u64>>(),
-        any::<u32>(),
+        prop::option::of("[a-z][a-z0-9_-]{0,20}"),
         any::<String>(),
         any::<String>(),
     )
         .prop_map(
-            |(environment_id, deployment_revision, import_index, security_scheme, status)| {
+            |(environment_id, deployment_revision, import, security_scheme, status)| {
                 crate::model::mcp::McpImportOAuthStatus {
                     environment_id: uuid::Uuid::from_u128(environment_id),
                     deployment_revision,
-                    import_index,
+                    import,
                     security_scheme,
                     status,
                 }
@@ -7030,7 +7132,7 @@ fn arb_mcp_import_tools_result() -> OutputDocumentStrategy {
         (
             any::<u128>(),
             any::<u64>(),
-            any::<u32>(),
+            prop::option::of("[a-z][a-z0-9_-]{0,20}"),
             any::<String>(),
             prop::collection::vec((any::<String>(), any::<String>()), 0..3),
             prop::collection::vec((any::<String>(), any::<String>()), 0..3),
@@ -7039,15 +7141,15 @@ fn arb_mcp_import_tools_result() -> OutputDocumentStrategy {
                 |(
                     environment_id,
                     deployment_revision,
-                    import_index,
+                    import,
                     protocol_version,
                     tools,
                     diagnostics,
                 )| {
-                    crate::model::mcp::McpImportToolsView(golem_client::model::McpImportTools {
+                    crate::model::mcp::McpImportToolsView(crate::model::mcp::McpImportTools {
                         environment_id: uuid::Uuid::from_u128(environment_id),
                         deployment_revision,
-                        import_index,
+                        import,
                         protocol_version,
                         tools: tools
                             .into_iter()

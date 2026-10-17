@@ -6,6 +6,22 @@ Build durable, fault-tolerant agents on the [Golem](https://golem.cloud) platfor
 
 This SDK lets you write Golem agents in MoonBit with minimal boilerplate. Agents are compiled to WebAssembly components and run on Golem, which provides automatic durable execution, persistent state, and agent-to-agent communication.
 
+## Host retry evaluation
+
+`@api.next_retry_delay(policy, state, elapsed, verb, noun_uri, properties)` exposes
+the host retry evaluator. Start a sequence with an empty `FixedArray[Byte]` and
+pass the returned `RetryDecision.state` unchanged after each failed, compensated
+attempt. `elapsed` is nanoseconds since before the first attempt, including work,
+compensation, and waiting. Supply the same operation context used to resolve the
+policy. `None` selects `config.retry`.
+
+`Ok(decision)` with `decision.delay == None` means exhaustion. A delay is in
+nanoseconds; wait with a durable timer before the next attempt. `Err(reason)`
+reports evaluation errors, including policy changes or unbounded saga policies.
+The host records decisions, jitter, and errors for replay. The token is opaque:
+do not decode it or replace it with an attempt counter. MoonBit provides this
+host API, not a public saga helper.
+
 ## Self metadata and authority
 
 `@api.get_self_metadata()` calls the host operation `get-self-metadata`. It requires
@@ -275,8 +291,21 @@ An `@asyncCore.Stream[Byte]` input becomes a client parameter. Either declared o
 started-invocation result shape, with independent optional stdout/stderr streams, structured result,
 collection, and cancellation. Providers can write with `write_all`/`write_all_bytes`, select
 successful completion with `finish`, or select a typed `@tool.ToolStreamError` terminal with
-`fail`. Returning normally also finishes open outputs; dropping one while still open selects
-`Abandoned` for that channel. See the
+`fail`. Returning normally attempts to finish each open output independently, including returned
+declared errors and invalid-result errors. An ordinary implicit finish error cannot replace the
+structured outcome or prevent cleanup of the other output. Explicit terminals remain unchanged.
+An unhandled error raised by the handler (including an explicit output operation) follows the
+failure path and is rethrown; it is not a returned invalid-result error. Task cancellation remains
+cancellation. Dropping an open provider output selects `Abandoned` for that channel.
+
+On the caller, closing or dropping an output permanently closes only that reader. It does not cancel
+the invocation or close the sibling output. There is no guarantee that a cancelled pending read can
+resume. `detach_result_observer()` stops delivery of the structured result without cancelling the
+invocation or closing either output. It releases unclaimed cached and late result capabilities.
+Capabilities already delivered by `get()` remain the caller's responsibility. If a host `get` is
+active, physical disposal waits for it to settle. `cancel()` still requests invocation cancellation
+until physical disposal; after disposal it is a no-op. `drop()` detaches the result and closes both
+readers, but does not cancel the invocation. See the
 [`golem_sdk_tools` documentation](https://mooncakes.io/docs/#/golemcloud/golem_sdk_tools/) and the
 canonical `grep`/`git` examples for the complete annotation surface.
 
@@ -293,7 +322,14 @@ and a snapshot changes only after explicit rediscovery. Use `SchemaRef::typed_va
 schema-native value and create the self-contained graph required by a fully dynamic invocation.
 
 Use `command.pack_json(input)` and `command.invoke_json(input)` for canonical JSON, or
-`command.invoke_value(input)` for schema-native values. The command validates inputs locally before
+`command.invoke_value(input)` for schema-native values. Canonical JSON may omit a scalar option or a
+fixed positional that declares a default, and any flag; packing fills each omitted argument with its
+declared default (a count flag defaults to `0`) and leaves the canonical input record unchanged.
+Repeatable options and tails are not filled. `command.input_schema().to_json_schema()` leaves these
+arguments out of `required` and adds their `default` when it has a canonical JSON form. For rejected
+JSON, `SchemaRef::pack_json` raises `ReflectError::Json(message, path~)`, where `path` locates the
+rejected value, for example `["script"]` for a missing `script` argument; `command.pack_json`
+returns the same failure as an invalid-input tool error. The command validates inputs locally before
 opening RPC and validates declared results after invocation. `start_value` returns an invocation
 whose `stdout`, `stderr`, `collect`, `get`, and `cancel` methods handle pending and streaming calls.
 A command with either required output must use `start_value`; `collect` drains both outputs

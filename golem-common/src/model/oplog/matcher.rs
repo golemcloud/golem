@@ -340,7 +340,6 @@ impl PublicOplogEntry {
                 Self::string_match("recoverysucceeded", &[], query_path, query)
                     || Self::string_match("recovery-succeeded", &[], query_path, query)
             }
-            PublicOplogEntry::NoOp(_params) => Self::string_match("noop", &[], query_path, query),
             PublicOplogEntry::Jump(_params) => Self::string_match("jump", &[], query_path, query),
             PublicOplogEntry::Interrupted(_params) => {
                 Self::string_match("interrupted", &[], query_path, query)
@@ -348,15 +347,6 @@ impl PublicOplogEntry {
             PublicOplogEntry::Exited(_params) => {
                 Self::string_match("exited", &[], query_path, query)
             }
-            PublicOplogEntry::BeginAtomicRegion(_params) => {
-                Self::string_match("beginatomicregion", &[], query_path, query)
-                    || Self::string_match("begin-atomic-region", &[], query_path, query)
-            }
-            PublicOplogEntry::EndAtomicRegion(_params) => {
-                Self::string_match("endatomicregion", &[], query_path, query)
-                    || Self::string_match("end-atomic-region", &[], query_path, query)
-            }
-
             PublicOplogEntry::PendingAgentInvocation(params) => {
                 Self::string_match("pendingagentinvocation", &[], query_path, query)
                     || Self::string_match("invoke", &[], query_path, query)
@@ -610,6 +600,17 @@ impl PublicOplogEntry {
                 Self::string_match("hoststreamframe", &[], query_path, query)
                     || Self::string_match("host-stream-frame", &[], query_path, query)
                     || Self::match_typed_schema_value(&params.payload, &[], query_path, query)
+            }
+            PublicOplogEntry::ToolAttachmentRead(params) => {
+                Self::string_match("toolattachmentread", &[], query_path, query)
+                    || Self::string_match("tool-attachment-read", &[], query_path, query)
+                    || Self::match_typed_schema_value(&params.observation, &[], query_path, query)
+            }
+            PublicOplogEntry::ToolAttachmentControl(params) => {
+                Self::string_match("toolattachmentcontrol", &[], query_path, query)
+                    || Self::string_match("tool-attachment-control", &[], query_path, query)
+                    || Self::match_typed_schema_value(&params.attachment, &[], query_path, query)
+                    || Self::match_typed_schema_value(&params.transition, &[], query_path, query)
             }
             PublicOplogEntry::StreamRegistered(params) => {
                 Self::string_match("streamregistered", &[], query_path, query)

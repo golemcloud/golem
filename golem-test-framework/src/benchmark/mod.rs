@@ -18,10 +18,15 @@ pub mod storage_metrics;
 #[cfg(test)]
 mod tests;
 
-pub use config::{BenchmarkConfig, BenchmarkSuite, BenchmarkSuiteItem, RunConfig};
+pub use config::{
+    BenchmarkConfig, BenchmarkSuite, BenchmarkSuiteItem, DensityAction, DensityAgentModeArg,
+    DensityPromiseRuntimeArg, DensityPromiseTopologyArg, DensityPromiseWaiterPresenceArg,
+    DensityScenarioArg, DensityScheduleTargetPatternArg, DensityScheduleTargetResidencyArg,
+    DensitySectionArg, DensitySharingArg, DensitySnapshottingArg, RunConfig,
+};
 pub use results::{
     BenchmarkArtifact, BenchmarkArtifacts, BenchmarkResult, BenchmarkRunResult, BenchmarkRunner,
-    BenchmarkSource, BenchmarkSuiteResult, ResultKey,
+    BenchmarkSource, BenchmarkSuiteResult, ResultKey, RunMetadata,
 };
 
 use crate::config::benchmark::TestMode;
@@ -32,7 +37,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tracing::{Instrument, Level, info};
 
@@ -142,6 +147,25 @@ impl std::fmt::Display for BenchmarkError {
 impl std::error::Error for BenchmarkError {}
 
 pub type BenchmarkResultValue<T = ()> = Result<T, BenchmarkError>;
+
+/// The default deadline of one measured iteration, for `--run-deadline-secs`.
+pub const DEFAULT_RUN_DEADLINE_SECS: u64 = 600;
+
+static RUN_DEADLINE: OnceLock<Duration> = OnceLock::new();
+
+/// Sets the deadline of the `run` phase of every iteration. The first call wins. A cloud
+/// throughput iteration at size 250 and length 10000 takes more than the default: it makes
+/// 25000 calls for each of six implementations, about 760s on Golem 1.5 on golem-dev.
+pub fn set_run_deadline(deadline: Duration) {
+    let _ = RUN_DEADLINE.set(deadline);
+}
+
+fn run_deadline() -> Duration {
+    RUN_DEADLINE
+        .get()
+        .copied()
+        .unwrap_or(Duration::from_secs(DEFAULT_RUN_DEADLINE_SECS))
+}
 
 async fn phase<T>(
     recorder: &BenchmarkRecorder,
@@ -316,7 +340,7 @@ async fn run_benchmark<B: Benchmark>(
                 phase(
                     &recorder,
                     "run",
-                    Duration::from_secs(600),
+                    run_deadline(),
                     benchmark.run(benchmark_context, &context, recorder.clone()),
                 )
                 .await;

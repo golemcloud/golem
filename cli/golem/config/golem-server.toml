@@ -99,6 +99,9 @@ max_connections = 4
 cleanup_interval = "1h"
 retention = "1day"
 
+[registry_service.domain_registration]
+reserved_domains = []
+
 [registry_service.domain_registration.available_domains]
 type = "Unrestricted"
 
@@ -315,6 +318,9 @@ runtime_metrics_sampling_interval = "5s"
 drop_when_full = 0.25
 ttl = "8h"
 
+[worker_executor.agent_sockets]
+enabled = false
+
 [worker_executor.agent_status_checkpoint]
 enabled = true
 min_oplog_delta = 1000
@@ -463,8 +469,11 @@ fuel_to_borrow = 10000
 invocation_result_broadcast_capacity = 100000
 live_stream_event_broadcast_capacity = 32
 max_active_agents = 1024
+max_concurrent_oplog_entry_reads = 4
 max_concurrent_streams = 1024
+max_inline_oplog_entry_size = 1048576
 max_invocation_context_stack_depth = 1024
+max_oplog_query_page_bytes = 8388608
 max_oplog_query_pages_size = 100
 max_tool_attachment_bytes = 16777216
 tail_work_settle_timeout = "30s"
@@ -807,6 +816,7 @@ connect_timeout = "10s"
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
+max_concurrent_oplog_entry_reads = 4
 max_message_size = 33554432
 
 [worker_service.worker_executor.retries]
@@ -840,14 +850,15 @@ type = "Disabled"
 # type = "S3"
 #
 # [component_compilation_service.blob_storage.config]
-# compilation_cache_bucket = "golem-compiled-components"
-# components_bucket = "component-store"
-# compressed_oplog_buckets = ["oplog-archive-1"]
-# custom_data_bucket = "custom-data"
-# filesystem_snapshots_bucket = "filesystem-snapshots"
-# initial_agent_files_bucket = "golem-initial-agent-files"
+# compilation_cache_bucket = "golem"
+# components_bucket = "golem"
+# compressed_oplog_buckets = ["golem"]
+# custom_data_bucket = "golem"
+# filesystem_snapshots_bucket = "golem"
+# initial_agent_files_bucket = "golem"
+# namespace_prefixes = true
 # object_prefix = ""
-# oplog_payload_bucket = "oplog-payload"
+# oplog_payload_bucket = "golem"
 # region = "us-east-1"
 #
 # [component_compilation_service.blob_storage.config.retries]
@@ -900,14 +911,15 @@ type = "Disabled"
 # type = "S3"
 #
 # [registry_service.blob_storage.config]
-# compilation_cache_bucket = "golem-compiled-components"
-# components_bucket = "component-store"
-# compressed_oplog_buckets = ["oplog-archive-1"]
-# custom_data_bucket = "custom-data"
-# filesystem_snapshots_bucket = "filesystem-snapshots"
-# initial_agent_files_bucket = "golem-initial-agent-files"
+# compilation_cache_bucket = "golem"
+# components_bucket = "golem"
+# compressed_oplog_buckets = ["golem"]
+# custom_data_bucket = "golem"
+# filesystem_snapshots_bucket = "golem"
+# initial_agent_files_bucket = "golem"
+# namespace_prefixes = true
 # object_prefix = ""
-# oplog_payload_bucket = "oplog-payload"
+# oplog_payload_bucket = "golem"
 # region = "us-east-1"
 #
 # [registry_service.blob_storage.config.retries]
@@ -966,6 +978,9 @@ type = "Disabled"
 # [registry_service.deployment_events]
 # cleanup_interval = "1h"
 # retention = "1day"
+#
+# [registry_service.domain_registration]
+# reserved_domains = []
 #
 # [registry_service.domain_registration.available_domains]
 # type = "Unrestricted"
@@ -1188,6 +1203,9 @@ type = "Disabled"
 # drop_when_full = 0.25
 # ttl = "8h"
 #
+# [worker_executor.agent_sockets]
+# enabled = false
+#
 # [worker_executor.agent_status_checkpoint]
 # enabled = true
 # min_oplog_delta = 1000
@@ -1211,14 +1229,15 @@ type = "Disabled"
 # type = "S3"
 #
 # [worker_executor.blob_storage.config]
-# compilation_cache_bucket = "golem-compiled-components"
-# components_bucket = "component-store"
-# compressed_oplog_buckets = ["oplog-archive-1"]
-# custom_data_bucket = "custom-data"
-# filesystem_snapshots_bucket = "filesystem-snapshots"
-# initial_agent_files_bucket = "golem-initial-agent-files"
+# compilation_cache_bucket = "golem"
+# components_bucket = "golem"
+# compressed_oplog_buckets = ["golem"]
+# custom_data_bucket = "golem"
+# filesystem_snapshots_bucket = "golem"
+# initial_agent_files_bucket = "golem"
+# namespace_prefixes = true
 # object_prefix = ""
-# oplog_payload_bucket = "oplog-payload"
+# oplog_payload_bucket = "golem"
 # region = "us-east-1"
 #
 # [worker_executor.blob_storage.config.retries]
@@ -1365,8 +1384,11 @@ type = "Disabled"
 # invocation_result_broadcast_capacity = 100000
 # live_stream_event_broadcast_capacity = 32
 # max_active_agents = 1024
+# max_concurrent_oplog_entry_reads = 4
 # max_concurrent_streams = 1024
+# max_inline_oplog_entry_size = 1048576
 # max_invocation_context_stack_depth = 1024
+# max_oplog_query_page_bytes = 8388608
 # max_oplog_query_pages_size = 100
 # max_tool_attachment_bytes = 16777216
 # tail_work_settle_timeout = "30s"
@@ -1591,14 +1613,15 @@ type = "Disabled"
 # type = "S3"
 #
 # [worker_service.blob_storage.config]
-# compilation_cache_bucket = "golem-compiled-components"
-# components_bucket = "component-store"
-# compressed_oplog_buckets = ["oplog-archive-1"]
-# custom_data_bucket = "custom-data"
-# filesystem_snapshots_bucket = "filesystem-snapshots"
-# initial_agent_files_bucket = "golem-initial-agent-files"
+# compilation_cache_bucket = "golem"
+# components_bucket = "golem"
+# compressed_oplog_buckets = ["golem"]
+# custom_data_bucket = "golem"
+# filesystem_snapshots_bucket = "golem"
+# initial_agent_files_bucket = "golem"
+# namespace_prefixes = true
 # object_prefix = ""
-# oplog_payload_bucket = "oplog-payload"
+# oplog_payload_bucket = "golem"
 # region = "us-east-1"
 #
 # [worker_service.blob_storage.config.retries]
@@ -1735,6 +1758,7 @@ type = "Disabled"
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true
+# max_concurrent_oplog_entry_reads = 4
 # max_message_size = 33554432
 #
 # [worker_service.worker_executor.retries]

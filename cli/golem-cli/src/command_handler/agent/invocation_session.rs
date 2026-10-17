@@ -18,6 +18,9 @@ use crate::command_handler::agent::parse_method_argument_schema_value;
 use crate::command_handler::log::render_command_output_document;
 use crate::context::Context;
 use crate::error::{NonSuccessfulExit, PipedExitCode};
+use crate::log::{
+    CLOSED_OUTPUT_EXIT_CODE, ClosedOutputHold, end_for_closed_output, eprint_line, is_closed_pipe,
+};
 use crate::model::agent::invocation_session::{
     AgentInvocationSessionEvent, AgentInvocationSessionEventKind,
 };
@@ -51,7 +54,7 @@ use golem_common::schema::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::io::{BufRead, BufReader, ErrorKind, IsTerminal, Read, Write};
+use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -460,8 +463,8 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         stdin_format == InvocationStdinFormat::Value && !std::io::stdin().is_terminal();
     let has_input = input_binding.is_some();
     if resuming_from_checkpoint && has_input {
-        eprintln!(
-            "Resumed stdin starts after the server's durable input high-water; stdin bytes lost when the previous CLI process exited cannot be recovered."
+        eprint_line(
+            "Resumed stdin starts after the server's durable input high-water; stdin bytes lost when the previous CLI process exited cannot be recovered.",
         );
     }
     let mut input_failure_open = has_input;
@@ -524,6 +527,9 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         agent_id: args.selected_agent_name.clone(),
     };
     let mut finished = false;
+    // The reader of the output may go while the session runs. The session then tells the server
+    // that nobody consumes its streams before the process ends.
+    let output_hold = ClosedOutputHold::new();
 
     'session: while !finished {
         let next_unsent_input = input_buffer.next_unsent();
@@ -554,10 +560,25 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                     }
                 }
             }
+            _ = output_hold.reader_gone() => {
+                input_cancelled.cancel();
+                input_rx.close();
+                let requests = cancel_open_streams(
+                    if accepted && !input_terminal {
+                        input_binding.as_ref().and_then(|binding| binding.channel)
+                    } else {
+                        None
+                    },
+                    &output_streams,
+                    PublicClientCancelReason::ConsumerDrop,
+                );
+                cancel_before_close(&mut session, requests).await;
+                bail!(PipedExitCode(CLOSED_OUTPUT_EXIT_CODE));
+            }
             result = &mut output_result_rx => {
                 match result {
                     Ok(Ok(())) => bail!("invocation output closed before completion"),
-                    Ok(Err(error)) if error.downcast_ref::<PipedExitCode>().is_some_and(|exit| exit.0 == 0) => {
+                    Ok(Err(error)) if error.downcast_ref::<PipedExitCode>().is_some_and(|exit| exit.0 == CLOSED_OUTPUT_EXIT_CODE) => {
                         input_cancelled.cancel();
                         input_rx.close();
                         let requests = cancel_open_streams(
@@ -718,6 +739,13 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                         input_failure_open = false;
                         fatal_input_failure = Some(take_input_failure(&mut input_failure_rx)?);
                         break 'session;
+                    }
+                    // A write of the output found the reader gone. Recording that makes the next
+                    // turn of the loop take the branch of a gone reader, which cancels the
+                    // streams before the process ends.
+                    Err(error) if error.downcast_ref::<PipedExitCode>().is_some_and(|exit| exit.0 == CLOSED_OUTPUT_EXIT_CODE) => {
+                        end_for_closed_output();
+                        continue 'session;
                     }
                     Err(error) => return Err(error),
                 }
@@ -1594,7 +1622,7 @@ async fn handle_response(
                 event.error = Some(message);
                 emit(output_tx, OutputJob::Event(event)).await?;
             } else {
-                eprintln!("Invocation rejected ({reason}): {message}");
+                eprint_line(format!("Invocation rejected ({reason}): {message}"));
             }
         }
         ServerFrame::Message(PublicServerMessage::InvocationResult { result, .. }) => {
@@ -1779,7 +1807,7 @@ async fn handle_response(
                 event.reason = reason;
                 emit(output_tx, OutputJob::Event(event)).await?;
             } else if let Some(error) = error {
-                eprintln!("Output stream {channel} failed: {error}");
+                eprint_line(format!("Output stream {channel} failed: {error}"));
             }
         }
         ServerFrame::Message(PublicServerMessage::InputStreamAck { .. }) => {}
@@ -1806,7 +1834,7 @@ async fn handle_response(
                 event.reason = Some(format!("{reason:?}"));
                 emit(output_tx, OutputJob::Event(event)).await?;
             } else {
-                eprintln!("Stream {channel} was cancelled");
+                eprint_line(format!("Stream {channel} was cancelled"));
             }
         }
         ServerFrame::Message(PublicServerMessage::AttachmentRevoked { reason, .. }) => {
@@ -1827,7 +1855,7 @@ async fn handle_response(
                 event.error = error;
                 emit(output_tx, OutputJob::Event(event)).await?;
             } else if let Some(error) = error {
-                eprintln!("Invocation failed: {error}");
+                eprint_line(format!("Invocation failed: {error}"));
             }
         }
     }
@@ -1995,7 +2023,7 @@ async fn emit(output: &OutputChannel, job: OutputJob) -> anyhow::Result<()> {
         _ = output.interrupt.cancelled() => bail!(PipedExitCode(130)),
         result = completed => match result {
             Ok(Ok(())) => Ok(()),
-            Ok(Err(error)) if error == "broken-pipe" => bail!(PipedExitCode(0)),
+            Ok(Err(error)) if error == "broken-pipe" => bail!(PipedExitCode(CLOSED_OUTPUT_EXIT_CODE)),
             Ok(Err(error)) => bail!(error),
             Err(_) => bail!("invocation output closed before acknowledging a write"),
         },
@@ -2019,7 +2047,7 @@ fn write_output(
         if let Err(error) = write_and_flush(&mut stdout.lock(), &bytes) {
             let diagnostic = if error
                 .downcast_ref::<PipedExitCode>()
-                .is_some_and(|exit| exit.0 == 0)
+                .is_some_and(|exit| exit.0 == CLOSED_OUTPUT_EXIT_CODE)
             {
                 "broken-pipe".to_string()
             } else {
@@ -2065,8 +2093,8 @@ fn render_output_job(job: OutputJob, format: Format, colorize: bool) -> anyhow::
 
 fn write_and_flush(output: &mut impl Write, bytes: &[u8]) -> anyhow::Result<()> {
     if let Err(error) = output.write_all(bytes).and_then(|()| output.flush()) {
-        if error.kind() == ErrorKind::BrokenPipe {
-            bail!(PipedExitCode(0));
+        if is_closed_pipe(&error) {
+            bail!(PipedExitCode(CLOSED_OUTPUT_EXIT_CODE));
         }
         return Err(error.into());
     }
@@ -2623,6 +2651,7 @@ mod public_tests {
         PublicStreamDirection, PublicStreamMapping,
     };
     use golem_common::schema::metadata::MetadataEnvelope;
+    use std::io::ErrorKind;
     use test_r::test;
 
     fn checkpoint() -> InvocationSessionCheckpoint {
@@ -3068,7 +3097,10 @@ mod public_tests {
         );
         drop(tx);
         let error = write_output_to(rx, Format::Text, false, &mut BrokenOnFlush).unwrap_err();
-        assert_eq!(error.downcast_ref::<PipedExitCode>().unwrap().0, 0);
+        assert_eq!(
+            error.downcast_ref::<PipedExitCode>().unwrap().0,
+            CLOSED_OUTPUT_EXIT_CODE
+        );
         assert!(completed.blocking_recv().is_err());
     }
 }

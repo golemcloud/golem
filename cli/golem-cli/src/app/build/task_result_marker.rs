@@ -44,8 +44,8 @@ pub trait TaskResultMarkerHashSource {
     ///
     /// If id() returns None, then the source will be used as id.
     ///
-    /// Specifying the id is optional, as some tasks are their own identity, like external commands.
-    /// In those cases we can skip calculating values and hashes twice.
+    /// Specifying the id is optional when the complete input identifies the task.
+    /// Tasks that overwrite shared outputs need an identity independent of mutable inputs.
     ///
     /// The main difference between id and source is that it should not include
     /// generic "task properties", only ids for the task. E.g.: the hash_input for rpc linking
@@ -73,6 +73,7 @@ pub struct TaskResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hash_input: Option<String>,
 
+    pub cli_version: String,
     pub hash_hex: String,
     pub success: bool,
 }
@@ -126,13 +127,42 @@ impl TaskResultMarkerHashSource for MoonInstallDepsMarkerHash<'_> {
     }
 }
 
+#[derive(Serialize)]
+pub struct GoModDepsMarkerHash<'a> {
+    pub go_module_root: &'a Path,
+    pub go_mod_hash: &'a str,
+    pub go_sum_hash: Option<&'a str>,
+    pub inputs_hash: &'a str,
+}
+
+impl TaskResultMarkerHashSource for GoModDepsMarkerHash<'_> {
+    fn kind() -> &'static str {
+        "GoModDepsMarkerHash"
+    }
+
+    fn id(&self) -> anyhow::Result<Option<String>> {
+        Ok(Some(format!(
+            "go-mod-deps:{}",
+            self.go_module_root.display()
+        )))
+    }
+
+    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
+        Ok(HashFromString(serde_json::to_string(self)?))
+    }
+}
+
 impl TaskResultMarkerHashSource for ResolvedExternalCommandMarkerHash<'_> {
     fn kind() -> &'static str {
         "ResolvedExternalCommandMarkerHash"
     }
 
     fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(None)
+        Ok(Some(serde_json::to_string(&(
+            self.build_dir,
+            &self.command.command,
+            &self.command.targets,
+        ))?))
     }
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
@@ -325,6 +355,7 @@ impl TaskResultMarkerHashSource for GetServerIfsFileHash<'_> {
 pub struct GenerateBridgeSdkMarkerHash<'a> {
     pub output_dir: &'a Path,
     pub source: &'a BridgeSdkTargetSource,
+    pub tool_definition: Option<&'a golem_common::schema::tool::Tool>,
     pub target_name: &'a str,
     pub kind: &'static str,
     pub language: &'a GuestLanguage,
@@ -336,6 +367,7 @@ pub struct GenerateBridgeSdkMarkerHash<'a> {
 #[serde(rename_all = "camelCase")]
 struct GenerateBridgeSdkMarkerHashSource<'a> {
     source: &'a BridgeSdkTargetSource,
+    tool_definition: Option<&'a golem_common::schema::tool::Tool>,
     target_name: &'a str,
     kind: &'static str,
     language: &'a GuestLanguage,
@@ -361,6 +393,7 @@ impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
         Ok(HashFromString(serde_json::to_string(
             &GenerateBridgeSdkMarkerHashSource {
                 source: self.source,
+                tool_definition: self.tool_definition,
                 target_name: self.target_name,
                 kind: self.kind,
                 language: self.language,
@@ -374,6 +407,24 @@ impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
 
 pub struct ExtractComponentMetadataMarkerHash<'a> {
     pub component_name: &'a ComponentName,
+}
+
+pub struct OnDemandCommonTemplateMarkerHash<'a> {
+    pub content_hash: &'a str,
+}
+
+impl TaskResultMarkerHashSource for OnDemandCommonTemplateMarkerHash<'_> {
+    fn kind() -> &'static str {
+        "OnDemandCommonTemplateMarkerHash"
+    }
+
+    fn id(&self) -> anyhow::Result<Option<String>> {
+        Ok(Some("on-demand-common".to_string()))
+    }
+
+    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
+        Ok(HashFromString(self.content_hash.to_string()))
+    }
 }
 
 impl TaskResultMarkerHashSource for ExtractComponentMetadataMarkerHash<'_> {
@@ -491,7 +542,8 @@ impl TaskResultMarker {
         let previous_result = {
             if marker_file_exists {
                 match serde_json::from_str::<TaskResult>(&fs::read_to_string(&marker_file_path)?) {
-                    Ok(result) => Some(result),
+                    Ok(result) if result.cli_version == crate::version() => Some(result),
+                    Ok(_) => None,
                     Err(err) => {
                         log_warn_action(
                             "Ignoring",
@@ -539,6 +591,7 @@ impl TaskResultMarker {
                 kind: Some(self.kind.to_string()),
                 id: Some(self.id),
                 hash_input: Some(self.hash_input),
+                cli_version: crate::version().to_string(),
                 hash_hex: self.hash_hex,
                 success,
             })?,
@@ -574,6 +627,68 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn external_build_marker_tracks_shared_output_across_configuration_switches() {
+        let directory = tempfile::tempdir().unwrap();
+        let command = |mapping: &str| -> app_raw::ExternalCommand {
+            serde_json::from_value(serde_json::json!({
+                "command": "npx rollup -c",
+                "targets": ["main.js"],
+                "env": {"GOLEM_NODE_HTTP_ROUTERS": mapping}
+            }))
+            .unwrap()
+        };
+        let a = command("{\"3000\":{\"name\":\"A\",\"mount\":\"/a\"}}");
+        let b = command("{\"3000\":{\"name\":\"B\",\"mount\":\"/b\"}}");
+        let marker = |command| {
+            TaskResultMarker::new(
+                directory.path(),
+                ResolvedExternalCommandMarkerHash {
+                    build_dir: Path::new("component"),
+                    command,
+                },
+            )
+            .unwrap()
+        };
+        assert!(!marker(&a).is_up_to_date());
+        marker(&a).success().unwrap();
+        assert!(marker(&a).is_up_to_date());
+        assert!(!marker(&b).is_up_to_date());
+        marker(&b).success().unwrap();
+        assert!(!marker(&a).is_up_to_date());
+        marker(&a).success().unwrap();
+        assert!(marker(&a).is_up_to_date());
+    }
+
+    #[test]
+    fn task_markers_reject_results_from_another_cli_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let component = ComponentName("app:producer".into());
+        let marker = || {
+            TaskResultMarker::new(
+                dir.path(),
+                ExtractComponentMetadataMarkerHash {
+                    component_name: &component,
+                },
+            )
+            .unwrap()
+        };
+        let initial = marker();
+        let path = initial.marker_file_path.clone();
+        initial.success().unwrap();
+        assert!(marker().is_up_to_date());
+
+        let mut result: TaskResult =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        result.cli_version = format!("{}-other", crate::version());
+        fs::write_str(&path, serde_json::to_string(&result).unwrap()).unwrap();
+
+        let invalidated = marker();
+        assert!(!invalidated.is_up_to_date());
+        invalidated.success().unwrap();
+        assert!(marker().is_up_to_date());
+    }
+
+    #[test]
     fn bridge_sdk_marker_hash_source_includes_bridge_mode() {
         let component_name = ComponentName("app:producer".to_string());
         let source = BridgeSdkTargetSource::local(component_name);
@@ -583,6 +698,7 @@ mod tests {
         let external_source = GenerateBridgeSdkMarkerHash {
             output_dir: Path::new("bridge/alpha"),
             source: &source,
+            tool_definition: None,
             target_name: agent_type_name.as_str(),
             kind: "agent",
             language: &language,
@@ -594,6 +710,7 @@ mod tests {
         let guest_source = GenerateBridgeSdkMarkerHash {
             output_dir: Path::new("bridge/alpha"),
             source: &source,
+            tool_definition: None,
             target_name: agent_type_name.as_str(),
             kind: "agent",
             language: &language,
@@ -627,6 +744,7 @@ mod tests {
             GenerateBridgeSdkMarkerHash {
                 output_dir: Path::new("bridge/alpha"),
                 source: &source,
+                tool_definition: None,
                 target_name: "AlphaAgent",
                 kind: "agent",
                 language: &language,
@@ -676,6 +794,7 @@ mod tests {
             GenerateBridgeSdkMarkerHash {
                 output_dir: Path::new("bridge/left"),
                 source: &left_source,
+                tool_definition: None,
                 target_name: "b",
                 kind: "agent",
                 language: &language,
@@ -689,6 +808,7 @@ mod tests {
             GenerateBridgeSdkMarkerHash {
                 output_dir: Path::new("bridge/right"),
                 source: &right_source,
+                tool_definition: None,
                 target_name: "a-b",
                 kind: "agent",
                 language: &language,
@@ -851,6 +971,7 @@ mod tests {
                 GenerateBridgeSdkMarkerHash {
                     output_dir: &output_dir,
                     source,
+                    tool_definition: None,
                     target_name: "search",
                     kind: "tool",
                     language: &language,
@@ -884,6 +1005,7 @@ mod tests {
         let marker = GenerateBridgeSdkMarkerHash {
             output_dir: Path::new("bridge/search"),
             source,
+            tool_definition: None,
             target_name: "search",
             kind: "tool",
             language: &language,

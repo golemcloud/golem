@@ -72,6 +72,8 @@ describe('AgentClassName', () => {
     it('should reject names with consecutive separators', () => {
       expect(() => new AgentClassName('My__Agent')).toThrow(validSeparatorsAndSections);
       expect(() => new AgentClassName('My--Agent')).toThrow(validSeparatorsAndSections);
+      expect(() => new AgentClassName('My_-Agent')).toThrow(validSeparatorsAndSections);
+      expect(() => new AgentClassName('My-_Agent')).toThrow(validSeparatorsAndSections);
       expect(() => new AgentClassName('User___Profile')).toThrow(validSeparatorsAndSections);
     });
 

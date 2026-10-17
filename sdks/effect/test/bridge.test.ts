@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
+import { vi } from "vitest"
 import { Effect, Fiber, Layer, Stream } from "effect"
 import * as Bridge from "../src/Bridge.js"
 import { AgentHostClient } from "../src/host/AgentHostClient.js"
@@ -90,7 +91,7 @@ describe("Bridge", () => {
     expect(() => Bridge.datetimeFromISOString("2026-02-30T00:00:00Z")).toThrow("Invalid datetime")
   })
 
-  it("closes unread stream siblings when generated result decoding fails", () => {
+  it("closes unread stream siblings when generated result decoding fails", async () => {
     let closed = 0
     const wire = {
       root: 2,
@@ -105,7 +106,7 @@ describe("Bridge", () => {
         throw new Error("invalid generated result")
       }),
     ).toThrow("invalid generated result")
-    expect(closed).toBe(1)
+    await vi.waitFor(() => expect(closed).toBe(1))
     expect(wire?.valueNodes[0]).toEqual({ tag: "stream-value", val: undefined })
   })
 })

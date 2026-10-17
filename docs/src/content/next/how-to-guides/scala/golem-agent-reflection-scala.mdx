@@ -31,8 +31,12 @@ current component ID, lifecycle mode, constructor
 and unpacks canonical `zio.blocks.schema.json.Json`, and renders JSON Schema.
 An omitted option record field and an explicit `null` both decode as `None`;
 re-encoding may emit `null`, and the field is omitted from JSON Schema
-`required`. Canonical JSON encodes `s64` and `u64` as decimal strings, duration
-as `{ "nanoseconds": "..." }`, and quantity mantissas as decimal strings. These
+`required`. A tool command's `inputSchema` also accepts JSON that omits a
+scalar option, positional with a declared default, or flag: packing fills in the
+declared default, and `toJsonSchema` does not require the argument. Issues carry
+the JSON path of the failing value. Canonical JSON encodes `s64` and `u64` as
+decimal strings, duration as `{ "nanoseconds": "..." }`, and quantity mantissas
+as decimal strings. These
 strings reject `+`, leading zeroes, `-0`, and overflow. Capabilities, futures,
 and streams cannot be packed or unpacked as reflected JSON and project to an
 unsatisfiable reflection JSON Schema.

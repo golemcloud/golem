@@ -331,7 +331,9 @@ struct RetainedHostedInstance<Ctx: WorkerCtx> {
 }
 
 pub(crate) struct RetainedNativeContext<Ctx: WorkerCtx> {
-    context: Ctx,
+    // Revoke task admission and transfer child joins before destroying the context.
+    reconstruction_tasks: super::tasks::NativeReconstructionTasks,
+    context: crate::native_tool::NativeToolContext<Ctx>,
     execution: Arc<super::instance::OwnerExecution>,
     invocation: OwnerInvocationId,
     parent_end_prepared: bool,
@@ -340,18 +342,21 @@ pub(crate) struct RetainedNativeContext<Ctx: WorkerCtx> {
 impl<Ctx: WorkerCtx> RetainedNativeContext<Ctx> {
     pub(crate) fn new(
         context: Ctx,
+        registration: EntitySlotRegistration,
         execution: Arc<super::instance::OwnerExecution>,
         invocation: OwnerInvocationId,
+        reconstruction_tasks: super::tasks::NativeReconstructionTasks,
     ) -> Self {
         Self {
-            context,
+            reconstruction_tasks,
+            context: crate::native_tool::NativeToolContext::new(context, registration),
             execution,
             invocation,
             parent_end_prepared: false,
         }
     }
 
-    pub(crate) fn context_mut(&mut self) -> &mut Ctx {
+    pub(crate) fn context_mut(&mut self) -> &mut crate::native_tool::NativeToolContext<Ctx> {
         &mut self.context
     }
 
@@ -359,20 +364,40 @@ impl<Ctx: WorkerCtx> RetainedNativeContext<Ctx> {
         if self.parent_end_prepared {
             return Ok(());
         }
-        crate::durable_host::tool::prepare_tool_parent_end_owned(
-            &self.execution,
-            self.invocation.clone(),
-        )
-        .await?;
+        let monitor = self.reconstruction_tasks.monitor();
+        {
+            tokio::select! {
+                biased;
+                error = monitor.wait_for_failure() => return Err(error),
+                error = monitor.wait_for_body_failure() => return Err(error),
+                result = crate::durable_host::tool::prepare_tool_parent_end_owned(
+                    &self.execution,
+                    self.invocation.clone(),
+                ) => result?,
+            }
+        }
+
+        tokio::select! {
+            biased;
+            result = self.reconstruction_tasks.seal_and_drain() => result?,
+            error = monitor.wait_for_body_failure() => return Err(error),
+        }
+        if let Some(error) = monitor.take_body_failure() {
+            return Err(error);
+        }
 
         // Native handlers use the context's host resource table directly. Destroy every
         // body-owned resource while the context and its drop-event receiver are still alive, then
         // record the resulting durable cancellations before removing the entity scope.
-        *self.context.durable_ctx_mut().table() = wasmtime::component::ResourceTable::new();
-        crate::durable_host::drain_queued_dropped_call_events(self.context.durable_ctx_mut())
-            .await
-            .map_err(|error| error.source)?;
-        self.context.set_entity_invocation_scope(None)?;
+        self.context
+            .shared
+            .with_ctx(|ctx| *ctx.table() = wasmtime::component::ResourceTable::new());
+        crate::durable_host::tool::durability::finish_producer_disposals(&mut self.context.shared)
+            .await?;
+        self.context.shared.with_worker_ctx(|ctx| {
+            ctx.durable_ctx_mut().set_invocation_principal(None);
+            ctx.set_entity_invocation_scope(None)
+        })?;
         self.parent_end_prepared = true;
         Ok(())
     }
@@ -1076,7 +1101,6 @@ mod tests {
             ),
             InvocationExecutionMode::Live,
             golem_common::model::IdempotencyKey::fresh(),
-            false,
             false,
             golem_common::model::IdempotencyKey::fresh(),
         )

@@ -17,6 +17,7 @@ members = [
     "golem-worker-executor",
     "golem-worker-executor-test-utils",
     "golem-worker-service",
+    "golem-xfs-quotad",
     "integration-tests",
     "golem-schema",
     "golem-schema-derive",
@@ -31,6 +32,10 @@ exclude = [
     "sdks/golem-rust",
     "dev-tools"
 ]
+
+[workspace.lints.clippy]
+print_stdout = "deny"
+print_stderr = "deny"
 
 [workspace.metadata]
 license-file = "LICENSE"
@@ -57,6 +62,7 @@ golem-tool-metadata = { version = "=0.0.0", path = "golem-tool-metadata", defaul
 golem-worker-executor = { version = "=0.0.0", path = "golem-worker-executor" }
 golem-worker-executor-test-utils = { version = "=0.0.0", path = "golem-worker-executor-test-utils" }
 golem-worker-service = { path = "golem-worker-service" }
+golem-xfs-quotad = { version = "=0.0.0", path = "golem-xfs-quotad" }
 
 
 anyhow = "1.0.97"
@@ -83,6 +89,7 @@ bigdecimal = { version = "0.4.7", features = ["serde", "string-only"] }
 bit-vec = { version = "0.6.3", features = ["serde"] }
 bitflags = "2.6.0"
 blake3 = { version = "1.8.2", features = ["rayon"] }
+bzip2 = "0.6.1"
 bytes = "1.10.1"
 bytesize = "2.7.0"
 camino = "1.1.10"
@@ -223,6 +230,7 @@ quote = "1.0.37"
 rand = "0.9.0"
 range-set-blaze = "0.1.16"
 rayon = "1.11.0"
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
 redis = { version = "0.29.1", features = ["default", "tokio-comp"] }
 reedline = { version = "0.51", default-features = false }
 regex = "1.11.1"
@@ -241,6 +249,7 @@ rustic_core = { version = "0.13.0", default-features = false }
 rustix = { version = "1.1.4", features = ["fs"] }
 rustls = { version = "0.23.23", features = ["ring"] }
 rustls-pemfile = "2.2.0"
+rustls-platform-verifier = "0.7.0"
 sanitize-filename = "0.6.0"
 scc = "3.6.9"
 semver = "1.0.26"
@@ -270,6 +279,7 @@ synoptic = "2.2.9"
 sysinfo = { version = "0.33.1", default-features = false, features = ["system"] }
 system-interface = "0.27.3"
 tap = "1.0.1"
+tar = "0.4.46"
 tempfile = "3.18.0"
 terminal_size = "0.4.2"
 test-r = { version = "3.0.12", default-features = true }
@@ -301,6 +311,7 @@ tracing-serde = "0.2.0"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "std", "json", ] }
 tracing-test = "0.2.5"
 tree-sitter = "0.26.5"
+tree-sitter-go = "0.23.4"
 tree-sitter-json = "0.24.8"
 tree-sitter-rust = "0.24.0"
 tree-sitter-typescript = "0.23.2"
@@ -349,7 +360,7 @@ wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "
 wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
 wasmtime-wizer = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
 # The head of the branch `golem-rustic_core-v0.13.0` of the fork.
-rustic_core = { git = "https://github.com/golemcloud/rustic_core", rev = "b1f72158c3b07c2efb8c546aa9d2aaff0819ea95" }
+rustic_core = { git = "https://github.com/golemcloud/rustic_core", rev = "2269cbb0b2b89dc55cd4dca0172ead894b7b43fd" }
 
 [profile.dev]
 panic = "abort"

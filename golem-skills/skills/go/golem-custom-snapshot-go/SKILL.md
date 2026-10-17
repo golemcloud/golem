@@ -1,0 +1,221 @@
+---
+name: golem-custom-snapshot-go
+description: "Enabling snapshot-based recovery and customizing state save/load for Go agents. Use when adding manual update support, custom state serialization, capturing unexported state — or when a long-running Go agent's oplog is growing large and recovery/replay is becoming slow (heartbeats, polling loops, recurring tasks, frequent state changes)."
+---
+
+# Custom Snapshots in Go
+
+## Overview
+
+Snapshotting serializes a running Go agent's state so the host can save it and later restore it. It solves two problems:
+
+1. **Manual / snapshot-based component updates** — required when updating agents between incompatible component versions. A Go agent cannot take a manual (snapshot-based) update: the Go runtime reads its environment through a durable host call when it starts, before the snapshot loads, and the executor rejects the pending update. Automatic updates and snapshot-based recovery work.
+2. **Fast recovery and oplog compaction** — for long-running agents whose oplog grows over time (heartbeats, polling loops, recurring tasks, frequent state changes). Without snapshotting, every recovery replays the full oplog; with periodic snapshotting, recovery starts from the latest snapshot and replays only what came after it.
+
+> **You cannot opt out of oplog writes for a durable agent.** If you are worried about oplog volume or replay cost, do *not* try to skip persistence — enable snapshot-based recovery here instead.
+
+## Two things to set
+
+1. **A snapshot policy** on the agent's `Spec` — *whether and how often* the platform snapshots. Without a policy, no snapshots are taken.
+2. **How the state serializes** — the default (JSON of **exported** fields) or a custom `golem.Snapshotter` implementation (needed for unexported state or a custom/binary format).
+
+## Step 1: enable a snapshot policy (`Spec.Snapshot`)
+
+Set `Snapshot` on the agent definition's `Spec`. The zero value is `golem.SnapshotDisabled`.
+
+```go
+var Agent = golem.DefineAgent[ID](golem.Spec{
+    Name:     "SessionAgent",
+    Snapshot: golem.SnapshotEveryN(5), // snapshot every 5 invocations
+})
+```
+
+### Policy builders (from `golem.go`)
+
+| Builder | Meaning |
+|---------|---------|
+| `golem.SnapshotDisabled` | Zero value — never snapshot |
+| `golem.SnapshotDefault` | Platform's default cadence (**note: the server default may itself be disabled** — prefer an explicit policy) |
+| `golem.SnapshotPeriodic(d time.Duration)` | Snapshot at most once per interval |
+| `golem.SnapshotEveryN(n uint16)` | Snapshot every `n` invocations (`SnapshotEveryN(1)` = every invocation) |
+
+Snapshots are for durable agents only. An ephemeral agent takes no snapshots, and the SDK refuses an ephemeral agent definition whose `Snapshot` is not `golem.SnapshotDisabled`, with an error that names the agent.
+
+```go
+Snapshot: golem.SnapshotEveryN(1)                     // every invocation
+Snapshot: golem.SnapshotPeriodic(30 * time.Second)    // at most once per 30s
+```
+
+## Step 2a: automatic (default) snapshotting
+
+If you set a policy and do nothing else, the SDK JSON-encodes the state's **exported** fields. This is enough when all state you need to preserve lives in exported fields.
+
+> **Caveat:** Go reflection cannot see **unexported** fields. The idiomatic private state (e.g. an unexported `count`) is invisible to the default snapshot and would be **dropped**. To capture unexported state, implement `golem.Snapshotter` (Step 2b).
+
+## Step 2b: custom snapshotting (`golem.Snapshotter`)
+
+Implement `Save`/`Load` on the state type (pointer receiver) when you need to capture unexported fields, use a compact binary format, or migrate between schema versions:
+
+```go
+type Snapshotter interface {
+    Save() ([]byte, error)
+    Load([]byte) error
+}
+```
+
+When the state implements `Snapshotter`, its bytes are stored **verbatim** by the host (opaque payload) and handed back on restore — bypassing the reflective JSON path entirely.
+
+## Step 2c: JSON state and named bytes (`golem.MultipartSnapshotter`)
+
+When the state holds binary data that should not go through JSON (an index, an image), implement `SaveParts`/`LoadParts` instead of `Snapshotter`. The snapshot is a small JSON projection plus named parts of opaque bytes with a bare MIME type:
+
+```go
+type savedState struct {
+    Revision uint32 `json:"revision"`
+}
+
+func (s *state) SaveParts() (golem.MultipartSnapshot, error) {
+    return golem.NewMultipartSnapshot(savedState{Revision: s.revision}, map[string]golem.SnapshotPart{
+        "index": {Bytes: s.index, ContentType: "application/octet-stream"},
+    })
+}
+
+func (s *state) LoadParts(snapshot golem.MultipartSnapshot) error {
+    var saved savedState
+    if err := snapshot.DecodeState(&saved); err != nil {
+        return err
+    }
+    index, err := snapshot.RequirePart("index", "application/octet-stream")
+    if err != nil {
+        return err
+    }
+    *s = state{revision: saved.Revision, index: index}
+    return nil
+}
+```
+
+Part names start with a letter, a digit or `_`, and continue with those, `.` or `-`. A state that implements both `Snapshotter` and `MultipartSnapshotter` is a definition error.
+
+## Step 3 (optional): rebuild runtime-only state (`OnRestore`)
+
+A restore does **not** run the constructor passed to `Implement`: whatever it did (an RPC, an HTTP request) is already in the history the snapshot replaces, and the restore runs read-only. The state starts from its zero value, the snapshot is loaded into it, and then the `OnRestore` hook runs, if registered. Use it to rebuild what the snapshot does not carry (clients, caches, derived fields):
+
+```go
+agent.OnRestore(func(ic *golem.InitContext[session.ID, state, golem.NoConfig], s *state) error {
+    // rebuild runtime-only fields of s, e.g. from ic.ID().User;
+    // ic also has AgentID(), Principal() and Config()
+    return nil
+})
+```
+
+An error from the hook fails the restore, like an error from `Load`. The restored state must behave like the state it replaces: the calls recorded after the snapshot are replayed on it, and a different result is a divergence.
+
+## Agent Files
+
+A snapshot holds only the agent's in-memory state: the JSON of the exported fields, or what `Save` or `SaveParts` returns. It does not hold the files that the agent wrote.
+
+- On an executor with filesystem snapshots, Golem captures the agent's files at the same point as the snapshot and restores them before `Load` or `LoadParts` runs, so those methods and `OnRestore` can read them. The snapshot and the files form one restore point.
+- Do not write files in `Save`, `SaveParts`, `Load`, `LoadParts` or `OnRestore`, and do not copy file contents into the snapshot to keep them. Golem does not run `Save` again in a replay, and the load methods run in read-only mode.
+- On an executor without filesystem snapshots, Golem takes a snapshot only while the agent's files are its initial files. After the agent changes its files, Golem takes no automatic snapshot: a start uses an older restore point or replays the full oplog, which writes the files again without data loss.
+
+Filesystem snapshots are off by default on standalone executors and on local servers, except `golem server run` on macOS. See [Agent files and snapshots](https://learn.golem.cloud/next/develop/snapshotting#agent-files-and-snapshots).
+
+## Full example: session agent with custom snapshot
+
+### Definition (`agents/session/session.go`)
+
+```go
+// Package session is the DEFINITION of the session agent. Its behaviour, private
+// state, and custom snapshot serialization live in the impl subpackage.
+package session
+
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+type ID struct{ User string }
+
+type SpendIn struct{ Amount int64 }
+
+// Snapshot every 5 invocations instead of the default cadence. Mode defaults to Durable.
+var Agent = golem.DefineAgent[ID](golem.Spec{
+    Name:        "SessionAgent",
+    Description: "A session that snapshots its running total every few invocations",
+    Snapshot:    golem.SnapshotEveryN(5),
+})
+
+var (
+    Spend = Agent.Method[SpendIn, int64]("spend", golem.Description("Add to the running total"))
+    Total = Agent.Method[golem.Unit, int64]("total", golem.Description("Return the running total"))
+)
+```
+
+### Implementation (`agents/session/impl/impl.go`)
+
+```go
+// Package impl holds the session agent's private state, method handlers, and
+// custom snapshot serialization. Importing it registers the agent.
+package impl
+
+import (
+    "encoding/binary"
+
+    "myapp/agents/session"
+
+    "github.com/golemcloud/golem/sdks/go/golem"
+)
+
+// state keeps a running total in an UNEXPORTED field. Reflection cannot see it,
+// so the default snapshot (JSON of exported fields) would drop it — implementing
+// golem.Snapshotter below is what makes the state survive.
+type state struct{ total int64 }
+
+// Save/Load make *state a golem.Snapshotter: the returned bytes are stored
+// verbatim by the host and handed back on restore, so unexported state is kept.
+func (s *state) Save() ([]byte, error) {
+    b := make([]byte, 8)
+    binary.LittleEndian.PutUint64(b, uint64(s.total))
+    return b, nil
+}
+func (s *state) Load(b []byte) error {
+    if len(b) == 8 {
+        s.total = int64(binary.LittleEndian.Uint64(b))
+    }
+    return nil
+}
+
+var agent = session.Agent.Implement(func(session.ID) *state { return &state{} })
+
+func init() {
+    agent.Handle(session.Spend, func(ctx *golem.Context[state], in session.SpendIn) int64 {
+        ctx.State.total += in.Amount
+        return ctx.State.total
+    })
+    agent.Handle(session.Total, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+        return ctx.State.total
+    })
+}
+```
+
+## Best practices
+
+1. **Prefer the default JSON snapshot** unless you have unexported state, need a compact binary format, or need cross-version migration — in those cases implement `Snapshotter`.
+2. **Version your format** — include a version byte or tag so `Load` can read snapshots written by an older `Save`.
+3. **Keep snapshots small** — large snapshots slow recovery and updates.
+4. **Test round-trips** — `Save` → `Load` should reproduce equivalent state (this is native, host-free, so it unit-tests easily).
+5. **Handle migration** in `Load` when the schema changes between versions; returning an `error` from `Load` fails a snapshot-based update.
+
+## Key Constraints
+
+- A policy is required for snapshots to happen — `Spec.Snapshot` defaults to `SnapshotDisabled`, and `SnapshotDefault` may resolve to the server's default (possibly disabled). Use `SnapshotEveryN` / `SnapshotPeriodic` to guarantee it.
+- `Snapshotter` and `MultipartSnapshotter` are the **only** ways to capture unexported state — the default reflective path sees exported fields only.
+- Implement `Save` and `Load` as a pair on the state (usually pointer receiver); the host calls `Save` to capture and `Load` to restore.
+- `Save`/`Load` return an `error`; a non-nil `Load` error fails the snapshot-based update.
+- A restore never runs the constructor: the state starts from its zero value, `Load` (or the JSON default) fills it, and `OnRestore` rebuilds the rest. Do not rely on fields the constructor sets unless they are in the snapshot or rebuilt in `OnRestore`.
+- The SDK stores the agent's principal (`ctx.Principal()`) beside your payload and restores it for the agent; `Save`/`Load` see only your own bytes.
+
+### Related Skills
+
+| Skill | When to Load |
+|-------|--------------|
+| `golem-add-agent-go` | Define the agent whose state is snapshotted |
+| `golem-configure-durability-go` | Other durability controls on an agent |
+| `golem-recurring-task-go` | Long-running agents that benefit most from snapshotting |

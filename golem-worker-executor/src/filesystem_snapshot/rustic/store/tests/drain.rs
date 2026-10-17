@@ -490,20 +490,14 @@ async fn save_and_prune(
 #[timeout("60s")]
 async fn a_save_and_a_prune_of_one_agent_in_both_orders_of_the_publish_and_the_index_read_give_whole_snapshots()
  {
-    // A prune that reads the index before the publish marks the new packs of the save, so a
-    // restore before the next prune gives `Failed` with the cause of a marked pack, as the doc of
-    // `restore` says. The next prune finds the snapshot and keeps its packs.
+    // A prune that reads the index before the publish marks the new packs of the save. A restore
+    // before the next prune reads the marked packs and gives the whole tree. The next prune finds
+    // the snapshot and keeps its packs.
     let outcomes = futures::stream::iter([false, true])
         .then(|index_read_first| async move {
             let (saved, after_the_prune, after_the_next_prune, tree) =
                 save_and_prune(index_read_first).await;
-            let first = match after_the_prune {
-                Ok(listed) => listed == tree,
-                Err(RestoreFailure::Failed(failed)) => {
-                    index_read_first && failed.cause().to_string().contains("marked for deletion")
-                }
-                Err(_) => false,
-            };
+            let first = after_the_prune.is_ok_and(|listed| listed == tree);
             let next = match after_the_next_prune {
                 Ok(listed) => (listed == tree).to_string(),
                 Err(error) => format!("{error:?}"),

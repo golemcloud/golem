@@ -72,10 +72,6 @@ pub(super) enum Observed {
         reason: Reread,
         found: Found,
     },
-    /// Whether the blob that the check missed is only in packs that a prune marked for deletion.
-    MarkedRead {
-        only_marked: bool,
-    },
     /// Whether a new load of the index lists the pack that was missing.
     PackIndexed(bool),
     /// A storage call failed after its tries, after the first write when `written`.
@@ -100,7 +96,6 @@ pub(super) enum Step {
     LoadAgain,
     ListIndexAgain,
     ReadSnapshotsAgain(Reread),
-    ReadMarked,
     LoadIndexAgain,
     /// Remove what the run wrote, then end the run.
     ClearAndEnd(RunEnd),
@@ -125,8 +120,6 @@ pub(super) enum Learned {
 pub(super) enum Outcome {
     NotFound,
     Corrupt,
-    /// `Failed`: a pack of the snapshot is marked for deletion, and a later restore can succeed.
-    MarkedOnly,
     Destination,
 }
 
@@ -178,18 +171,17 @@ fn step_after(observed: &Observed) -> Step {
             reason: Reread::Ghost,
             found: Found::Name,
         } => Step::RunEnded(RunEnd::CallFailed),
+        // The index of the run also holds the packs that a prune marked, so a blob of a name that
+        // is still there and that no index file lists is not in the repository.
         Observed::SnapshotsReadAgain {
             reason: Reread::Check,
             found: Found::Name,
-        } => Step::ReadMarked,
+        }
+        | Observed::PackIndexed(true) => Step::Answer(Outcome::Corrupt),
         Observed::SnapshotsReadAgain {
             reason: Reread::Pack,
             found: Found::Name,
         } => Step::LoadIndexAgain,
-        Observed::MarkedRead { only_marked: true } => Step::Answer(Outcome::MarkedOnly),
-        Observed::MarkedRead { only_marked: false } | Observed::PackIndexed(true) => {
-            Step::Answer(Outcome::Corrupt)
-        }
         Observed::PackIndexed(false) => Step::ClearAndEnd(RunEnd::RaceRunAgain),
         Observed::CallFailed { written: false } => Step::RunEnded(RunEnd::CallFailed),
         Observed::CallFailed { written: true } => Step::ClearAndEnd(RunEnd::CallFailed),

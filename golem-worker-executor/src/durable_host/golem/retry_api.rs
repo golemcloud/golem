@@ -24,6 +24,7 @@ use golem_common::model::oplog::host_functions::{
     GolemApiRetryGetRetryPolicies, GolemApiRetryGetRetryPolicyByName,
     GolemApiRetryResolveRetryPolicy,
 };
+use golem_common::model::oplog::payload::types::SerializableToolPositionalRequest;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemRetryPolicyByName, HostRequestGolemRetryResolvePolicy,
     HostRequestNoInput, HostResponseGolemRetryNamedPolicy, HostResponseGolemRetryPolicies,
@@ -32,6 +33,79 @@ use golem_common::model::oplog::{
 use golem_common::model::retry_policy::{NamedRetryPolicy, PredicateValue, RetryContext};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
+    async fn next_retry_delay(
+        &mut self,
+        policy: Option<WitRetryPolicy>,
+        state: Vec<u8>,
+        elapsed: u64,
+        verb: String,
+        noun_uri: String,
+        properties: Vec<(String, WitPredicateValue)>,
+    ) -> anyhow::Result<Result<crate::preview2::golem_api_1_x::retry::RetryDecision, String>> {
+        use golem_common::model::oplog::host_functions::GolemApiRetryNextRetryDelay;
+        use golem_common::model::oplog::{
+            HostRequestGolemRetryNextDelay, HostResponseGolemRetryNextDelay,
+        };
+        use golem_common::model::retry_policy::{RetryPolicy, ThreadRng};
+        use std::time::Duration;
+
+        self.observe_function_call("golem::api::retry", "next_retry_delay");
+        let policy_identity = format!("{policy:?}");
+        let policy = policy.map(RetryPolicy::try_from).transpose();
+        let properties: Vec<(String, PredicateValue)> = properties
+            .into_iter()
+            .map(|(key, value)| (key, value.into()))
+            .collect();
+        let handle = DurableCallSession::<GolemApiRetryNextRetryDelay, NotCancellable>::start(
+            self,
+            HostRequestGolemRetryNextDelay {
+                policy: policy_identity,
+                state: state.clone(),
+                elapsed,
+                verb: verb.clone(),
+                noun_uri: noun_uri.clone(),
+                properties: properties.clone(),
+            },
+            DurableFunctionType::ReadLocal,
+        )
+        .await?;
+        let persisted = handle
+            .run(self, async |ctx| -> anyhow::Result<_> {
+                let result = (|| {
+                    let policy = policy?.unwrap_or_else(|| {
+                        NamedRetryPolicy::default_from_config(&ctx.state.config.retry).policy
+                    });
+                    if verb == "saga" && !policy.is_bounded() {
+                        return Err(
+                            "Saga retry policy must have a finite count or time bound".into()
+                        );
+                    }
+                    let mut props = RetryContext::custom(&verb, &noun_uri);
+                    for (key, value) in properties {
+                        props.set(key, value);
+                    }
+                    policy
+                        .next_retry_delay(
+                            &state,
+                            Duration::from_nanos(elapsed),
+                            &props,
+                            &mut ThreadRng,
+                        )
+                        .map(|(state, delay)| {
+                            (
+                                state,
+                                delay.map(|d| d.as_nanos().min(u64::MAX as u128) as u64),
+                            )
+                        })
+                })();
+                Ok(HostResponseGolemRetryNextDelay { result })
+            })
+            .await?;
+        Ok(persisted.result.map(|(state, delay)| {
+            crate::preview2::golem_api_1_x::retry::RetryDecision { state, delay }
+        }))
+    }
+
     async fn get_retry_policies(&mut self) -> anyhow::Result<Vec<WitNamedRetryPolicy>> {
         self.observe_function_call("golem::api::retry", "get_retry_policies");
 
@@ -82,7 +156,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         verb: String,
         noun_uri: String,
         properties: Vec<(String, WitPredicateValue)>,
-    ) -> anyhow::Result<Option<WitRetryPolicy>> {
+    ) -> anyhow::Result<Result<Option<WitRetryPolicy>, String>> {
         self.observe_function_call("golem::api::retry", "resolve_retry_policy");
 
         let mut props = RetryContext::custom(&verb, &noun_uri);
@@ -102,25 +176,24 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 noun_uri,
                 properties: properties_for_persist,
             },
-            DurableFunctionType::ReadRemote,
+            DurableFunctionType::ReadLocal,
         )
         .await?;
 
         let persisted = handle
             .run(self, async |ctx| -> anyhow::Result<_> {
                 let policies = ctx.state.named_retry_policies().await;
-                let resolved = match NamedRetryPolicy::resolve(&policies, &props) {
-                    Ok(Some(matched)) => Some(matched.policy.clone()),
-                    Ok(None) => None,
-                    Err(err) => {
-                        return Err(anyhow::anyhow!("Retry policy resolution error: {err}"));
-                    }
-                };
-                Ok(HostResponseGolemRetryResolvedPolicy { policy: resolved })
+                let result =
+                    NamedRetryPolicy::resolve_applicable_treating_missing_properties_as_no_match(
+                        &policies, &props,
+                    )
+                    .map(|matched| matched.map(|p| p.policy.clone()))
+                    .map_err(|err| format!("Retry policy resolution error: {err}"));
+                Ok(HostResponseGolemRetryResolvedPolicy { result })
             })
             .await?;
 
-        Ok(persisted.policy.map(|p| p.into()))
+        Ok(persisted.result.map(|policy| policy.map(Into::into)))
     }
 
     async fn set_retry_policy(&mut self, policy: WitNamedRetryPolicy) -> anyhow::Result<()> {
@@ -131,7 +204,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         if self.state.durability_is_suppressed() {
             // Apply the in-memory change without creating durable history.
         } else if let Some((_, entry)) = self
-            .get_oplog_entry_or_continue_live("SetRetryPolicy")
+            .get_oplog_entry_or_continue_live(SerializableToolPositionalRequest::SetRetryPolicy)
             .await?
         {
             if !matches!(entry, OplogEntry::SetRetryPolicy { .. }) {
@@ -160,7 +233,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         if self.state.durability_is_suppressed() {
             // Apply the in-memory change without creating durable history.
         } else if let Some((_, entry)) = self
-            .get_oplog_entry_or_continue_live("RemoveRetryPolicy")
+            .get_oplog_entry_or_continue_live(SerializableToolPositionalRequest::RemoveRetryPolicy)
             .await?
         {
             if !matches!(entry, OplogEntry::RemoveRetryPolicy { .. }) {

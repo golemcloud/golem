@@ -283,6 +283,11 @@ fn read_retry_budget_and_retry_after_do_not_change_request() {
             Some(Err(throttled)),
             Some(Err(failure(ErrorKind::Timeout))),
             Some(Err(failure(ErrorKind::Transport))),
+            Some(Err(failure(ErrorKind::RateLimited))),
+            Some(Err(failure(ErrorKind::Timeout))),
+            Some(Err(failure(ErrorKind::Transport))),
+            Some(Err(failure(ErrorKind::Timeout))),
+            Some(Err(failure(ErrorKind::Transport))),
             Some(Err(failure(ErrorKind::Unavailable))),
         ])
     });
@@ -293,13 +298,13 @@ fn read_retry_budget_and_retry_after_do_not_change_request() {
         ErrorKind::Unavailable
     ));
     READS.with_borrow(|r| {
-        assert_eq!(r.len(), 4);
+        assert_eq!(r.len(), 9);
         assert!(r.iter().all(|r| r.checkpoint.offset == "-1"));
     });
-    WAITS.with_borrow(|r| assert_eq!(r, &[17_000, 200, 400]));
+    WAITS.with_borrow(|r| assert_eq!(r, &[17_000, 200, 400, 800, 1_600, 3_200, 6_400, 12_800]));
     READERS.with_borrow(|r| assert_eq!(r.len(), 1));
-    READ_HANDLES.with_borrow(|r| assert_eq!(r, &[0, 0, 0, 0]));
-    assert_eq!(stream.failures, 3);
+    READ_HANDLES.with_borrow(|r| assert_eq!(r, &[0; 9]));
+    assert_eq!(stream.failures, 8);
     assert!(
         RetryOptions::default()
             .delay(&Error::new(ErrorKind::Gone, "gone"), 0)

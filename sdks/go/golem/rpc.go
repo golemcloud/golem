@@ -1,0 +1,422 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package golem
+
+import (
+	"fmt"
+	"reflect"
+	"time"
+
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
+	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
+	clock "github.com/golemcloud/golem/sdks/go/golem/internal/wit/wasi_clocks_0_3_0_system_clock"
+	witTypes "go.bytecodealliance.org/pkg/wit/types"
+)
+
+// Cross-agent calls hang off the method descriptor rather than the client:
+//
+//	res, err := Charge.Call(pay, ChargeIn{AmountCents: 500})
+//
+// Go methods cannot introduce type parameters, so a Client[Id] could never have
+// a Call[In, Out] method. The descriptor already binds In and Out, and shares Id
+// with the client — which is what makes aiming a method at the wrong agent a
+// compile error.
+//
+// A remote failure — the callee failed, or was unreachable after the runtime
+// exhausted its retries, or returned a value that does not decode as Out — is
+// returned as a [RemoteCallError]. The runtime handles transient failures and
+// replays deterministically, so a failure that reaches the guest is terminal.
+// Each call form has a Must variant ([MethodDef.MustCall], [Future.MustGet], …)
+// that panics instead; a panic in an agent method traps the component, as in
+// Rust, so the worker fails. Model *expected* outcomes as a [Result] in the
+// method's output.
+//
+// Misuse — a zero Client, an input that does not encode, a stream on a
+// fire-and-forget form — panics in every form.
+
+// noScopeCard is the scope card of the invocations that do not wait for their
+// result: the host accepts a scope card only on an awaited call.
+func noScopeCard() witTypes.Option[*types.PermissionCard] {
+	return witTypes.None[*types.PermissionCard]()
+}
+
+// Scope cards.
+//
+// An awaited call — Call, MustCall or CallAsync — may carry a [ScopeCard] from
+// [DeriveScope]. The callee holds the card's grants for that invocation only,
+// and loses them when the invocation ends. Attaching a card lends it: the
+// caller keeps it and may attach it again within the same invocation. Trigger
+// and Schedule never carry a scope card, as the host accepts one only on an
+// awaited call.
+//
+//	scope := golem.MustDeriveScope(bounds, parent)
+//	out, err := Charge.WithScopeCard(scope).Call(pay, ChargeIn{AmountCents: 500})
+//
+// [Client.WithScopeCard] sets a default for every awaited call through the
+// client; a card attached to the call takes precedence.
+//
+// A scope card is valid only during the invocation that derived it. Keeping
+// one, or a client whose default is one, for a later invocation makes that
+// invocation's awaited calls fail: the host retires the card when its
+// invocation ends, and denies them. Releasing a retired card is safe.
+//
+// The scope card is checked before the input is encoded: a released scope card
+// panics with [ErrPermissionCardMoved] and leaves every card in the input with
+// the caller.
+
+// ScopedMethod is a method descriptor with a scope card attached to its
+// awaited calls, made by [MethodDef.WithScopeCard].
+type ScopedMethod[Id, In, Out any] struct {
+	m    MethodDef[Id, In, Out]
+	card ScopeCard
+}
+
+// WithScopeCard attaches card to the awaited calls of m. The card is lent, not
+// moved, and is valid only in the invocation that derived it. It panics on the
+// zero ScopeCard.
+func (m MethodDef[Id, In, Out]) WithScopeCard(card ScopeCard) ScopedMethod[Id, In, Out] {
+	return ScopedMethod[Id, In, Out]{m: m, card: mustScopeCard(m.name, card)}
+}
+
+// Call is [MethodDef.Call] carrying the scope card.
+func (s ScopedMethod[Id, In, Out]) Call(c Client[Id], in In) (Out, error) {
+	return s.m.callAsync(c, in, s.card).Get()
+}
+
+// MustCall is [MethodDef.MustCall] carrying the scope card.
+func (s ScopedMethod[Id, In, Out]) MustCall(c Client[Id], in In) Out {
+	return s.m.callAsync(c, in, s.card).MustGet()
+}
+
+// CallAsync is [MethodDef.CallAsync] carrying the scope card.
+func (s ScopedMethod[Id, In, Out]) CallAsync(c Client[Id], in In) *Future[Out] {
+	return s.m.callAsync(c, in, s.card)
+}
+
+// Call invokes the method and waits for its result. A remote failure is
+// returned as a [RemoteCallError].
+//
+// It is [MethodDef.CallAsync] followed by [Future.Get]: the call goes through the
+// asynchronous import, as every other SDK's does, which is the form the executor
+// resumes into after suspending a caller that waited past its RPC idle window. A
+// call that outlasts that window therefore suspends the worker and resumes it
+// with the result, rather than holding it resident.
+//
+// While it waits, other goroutines of the same invocation may run: Call is a
+// yield point, exactly like Future.Get. To have several calls in flight at once,
+// use [MethodDef.CallAsync] directly.
+func (m MethodDef[Id, In, Out]) Call(c Client[Id], in In) (Out, error) {
+	return m.callAsync(c, in, ScopeCard{}).Get()
+}
+
+// MustCall is [MethodDef.Call] that panics on a remote failure.
+func (m MethodDef[Id, In, Out]) MustCall(c Client[Id], in In) Out {
+	return m.callAsync(c, in, ScopeCard{}).MustGet()
+}
+
+// Trigger invokes the method without waiting for a result, returning the
+// invocation's identity. A failure to start the invocation is returned as a
+// [RemoteCallError]; failures after the invocation is accepted are not
+// reported here.
+func (m MethodDef[Id, In, Out]) Trigger(c Client[Id], in In) (InvocationID, error) {
+	if c.rpc == nil {
+		panic(fmt.Errorf("golem: %s: called on a zero Client", m.name))
+	}
+	m.refuseStreams("Trigger")
+	tree, err := m.encodeInput(in)
+	if err != nil {
+		panic(err)
+	}
+	res := c.rpc.Invoke(m.name, tree, noScopeCard())
+	if res.IsErr() {
+		return InvocationID{}, rpcErrorToGo(c.agentID, m.name, res.Err())
+	}
+	return invocationIDFrom(res.Ok()), nil
+}
+
+// MustTrigger is [MethodDef.Trigger] that panics on a remote failure.
+func (m MethodDef[Id, In, Out]) MustTrigger(c Client[Id], in In) InvocationID {
+	id, err := m.Trigger(c, in)
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
+// Schedule arranges for the method to be invoked at the given time and returns a
+// token that can cancel it beforehand. A failure to schedule is returned as a
+// [RemoteCallError].
+func (m MethodDef[Id, In, Out]) Schedule(c Client[Id], at time.Time, in In) (*ScheduledInvocation, error) {
+	if c.rpc == nil {
+		panic(fmt.Errorf("golem: %s: called on a zero Client", m.name))
+	}
+	m.refuseStreams("Schedule")
+	tree, err := m.encodeInput(in)
+	if err != nil {
+		panic(err)
+	}
+	res := c.rpc.ScheduleCancelableInvocation(instantFrom(at), m.name, tree, noScopeCard())
+	if res.IsErr() {
+		return nil, rpcErrorToGo(c.agentID, m.name, res.Err())
+	}
+	receipt := res.Ok()
+	return &ScheduledInvocation{
+		ID:    invocationIDFrom(receipt.Metadata),
+		token: receipt.CancellationToken,
+	}, nil
+}
+
+// MustSchedule is [MethodDef.Schedule] that panics on a remote failure.
+func (m MethodDef[Id, In, Out]) MustSchedule(c Client[Id], at time.Time, in In) *ScheduledInvocation {
+	s, err := m.Schedule(c, at, in)
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
+
+// CallAsync starts the invocation and returns immediately with a future. A
+// failure to start is reported by the future's Get, as the host's
+// asynchronous import has no error result of its own.
+//
+// This is the only way to have several invocations in flight: `invoke-and-await`
+// is a synchronous import and blocks the component, whereas the future's Get is
+// async, so a goroutine blocked in it yields to the component-model event loop
+// and lets other goroutines proceed.
+//
+// Note the platform contract: a single target instance handles one invocation at
+// a time, so fanning out to the SAME agent instance does not run in parallel.
+// Concurrency is across DIFFERENT targets.
+func (m MethodDef[Id, In, Out]) CallAsync(c Client[Id], in In) *Future[Out] {
+	return m.callAsync(c, in, ScopeCard{})
+}
+
+// callAsync starts an awaited call carrying scope, or the client's default
+// scope card when scope is the zero ScopeCard.
+func (m MethodDef[Id, In, Out]) callAsync(c Client[Id], in In, scope ScopeCard) *Future[Out] {
+	if c.rpc == nil {
+		panic(fmt.Errorf("golem: %s: called on a zero Client", m.name))
+	}
+	tree, card, err := m.awaitedCallArgs(c, in, scope)
+	if err != nil {
+		panic(err)
+	}
+	inv := c.rpc.AsyncInvokeAndAwait(m.name, tree, card)
+	return &Future[Out]{
+		ID:     invocationIDFrom(inv.Metadata),
+		fut:    inv.Future,
+		method: m.name,
+		target: c.agentID,
+	}
+}
+
+// ---------------------------------------------------------------------------
+// encoding / decoding, shared by every call shape
+// ---------------------------------------------------------------------------
+
+// awaitedCallArgs resolves an awaited call's scope card — scope, or the
+// client's default when scope is the zero ScopeCard — and then encodes the
+// input. The order matters: a released scope card panics before any card in
+// the input moves.
+func (m MethodDef[Id, In, Out]) awaitedCallArgs(c Client[Id], in In, scope ScopeCard) (types.SchemaValueTree, witTypes.Option[*types.PermissionCard], error) {
+	if scope.sst == nil {
+		scope = c.scopeCard
+	}
+	card := scopeCardHandle(scope)
+	tree, err := m.encodeInput(in)
+	return tree, card, err
+}
+
+// encodeInput encodes the In value into a parameter-list value tree. The callee
+// derives the same field list from the same Go type, which is what keeps the two
+// sides symmetric.
+func (m MethodDef[Id, In, Out]) encodeInput(in In) (tree types.SchemaValueTree, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("golem: %s: encoding input: %v", m.name, r)
+		}
+	}()
+	inType := reflect.TypeFor[In]()
+	if problem := paramsTypeProblem(inType); problem != "" {
+		return tree, fmt.Errorf("golem: %s: %s", m.name, problem)
+	}
+	return encodeParams(defs.StructFields(inType), reflect.ValueOf(&in).Elem()), nil
+}
+
+// decodeOutput decodes a remote result through the LOCAL descriptor's Out codec.
+// That codec checks every node tag, so a remote returning the wrong shape yields
+// an error rather than a panic. The permission cards in the result that the
+// decode does not keep go back to the host.
+func decodeOutput[Out any](target, method string, out witTypes.Option[types.SchemaValueTree]) (Out, error) {
+	var zero Out
+	outType := reflect.TypeFor[Out]()
+	if outType == reflect.TypeFor[Unit]() {
+		if out.IsSome() {
+			engine.ReleaseCardsIn(out.Some().ValueNodes, releaseCard)
+		}
+		return zero, nil
+	}
+	if out.IsNone() {
+		return zero, &RemoteCallError{
+			Target: target, Method: method, Kind: RemoteProtocolError,
+			Message: "remote returned no value for a non-unit output",
+		}
+	}
+	tree := out.Some()
+	dst := reflect.New(outType).Elem()
+	dec := engine.Decoder{Nodes: tree.ValueNodes}
+	if err := defs.Compile(outType).Decode(&dec, dst, tree.Root); err != nil {
+		dec.ReleaseCards(releaseCard)
+		return zero, &RemoteCallError{
+			Target: target, Method: method, Kind: RemoteProtocolError,
+			Message: "remote returned an undecodable value: " + err.Error(),
+		}
+	}
+	dec.ReleaseRest(releaseCard)
+	return dst.Interface().(Out), nil
+}
+
+// ---------------------------------------------------------------------------
+// invocation identity and scheduling
+// ---------------------------------------------------------------------------
+
+// InvocationID identifies one remote invocation.
+type InvocationID struct {
+	AgentID        string
+	IdempotencyKey string
+}
+
+func invocationIDFrom(m host.InvocationMetadata) InvocationID {
+	return InvocationID{AgentID: m.AgentId, IdempotencyKey: m.IdempotencyKey}
+}
+
+// ScheduledInvocation is a future invocation that has not run yet.
+type ScheduledInvocation struct {
+	ID    InvocationID
+	token *host.CancellationToken
+}
+
+// Cancel prevents the invocation, if it has not already started.
+func (s *ScheduledInvocation) Cancel() {
+	if s.token != nil {
+		s.token.Cancel()
+		dropCancellationToken(s.token)
+		s.token = nil
+	}
+}
+
+// dropCancellationToken releases a used token. The component build binds it
+// to the resource's Drop; a native build has no host resource to release.
+var dropCancellationToken = func(*host.CancellationToken) {}
+
+func instantFrom(t time.Time) clock.Instant {
+	return clock.Instant{
+		Seconds:     t.Unix(),
+		Nanoseconds: uint32(t.Nanosecond()),
+	}
+}
+
+// ---------------------------------------------------------------------------
+// errors
+// ---------------------------------------------------------------------------
+
+// RemoteCallErrorKind classifies an RPC failure. The kinds are the host's
+// rpc-error cases.
+type RemoteCallErrorKind uint8
+
+const (
+	// RemoteProtocolError is a transport or encoding level failure.
+	RemoteProtocolError RemoteCallErrorKind = iota
+	// RemoteDenied means the caller is not permitted to make this call.
+	RemoteDenied
+	// RemoteNotFound means the target agent or method does not exist.
+	RemoteNotFound
+	// RemoteInternalError is an unexpected failure on the remote side.
+	RemoteInternalError
+	// RemoteAgentError means the remote returned a domain error; see Cause.
+	RemoteAgentError
+)
+
+func (k RemoteCallErrorKind) String() string {
+	switch k {
+	case RemoteDenied:
+		return "denied"
+	case RemoteNotFound:
+		return "not found"
+	case RemoteInternalError:
+		return "remote internal error"
+	case RemoteAgentError:
+		return "remote agent error"
+	default:
+		return "protocol error"
+	}
+}
+
+// RemoteCallError is returned by every cross-agent call that fails.
+//
+// A remote domain error keeps its Cause rather than being flattened into a
+// string, so a remote custom-error stays inspectable by the caller.
+type RemoteCallError struct {
+	Target  string
+	Method  string
+	Kind    RemoteCallErrorKind
+	Message string
+	Cause   error
+}
+
+func (e *RemoteCallError) Error() string {
+	target := e.Target
+	if target == "" {
+		target = "<unknown agent>"
+	}
+	return fmt.Sprintf("golem: calling %s.%s: %s: %s", target, e.Method, e.Kind, e.Message)
+}
+
+func (e *RemoteCallError) Unwrap() error { return e.Cause }
+
+func rpcErrorToGo(target, method string, e host.RpcError) error {
+	err := &RemoteCallError{Target: target, Method: method}
+	switch e.Tag() {
+	case host.RpcErrorProtocolError:
+		err.Kind, err.Message = RemoteProtocolError, e.ProtocolError()
+	case host.RpcErrorDenied:
+		err.Kind, err.Message = RemoteDenied, e.Denied()
+	case host.RpcErrorNotFound:
+		err.Kind, err.Message = RemoteNotFound, e.NotFound()
+	case host.RpcErrorRemoteInternalError:
+		err.Kind, err.Message = RemoteInternalError, e.RemoteInternalError()
+	case host.RpcErrorRemoteAgentError:
+		remote := e.RemoteAgentError()
+		err.Kind = RemoteAgentError
+		err.Cause = agentErrorToGo(remote)
+		err.Message = err.Cause.Error()
+	default:
+		panic(fmt.Sprintf("golem: unhandled rpc-error case %d", e.Tag()))
+	}
+	return err
+}
+
+// refuseStreams rejects the fire-and-forget invocation forms for a method that
+// carries a stream. Both return before the call completes, so neither can hand
+// the caller a stream endpoint — including when the only stream is in the
+// output. Await the call instead.
+func (m MethodDef[Id, In, Out]) refuseStreams(form string) {
+	if defs.CarriesStream(reflect.TypeFor[In]()) || defs.CarriesStream(reflect.TypeFor[Out]()) {
+		panic(fmt.Errorf(
+			"golem: %s: %s cannot carry a stream; await the call with Call or CallAsync instead",
+			m.name, form))
+	}
+}

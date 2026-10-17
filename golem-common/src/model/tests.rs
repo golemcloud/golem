@@ -1470,6 +1470,7 @@ fn agent_invocation_payload_round_trip_preserves_scope_card() {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
+        expires_at: None,
     };
     let invocation = AgentInvocation::AgentMethod {
         idempotency_key: IdempotencyKey::fresh(),

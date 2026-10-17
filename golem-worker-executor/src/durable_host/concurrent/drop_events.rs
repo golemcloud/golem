@@ -52,8 +52,7 @@ impl HttpSpanCleanupRecorder {
             replay: ctx.state.replay_state.clone(),
             live: ctx.is_live(),
             persisted: persisted && !ctx.state.snapshotting_mode,
-            parent: ctx
-                .child_parent_start_index(&DurableFunctionType::ReadLocal, OplogIndex::INITIAL),
+            parent: ctx.entity_parent_start_index(),
             owner,
             send_start_index,
             invocation_id,
@@ -305,10 +304,6 @@ pub struct DroppedCall {
     pub(super) request_upload: PendingUpload,
     pub(super) span_finished: Option<golem_common::model::oplog::SpanFinished>,
     pub(super) span_observer: Option<Arc<dyn CallSpanObserver>>,
-    /// The dropped call's atomic-region ownership lease, shared with every other holder (the
-    /// originating handle, terminal guards). Released — store-free and idempotently — once the
-    /// call's terminal is recorded.
-    pub(super) atomic_lease: Option<Arc<AtomicRegionLease>>,
     /// The dropped call's own trap classification, captured from its execution scope at drop time.
     /// A cancellation-drain failure (deferred request upload / terminal recorder join) traps with
     /// this context so the retry grouping belongs to the dropped call, not to whichever later host
@@ -347,18 +342,6 @@ impl DroppedCall {
         &self.request_upload
     }
 
-    /// The atomic region currently owning the dropped call, read through its lease.
-    pub fn atomic_region(&self) -> Option<OplogIndex> {
-        self.atomic_lease.as_ref().and_then(|lease| lease.owner())
-    }
-
-    /// Releases the dropped call's atomic-region membership (idempotent, store-free).
-    pub(super) fn release_atomic_lease(&self) {
-        if let Some(lease) = &self.atomic_lease {
-            lease.release();
-        }
-    }
-
     pub fn trap_context(&self) -> DurableCallTrapContext {
         self.trap_context
     }
@@ -378,7 +361,6 @@ impl DroppedCall {
     ) -> Result<(), WorkerExecutorError> {
         self.append_cancelled_with_oplog(ctx.state.oplog.clone(), partial)
             .await?;
-        self.release_atomic_lease();
         ctx.end_durable_function(&self.function_type, self.begin_index, false)
             .await?;
         Ok(())
@@ -417,11 +399,10 @@ pub enum DropEvent {
     UnfinishedCancellable { call: DroppedCall },
     /// A `NotCancellable` handle was dropped unfinished; this is a programming error.
     UnfinishedNotCancellable { call: DroppedCall },
-    /// A terminal append was handed to an owned task; wait for it before releasing the call's
-    /// atomic-region lease. A join failure traps with the dropped call's own `trap_context`
+    /// A terminal append was handed to an owned task; wait for it before closing the call's
+    /// durable scope. A join failure traps with the dropped call's own `trap_context`
     /// rather than ambient state.
     CleanupAfterTerminal {
-        atomic_lease: Option<Arc<AtomicRegionLease>>,
         function_type: DurableFunctionType,
         durable_begin_index: OplogIndex,
         terminal: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
@@ -435,7 +416,7 @@ pub enum DropEvent {
     /// A deferred guest-delivery token ([`CompletionDelivery`]) was dropped while still armed:
     /// its call's terminal `End` is already recorded and the durable scope already closed, so the
     /// only remaining work is joining the owned marker (or trailing ordered-append) task while
-    /// keeping the call counted as in flight — no scope close and no atomic-region cleanup.
+    /// keeping the call counted as in flight — no scope close.
     AwaitCompletionMarker {
         receipt: Option<MarkerReceipt>,
         trap_context: DurableCallTrapContext,
@@ -451,14 +432,6 @@ pub enum DropEvent {
         lifecycle: Arc<CustomBeginLifecycle>,
         terminal: Option<tokio::task::JoinHandle<Result<Option<OplogIndex>, WorkerExecutorError>>>,
     },
-    /// A guest-cancelled accessor future may leave a caller-managed durable scope with no code path
-    /// back into the resource's `drop`. Close that parent scope from the next safe store-access
-    /// window. The close is idempotent because the resource may be dropped before this event drains.
-    CloseDurableScope {
-        function_type: DurableFunctionType,
-        begin_index: OplogIndex,
-        span_finished: Option<golem_common::model::oplog::SpanFinished>,
-    },
     /// An invocation-context span whose owning resource was dropped from a synchronous host
     /// context (e.g. a p3 HTTP response dropped before its body was consumed). Finish it from the
     /// next drain point.
@@ -472,6 +445,12 @@ pub enum DropEvent {
     /// next safe worker-access window performs both before invocation progress can overtake them.
     CancelDroppedDurableInput {
         cancellation: Box<DroppedDurableInput>,
+    },
+    /// A semantic producer disposal retains its commit receipt or resumes admission at the
+    /// replay tail from a safe context window. Rust resource destruction never records it.
+    DisposeToolProducer {
+        disposal: Box<crate::durable_host::tool::durability::ProducerDisposal>,
+        trap_context: DurableCallTrapContext,
     },
 }
 
@@ -571,7 +550,6 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
             ));
         }
         DropEvent::CleanupAfterTerminal {
-            atomic_lease,
             function_type,
             durable_begin_index,
             terminal,
@@ -592,9 +570,6 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
                         return Err(TerminalCallError::new(err, trap_context));
                     }
                 }
-            }
-            if let Some(lease) = &atomic_lease {
-                lease.release();
             }
             ctx.end_durable_function(&function_type, durable_begin_index, false)
                 .await
@@ -637,30 +612,6 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
             }
             lifecycle.release_initiation();
         }
-        DropEvent::CloseDurableScope {
-            function_type,
-            begin_index,
-            span_finished,
-        } => {
-            if ctx.state.is_durable_scope_open(begin_index) {
-                if let Some(span_finished) = span_finished {
-                    ctx.end_durable_function_with_span(
-                        &function_type,
-                        begin_index,
-                        false,
-                        span_finished.clone(),
-                    )
-                    .await
-                    .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?;
-                    finish_span_in_memory(ctx, &span_finished.span_id)
-                        .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?;
-                } else {
-                    ctx.end_durable_function(&function_type, begin_index, false)
-                        .await
-                        .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?;
-                }
-            }
-        }
         DropEvent::FinishSpan { span_id } => {
             finish_span_in_memory(ctx, &span_id)
                 .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?;
@@ -691,6 +642,15 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
             }
             finish_span_in_memory(ctx, &cleanup.finished.span_id)
                 .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?;
+        }
+        DropEvent::DisposeToolProducer {
+            mut disposal,
+            trap_context,
+        } => {
+            disposal
+                .finish(ctx)
+                .await
+                .map_err(|error| TerminalCallError::new(error, trap_context))?;
         }
         DropEvent::CancelDroppedDurableInput { cancellation } => {
             let result = async {
@@ -736,7 +696,7 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
 }
 
 pub(crate) async fn cancel_dropped_durable_input_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     cancellation: &DroppedDurableInput,
 ) -> Result<(), WorkerExecutorError>
@@ -799,9 +759,21 @@ where
 
 /// Accessor-window variant of [`drain_queued_dropped_call_events`]. It drains the queue from a short
 /// worker-state window, records `Cancelled` entries using owned oplog handles outside the window,
-/// then re-enters only to unregister atomic-region membership.
+/// then closes the durable-function scope.
 pub async fn drain_dropped_call_events_access<T, D, Ctx>(
     store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<usize, TerminalCallError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    drain_dropped_call_events_context(store, get_ctx).await
+}
+
+pub(in crate::durable_host) async fn drain_dropped_call_events_context<T, D, Ctx>(
+    store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Result<usize, TerminalCallError>
 where
@@ -835,11 +807,9 @@ where
                 .await;
                 match result {
                     Ok(()) => {
-                        // The `Cancelled` entry is durable and the lease release is synchronous
-                        // (store-free), so neutralize the event before the remaining fallible
+                        // The `Cancelled` entry is durable, so neutralize the event before the remaining fallible
                         // work: a torn drain from here re-queues only a permit-holding no-op
                         // instead of re-appending a second `Cancelled`.
-                        call.release_atomic_lease();
                         let live_call_permit = call.live_call_permit.take();
                         drain.replace_current(DropEvent::AwaitCompletionMarker {
                             receipt: None,
@@ -880,7 +850,6 @@ where
                 });
             }
             DropEvent::CleanupAfterTerminal {
-                atomic_lease,
                 function_type,
                 durable_begin_index,
                 terminal,
@@ -890,7 +859,6 @@ where
                 // finished or dropped.
                 live_call_permit: _,
             } => {
-                let atomic_lease = atomic_lease.clone();
                 let function_type = function_type.clone();
                 let durable_begin_index = *durable_begin_index;
                 let trap_context = *trap_context;
@@ -913,9 +881,6 @@ where
                     }
                 }
                 if terminal_recorded {
-                    if let Some(lease) = &atomic_lease {
-                        lease.release();
-                    }
                     if let Err(err) = end_durable_function_access(
                         store,
                         get_ctx,
@@ -999,57 +964,6 @@ where
                     lifecycle.release_initiation();
                 }
             }
-            DropEvent::CloseDurableScope {
-                function_type,
-                begin_index,
-                span_finished,
-            } => {
-                let function_type = function_type.clone();
-                let begin_index = *begin_index;
-                let span_finished = span_finished.clone();
-                match end_durable_function_access_if_open_with_span(
-                    store,
-                    get_ctx,
-                    function_type,
-                    begin_index,
-                    false,
-                    span_finished.clone(),
-                )
-                .await
-                {
-                    Ok(true) => {
-                        if let Some(span_finished) = span_finished
-                            && let Err(err) = store.with(|mut access| {
-                                finish_span_in_memory(
-                                    get_ctx(access.data_mut()),
-                                    &span_finished.span_id,
-                                )
-                            })
-                            && first_error.is_none()
-                        {
-                            first_error = Some(TerminalCallError::new(
-                                err,
-                                store.with(|mut access| {
-                                    ambient_trap_context(get_ctx(access.data_mut()))
-                                }),
-                            ));
-                        }
-                        recorded += 1;
-                    }
-                    Ok(false) => {}
-                    Err(err) => {
-                        if first_error.is_none() {
-                            first_error = Some(TerminalCallError::new(
-                                err,
-                                store.with(|mut access| {
-                                    let ctx = get_ctx(access.data_mut());
-                                    ambient_trap_context(ctx)
-                                }),
-                            ));
-                        }
-                    }
-                }
-            }
             DropEvent::FinishSpan { span_id } => {
                 let span_id = span_id.clone();
                 let finish_result = store.with(|mut access| {
@@ -1121,6 +1035,19 @@ where
                     recorded += 1;
                 }
             }
+            DropEvent::DisposeToolProducer {
+                disposal,
+                trap_context,
+            } => {
+                let mut access = AccessorContext::new(store, get_ctx);
+                if let Err(error) = disposal.finish(&mut access).await {
+                    if first_error.is_none() {
+                        first_error = Some(TerminalCallError::new(error, *trap_context));
+                    }
+                } else {
+                    recorded += 1;
+                }
+            }
             DropEvent::CancelDroppedDurableInput { cancellation } => {
                 if let Err(error) =
                     cancel_dropped_durable_input_access(store, get_ctx, cancellation).await
@@ -1160,9 +1087,10 @@ pub(super) mod tests {
     use test_r::test;
 
     fn noop() -> OplogEntry {
-        OplogEntry::NoOp {
+        OplogEntry::RemoveRetryPolicy {
             timestamp: Timestamp::now_utc(),
             entity_parent_start_index: None,
+            name: "test-policy".to_string(),
         }
     }
 
@@ -1194,6 +1122,8 @@ pub(super) mod tests {
             DeletedRegions::default(),
             None,
             crate::durable_host::tool::operation::OwnerToolOperations::new(),
+            oplog.current_oplog_index().await,
+            None,
         )
         .await
         .unwrap();
@@ -1436,7 +1366,7 @@ pub(super) mod tests {
             }
             let (index, entry) = replay.get_oplog_entry(None).await.unwrap();
             assert_eq!(index, OplogIndex::from_u64(3));
-            assert!(matches!(entry, OplogEntry::NoOp { .. }));
+            assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
             assert!(matches!(
                 cleanup.progress.clone().await.unwrap(),
                 HttpSpanCleanupProgress::Complete

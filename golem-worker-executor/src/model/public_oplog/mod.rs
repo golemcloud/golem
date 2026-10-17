@@ -31,15 +31,14 @@ use golem_common::model::lucene::Query;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, CardDerivedParams, CardEventQueuedParams, CardExpiredParams,
-    CardInstallFailedParams, CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams,
-    CardTransferConfirmedParams, CardTransferStartedParams, CardTransferredParams,
-    CommittedRemoteTransactionParams, CompletionDeliveredParams, CompletionDiscardedParams,
-    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
-    EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams,
-    GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
-    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    BeginRemoteTransactionParams, CancelPendingInvocationParams, CancelledParams,
+    CardDerivedParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams,
+    CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams, CardTransferConfirmedParams,
+    CardTransferStartedParams, CardTransferredParams, CommittedRemoteTransactionParams,
+    CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
+    DeactivatePluginParams, DropResourceParams, EndParams, ErrorParams, ExitedParams,
+    FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
+    LogParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
     PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RecoverySucceededParams,
     RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
     RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
@@ -57,16 +56,17 @@ use golem_common::model::oplog::{
     ExternalToolResultParameters, FallibleResultParameters, HostRequest, HostRequestGolemRpcInvoke,
     HostRequestGolemRpcScheduledInvocation, HostResponse, HostResponseEntityInvocation,
     JsonSnapshotData, LoadSnapshotParameters, ManualUpdateParameters, MultipartPartData,
-    MultipartSnapshotData, MultipartSnapshotPart, OplogEntry, OplogIndex,
+    MultipartSnapshotData, MultipartSnapshotPart, OmittedOplogEntry, OplogEntry, OplogIndex,
     PluginInstallationDescription, ProcessOplogEntriesParameters,
     ProcessOplogEntriesResultParameters, PublicAgentEntity, PublicAgentEntityKind,
     PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute, PublicEntityCallMode,
     PublicEntityInvocation, PublicEntityInvocationContext, PublicEntityInvocationOperation,
     PublicExternalToolResult, PublicFailedSnapshotAssistedUpdateDetails, PublicOplogEntry,
-    PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicSnapshotAssistedUpdateDetails,
-    PublicSnapshotData, PublicToolInvocationOperation, PublicTypedAgentConfigEntry,
-    PublicUpdateDescription, RawSnapshotData, SaveSnapshotResultParameters,
-    SnapshotAssistedAutomaticUpdateParameters, SnapshotBasedUpdateParameters, UpdateDescription,
+    PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicOplogPageEntry,
+    PublicSnapshotAssistedUpdateDetails, PublicSnapshotData, PublicToolInvocationOperation,
+    PublicTypedAgentConfigEntry, PublicUpdateDescription, RawSnapshotData,
+    SaveSnapshotResultParameters, SnapshotAssistedAutomaticUpdateParameters,
+    SnapshotBasedUpdateParameters, UpdateDescription,
 };
 use golem_common::model::oplog::{
     SpanAttributes, SpanFinished, SpanKind, SpanOutcome, SpanStarted,
@@ -84,12 +84,115 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-pub struct PublicOplogChunk {
-    pub entries: Vec<PublicOplogEntryWithIndex>,
+pub struct PublicOplogChunk<E = PublicOplogEntryWithIndex> {
+    pub entries: Vec<E>,
     pub next_oplog_index: OplogIndex,
     pub current_component_revision: ComponentRevision,
     pub first_index_in_chunk: OplogIndex,
     pub last_index: OplogIndex,
+}
+
+/// The limits of an oplog page that the executor returns to a remote reader.
+#[derive(Clone, Copy, Debug)]
+pub struct PublicOplogPageLimits {
+    /// The maximum number of oplog entries that the page reads.
+    pub count: usize,
+    /// The maximum protobuf-encoded size of the entries of the page. A page always holds at
+    /// least one entry.
+    pub max_bytes: usize,
+    /// The page replaces an entry whose protobuf-encoded size is larger than this with an
+    /// `OmittedOplogEntry`.
+    pub max_entry_bytes: usize,
+}
+
+/// Collects the entries of an oplog chunk in the form that its reader gets.
+trait ChunkBuilder {
+    type Entry;
+
+    /// Returns the form of `entry` that the chunk holds, or `None` if the entry does not fit in
+    /// the chunk. `component_revision` is the revision that `entry` was decoded with.
+    fn admit(
+        &mut self,
+        entry: PublicOplogEntryWithIndex,
+        component_revision: ComponentRevision,
+    ) -> Result<Option<Self::Entry>, String>;
+}
+
+/// The chunk of a reader in the executor process, which gets every entry in full.
+struct InProcessChunk;
+
+impl ChunkBuilder for InProcessChunk {
+    type Entry = PublicOplogEntryWithIndex;
+
+    fn admit(
+        &mut self,
+        entry: PublicOplogEntryWithIndex,
+        _component_revision: ComponentRevision,
+    ) -> Result<Option<Self::Entry>, String> {
+        Ok(Some(entry))
+    }
+}
+
+/// An oplog page for a remote reader, in its protobuf form.
+struct RemotePage {
+    limits: PublicOplogPageLimits,
+    used_bytes: usize,
+    admitted: usize,
+}
+
+impl RemotePage {
+    fn new(limits: PublicOplogPageLimits) -> Self {
+        Self {
+            limits,
+            used_bytes: 0,
+            admitted: 0,
+        }
+    }
+}
+
+impl ChunkBuilder for RemotePage {
+    type Entry = golem_api_grpc::proto::golem::worker::OplogPageEntry;
+
+    /// Replaces an entry that is larger than `max_entry_bytes` with an `OmittedOplogEntry`. The
+    /// first entry of a page always fits in the byte budget, so that a reader makes progress past
+    /// an entry that is larger than the budget.
+    fn admit(
+        &mut self,
+        entry: PublicOplogEntryWithIndex,
+        component_revision: ComponentRevision,
+    ) -> Result<Option<Self::Entry>, String> {
+        let omitted = OmittedOplogEntry {
+            oplog_index: entry.oplog_index,
+            attribution: entry.attribution.clone(),
+            timestamp: entry.entry.timestamp(),
+            entry_type: entry.entry.entry_type().to_string(),
+            size: 0,
+            component_revision,
+        };
+        let full: golem_api_grpc::proto::golem::worker::OplogEntryWithIndex = entry.try_into()?;
+        let full_size = prost::Message::encoded_len(&full);
+        let page_entry = if full_size > self.limits.max_entry_bytes {
+            PublicOplogPageEntry::Omitted(OmittedOplogEntry {
+                size: full_size as u64,
+                ..omitted
+            })
+            .try_into()?
+        } else {
+            golem_api_grpc::proto::golem::worker::OplogPageEntry {
+                entry: Some(
+                    golem_api_grpc::proto::golem::worker::oplog_page_entry::Entry::Included(full),
+                ),
+            }
+        };
+
+        let size = prost::Message::encoded_len(&page_entry);
+        if self.admitted > 0 && self.used_bytes.saturating_add(size) > self.limits.max_bytes {
+            return Ok(None);
+        }
+        self.used_bytes = self.used_bytes.saturating_add(size);
+        self.admitted += 1;
+        Ok(Some(page_entry))
+    }
 }
 
 fn public_attributes(attributes: golem_common::model::oplog::AttributeMap) -> Vec<PublicAttribute> {
@@ -249,6 +352,12 @@ impl<'a> PublicOplogAttributionResolver<'a> {
 
         let owner_start_index = match entry {
             OplogEntry::Start { .. } => Some(index),
+            OplogEntry::ToolAttachmentRead { observation, .. } => match observation.observation {
+                golem_common::base_model::durable_stream::StreamConsumerObservation::Host => None,
+                golem_common::base_model::durable_stream::StreamConsumerObservation::Guest {
+                    parent_start_index,
+                } => parent_start_index,
+            },
             OplogEntry::End { start_index, .. }
             | OplogEntry::Cancelled { start_index, .. }
             | OplogEntry::CompletionDiscarded { start_index, .. }
@@ -264,19 +373,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
                 entity_parent_start_index,
                 ..
             }
-            | OplogEntry::NoOp {
-                entity_parent_start_index,
-                ..
-            }
             | OplogEntry::Jump {
-                entity_parent_start_index,
-                ..
-            }
-            | OplogEntry::BeginAtomicRegion {
-                entity_parent_start_index,
-                ..
-            }
-            | OplogEntry::EndAtomicRegion {
                 entity_parent_start_index,
                 ..
             }
@@ -355,15 +452,15 @@ impl<'a> PublicOplogAttributionResolver<'a> {
             | OplogEntry::StreamSession {
                 entity_parent_start_index,
                 ..
+            }
+            | OplogEntry::ToolAttachmentControl {
+                entity_parent_start_index,
+                ..
             } => *entity_parent_start_index,
             OplogEntry::BeginRemoteTransaction {
-                original_begin_index: Some(begin_index),
+                original_begin_index: begin_index,
                 ..
             } => Some(*begin_index),
-            OplogEntry::BeginRemoteTransaction {
-                original_begin_index: None,
-                ..
-            } => Some(index.previous()),
             OplogEntry::PreCommitRemoteTransaction { begin_index, .. }
             | OplogEntry::PreRollbackRemoteTransaction { begin_index, .. }
             | OplogEntry::CommittedRemoteTransaction { begin_index, .. }
@@ -574,6 +671,119 @@ pub async fn get_public_oplog_chunk(
     initial_oplog_index: OplogIndex,
     count: usize,
 ) -> Result<PublicOplogChunk, String> {
+    let (chunk, _) = read_public_oplog_chunk(
+        components,
+        oplog_service,
+        owned_agent_id,
+        agent_mode,
+        agent_type_name,
+        initial_component_revision,
+        initial_oplog_index,
+        count,
+        None,
+        &mut InProcessChunk,
+    )
+    .await?;
+    Ok(chunk)
+}
+
+/// Reads an oplog page for a remote reader. The page omits entries that are larger than
+/// `limits.max_entry_bytes`, and ends early when the next entry does not fit in
+/// `limits.max_bytes`.
+pub async fn get_public_oplog_page(
+    components: Arc<dyn ComponentService>,
+    oplog_service: Arc<dyn OplogService>,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    agent_type_name: Option<&AgentTypeName>,
+    initial_component_revision: ComponentRevision,
+    initial_oplog_index: OplogIndex,
+    limits: PublicOplogPageLimits,
+) -> Result<PublicOplogChunk<golem_api_grpc::proto::golem::worker::OplogPageEntry>, String> {
+    let (chunk, _) = read_public_oplog_chunk(
+        components,
+        oplog_service,
+        owned_agent_id,
+        agent_mode,
+        agent_type_name,
+        initial_component_revision,
+        initial_oplog_index,
+        limits.count,
+        None,
+        &mut RemotePage::new(limits),
+    )
+    .await?;
+    Ok(chunk)
+}
+
+/// Reads one oplog entry in full. `component_revision` is the revision to decode the entry with,
+/// as an oplog page reports it for an omitted entry; without it, the oplog is scanned up to the
+/// entry to find the revision.
+pub async fn get_public_oplog_entry(
+    components: Arc<dyn ComponentService>,
+    oplog_service: Arc<dyn OplogService>,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    agent_type_name: Option<&AgentTypeName>,
+    oplog_index: OplogIndex,
+    component_revision: Option<ComponentRevision>,
+) -> Result<PublicOplogEntryWithIndex, WorkerExecutorError> {
+    let last_index = oplog_service
+        .get_last_index(owned_agent_id, agent_mode)
+        .await;
+    if oplog_index < OplogIndex::INITIAL || oplog_index > last_index {
+        return Err(WorkerExecutorError::invalid_request(format!(
+            "agent {owned_agent_id} has no oplog entry at index {oplog_index}"
+        )));
+    }
+    let component_revision = match component_revision {
+        Some(component_revision) => component_revision,
+        None => {
+            find_component_revision_at(
+                oplog_service.clone(),
+                owned_agent_id,
+                agent_mode,
+                oplog_index,
+            )
+            .await?
+        }
+    };
+    let chunk = get_public_oplog_chunk(
+        components,
+        oplog_service,
+        owned_agent_id,
+        agent_mode,
+        agent_type_name,
+        component_revision,
+        oplog_index,
+        1,
+    )
+    .await
+    .map_err(WorkerExecutorError::unknown)?;
+    chunk.entries.into_iter().next().ok_or_else(|| {
+        WorkerExecutorError::unknown(format!(
+            "agent {owned_agent_id} has no oplog entry at index {oplog_index}"
+        ))
+    })
+}
+
+/// Reads up to `count` oplog entries from `initial_oplog_index` and adds the entries that match
+/// `filter` to the chunk, in the form that `builder` selects. The chunk ends early at the first
+/// matching entry that does not fit; the cursor of the chunk then points to that entry, and the
+/// returned flag is `true`.
+#[allow(clippy::too_many_arguments)]
+async fn read_public_oplog_chunk<B: ChunkBuilder>(
+    components: Arc<dyn ComponentService>,
+    oplog_service: Arc<dyn OplogService>,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    agent_type_name: Option<&AgentTypeName>,
+    initial_component_revision: ComponentRevision,
+    initial_oplog_index: OplogIndex,
+    count: usize,
+    filter: Option<&Query>,
+    builder: &mut B,
+) -> Result<(PublicOplogChunk<B::Entry>, bool), String> {
     let initial_oplog_index = initial_oplog_index.max(OplogIndex::INITIAL);
     let last_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
@@ -596,6 +806,7 @@ pub async fn get_public_oplog_chunk(
     let mut current_component_revision = initial_component_revision;
     let mut next_oplog_index = initial_oplog_index;
     let mut first_index_in_chunk = None;
+    let mut page_full = false;
 
     let mut attribution_resolver =
         PublicOplogAttributionResolver::new(oplog_service.clone(), owned_agent_id, agent_mode);
@@ -604,12 +815,9 @@ pub async fn get_public_oplog_chunk(
     }
 
     for (index, raw_entry) in raw_entries {
-        if first_index_in_chunk.is_none() {
-            first_index_in_chunk = Some(index);
-        }
-        if let Some(revision) = raw_entry.specifies_component_revision() {
-            current_component_revision = revision;
-        }
+        let entry_component_revision = raw_entry
+            .specifies_component_revision()
+            .unwrap_or(current_component_revision);
 
         let attribution = attribution_resolver
             .attribution_for_entry(index, &raw_entry)
@@ -622,28 +830,45 @@ pub async fn get_public_oplog_chunk(
             owned_agent_id,
             agent_mode,
             agent_type_name,
-            current_component_revision,
+            entry_component_revision,
         )
         .await?;
-        entries.push(PublicOplogEntryWithIndex {
-            oplog_index: index,
-            attribution,
-            entry,
-        });
+        if filter.is_none_or(|query| entry.matches(query)) {
+            let entry = PublicOplogEntryWithIndex {
+                oplog_index: index,
+                attribution,
+                entry,
+            };
+            match builder.admit(entry, entry_component_revision)? {
+                Some(chunk_entry) => entries.push(chunk_entry),
+                None => {
+                    page_full = true;
+                    break;
+                }
+            }
+        }
+
+        if first_index_in_chunk.is_none() {
+            first_index_in_chunk = Some(index);
+        }
+        current_component_revision = entry_component_revision;
         next_oplog_index = index.next();
     }
 
-    Ok(PublicOplogChunk {
-        entries,
-        next_oplog_index,
-        current_component_revision,
-        first_index_in_chunk: first_index_in_chunk.unwrap_or(initial_oplog_index),
-        last_index,
-    })
+    Ok((
+        PublicOplogChunk {
+            entries,
+            next_oplog_index,
+            current_component_revision,
+            first_index_in_chunk: first_index_in_chunk.unwrap_or(initial_oplog_index),
+            last_index,
+        },
+        page_full,
+    ))
 }
 
-pub struct PublicOplogSearchResult {
-    pub entries: Vec<PublicOplogEntryWithIndex>,
+pub struct PublicOplogSearchResult<E = PublicOplogEntryWithIndex> {
+    pub entries: Vec<E>,
     pub next_oplog_index: OplogIndex,
     pub current_component_revision: ComponentRevision,
     pub last_index: OplogIndex,
@@ -660,6 +885,62 @@ pub async fn search_public_oplog(
     count: usize,
     query: &str,
 ) -> Result<PublicOplogSearchResult, String> {
+    search_public_oplog_with(
+        component_service,
+        oplog_service,
+        owned_agent_id,
+        agent_mode,
+        agent_type_name,
+        initial_component_revision,
+        initial_oplog_index,
+        count,
+        query,
+        InProcessChunk,
+    )
+    .await
+}
+
+/// Searches the oplog for a remote reader. The result is an oplog page with the limits of
+/// `get_public_oplog_page`; only the matching entries count against the limits.
+pub async fn search_public_oplog_page(
+    component_service: Arc<dyn ComponentService>,
+    oplog_service: Arc<dyn OplogService>,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    agent_type_name: Option<&AgentTypeName>,
+    initial_component_revision: ComponentRevision,
+    initial_oplog_index: OplogIndex,
+    limits: PublicOplogPageLimits,
+    query: &str,
+) -> Result<PublicOplogSearchResult<golem_api_grpc::proto::golem::worker::OplogPageEntry>, String> {
+    search_public_oplog_with(
+        component_service,
+        oplog_service,
+        owned_agent_id,
+        agent_mode,
+        agent_type_name,
+        initial_component_revision,
+        initial_oplog_index,
+        limits.count,
+        query,
+        RemotePage::new(limits),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn search_public_oplog_with<B: ChunkBuilder>(
+    component_service: Arc<dyn ComponentService>,
+    oplog_service: Arc<dyn OplogService>,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    agent_type_name: Option<&AgentTypeName>,
+    initial_component_revision: ComponentRevision,
+    initial_oplog_index: OplogIndex,
+    count: usize,
+    query: &str,
+    mut builder: B,
+) -> Result<PublicOplogSearchResult<B::Entry>, String> {
     let mut results = Vec::new();
     let mut last_index;
     let mut current_index = initial_oplog_index;
@@ -668,7 +949,7 @@ pub async fn search_public_oplog(
     let query = Query::parse(query)?;
 
     loop {
-        let chunk = get_public_oplog_chunk(
+        let (chunk, page_full) = read_public_oplog_chunk(
             component_service.clone(),
             oplog_service.clone(),
             owned_agent_id,
@@ -677,20 +958,18 @@ pub async fn search_public_oplog(
             current_component_revision,
             current_index,
             count,
+            Some(&query),
+            &mut builder,
         )
         .await?;
 
-        for entry in chunk.entries {
-            if entry.entry.matches(&query) {
-                results.push(entry);
-            }
-        }
+        results.extend(chunk.entries);
 
         last_index = chunk.last_index;
         current_index = chunk.next_oplog_index;
         current_component_revision = chunk.current_component_revision;
 
-        if current_index > last_index || results.len() >= count {
+        if page_full || current_index > last_index || results.len() >= count {
             break;
         }
     }
@@ -713,19 +992,20 @@ pub async fn find_component_revision_at(
     let last_oplog_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
         .await;
+    const BATCH_SIZE: u64 = 256;
+    let end = start.min(last_oplog_index.next());
     let mut current = OplogIndex::INITIAL;
-    while current < start && current <= last_oplog_index {
-        // NOTE: could be reading in pages for optimization
-        let entry = oplog_service
-            .read_exact(owned_agent_id, agent_mode, current, 1)
-            .await
-            .remove(&current);
-
-        if let Some(revision) = entry.and_then(|entry| entry.specifies_component_revision()) {
-            initial_component_revision = revision;
+    while current < end {
+        let count = (end.as_u64() - current.as_u64()).min(BATCH_SIZE);
+        let entries = oplog_service
+            .read_exact(owned_agent_id, agent_mode, current, count)
+            .await;
+        for entry in entries.into_values() {
+            if let Some(revision) = entry.specifies_component_revision() {
+                initial_component_revision = revision;
+            }
         }
-
-        current = current.next();
+        current = OplogIndex::from_u64(current.as_u64() + count);
     }
 
     Ok(initial_component_revision)
@@ -1039,7 +1319,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 kind,
                 error,
                 retry_from,
-                inside_atomic_region,
                 retry_policy_state,
                 ..
             } => Ok(PublicOplogEntry::Error(ErrorParams {
@@ -1047,15 +1326,11 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 kind,
                 error: error.to_string(""),
                 retry_from,
-                inside_atomic_region,
                 retry_policy_state: retry_policy_state.map(Into::into),
             })),
             OplogEntry::RecoverySucceeded { timestamp } => Ok(PublicOplogEntry::RecoverySucceeded(
                 RecoverySucceededParams { timestamp },
             )),
-            OplogEntry::NoOp { timestamp, .. } => {
-                Ok(PublicOplogEntry::NoOp(NoOpParams { timestamp }))
-            }
             OplogEntry::Jump {
                 timestamp, jump, ..
             } => Ok(PublicOplogEntry::Jump(JumpParams { timestamp, jump })),
@@ -1067,17 +1342,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::Exited { timestamp } => {
                 Ok(PublicOplogEntry::Exited(ExitedParams { timestamp }))
             }
-            OplogEntry::BeginAtomicRegion { timestamp, .. } => Ok(
-                PublicOplogEntry::BeginAtomicRegion(BeginAtomicRegionParams { timestamp }),
-            ),
-            OplogEntry::EndAtomicRegion {
-                timestamp,
-                begin_index,
-                ..
-            } => Ok(PublicOplogEntry::EndAtomicRegion(EndAtomicRegionParams {
-                timestamp,
-                begin_index,
-            })),
             OplogEntry::PendingAgentInvocation {
                 timestamp,
                 idempotency_key,
@@ -1514,6 +1778,46 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         .into_typed_schema_value()
                         .map_err(|e| e.to_string())?,
                 }))
+            }
+            OplogEntry::ToolAttachmentControl {
+                timestamp,
+                attachment,
+                transition,
+                ..
+            } => Ok(PublicOplogEntry::ToolAttachmentControl(
+                golem_common::model::oplog::public_oplog_entry::ToolAttachmentControlParams {
+                    timestamp,
+                    attachment: attachment
+                        .into_typed_schema_value()
+                        .map_err(|error| error.to_string())?,
+                    transition: transition
+                        .into_typed_schema_value()
+                        .map_err(|error| error.to_string())?,
+                },
+            )),
+            OplogEntry::ToolAttachmentRead {
+                timestamp,
+                observation,
+                payload,
+                ..
+            } => {
+                let payload = match payload {
+                    Some(payload) => Some(
+                        oplog_service
+                            .download_payload(owned_agent_id, agent_mode, payload)
+                            .await?,
+                    ),
+                    None => None,
+                };
+                Ok(PublicOplogEntry::ToolAttachmentRead(
+                    golem_common::model::oplog::public_oplog_entry::ToolAttachmentReadParams {
+                        timestamp,
+                        observation: (*observation)
+                            .into_typed_schema_value()
+                            .map_err(|error| error.to_string())?,
+                        payload,
+                    },
+                ))
             }
             OplogEntry::StreamItems {
                 timestamp, record, ..

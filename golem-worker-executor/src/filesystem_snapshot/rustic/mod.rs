@@ -32,6 +32,7 @@ mod scope;
 mod spawner;
 mod store;
 
+#[cfg(any(test, feature = "test-utils"))]
 pub(crate) use runs::run_delay;
 pub(crate) use store::RusticSnapshotStore;
 
@@ -100,7 +101,8 @@ pub(super) struct PruneSettings {
     pub(super) keep_delete: Duration,
 }
 
-/// The numbers of the plan of a prune that tell whether it leaves marked packs.
+/// The numbers of the plan of a prune that tell whether it leaves marked packs, and the bytes of
+/// the packs that it deletes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct PruneReport {
     /// The packs that no snapshot uses.
@@ -110,6 +112,8 @@ pub(super) struct PruneReport {
     pub(super) marked_packs_kept: u64,
     /// The packs that no index lists. The prune marks each of them.
     pub(super) packs_unindexed: u64,
+    /// The bytes of the marked packs whose time to stay is over. The prune deletes them.
+    pub(super) bytes_removed: u64,
 }
 
 /// Runs the task on a blocking thread of the runtime.
@@ -185,9 +189,14 @@ fn unopened(backend: Arc<BlobBackend>) -> RusticResult<RusticRepository<()>> {
     )
 }
 
-/// The options of each repository: no rustic cache.
+/// The options of each repository: no rustic cache, and an index for a restore that also holds the
+/// blobs of the packs that a prune marked for deletion. A save can reuse a blob of a pack that a
+/// prune marks at the same time, because the prune did not see the new snapshot; the next prune
+/// sees the snapshot and keeps the pack.
 fn repository_options() -> RepositoryOptions {
-    RepositoryOptions::default().no_cache(true)
+    RepositoryOptions::default()
+        .no_cache(true)
+        .index_marked_packs(true)
 }
 
 /// The chunker of a new repository. It cuts files into content-defined chunks, so an insert moves
@@ -239,12 +248,14 @@ fn prune_options(settings: &PruneSettings) -> anyhow::Result<PruneOptions> {
         .keep_delete(Span::try_from(settings.keep_delete)?))
 }
 
-/// Gives the numbers of the plan of a prune that tell whether it leaves marked packs.
+/// Gives the numbers of the plan of a prune that tell whether it leaves marked packs, and the bytes
+/// of the packs that it deletes.
 fn prune_report(stats: &PruneStats) -> PruneReport {
     PruneReport {
         packs_unused: stats.packs.unused,
         packs_repacked: stats.packs.repack,
         marked_packs_kept: stats.packs_to_delete.keep,
         packs_unindexed: stats.packs_unref,
+        bytes_removed: stats.size_to_delete.remove,
     }
 }

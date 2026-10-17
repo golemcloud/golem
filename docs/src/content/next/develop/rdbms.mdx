@@ -12,7 +12,7 @@ The currently supported databases are:
 <details>
     <summary>See selected API types and signatures</summary>
 
-    <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
       ```ts
       declare module 'golem:rdbms/types@1.5.0' {
@@ -64,7 +64,9 @@ The currently supported databases are:
         }
 
         export class DbResultStream {
+          /** @throws Error */
           getColumns(): DbColumn[];
+          /** @throws Error */
           getNext(): DbRow[] | undefined;
         }
 
@@ -106,7 +108,8 @@ The currently supported databases are:
           | { tag: 'query-parameter-failure'; val: string }
           | { tag: 'query-execution-failure'; val: string }
           | { tag: 'query-response-failure'; val: string }
-          | { tag: 'other'; val: string };
+          | { tag: 'other'; val: string }
+          | { tag: 'resource-lost'; val: string };
 
         export type SparseVec = {
           dim: number;
@@ -162,7 +165,9 @@ The currently supported databases are:
         import * as golemRdbms150Types from 'golem:rdbms/types@1.5.0';
 
         export class DbResultStream {
+          /** @throws Error */
           getColumns(): DbColumn[];
+          /** @throws Error */
           getNext(): DbRow[] | undefined;
         }
 
@@ -201,7 +206,8 @@ The currently supported databases are:
           | { tag: 'query-parameter-failure'; val: string }
           | { tag: 'query-execution-failure'; val: string }
           | { tag: 'query-response-failure'; val: string }
-          | { tag: 'other'; val: string };
+          | { tag: 'other'; val: string }
+          | { tag: 'resource-lost'; val: string };
 
         export type DbColumnType =
           | { tag: 'varchar' }
@@ -375,6 +381,7 @@ The currently supported databases are:
       final case class QueryExecutionFailure(message: String) extends DbError
       final case class QueryResponseFailure(message: String) extends DbError
       final case class Other(message: String) extends DbError
+      final case class ResourceLost(message: String) extends DbError
     }
 
     final case class DbColumn(ordinal: Long, name: String, dbTypeName: String)
@@ -479,6 +486,7 @@ The currently supported databases are:
       QueryExecutionFailure(String)
       QueryResponseFailure(String)
       Other(String)
+      ResourceLost(String)
     } derive(Debug, Eq)
 
     pub(all) struct SparseVec {
@@ -503,8 +511,8 @@ The currently supported databases are:
       // ...
     } derive(Debug, Eq)
 
-    pub fn DbResultStream::get_columns(self : DbResultStream) -> Array[DbColumn]
-    pub fn DbResultStream::get_next(self : DbResultStream) -> Array[DbRow]?
+    pub fn DbResultStream::get_columns(self : DbResultStream) -> Result[Array[DbColumn], Error_]
+    pub fn DbResultStream::get_next(self : DbResultStream) -> Result[Array[DbRow]?, Error_]
 
     pub fn DbConnection::open(address : String) -> Result[DbConnection, Error_]
     pub fn DbConnection::query(
@@ -551,6 +559,7 @@ The currently supported databases are:
       QueryExecutionFailure(String)
       QueryResponseFailure(String)
       Other(String)
+      ResourceLost(String)
     } derive(Debug, Eq)
 
     pub(all) enum DbValue {
@@ -562,8 +571,8 @@ The currently supported databases are:
       // ...
     } derive(Debug, Eq)
 
-    pub fn DbResultStream::get_columns(self : DbResultStream) -> Array[DbColumn]
-    pub fn DbResultStream::get_next(self : DbResultStream) -> Array[DbRow]?
+    pub fn DbResultStream::get_columns(self : DbResultStream) -> Result[Array[DbColumn], Error_]
+    pub fn DbResultStream::get_next(self : DbResultStream) -> Result[Array[DbRow]?, Error_]
 
     pub fn DbConnection::open(address : String) -> Result[DbConnection, Error_]
     pub fn DbConnection::query(
@@ -605,6 +614,104 @@ The currently supported databases are:
     ```
     </Tabs.Tab>
 
+    <Tabs.Tab>
+
+    In Go, use the `postgres` and `mysql` packages under `github.com/golemcloud/golem/sdks/go/golem/rdbms`. They wrap the
+    `golem:rdbms` interfaces in a `database/sql`-flavoured style; the shared temporal and network types live in the
+    `rdbms` package:
+
+    ```go
+    // package rdbms
+    type Date struct{ Year, Month, Day int }
+    type Time struct{ Hour, Minute, Second, Nanosecond int }
+    type Timetz struct {
+        Time          Time
+        OffsetSeconds int
+    }
+    type Timestamp struct {
+        Date Date
+        Time Time
+    }
+    type Timestamptz struct {
+        Timestamp     Timestamp
+        OffsetSeconds int
+    }
+    type Interval struct {
+        Months       int
+        Days         int
+        Microseconds int64
+    }
+    type MacAddr [6]byte
+
+    type ErrorKind uint8
+
+    const (
+        ConnectionFailure ErrorKind = iota
+        QueryParameterFailure
+        QueryExecutionFailure
+        QueryResponseFailure
+        Other
+        ResourceLost
+    )
+    ```
+
+    The `postgres` and `mysql` packages expose the same connection API:
+
+    ```go
+    // package postgres (package mysql is identical)
+    type Error struct {
+        Kind    ErrorKind // rdbms.ErrorKind
+        Message string
+    }
+
+    type Column struct {
+        Ordinal    uint64
+        Name       string
+        DbTypeName string
+    }
+
+    func Open(address string) (*DB, error)
+
+    func (db *DB) Query(sql string, args ...any) (*ResultSet, error)
+    func (db *DB) QueryStream(sql string, args ...any) (*Stream, error)
+    func (db *DB) Exec(sql string, args ...any) (uint64, error)
+    func (db *DB) Begin() (*Tx, error)
+    func (db *DB) Transaction(fn func(*Tx) error) error
+    func (db *DB) Close()
+
+    func (tx *Tx) Query(sql string, args ...any) (*ResultSet, error)
+    func (tx *Tx) QueryStream(sql string, args ...any) (*Stream, error)
+    func (tx *Tx) Exec(sql string, args ...any) (uint64, error)
+    func (tx *Tx) Commit() error
+    func (tx *Tx) Rollback() error
+
+    func (rs *ResultSet) Columns() []Column
+    func (rs *ResultSet) Rows() []Row
+
+    func (s *Stream) Columns() []Column
+    func (s *Stream) Next() (row Row, ok bool, err error)
+    func (s *Stream) Close()
+
+    func (r Row) Len() int
+    func (r Row) IsNull(i int) bool
+    func (r Row) Get(i int) (any, error)
+    func (r Row) Int64(i int) (int64, error)
+    func (r Row) Float64(i int) (float64, error)
+    func (r Row) String(i int) (string, error)
+    func (r Row) Bool(i int) (bool, error)
+    func (r Row) Bytes(i int) ([]byte, error)
+    func (r Row) Time(i int) (time.Time, error)
+    func (r Row) Scan(dest ...any) error
+    ```
+
+    Query arguments are ordinary Go values: `nil`, `bool`, the sized integer and float types, `string`, `[]byte` and
+    `time.Time` (plus `golem.UUID` for Postgres) map to the natural column types. Where the exact column type matters,
+    build a `DbValue` with a constructor of the driver package and pass it like any other argument, for example
+    `postgres.Numeric`, `postgres.JSONB`, `postgres.Int4`, `postgres.Array`, `postgres.Int4Range`, or `mysql.Decimal`,
+    `mysql.JSON`, `mysql.Int`. The `postgres` `Row` additionally has `UUID`, range, `Enum`, `SparseVec`, `Array`,
+    `Composite` and `Domain` getters, and the `mysql` `Row` has `Uint64`.
+    </Tabs.Tab>
+
     </Tabs>
 </details>
 
@@ -615,7 +722,7 @@ To execute an SQL statement with `golem-rdbms`, first create a `db-connection` r
 The Effect examples below run inside a Golem Effect agent, whose runtime supplies the database host services. Creating an Effect does not execute it. Database failures use the `SqlError` error channel; handle them or map them to the agent method's declared error type.
 
 #### MySQL
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
   ```typescript
   import { DbConnection } from "golem:rdbms/mysql@1.5.0";
@@ -735,11 +842,38 @@ The Effect examples below run inside a Golem Effect agent, whose runtime supplie
   </Callout>
   </Tabs.Tab>
 
+  <Tabs.Tab>
+  ```go
+  import (
+      "github.com/golemcloud/golem/sdks/go/golem"
+      "github.com/golemcloud/golem/sdks/go/golem/rdbms/mysql"
+  )
+
+  // Connecting to the database called 'test' with user 'root'
+  // Use appropriate error handling in real code
+  db := golem.Must(mysql.Open("mysql://root@localhost:3306/test"))
+  defer db.Close()
+
+  golem.Must(db.Exec(
+    `CREATE TABLE IF NOT EXISTS test_users
+      (
+          user_id             varchar(25)    NOT NULL,
+          name                varchar(255)   NOT NULL,
+          created_on          timestamp NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (user_id)
+      );`))
+  ```
+
+  <Callout type="info">
+  The functions in the `rdbms/mysql` package are blocking calls that return an `error`; `golem.Must` panics on the error, which fails the invocation.
+  </Callout>
+  </Tabs.Tab>
+
 </Tabs>
 
 #### PostgreSQL
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
   ```typescript
   import { DbConnection } from "golem:rdbms/postgres@1.5.0";
@@ -859,11 +993,38 @@ The Effect examples below run inside a Golem Effect agent, whose runtime supplie
   The functions in `golemcloud/golem_sdk/interface/golem/rdbms/postgres` are **not async**. This is due to a limitation of the current Golem runtime, and are subject to change in future releases.
   </Callout>
   </Tabs.Tab>
+
+  <Tabs.Tab>
+  ```go
+  import (
+      "github.com/golemcloud/golem/sdks/go/golem"
+      "github.com/golemcloud/golem/sdks/go/golem/rdbms/postgres"
+  )
+
+  // Connecting to the database called 'test' with user 'user'
+  // Use appropriate error handling in real code
+  db := golem.Must(postgres.Open("postgresql://user@localhost:5432/test"))
+  defer db.Close()
+
+  golem.Must(db.Exec(
+    `CREATE TABLE IF NOT EXISTS test_users
+      (
+          user_id             varchar(25)    NOT NULL,
+          name                varchar(255)   NOT NULL,
+          created_on          timestamp NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (user_id)
+      );`))
+  ```
+
+  <Callout type="info">
+    The functions in the `rdbms/postgres` package are blocking calls that return an `error`; `golem.Must` panics on the error, which fails the invocation.
+  </Callout>
+  </Tabs.Tab>
 </Tabs>
 
 #### Apache Ignite
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
   ```typescript
   import { DbConnection } from "golem:rdbms/ignite2@1.5.0";
@@ -1031,6 +1192,10 @@ The Effect examples below run inside a Golem Effect agent, whose runtime supplie
   </Callout>
   </Tabs.Tab>
 
+  <Tabs.Tab>
+  The Go SDK does not provide an Apache Ignite 2 client; its `rdbms/postgres` and `rdbms/mysql` packages cover PostgreSQL and MySQL.
+  </Tabs.Tab>
+
 </Tabs>
 
 #### API
@@ -1040,3 +1205,18 @@ Additionally you can:
 - `query` executes a SQL statement and returns a result
 - `query-stream` executes a SQL statement and returns a streaming result where the selected SDK exposes streaming
 - `begin-transaction` creates a transaction resource on which, in addition to the `query` and `execute` functions, there is also a `commit` and a `rollback` method.
+
+At the WIT boundary, a result stream's accessors are fallible:
+
+```wit
+get-columns: func() -> result<list<db-column>, error>;
+get-next: func() -> result<option<list<db-row>>, error>;
+```
+
+Handle the error arm before consuming columns or rows. Only a successful `none` from `get-next`
+means the stream ended. Recorded results replay unchanged. A transaction or stream that cannot
+continue after reconstruction reports `resource-lost` (`ResourceLost` in the SDKs) at its live
+boundary. This error is permanent for that resource; retrying it does not restore the transaction
+or stream. Golem does not silently rerun the transaction or neighboring effects. Open a new
+transaction explicitly and reconcile uncertain external outcomes before repeating business work.
+Loss does not prove a prior write failed.

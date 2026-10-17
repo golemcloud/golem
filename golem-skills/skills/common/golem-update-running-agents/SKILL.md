@@ -41,9 +41,11 @@ This deploys the new component version **and** triggers an update for all existi
 |------|-------------|
 | `-u, --update-agents <MODE>` | Update existing agents with `auto` or `manual` mode |
 | `--redeploy-agents` | Delete and recreate all existing agents (loses state) |
-| `-r, --reset` | Delete agents and the environment, then deploy from scratch |
+| `-r, --reset` | Deploy, then delete existing agents of the deployed components; their state is lost, and the environment is retained |
 
 These flags are mutually exclusive — only one can be used at a time.
+
+`--reset` does not clear domains, HTTP and MCP deployments, secrets, retry policies, plugins, or component revision history. The deployment still reconciles the manifest and can update these resources, including replacement of incompatible agent secrets. Agents are created again on invocation rather than recreated by the command.
 
 ## Method 2: Explicit Agent Update Command
 
@@ -192,3 +194,5 @@ Other failures, such as a change of the agent mode, a conflict of the initial fi
 6. If `load-snapshot` returns `Err`, the update fails and the agent reverts to the old version.
 
 To implement manual updates, the component must export the `save-snapshot` and `load-snapshot` WIT interfaces. Each SDK provides helpers for this — see the language-specific `golem-custom-snapshot-*` skills for implementation details.
+
+Go agents cannot take a manual update yet: the Go runtime reads its environment through a durable host call when it starts, before the snapshot loads, and the executor rejects the pending update. Use automatic updates for Go agents; snapshot-based recovery works.

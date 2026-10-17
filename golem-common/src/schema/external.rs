@@ -1679,6 +1679,34 @@ mod tests {
     }
 
     #[test]
+    fn shared_rest_wire_form_corpus_matches_the_host() {
+        let corpus: Value =
+            serde_json::from_str(include_str!("../../../test-data/rest-wire-form/v1.json"))
+                .unwrap();
+        assert_eq!(corpus["version"], "1.0.0");
+        let mut ids = std::collections::HashSet::new();
+        for case in corpus["roundtrip"].as_array().unwrap() {
+            let id = case["id"].as_str().unwrap();
+            assert!(ids.insert(id), "duplicate case {id}");
+            let decoded: ExternalSchemaValue = serde_json::from_value(case["wire"].clone())
+                .unwrap_or_else(|error| panic!("{id}: {error}"));
+            assert_eq!(
+                serde_json::to_value(&decoded).unwrap(),
+                case["wire"],
+                "{id}"
+            );
+        }
+        for case in corpus["reject"].as_array().unwrap() {
+            let id = case["id"].as_str().unwrap();
+            assert!(ids.insert(id), "duplicate case {id}");
+            assert!(
+                serde_json::from_value::<ExternalSchemaValue>(case["wire"].clone()).is_err(),
+                "{id} was accepted"
+            );
+        }
+    }
+
+    #[test]
     fn owned_external_decoder_preserves_nested_rejections() {
         let malformed = [
             json!({"kind":"secret","value":{}}),

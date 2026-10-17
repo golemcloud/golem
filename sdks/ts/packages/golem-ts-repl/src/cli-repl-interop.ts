@@ -409,27 +409,11 @@ const COMPLETION_HOOKS: Partial<Record<CompletionHookId, CompletionHook>> = {
   AGENT_ID: {
     complete: async (cli, currentToken) => {
       const result = await cli.runJson({ args: ['agent', 'list'] });
-
-      if (
-        !result.ok ||
-        !result.json ||
-        result.json.$type !== 'agent.list' ||
-        !Array.isArray(result.json.agents)
-      ) {
+      if (!result.ok) {
         return [];
       }
 
-      const values = result.json.agents
-        .map((agent: any) => {
-          const agentName = agent?.agentName;
-          if (typeof agentName !== 'string') {
-            return undefined;
-          }
-          return agentName;
-        })
-        .filter((value: unknown): value is string => typeof value === 'string');
-
-      return filterByPrefix(values, currentToken);
+      return filterByPrefix(agentIdsFromAgentListJson(result.json), currentToken);
     },
   },
 
@@ -456,6 +440,16 @@ const COMPLETION_HOOKS: Partial<Record<CompletionHookId, CompletionHook>> = {
     },
   },
 };
+
+export function agentIdsFromAgentListJson(json: any): string[] {
+  if (!json || json.$type !== 'agent.list' || !Array.isArray(json.agents)) {
+    return [];
+  }
+
+  return json.agents
+    .map((agent: any) => agent?.agentId)
+    .filter((value: unknown): value is string => typeof value === 'string');
+}
 
 function findArgCompletionHook(arg: CliArgMetadata): CompletionHook | undefined {
   const candidates = [arg.id, ...arg.valueNames];

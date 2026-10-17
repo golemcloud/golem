@@ -15,17 +15,13 @@
 use crate::durable_host::authorization::targets::{agent_worker_target, oplog_target};
 use crate::durable_host::concurrent::{
     CallReplayOutcome, Cancellable, DurableCallSession, NotCancellable, ResolvedCall,
-    drain_dropped_call_events_access, drain_queued_dropped_call_events,
-    reserve_invocation_id_before_await,
+    drain_dropped_call_events_access, reserve_invocation_id_before_await,
 };
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::suspendable_wait::{
     ParkOutcome, ephemeral_sleep_too_long_error, wait_for_ready,
 };
-use crate::durable_host::{
-    ActiveAtomicRegion, BeginReplayToLive, DurabilityHost, DurableWorkerCtx, InternalRetryResult,
-};
-use crate::get_oplog_entry;
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::model::public_oplog::{
     PublicOplogEntryOps, find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
 };
@@ -71,10 +67,9 @@ use golem_common::model::oplog::{
     HostResponseGolemApiPromiseId, HostResponseGolemApiPromiseResult,
     HostResponseGolemApiSelfAgentMetadata, HostResponseGolemApiUnit, OplogEntry, PublicOplogEntry,
 };
-use golem_common::model::regions::OplogRegion;
 use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
 use golem_common::model::{OplogIndex, PromiseId, RetryContext};
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::OnceCell;
@@ -459,15 +454,17 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
             accessor,
             accessor.getter(),
             DurableFunctionType::WriteLocal,
-            async |context| {
-                if context.is_live {
-                    crate::durable_host::call_coordinator::synchronize_live_agent_authority_access(
-                        accessor,
-                        accessor.getter(),
-                    )
-                    .await?;
-                }
-                Ok(HostRequestNoInput {})
+            |context, accessor| {
+                Box::pin(async move {
+                    if context.is_live {
+                        crate::durable_host::call_coordinator::synchronize_live_agent_authority_access(
+                            accessor,
+                            accessor.getter(),
+                        )
+                        .await?;
+                    }
+                    Ok(HostRequestNoInput {})
+                })
             },
         )
         .await?;
@@ -636,123 +633,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Ok(result.completed)
     }
 
-    async fn get_oplog_index(&mut self) -> anyhow::Result<golem_api_1_x::oplog::OplogIndex> {
-        self.observe_function_call("golem::api", "get_oplog_index");
-        let marker = if self.state.durability_is_suppressed() {
-            self.state.current_oplog_index().await
-        } else if let Some((oplog_index, entry)) =
-            self.get_oplog_entry_or_continue_live("NoOp").await?
-        {
-            if !matches!(entry, OplogEntry::NoOp { .. }) {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "NoOp",
-                    format!("{entry:?}"),
-                )
-                .into());
-            }
-            // The replayed `get_oplog_index` returns this same marker to the guest, which may feed
-            // it to `set_oplog_index` after switching to live. Pin the watermark here too (mirroring
-            // the live branch) so a post-replay mid-invocation checkpoint never advances past it.
-            self.state.min_exposed_marker = Some(match self.state.min_exposed_marker {
-                Some(existing) => existing.min(oplog_index),
-                None => oplog_index,
-            });
-            oplog_index
-        } else {
-            // Use the index returned by `add` — a concurrently running host task (a durable
-            // call's terminal write, a drop-event `Cancelled`, a log hint entry) may append
-            // between this `add` and a subsequent `current_oplog_index` read, so re-reading the
-            // tip would nondeterministically point past the `NoOp` entry. Fall back to the current
-            // oplog index if the write returns `NONE` so the guest never observes an invalid index.
-            let marker = match self
-                .state
-                .oplog
-                .add(OplogEntry::no_op(self.entity_parent_start_index()))
-                .await
-                .map_err(|error| anyhow!(WorkerExecutorError::from(error)))?
-            {
-                OplogIndex::NONE => self.state.current_oplog_index().await,
-                index => index,
-            };
-            // This `NoOp` index is the realistic `set_oplog_index` target; pin the mid-invocation
-            // checkpoint watermark to the earliest one so a checkpoint at `<= marker` survives a
-            // later jump back to it. (No checkpoint is taken here — there is no commit at this
-            // point; the next post-commit boundary at/below the marker takes it.)
-            self.state.min_exposed_marker = Some(match self.state.min_exposed_marker {
-                Some(existing) => existing.min(marker),
-                None => marker,
-            });
-            marker
-        };
-        self.owner_execution.mark_reached_oplog_marker(marker);
-        if !self.state.is_live() && self.state.replay_state.is_live() {
-            self.switch_to_live().await?;
-        }
-        Ok(marker.into())
-    }
-
-    async fn set_oplog_index(
-        &mut self,
-        oplog_idx: golem_api_1_x::oplog::OplogIndex,
-    ) -> anyhow::Result<()> {
-        self.observe_function_call("golem::api", "set_oplog_index");
-        if self.state.durability_is_suppressed() {
-            return Ok(());
-        }
-        if self.state.is_live() {
-            // A jump deletes the oplog region between the target and the Jump entry; no durable
-            // call may span that boundary. First drain already-dropped cancellable calls so their
-            // `Cancelled` terminal is recorded before the Jump (inside the deleted region), then
-            // refuse to jump while any live durable call is still in flight — its `End`/
-            // `Cancelled` would be recorded after the Jump and reference a `Start` inside the
-            // deleted region (mirrors the `mark_end_operation` boundary guard).
-            drain_queued_dropped_call_events(self)
-                .await
-                .map_err(anyhow::Error::from)?;
-            if self.state.has_in_flight_live_host_calls() {
-                return Err(anyhow!(
-                    "Cannot jump to oplog index {oplog_idx}: durable host calls are still in flight"
-                ));
-            }
-        }
-        let jump_source = self.state.current_oplog_index().await.next(); // index of the Jump instruction that we will add
-        let jump_target = OplogIndex::from_u64(oplog_idx).next(); // we want to jump _after_ reaching the target index
-        let original_target = OplogIndex::from_u64(oplog_idx); // the actual oplog entry the user wants to jump to
-        if jump_target > jump_source {
-            Err(anyhow!(
-                "Attempted to jump forward in oplog to index {jump_target} from {jump_source}"
-            ))
-        } else if self
-            .state
-            .replay_state
-            .is_in_skipped_region(original_target)
-            .await
-            .map_err(anyhow::Error::from)?
-        {
-            Err(anyhow!(
-                "Attempted to jump to a deleted region in oplog to index {original_target} from {jump_source}"
-            ))
-        } else if self.state.is_live() {
-            let jump = OplogRegion {
-                start: jump_target,
-                end: jump_source,
-            };
-
-            // Write an oplog entry with the new jump and then restart the worker
-            self.public_state
-                .worker()
-                .add_and_commit_oplog(OplogEntry::jump(self.entity_parent_start_index(), jump))
-                .await?;
-
-            debug!("Interrupting live execution for jumping from {jump_source} to {jump_target}",);
-            Err(InterruptKind::Jump.into())
-        } else {
-            // In replay mode we never have to do anything here
-            debug!("Ignoring replayed set_oplog_index");
-            Ok(())
-        }
-    }
-
     async fn oplog_commit(&mut self, replicas: u8) -> anyhow::Result<()> {
         self.observe_function_call("golem::api", "oplog_commit");
         if self.state.is_live() {
@@ -786,191 +666,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn mark_begin_operation(&mut self) -> anyhow::Result<golem_api_1_x::host::OplogIndex> {
-        self.observe_function_call("golem::api", "mark_begin_operation");
-
-        if self.state.durability_is_suppressed() {
-            Ok(self.state.current_oplog_index().await.into())
-        } else if let Some((begin_index, entry)) = self
-            .get_oplog_entry_or_continue_live("BeginAtomicRegion")
-            .await?
-        {
-            if !matches!(entry, OplogEntry::BeginAtomicRegion { .. }) {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "BeginAtomicRegion",
-                    format!("{entry:?}"),
-                )
-                .into());
-            }
-
-            match self
-                .state
-                .replay_state
-                .lookup_oplog_entry(begin_index, OplogEntry::is_end_atomic_region)
-                .await
-            {
-                Some(end_index) => {
-                    debug!(
-                        "Worker's atomic operation starting at {} is already committed at {}",
-                        begin_index, end_index
-                    );
-                }
-                None => {
-                    debug!(
-                        "Worker's atomic operation starting at {} is not committed, ignoring persisted entries",
-                        begin_index
-                    );
-
-                    if self.entity_parent_start_index().is_some() {
-                        let pending = match self
-                            .prepare_live_continuation_at_replay_tail(
-                                false,
-                                "entity-local atomic rollback".to_string(),
-                            )
-                            .await?
-                        {
-                            BeginReplayToLive::ReplayResumed => {
-                                return Err(WorkerExecutorError::runtime(
-                                    "replay target grew while an atomic operation was settling",
-                                )
-                                .into());
-                            }
-                            BeginReplayToLive::Pending(pending) => pending,
-                        };
-                        self.finish_switch_to_live(pending).await?.require_live()?;
-                    } else {
-                        let pending = match self.begin_switch_to_live().await? {
-                            BeginReplayToLive::ReplayResumed => {
-                                return Err(WorkerExecutorError::runtime(
-                                    "replay target grew while an atomic operation was settling",
-                                )
-                                .into());
-                            }
-                            BeginReplayToLive::Pending(pending) => pending,
-                        };
-
-                        self.finish_switch_to_live(pending).await?.require_live()?;
-                    }
-                }
-            }
-
-            self.state
-                .active_atomic_regions
-                .push(ActiveAtomicRegion::new(begin_index, begin_index.next()));
-            Ok(begin_index.into())
-        } else {
-            let next_idempotency_key_oplog_index = self
-                .state
-                .current_atomic_region_idempotency_key_oplog_index();
-            // Use the index returned by `add` — a concurrently running host task (a durable
-            // call's terminal write, a drop-event `Cancelled`, a log hint entry) may append
-            // between this `add` and a subsequent `current_oplog_index` read. Reading the tip
-            // afterwards would record a begin index past the `BeginAtomicRegion` entry, making
-            // `Error.retry_from` diverge from the persisted region marker and breaking the
-            // retry-budget grouping keyed on it. Fall back to the current oplog index if the write
-            // returns `NONE`, matching the index the guest observed before.
-            let begin_index = match self
-                .state
-                .oplog
-                .add(OplogEntry::begin_atomic_region(
-                    self.entity_parent_start_index(),
-                ))
-                .await
-                .map_err(|error| anyhow!(WorkerExecutorError::from(error)))?
-            {
-                OplogIndex::NONE => self.state.current_oplog_index().await,
-                index => index,
-            };
-            let next_idempotency_key_oplog_index =
-                next_idempotency_key_oplog_index.unwrap_or_else(|| begin_index.next());
-            self.state
-                .active_atomic_regions
-                .push(ActiveAtomicRegion::new(
-                    begin_index,
-                    next_idempotency_key_oplog_index,
-                ));
-            Ok(begin_index.into())
-        }
-    }
-
-    async fn mark_end_operation(
-        &mut self,
-        begin: golem_api_1_x::oplog::OplogIndex,
-    ) -> anyhow::Result<()> {
-        self.observe_function_call("golem::api", "mark_end_operation");
-        if self.state.durability_is_suppressed() {
-            return Ok(());
-        }
-        let begin_index = OplogIndex::from_u64(begin);
-        if self.state.is_live() {
-            // Atomic-region legality under overlap: closing a region does not require all member
-            // calls to have completed. Each member call holds a transferable ownership lease
-            // (`AtomicRegionLease`); on close, surviving members transfer to the enclosing open
-            // atomic region if one exists, and at the outermost close they detach — allowed only
-            // for calls that replay can safely re-execute from an incomplete `Start` (reads,
-            // local writes, idempotent remote writes). A pending non-repairable write (a
-            // non-idempotent / batched / transactional remote write) still blocks the outermost
-            // close: its terminal must be able to record against the region that made it
-            // retry-relevant, and replay cannot repair it if it never lands.
-            //
-            // A member call the guest already awaited may still hold its lease here: its cleanup
-            // (terminal join, scope close, lease release) is queued as a dropped-call event and
-            // drained at the next safe worker-access window. Ending the region is such a window,
-            // so drain first — otherwise a fully completed call would spuriously count as a
-            // surviving member (mirrors the jump boundary guard).
-            drain_queued_dropped_call_events(self)
-                .await
-                .map_err(anyhow::Error::from)?;
-            if !self.state.atomic_region_has_parent(begin_index)
-                && self
-                    .state
-                    .atomic_region_surviving_members(begin_index)
-                    .iter()
-                    .any(|lease| !lease.repairable_when_incomplete())
-            {
-                return Err(anyhow!(
-                    "Cannot end atomic region {begin_index}: non-re-executable durable calls initiated in it are still in flight"
-                ));
-            }
-            // The `EndAtomicRegion` entry is the durable linearization point of the transfer /
-            // detach decision: append it first, then transition the leases, so a crash before the
-            // append leaves the region uncommitted and replay retries it as a whole.
-            self.state
-                .oplog
-                .add(OplogEntry::end_atomic_region(
-                    self.entity_parent_start_index(),
-                    begin_index,
-                ))
-                .await
-                .map_err(|error| anyhow!(WorkerExecutorError::from(error)))?;
-        } else {
-            let (_, _) = get_oplog_entry!(self, OplogEntry::EndAtomicRegion)?;
-        }
-
-        // Same transition on live and replay: transfer surviving members to the parent region (or
-        // detach them at the outermost close) and remove the region, so replayed calls observe the
-        // same ownership changes as live ones did. The replay path deliberately skips the
-        // non-repairable validation above — a committed `EndAtomicRegion` is a fact of the oplog
-        // and must replay even for layouts a newer live executor would reject.
-        self.state.close_atomic_region(begin_index);
-
-        Ok(())
-    }
-
     async fn trap(&mut self, reason: String) -> anyhow::Result<()> {
         self.observe_function_call("golem::api", "trap");
-        Err(anyhow::anyhow!("guest-requested trap: {reason}"))
-    }
-
-    async fn get_idempotence_mode(&mut self) -> anyhow::Result<bool> {
-        self.observe_function_call("golem::api", "get_idempotence_mode");
-        Ok(self.state.assume_idempotence)
-    }
-
-    async fn set_idempotence_mode(&mut self, idempotent: bool) -> anyhow::Result<()> {
-        self.observe_function_call("golem::api", "set_idempotence_mode");
-        self.state.assume_idempotence = idempotent;
-        Ok(())
+        Err(anyhow::Error::new(wasmtime::Trap::UnreachableCodeReached)
+            .context(format!("guest-requested trap: {reason}")))
     }
 
     async fn generate_idempotency_key(&mut self) -> anyhow::Result<golem_api_1_x::host::Uuid> {
@@ -1620,18 +1319,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     )
                     .await?;
             }
-            if !self.state.active_atomic_regions.is_empty() {
-                break 'result handle
-                    .complete(
-                        self,
-                        HostResponseGolemApiFork {
-                            forked_phantom_id: Uuid::nil(),
-                            result: Err("Cannot fork inside an atomic region".to_string()),
-                        },
-                    )
-                    .await?;
-            }
-
             let retry_properties = RetryContext::golem_api("fork");
 
             let new_name = if let Some(agent_id) = self.parsed_agent_id() {
@@ -1654,17 +1341,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 agent_id: new_name.clone(),
             };
             // The forked worker must inherit the source state from the source-side fork call's
-            // durable replay point. In non-idempotent mode this is the outer `WriteRemote` scope
-            // `Start`; `fork_and_write_fork_result` completes that copied scope around a synthetic
-            // child call carrying `ForkResult::Forked`. The source call completes later with
-            // `ForkResult::Original`. We still force a commit so the eager `Start` is durable for
-            // this (source) worker's own crash recovery.
-            let copied_scope_start = self
-                .state
-                .opens_durable_scope(&DurableFunctionType::WriteRemote)
-                .then_some(handle.begin_index());
-            let oplog_index_cut_off =
-                copied_scope_start.unwrap_or_else(|| handle.start_index().previous());
+            // durable replay point. The source call completes with `ForkResult::Original`.
+            // Force a commit so the eager `Start` is durable for the source's crash recovery.
+            let copied_scope_start = None;
+            let oplog_index_cut_off = handle.start_index().previous();
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)

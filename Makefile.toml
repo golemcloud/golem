@@ -113,6 +113,7 @@ args = [
     "--src", "wit/deps", "--dst", "sdks/effect/wit/deps",
     "--src", "wit/deps", "--dst", "sdks/scala/wit/deps",
     "--src", "wit/deps", "--dst", "sdks/moonbit/golem_sdk/wit/deps",
+    "--src", "wit/deps", "--dst", "sdks/go/golem/wit/deps",
 ]
 
 [tasks.wit-golem-cli]
@@ -131,7 +132,7 @@ args = [
 private = true
 script_runner = "@duckscript"
 script = '''
-status = exec git status --porcelain -- golem-common/wit/deps cli/golem-cli/wit/deps sdks/rust/golem-rust/wit/deps sdks/ts/wit/deps sdks/effect/wit/deps sdks/scala/wit/deps sdks/moonbit/golem_sdk/wit/deps
+status = exec git status --porcelain -- golem-common/wit/deps cli/golem-cli/wit/deps sdks/rust/golem-rust/wit/deps sdks/ts/wit/deps sdks/effect/wit/deps sdks/scala/wit/deps sdks/moonbit/golem_sdk/wit/deps sdks/go/golem/wit/deps
 ok = eq ${status.code} 0
 if not ${ok}
     echo "git status failed (exit ${status.code}):"
@@ -155,13 +156,25 @@ run_task = [{ name = ["wit", "diff-wit"] }]
 # BUILD
 
 [tasks.build]
-dependencies = ["wit"]
+dependencies = ["wit", "ensure-builtin-artifacts"]
 description = "Builds everything in debug mode"
 command = "cargo"
 args = ["build", "--workspace", "--all-targets"]
 
+[tasks.build-golem]
+dependencies = ["wit", "ensure-builtin-artifacts"]
+description = "Builds the local Golem server and its built-in artifacts"
+command = "cargo"
+args = ["build", "-p", "golem", "--bin", "golem"]
+
+[tasks.build-golem-cli]
+dependencies = ["wit", "ensure-builtin-artifacts"]
+description = "Builds the local CLI and its built-in artifacts"
+command = "cargo"
+args = ["build", "-p", "golem-cli", "--bin", "golem-cli"]
+
 [tasks.build-all-bins-including-tests]
-dependencies = ["wit"]
+dependencies = ["wit", "ensure-builtin-artifacts-non-ci"]
 description = "Builds all executables in debug mode, including the single-executable golem and all tests"
 # A single cargo invocation is used on purpose: `cargo build` followed by `cargo test --no-run`
 # resolves features twice (dev-dependencies enable e.g. `golem-common/proptest` only in the second
@@ -170,7 +183,7 @@ command = "cargo"
 args = ["build", "--workspace", "--bins", "--tests", "--profile", "${PROFILE}"]
 
 [tasks.build-bins]
-dependencies = ["wit"]
+dependencies = ["wit", "ensure-builtin-artifacts"]
 description = "Builds all executables in debug mode"
 command = "cargo"
 args = [
@@ -184,7 +197,7 @@ args = [
 ]
 
 [tasks.build-bins-all]
-dependencies = ["wit"]
+dependencies = ["wit", "ensure-builtin-artifacts"]
 description = "Builds all executables in debug mode, including the single-executable golem"
 command = "cargo"
 args = ["build", "--workspace", "--bins", "--exclude", "integration-tests"]
@@ -195,8 +208,8 @@ condition = { env_not_set = ["CI"] }
 run_task = [{ name = ["build-bins-all"] }]
 
 [tasks.build-cli-test-bins]
-dependencies = ["wit"]
-description = "Builds the golem binary used by CLI integration tests"
+dependencies = ["wit", "ensure-builtin-artifacts-non-ci"]
+description = "Builds the golem and golem-cli binaries used by CLI integration tests"
 script_runner = "@duckscript"
 script = '''
 profile = get_env GOLEM_CLI_TEST_BIN_PROFILE
@@ -211,15 +224,15 @@ dev_release_profile = eq ${profile} dev-release
 dev_release_ci_profile = eq ${profile} dev-release-ci
 
 if ${debug_profile}
-    exec --fail-on-error cargo build -p golem --bin golem
+    exec --fail-on-error cargo build -p golem --bin golem -p golem-cli --bin golem-cli
 elseif ${dev_ci_profile}
-    exec --fail-on-error cargo build --profile dev-ci -p golem --bin golem
+    exec --fail-on-error cargo build --profile dev-ci -p golem --bin golem -p golem-cli --bin golem-cli
 elseif ${dev_release_profile}
     set_env GOLEM_BUILD_SKIP_SHADOW 1
-    exec --fail-on-error cargo build --profile dev-release -p golem --bin golem
+    exec --fail-on-error cargo build --profile dev-release -p golem --bin golem -p golem-cli --bin golem-cli
 elseif ${dev_release_ci_profile}
     set_env GOLEM_BUILD_SKIP_SHADOW 1
-    exec --fail-on-error cargo build --profile dev-release-ci -p golem --bin golem
+    exec --fail-on-error cargo build --profile dev-release-ci -p golem --bin golem -p golem-cli --bin golem-cli
 else
     echo "Unsupported GOLEM_CLI_TEST_BIN_PROFILE=${profile}. Expected 'debug', 'dev-ci', 'dev-release', or 'dev-release-ci'."
     trigger_error unsupported-cli-test-bin-profile
@@ -248,6 +261,7 @@ condition = { env_not_set = ["CI"] }
 run_task = [{ name = ["build-worker-service"] }]
 
 [tasks.build-registry-service]
+dependencies = ["ensure-builtin-artifacts"]
 description = "Builds registry service"
 command = "cargo"
 args = ["build", "-p", "golem-registry-service"]
@@ -267,6 +281,7 @@ args = ["build", "-p", "golem-shard-manager", "--features", "kubernetes"]
 dependencies = [
     "wit",
     "set-version",
+    "ensure-builtin-artifacts-non-ci",
 ]
 command = "cargo"
 args = [
@@ -286,6 +301,7 @@ for docker images."""
 dependencies = [
     "wit",
     "set-version",
+    "ensure-builtin-artifacts-non-ci",
     "build-release-default",
     "build-release-override-linux-amd64",
     "build-release-override-linux-arm64",
@@ -444,6 +460,33 @@ else
     mkdir -p target
     touch target/.local-publish-marker
 fi
+'''
+
+[tasks.generate-sdk-go-bindings]
+description = "Regenerates the Go SDK's WIT bindings (sdks/go/golem/internal/wit)"
+dependencies = ["wit"]
+cwd = "./sdks/go/golem"
+script_runner = "@duckscript"
+script = '''
+# The componentize-go version is pinned in sdks/go/golem/go.mod via the `tool` directive
+# (never `latest`); `go tool` therefore resolves the exact pinned build.
+# --all-features is a GLOBAL flag and must precede the subcommand: golem's p3 WIT
+# uses @unstable annotations (timezone).
+# Imports + the wasmexport glue are generated into internal/wit (wiped each run).
+# The export packages are NOT generated: --export-pkg-name points the glue at
+# internal/exports, which we hand-write (the `Exports` slots the SDK fills in at
+# init). That keeps generated and hand-written code strictly separated.
+exec --fail-on-error go tool componentize-go --all-features bindings --output internal/wit --pkg-name github.com/golemcloud/golem/sdks/go/golem/internal/wit --export-pkg-name github.com/golemcloud/golem/sdks/go/golem/internal/exports --format
+
+# Works around a wit-bindgen crates/go codegen bug; see dev-tools/go-bindgen-fixup.
+exec --fail-on-error cargo run --quiet --manifest-path ../../../dev-tools/Cargo.toml --bin go-bindgen-fixup -- internal/wit
+exec --fail-on-error gofmt -w internal/wit
+
+# The generated code is wasm-only (//go:wasmimport declarations have no bodies),
+# so it can only be type-checked for the wasip1 target, not the host.
+set_env GOOS wasip1
+set_env GOARCH wasm
+exec --fail-on-error go build ./internal/wit/...
 '''
 
 [tasks.clean-sdk-scala]
@@ -608,10 +651,38 @@ description = "Runs the dev-tools workspace unit tests"
 command = "cargo"
 args = ["test", "--manifest-path", "dev-tools/Cargo.toml", "--lib"]
 
+[tasks.builtin-artifacts-release-tests]
+description = "Tests the registry with embedded release defaults instead of checkout-local defaults"
+script_runner = "@duckscript"
+script = '''
+manifest = set builtin-artifacts.release.json
+if is_path_exists ${manifest}
+    trigger_error "Move the existing release manifest before running fixture-based release tests"
+end
+cp golem-registry-service/tests/builtin-artifacts.release.json ${manifest}
+set_env GOLEM_BUILTIN_RELEASE 1
+blocked = exec cargo test --profile ${PROFILE} -p golem-registry-service --lib --features embed-builtin-artifacts --no-run
+result = exec cargo test --profile ${PROFILE} -p golem-registry-service --lib -- builtin_artifact --report-time
+rm ${manifest}
+unset_env GOLEM_BUILTIN_RELEASE
+if equals ${blocked.code} 0
+    trigger_error "Release builds must reject embedded WASMs"
+end
+if not contains ${blocked.stderr} "Published release binaries must download built-ins"
+    echo ${blocked.stderr}
+    trigger_error "Release embedding check failed for an unexpected reason"
+end
+echo ${result.stdout}
+echo ${result.stderr}
+if not equals ${result.code} 0
+    trigger_error "Built-in release registry tests failed"
+end
+'''
+
 # Worker-executor test tasks use production's 32 MiB native stacks to avoid
 # allocating a temporary invocation stack on every poll.
 [tasks.worker-executor-tests]
-dependencies = ["wit", "fetch-builtin-artifacts"]
+dependencies = ["wit", "ensure-builtin-artifacts"]
 description = "Runs worker executor tests only"
 env = { "RUST_MIN_STACK" = "33554432", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_BACKTRACE" = "1", "RUST_LOG" = "info" }
 command = "cargo"
@@ -626,7 +697,7 @@ args = [
 ]
 
 [tasks.worker-executor-tests-misc]
-dependencies = ["wit", "fetch-builtin-artifacts"]
+dependencies = ["wit", "ensure-builtin-artifacts"]
 description = "Runs untagged, sequential storage, oplog blob archive, and service-specific worker-executor tests"
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
@@ -649,7 +720,7 @@ cargo-test-r run --package golem-worker-executor --test integration :tag:ignite_
 '''
 
 [tasks.worker-executor-tests-group1]
-dependencies = ["wit", "fetch-builtin-artifacts"]
+dependencies = ["wit", "ensure-builtin-artifacts"]
 description = "Runs worker executor tests only (group 1/4)"
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
@@ -658,7 +729,7 @@ exec --fail-on-error cargo-test-r run --package golem-worker-executor --test int
 '''
 
 [tasks.worker-executor-tests-group2]
-dependencies = ["wit", "fetch-builtin-artifacts"]
+dependencies = ["wit", "ensure-builtin-artifacts"]
 description = "Runs worker executor tests only (group 2/4)"
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
@@ -669,7 +740,7 @@ exec --fail-on-error cargo-test-r run --package golem-worker-executor --test int
 '''
 
 [tasks.worker-executor-tests-group3]
-dependencies = ["wit", "fetch-builtin-artifacts"]
+dependencies = ["wit", "ensure-builtin-artifacts"]
 description = "Runs worker executor tests only (group 3/4)"
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
@@ -678,7 +749,7 @@ exec --fail-on-error cargo-test-r run --package golem-worker-executor --test int
 '''
 
 [tasks.worker-executor-tests-group4]
-dependencies = ["wit", "fetch-builtin-artifacts"]
+dependencies = ["wit", "ensure-builtin-artifacts"]
 description = "Runs worker executor tests only (group 4/4)"
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
@@ -687,7 +758,7 @@ exec --fail-on-error cargo-test-r run --package golem-worker-executor --test int
 '''
 
 [tasks.worker-executor-tests-tool-streaming]
-dependencies = ["wit", "fetch-builtin-artifacts"]
+dependencies = ["wit", "ensure-builtin-artifacts"]
 description = "Runs tool streaming worker executor tests with bounded concurrency"
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
@@ -752,7 +823,7 @@ cargo-test-r run --package integration-tests --test streaming-session-recovery -
 
 [tasks.integration-tests-group5]
 description = "Runs integration tests (group 5/11 - service tests)"
-dependencies = ["wit"]
+dependencies = ["wit", "ensure-builtin-artifacts"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
 cargo-test-r run --package golem-service-base --test '*' -- --nocapture --report-time $JUNIT_OPTS
@@ -790,7 +861,7 @@ cargo-test-r run --package integration-tests --test sharding -- --skip coordinat
 
 [tasks.integration-tests-group7]
 description = "Runs integration tests (group 7/11 - otlp_plugin, plugins)"
-dependencies = ["build-bins-non-ci", "fetch-builtin-artifacts"]
+dependencies = ["build-bins-non-ci", "ensure-builtin-artifacts"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
 cargo-test-r run --package integration-tests --test integration :tag:group7 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
@@ -847,7 +918,7 @@ cargo-test-r run --package integration-tests --test memory-billing -- --nocaptur
 '''
 
 [tasks.cli-integration-tests]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts", "prepare-git-differential-tests"]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "ensure-builtin-artifacts", "prepare-git-differential-tests"]
 description = "Runs all CLI integration tests"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
@@ -864,8 +935,8 @@ run_task = "cli-integration-tests"
 # and `#[tag]` declarations under cli/golem-cli/tests). Shards that are a subset of a module-level
 # tag use `--skip` on the more specific tag so every test is in exactly one shard.
 [tasks.cli-integration-tests-agents]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
-description = "Runs the it-cli 'agents' shard (app::agents without the guest-bridge and streaming tests)"
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "ensure-builtin-artifacts"]
+description = "Runs the it-cli 'agents' shard (agents and short streaming cases, without guest bridges or long streaming drivers)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
@@ -873,8 +944,8 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 '''
 
 [tasks.cli-integration-tests-agents-guest-bridge]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
-description = "Runs the it-cli 'agents_guest_bridge' shard (Rust and TypeScript agent bridges)"
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "ensure-builtin-artifacts"]
+description = "Runs the it-cli 'agents_guest_bridge' shard (Rust, TypeScript and Go guest bridges)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
@@ -882,7 +953,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 '''
 
 [tasks.cli-integration-tests-agents-guest-bridge-sources]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "ensure-builtin-artifacts"]
 description = "Runs the it-cli 'agents_guest_bridge_sources' shard (MCP, Effect, Scala, and MoonBit)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
@@ -891,8 +962,8 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 '''
 
 [tasks.cli-integration-tests-agents-streaming]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
-description = "Runs the it-cli 'agents_streaming' shard (app::agents streaming end-to-end tests)"
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "ensure-builtin-artifacts"]
+description = "Runs the it-cli 'agents_streaming' shard (the two long generated streaming drivers)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_LOG_FILTER" = "golem_worker_executor::durable_host=debug,golem_worker_executor::grpc=debug,golem_worker_service::api::invocation_session=debug" }
 script_runner = "@duckscript"
 script = '''
@@ -900,7 +971,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 '''
 
 [tasks.cli-integration-tests-bridge]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "ensure-builtin-artifacts"]
 description = "Runs the it-cli 'bridge_gen' shard (bridge_gen without bridge_gen::rust)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
@@ -909,7 +980,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 '''
 
 [tasks.cli-integration-tests-bridge-rust]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
+dependencies = ["build-cli-test-bins-non-ci", "ensure-builtin-artifacts"]
 description = "Runs the it-cli 'bridge_gen_rust' shard (bridge_gen::rust)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
@@ -918,7 +989,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 '''
 
 [tasks.cli-integration-tests-deploy]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "ensure-builtin-artifacts"]
 description = "Runs the it-cli 'deploy' shard (component and conformance tests)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
@@ -927,7 +998,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 '''
 
 [tasks.cli-integration-tests-deploy-runtime]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "ensure-builtin-artifacts"]
 description = "Runs the it-cli 'deploy_runtime' shard (SSH, account, secrets, bash, and templates)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
@@ -936,7 +1007,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 '''
 
 [tasks.cli-integration-tests-core]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts", "prepare-git-differential-tests"]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "ensure-builtin-artifacts", "prepare-git-differential-tests"]
 description = "Runs the it-cli 'core' shard (untagged application and Git differential tests)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
@@ -945,7 +1016,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 '''
 
 [tasks.cli-integration-tests-update-golden-files]
-dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "ensure-builtin-artifacts"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "UPDATE_GOLDENFILES" = "1" }
 script_runner = "@duckscript"
 script = '''
@@ -1041,6 +1112,10 @@ args = [
 description = "Generates openapi spec from the code and checks if it is the same as the ones in the openapi directory; also checks docs MDX drift"
 dependencies = ["merge-openapi", "diff-openapi", "check-docs-openapi"]
 
+[tasks.unit-tests-and-checks]
+description = "Runs unit tests and source drift checks in one cargo-make invocation"
+dependencies = ["check-openapi", "check-docs-skills", "check-reflection-conformance", "check-builtin-artifacts", "check-wit", "unit-tests"]
+
 [tasks.diff-openapi]
 description = "Checks if the generated openapi spec is the same as the one in the openapi directory"
 dependencies = ["merge-openapi"]
@@ -1097,17 +1172,20 @@ mkdir -pv ./target/data
 "$target_dir/debug/golem-worker-service" --dump-openapi-yaml > ./target/golem-worker-service.yaml
 '''
 
+[tasks.build-openapi-generator-non-ci]
+private = true
+condition = { env_not_set = ["CI"] }
+command = "cargo"
+args = ["build", "-p", "golem-openapi-client-generator"]
+
 [tasks.merge-openapi]
 dependencies = [
     "generate-registry-service-openapi",
-    "generate-worker-service-openapi"
+    "generate-worker-service-openapi",
+    "build-openapi-generator-non-ci"
 ]
-command = "cargo"
+command = "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem-openapi-client-generator"
 args = [
-    "run",
-    "-p",
-    "golem-openapi-client-generator",
-    "--",
     "merge",
     "--spec-yaml",
     "./target/golem-registry-service.yaml",
@@ -1420,6 +1498,7 @@ args = [
     "${PLATFORM_TARGET}/release/worker-executor",
     "${PLATFORM_TARGET}/release/golem-worker-service",
     "${PLATFORM_TARGET}/release/golem-component-compilation-service",
+    "${PLATFORM_TARGET}/release/golem-xfs-quotad",
 ]
 
 
@@ -1774,9 +1853,15 @@ exec --fail-on-error cargo install --debug --path cli/golem-cli --bin golem-cli 
 
 [tasks.install-golem-debug]
 description = "Install golem (debug)"
+dependencies = ["ensure-builtin-artifacts"]
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo install --debug --path cli/golem --bin golem --target-dir target --locked --offline
+features = set embed-builtin-artifacts
+release = get_env GOLEM_BUILTIN_RELEASE
+if not is_empty ${release}
+    features = set ""
+end
+exec --fail-on-error cargo install --debug --path cli/golem --bin golem --target-dir ${CARGO_MAKE_CRATE_TARGET_DIRECTORY} --locked --offline "--features=${features}"
 '''
 
 ## ** INSTALL - DEV RELEASE **
@@ -1796,10 +1881,16 @@ exec --fail-on-error cargo install --profile dev-release --path cli/golem-cli --
 # Requires lld to be installed, e.g., on macOS `brew install lld` can be used
 [tasks.install-golem-dev-release]
 description = "Install golem (dev-release)"
+dependencies = ["ensure-builtin-artifacts"]
 env = { GOLEM_BUILD_SKIP_SHADOW = 1, RUSTFLAGS = "-C link-arg=-fuse-ld=lld" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo install --profile dev-release --path cli/golem --bin golem --target-dir target --locked --offline
+features = set embed-builtin-artifacts
+release = get_env GOLEM_BUILTIN_RELEASE
+if not is_empty ${release}
+    features = set ""
+end
+exec --fail-on-error cargo install --profile dev-release --path cli/golem --bin golem --target-dir ${CARGO_MAKE_CRATE_TARGET_DIRECTORY} --locked --offline "--features=${features}"
 '''
 
 ## ** INSTALL - RELEASE **
@@ -1817,9 +1908,15 @@ exec --fail-on-error cargo install --path cli/golem-cli --bin golem-cli --target
 
 [tasks.install-golem-release]
 description = "Install golem (debug)"
+dependencies = ["ensure-builtin-artifacts"]
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo install --path cli/golem --bin golem --target-dir target --locked --offline
+features = set embed-builtin-artifacts
+release = get_env GOLEM_BUILTIN_RELEASE
+if not is_empty ${release}
+    features = set ""
+end
+exec --fail-on-error cargo install --path cli/golem --bin golem --target-dir ${CARGO_MAKE_CRATE_TARGET_DIRECTORY} --locked --offline "--features=${features}"
 '''
 
 ## ** APP MANIFEST SCHEMA **
@@ -1835,15 +1932,84 @@ command = "miniserve"
 args = ["--interfaces", "127.0.0.1", "--port", "41357", "cli/schema.golem.cloud"]
 
 ## PLUGINS
+[tasks.builtin-artifact-build]
+private = true
+condition_script = '''
+#!@duckscript
+prebuilt = get_env GOLEM_BUILTIN_ARTIFACTS_PREBUILT
+if equals ${prebuilt} 1
+    exit 1
+end
+release = get_env GOLEM_BUILTIN_RELEASE
+if not is_empty ${release}
+    exit 1
+end
+inventory = readfile builtin-artifacts.json
+artifacts = json_parse --collection ${inventory}
+ids = map_keys ${artifacts}
+selected = set ""
+separator = set ""
+for id in ${ids}
+    entry = map_get ${artifacts} ${id}
+    task = map_get ${entry} task
+    matches = equals ${task} ${CARGO_MAKE_CURRENT_TASK_NAME}
+    if equals ${CARGO_MAKE_CURRENT_TASK_NAME} build-javascript-typescript-tools
+        if equals ${id} javascript_tools
+            matches = set true
+        elif equals ${id} typescript_tools
+            matches = set true
+        end
+    end
+    if ${matches}
+        output = map_get ${entry} path
+        stale = set false
+        if not is_path_exists ${output}
+            stale = set true
+        end
+        inputs = map_get ${entry} inputs
+        common = array Cargo.toml Cargo.lock .cargo Makefile.toml builtin-artifacts.json wit cli/golem-cli golem-common golem-api-grpc golem-client golem-schema golem-schema-derive golem-mcp-import golem-openapi-client-generator golem-skills/skills
+        for input in ${common}
+            array_push ${inputs} ${input}
+        end
+        for input in ${inputs}
+            if not ${stale}
+                if is_path_exists ${input}
+                    paths = gitignore_path_array --include-hidden ${input}
+                    for path in ${paths}
+                        if is_file ${path}
+                            if is_path_newer ${path} ${output}
+                                stale = set true
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        if ${stale}
+            selected = concat ${selected} ${separator} ${id}
+            separator = set ","
+        end
+    end
+end
+if is_empty ${selected}
+    exit 1
+end
+set_env GOLEM_BUILTIN_ARTIFACT_IDS ${selected}
+exit 0
+'''
+
 [tasks.build-otlp-exporter]
-dependencies = ["build"]
+extend = "builtin-artifact-build"
+private = false
+dependencies = ["wit"]
 description = "Builds the built-in OTLP exporter (requires golem CLI to be built first)"
 script_runner = "@duckscript"
 script = '''
-# Resolve the cargo target directory robustly so this works even when the target
-# dir is redirected (e.g. via CARGO_TARGET_DIR, cargo config, or a cargo wrapper).
-# cargo-make computes CARGO_MAKE_CRATE_TARGET_DIRECTORY for us cross-platform.
-golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
+golem = get_env GOLEM_CLI
+if is_empty ${golem}
+    exec --fail-on-error cargo build -p golem-cli --bin golem-cli
+    golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem-cli"
+end
 cd plugins/otlp-exporter
 exec --fail-on-error ${golem} build -P release --force-build --yes
 exec --fail-on-error ${golem} exec -P release copy
@@ -1856,12 +2022,17 @@ description = "Builds all built-in plugins"
 
 ## BUILT-IN TOOLS
 [tasks.build-filesystem-tools]
+extend = "builtin-artifact-build"
+private = false
 dependencies = ["wit"]
 description = "Builds the built-in filesystem tools and path-policy middleware"
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo build -p golem --bin golem
-golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
+golem = get_env GOLEM_CLI
+if is_empty ${golem}
+    exec --fail-on-error cargo build -p golem-cli --bin golem-cli
+    golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem-cli"
+end
 cd builtin-tools/filesystem-tools
 exec --fail-on-error ${golem} build -P release --force-build --yes
 exec --fail-on-error ${golem} exec -P release copy
@@ -1879,17 +2050,23 @@ cd ../..
 '''
 
 [tasks.build-git-tool]
+extend = "builtin-artifact-build"
+private = false
 dependencies = ["wit"]
 description = "Builds the built-in Git tool component"
 script_runner = "@duckscript"
 script = '''
+set_env CARGO_TARGET_DIR ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}
 cd sdks/ts
 exec --fail-on-error npx pnpm install --frozen-lockfile
 exec --fail-on-error npx pnpm --filter @golemcloud/golem-ts-sdk run build
 exec --fail-on-error npx pnpm run build-agent-template
 cd ../..
-exec --fail-on-error cargo build -p golem --bin golem
-golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
+golem = get_env GOLEM_CLI
+if is_empty ${golem}
+    exec --fail-on-error cargo build -p golem-cli --bin golem-cli
+    golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem-cli"
+end
 cd builtin-tools/git
 exec --fail-on-error npm ci --ignore-scripts --no-audit --no-fund
 exec --fail-on-error npm run verify:release
@@ -1901,14 +2078,16 @@ cd ../..
 '''
 
 [tasks.build-web-fetch]
+extend = "builtin-artifact-build"
+private = false
 dependencies = ["wit"]
 description = "Builds the built-in web fetch tool component"
 script_runner = "@duckscript"
 script = '''
 golem = get_env GOLEM_CLI
 if is_empty ${golem}
-    exec --fail-on-error cargo build -p golem --bin golem
-    golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
+    exec --fail-on-error cargo build -p golem-cli --bin golem-cli
+    golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem-cli"
 end
 set_env GOLEM_RUST_PATH "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/sdks/rust/golem-rust"
 cd builtin-tools/web-fetch
@@ -1918,10 +2097,31 @@ cd ../..
 '''
 
 [tasks.build-bash-tool]
+extend = "builtin-artifact-build"
+private = false
 description = "Builds the built-in Bash tool component reproducibly in a pinned container (builtin-tools/bash/build-bash-wasm.sh); needs Docker"
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error sh builtin-tools/bash/build-bash-wasm.sh
+'''
+
+[tasks.build-python-tool]
+extend = "builtin-artifact-build"
+private = false
+description = "Builds the standalone RustPython CLI tool with its frozen standard library"
+script_runner = "@duckscript"
+script = '''
+golem = get_env GOLEM_CLI
+if is_empty ${golem}
+    exec --fail-on-error cargo build -p golem-cli --bin golem-cli
+    golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem-cli"
+end
+set_env GOLEM_RUST_PATH "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/sdks/rust/golem-rust"
+cd builtin-tools/python
+exec --fail-on-error cargo test --lib
+exec --fail-on-error ${golem} build -P release --force-build --yes
+exec --fail-on-error ${golem} exec -P release copy
+cd ../..
 '''
 
 [tasks.test-builtin-bash-pipelines]
@@ -1957,13 +2157,21 @@ exec --fail-on-error cargo deny check sources
 cd ../..
 '''
 
-[tasks.build-javascript-typescript-tools]
-dependencies = ["wit", "build-sdk-ts"]
-description = "Builds the bundled, Wizer-preinitialized JavaScript and TypeScript tool components"
+[tasks.builtin-javascript-typescript-build]
+private = true
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo build -p golem --bin golem
-golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
+set_env CARGO_TARGET_DIR ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}
+cd sdks/ts
+exec --fail-on-error npx pnpm install --frozen-lockfile
+exec --fail-on-error npx pnpm --filter @golemcloud/golem-ts-sdk run build
+exec --fail-on-error npx pnpm run build-agent-template
+cd ../..
+golem = get_env GOLEM_CLI
+if is_empty ${golem}
+    exec --fail-on-error cargo build -p golem-cli --bin golem-cli
+    golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem-cli"
+end
 cd builtin-tools/js-ts-tools
 exec --fail-on-error npm ci --ignore-scripts --no-audit --no-fund
 exec --fail-on-error npm run verify:release
@@ -1972,101 +2180,168 @@ exec --fail-on-error npm run smoke:embedded
 exec --fail-on-error npm run test:runtime
 exec --fail-on-error npm run typecheck
 exec --fail-on-error ${golem} build -P optimized --force-build --yes
-exec --fail-on-error ${golem} exec -P optimized copy
+requested = get_env GOLEM_BUILTIN_ARTIFACT_IDS
+ids = split ${requested} ,
+for id in ${ids}
+    if equals ${id} javascript_tools
+        exec --fail-on-error ${golem} exec -P optimized copy-javascript
+    elif equals ${id} typescript_tools
+        exec --fail-on-error ${golem} exec -P optimized copy-typescript
+    end
+end
 cd ../..
 '''
 
+[tasks.build-javascript-typescript-tools]
+extend = "builtin-artifact-build"
+private = false
+dependencies = ["wit"]
+description = "Builds stale JavaScript and TypeScript outputs in one shared pipeline"
+run_task = "builtin-javascript-typescript-build"
+
 [tasks.build-javascript-tools]
-dependencies = ["build-javascript-typescript-tools"]
+extend = "builtin-artifact-build"
+private = false
+dependencies = ["wit"]
 description = "Builds the built-in JavaScript tool component"
+run_task = "builtin-javascript-typescript-build"
 
 [tasks.build-typescript-tools]
-dependencies = ["build-javascript-typescript-tools"]
+extend = "builtin-artifact-build"
+private = false
+dependencies = ["wit"]
 description = "Builds the built-in TypeScript tool component"
+run_task = "builtin-javascript-typescript-build"
 
 [tasks.build-builtin-tools]
-dependencies = ["build-filesystem-tools", "build-git-tool", "build-javascript-typescript-tools", "build-web-fetch", "build-bash-tool"]
+dependencies = ["build-filesystem-tools", "build-git-tool", "build-javascript-typescript-tools", "build-web-fetch", "build-bash-tool", "build-python-tool"]
 description = "Builds all built-in tool components"
 
-[tasks.fetch-builtin-artifacts]
-description = "Downloads checksum-pinned built-in artifacts for local and CI tests"
+[tasks.ensure-builtin-artifacts]
+dependencies = ["wit", "build-builtin-tools", "build-plugins"]
+description = "Builds missing or changed built-ins, preserving local WASM replacements on a warm build"
 script_runner = "@duckscript"
 script = '''
-lock_text = readfile builtin-artifacts.lock.json
-lock = json_parse --collection ${lock_text}
-repository = map_get ${lock} repository
-artifacts = map_get ${lock} artifacts
-cache_dir = get_env BUILTIN_ARTIFACT_CACHE_DIR
-if is_empty ${cache_dir}
-    cache_dir = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/builtin-artifacts"
+release = get_env GOLEM_BUILTIN_RELEASE
+if not is_empty ${release}
+    exit 0
 end
-if not is_path_exists ${cache_dir}
-    mkdir ${cache_dir}
+inventory = readfile builtin-artifacts.json
+artifacts = json_parse --collection ${inventory}
+ids = map_keys ${artifacts}
+for id in ${ids}
+    entry = map_get ${artifacts} ${id}
+    output = map_get ${entry} path
+    if not is_path_exists ${output}
+        trigger_error "Missing built-in artifact: ${output}"
+    end
 end
+'''
 
-artifact_ids = array bash filesystem_tools git_tool javascript_tools otlp_exporter typescript_tools web_fetch
-for artifact_id in ${artifact_ids}
-    entry = map_get ${artifacts} ${artifact_id}
+[tasks.ensure-builtin-artifacts-non-ci]
+condition = { env_not_set = ["CI", "GOLEM_BUILTIN_RELEASE"] }
+run_task = "ensure-builtin-artifacts"
+
+[tasks.validate-builtin-release]
+description = "Checks the clean tagged source before manual built-in release preparation"
+script_runner = "@duckscript"
+script = '''
+ci = get_env CI
+if not is_empty ${ci}
+    trigger_error "Built-in publication is manual, never from CI"
+end
+version = get_env BUILTIN_VERSION
+if is_empty ${version}
+    trigger_error "BUILTIN_VERSION is required, without a leading v"
+end
+if starts_with ${version} v
+    trigger_error "BUILTIN_VERSION must not include a leading v"
+end
+status = exec --fail-on-error git status --porcelain --untracked-files=all
+status = trim ${status.stdout}
+if not is_empty ${status}
+    trigger_error "Release preparation requires a clean tagged checkout"
+end
+head = exec --fail-on-error git rev-parse HEAD
+tag = exec --fail-on-error git rev-parse "refs/tags/v${version}^{commit}"
+head = trim ${head.stdout}
+tag = trim ${tag.stdout}
+if not equals ${head} ${tag}
+    trigger_error "HEAD must equal the release tag v${version}"
+end
+exec --fail-on-error git fetch https://github.com/golemcloud/golem.git "refs/tags/v${version}"
+public_tag = exec --fail-on-error git rev-parse "FETCH_HEAD^{commit}"
+public_tag = trim ${public_tag.stdout}
+if not equals ${head} ${public_tag}
+    trigger_error "The public release tag must equal HEAD"
+end
+exec --fail-on-error git fetch https://github.com/golemcloud/golem.git main
+exec --fail-on-error git merge-base --is-ancestor ${head} FETCH_HEAD
+exec --fail-on-error gh release view "v${version}" --repo golemcloud/golem
+'''
+
+[tasks.publish-builtin-artifacts]
+description = "Manually publishes every built-in and uploads the tagged release manifest"
+dependencies = ["validate-builtin-release"]
+script_runner = "@duckscript"
+script = '''
+if is_path_exists builtin-artifacts.release.json
+    trigger_error "The release manifest already exists; do not replace immutable release assets"
+end
+version = get_env BUILTIN_VERSION
+dry_run = get_env BUILTIN_DRY_RUN
+inventory = readfile builtin-artifacts.json
+artifacts = json_parse --collection ${inventory}
+ids = map_keys ${artifacts}
+# Release builds must not use a developer's replacement WASM.
+for id in ${ids}
+    entry = map_get ${artifacts} ${id}
+    output = map_get ${entry} path
+    if is_path_exists ${output}
+        rm ${output}
+    end
+end
+unset_env GOLEM_BUILTIN_ARTIFACTS_PREBUILT
+unset_env GOLEM_BUILTIN_RELEASE
+cm_run_task ensure-builtin-artifacts
+cm_run_task validate-builtin-release
+set_env BUILTIN_SKIP_BUILD 1
+manifest_entries = set ""
+separator = set ""
+for id in ${ids}
+    entry = map_get ${artifacts} ${id}
     component = map_get ${entry} component
-    version = map_get ${entry} version
-    sha256 = map_get ${entry} sha256
-    tag = set "${component}-v${version}"
-    url = set "https://github.com/${repository}/releases/download/${tag}/${component}.wasm"
-    cached = set "${cache_dir}/${sha256}.wasm"
-
-    if equals ${artifact_id} bash
-        destination = set builtin-tools/bash.wasm
-    elif equals ${artifact_id} filesystem_tools
-        destination = set builtin-tools/filesystem-tools.wasm
-    elif equals ${artifact_id} git_tool
-        destination = set builtin-tools/git-tool.wasm
-    elif equals ${artifact_id} javascript_tools
-        destination = set builtin-tools/javascript-tools.wasm
-    elif equals ${artifact_id} otlp_exporter
-        destination = set plugins/otlp-exporter.wasm
-    elif equals ${artifact_id} typescript_tools
-        destination = set builtin-tools/typescript-tools.wasm
-    else
-        destination = set builtin-tools/web-fetch.wasm
-    end
-
-    if not is_path_exists ${cached}
-        if is_path_exists ${destination}
-            local_sha256 = sha256sum ${destination}
-            if equals ${local_sha256} ${sha256}
-                cp ${destination} ${cached}
-            end
+    output = map_get ${entry} path
+    set_env BUILTIN_COMPONENT ${component}
+    cm_run_task publish-builtin-artifact
+    sha = sha256sum ${output}
+    if not equals ${dry_run} 1
+        url = set "https://github.com/golemcloud/golem-builtins/releases/download/${component}-v${version}/${component}.wasm"
+        verified = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/builtin-artifact-release/verify.wasm"
+        mkdir "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/builtin-artifact-release"
+        exec --fail-on-error curl --fail --location --max-time 120 --output ${verified} ${url}
+        public_sha = sha256sum ${verified}
+        exec --fail-on-error curl --fail --location --max-time 120 --output "${verified}.sha256" "${url}.sha256"
+        checksum = readfile "${verified}.sha256"
+        rm ${verified}
+        rm "${verified}.sha256"
+        if not equals ${sha} ${public_sha}
+            trigger_error "Public bytes differ for ${component}; never overwrite an immutable release"
+        end
+        if not starts_with ${checksum} ${sha}
+            trigger_error "Public checksum differs for ${component}"
         end
     end
-
-    if is_path_exists ${cached}
-        actual = sha256sum ${cached}
-        if not equals ${actual} ${sha256}
-            rm ${cached}
-        end
-    end
-    if not is_path_exists ${cached}
-        temporary = set "${cached}.tmp"
-        if is_path_exists ${temporary}
-            rm ${temporary}
-        end
-        download = exec curl --fail --location --silent --show-error --output ${temporary} ${url}
-        if not equals ${download.code} 0
-            echo ${download.stderr}
-            trigger_error "failed to download built-in artifact '${artifact_id}' from ${url}"
-        end
-        actual = sha256sum ${temporary}
-        if not equals ${actual} ${sha256}
-            rm ${temporary}
-            trigger_error "downloaded built-in artifact '${artifact_id}' has SHA-256 ${actual}, expected ${sha256}"
-        end
-        mv ${temporary} ${cached}
-    end
-
-    cp ${cached} ${destination}
+    manifest_entries = concat ${manifest_entries} ${separator} "\n    \"${id}\": {\"component\": \"${component}\", \"version\": \"${version}\", \"sha256\": \"${sha}\"}"
+    separator = set ","
 end
-release --recursive ${lock}
-echo "downloaded checksum-pinned built-in artifacts into ${cache_dir}"
+if equals ${dry_run} 1
+    echo "Dry run complete; no manifest or releases created"
+    exit 0
+end
+manifest = set "{\n  \"schemaVersion\": 1,\n  \"repository\": \"golemcloud/golem-builtins\",\n  \"artifacts\": {${manifest_entries}\n  }\n}\n"
+writefile builtin-artifacts.release.json ${manifest}
+exec --fail-on-error gh release upload "v${version}" builtin-artifacts.release.json --repo golemcloud/golem
 '''
 
 [tasks.publish-builtin-artifact]
@@ -2094,7 +2369,7 @@ if equals ${component} otlp-exporter
     build_task = set build-otlp-exporter
     wasm = set plugins/otlp-exporter.wasm
     artifact_id = set otlp_exporter
-    exports_json = set "{\"plugin\":\"golem-otlp-exporter\",\"version\":\"1.5.6\"}"
+    exports_json = set "{\"plugin\":\"golem-otlp-exporter\",\"version\":\"1.5.8\"}"
     licenses = set LICENSE
     sbom = set ""
 elif equals ${component} filesystem-tools
@@ -2108,7 +2383,7 @@ elif equals ${component} javascript-tools
     build_task = set build-javascript-tools
     wasm = set builtin-tools/javascript-tools.wasm
     artifact_id = set javascript_tools
-    exports_json = set "{\"tools\":[\"node@0.1.6\",\"npm@10.9.9+golem.6\",\"npx@10.9.9+golem.6\"]}"
+    exports_json = set "{\"tools\":[\"node@0.1.9\",\"npm@10.9.9+golem.9\",\"npx@10.9.9+golem.9\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/npm
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/npm/sbom.spdx.json
@@ -2116,7 +2391,7 @@ elif equals ${component} typescript-tools
     build_task = set build-typescript-tools
     wasm = set builtin-tools/typescript-tools.wasm
     artifact_id = set typescript_tools
-    exports_json = set "{\"tools\":[\"tsc@5.9.2+golem.6\"]}"
+    exports_json = set "{\"tools\":[\"tsc@5.9.2+golem.9\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/typescript
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/typescript/sbom.spdx.json
@@ -2124,7 +2399,7 @@ elif equals ${component} bash
     build_task = set build-bash-tool
     wasm = set builtin-tools/bash.wasm
     artifact_id = set bash
-    exports_json = set "{\"tools\":[\"bash@0.2.1\"]}"
+    exports_json = set "{\"tools\":[\"bash@0.2.2\"]}"
     licenses = set builtin-tools/bash/LICENSE
     source_notice = set builtin-tools/bash/NOTICE
     sbom = set ""
@@ -2132,7 +2407,7 @@ elif equals ${component} git-tool
     build_task = set build-git-tool
     wasm = set builtin-tools/git-tool.wasm
     artifact_id = set git_tool
-    exports_json = set "{\"tools\":[\"git@0.1.13\"]}"
+    exports_json = set "{\"tools\":[\"git@0.1.15\"]}"
     licenses = set builtin-tools/git/licenses/git
     source_notice = set builtin-tools/git/licenses/SOURCE.md
     sbom = set builtin-tools/git/licenses/git/sbom.spdx.json
@@ -2140,12 +2415,20 @@ elif equals ${component} web-fetch
     build_task = set build-web-fetch
     wasm = set builtin-tools/web-fetch.wasm
     artifact_id = set web_fetch
-    exports_json = set "{\"tools\":[\"web-fetch@0.1.1\"]}"
+    exports_json = set "{\"tools\":[\"web-fetch@0.1.2\"]}"
     licenses = set builtin-tools/web-fetch/licenses/THIRD_PARTY_LICENSES.html
     source_notice = set LICENSE
     sbom = set ""
+elif equals ${component} python
+    build_task = set build-python-tool
+    wasm = set builtin-tools/python.wasm
+    artifact_id = set python
+    exports_json = set "{\"tools\":[\"python@0.1.1\"]}"
+    licenses = set builtin-tools/python/licenses
+    source_notice = set builtin-tools/python/SOURCE.md
+    sbom = set ""
 else
-    trigger_error "BUILTIN_COMPONENT must be one of: otlp-exporter, filesystem-tools, git-tool, javascript-tools, typescript-tools, web-fetch, bash"
+    trigger_error "BUILTIN_COMPONENT must be one of: otlp-exporter, filesystem-tools, git-tool, javascript-tools, typescript-tools, web-fetch, bash, python"
 end
 
 skip_build = get_env BUILTIN_SKIP_BUILD
@@ -2160,28 +2443,6 @@ exec --fail-on-error wasm-tools validate --features all ${wasm}
 
 sha256 = sha256sum ${wasm}
 size = get_file_size ${wasm}
-lock_text = readfile builtin-artifacts.lock.json
-lock = json_parse --collection ${lock_text}
-locked_artifacts = map_get ${lock} artifacts
-# An artifact published for the first time has no lock entry to compare with.
-already_locked = map_contains_key ${locked_artifacts} ${artifact_id}
-if ${already_locked}
-    locked_entry = map_get ${locked_artifacts} ${artifact_id}
-    locked_version = map_get ${locked_entry} version
-    locked_sha256 = map_get ${locked_entry} sha256
-    same_version = equals ${version} ${locked_version}
-    same_bytes = equals ${sha256} ${locked_sha256}
-    if ${same_version}
-        if not ${same_bytes}
-            trigger_error "artifact bytes changed; bump ${component} from ${locked_version} before publishing"
-        end
-    else
-        if ${same_bytes}
-            trigger_error "artifact bytes are unchanged; keep ${component} at ${locked_version}"
-        end
-    end
-end
-release --recursive ${lock}
 tag = set "${component}-v${version}"
 asset_name = set "${component}.wasm"
 staging = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/builtin-artifact-release/${tag}"
@@ -2195,39 +2456,29 @@ writefile "${staged_wasm}.sha256" "${sha256}  ${asset_name}\n"
 
 source_commit_result = exec git rev-parse HEAD
 source_commit = trim ${source_commit_result.stdout}
-source_ref_result = exec git rev-parse --abbrev-ref HEAD
-source_ref = trim ${source_ref_result.stdout}
+source_ref = set ${source_commit}
 source_status_result = exec git status --porcelain
 source_status = trim ${source_status_result.stdout}
 provenance = set "{\n  \"schemaVersion\": 1,\n  \"artifact\": {\"component\": \"${component}\", \"version\": \"${version}\", \"asset\": \"${asset_name}\", \"sha256\": \"${sha256}\", \"size\": ${size}, \"exports\": ${exports_json}},\n  \"source\": {\"repository\": \"https://github.com/golemcloud/golem\", \"commit\": \"${source_commit}\", \"ref\": \"${source_ref}\"},\n  \"build\": {\"task\": \"cargo make ${build_task}\"}\n}\n"
 writefile "${staging}/provenance.json" ${provenance}
 
-license_dir = set "${staging}/licenses"
 if equals ${licenses} LICENSE
-    mkdir ${license_dir}
-    cp LICENSE "${license_dir}/LICENSE"
-elif equals ${component} bash
-    mkdir ${license_dir}
-    cp ${licenses} "${license_dir}/LICENSE"
-    cp ${source_notice} "${license_dir}/NOTICE"
-elif equals ${component} web-fetch
-    mkdir ${license_dir}
-    cp ${licenses} "${license_dir}/THIRD_PARTY_LICENSES.html"
-    cp ${source_notice} "${license_dir}/LICENSE"
+    exec --fail-on-error git archive --format=tar.gz "--output=${staging}/${component}-licenses.tar.gz" HEAD LICENSE
 else
-    cp ${licenses} ${license_dir}
-    cp ${source_notice} "${license_dir}/SOURCE.md"
+    exec --fail-on-error git archive --format=tar.gz "--output=${staging}/${component}-licenses.tar.gz" HEAD ${licenses} ${source_notice}
 end
-exec --fail-on-error tar -czf "${staging}/${component}-licenses.tar.gz" -C ${license_dir} .
 if not is_empty ${sbom}
     cp ${sbom} "${staging}/${component}.spdx.json"
+end
+if equals ${component} python
+    exec --fail-on-error python3 builtin-tools/python/package_source.py ${staging}
 end
 
 echo "artifact: ${component} ${version}"
 echo "source:   ${source_commit} (${source_ref})"
 echo "asset:    ${staged_wasm} (${size} bytes)"
 echo "sha256:   ${sha256}"
-echo "lock:     \"${artifact_id}\": { \"component\": \"${component}\", \"version\": \"${version}\", \"sha256\": \"${sha256}\" }"
+echo "manifest: \"${artifact_id}\": { \"component\": \"${component}\", \"version\": \"${version}\", \"sha256\": \"${sha256}\" }"
 
 dry_run = get_env BUILTIN_DRY_RUN
 if equals ${dry_run} 1
@@ -2238,38 +2489,77 @@ if not is_empty ${source_status}
     trigger_error "refusing to publish from a dirty source tree; commit the exact source first"
 end
 existing = exec gh release view ${tag} --repo ${repository}
-if equals ${existing.code} 0
-    trigger_error "immutable built-in release already exists: ${repository}@${tag}"
-end
 notes = set "Built from [golem@${source_commit}](https://github.com/golemcloud/golem/commit/${source_commit}).\n\nSHA-256: `${sha256}`\n\nThe source and build tooling for this artifact live in the golem repository.\n"
+if equals ${component} python
+    notes = concat ${notes} "\nThe Python component statically links the LGPL-3.0-only Malachite libraries. The attached python-source.tar.gz contains their corresponding source, the application source and locked dependencies, and offline rebuild/relinking instructions in builtin-tools/python/SOURCE.md. Each source retains its own license; the Golem license does not replace the library licenses.\n"
+end
 notes_path = set "${staging}/release-notes.md"
 writefile ${notes_path} ${notes}
-if is_empty ${sbom}
-    exec --fail-on-error gh release create ${tag} --repo ${repository} --title ${tag} --notes-file ${notes_path} ${staged_wasm} "${staged_wasm}.sha256" "${staging}/provenance.json" "${staging}/${component}-licenses.tar.gz"
-else
-    exec --fail-on-error gh release create ${tag} --repo ${repository} --title ${tag} --notes-file ${notes_path} ${staged_wasm} "${staged_wasm}.sha256" "${staging}/provenance.json" "${staging}/${component}-licenses.tar.gz" "${staging}/${component}.spdx.json"
+assets = array ${staged_wasm} "${staged_wasm}.sha256" "${staging}/provenance.json" "${staging}/${component}-licenses.tar.gz"
+if equals ${component} python
+    array_push ${assets} "${staging}/python-source.tar.gz"
+    array_push ${assets} "${staging}/python-source.tar.gz.sha256"
+elif not is_empty ${sbom}
+    array_push ${assets} "${staging}/${component}.spdx.json"
+end
+if not equals ${existing.code} 0
+    exec --fail-on-error gh release create ${tag} --repo ${repository} --title ${tag} --notes-file ${notes_path}
+end
+published = exec --fail-on-error gh release view ${tag} --repo ${repository} --json assets
+published = json_parse --collection ${published.stdout}
+published = map_get ${published} assets
+missing = array
+mkdir "${staging}/public"
+# Verify every existing asset before repairing any missing uploads.
+for asset in ${assets}
+    name = basename ${asset}
+    found = set false
+    for remote in ${published}
+        remote_name = map_get ${remote} name
+        if equals ${remote_name} ${name}
+            found = set true
+        end
+    end
+    if ${found}
+        exec --fail-on-error gh release download ${tag} --repo ${repository} --pattern ${name} --dir "${staging}/public"
+        expected = sha256sum ${asset}
+        actual = sha256sum "${staging}/public/${name}"
+        if not equals ${expected} ${actual}
+            trigger_error "Conflicting immutable asset ${repository}@${tag}/${name}; no assets were replaced"
+        end
+    else
+        array_push ${missing} ${asset}
+    end
+end
+for asset in ${missing}
+    exec --fail-on-error gh release upload ${tag} ${asset} --repo ${repository}
+end
+# Check the complete public set, including uploads from this invocation.
+for asset in ${assets}
+    name = basename ${asset}
+    verified = set "${staging}/public/${name}"
+    if is_path_exists ${verified}
+        rm ${verified}
+    end
+    exec --fail-on-error gh release download ${tag} --repo ${repository} --pattern ${name} --dir "${staging}/public"
+    expected = sha256sum ${asset}
+    actual = sha256sum ${verified}
+    if not equals ${expected} ${actual}
+        trigger_error "Public asset verification failed for ${repository}@${tag}/${name}"
+    end
 end
 '''
 
 [tasks.check-builtin-artifacts]
-description = "Checks the built-in artifact release lock and rejects committed generated WASMs"
+description = "Checks the built-in artifact inventory and rejects committed generated WASMs"
 script_runner = "@duckscript"
 script = '''
-lock_text = readfile builtin-artifacts.lock.json
-lock = json_parse --collection ${lock_text}
-schema_version = map_get ${lock} schemaVersion
-if not equals ${schema_version} 1
-    trigger_error "builtin-artifacts.lock.json must use schemaVersion 1"
-end
-repository = map_get ${lock} repository
-if not equals ${repository} golemcloud/golem-builtins
-    trigger_error "builtin-artifacts.lock.json must use golemcloud/golem-builtins"
-end
-artifacts = map_get ${lock} artifacts
+inventory_text = readfile builtin-artifacts.json
+artifacts = json_parse --collection ${inventory_text}
 artifact_ids = map_keys ${artifacts}
 artifact_count = array_length ${artifact_ids}
 if equals ${artifact_count} 0
-    trigger_error "builtin-artifacts.lock.json must contain artifacts"
+    trigger_error "builtin-artifacts.json must contain artifacts"
 end
 for artifact_id in ${artifact_ids}
     canonical_artifact_id = snakecase ${artifact_id}
@@ -2278,8 +2568,8 @@ for artifact_id in ${artifact_ids}
     end
     entry = map_get ${artifacts} ${artifact_id}
     component = map_get ${entry} component
-    version = map_get ${entry} version
-    sha256 = map_get ${entry} sha256
+    path = map_get ${entry} path
+    task = map_get ${entry} task
     if is_empty ${component}
         trigger_error "built-in artifact '${artifact_id}' has no component"
     end
@@ -2287,28 +2577,14 @@ for artifact_id in ${artifact_ids}
     if not equals ${component} ${canonical_component}
         trigger_error "built-in artifact '${artifact_id}' has invalid component '${component}'"
     end
-    if is_empty ${version}
-        trigger_error "built-in artifact '${artifact_id}' has no version"
+    if is_empty ${path}
+        trigger_error "built-in artifact '${artifact_id}' has no output path"
     end
-    sha_length = strlen ${sha256}
-    if not equals ${sha_length} 64
-        trigger_error "built-in artifact '${artifact_id}' has an invalid SHA-256"
-    end
-    lowercase_sha256 = lowercase ${sha256}
-    if not equals ${sha256} ${lowercase_sha256}
-        trigger_error "built-in artifact '${artifact_id}' has a non-lowercase SHA-256"
-    end
-    non_hex = set ${sha256}
-    hex_digits = array 0 1 2 3 4 5 6 7 8 9 a b c d e f
-    for digit in ${hex_digits}
-        non_hex = replace ${non_hex} ${digit} ""
-    end
-    release ${hex_digits}
-    if not is_empty ${non_hex}
-        trigger_error "built-in artifact '${artifact_id}' has a non-hex SHA-256"
+    if is_empty ${task}
+        trigger_error "built-in artifact '${artifact_id}' has no build task"
     end
 end
-release --recursive ${lock}
+release --recursive ${artifacts}
 
 tracked = exec git ls-files -- builtin-tools/*.wasm plugins/*.wasm
 if not equals ${tracked.code} 0
@@ -2372,7 +2648,7 @@ if ${golem_cli_empty}
     golem_cli = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/release/golem-cli"
     set_env GOLEM_CLI ${golem_cli}
 end
-exec --fail-on-error cargo make fetch-builtin-artifacts
+exec --fail-on-error cargo make ensure-builtin-artifacts
 cd test-components
 exec --fail-on-error ./build-components.sh benchmarks rebuild
 cd ..

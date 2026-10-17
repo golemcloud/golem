@@ -812,7 +812,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
     let (_, env) = user.app_and_env().await?;
 
     // needs to be static as it's used for hash calculation
-    let domain = Domain("full_deployment_test.golem.cloud".to_string());
+    let domain = Domain("full-deployment-test.golem.cloud".to_string());
 
     client
         .create_domain_registration(

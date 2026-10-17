@@ -21,9 +21,16 @@ export class CapabilityTransaction {
     this.rollbacks.push(rollback)
   }
 
-  commit(): void {
+  commit(retainRollback?: (rollback: () => void) => void): void {
     for (const handle of this.handles) pending.delete(handle)
     this.handles.length = 0
+    if (retainRollback && this.rollbacks.length > 0) {
+      const rollbacks = this.rollbacks.splice(0)
+      retainRollback(() => {
+        for (let i = rollbacks.length - 1; i >= 0; i--) rollbacks[i]!()
+        rollbacks.length = 0
+      })
+    }
     this.rollbacks.length = 0
   }
 
@@ -39,11 +46,12 @@ export class CapabilityTransaction {
 
 export function withCapabilityAdoptionTransaction<T>(
   convert: (transaction: CapabilityTransaction) => T,
+  retainRollback?: (rollback: () => void) => void,
 ): T {
   const transaction = new CapabilityTransaction()
   try {
     const result = convert(transaction)
-    transaction.commit()
+    transaction.commit(retainRollback)
     return result
   } catch (error) {
     transaction.rollback()

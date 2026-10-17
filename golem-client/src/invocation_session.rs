@@ -61,6 +61,8 @@ pub enum SessionTransportError {
     Request(#[source] tungstenite::Error),
     #[error("failed to connect to the invocation session: {0}")]
     Connect(#[source] tungstenite::Error),
+    #[error("failed to configure TLS for the invocation session: {0}")]
+    Tls(#[source] rustls::Error),
     #[error("server did not select {INVOCATION_SESSION_SUBPROTOCOL}")]
     UnsupportedSubprotocol,
     #[error("invocation session connection closed")]
@@ -1368,6 +1370,9 @@ pub struct InvocationSessionTransport {
 }
 
 impl InvocationSessionTransport {
+    /// Connects to an invocation session. Without a connector, a `wss://` connection uses
+    /// [`crate::tls::platform_verifier_connector`], so it does not depend on a process-level
+    /// rustls `CryptoProvider`.
     pub async fn connect(
         request: impl IntoClientRequest,
         connector: Option<Connector>,
@@ -1389,6 +1394,8 @@ impl InvocationSessionTransport {
                 .parse()
                 .expect("static subprotocol is a valid header"),
         );
+        let connector = crate::tls::connector_for(request.uri(), connector)
+            .map_err(SessionTransportError::Tls)?;
         let config = tungstenite::protocol::WebSocketConfig::default()
             .max_message_size(Some(MAX_WEBSOCKET_MESSAGE_SIZE))
             .max_frame_size(Some(MAX_WEBSOCKET_MESSAGE_SIZE));
@@ -4217,6 +4224,82 @@ mod tests {
             INVOCATION_SESSION_SUBPROTOCOL.parse().unwrap(),
         );
         response
+    }
+
+    /// A TLS server config with a certificate for `localhost` from a CA that nothing trusts.
+    fn untrusted_server_tls() -> Arc<rustls::ServerConfig> {
+        let ca_key = rcgen::KeyPair::generate().unwrap();
+        let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+        ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let ca = rcgen::Issuer::from_params(&ca_params, &ca_key);
+        let server_key = rcgen::KeyPair::generate().unwrap();
+        let server_cert = rcgen::CertificateParams::new(vec!["localhost".to_string()])
+            .unwrap()
+            .signed_by(&server_key, &ca)
+            .unwrap();
+        Arc::new(
+            rustls::ServerConfig::builder_with_provider(Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![server_cert.der().clone()],
+                rustls::pki_types::PrivateKeyDer::Pkcs8(server_key.serialize_der().into()),
+            )
+            .unwrap(),
+        )
+    }
+
+    async fn serve_tls_sessions(
+        server_config: Arc<rustls::ServerConfig>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "wss://localhost:{}/v1/agents/invoke-agent-session",
+            listener.local_addr().unwrap().port()
+        );
+        let acceptor = tokio_rustls::TlsAcceptor::from(server_config);
+        let server = tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    let Ok(socket) = acceptor.accept(socket).await else {
+                        return;
+                    };
+                    if let Ok(mut socket) =
+                        accept_hdr_async(socket, |request: &Request, response: Response| {
+                            Ok(select_session_subprotocol(request, response))
+                        })
+                        .await
+                    {
+                        while let Some(Ok(_)) = socket.next().await {}
+                    }
+                });
+            }
+        });
+        (url, server)
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn tls_session_without_connector_does_not_need_process_crypto_provider() {
+        assert!(rustls::crypto::CryptoProvider::get_default().is_none());
+        let (url, server) = serve_tls_sessions(untrusted_server_tls()).await;
+
+        let error = InvocationSessionTransport::connect(url.as_str(), None)
+            .await
+            .err()
+            .expect("the platform verifier does not trust the test CA");
+        assert!(
+            matches!(&error, SessionTransportError::Connect(_))
+                && error.to_string().contains("invalid peer certificate"),
+            "{error}"
+        );
+
+        server.abort();
     }
 
     fn permit() -> tokio::sync::OwnedSemaphorePermit {

@@ -134,6 +134,11 @@ pub struct BenchmarkCliParameters {
 
     #[arg(long, default_value = "false")]
     pub otlp: bool,
+
+    /// Deadline of the measured part of one iteration, in seconds. Cloud runs need more
+    /// than the default for the large throughput configs.
+    #[arg(long, default_value_t = crate::benchmark::DEFAULT_RUN_DEADLINE_SECS)]
+    pub run_deadline_secs: u64,
 }
 
 impl BenchmarkCliParameters {
@@ -292,10 +297,14 @@ pub enum TestMode {
         #[arg(long)]
         admin_account_token: String,
         /// UUID of the builtin-plugin-owner account.
-        #[arg(long)]
+        /// Only needed for environment-plugin-grant tests; benchmarks do not
+        /// use it so the default (nil UUID) is fine for benchmark runs.
+        #[arg(long, default_value_t = Uuid::nil())]
         builtin_plugin_owner_account_id: Uuid,
         /// UUID of the default plan on the target cluster.
-        #[arg(long)]
+        /// Only needed for environment-plugin-grant tests; benchmarks do not
+        /// use it so the default (nil UUID) is fine for benchmark runs.
+        #[arg(long, default_value_t = Uuid::nil())]
         default_plan_id: Uuid,
         /// Optional shard-manager gRPC hostname for a kubectl port-forward
         /// (e.g. `localhost`). When set together with
@@ -915,5 +924,24 @@ mod tests {
         };
 
         assert_eq!(shard_manager_state_write_timeout_millis, 4_500);
+    }
+
+    #[test]
+    fn run_deadline_defaults_to_600s_and_can_be_raised() {
+        let default =
+            BenchmarkCliParameters::try_parse_from(["benchmark", "benchmark", "noop", "spawned"])
+                .expect("the minimal spawned benchmark command must parse");
+        assert_eq!(default.run_deadline_secs, 600);
+
+        let raised = BenchmarkCliParameters::try_parse_from([
+            "benchmark",
+            "--run-deadline-secs",
+            "1800",
+            "benchmark",
+            "noop",
+            "spawned",
+        ])
+        .expect("--run-deadline-secs must parse before the subcommand");
+        assert_eq!(raised.run_deadline_secs, 1800);
     }
 }

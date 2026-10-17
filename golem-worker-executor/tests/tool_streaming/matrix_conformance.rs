@@ -102,6 +102,8 @@ async fn generated_clients_invoke_every_sdk_provider_and_preserve_runtime_identi
     #[tagged_as("tool_streaming_moonbit")] moonbit: &PrecompiledComponent,
     #[tagged_as("tool_streaming_effect_provider")] effect_provider: &PrecompiledComponent,
     #[tagged_as("tool_streaming_effect_caller")] effect_caller: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_go_provider")] go_provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_go_caller")] go_caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -160,6 +162,13 @@ async fn generated_clients_invoke_every_sdk_provider_and_preserve_runtime_identi
             agent_type: "",
             method: "",
         },
+        MatrixFixture {
+            language: "go",
+            component: go_provider,
+            package: "golem-it:tool-streaming-go-provider",
+            agent_type: "",
+            method: "",
+        },
     ];
     let callers = [
         MatrixFixture {
@@ -195,6 +204,13 @@ async fn generated_clients_invoke_every_sdk_provider_and_preserve_runtime_identi
             component: effect_caller,
             package: "",
             agent_type: "EffectToolStreamingCaller",
+            method: "matrix_core_observation",
+        },
+        MatrixFixture {
+            language: "go",
+            component: go_caller,
+            package: "",
+            agent_type: "GoToolStreamingCaller",
             method: "matrix_core_observation",
         },
     ];
@@ -297,5 +313,74 @@ async fn generated_clients_invoke_every_sdk_provider_and_preserve_runtime_identi
         }
     }
 
+    Ok(())
+}
+
+/// A Go caller gives a tool a pipe nobody writes as its stdin, and the tool
+/// returns without reading it. The stream closing tells the caller's stdin
+/// pump that nobody consumes the pipe, so the pump closes it and releases the
+/// call's handles instead of waiting in a Read forever.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn go_caller_closes_the_stdin_a_tool_does_not_read(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_go_provider")] go_provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_go_caller")] go_caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let provider = executor
+        .component_dep(&context.default_environment_id, go_provider)
+        .store()
+        .await?;
+    let provider_tools = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", go_provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?
+    .tools;
+    let caller = executor
+        .component_dep(&context.default_environment_id, go_caller)
+        .store()
+        .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller.id,
+        caller.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider.id,
+            provider.revision,
+            "golem-it:tool-streaming-go-provider",
+            "GoToolStreamingCaller",
+            provider_tools,
+        )),
+    );
+
+    let agent_id = agent_id!("GoToolStreamingCaller", "stdin-released");
+    let released: bool = executor
+        .invoke_and_await_agent(&caller, &agent_id, "stdin_released", data_value!())
+        .await?
+        .into_typed()?;
+    assert!(
+        released,
+        "the caller's stdin pipe stayed open after the tool returned without reading it"
+    );
     Ok(())
 }

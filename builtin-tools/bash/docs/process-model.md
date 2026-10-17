@@ -221,14 +221,10 @@ script ended with: the call's time limit returns 124, and the caller's stop requ
 The tool records the place of the script at each step of such a stop. A later run of the call
 repeats the step at that place or fails the call, for the scripts that Replay safety names; for
 the shapes it lists as limits neither is guaranteed.
-Neither stop reaches a loop that runs a pipeline in each round, such as
-`n=0; while :; do n=$((n+1)); echo $n | while read -r x; do :; done; done`. The watchdog acts
-when the call gets the completion of the limit's timer or of the stop request, and the
-component's runtime takes a completion only after a pass over the tasks in which none of them
-ended or started another. A loop of plain commands gets there because the interpreter gives way
-after 64 commands. It starts that count again with every pipeline stage, so this loop never gets
-to 64, and its stages start and end in every pass. Such a call runs until something outside the
-tool ends it.
+Both stops reach a loop of commands that never wait, also one that runs a pipeline in each
+round, such as `n=0; while :; do n=$((n+1)); echo $n | while read -r x; do :; done; done`: each
+shell and each pipeline stage gives way after 64 of its own commands, and the watchdog acts when
+the call gets the completion of the limit's timer or of the stop request.
 A job that finished before the script ended is not reported. This deliberately differs from bash,
 whose non-interactive scripts leave background jobs running after exit, because a job cannot
 survive the transient Store.

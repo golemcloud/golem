@@ -32,10 +32,6 @@ pub fn get_agent_metadata(@types.AgentId) -> @host.AgentMetadata?
 
 pub fn get_agents(@types.ComponentId, @host.AgentAnyFilter?, Bool) -> AgentsPager
 
-pub fn get_idempotence_mode() -> Bool
-
-pub fn get_oplog_index() -> UInt64
-
 pub fn get_promise(@types.PromiseId) -> PromiseResult
 
 pub fn get_retry_policies() -> Array[@retry.NamedRetryPolicy]
@@ -44,9 +40,7 @@ pub fn get_retry_policy_by_name(String) -> @retry.NamedRetryPolicy?
 
 pub fn get_self_metadata() -> @host.AgentMetadata
 
-pub fn mark_begin_operation() -> UInt64
-
-pub fn mark_end_operation(UInt64) -> Unit
+pub fn next_retry_delay(@retry.RetryPolicy?, FixedArray[Byte], UInt64, String, String, Array[(String, @retry.PredicateValue)]) -> Result[@retry.RetryDecision, String]
 
 pub fn oplog_commit(Byte) -> Unit
 
@@ -58,17 +52,13 @@ pub fn resolve_agent_id_strict(String, String) -> @types.AgentId?
 
 pub fn resolve_component_id(String) -> @types.ComponentId?
 
-pub fn resolve_retry_policy(String, String, Array[(String, @retry.PredicateValue)]) -> @retry.RetryPolicy?
+pub fn resolve_retry_policy(String, String, Array[(String, @retry.PredicateValue)]) -> Result[@retry.RetryPolicy?, String]
 
 pub async fn[T, E] retry_local(@retry.RetryPolicy, async () -> Result[T, E], properties? : (E) -> Array[(String, @retry.PredicateValue)]) -> Result[T, E]
 
 pub fn revert_agent(@types.AgentId, @host.RevertAgentTarget) -> Unit
 
-pub fn set_idempotence_mode(Bool) -> Unit
-
 pub fn set_named_policy(NamedPolicy) -> Unit raise RetryBuilderError
-
-pub fn set_oplog_index(UInt64) -> Unit
 
 pub fn set_retry_policy(@retry.NamedRetryPolicy) -> Unit
 
@@ -79,10 +69,6 @@ pub fn update_agent(@types.AgentId, UInt64, @host.UpdateMode) -> Unit
 pub fn use_named_policy(NamedPolicy) -> RetryPolicyGuard raise RetryBuilderError
 
 pub fn use_retry_policy(@retry.NamedRetryPolicy) -> RetryPolicyGuard
-
-pub fn[T] with_atomic_operation(() -> T raise) -> T
-
-pub fn[T] with_idempotence_mode(Bool, () -> T) -> T
 
 pub fn[T] with_named_policy(NamedPolicy, () -> T) -> T raise RetryBuilderError
 
@@ -115,8 +101,6 @@ pub(all) enum DurableFunctionType {
   WriteLocal
   ReadRemote
   WriteRemote
-  WriteRemoteBatched(UInt64?)
-  WriteRemoteTransaction(UInt64?)
 } derive(Eq, @debug.Debug)
 
 pub struct Duration {
@@ -267,6 +251,8 @@ pub using @retry {type NamedRetryPolicy}
 pub using @retry {type PredicateValue}
 
 pub using @types {type PromiseId}
+
+pub using @retry {type RetryDecision}
 
 pub using @retry {type RetryPolicy}
 

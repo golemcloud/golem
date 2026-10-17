@@ -95,6 +95,21 @@ steps:
         return a `Bool` — the value returned by `register`.
 
         Make sure the project builds successfully.
+      go: >
+        In the test-app project, add a second agent type called `GlobalRegistry` that is a
+        singleton (no constructor parameter / single global instance). It must expose two
+        externally invokable methods: `register(name string, count uint64) bool` and
+        `getAll() []RegistryEntry`. Define a `RegistryEntry` struct with fields `Name string`
+        and `Count uint64`. `register` must store or update the name and count in agent state
+        and return `true` if count < 5, `false` otherwise. `getAll` must return all stored
+        entries.
+
+        Then modify the existing `CounterAgent` so that every time `increment` is called it
+        invokes the `GlobalRegistry` singleton's `register` method, passing the counter's own name
+        and its new count value, and waits for the result. Change `increment` to return a
+        `bool` — the value returned by `register`.
+
+        Make sure the project builds successfully.
     expectedSkills:
       rust:
         - "golem-call-another-agent-rust"
@@ -106,6 +121,8 @@ steps:
         - "golem-call-another-agent-scala"
       moonbit:
         - "golem-call-another-agent-moonbit"
+      go:
+        - "golem-call-another-agent-go"
     verify:
       build: true
       deploy: true
@@ -182,6 +199,7 @@ steps:
         effect: "getAll"
         scala: "getAll"
         moonbit: "get_all"
+        go: "getAll"
     expect:
       result_json:
         - path: "$"
