@@ -5,6 +5,7 @@
 //! numbers end with the call. Permissions, active tasks and human workflows never cross calls.
 
 use bash_shell::session::{Session, check_working_dir};
+use golem_rust::agentic::InputStream;
 use golem_rust::{
     FromSchema, FromWire, IntoSchema, IntoWire, ToolError, WireSchema, tool_definition,
     tool_implementation,
@@ -64,16 +65,23 @@ pub enum BashError {
     Internal { reason: String },
 }
 
-#[tool_definition(version = "0.2.2")]
+#[tool_definition(version = "0.3.0")]
 pub trait Bash {
     /// Execute a script in a fresh shell; pass a previous result's cwd to start in that directory.
     /// A script still running after `timeout` seconds (at most 3600) is stopped with TERM, then
-    /// KILL a second later, and the call returns exit code 124.
+    /// KILL a second later, and the call returns exit code 124. `stdin` is not the script's
+    /// input: a caller that cancels it stops the script with INT, then KILL a second later, and
+    /// the call returns exit code 130.
     #[arg(cwd = "option", default = "")]
     #[arg(script = "positional")]
     #[arg(timeout = "option", default = 600)]
-    async fn run(&self, cwd: String, script: String, timeout: u32)
-    -> Result<BashResult, BashError>;
+    async fn run(
+        &self,
+        cwd: String,
+        script: String,
+        timeout: u32,
+        stdin: Option<InputStream>,
+    ) -> Result<BashResult, BashError>;
 }
 
 struct BashImpl;
@@ -85,12 +93,49 @@ impl Bash for BashImpl {
         cwd: String,
         script: String,
         timeout: u32,
+        stdin: Option<InputStream>,
     ) -> Result<BashResult, BashError> {
-        run_script(&cwd, &script, timeout).await
+        run_script(&cwd, &script, timeout, stdin).await
     }
 }
 
-pub async fn run_script(cwd: &str, script: &str, timeout: u32) -> Result<BashResult, BashError> {
+/// Completes when the caller cancels `stdin`. Data is not the script's input and is dropped; a
+/// stream that ends in any other way asks for nothing, so this then never completes.
+#[cfg(target_arch = "wasm32")]
+async fn stop_requested(mut stdin: InputStream) {
+    use golem_rust::golem_agentic::golem::tool::streams::ByteStreamFailure;
+    loop {
+        match stdin.next().await {
+            Some(Ok(_)) => {}
+            Some(Err(ByteStreamFailure::Cancelled)) => return,
+            Some(Err(_)) | None => std::future::pending::<()>().await,
+        }
+    }
+}
+
+/// Keeps the place of a step of a stop in the call's record. Golem runs a call again from its
+/// record after it loads the agent again: the first run keeps `place`, and every later run gets
+/// the place the first run kept. The request is the same in every run, and the place is the
+/// response: the turn, and whether the script waited there.
+#[cfg(target_arch = "wasm32")]
+fn recorded_turn(place: bash_shell::session::Place) -> bash_shell::session::Place {
+    use golem_rust::durability::{Durability, DurableFunctionType};
+    let (turn, waited) = Durability::<(u64, bool), String>::new(
+        "bash",
+        "stop-turn",
+        DurableFunctionType::ReadLocal,
+        &(),
+    )
+    .run_infallible(|| (place.turn, place.waited));
+    bash_shell::session::Place { turn, waited }
+}
+
+pub async fn run_script(
+    cwd: &str,
+    script: &str,
+    timeout: u32,
+    stdin: Option<InputStream>,
+) -> Result<BashResult, BashError> {
     #[cfg(target_arch = "wasm32")]
     {
         // golem-rust installs its logger only in an agent's constructor; a tool component has
@@ -131,6 +176,15 @@ pub async fn run_script(cwd: &str, script: &str, timeout: u32) -> Result<BashRes
         session.set_working_dir(cwd).map_err(rejected_cwd)?;
     }
     session.set_time_limit(std::time::Duration::from_secs(u64::from(timeout)));
+    #[cfg(target_arch = "wasm32")]
+    session.set_turn_recorder(recorded_turn);
+    #[cfg(target_arch = "wasm32")]
+    if let Some(stdin) = stdin {
+        session.set_stop_request(stop_requested(stdin));
+    }
+    // Natively nothing stops a script, as nothing limits its time.
+    #[cfg(not(target_arch = "wasm32"))]
+    drop(stdin);
 
     let result = session.run(script).await;
     let cwd = session.cwd().display().to_string();
