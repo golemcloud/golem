@@ -1,4 +1,5 @@
 import type { Dirent, Stats } from 'node:fs';
+import { join } from 'node:path';
 import { validatedCwd } from '../../shared/cli-runtime.js';
 
 export const NPM_VERSION = '10.9.9';
@@ -29,9 +30,9 @@ export function normalizedRegistry(value: string): string {
 
 export function npmInvocation(cwdValue: string, registryValue: string) {
   const cwd = validatedCwd(cwdValue);
-  const home = `${cwd}/.golem-home`;
-  const cache = `${cwd}/.golem-npm-cache`;
-  const prefix = `${cwd}/.golem-npm-prefix`;
+  const home = join(cwd, '.golem-home');
+  const cache = join(cwd, '.golem-npm-cache');
+  const prefix = join(cwd, '.golem-npm-prefix');
   return {
     environment: {
       HOME: home,
@@ -43,7 +44,7 @@ export function npmInvocation(cwdValue: string, registryValue: string) {
       NPM_CONFIG_PREFIX: prefix,
       NPM_CONFIG_REGISTRY: normalizedRegistry(registryValue),
       NPM_CONFIG_UPDATE_NOTIFIER: 'false',
-      PATH: `${cwd}/node_modules/.bin:/usr/local/bin:/usr/bin:/bin`,
+      PATH: `${join(cwd, 'node_modules/.bin')}:/usr/local/bin:/usr/bin:/bin`,
     },
     directories: [home, cache, prefix],
   };

@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import {
   installNpmRecursiveRmPatch,
   installNpmTransportWarningFilter,
+  npmInvocation,
 } from '../golem-temp/runtime-tests/javascript-tools/src/npm-runtime.js';
 
 async function recursiveRemoveDoesNotFollowDirectorySymlinks() {
@@ -85,6 +86,15 @@ function filtersOnlyTheAgentTransportWarning() {
   assert.equal(target.emitWarning, original);
 }
 
+function derivesPathsFromTheRootDirectory() {
+  const { environment, directories } = npmInvocation('/', 'https://registry.npmjs.org/');
+  assert.equal(environment.HOME, '/.golem-home');
+  assert.equal(environment.NPM_CONFIG_CACHE, '/.golem-npm-cache');
+  assert.ok(environment.PATH.startsWith('/node_modules/.bin:'), environment.PATH);
+  assert.deepEqual(directories, ['/.golem-home', '/.golem-npm-cache', '/.golem-npm-prefix']);
+}
+
 await recursiveRemoveDoesNotFollowDirectorySymlinks();
+derivesPathsFromTheRootDirectory();
 filtersOnlyTheAgentTransportWarning();
 console.log('npm runtime checks passed');

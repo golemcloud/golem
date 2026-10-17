@@ -16705,6 +16705,23 @@ async fn builtin_javascript_and_typescript_tools_run_in_sidecars_and_reconstruct
         true,
     )
     .await?;
+    // A shell passes its current directory through PWD, so every tool starts where a script is.
+    for tool in javascript_metadata
+        .tools
+        .iter()
+        .chain(&typescript_metadata.tools)
+    {
+        let cwd = tool.commands.nodes[0]
+            .body
+            .as_ref()
+            .and_then(|body| body.options.iter().find(|option| option.long == "cwd"));
+        assert_eq!(
+            cwd.and_then(|option| option.env_var.as_deref()),
+            Some("PWD"),
+            "{:?}",
+            tool.name()
+        );
+    }
     let mut deployment = deployment_state(
         context.account_id,
         javascript_component.id,
