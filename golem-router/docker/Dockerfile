@@ -1,11 +1,14 @@
-FROM nginx:1.29
+FROM envoyproxy/envoy:v1.36.13
 
-# Only the GOLEM_ROUTER_ variables are replaced in the template, so the nginx variables stay.
-ENV NGINX_ENVSUBST_FILTER=^GOLEM_ROUTER_
-# The default resolver is the name servers of /etc/resolv.conf.
-ENV NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1
+COPY golem-router/docker/golem-router-entrypoint.sh /usr/local/bin/golem-router-entrypoint
 
-COPY golem-router/docker/16-golem-router.envsh /docker-entrypoint.d/16-golem-router.envsh
-COPY golem-router/golem-router.conf.template /etc/nginx/templates/default.conf.template
+# Runs Envoy as uid and gid 65534, like the images of the services; see the script.
+RUN --mount=type=bind,source=docker/prepare-service-image.sh,target=/tmp/prepare-service-image.sh \
+    sh /tmp/prepare-service-image.sh
 
-EXPOSE 80
+ENV HOME=/home/golem
+USER 65534:65534
+
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/golem-router-entrypoint"]
+CMD []
