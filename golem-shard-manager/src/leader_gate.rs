@@ -232,6 +232,7 @@ mod tests {
             identity: "sm".to_string(),
             grpc_address: Some(address(port)),
             ready,
+            rollout_generation: None,
         }
     }
 

@@ -17,6 +17,7 @@
 
 use crate::config::EtcdConfig;
 use crate::metrics;
+use crate::sharding::election_watch::{ElectionWatch, ElectionWatcher};
 use crate::sharding::error::ShardManagerError;
 use crate::sharding::etcd_connection::connect_for_election;
 use crate::sharding::etcd_retry::retry_retriable_until;
@@ -506,6 +507,7 @@ impl LeaderElection {
                 identity: identity(),
                 grpc_address: None,
                 ready: false,
+                rollout_generation: None,
             },
             shutdown: CancellationToken::new(),
             confirm_hook: None,
@@ -791,6 +793,18 @@ impl LeaderElection {
         }
     }
 
+    /// The view of this election and the task that keeps it current. The task must be spawned;
+    /// it runs until the replica stops.
+    pub fn watch(&self) -> (ElectionWatch, ElectionWatcher) {
+        ElectionWatcher::new(
+            self.client.clone(),
+            &self.election_name,
+            self.request_timeout,
+            self.lease_ttl,
+            self.retry,
+        )
+    }
+
     /// Bounds one request on the election channel, which has no channel-level timeout: only the
     /// campaign may block indefinitely.
     async fn bounded<T, F>(&self, request: F) -> Result<T, ShardManagerError>
@@ -855,7 +869,10 @@ fn is_no_leader(err: &ShardManagerError) -> bool {
     )
 }
 
-async fn bounded<T, F>(request_timeout: Duration, request: F) -> Result<T, ShardManagerError>
+pub(crate) async fn bounded<T, F>(
+    request_timeout: Duration,
+    request: F,
+) -> Result<T, ShardManagerError>
 where
     F: Future<Output = Result<T, etcd_client::Error>>,
 {
@@ -879,6 +896,11 @@ pub struct ElectionValue {
     /// nothing, as in tests of the election alone.
     pub grpc_address: Option<LeaderAddress>,
     pub ready: bool,
+    /// The operator's rollout generation of this replica, if set. A standby moves behind a
+    /// campaigner of a higher generation, so that a rolling update hands the leadership to a new
+    /// replica. Absent from values of replicas that have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollout_generation: Option<u64>,
 }
 
 impl ElectionValue {

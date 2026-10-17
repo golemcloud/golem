@@ -19,9 +19,9 @@ use golem_service_base::clients::shard_manager_leader::LeaderAddress;
 use golem_shard_manager::LEADER_ELECTION_NAME;
 use golem_shard_manager::config::EtcdConfig;
 use golem_shard_manager::{
-    Elected, ElectionValue, EtcdRoutingTablePersistence, ExecutorAddr, ExecutorId, LeaderElection,
-    LeaderFence, LeaderLocator, LeaseKeepAlive, LeaseLossReason, NO_REVISION,
-    RoutingTablePersistence, STATE_KEY, ShardLeaseState, ShardManagerError,
+    CampaignView, Elected, ElectionValue, ElectionWatch, EtcdRoutingTablePersistence, ExecutorAddr,
+    ExecutorId, LeaderElection, LeaderFence, LeaderLocator, LeaseKeepAlive, LeaseLossReason,
+    NO_REVISION, RoutingTablePersistence, STATE_KEY, ShardLeaseState, ShardManagerError,
 };
 use golem_test_framework::components::etcd::docker_etcd::DockerEtcd;
 use std::net::{IpAddr, Ipv4Addr};
@@ -1757,6 +1757,7 @@ fn an_election_value_reads_back() {
         identity: "sm-1/pid-7/1792000000".to_string(),
         grpc_address: Some(address(9002)),
         ready: true,
+        rollout_generation: None,
     };
     assert_eq!(ElectionValue::decode(&value.encode()), Some(value));
     assert_eq!(ElectionValue::decode(b"sm-1/pid-7/1792000000"), None);
@@ -1791,4 +1792,143 @@ async fn marking_the_leader_ready_survives_a_dead_member_in_the_endpoint_list(
             .await
             .unwrap_or_else(|err| panic!("Marking ready failed on attempt {attempt}: {err}"));
     }
+}
+
+/// Waits until the watch's view satisfies `ready`.
+async fn await_view(
+    watch: &mut ElectionWatch,
+    ready: impl Fn(&CampaignView) -> bool,
+) -> CampaignView {
+    timeout(CAMPAIGN_TIMEOUT, async {
+        loop {
+            if let Some(view) = watch.view()
+                && ready(&view)
+            {
+                return view;
+            }
+            watch.changed().await;
+        }
+    })
+    .await
+    .expect("the election watch should reach the expected view")
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A standby answers callers from this view, so it must follow a new leader and a proclaimed
+// `ready` without a read per call.
+async fn the_election_watch_follows_campaigners_and_the_ready_mark(etcd: &Arc<DockerEtcd>) {
+    let election_name = unique_election_name();
+    let first = LeaderElection::connect(&election_config(etcd), election_name.clone())
+        .await
+        .expect("Connecting the election client to etcd should succeed")
+        .with_grpc_address(address(4101));
+    let (mut watch, watcher) = first.watch();
+    let watcher = tokio::spawn(watcher.run());
+
+    let elected = timeout(CAMPAIGN_TIMEOUT, first.campaign_until_elected())
+        .await
+        .expect("An uncontested campaign should finish")
+        .expect("An uncontested campaign should be won");
+    let view = await_view(&mut watch, |view| view.leader().is_some()).await;
+    assert_eq!(
+        view.leader()
+            .and_then(|leader| leader.value.clone())
+            .and_then(|value| value.grpc_address),
+        Some(address(4101))
+    );
+
+    elected
+        .leadership
+        .publish_ready()
+        .await
+        .expect("Marking ready should succeed");
+    await_view(&mut watch, |view| {
+        view.leader()
+            .and_then(|leader| leader.value.as_ref())
+            .is_some_and(|value| value.ready)
+    })
+    .await;
+    assert!(watch.answered_within(Duration::from_secs(5)));
+
+    elected
+        .leadership
+        .step_down()
+        .await
+        .expect("Stepping down should succeed");
+    await_view(&mut watch, |view| view.campaigners.is_empty()).await;
+    watcher.abort();
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// The leader compacts etcd's history, and etcd cancels a watch whose next revision is compacted.
+// The view must recover by reading again instead of freezing.
+async fn the_election_watch_survives_a_compaction(etcd: &Arc<DockerEtcd>) {
+    let election_name = unique_election_name();
+    let election = LeaderElection::connect(&election_config(etcd), election_name.clone())
+        .await
+        .expect("Connecting the election client to etcd should succeed");
+    let (mut watch, watcher) = election.watch();
+    let watcher = tokio::spawn(watcher.run());
+    await_view(&mut watch, |view| view.campaigners.is_empty()).await;
+
+    let mut kv = inspection_client(etcd).await.kv_client();
+    // Moves the store past the watch's start revision, then compacts that history away.
+    for i in 0..5 {
+        kv.put(format!("{election_name}-filler"), format!("{i}"), None)
+            .await
+            .unwrap();
+    }
+    let revision = kv
+        .get("x", None)
+        .await
+        .unwrap()
+        .header()
+        .unwrap()
+        .revision();
+    let _ = kv.compact(revision, None).await;
+
+    let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
+        .await
+        .expect("An uncontested campaign should finish")
+        .expect("An uncontested campaign should be won");
+    await_view(&mut watch, |view| view.campaigners.len() == 1).await;
+    elected
+        .leadership
+        .step_down()
+        .await
+        .expect("Stepping down should succeed");
+    watcher.abort();
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A value written before the JSON form (a plain identity) must not break a standby: the leader is
+// seen, its value is not, so nobody is named and the client retries.
+async fn a_leader_value_written_before_the_json_form_is_seen_but_names_no_address(
+    etcd: &Arc<DockerEtcd>,
+) {
+    let election_name = unique_election_name();
+    let mut client = inspection_client(etcd).await;
+    let lease = client.lease_grant(10, None).await.unwrap().id();
+    client
+        .put(
+            format!("{election_name}/{lease:x}"),
+            "sm-old/pid-1/1700000000",
+            Some(etcd_client::PutOptions::new().with_lease(lease)),
+        )
+        .await
+        .unwrap();
+
+    let election = LeaderElection::connect(&election_config(etcd), election_name.clone())
+        .await
+        .expect("Connecting the election client to etcd should succeed");
+    let (mut watch, watcher) = election.watch();
+    let watcher = tokio::spawn(watcher.run());
+    await_view(&mut watch, |view| view.leader().is_some()).await;
+    assert_eq!(watch.leader_value(), Some(None));
+
+    client.lease_revoke(lease).await.unwrap();
+    watcher.abort();
 }

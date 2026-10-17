@@ -44,12 +44,13 @@ use golem_service_base::clients::shard_manager_leader::LeaderAddress;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use include_dir::include_dir;
 use prometheus::Registry;
+pub use sharding::election_watch::{CampaignView, Campaigner, ElectionWatch, ElectionWatcher};
 pub use sharding::error::{HealthCheckError, ShardManagerError};
 pub use sharding::etcd_retry::ReadRetry;
 pub use sharding::healthcheck::HealthCheck;
 pub use sharding::leader_election::{
     Elected, ElectionValue, LEADER_ELECTION_NAME, LeaderElection, LeaderFence, LeaderLocator,
-    LeadershipHandle, LeaseKeepAlive, LeaseLossReason, LeaseLost,
+    LeadershipHandle, LeaseKeepAlive, LeaseLossReason, LeaseLost, RetryDelays,
 };
 pub use sharding::persistence::{
     DbRoutingTablePersistence, EtcdRoutingTablePersistence, ExternalRevision, NO_REVISION,

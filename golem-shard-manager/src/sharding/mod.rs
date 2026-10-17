@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod election_watch;
 pub mod error;
 pub mod etcd_connection;
 pub mod etcd_retry;
