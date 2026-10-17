@@ -479,8 +479,10 @@ mod post_export {
         })
         .await
         .context("initial idle permit release")?;
-        let root_returned = worker.observe_next_tail_drain_for_test();
         let key = IdempotencyKey::fresh();
+        let mut root_event = crate::tail_roots::root_returned(&owned, &key);
+        let primary_execution = active.execution();
+        let tail_count = || primary_execution.primary_tail_work_active_count_for_test();
         executor
             .invoke_agent_with_key(
                 &component,
@@ -490,14 +492,15 @@ mod post_export {
                 data_value!(),
             )
             .await?;
-        let tracker = tokio::time::timeout(Duration::from_secs(10), root_returned)
+        let root_snapshot = tokio::time::timeout(Duration::from_secs(10), root_event.returned())
             .await
-            .context("root export returned and tail drain started")??;
+            .context("actual root-completion diagnostic")??;
         tokio::time::timeout(Duration::from_secs(10), request)
             .await
             .context("spawned HTTP request entered held handler")??;
         let (started, chunk) = pending_tail(&worker, &key).await?;
-        assert!(tracker.has_active());
+        let prefix = executor.stored_oplog(&id).await;
+        assert!(tail_count() > 0);
         assert!(worker.concurrent_agent_permit_is_held().await);
         let generation = worker.resident_generation_for_test();
         let acquisitions = worker.permit_acquisitions_for_test();
@@ -505,8 +508,8 @@ mod post_export {
         assert_eq!(account.monthly_observer_count_for_test(), 1);
         let admitted_revision = registry.current_limits().monthly_policy_revision;
         eprintln!(
-            "[monthly-tail] root returned, active tail tasks={}, method Start={started}, HTTP chunk Start={chunk}, response body held, permit held, generation={generation}",
-            tracker.active_count()
+            "[monthly-tail] root completion diagnostic, root snapshot={root_snapshot}, active tail tasks={}, method Start={started}, HTTP chunk Start={chunk}, response body held, permit held, generation={generation}",
+            tail_count()
         );
 
         let mut attempts =
@@ -547,7 +550,7 @@ mod post_export {
         ));
         eprintln!(
             "[monthly-tail] accepted {cause:?}, tail tasks={}, peer response and terminal append held, permit held, receipt pending",
-            tracker.active_count()
+            tail_count()
         );
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??,
@@ -557,7 +560,7 @@ mod post_export {
         // Keep peer bytes unavailable until the tracked HTTP task has cooperatively retired.
         // Release the peer even on timeout so a failed stop leaves a bounded diagnostic.
         let tail_retired = tokio::time::timeout(Duration::from_secs(10), async {
-            while tracker.has_active() {
+            while tail_count() != 0 {
                 tokio::task::yield_now().await;
             }
         })
@@ -587,7 +590,7 @@ mod post_export {
                 | tokio::sync::broadcast::error::TryRecvError::Closed)
         ));
         tail_retired.context("tracked HTTP tail retires without peer body bytes")?;
-        assert!(!tracker.has_active());
+        assert_eq!(tail_count(), 0);
         assert_eq!(account.monthly_observer_count_for_test(), 0);
         assert_eq!(worker.resident_generation_for_test(), generation);
         assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
@@ -599,6 +602,14 @@ mod post_export {
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
             .await;
+        let stopped_raw = executor.stored_oplog(&id).await;
+        assert!(stopped_raw.len() >= prefix.len());
+        assert_eq!(&stopped_raw[..prefix.len()], prefix.as_slice());
+        assert!(
+            !stopped
+                .values()
+                .any(|entry| matches!(entry, OplogEntry::Jump { .. }))
+        );
         assert_eq!(stopped.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
         assert_eq!(
             stopped

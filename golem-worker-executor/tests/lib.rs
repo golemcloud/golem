@@ -74,6 +74,7 @@ pub mod scheduler_storage;
 mod scheduler_waits;
 pub mod scope_cards;
 pub mod suspension_races;
+mod tail_roots;
 pub mod tool_discovery;
 pub mod tool_runtime_bypass;
 pub mod tool_streaming;
@@ -179,6 +180,7 @@ impl Tracing {
                     invocation_waits::layer(),
                     scheduler_waits::layer(),
                     entity_fence_waits::layer(),
+                    tail_roots::layer(),
                     monthly_acceptance::layer(),
                 ],
             );

@@ -380,7 +380,18 @@ Findings 11-14 have separate linked comments.
     not a claim that their resource behavior is fixed or that the full parallel cohort passes.
     The read-only current-window snapshot remains separate from this removed transport. The
     subsequent #4195 combined-source proofs have their own validation scope above.
-  - [ ] Address idle/tail observations,
+  - [x] Remove the complete Worker-owned tail observation family.
+    The unchanged native baseline and dual comparison pass before producer deletion. A normal
+    root-completion debug event distinguishes guest execution from tail settlement; capture stays
+    in the test binary with exact owner/key/primary fields. The existing pinned OwnerExecution
+    tracker supplies live positive/zero counts, not the diagnostic snapshot. The change removes
+    the Worker sender, setter/notify methods and root-wrapper test producer. Original effects,
+    invocation identity, exact incomplete chunk/terminal history, receipts, accounting and physical
+    cleanup remain, with complete stored-prefix/no-Jump checks added. The ordinary tail deadline
+    and Notify are unchanged. Separate producer-free capture/native and custom-suspension/real-timer
+    regression batches, library checks, strict lint, production compilation, formatting and browser
+    verification pass. This completes this family only; overall A1/F10/F11 remain open.
+  - [ ] Address idle observations,
     private lifecycle projections, scripted allocation support and test-only entity construction.
   - [ ] Keep shared support at real dependency boundaries or in test-utils where appropriate.
     Merely moving files or relocating the same runtime hook does not close this finding.

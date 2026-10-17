@@ -330,6 +330,28 @@ The completed rejection diagnostic proves that the policy applied; joining the w
 allowing interruption deadlocks the test. Keep both full joins after physical cleanup. The other
 time-driving consumers and Worker clock support remain separate open work.
 
+### Root completion and live tail ownership
+
+`run_guest_call_settled` emits "Guest call root completed; settling tail work" immediately after
+the Rust root future returns and the existing drain notification fires. This normal debug event
+separates guest execution from tail settlement even when the idle predicate never runs. Its owner,
+invocation key and primary flag identify the call; its count is only a snapshot. Wasmtime's earlier
+`task.return` and the later idle-settlement predicate do not establish this boundary.
+
+Capture the diagnostic only in the integration binary, with exact fields and one-shot, token-safe
+interests. Retain the actual `OwnerExecution` before invoking the primary. Its read-only test count
+uses the existing primary tracker without exposing task registration. At the held HTTP chunk,
+require a live positive count; after cooperative retirement and physical cleanup, require zero on
+that same owner. Never substitute the event's sampled count for either live assertion.
+
+The dual baseline compares these observations with the old returned tracker before deleting the
+Worker sender, observer methods and root-wrapper producer. The observer-free source keeps the
+ordinary tail deadline, Notify, acceptance and cleanup owners. Exact request and invocation identity,
+incomplete chunk history, one Suspend, accounting and receipts remain, with the complete stored
+prefix and no-Jump checks added. Separate producer-free capture/native, custom-suspension/real-timer
+regression, library, strict lint, production, formatting and browser checks pass. The other idle,
+monthly-time and deletion controls remain open.
+
 ### Idle health with distinct success boundaries
 
 Initial idle settlement precedes guest construction. Fault the existing weak usage flusher during

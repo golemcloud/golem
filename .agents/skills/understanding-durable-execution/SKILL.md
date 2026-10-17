@@ -493,7 +493,11 @@ regression batches, strict executor/test-utils lint, production compilation and 
 The adapter and its interests remain entirely in test-utils, outside Worker ownership and production
 replay code. This does not close the remaining A1/F10/F11 work.
 
-Idle, tail, monthly-time, deletion and other test controls remain open F10/F11 work;
+The Worker-owned tail observer is removed after passing dual observation.
+Normal root-completion diagnostics and live reads of the existing owner tracker replace its transport;
+see [root completion and live tail ownership](reference/testing-patterns.md#root-completion-and-live-tail-ownership).
+Separate producer-free native/library, strict lint, production and browser checks pass. Idle,
+monthly-time, deletion and other controls remain open F10/F11 work;
 isolating their fields under test configuration does not justify or complete their removal.
 
 An accepted stop in `WaitingForPermit` takes that attempt's exact task handle before signalling

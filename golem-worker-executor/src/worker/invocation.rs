@@ -625,11 +625,18 @@ pub(crate) async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
     let policy = store.data().durable_ctx().suspension_policy();
     let tracker = store.data().durable_ctx().tail_work_tracker();
     let tracker_for_error = tracker.clone();
+    let owner_id = store
+        .data()
+        .get_public_state()
+        .worker()
+        .owned_agent_id
+        .clone();
+    let root_key = store.data().get_current_idempotency_key().await;
+    let primary = entity_invocation.is_none();
     let drain_started = std::sync::Arc::new(tokio::sync::Notify::new());
     let fun = {
         let drain_started = drain_started.clone();
-        #[cfg(feature = "test-utils")]
-        let tail_observer = (store.data().get_public_state().worker(), tracker.clone());
+        let root_tracker = tracker.clone();
         let runtime = runtime.clone();
         async move |accessor: &Accessor<Ctx>| {
             if let (Some(runtime), Some(activity)) = (&runtime, accessor.runtime_activity()) {
@@ -641,8 +648,13 @@ pub(crate) async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
             // predicate is only consulted at idle observation points, which are never reached
             // if e.g. a guest task lingers, and the drain must stay bounded even then.
             drain_started.notify_one();
-            #[cfg(feature = "test-utils")]
-            tail_observer.0.notify_tail_drain_for_test(tail_observer.1);
+            debug!(
+                owner_id = %owner_id,
+                idempotency_key = root_key.as_ref().map(|key| key.value.as_str()),
+                primary,
+                active_tail_tasks = root_tracker.active_count(),
+                "Guest call root completed; settling tail work"
+            );
             result
         }
     };

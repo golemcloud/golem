@@ -247,6 +247,12 @@ impl OwnerExecution {
         self.primary_tail_work.clone()
     }
 
+    /// Reads the real primary tracker without exposing its task-registration interface.
+    #[cfg(feature = "test-utils")]
+    pub fn primary_tail_work_active_count_for_test(&self) -> usize {
+        self.primary_tail_work.active_count()
+    }
+
     pub(crate) fn deferred_tool_admission(&self) -> Arc<DeferredAdmissionTable> {
         self.deferred_tool_admission.clone()
     }

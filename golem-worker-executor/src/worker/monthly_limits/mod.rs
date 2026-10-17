@@ -786,33 +786,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     #[cfg(feature = "test-utils")]
-    pub fn observe_next_tail_drain_for_test(
-        &self,
-    ) -> tokio::sync::oneshot::Receiver<crate::durable_host::tail_work::TailWorkTracker> {
-        let (notify, observe) = tokio::sync::oneshot::channel();
-        assert!(
-            self.test_support
-                .lock()
-                .unwrap()
-                .tail_drain_observer
-                .replace(notify)
-                .is_none()
-        );
-        observe
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub(crate) fn notify_tail_drain_for_test(
-        &self,
-        tracker: crate::durable_host::tail_work::TailWorkTracker,
-    ) {
-        let observer = self.test_support.lock().unwrap().tail_drain_observer.take();
-        if let Some(observer) = observer {
-            let _ = observer.send(tracker);
-        }
-    }
-
-    #[cfg(feature = "test-utils")]
     pub async fn pending_stop_for_test(&self) -> Option<InterruptKind> {
         match &*self.interrupt_signal.lock().await {
             super::WorkerInterruptState::Pending(pending) => Some(pending.kind),
