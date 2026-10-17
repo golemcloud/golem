@@ -394,12 +394,51 @@ The [finite stdin observations](observations-2026-10-17-finite-stdin.json) recor
 the passing main/fresh-job transport and offline reconstruction test. The first
 fixture incorrectly expected kebab-case result keys; the corrected fixture checks
 the provider's canonical snake_case names. Memory and collector unit checks pass.
-The explicit replay input-digest guard was added afterward and still needs a fresh
-build and test run. This is not a claim that the current complete source is verified.
+The explicit replay input-digest guard was added afterward. The subsequent
+[CLI checkpoint](observations-2026-10-18-cli.json) records its changed-input unit
+test and a fresh real-executor finite-input/reconstruction run on the newer main.
+That verification does not establish the complete process adapter.
 
 The checkpoint does not establish production command parsing, timeout policy,
 asynchronous child-process support or enable/disable configuration. The complete
 feature still requires those gates.
+
+### Canonical CLI transport
+
+[`cli-process-probe.js`](cli-process-probe.js) uses the Golem-owned backend in
+`sdks/javascript/` instead of constructing typed tool input itself. Its ordinary
+`spawnSync('write-file', [path, content])` reaches the canonical parser, the real
+tool dispatcher and the owner filesystem. The existing filesystem harness checks
+main and fresh-job execution, help, the compatibility switch, repeated sidecars,
+and executor reconstruction. The portable fixture produces the same bundle bytes
+as the private fixture used by the recorded test.
+
+`prepare-command` uses ordinary durable tool discovery and pure argument parsing.
+Its `prepared-command` resource carries input and output policy, not authority;
+the subsequent `tool-rpc` still applies the binding and permission checks.
+Variables supply only metadata-declared defaults and are not recorded as an
+arbitrary process environment. Result rendering shares Bash's named exit-status,
+declared-error and capability-redaction policy. `collect-async` exposes the same
+host-owned collector through an asynchronous guest boundary.
+
+Generate the fixture with the standard tool world and these additional modules:
+
+```text
+probe=<bundled cli-process-probe.js>
+wasm-rquickjs-runtime-init=<repo>/sdks/javascript/runtime-init.js
+golem-tool-process-backend=<repo>/sdks/javascript/tool-process-backend.js
+```
+
+Use the optimized/Wizer build and the existing filesystem harness, with
+`GOLEM_NODE_TOOL_EXECUTOR_PROBE_WASM` pointing at that WASM. Run the JavaScript
+policy tests through `cargo make test-javascript-tool-process-backend`.
+
+The [observations](observations-2026-10-18-cli.json) distinguish the passing
+functional gates from remaining work. The prototype is not wired into SDK
+templates yet. Shells, deadlines, non-pipe stdio and asynchronous Node integration
+remain incomplete. Spawn-failure mapping must use the recorded skipped/executed
+body classification; an error tag alone does not prove no body ran. Timings from
+this policy-heavy fixture are not controlled performance measurements.
 
 ### Unconfigured backend cost
 

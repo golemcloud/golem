@@ -1,0 +1,79 @@
+{
+  "scope": "Canonical CLI transport checkpoint; not a complete or generally enabled Node process adapter",
+  "golemMainBase": "235998d5e",
+  "wrqjsSource": "1c93af93e0213fe3b250d53ebcc67183f738e734",
+  "runtimeSources": {
+    "backend": "sdks/javascript/tool-process-backend.js",
+    "backendSha256": "8f7e72c43bc483d4f874ae664bdacfb723acdf401d10caee30068e54b3f3e02f",
+    "initialization": "sdks/javascript/runtime-init.js",
+    "initializationSha256": "f2d1391616e231da72aa831c87b38ba199adac2e3566b32581756b3a3e7aa350"
+  },
+  "artifact": {
+    "path": "/private/tmp/node-tool-processes-probe.pQOFN4/cli-process-wizer-v2.wasm",
+    "sha256": "a4c769ee50009e9d6d5a8a052ae041cc45a9691201c5c144c83cd9ebcd49b56c",
+    "wizer": true,
+    "features": ["p3", "encoding"],
+    "source": "cli-process-probe.js",
+    "sourceNote": "The build used the private copy with absolute SDK import paths. The repository copy normalizes those paths.",
+    "portableBundleByteEquality": true
+  },
+  "executor": {
+    "binary": "target/dev-ci/deps/integration-d7453dd34cf5128b",
+    "sha256": "c6df7747a85e63ec88ba7db4e9758b55975f4b6ff2febfe4d9a0f23d8f1213ba",
+    "profile": "dev-ci",
+    "rustCallerSha256": "d2c959e7c0e8e4627a82c8ae2ec1f589d74b24b2d25ff84df0f85d690baafb78",
+    "rustProviderSha256": "056dc02d8dd1b521ed5c3cbbdd5472c239d50b49e6a7b09dfd1b6b54fcda47bb"
+  },
+  "cliProof": {
+    "test": "tool_streaming::node_tool_processes::node_sync_native_import_waits_for_filesystem_tool",
+    "log": "/private/tmp/node-tool-processes-cli-native-v1.log",
+    "passed": true,
+    "testSeconds": 13.124,
+    "checks": [
+      "Canonical write-file argv invokes the actual component-backed filesystem tool",
+      "The owner immediately reads the child filesystem effect",
+      "The same command runs through a fresh JavaScript job",
+      "CLI help returns without invoking the tool body",
+      "A per-call false compatibility switch prevents dispatch and file creation",
+      "Repeated fresh tool sidecars retain no probe globals or invocation environment mutation",
+      "Actual executor reconstruction preserves owner filesystem visibility",
+      "The oplog contains 25 outer entities and 12 nested writes, with exactly one End per entity"
+    ],
+    "timingClaim": "Functional test duration only. Help/disable checks and concurrent compilation make this unsuitable as a controlled process-overhead benchmark."
+  },
+  "finiteInputRetest": {
+    "log": "/private/tmp/node-tool-processes-finite-stdin-native-v3.log",
+    "passed": true,
+    "testSeconds": 7.91,
+    "inputBytes": 262161,
+    "attachmentCapacity": 65536,
+    "chunks": 5,
+    "checks": [
+      "Main runtime and fresh job consume all host-owned finite stdin",
+      "The new recorded-input digest guard accepts completed reconstruction",
+      "The external effect server stops before reconstruction",
+      "The authoritative recorded oplog prefix remains unchanged",
+      "A subsequent tool invocation succeeds"
+    ]
+  },
+  "otherChecks": {
+    "sharedPolicyTests": { "passed": 4, "log": "/private/tmp/node-tool-processes-process-policy-unit-v1.log" },
+    "bashAdapterTests": { "passed": 7, "log": "/private/tmp/node-tool-processes-bash-policy-unit-v1.log" },
+    "bashStrictClippy": { "passed": true, "log": "/private/tmp/node-tool-processes-bash-policy-clippy-v1.log" },
+    "javascriptAdapterTests": { "passed": 11, "log": "/private/tmp/node-tool-processes-js-adapter-make-v3.log" },
+    "commonContracts": { "passed": 3, "log": "/private/tmp/node-tool-processes-common-contracts-v4.log" },
+    "nativeUnitsBeforeFormatterCleanup": { "passed": 15, "log": "/private/tmp/node-tool-processes-cli-stdin-unit-v4.log" },
+    "formatterCleanupUnits": { "passed": 16, "log": "/private/tmp/node-tool-processes-cli-stdin-unit-v6.log", "note": "Includes the ignored/invalid-result owned-handle cleanup regression. A test-only array type-inference error in v5 was fixed before this passing run." }
+  },
+  "remainingGates": [
+    "Map spawn failure from recorded skipped/executed body classification, not the ToolRpcError tag alone",
+    "Finish asynchronous spawn, exec and execFile integration",
+    "Implement shell, timeout, cancellation and non-pipe stdio behavior",
+    "Wire the lazy backend and component compatibility control into every JavaScript SDK template",
+    "Verify native admission refusal without effects and incomplete/live recovery under memory pressure",
+    "Exercise mid-call crash and cancellation windows",
+    "Refresh all affected SDK declarations/templates and run strict native lint",
+    "Update the executor guide and verify the walkthrough in a browser",
+    "Measure controlled Golem tool-level costs and prepare the Golem draft PR"
+  ]
+}
