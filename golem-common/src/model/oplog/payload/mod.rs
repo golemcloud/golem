@@ -772,6 +772,18 @@ oplog_payload! {
             /// `Err` holds the reason of a denial.
             result: Result<(), String>
         },
+        /// The wallet a `self-wallet` call observed: each listed persistent card serialized as a
+        /// `StoredCard`, in the order the guest received them, and the serialized `ScopeCard`
+        /// lent to the invocation when it was listed.
+        PermissionWallet {
+            cards: Vec<Vec<u8>>,
+            scope_card: Option<Vec<u8>>,
+        },
+        /// The wallet version a `self-version` call observed.
+        PermissionWalletVersion {
+            wallet_id_hash: Vec<u8>,
+            generation: u64,
+        },
     }
 }
 
@@ -1026,7 +1038,9 @@ pub mod host_functions {
         (GolemToolOutputFinish => "golem::tool::streams::tool-output-writer", "finish", ToolAttachmentFinish, ToolAttachmentTerminalResult),
         (GolemToolOutputFail => "golem::tool::streams::tool-output-writer", "fail", ToolAttachmentFail, ToolAttachmentTerminalResult),
         (FilesystemPermissionCheck => "filesystem::permissions", "check", FileSystemPermissionCheck, PermissionCheck),
-        (SocketsTcpConnectPermissionCheck => "sockets::tcp::permissions", "check-connect", SocketsTcpConnectPermissionCheck, PermissionCheck)
+        (SocketsTcpConnectPermissionCheck => "sockets::tcp::permissions", "check-connect", SocketsTcpConnectPermissionCheck, PermissionCheck),
+        (GolemPermissionsSelfWallet => "golem::permissions::wallet", "self-wallet", NoInput, PermissionWallet),
+        (GolemPermissionsSelfVersion => "golem::permissions::wallet", "self-version", NoInput, PermissionWalletVersion)
     }
 }
 
