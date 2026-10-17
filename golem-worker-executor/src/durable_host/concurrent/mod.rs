@@ -36,8 +36,8 @@ use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostPayloadPair, HostRequest, HostResponse, OplogEntry, OplogIndex,
-    OplogPayload, host_functions::HostFunctionName,
+    DeniablePair, DurableFunctionType, HostPayloadPair, HostRequest, HostResponse, OplogEntry,
+    OplogIndex, OplogPayload, host_functions::HostFunctionName,
 };
 use golem_common::model::{RetryProperties, Timestamp};
 use golem_service_base::error::worker_executor::{

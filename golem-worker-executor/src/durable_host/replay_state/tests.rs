@@ -249,6 +249,7 @@ fn start_now() -> OplogEntry {
         )))),
         durable_function_type: DurableFunctionType::ReadLocal,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -290,6 +291,7 @@ fn rejected_tool_reconstruction_start(parent_start_index: OplogIndex) -> OplogEn
         request: Some(OplogPayload::Inline(Box::new(request))),
         durable_function_type: DurableFunctionType::WriteLocal,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -373,6 +375,7 @@ fn custom_start_with_request(
         request: Some(OplogPayload::Inline(Box::new(request))),
         durable_function_type: DurableFunctionType::ReadRemote,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -1012,6 +1015,7 @@ fn fork_start() -> OplogEntry {
         )))),
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -2921,6 +2925,7 @@ async fn dropped_scan_ahead_claim_leaves_no_residue_once_cursor_passes() {
             )))),
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
+            denial: None,
         }
     }
 
@@ -3130,6 +3135,7 @@ fn start_with_parent(parent_start_index: u64) -> OplogEntry {
         )))),
         durable_function_type: DurableFunctionType::ReadLocal,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -3576,6 +3582,7 @@ async fn invocation_boundary_tolerates_abandoned_consume_body_scope_shape() {
             )))),
             durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,
+            denial: None,
         },
         OplogEntry::Start {
             timestamp: Timestamp::now_utc(),
@@ -3588,6 +3595,7 @@ async fn invocation_boundary_tolerates_abandoned_consume_body_scope_shape() {
             )))),
             durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,
+            denial: None,
         },
         OplogEntry::End {
             timestamp: Timestamp::now_utc(),
@@ -8258,6 +8266,7 @@ fn transaction_scope_start(parent: Option<u64>) -> OplogEntry {
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -8453,6 +8462,7 @@ async fn rdbms_incomplete_stream_repair_reconstructs_typed_loss_at_original_star
             )))),
             durable_function_type: function_type.clone(),
             span_started: None,
+            denial: None,
         },
     ])
     .await;
@@ -9356,6 +9366,7 @@ fn batched_scope_start() -> OplogEntry {
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -9403,6 +9414,7 @@ fn batched_child_start(parent: u64) -> OplogEntry {
         )))),
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -9959,6 +9971,7 @@ async fn custom_claim_rejects_invocation_id_collision() {
         request: None,
         durable_function_type: DurableFunctionType::ReadLocal,
         span_started: None,
+        denial: None,
     };
     let rs = replay_state_over(vec![remove_retry_policy(), conflicting_start]).await;
 
@@ -9992,6 +10005,7 @@ async fn entity_owned_scope_claim_requires_the_recorded_parent() {
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
+        denial: None,
     };
     let rs = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
@@ -10035,6 +10049,7 @@ fn start_claim_requires_the_recorded_observational_owner() {
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
+        denial: None,
     };
 
     assert!(
@@ -10059,6 +10074,7 @@ fn start_claim_requires_the_recorded_observational_owner() {
         )))),
         durable_function_type: DurableFunctionType::ReadLocal,
         span_started: None,
+        denial: None,
     };
     assert!(
         StartClaim::unowned(
@@ -11581,6 +11597,7 @@ fn wait_for_start(duration_in_nanos: u64, invocation_id: Option<u64>) -> OplogEn
         ))),
         durable_function_type: DurableFunctionType::ReadLocal,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -11947,6 +11964,7 @@ fn scope_claim_requires_the_recorded_invocation_id() {
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
+        denial: None,
     };
     let claim = |invocation_id: Option<u64>| {
         StartClaim::scope(&scope_name, &DurableFunctionType::WriteRemote, None)

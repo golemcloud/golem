@@ -31,6 +31,7 @@ use wasmtime_wasi::p2::bindings::filesystem::types::{
 };
 
 use crate::durable_host::authorization::targets::CanonicalGuestPath;
+use crate::durable_host::concurrent::ResolvedCall;
 use crate::durable_host::{
     DurabilityHost, DurableCallSession, DurableWorkerCtx, LiveAuthorizationPermit, NotCancellable,
 };
@@ -104,30 +105,46 @@ async fn authorize_paths<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     requests: &[(FilesystemVerb, CanonicalGuestPath)],
 ) -> Result<Option<LiveAuthorizationPermit>, FsError> {
-    let mut permit = None;
-    let response = DurableCallSession::<FilesystemPermissionCheck, NotCancellable>::invoke(
+    let begun = DurableCallSession::<FilesystemPermissionCheck, NotCancellable>::begin(
         ctx,
-        permission_check_request(requests),
         DurableFunctionType::ReadLocal,
-        async |ctx| -> wasmtime::Result<_> {
-            let result = live_permission_decision(ctx, requests)
-                .await?
-                .map(|decision| permit = decision);
-            Ok(HostResponsePermissionCheck { result })
-        },
     )
     .await
     .map_err(FsError::trap)?;
+    let request = permission_check_request(requests);
+    let mut permit = None;
+    let response = 'resp: {
+        let handle = match begun.resolve(ctx).await.map_err(FsError::trap)? {
+            ResolvedCall::Live(begun) => {
+                match live_permission_decision(ctx, requests)
+                    .await
+                    .map_err(FsError::trap)?
+                {
+                    Ok(decision) => permit = Some(decision),
+                    Err(denial) => {
+                        break 'resp begun
+                            .start_live_denied(ctx, request, denial)
+                            .await
+                            .map_err(|error| FsError::trap(wasmtime::Error::from_anyhow(error)))?;
+                    }
+                }
+                begun
+                    .start_live(ctx, request)
+                    .await
+                    .map_err(FsError::trap)?
+            }
+            ResolvedCall::Replay(handle) => handle,
+        };
+        handle
+            .run(ctx, async |_| -> wasmtime::Result<_> {
+                Ok(HostResponsePermissionCheck { result: Ok(()) })
+            })
+            .await
+            .map_err(FsError::trap)?
+    };
     match response.result {
         Ok(()) => Ok(permit),
         Err(_) => Err(ErrorCode::NotPermitted.into()),
-    }
-}
-
-/// The recorded response of a `stat` or `stat-at` that the live permission check denies.
-fn p2_stat_denied() -> HostResponseFileSystemStat {
-    HostResponseFileSystemStat {
-        result: Err(FileSystemError::from_result(Ok(ErrorCode::NotPermitted))),
     }
 }
 
@@ -1093,17 +1110,16 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         }
 
         // `ReadLocal`: the local stat always runs (its timestamps are then overridden by the durable
-        // value), so only the file-times and a permission denial are made durable via
-        // `DurableCallSession::run`.
-        let handle = DurableCallSession::<FilesystemTypesDescriptorStat, NotCancellable>::start(
+        // value), so only the file-times and a permission denial are made durable.
+        let begun = DurableCallSession::<FilesystemTypesDescriptorStat, NotCancellable>::begin(
             self,
-            HostRequestFileSystemPath {
-                path: path.to_string_lossy().to_string(),
-            },
             DurableFunctionType::ReadLocal,
         )
         .await
         .map_err(FsError::trap)?;
+        let request = HostRequestFileSystemPath {
+            path: path.to_string_lossy().to_string(),
+        };
 
         let call = || {
             descriptor.with_node(|node| {
@@ -1113,23 +1129,42 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         };
         let mut live_stat = None;
 
-        let result = handle
-            .run(self, async |ctx| -> wasmtime::Result<_> {
-                if live_permission_decision(ctx, &permissions).await?.is_err() {
-                    return Ok(p2_stat_denied());
+        let result = 'resp: {
+            let handle = match begun.resolve(self).await.map_err(FsError::trap)? {
+                ResolvedCall::Live(begun) => {
+                    if let Err(denial) = live_permission_decision(self, &permissions)
+                        .await
+                        .map_err(FsError::trap)?
+                    {
+                        break 'resp begun
+                            .start_live_denied(self, request, denial)
+                            .await
+                            .map_err(|error| FsError::trap(wasmtime::Error::from_anyhow(error)))?;
+                    }
+                    begun
+                        .start_live(self, request)
+                        .await
+                        .map_err(FsError::trap)?
                 }
-                let stat = p2_local_stat(call()).await;
-                let result = stat.clone().map(|stat| SerializableFileTimes {
-                    data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
-                    data_modification_timestamp: stat.data_modification_timestamp.map(|t| t.into()),
-                });
-                live_stat = Some(stat);
-                Ok(HostResponseFileSystemStat {
-                    result: result.map_err(FileSystemError::from_result),
+                ResolvedCall::Replay(handle) => handle,
+            };
+            handle
+                .run(self, async |_| -> wasmtime::Result<_> {
+                    let stat = p2_local_stat(call()).await;
+                    let result = stat.clone().map(|stat| SerializableFileTimes {
+                        data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
+                        data_modification_timestamp: stat
+                            .data_modification_timestamp
+                            .map(|t| t.into()),
+                    });
+                    live_stat = Some(stat);
+                    Ok(HostResponseFileSystemStat {
+                        result: result.map_err(FileSystemError::from_result),
+                    })
                 })
-            })
-            .await
-            .map_err(FsError::trap)?;
+                .await
+                .map_err(FsError::trap)?
+        };
 
         match result.result {
             Ok(times) => {
@@ -1219,17 +1254,16 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         }
 
         // `ReadLocal`: the local stat always runs (its timestamps are then overridden by the durable
-        // value), so only the file-times and a permission denial are made durable via
-        // `DurableCallSession::run`.
-        let handle = DurableCallSession::<FilesystemTypesDescriptorStatAt, NotCancellable>::start(
+        // value), so only the file-times and a permission denial are made durable.
+        let begun = DurableCallSession::<FilesystemTypesDescriptorStatAt, NotCancellable>::begin(
             self,
-            HostRequestFileSystemPath {
-                path: full_path.to_string_lossy().to_string(),
-            },
             DurableFunctionType::ReadLocal,
         )
         .await
         .map_err(FsError::trap)?;
+        let request = HostRequestFileSystemPath {
+            path: full_path.to_string_lossy().to_string(),
+        };
 
         let call = || {
             agent_filesystem::attributes(&generation_handle, AgentTarget::Path(&target, follow))
@@ -1237,23 +1271,42 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         };
         let mut live_stat = None;
 
-        let result = handle
-            .run(self, async |ctx| -> wasmtime::Result<_> {
-                if live_permission_decision(ctx, &permissions).await?.is_err() {
-                    return Ok(p2_stat_denied());
+        let result = 'resp: {
+            let handle = match begun.resolve(self).await.map_err(FsError::trap)? {
+                ResolvedCall::Live(begun) => {
+                    if let Err(denial) = live_permission_decision(self, &permissions)
+                        .await
+                        .map_err(FsError::trap)?
+                    {
+                        break 'resp begun
+                            .start_live_denied(self, request, denial)
+                            .await
+                            .map_err(|error| FsError::trap(wasmtime::Error::from_anyhow(error)))?;
+                    }
+                    begun
+                        .start_live(self, request)
+                        .await
+                        .map_err(FsError::trap)?
                 }
-                let stat = p2_local_stat(call()).await;
-                let result = stat.clone().map(|stat| SerializableFileTimes {
-                    data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
-                    data_modification_timestamp: stat.data_modification_timestamp.map(|t| t.into()),
-                });
-                live_stat = Some(stat);
-                Ok(HostResponseFileSystemStat {
-                    result: result.map_err(FileSystemError::from_result),
+                ResolvedCall::Replay(handle) => handle,
+            };
+            handle
+                .run(self, async |_| -> wasmtime::Result<_> {
+                    let stat = p2_local_stat(call()).await;
+                    let result = stat.clone().map(|stat| SerializableFileTimes {
+                        data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
+                        data_modification_timestamp: stat
+                            .data_modification_timestamp
+                            .map(|t| t.into()),
+                    });
+                    live_stat = Some(stat);
+                    Ok(HostResponseFileSystemStat {
+                        result: result.map_err(FileSystemError::from_result),
+                    })
                 })
-            })
-            .await
-            .map_err(FsError::trap)?;
+                .await
+                .map_err(FsError::trap)?
+        };
 
         match result.result {
             Ok(times) => {

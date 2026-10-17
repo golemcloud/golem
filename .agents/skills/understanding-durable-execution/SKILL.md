@@ -348,7 +348,20 @@ shard. A commit whose status the status task must rebuild from an oplog that doe
 the incremental fold of the commit fails) is refused with
 `OplogRefusal::Unreadable`, so the start fails with `OplogFailed` (or `RecoveryRequired` when the
 storage did not answer); unlike the fence and the archive
-write, it is not latched on the oplog, and the caller that receives it fails the agent. When
+write, it is not latched on the oplog, and the caller that receives it fails the agent. The
+status stays detached until a later fold or rebuild succeeds. A caller that took the early receipt
+of `commit_oplog_before_status_update` does not wait for the refusal, so the owner finds it
+itself: the invocation loop chooses work only from `Worker::get_repaired_status`, which rebuilds a
+detached status first, and a rebuild that fails again is recorded like a failed recovery and
+ends in infrastructure recovery or in a stop with `OplogFailed` (`unreadable_oplog_outcome`). A
+pending invocation whose entry or payload does not hydrate takes the same path:
+`hydrate_pending_invocation` classifies the failure as `RecoveryRequired` or `OplogFailed`, and the
+loop does not retry it immediately.
+`AppendInvocationIfVersion` also rebuilds a detached status before it checks the key. A detached
+status can still name an invocation whose completion was committed and published as current, so
+the hydrated result cache keeps the keys of committed completions that the status has not folded
+yet, apart from the evictable payloads, and the terminal stop (`fail_pending_invocations`) does not
+fail those keys. When
 `on_invocation_failure` cannot record the failure of an invocation, the refusal takes the
 classification of its agent error (`terminal_entry_refusal` in `durable_host/mod.rs`). An oplog
 that failed for good fails the invocation with its cause. A storage that did not answer returns
@@ -769,6 +782,16 @@ for failure (`authoritative_replay_failure`), not publication over sibling histo
 or discard another task's history. A typed-loss End belongs to the original Start: HTTP without
 resend returns `http-response-incomplete`, RDBMS `resource-lost`, and TCP `connection-broken`.
 UDP `ReadRemote` instead re-executes receive after rebind.
+
+**A denied call records its denial.** When the host denies a live call before it runs, the call
+writes its `Start` with `denial` and an `End` that holds the pair's denied response
+(`BegunCall::start_live_denied`, `DurableCallSession::invoke_deniable_access`, or
+`AccessClaimOptions::denial`). The operation never runs. A pair declares its denied response with
+`denied = ...` in `host_payload_pairs!` (`DeniablePair::denied`); the response depends only on the
+recorded request and the denial, so live execution and recovery produce the same value. Replay of
+a denied `Start` without a terminal does not return `Incomplete`: the session appends the denied
+`End` and returns `Replayed`. A crash between the two entries therefore cannot run the denied
+operation. Call sites keep their replay branch free of authorization.
 
 **P3 HTTP recovery is call-local.** `client::send` records `WriteRemote` for all methods
 (`p3/http/send.rs`). Every method uses `Cancellable`: a guest drop records `Cancelled` and
@@ -1612,16 +1635,21 @@ guest paths, and its response is `Ok(())` or `Err(reason)`. A recorded denial re
 denial as their `not-permitted` result; their immutable initial-file fast path records a separate
 check. P3 `write-via-stream` and `append-via-stream` record the decision in their admission call
 (`admit_stream_write`). The live check (`live_permission_decision`,
-`p3_live_permission_decision`) runs only while the Store is live: when an incomplete check `Start`
-is repaired during replay, the repair completes it as allowed, because live authorization cannot
-run then. A new check in the replay tail has no recorded `Start`, so the call switches to live and
-checks the policy. P3 imports that await before their check reserve their invocation id first
+`p3_live_permission_decision`) runs only while the Store is live, before the call writes its
+`Start`. A denied check records the denial in its `Start` (`start_live_denied`, or
+`AccessClaimOptions::denial` in `run_deniable_filesystem_access`), so recovery of an incomplete
+denied `Start` completes it with the same denied response and the protected effect does not run.
+An incomplete `Start` without a denial was allowed, so its repair completes it as allowed without a
+new check. A new check in the replay tail has no recorded `Start`, so the call switches to live and
+checks the policy; a P3 call that becomes live after its Store replayed at the call checks after
+its `Start`. P3 imports that await before their check reserve their invocation id first
 (`reserve_invocation_id_before_await`). Test:
 `tests/scope_cards.rs::denied_filesystem_imports_are_recorded_and_replayed_after_restart`.
 
 P2 TCP `start-connect` records its decision in the same way, in a
 `sockets::tcp::permissions::check-connect` call (the request holds the remote address). A recorded
-denial returns `access-denied`, and its replay does not connect. Test:
+denial returns `access-denied`, and its replay does not connect. A denial is recorded in the check
+`Start`, so the recovery of an incomplete denied check does not connect either. Test:
 `tests/scope_cards.rs::p2_tcp_connect_denial_is_recorded_and_does_not_reach_the_backend_on_replay`.
 
 Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic

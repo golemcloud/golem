@@ -62,19 +62,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     Ok(target) => self.authorize_live_permission(&target).await?.is_err(),
                     Err(_) => true,
                 };
-                let call = begun.start_live(self, HostRequestConfigGet { key }).await?;
+                let request = HostRequestConfigGet { key };
                 if denied {
-                    let response = call
-                        .complete(
-                            self,
-                            HostResponseConfigGetResponse {
-                                result: Err(CONFIG_PERMISSION_DENIED.into()),
-                            },
-                        )
+                    let response = begun
+                        .start_live_denied(self, request, CONFIG_PERMISSION_DENIED.to_string())
                         .await?;
                     return Ok(response.result.map_err(config_error));
                 }
-                call
+                begun.start_live(self, request).await?
             }
             ResolvedCall::Replay(call) => call,
         };
@@ -104,7 +99,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             DurableFunctionType::ReadLocal,
         )
         .await?;
-        let (mut call, admitted_paths) = match begun.resolve(self).await? {
+        let (mut call, admitted_entries) = match begun.resolve(self).await? {
             ResolvedCall::Live(begun) => {
                 let paths: Vec<_> = self.state.agent_config.keys().cloned().collect();
                 let targets = paths
@@ -115,15 +110,30 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     Ok(targets) => self.filter_live_permissions(&targets).await?,
                     Err(_) => vec![false; paths.len()],
                 };
-                let admitted_paths = paths
+                let mut entries: Vec<_> = paths
                     .into_iter()
                     .zip(admitted)
                     .filter_map(|(path, allowed)| allowed.then_some(path))
-                    .collect::<std::collections::HashSet<_>>();
-                (
-                    begun.start_live(self, HostRequestConfigGetAll {}).await?,
-                    Some(admitted_paths),
-                )
+                    .filter_map(|path| {
+                        self.state
+                            .agent_config
+                            .get(&path)
+                            .and_then(render_agent_config_value)
+                            .map(|rendered| (render_config_path(&path), rendered))
+                    })
+                    .collect();
+                entries.sort_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
+                // The request carries the admitted entries so an incomplete call can finish after
+                // recovery without consulting current authority.
+                let call = begun
+                    .start_live(
+                        self,
+                        HostRequestConfigGetAll {
+                            entries: entries.clone(),
+                        },
+                    )
+                    .await?;
+                (call, Some(entries))
             }
             ResolvedCall::Replay(call) => (call, None),
         };
@@ -135,25 +145,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 CallReplayOutcome::Incomplete(live) => call = live,
             }
         }
-        let candidates: Vec<_> = self
-            .state
-            .agent_config
-            .iter()
-            .filter(|(path, _)| {
-                admitted_paths
-                    .as_ref()
-                    .is_none_or(|paths| paths.contains(*path))
-            })
-            .filter_map(|(path, value)| {
-                render_agent_config_value(value).map(|rendered| (path.clone(), rendered))
-            })
-            .collect();
-        let mut entries: Vec<_> = candidates
-            .into_iter()
-            .map(|(path, value)| (render_config_path(&path), value))
-            .collect();
-
-        entries.sort_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
+        let entries = match admitted_entries {
+            Some(entries) => entries,
+            None => call.recorded_request(self).await?.entries,
+        };
 
         Ok(call
             .complete(

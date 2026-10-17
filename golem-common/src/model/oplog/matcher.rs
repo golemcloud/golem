@@ -179,6 +179,9 @@ impl PublicOplogEntry {
                             )
                         })
                         .unwrap_or(false)
+                    || params.denial.as_ref().is_some_and(|denial| {
+                        Self::string_match(denial, &["denial".into()], query_path, query)
+                    })
             }
             PublicOplogEntry::End(params) => {
                 Self::string_match("End", &[], query_path, query)
