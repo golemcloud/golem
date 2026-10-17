@@ -158,6 +158,10 @@ name = "agent_extraction"
 harness = false
 
 [[test]]
+name = "node_tool_processes"
+harness = false
+
+[[test]]
 name = "component_introspection_exports"
 harness = false
 
