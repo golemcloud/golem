@@ -141,7 +141,17 @@ mod raw {
 
     /// Derives a child of `parent` that retains none of its grants.
     pub fn try_derive_empty_child(parent: &Card) -> Result<Card, PermissionError> {
-        derive::derive(parent, &[], &[], &[], &[], None)
+        try_derive_empty_child_with_lifespan(parent, None)
+    }
+
+    /// Derives a child of `parent` that retains none of its grants and lives for `lifespan`, an
+    /// ISO-8601 duration.
+    pub fn try_derive_empty_child_with_lifespan(
+        parent: &Card,
+        lifespan: Option<String>,
+    ) -> Result<Card, PermissionError> {
+        let lifespan = lifespan.map(|iso_8601| types::Duration { iso_8601 });
+        derive::derive(parent, &[], &[], &[], &[], lifespan.as_ref())
     }
 
     pub fn error_kind(error: &PermissionError) -> &'static str {
@@ -471,6 +481,13 @@ pub trait ScopeCardAgent {
 
     /// The id of the kept child, read through the `id` accessor.
     fn kept_child_id(&self) -> CardId;
+
+    /// Derives a child of the kept child that lives for `lifespan`, an ISO-8601 duration, and
+    /// returns the outcome.
+    fn derive_from_kept_child(&self, lifespan: Option<String>) -> String;
+
+    /// Derives a child of the wallet card `card_id` and returns the outcome.
+    fn derive_from_wallet_card(&self, card_id: CardId) -> String;
 
     /// Derives a card from the wallet and sends it to the `ScopeCardAgent` `target`, which
     /// uses it; returns the outcomes that `use_received_card` reports.
@@ -1247,6 +1264,17 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
             raw::outcome(&raw::view(child)),
             raw::outcome(&raw::try_derive_empty_child(child)),
         ]
+    }
+
+    fn derive_from_kept_child(&self, lifespan: Option<String>) -> String {
+        let kept = self.kept_cards.borrow();
+        let child = kept.child.as_ref().expect("no kept child card");
+        raw::outcome(&raw::try_derive_empty_child_with_lifespan(child, lifespan))
+    }
+
+    fn derive_from_wallet_card(&self, card_id: CardId) -> String {
+        let parent = raw::wallet_card(&card_id).expect("the parent card is not in the wallet");
+        raw::outcome(&raw::try_derive_empty_child(&parent))
     }
 
     fn install_kept_child(&self, component_id: ComponentId, target_agent_id: String) -> String {

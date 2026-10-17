@@ -1887,15 +1887,20 @@ the card service again. A failed lookup, or an answer that omits the card, traps
 (see the historical-ordering limit in the walkthrough). A revoked or expired card gives
 `card-revoked` or `card-expired`; the accessors trap. `revoke-card` resolves its handle inside
 its own recorded call. Runtime-card creation (`persist_runtime_card`) records a typed refusal in
-its `End` when the card service refuses a child because a parent is no longer live, and repairs
-an interrupted creation only while its repair authorization still holds. Otherwise it revokes the
-card the interrupted attempt may have created and records the refusal; the guest has not
-observed an incomplete call, so either outcome is a valid first observation. `install-card` of a
-template card records the same typed refusal in its `install-card-transfer` `End` when the card
-service refuses the installed child. Tests: `tests/scope_cards.rs::{cached_child_handle_reports_its_self_revoked_card_before_and_after_replay,
+its `End` when the card service refuses a child because a parent is no longer live. The card
+service reports an expired card as revoked, so the parent's expiry decides between
+`card-expired` and `card-revoked`. Creation repairs an interrupted call only while its repair
+authorization still holds. Otherwise it revokes the card the interrupted attempt may have
+created and records the refusal; the guest has not observed an incomplete call, so either
+outcome is a valid first observation. The registry never creates a revoked runtime card id
+again (`RuntimeCardCreation::Revoked`), so a later repair of a refused repair that failed before
+its `End` records `card-revoked` instead of retrying. `install-card` of a template card records
+the same typed refusals in its `install-card-transfer` `End`. Tests: `tests/scope_cards.rs::{cached_child_handle_reports_its_self_revoked_card_before_and_after_replay,
 received_card_replays_its_recorded_liveness_after_an_external_revocation,
 externally_revoked_cached_handle_returns_typed_errors_and_its_accessors_trap,
-cached_handle_reports_card_expired_after_its_lifespan}`.
+cached_handle_reports_card_expired_after_its_lifespan,
+derive_from_a_card_that_expires_before_its_creation_records_card_expired,
+a_refused_repair_that_fails_after_revoking_its_card_settles_with_card_revoked}`.
 
 ## Wrong model → right model
 | Wrong | Right | Fails under wrong model |

@@ -77,7 +77,7 @@ use golem_worker_executor::preview2::golem_api_1_x::host::Host as GolemApiHost;
 use golem_worker_executor::preview2::golem_api_1_x::retry::Host as RetryHost;
 use golem_worker_executor::services::HasComponentService;
 use golem_worker_executor::services::active_agents::ActiveAgent;
-use golem_worker_executor::services::card::{CardService, CardState};
+use golem_worker_executor::services::card::{CardService, CardState, RuntimeCardCreation};
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::oplog::CommitLevel;
 use golem_worker_executor::worker::EvictionClass;
@@ -176,7 +176,7 @@ impl CardService for FailingCheckCardService {
         &self,
         card: StoredCard,
         provenance: CardManagedByRuntimeDerived,
-    ) -> Result<StoredCard, WorkerExecutorError> {
+    ) -> Result<RuntimeCardCreation, WorkerExecutorError> {
         TestCardService.create_runtime_card(card, provenance).await
     }
 

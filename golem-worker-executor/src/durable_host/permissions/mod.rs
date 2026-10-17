@@ -41,7 +41,7 @@ use crate::preview2::golem::permissions::revoke as permissions_revoke;
 use crate::preview2::golem::permissions::types as permissions_types;
 use crate::preview2::golem::permissions::wallet as permissions_wallet;
 use crate::services::HasWorker;
-use crate::services::card::{CardRevokeResult, CardState};
+use crate::services::card::{CardRevokeResult, CardState, RuntimeCardCreation};
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
@@ -1159,9 +1159,13 @@ fn derive_error_to_permission_error(
 /// so that refusal is returned to the guest; any other refusal traps and is retried. A parent the
 /// card service omits from its answer has no settled state yet, so the omission is a lookup
 /// failure.
+///
+/// The card service reports an expired card as revoked, so `parent_expires_at`, the expiry of the
+/// card's parent, tells the two apart.
 async fn refused_runtime_card_parent<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     card: &StoredCard,
+    parent_expires_at: Option<DateTime<Utc>>,
 ) -> Result<Option<PermissionCardDeriveError>, WorkerExecutorError> {
     let parent_ids = card.parent_ids().to_vec();
     if parent_ids.is_empty() {
@@ -1176,10 +1180,19 @@ async fn refused_runtime_card_parent<Ctx: WorkerCtx>(
         match states.get(&parent_id) {
             Some(CardState::Live(_)) => {}
             Some(CardState::Revoked) | Some(CardState::Unknown) => {
-                return Ok(Some(PermissionCardDeriveError::CardRevoked(format!(
-                    "parent card {} is revoked or expired",
-                    parent_id.0
-                ))));
+                return Ok(Some(
+                    if parent_expires_at.is_some_and(|expires_at| expires_at <= Utc::now()) {
+                        PermissionCardDeriveError::CardExpired(format!(
+                            "parent card {} is expired",
+                            parent_id.0
+                        ))
+                    } else {
+                        PermissionCardDeriveError::CardRevoked(format!(
+                            "parent card {} is revoked",
+                            parent_id.0
+                        ))
+                    },
+                ));
             }
             None => {
                 return Err(WorkerExecutorError::runtime(format!(
@@ -1195,6 +1208,7 @@ async fn complete_runtime_card_creation<Ctx, Pair>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     mut handle: DurableCallSession<Pair, NotCancellable>,
     card: StoredCard,
+    parent_expires_at: Option<DateTime<Utc>>,
     provenance: CardManagedByRuntimeDerived,
 ) -> anyhow::Result<HostResponsePermissionCardDerived>
 where
@@ -1211,9 +1225,25 @@ where
         .create_runtime_card(card.clone(), provenance)
         .await
     {
-        Ok(created) => created,
+        Ok(RuntimeCardCreation::Created(created)) => *created,
+        // A card that an earlier attempt of this call created was revoked before the call
+        // completed, for example by a repair that was refused. The card service never creates it
+        // again, so the refusal is settled.
+        Ok(RuntimeCardCreation::Revoked) => {
+            return handle
+                .complete(
+                    ctx,
+                    HostResponsePermissionCardDerived {
+                        result: Err(PermissionCardDeriveError::CardRevoked(format!(
+                            "permission card {card_id} was revoked before its creation completed"
+                        ))),
+                    },
+                )
+                .await
+                .map_err(Into::into);
+        }
         Err(error) => {
-            return match refused_runtime_card_parent(ctx, &card).await {
+            return match refused_runtime_card_parent(ctx, &card, parent_expires_at).await {
                 Ok(Some(refusal)) => handle
                     .complete(
                         ctx,
@@ -1254,6 +1284,7 @@ async fn persist_runtime_card<Ctx, Pair, DeriveCardId, BuildCard, RepairAuthoriz
     ctx: &mut DurableWorkerCtx<Ctx>,
     derive_card_id: DeriveCardId,
     build_card: BuildCard,
+    parent_expires_at: Option<DateTime<Utc>>,
     repair_authorization: RepairAuthorization,
 ) -> anyhow::Result<Result<StoredCard, permissions_types::PermissionError>>
 where
@@ -1319,7 +1350,14 @@ where
     }
     let (response, executed_live) = if was_live {
         (
-            complete_runtime_card_creation(ctx, handle, card.clone(), provenance).await?,
+            complete_runtime_card_creation(
+                ctx,
+                handle,
+                card.clone(),
+                parent_expires_at,
+                provenance,
+            )
+            .await?,
             true,
         )
     } else {
@@ -1335,8 +1373,14 @@ where
                 };
                 let response = match authorized {
                     Ok(()) => {
-                        complete_runtime_card_creation(ctx, handle, card.clone(), provenance)
-                            .await?
+                        complete_runtime_card_creation(
+                            ctx,
+                            handle,
+                            card.clone(),
+                            parent_expires_at,
+                            provenance,
+                        )
+                        .await?
                     }
                     Err(refusal) => {
                         // The interrupted attempt may have created the card before the crash. No
@@ -1472,6 +1516,7 @@ fn ensure_persistent_derivation_repair_authority(
 async fn persist_derived_card<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     parent_id: CardId,
+    parent_expires_at: Option<DateTime<Utc>>,
     grants: DerivedGrantSets,
     created_at: DateTime<Utc>,
     expires_at: Option<DateTime<Utc>>,
@@ -1494,6 +1539,7 @@ async fn persist_derived_card<Ctx: WorkerCtx>(
                 managed_by: None,
             })
         },
+        parent_expires_at,
         move |ctx| {
             ensure_persistent_derivation_repair_authority(
                 &ctx.state.agent_effective_surface,
@@ -1542,6 +1588,7 @@ pub(crate) async fn persist_installed_child_card<Ctx: WorkerCtx>(
                 created_at,
             ))
         },
+        source.expires_at,
         move |ctx| {
             ensure_install_permission_in_surface(
                 &ctx.state.agent_effective_surface,
@@ -1566,7 +1613,16 @@ async fn derive_and_persist_card<Ctx: WorkerCtx>(
         Ok(expires_at) => expires_at,
         Err(error) => return Ok(Err(error)),
     };
-    persist_derived_card(ctx, parent.card_id, grants, now, expires_at, source).await
+    persist_derived_card(
+        ctx,
+        parent.card_id,
+        parent.expires_at,
+        grants,
+        now,
+        expires_at,
+        source,
+    )
+    .await
 }
 
 fn ensure_card_permission<Ctx: WorkerCtx>(
@@ -2253,9 +2309,21 @@ async fn execute_source_card_transfer<Ctx: WorkerCtx>(
                 .create_runtime_card(transfer.installed_card.clone(), provenance)
                 .await
             {
-                Ok(persisted) => persisted,
+                Ok(RuntimeCardCreation::Created(persisted)) => *persisted,
+                Ok(RuntimeCardCreation::Revoked) => {
+                    return Ok(Err(PermissionCardDeriveError::CardRevoked(format!(
+                        "installed permission card {} was revoked before the transfer completed",
+                        transfer.installed_card.card_id()
+                    ))));
+                }
                 Err(error) => {
-                    return match refused_runtime_card_parent(ctx, &transfer.installed_card).await {
+                    return match refused_runtime_card_parent(
+                        ctx,
+                        &transfer.installed_card,
+                        transfer.source_card.expires_at(),
+                    )
+                    .await
+                    {
                         Ok(Some(refusal)) => Ok(Err(refusal)),
                         Ok(None) => Err(error.into()),
                         Err(lookup_error) => Err(anyhow!(

@@ -117,7 +117,9 @@ use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::{
     BlobStoreError, BlobStoreMutation, BlobStoreService, DefaultBlobStoreService,
 };
-use golem_worker_executor::services::card::{CardService, CardState, NoopCardService};
+use golem_worker_executor::services::card::{
+    CardService, CardState, NoopCardService, RuntimeCardCreation,
+};
 use golem_worker_executor::services::card_interest::CardInterestIndex;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::direct_invocation_auth::{
@@ -9002,17 +9004,17 @@ impl CardService for TestCardService {
         &self,
         card: StoredCard,
         _provenance: CardManagedByRuntimeDerived,
-    ) -> Result<StoredCard, WorkerExecutorError> {
+    ) -> Result<RuntimeCardCreation, WorkerExecutorError> {
         let mut cards = TEST_RUNTIME_CARDS.write().unwrap();
         match cards.get(&card.card_id()) {
             Some(existing) if existing != &card => Err(WorkerExecutorError::runtime(format!(
                 "conflicting test runtime permission card {}",
                 card.card_id()
             ))),
-            Some(existing) => Ok(existing.clone()),
+            Some(existing) => Ok(RuntimeCardCreation::Created(Box::new(existing.clone()))),
             None => {
                 cards.insert(card.card_id(), card.clone());
-                Ok(card)
+                Ok(RuntimeCardCreation::Created(Box::new(card)))
             }
         }
     }

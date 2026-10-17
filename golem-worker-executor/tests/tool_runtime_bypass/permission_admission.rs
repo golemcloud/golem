@@ -54,7 +54,7 @@ use golem_common::{agent_id, data_value};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_test_framework::dsl::TestDsl;
-use golem_worker_executor::services::card::{CardService, CardState};
+use golem_worker_executor::services::card::{CardService, CardState, RuntimeCardCreation};
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestCardService, TestContext, TestExecutorOverrides,
@@ -133,7 +133,7 @@ impl CardService for PermissionCardService {
         &self,
         card: StoredCard,
         provenance: CardManagedByRuntimeDerived,
-    ) -> Result<StoredCard, WorkerExecutorError> {
+    ) -> Result<RuntimeCardCreation, WorkerExecutorError> {
         TestCardService.create_runtime_card(card, provenance).await
     }
 }
