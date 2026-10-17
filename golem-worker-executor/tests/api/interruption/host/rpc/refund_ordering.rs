@@ -1,8 +1,7 @@
 use super::*;
+use crate::monthly_acceptance::Acceptance;
 use golem_worker_executor::services::oplog::CommitLevel;
-use golem_worker_executor::worker::{
-    MonthlyAcceptanceForTest, MonthlyProposalForTest, MonthlyTimerPollForTest,
-};
+use golem_worker_executor::worker::{MonthlyProposalForTest, MonthlyTimerPollForTest};
 use golem_worker_executor::workerctx::default::Context;
 use golem_worker_executor_test_utils::TestWorkerExecutor;
 use test_r::test;
@@ -84,9 +83,7 @@ pub(super) fn exhausted_proposal(
     Ok(())
 }
 
-pub(super) fn no_attempt(
-    attempts: &mut mpsc::UnboundedReceiver<MonthlyAcceptanceForTest>,
-) -> anyhow::Result<()> {
+pub(super) fn no_attempt(attempts: &mut mpsc::UnboundedReceiver<Acceptance>) -> anyhow::Result<()> {
     ensure!(
         matches!(attempts.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
         "unexpected monthly attempt or closed acceptance observer"

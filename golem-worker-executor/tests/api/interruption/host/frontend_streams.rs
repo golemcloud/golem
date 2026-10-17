@@ -120,7 +120,8 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
     let mut result_wait = crate::invocation_waits::result_wait(&id, &key);
     let (clock, mut polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
-    let mut attempts = worker.observe_monthly_acceptance_for_test();
+    let mut attempts =
+        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let input = TypedSchemaValue::new(
         SchemaGraph::anonymous(SchemaType::record(vec![
             golem_common::schema::NamedFieldType {
@@ -200,7 +201,7 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
     let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
         .await?
         .context("monthly acceptance")?;
-    ensure!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
+    ensure!(attempt.accepted);
     ensure!(attempt.proposal.exhaustion == Some("monthly memory exhausted"));
     let expected = worker
         .monthly_stop_for_test()

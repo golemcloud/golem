@@ -218,7 +218,8 @@ async fn pending_compute(
     assert!(worker.concurrent_agent_permit_is_held().await);
     assert!(!invocation.is_finished());
 
-    let mut attempts = worker.observe_monthly_acceptance_for_test();
+    let mut attempts =
+        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let mut raw = worker.raw_interrupt_for_test();
     tokio::time::timeout(Duration::from_secs(10), polls.recv())
         .await?
@@ -249,7 +250,10 @@ async fn pending_compute(
     );
     assert_eq!(attempt.proposal.period, prepaid.period);
     assert_eq!(attempt.proposal.fuel_generation, prepaid.fuel_generation);
-    assert_eq!(attempt.proposal.window_identity, prepaid.window_identity);
+    assert_eq!(
+        attempt.proposal.diagnostic_window_id,
+        prepaid.diagnostic_window_id
+    );
     assert_eq!(
         attempt.proposal.resident_generation,
         prepaid.resident_generation
@@ -258,7 +262,7 @@ async fn pending_compute(
         attempt.proposal.exhaustion,
         Some("monthly compute exhausted")
     );
-    assert!(attempt.completed.await?);
+    assert!(attempt.accepted);
     assert!(account.settled_fuel_generation_for_test() > prepaid.fuel_generation);
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(30), raw.recv()).await??,

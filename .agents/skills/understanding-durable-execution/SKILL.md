@@ -451,6 +451,20 @@ leader/follower progress and seal/successor ordering retire with those producers
 effects, invocation identity, committed prefixes, exact results and terminals, and physical cleanup.
 Their receipt comes from ordinary `ExecutionStatus::Interrupting`, observed in test-side support
 while provider or oplog work remains held. No private publication receipt remains on Worker.
+The monthly-acceptance observer removal deletes the Worker-owned sender, setter, constructor
+wiring, exported acceptance envelope and pre/post acceptance producer branches. Tests capture the
+existing `monthly_acceptance` diagnostic only after the actual acceptance result. It carries the
+sampled policy and owner/window identity and the exact acceptance boolean. There is no replacement
+runtime channel or completion future. Receiving this event is not evidence of when a proposal was
+first sampled, interruption completion or physical cleanup. A dual-observation baseline checks
+Registry rejection, tick rejection and later acceptance against the old observer before removal.
+Native same-window/replacement checks use the real unique diagnostic window ID with attempt and
+generation, not a projected Arc address; unit tests still exercise the actual Arc guard. The read-only
+current-window snapshot remains. Library, strict lint and production checks pass on that Rust source.
+The canary and selected native cases, including every earlier timeout case, pass in small exact-name
+batches with the approved thermal/CI-time guard. Earlier broad failures and the killed run remain
+failed/aborted evidence, not a passing parallel-suite claim. #4195 composition remains separate.
+
 The existing teardown, idle, monthly-time, replay and other test controls remain open F10/F11 work;
 isolating their fields under test configuration does not justify or complete their removal.
 
@@ -541,7 +555,7 @@ checks through the real oplog dependency. Selection and host completion cases re
 key/history and ordinary reconstruction, but no longer require raw stop signalling to wait for the
 callback's commit. The idle-after-success observer and private pending/committed-writer projections
 are removed with their protocol. Setup uses actual invocation completion and execution-permit release.
-Monthly observers and other cleanup controls remain open F10/F11 work. The local restoration removes
+Remaining monthly-time and other cleanup controls remain open F10/F11 work. The local restoration removes
 the general stop protocol and passes its affected checks; that does not close all architectural work.
 
 The default 10 ms epoch increment still does not wake pending host futures. Real silent-TCP tests

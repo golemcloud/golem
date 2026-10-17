@@ -120,7 +120,7 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
     assert_eq!(old.diagnostic_window_id, initial.diagnostic_window_id);
     assert_eq!(old.start_attempt, initial.start_attempt);
     assert_eq!(old.resident_generation, initial.resident_generation);
-    assert_eq!(old.window_identity, initial.window_identity);
+    assert_eq!(old.diagnostic_window_id, initial.diagnostic_window_id);
     assert!(worker.concurrent_agent_permit_is_held().await);
     assert_eq!(worker.permit_acquisitions_for_test(), old_acquisitions);
     assert_eq!(worker.monthly_stop_for_test(), None);
@@ -145,7 +145,7 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
     assert_eq!(credited.diagnostic_window_id, old.diagnostic_window_id);
     assert_eq!(credited.start_attempt, old.start_attempt);
     assert_eq!(credited.resident_generation, old.resident_generation);
-    assert_eq!(credited.window_identity, old.window_identity);
+    assert_eq!(credited.diagnostic_window_id, old.diagnostic_window_id);
     assert_eq!(worker.monthly_stop_for_test(), None);
     drop(updates);
     assert_eq!(account.monthly_observer_count_for_test(), 1);
@@ -165,7 +165,8 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
     tokio::time::timeout(Duration::from_secs(10), old_refresh).await??;
     tokio::time::timeout(Duration::from_secs(10), restored_refresh).await??;
     worker.drain_lifecycle_for_test().await?;
-    let mut attempts = worker.observe_monthly_acceptance_for_test();
+    let mut attempts =
+        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
 
     let (new_replay, release_new_replay) = worker.pause_completed_replay_for_test(key.clone());
     let resume = tokio::spawn({
@@ -188,7 +189,7 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
     assert_eq!(current.fingerprint, old.fingerprint);
     assert_ne!(current.start_attempt, old.start_attempt);
     assert!(current.resident_generation > old.resident_generation);
-    assert_ne!(current.window_identity, old.window_identity);
+    assert_ne!(current.diagnostic_window_id, old.diagnostic_window_id);
     assert_eq!(current.policy_revision, old.policy_revision);
     assert_eq!(current.period, old.period);
     assert!(worker.concurrent_agent_permit_is_held().await);
@@ -218,7 +219,10 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
     );
     assert_eq!(current.start_attempt, replacement.start_attempt);
     assert_eq!(current.resident_generation, replacement.resident_generation);
-    assert_eq!(current.window_identity, replacement.window_identity);
+    assert_eq!(
+        current.diagnostic_window_id,
+        replacement.diagnostic_window_id
+    );
     assert_eq!(current.policy_revision, old.policy_revision);
     assert_eq!(current.period, old.period);
     assert_eq!(current.fuel_generation, old.fuel_generation);
@@ -230,11 +234,7 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
         .await?
         .context("current actual monitor proposal")?;
     assert_eq!(fresh.proposal, current);
-    assert!(
-        tokio::time::timeout(Duration::from_secs(10), fresh.completed)
-            .await
-            .context("current target acceptance acknowledgment")??
-    );
+    assert!(fresh.accepted);
     eprintln!(
         "[stale-target] accepted current attempt: {:?}",
         fresh.proposal

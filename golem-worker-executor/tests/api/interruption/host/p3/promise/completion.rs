@@ -52,7 +52,8 @@ async fn durable_p3_promise_completion_before_quota_stop(
     .await?;
     let (clock, _polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
-    let mut attempts = worker.observe_monthly_acceptance_for_test();
+    let mut attempts =
+        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let key = IdempotencyKey::fresh();
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
@@ -99,7 +100,7 @@ async fn durable_p3_promise_completion_before_quota_stop(
         registry.set_policy(exhausted);
         let refresh = applied_refresh(&limits, &registry, context.account_id).await?;
         let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv()).await?.context("monthly acceptance")?;
-        ensure!(attempt.proposal.window_identity == initial.window_identity);
+        ensure!(attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id);
         ensure!(attempt.proposal.resident_generation == initial.resident_generation);
         ensure!(attempt.proposal.policy_revision == initial.policy_revision + 1);
         ensure!(attempt.proposal.period == initial.period);
@@ -107,7 +108,7 @@ async fn durable_p3_promise_completion_before_quota_stop(
         ensure!(attempt.proposal.start_attempt == initial.start_attempt);
         ensure!(attempt.proposal.fuel_generation == initial.fuel_generation);
         ensure!(attempt.proposal.exhaustion == Some("monthly memory exhausted"));
-        ensure!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
+        ensure!(attempt.accepted);
         ensure!(!invocation.is_finished());
         // End and delivery were committed before exhaustion. Release the selected
         // invocation result and check it survives the accepted stop. Receive order

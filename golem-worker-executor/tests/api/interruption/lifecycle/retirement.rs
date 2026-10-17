@@ -202,7 +202,7 @@ async fn stop_order(
     assert_eq!(applied.diagnostic_window_id, initial.diagnostic_window_id);
     assert_eq!(applied.start_attempt, initial.start_attempt);
     assert_eq!(applied.resident_generation, initial.resident_generation);
-    assert_eq!(applied.window_identity, initial.window_identity);
+    assert_eq!(applied.diagnostic_window_id, initial.diagnostic_window_id);
     drop(updates);
     assert_eq!(account.monthly_observer_count_for_test(), 1);
     assert!(worker.concurrent_agent_permit_is_held().await);

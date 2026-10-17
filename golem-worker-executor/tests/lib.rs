@@ -51,6 +51,7 @@ mod invocation_waits;
 pub mod key_value_storage;
 pub mod keyvalue;
 pub mod mcp_stdout;
+mod monthly_acceptance;
 pub mod namespace_routed_key_value_storage;
 mod native_waits;
 pub mod observability;
@@ -178,6 +179,7 @@ impl Tracing {
                     invocation_waits::layer(),
                     scheduler_waits::layer(),
                     entity_fence_waits::layer(),
+                    monthly_acceptance::layer(),
                 ],
             );
         });

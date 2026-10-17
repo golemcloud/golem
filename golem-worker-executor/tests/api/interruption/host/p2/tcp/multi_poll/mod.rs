@@ -159,7 +159,8 @@ async fn pending_multi_poll(
     }
     let (clock, mut polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
-    let mut attempts = worker.observe_monthly_acceptance_for_test();
+    let mut attempts =
+        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let mut phases = crate::native_waits::poll(worker.get_initial_worker_metadata().fingerprint);
     let listeners = listeners().await?;
     let first_port = listeners[0].local_addr()?.port();
@@ -284,11 +285,11 @@ async fn pending_multi_poll(
         ensure!(attempt.proposal.fingerprint == initial.fingerprint);
         ensure!(attempt.proposal.start_attempt == initial.start_attempt);
         ensure!(attempt.proposal.period == initial.period);
-        ensure!(attempt.proposal.window_identity == initial.window_identity);
+        ensure!(attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id);
         ensure!(attempt.proposal.resident_generation == initial.resident_generation);
         ensure!(attempt.proposal.fuel_generation == initial.fuel_generation);
         ensure!(attempt.proposal.exhaustion == Some(resource.reason(durable)));
-        ensure!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
+        ensure!(attempt.accepted);
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
         ensure!(worker.monthly_stop_for_test() == Some(signal));

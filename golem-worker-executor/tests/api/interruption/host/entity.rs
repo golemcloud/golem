@@ -288,7 +288,8 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
         "[monthly-entity] primary calls={primary_calls:?}, entity calls={entity_calls:?}, registration={registered:?}, live owner flushers=2, observers=1, generation={generation}"
     );
 
-    let mut attempts = worker.observe_monthly_acceptance_for_test();
+    let mut attempts =
+        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let committed_prefix = executor.stored_oplog(&id).await;
     let (selected, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
     let mut raw = worker.raw_interrupt_for_test();
@@ -303,7 +304,7 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
         .await?
         .context("monthly proposal for the two-Store owner")?;
     assert_eq!(attempt.proposal.resident_generation, generation);
-    assert!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
+    assert!(attempt.accepted);
     assert_eq!(
         limits
             .initialized_policy_revision_for_test(context.account_id)

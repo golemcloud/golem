@@ -139,7 +139,8 @@ async fn pending_scripted_storage(
         .set_scripted_filesystem_usage_for_test(source.clone());
     let (clock, mut polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
-    let mut attempts = worker.observe_monthly_acceptance_for_test();
+    let mut attempts =
+        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     let invocation = tokio::spawn({
@@ -208,7 +209,10 @@ async fn pending_scripted_storage(
         .context("storage exhaustion proposal")?
         .unwrap();
     assert_eq!(attempt.proposal.policy_revision, initial.policy_revision);
-    assert_eq!(attempt.proposal.window_identity, initial.window_identity);
+    assert_eq!(
+        attempt.proposal.diagnostic_window_id,
+        initial.diagnostic_window_id
+    );
     assert_eq!(
         attempt.proposal.exhaustion,
         Some(if durable {
@@ -217,7 +221,7 @@ async fn pending_scripted_storage(
             "monthly ephemeral storage exhausted"
         })
     );
-    assert!(attempt.completed.await?);
+    assert!(attempt.accepted);
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??,
         InterruptKind::Suspend(_)

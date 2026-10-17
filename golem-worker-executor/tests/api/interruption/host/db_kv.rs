@@ -557,7 +557,8 @@ async fn completion_stop(
     .await?;
     let (clock, mut polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
-    let mut attempts = worker.observe_monthly_acceptance_for_test();
+    let mut attempts =
+        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let method = match operation {
         Operation::Keyvalue => "set_twice",
         Operation::Execute => "execute_twice",
@@ -608,7 +609,7 @@ async fn completion_stop(
             applied_refresh(&limits, &registry, context.account_id).await?,
         ));
         let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv()).await?.context("monthly stop acceptance")?;
-        ensure!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
+        ensure!(attempt.accepted);
         let kind = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(kind, InterruptKind::Suspend(_)));
         let baseline = registry.applied_updates().len();

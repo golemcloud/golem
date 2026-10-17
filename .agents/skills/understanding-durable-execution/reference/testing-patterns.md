@@ -452,8 +452,22 @@ controlled whole-Worker compound interleaving.
 
 ### Monthly acceptance guard and applied capacity
 
+Acceptance observation uses test-side capture of the existing completed `monthly_acceptance`
+diagnostic. The sample fields and exact acceptance boolean share that event. They do not expose a
+pre-acceptance phase or form an interruption receipt. A bounded receive replaces the old proposal
+receive plus separate runtime completion wait. Preserve the same required boolean; rejection never
+allows a retry or either-result assertion. The dual-observation baseline checks both contended
+rejections and a later acceptance before removing the Worker transport.
+
+Use diagnostic window ID, fingerprint, attempt and generation for native same-window/replacement
+comparisons. The ID belongs to the actual window, not a test-side reconstruction of its Arc address.
+Colocated tests retain literal Arc matching. The read-only current-window snapshot remains separate
+from the removed observer field and producer. Missing or mismatched events fail the test; capture
+must never create synthetic proposals or results.
+
 The monthly acceptance gate field, setter and pre-validation await producer are removed. Its existing
-observer/completion transport and ordinary tracing event remain, without a replacement runtime gate.
+ordinary tracing event remains. The observer/completion transport is removed separately, without
+a replacement runtime gate.
 `matches_running_owner` matches the outer `WorkerInstance::Running` before loading generation or held-permit
 atomics or locking the current target. It never unwraps `deletion_runtime`. The actual path keeps
 cached-owner lookup before the instance mutex, then retains that guard through the predicate, active
@@ -472,7 +486,7 @@ full batches before any Worker exists, then retains silent-I/O liveness and clea
 live-window stale-message delivery. `same_cached_worker_replaces_monthly_window_and_accepts_current_quota`
 keeps the cached owner, replaces its actual window/attempt/generation and accepts a current proposal.
 Old-target rejection belongs to the body predicate, not a fabricated old completion or late false ack.
-Its existing acceptance observer is installed after the old monitor joins and lifecycle FIFO drains,
+Its test-side acceptance subscription is installed after the old monitor joins and lifecycle FIFO drains,
 not filtered to discard old events. Retirement cases retain first-cause/history/cleanup facts without
 claiming particular late actor-message processing. The retry case remains a timer/rearm proof under
 its existing interrupt-lock hold, not a new watch or notification checkpoint.

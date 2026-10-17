@@ -72,6 +72,14 @@ This section records the state at plan capture, not the status of every later ex
 
 ## Authorized work and integration boundary
 
+#4195 has now merged after the main revision integrated here. Its Rust custom-scope and async
+completion changes are not yet in this branch. The static impact review is in
+`PR-3894-pr4195-impact.md`. It finds a required composition check for automatic suspension and
+quota-forced Suspend during custom bodies and pending async finish. The upstream "suspended sibling"
+case uses simulated crash, not Worker auto-suspension. Keep SDK/WIT/host integration coherent and
+preserve this branch's InterruptSources behavior. No merge, build or test was performed for this
+review; cooling and host-guard setup keep execution paused. Earlier receipts do not validate #4195.
+
 The user approved independent implementation, then local recovery integration, and now directs
 the branch to current main after #4207 merged. Keep #4212's merged stdin fixes.
 This does not authorize changing grants, pushing, review replies or tracker mutations.

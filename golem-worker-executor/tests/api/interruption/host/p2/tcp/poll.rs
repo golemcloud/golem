@@ -164,7 +164,8 @@ async fn pending_block(
     if resource != Resource::Memory {
         worker.set_monthly_clock_for_test(clock.clone());
     }
-    let mut attempts = worker.observe_monthly_acceptance_for_test();
+    let mut attempts =
+        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     let mut invocation = tokio::spawn({
@@ -302,11 +303,11 @@ async fn pending_block(
                 == initial.policy_revision + u64::from(resource != Resource::Storage)
         );
         ensure!(attempt.proposal.period == initial.period);
-        ensure!(attempt.proposal.window_identity == initial.window_identity);
+        ensure!(attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id);
         ensure!(attempt.proposal.resident_generation == initial.resident_generation);
         ensure!(attempt.proposal.fuel_generation == initial.fuel_generation);
         ensure!(attempt.proposal.exhaustion == Some(resource.reason(durable)));
-        ensure!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
+        ensure!(attempt.accepted);
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
         ensure!(worker.monthly_stop_for_test() == Some(signal));
@@ -484,11 +485,11 @@ async fn pending_block(
                 let refresh = applied_refresh(&limits, &registry, context.account_id).await?;
                 let accepted = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
                     .await?.context("replay monthly acceptance")?;
-                ensure!(accepted.proposal.window_identity == replay_proposal.window_identity);
+                ensure!(accepted.proposal.diagnostic_window_id == replay_proposal.diagnostic_window_id);
                 ensure!(accepted.proposal.resident_generation == replay_proposal.resident_generation);
                 ensure!(accepted.proposal.policy_revision == replay_proposal.policy_revision + 1);
                 ensure!(accepted.proposal.exhaustion == Some("monthly memory exhausted"));
-                ensure!(tokio::time::timeout(Duration::from_secs(10), accepted.completed).await??);
+                ensure!(accepted.accepted);
                 let signal = tokio::time::timeout(Duration::from_secs(10), replay_signal.recv()).await??;
                 ensure!(matches!(signal, InterruptKind::Suspend(_)));
                 ensure!(worker.monthly_stop_for_test() == Some(signal));

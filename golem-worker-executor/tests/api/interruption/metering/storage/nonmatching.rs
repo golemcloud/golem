@@ -130,7 +130,8 @@ async fn nonmatching_storage(
         .set_scripted_filesystem_usage_for_test(source.clone());
     let (clock, mut polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
-    let mut attempts = worker.observe_monthly_acceptance_for_test();
+    let mut attempts =
+        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     let invocation = tokio::spawn({
@@ -258,7 +259,7 @@ async fn nonmatching_storage(
     let sampled = worker.current_monthly_proposal_for_test();
     assert_eq!(sampled.policy_revision, revision);
     assert_eq!(sampled.period, initial.period);
-    assert_eq!(sampled.window_identity, initial.window_identity);
+    assert_eq!(sampled.diagnostic_window_id, initial.diagnostic_window_id);
     assert_eq!(sampled.resident_generation, initial.resident_generation);
     assert_eq!(sampled.exhaustion, None);
     assert!(account.monthly_capacity_is_exhausted_for_test(other));

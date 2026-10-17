@@ -132,7 +132,8 @@ async fn pending_stop(
     .await?;
     let (clock, mut polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
-    let mut attempts = worker.observe_monthly_acceptance_for_test();
+    let mut attempts =
+        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let gate = filesystem.then(|| FilesystemObservationGateForTest::install(key.clone()));
     let method = if filesystem {
         "stat_root"
@@ -176,7 +177,7 @@ async fn pending_stop(
         registry.set_policy(exhausted);
         let refresh = applied_refresh(&limits, &registry, context.account_id).await?;
         let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv()).await?.context("accepted monthly stop")?;
-        ensure!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
+        ensure!(attempt.accepted);
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
         tokio::time::timeout(Duration::from_secs(3), async {

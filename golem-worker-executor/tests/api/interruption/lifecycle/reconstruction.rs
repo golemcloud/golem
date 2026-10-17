@@ -135,7 +135,8 @@ mod completed_history {
             "[monthly-replay] committed key={key:?}, indices={replay_indices:?}, result={result}, fingerprint={fingerprint:?}, generation={initial_generation}->{generation}"
         );
 
-        let mut attempts = worker.observe_monthly_acceptance_for_test();
+        let mut attempts =
+            crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy.clone();
         exhausted.available_memory_gb_seconds = 0;
@@ -148,7 +149,7 @@ mod completed_history {
             .await?
             .context("monthly proposal while completed replay is held")?;
         assert_eq!(attempt.proposal.resident_generation, generation);
-        assert!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
+        assert!(attempt.accepted);
         let monthly = worker
             .monthly_stop_for_test()
             .expect("accepted monthly stop");
@@ -495,7 +496,8 @@ mod post_export {
             tracker.active_count()
         );
 
-        let mut attempts = worker.observe_monthly_acceptance_for_test();
+        let mut attempts =
+            crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
         let (selected, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy;
@@ -509,7 +511,7 @@ mod post_export {
             .await?
             .context("monthly proposal after root export returned")?;
         assert_eq!(attempt.proposal.resident_generation, generation);
-        assert!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
+        assert!(attempt.accepted);
         assert_eq!(
             limits
                 .initialized_policy_revision_for_test(context.account_id)

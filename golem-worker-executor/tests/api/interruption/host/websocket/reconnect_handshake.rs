@@ -230,7 +230,7 @@ pub(super) async fn pending_reconnect_handshake(
         let target_updates_start = registry.applied_updates().len();
         let (clock, mut polls) = MonthlyClockForTest::new();
         worker.set_monthly_clock_for_test(clock.clone());
-        let mut attempts = worker.observe_monthly_acceptance_for_test();
+        let mut attempts = crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
         let holder_key = IdempotencyKey::fresh();
         holder_invocation = Some(tokio::spawn({
             let executor = executor.clone(); let component = component.clone(); let key = holder_key.clone(); let url = peer.url.clone();
@@ -358,11 +358,11 @@ pub(super) async fn pending_reconnect_handshake(
             }
         }).await.context("monthly proposal")??;
         ensure!(attempt.proposal.policy_revision == initial.policy_revision + u64::from(resource != Resource::Storage));
-        ensure!(attempt.proposal.period == initial.period && attempt.proposal.window_identity == initial.window_identity);
+        ensure!(attempt.proposal.period == initial.period && attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id);
         ensure!(attempt.proposal.resident_generation == initial.resident_generation && attempt.proposal.start_attempt == initial.start_attempt);
         ensure!(attempt.proposal.fingerprint == initial.fingerprint && attempt.proposal.fuel_generation == initial.fuel_generation);
         ensure!(attempt.proposal.exhaustion == Some(resource.reason(true)));
-        ensure!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
+        ensure!(attempt.accepted);
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)) && worker.monthly_stop_for_test() == Some(signal));
         peer.assert_effects(3, 2, 2)?;

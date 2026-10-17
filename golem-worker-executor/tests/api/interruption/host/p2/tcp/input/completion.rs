@@ -81,7 +81,8 @@ async fn completion_and_history(
     let (clock, _polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
     let mut phases = crate::native_waits::input(worker.get_initial_worker_metadata().fingerprint);
-    let mut attempts = worker.observe_monthly_acceptance_for_test();
+    let mut attempts =
+        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     let key = IdempotencyKey::fresh();
@@ -128,7 +129,7 @@ async fn completion_and_history(
         ensure!(attempt.proposal.resident_generation == phase.runtime.resident_generation);
         ensure!(attempt.proposal.policy_revision == phase.runtime.policy_revision + 1);
         ensure!(attempt.proposal.exhaustion == Some("monthly memory exhausted"));
-        ensure!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
+        ensure!(attempt.accepted);
         tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
         ensure!(!request_is_finished(&invocation));
         release.send(false).unwrap();

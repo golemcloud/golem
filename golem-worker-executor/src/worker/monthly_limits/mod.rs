@@ -237,7 +237,6 @@ pub struct MonthlyProposalForTest {
     pub fingerprint: AgentFingerprint,
     pub start_attempt: Uuid,
     pub resident_generation: u64,
-    pub window_identity: usize,
     pub policy_revision: u64,
     pub period: golem_common::model::account_usage::AccountUsagePeriod,
     pub fuel_generation: Option<u64>,
@@ -252,19 +251,12 @@ impl MonthlyProposalForTest {
             fingerprint: target.fingerprint,
             start_attempt: target.start_attempt,
             resident_generation: target.resident_generation,
-            window_identity: Arc::as_ptr(target) as usize,
             policy_revision: capacity.policy_revision,
             period: capacity.period,
             fuel_generation: capacity.fuel_generation,
             exhaustion: capacity.exhaustion.map(|value| value.reason()),
         }
     }
-}
-
-#[cfg(feature = "test-utils")]
-pub struct MonthlyAcceptanceForTest {
-    pub proposal: MonthlyProposalForTest,
-    pub completed: tokio::sync::oneshot::Receiver<bool>,
 }
 
 pub(super) struct ExecutionWindow {
@@ -742,21 +734,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     #[cfg(feature = "test-utils")]
-    pub fn observe_monthly_acceptance_for_test(
-        &self,
-    ) -> tokio::sync::mpsc::UnboundedReceiver<MonthlyAcceptanceForTest> {
-        let (notify, observe) = tokio::sync::mpsc::unbounded_channel();
-        assert!(
-            self.monthly_acceptance_observer
-                .lock()
-                .unwrap()
-                .replace(notify)
-                .is_none()
-        );
-        observe
-    }
-
-    #[cfg(feature = "test-utils")]
     pub fn current_monthly_proposal_for_test(&self) -> MonthlyProposalForTest {
         let target = self
             .monthly_window
@@ -1115,18 +1092,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         target: Arc<MonthlyWindowTarget>,
         proposed: MonthlyCapacity,
     ) {
-        #[cfg(feature = "test-utils")]
-        let completed = {
-            let observer = self.monthly_acceptance_observer.lock().unwrap().clone();
-            observer.map(|observer| {
-                let (completed, receive) = tokio::sync::oneshot::channel();
-                let _ = observer.send(MonthlyAcceptanceForTest {
-                    proposal: MonthlyProposalForTest::new(&target, proposed),
-                    completed: receive,
-                });
-                completed
-            })
-        };
         let diagnostic = crate::native_wait_diagnostics::WindowTrace {
             id: target.diagnostic_window_id,
             fingerprint: target.fingerprint,
@@ -1136,10 +1101,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         let accepted = self.try_accept_monthly_capacity(target, proposed).await;
         diagnostic.event("monthly_acceptance", Some(proposed), Some(accepted));
-        #[cfg(feature = "test-utils")]
-        if let Some(completed) = completed {
-            let _ = completed.send(accepted);
-        }
     }
 
     async fn try_accept_monthly_capacity(

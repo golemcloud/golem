@@ -264,7 +264,20 @@ Findings 11-14 have separate linked comments.
   - [x] Delete the invocation-deadline watch state and Worker expiry interfaces with their producer
     branch. The native tests now use the existing timer, as recorded under F10.
   - [ ] Address the keyed filesystem gate; oplog backpressure is not actual metadata Pending.
-  - [ ] Address monthly-acceptance observers/completion projections, idle/tail observations,
+  - [x] Remove the monthly-acceptance observer/completion family. The local change
+    removes the Worker sender, constructor wiring, setter, exported acceptance envelope and producer
+    branches. Tests capture the existing completed-acceptance event with exact sampled attributes
+    and acceptance boolean. A dual-observation baseline verifies Registry rejection, tick rejection
+    and later acceptance against the old channel before removal. Native window checks use the unique
+    diagnostic window ID rather than a projected Arc address; actual Arc checks remain in unit tests.
+    Other native assertion bodies are unchanged after formatting. Library checks, strict lint and
+    production compilation pass on the same Rust source. The capture-only canary, contention/refund
+    cases and all cases that timed out previously pass in exact-name guarded batches under the
+    user-approved local profile. The earlier broad failure and killed run remain recorded; this is
+    not a claim that their resource behavior is fixed or that the full parallel cohort passes.
+    The read-only current-window snapshot remains separate from this removed transport. #4195 needs
+    separate combined-source validation after integration.
+  - [ ] Address idle/tail observations,
     private lifecycle projections, scripted allocation support and test-only entity construction.
   - [ ] Keep shared support at real dependency boundaries or in test-utils where appropriate.
     Merely moving files or relocating the same runtime hook does not close this finding.

@@ -1,6 +1,7 @@
 use super::*;
+use crate::monthly_acceptance::Acceptance;
 use golem_common::model::Timestamp;
-use golem_worker_executor::worker::{MonthlyAcceptanceForTest, MonthlyTimerPollForTest};
+use golem_worker_executor::worker::MonthlyTimerPollForTest;
 use test_r::test;
 
 macro_rules! repeated_stop_case {
@@ -62,8 +63,8 @@ async fn armed_timer(
 }
 
 async fn next_attempt(
-    attempts: &mut tokio::sync::mpsc::UnboundedReceiver<MonthlyAcceptanceForTest>,
-) -> anyhow::Result<MonthlyAcceptanceForTest> {
+    attempts: &mut tokio::sync::mpsc::UnboundedReceiver<Acceptance>,
+) -> anyhow::Result<Acceptance> {
     tokio::time::timeout(Duration::from_secs(10), attempts.recv())
         .await?
         .context("monthly acceptance observer closed")
@@ -160,7 +161,8 @@ async fn repeated_stop(
         .set_scripted_filesystem_usage_for_test(source.clone());
     let (clock, mut polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
-    let mut attempts = worker.observe_monthly_acceptance_for_test();
+    let mut attempts =
+        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let mut phases = crate::native_waits::input(worker.get_initial_worker_metadata().fingerprint);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
@@ -236,7 +238,7 @@ async fn repeated_stop(
         let mut expected = initial;
         expected.exhaustion = Some(Resource::Storage.reason(durable));
         ensure!(first.proposal == expected, "{:?} != {expected:?}", first.proposal);
-        let accepted = tokio::time::timeout(Duration::from_secs(10), first.completed).await??;
+        let accepted = first.accepted;
         ensure!(accepted != user_stop, "monthly storage proposal accepted={accepted} after user_stop={user_stop}");
         if !user_stop {
             receipt = Some(published_interrupt_receipt(worker.as_ref()).await?);
@@ -272,7 +274,7 @@ async fn repeated_stop(
         clock.advance(Duration::from_secs(30));
         let repeated = next_attempt(&mut attempts).await?;
         ensure!(repeated.proposal == first.proposal);
-        let accepted = tokio::time::timeout(Duration::from_secs(10), repeated.completed).await??;
+        let accepted = repeated.accepted;
         info!(?mode, user_stop, accepted, retained = ?worker.monthly_stop_for_test(), ?signal, "Second tick at claimed terminal");
         ensure!(!accepted, "second tick accepted a monthly stop after TerminalClaimed");
         armed_timer(&mut polls, now).await?;
@@ -289,7 +291,7 @@ async fn repeated_stop(
         expected.policy_revision += 1;
         expected.exhaustion = Some(Resource::Memory.reason(durable));
         ensure!(updated.proposal == expected, "{:?} != {expected:?}", updated.proposal);
-        ensure!(!tokio::time::timeout(Duration::from_secs(10), updated.completed).await??);
+        ensure!(!updated.accepted);
         info!(?mode, user_stop, proposal = ?updated.proposal, ?signal, "Changed-resource update rejected after terminal claim");
         worker.drain_lifecycle_for_test().await?;
         ensure!(worker.terminal_stop_claimed_for_test().await);

@@ -134,7 +134,8 @@ mod initialization {
         );
         let generation = worker.resident_generation_for_test();
         let acquisitions = worker.permit_acquisitions_for_test();
-        let mut attempts = worker.observe_monthly_acceptance_for_test();
+        let mut attempts =
+            crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
         let mut raw = worker.raw_interrupt_for_test();
         let helper = worker.await_interrupt_for_test();
         let mut exhausted = policy.clone();
@@ -148,7 +149,7 @@ mod initialization {
             .await?
             .context("monthly proposal during core initialization")?;
         assert_eq!(attempt.proposal.resident_generation, generation);
-        assert!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
+        assert!(attempt.accepted);
         let quota_stop = worker
             .monthly_stop_for_test()
             .expect("monthly accepted during core initializer");
@@ -412,7 +413,8 @@ mod owner_election {
         let key = IdempotencyKey::fresh();
         let before = executor.oplog_max_index(&id).await?;
         let (teardown, release_teardown) = worker.pause_next_teardown_fence_for_test();
-        let mut attempts = worker.observe_monthly_acceptance_for_test();
+        let mut attempts =
+            crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
         executor
             .invoke_agent_with_key(&component, &name, &key, "increment", data_value!())
             .await?;
@@ -457,7 +459,7 @@ mod owner_election {
             .await?
             .context("monitor proposal while compute admission teardown is held")?;
         assert_eq!(attempt.proposal.resident_generation, generation);
-        assert!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
+        assert!(attempt.accepted);
         let accepted = worker
             .monthly_stop_for_test()
             .expect("monitor accepted a stop");

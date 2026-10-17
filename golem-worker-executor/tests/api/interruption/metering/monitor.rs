@@ -336,7 +336,8 @@ mod retries {
         .context("initial idle release")?;
         let (clock, mut polls) = MonthlyClockForTest::new();
         worker.set_monthly_clock_for_test(clock.clone());
-        let mut attempts = worker.observe_monthly_acceptance_for_test();
+        let mut attempts =
+            crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
         let account = limits.initialize_account(context.account_id).await?;
         assert_eq!(clock.active_sleeps(), 0);
         assert_eq!(account.monthly_observer_count_for_test(), 0);
@@ -402,15 +403,11 @@ mod retries {
             .context("Registry-triggered attempt")?;
         let current = worker.current_monthly_proposal_for_test();
         assert_eq!(current, missed.proposal);
-        assert_eq!(current.window_identity, initial.window_identity);
+        assert_eq!(current.diagnostic_window_id, initial.diagnostic_window_id);
         assert_eq!(current.start_attempt, initial.start_attempt);
         assert_eq!(current.resident_generation, initial.resident_generation);
         assert_eq!(current.exhaustion, Some("monthly memory exhausted"));
-        assert!(
-            !tokio::time::timeout(Duration::from_secs(10), missed.completed)
-                .await
-                .context("contended attempt rejection")??
-        );
+        assert!(!missed.accepted);
         expect_poll(&mut polls, 11, 41).await?;
         assert_eq!(worker.monthly_stop_for_test(), None);
         assert_eq!(worker.owner_stop_for_test().await, None);
@@ -449,7 +446,7 @@ mod retries {
             .await?
             .context("contended tick proposal")?;
         assert_eq!(missed_tick.proposal, current);
-        assert!(!tokio::time::timeout(Duration::from_secs(10), missed_tick.completed).await??);
+        assert!(!missed_tick.accepted);
         expect_poll(&mut polls, 41, 71).await?;
         assert_eq!(worker.monthly_stop_for_test(), None);
         assert_eq!(worker.owner_stop_for_test().await, None);
@@ -489,7 +486,7 @@ mod retries {
             .await?
             .context("next tick proposal after contention ends")?;
         assert_eq!(retried.proposal, current);
-        assert!(tokio::time::timeout(Duration::from_secs(10), retried.completed).await??);
+        assert!(retried.accepted);
         tokio::time::timeout(Duration::from_secs(10), selected).await??;
         expect_poll(&mut polls, 71, 101).await?;
         let quota_stop = worker.monthly_stop_for_test().expect("accepted tick stop");

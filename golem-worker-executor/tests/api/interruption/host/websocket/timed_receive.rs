@@ -254,7 +254,8 @@ async fn pending_timed_receive(
     }
     let (clock, mut polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
-    let mut attempts = worker.observe_monthly_acceptance_for_test();
+    let mut attempts =
+        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let mut peer = Peer::start().await?;
     let mut native = crate::native_waits::websocket_timed_receive(
         worker.get_initial_worker_metadata().fingerprint,
@@ -394,13 +395,13 @@ async fn pending_timed_receive(
                 == initial.policy_revision + u64::from(resource != Resource::Storage)
         );
         ensure!(attempt.proposal.period == initial.period);
-        ensure!(attempt.proposal.window_identity == initial.window_identity);
+        ensure!(attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id);
         ensure!(attempt.proposal.resident_generation == initial.resident_generation);
         ensure!(attempt.proposal.start_attempt == initial.start_attempt);
         ensure!(attempt.proposal.fingerprint == initial.fingerprint);
         ensure!(attempt.proposal.fuel_generation == initial.fuel_generation);
         ensure!(attempt.proposal.exhaustion == Some(resource.reason(durable)));
-        ensure!(tokio::time::timeout(Duration::from_secs(10), attempt.completed).await??);
+        ensure!(attempt.accepted);
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
         ensure!(matches!(signal, InterruptKind::Suspend(_)));
         ensure!(worker.monthly_stop_for_test() == Some(signal));
@@ -757,7 +758,8 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
     .await?;
     let (clock, mut polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
-    let mut accepted = worker.observe_monthly_acceptance_for_test();
+    let mut accepted =
+        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let pool = worker.websocket_connection_pool();
     let mut peer = Peer::start().await?;
     let mut native = crate::native_waits::websocket_timed_receive(

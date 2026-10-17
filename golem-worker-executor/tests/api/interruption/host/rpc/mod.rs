@@ -251,7 +251,9 @@ async fn pending_rpc_scenario(
     // Keep the target's independent local tick still; applied account updates remain real.
     let (target_clock, mut target_polls) = MonthlyClockForTest::new();
     target.set_monthly_clock_for_test(target_clock.clone());
-    let mut target_attempts = held_growth.then(|| target.observe_monthly_acceptance_for_test());
+    let mut target_attempts = held_growth.then(|| {
+        crate::monthly_acceptance::observe(target.get_initial_worker_metadata().fingerprint)
+    });
     if resource == Resource::Compute {
         limits.run_batch_for_test().await;
     }
@@ -317,7 +319,8 @@ async fn pending_rpc_scenario(
     }
     let (clock, mut polls) = MonthlyClockForTest::new();
     worker.set_monthly_clock_for_test(clock.clone());
-    let mut attempts = worker.observe_monthly_acceptance_for_test();
+    let mut attempts =
+        crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let mut pending_results =
         crate::native_waits::rpc_result(worker.get_initial_worker_metadata().fingerprint);
     let mut invocation = tokio::spawn({
@@ -498,7 +501,7 @@ async fn pending_rpc_scenario(
                 let target_attempt = tokio::time::timeout(Duration::from_secs(5), target_attempts.as_mut().unwrap().recv())
                     .await?.context("target monthly acceptance closed")?;
                 ensure!(target_attempt.proposal == expected_target, "wrong target proposal: {:?}", target_attempt.proposal);
-                ensure!(target_attempt.completed.await?, "the target's exact exhausted proposal was rejected");
+                ensure!(target_attempt.accepted, "the target's exact exhausted proposal was rejected");
                 let signal = tokio::time::timeout(Duration::from_secs(5), target_raw.recv()).await??;
                 ensure!(matches!(signal, InterruptKind::Suspend(_)));
                 ensure!(target.monthly_stop_for_test() == Some(signal));
@@ -528,7 +531,7 @@ async fn pending_rpc_scenario(
                 let caller_attempt = tokio::time::timeout(Duration::from_secs(5), attempts.recv())
                     .await?.context("caller monthly acceptance closed")?;
                 ensure!(caller_attempt.proposal == expected_caller, "wrong queued caller proposal: {:?}", caller_attempt.proposal);
-                ensure!(!caller_attempt.completed.await?, "the queued exhausted proposal survived a real target refund");
+                ensure!(!caller_attempt.accepted, "the queued exhausted proposal survived a real target refund");
                 worker.drain_lifecycle_for_test().await?;
                 refund_ordering::entry_count(&worker, caller_entry, 1).await?;
                 ensure!(worker.current_monthly_proposal_for_test() == restored);
@@ -572,10 +575,10 @@ async fn pending_rpc_scenario(
             };
             ensure!(attempt.proposal.policy_revision == initial.policy_revision + u64::from(resource != Resource::Storage));
             ensure!(attempt.proposal.period == initial.period && attempt.proposal.fingerprint == initial.fingerprint);
-            ensure!(attempt.proposal.window_identity == initial.window_identity && attempt.proposal.resident_generation == initial.resident_generation);
+            ensure!(attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id && attempt.proposal.resident_generation == initial.resident_generation);
             ensure!(attempt.proposal.start_attempt == initial.start_attempt && attempt.proposal.fuel_generation == initial.fuel_generation);
             ensure!(attempt.proposal.exhaustion == Some(resource.reason(durable)));
-            let accepted = attempt.completed.await?;
+            let accepted = attempt.accepted;
             ensure!(accepted);
             if let Some(release) = release_result {
                 // The RPC End and target Finished preceded exhaustion. This checks result
