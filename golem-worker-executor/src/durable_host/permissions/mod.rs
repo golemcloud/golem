@@ -62,14 +62,17 @@ use golem_common::model::card::{
 };
 use golem_common::model::oplog::host_functions::{
     GolemPermissionsDerivePersist, GolemPermissionsInstallChildPersist,
-    GolemPermissionsInstallTransfer, GolemPermissionsRevokePersist,
+    GolemPermissionsInstallTransfer, GolemPermissionsRevokePersist, GolemPermissionsSelfVersion,
+    GolemPermissionsSelfWallet,
 };
 use golem_common::model::oplog::payload::types::PermissionCardRevokeError;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostPayloadPair, HostRequest, HostRequestPermissionCardDerive,
-    HostRequestPermissionCardRevoke, HostRequestPermissionCardTransfer,
-    HostResponsePermissionCardDerived, HostResponsePermissionCardTransferComplete,
-    HostResponsePermissionCardsRevoked, OplogEntry, OplogIndex, QueuedCardEvent,
+    DurableFunctionType, HostPayloadPair, HostRequest, HostRequestNoInput,
+    HostRequestPermissionCardDerive, HostRequestPermissionCardRevoke,
+    HostRequestPermissionCardTransfer, HostResponsePermissionCardDerived,
+    HostResponsePermissionCardTransferComplete, HostResponsePermissionCardsRevoked,
+    HostResponsePermissionWallet, HostResponsePermissionWalletVersion, OplogEntry, OplogIndex,
+    QueuedCardEvent,
 };
 use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId, PendingCardEventRef, Timestamp};
 use golem_common::serialization::{deserialize, serialize};
@@ -2817,42 +2820,84 @@ impl<Ctx: WorkerCtx> permissions_revoke::Host for DurableWorkerCtx<Ctx> {
     }
 }
 
+/// Reads the wallet that a live `self-wallet` call lists. The result is recorded: replay applies
+/// the card events of an invocation at their recorded positions, but an unrecorded read has no
+/// position, so replay could apply an event committed between two reads before both of them.
+async fn observe_self_wallet<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+) -> anyhow::Result<HostResponsePermissionWallet> {
+    let cards = ctx
+        .active_agent_wallet_cards_snapshot()
+        .await?
+        .iter()
+        .map(|card| {
+            serialize(card).map_err(|err| {
+                anyhow!(
+                    "failed to serialize observed wallet card {}: {err}",
+                    card.card_id()
+                )
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    // A scope card lent to this invocation is listed only to a holder that may inspect cards;
+    // for any other holder it stays sealed: it still authorizes, but is not enumerated. The
+    // card is read after the boundary has applied revocations and expiry, so a scope card
+    // invalidated at this boundary is never handed out again.
+    let scope_card = ctx
+        .with_agent_authority_at_boundary(|ctx| {
+            let scope_card = ctx.state.invocation_scope_card.clone()?;
+            ensure_card_permission(ctx, CardVerb::Inspect, CardResourcePattern::Any)
+                .ok()
+                .map(|()| scope_card)
+        })
+        .await?
+        .map(|scope_card| {
+            serialize(&scope_card).map_err(|err| {
+                anyhow!(
+                    "failed to serialize lent scope card {}: {err}",
+                    scope_card.scope_card_id
+                )
+            })
+        })
+        .transpose()?;
+
+    Ok(HostResponsePermissionWallet { cards, scope_card })
+}
+
 impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
     async fn self_wallet(&mut self) -> anyhow::Result<Vec<permissions_types::WalletCard>> {
-        DurabilityHost::observe_function_call(self, "golem::permissions::wallet", "self-wallet");
-        let cards = self.active_agent_wallet_cards_snapshot().await?;
-        let mut wallet_cards = cards
-            .into_iter()
-            .map(|card| {
-                let template = matches!(card, StoredCard::Polymorphic(_));
-                self.table()
-                    .push(PermissionCardHandleRep::new(
-                        PermissionCardEntry::from_card(card),
-                    ))
-                    .map(|handle| {
-                        if template {
-                            permissions_types::WalletCard::Template(handle)
-                        } else {
-                            permissions_types::WalletCard::Concrete(handle)
-                        }
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(anyhow::Error::from)?;
+        let observed = DurableCallSession::<GolemPermissionsSelfWallet, NotCancellable>::invoke(
+            self,
+            HostRequestNoInput {},
+            DurableFunctionType::ReadLocal,
+            async |ctx| observe_self_wallet(ctx).await,
+        )
+        .await?;
 
-        // A scope card lent to this invocation is listed only to a holder that may inspect cards;
-        // for any other holder it stays sealed: it still authorizes, but is not enumerated. The
-        // card is read after the boundary has applied revocations and expiry, so a scope card
-        // invalidated at this boundary is never handed out again.
-        let lent_scope_card = self
-            .with_agent_authority_at_boundary(|ctx| {
-                let scope_card = ctx.state.invocation_scope_card.clone()?;
-                ensure_card_permission(ctx, CardVerb::Inspect, CardResourcePattern::Any)
-                    .ok()
-                    .map(|()| scope_card)
+        let mut wallet_cards = observed
+            .cards
+            .iter()
+            .map(|bytes| {
+                let card: StoredCard = deserialize(bytes).map_err(|err| {
+                    anyhow!("failed to deserialize an observed wallet card: {err}")
+                })?;
+                let template = matches!(card, StoredCard::Polymorphic(_));
+                let handle = self.table().push(PermissionCardHandleRep::new(
+                    PermissionCardEntry::from_card(card),
+                ))?;
+                Ok(if template {
+                    permissions_types::WalletCard::Template(handle)
+                } else {
+                    permissions_types::WalletCard::Concrete(handle)
+                })
             })
-            .await?;
-        if let Some(scope_card) = lent_scope_card {
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        if let Some(scope_card) = observed.scope_card {
+            let scope_card: ScopeCard = deserialize(&scope_card).map_err(|err| {
+                anyhow!("failed to deserialize an observed lent scope card: {err}")
+            })?;
             let invocation_key = self.state.get_current_idempotency_key().ok_or_else(|| {
                 anyhow::anyhow!("an admitted scope card requires an active invocation")
             })?;
@@ -2870,15 +2915,23 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn self_version(&mut self) -> anyhow::Result<permissions_types::WalletVersionToken> {
-        DurabilityHost::observe_function_call(self, "golem::permissions::wallet", "self-version");
-        let _ = self.active_agent_wallet_cards_snapshot().await?;
-
-        let wallet_id_hash = self.wallet_id_hash().to_vec();
-        let generation = self.wallet_generation();
+        let observed = DurableCallSession::<GolemPermissionsSelfVersion, NotCancellable>::invoke(
+            self,
+            HostRequestNoInput {},
+            DurableFunctionType::ReadLocal,
+            async |ctx| {
+                let _ = ctx.active_agent_wallet_cards_snapshot().await?;
+                Ok::<_, anyhow::Error>(HostResponsePermissionWalletVersion {
+                    wallet_id_hash: ctx.wallet_id_hash().to_vec(),
+                    generation: ctx.wallet_generation(),
+                })
+            },
+        )
+        .await?;
 
         Ok(permissions_types::WalletVersionToken {
-            wallet_id_hash,
-            generation,
+            wallet_id_hash: observed.wallet_id_hash,
+            generation: observed.generation,
         })
     }
 
