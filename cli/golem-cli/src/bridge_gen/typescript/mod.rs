@@ -108,12 +108,13 @@ impl TypeScriptBridgeMode {
 }
 
 /// The result type a guest bridge exposes for a `result<ok, err>` schema.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum GuestResultRepr {
     /// The TS SDK `Result<T, E>` (`{ tag: 'ok' | 'err', val }`), re-exported as `base.Result`.
     Sdk,
-    /// Effect's `Result.Result<T, E>`, imported as `Result` from `effect`.
-    Effect,
+    /// Effect's `Result.Result<T, E>`. The `Result` module of `effect` is imported under the
+    /// given alias, which does not collide with the generated names.
+    Effect(String),
 }
 
 pub struct TypeScriptBridgeGenerator {
@@ -259,12 +260,12 @@ impl TypeScriptBridgeGenerator {
 
     /// The TS type of a `result<ok, err>` value in this bridge.
     fn result_type(&self, ok_type: &str, err_type: &str) -> String {
-        match (self.mode, self.guest_result_repr) {
+        match (self.mode, &self.guest_result_repr) {
             (TypeScriptBridgeMode::GuestWasmRpc, GuestResultRepr::Sdk) => {
                 format!("base.Result<{ok_type}, {err_type}>")
             }
-            (TypeScriptBridgeMode::GuestWasmRpc, GuestResultRepr::Effect) => {
-                format!("Result.Result<{ok_type}, {err_type}>")
+            (TypeScriptBridgeMode::GuestWasmRpc, GuestResultRepr::Effect(alias)) => {
+                format!("{alias}.Result<{ok_type}, {err_type}>")
             }
             (TypeScriptBridgeMode::ExternalRest, _) => {
                 format!("base.JsonResult<{ok_type}, {err_type}>")
@@ -284,8 +285,8 @@ impl TypeScriptBridgeGenerator {
         }
         let mut naming = ParameterNaming::new();
         naming.reserve("base");
-        if self.guest_result_repr == GuestResultRepr::Effect {
-            naming.reserve_many(["Effect", "Result"]);
+        if let GuestResultRepr::Effect(alias) = &self.guest_result_repr {
+            naming.reserve_many(["Effect", alias.as_str()]);
         }
         naming.reserve(self.agent_type.type_name.0.clone());
         for (_, type_name) in self.type_naming.types() {
@@ -3217,9 +3218,13 @@ impl TypeScriptBridgeGenerator {
                 self.decode_schema_value("entry.value", val)?
             ),
             SchemaType::Result { spec, .. } => {
-                let (make_ok, make_err) = match self.guest_result_repr {
-                    GuestResultRepr::Sdk => ("base.Result.ok", "base.Result.err"),
-                    GuestResultRepr::Effect => ("Result.succeed", "Result.fail"),
+                let (make_ok, make_err) = match &self.guest_result_repr {
+                    GuestResultRepr::Sdk => {
+                        ("base.Result.ok".to_string(), "base.Result.err".to_string())
+                    }
+                    GuestResultRepr::Effect(alias) => {
+                        (format!("{alias}.succeed"), format!("{alias}.fail"))
+                    }
                 };
                 let ok = match spec.ok.as_deref() {
                     Some(typ) => self.decode_schema_value("n.result.value", typ)?,
@@ -3662,9 +3667,11 @@ impl TypeScriptBridgeGenerator {
                 self.encode_schema_value("entry[1]", val)?
             ),
             SchemaType::Result { spec, .. } => {
-                let (is_ok, ok_value, err_value) = match self.guest_result_repr {
+                let (is_ok, ok_value, err_value) = match &self.guest_result_repr {
                     GuestResultRepr::Sdk => ("v.tag === 'ok'", "v.val", "v.val"),
-                    GuestResultRepr::Effect => ("v._tag === 'Success'", "v.success", "v.failure"),
+                    GuestResultRepr::Effect(_) => {
+                        ("v._tag === 'Success'", "v.success", "v.failure")
+                    }
                 };
                 let ok = match spec.ok.as_deref() {
                     Some(typ) => format!(

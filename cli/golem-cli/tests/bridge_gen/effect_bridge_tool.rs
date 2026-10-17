@@ -145,15 +145,15 @@ fn effect_tool_trailing_optional_fields_and_effect_results_compile() {
     let generated = target.join("grep-tool-guest-client.ts");
     let source = std::fs::read_to_string(&generated).unwrap();
     assert!(
-        source.contains("import { Effect, Result, Scope } from 'effect'"),
+        source.contains("import { Effect, Result as EffectResult, Scope } from 'effect'"),
         "{source}"
     );
     assert!(source.contains("max_count?: number)"), "{source}");
     assert!(
-        source.contains("Effect.Effect<Result.Result<string[], number>"),
+        source.contains("Effect.Effect<EffectResult.Result<string[], number>"),
         "{source}"
     );
-    assert!(source.contains("Result.succeed("), "{source}");
+    assert!(source.contains("EffectResult.succeed("), "{source}");
     let consumer = r#"import { BridgeTool as base } from "@golemcloud/effect-golem"
 import { Effect, Result } from "effect"
 import { client } from "./grep-tool-guest-client.js"

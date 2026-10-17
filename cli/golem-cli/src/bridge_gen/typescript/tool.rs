@@ -5,6 +5,10 @@ use super::javascript::escape_js_ident;
 use super::schema_graph::SchemaGraphRegistry;
 use super::ts_writer::TsWriter;
 use super::{GuestResultRepr, TypeScriptBridgeGenerator};
+
+/// The name the Effect dialect imports Effect's `Result` module under. It is reserved for
+/// the tool's generated names, so no client, error or schema type can take it.
+const EFFECT_RESULT_ALIAS: &str = "EffectResult";
 use crate::bridge_gen::parameter_naming::ParameterNaming;
 use crate::bridge_gen::tool_bridge_client_directory_name;
 use crate::bridge_gen::tool_common::{
@@ -144,8 +148,10 @@ impl TypeScriptToolBridgeGenerator {
                 out.push_str("import { bridge as base } from '@golemcloud/golem-ts-sdk';\n")
             }
             SourceDialect::Effect => {
-                self.inner.set_guest_result_repr(GuestResultRepr::Effect);
-                out.push_str("import { BridgeTool as base } from '@golemcloud/effect-golem';\nimport { Effect, Result, Scope } from 'effect';\n")
+                self.inner.set_guest_result_repr(GuestResultRepr::Effect(
+                    EFFECT_RESULT_ALIAS.to_string(),
+                ));
+                out.push_str(&format!("import {{ BridgeTool as base }} from '@golemcloud/effect-golem';\nimport {{ Effect, Result as {EFFECT_RESULT_ALIAS}, Scope }} from 'effect';\n"))
             }
         }
         let mut body = String::from("\ntype ToolInputStream = base.ToolInputStream;\n\n");
@@ -635,8 +641,8 @@ impl TypeScriptToolBridgeGenerator {
             "decodeError",
             "expectedResultGraph",
         ]);
-        if self.inner.guest_result_repr == GuestResultRepr::Effect {
-            naming.reserve_many(["Effect", "Result", "Scope"]);
+        if matches!(self.inner.guest_result_repr, GuestResultRepr::Effect(_)) {
+            naming.reserve_many(["Effect", EFFECT_RESULT_ALIAS, "Scope"]);
         }
         for (_, type_name) in self.inner.type_naming.types() {
             naming.reserve(format!("encode{type_name}"));
@@ -809,7 +815,7 @@ fn collect_names(tool: &Tool, name: &str) -> anyhow::Result<CollectedNames> {
     let mut u = BTreeSet::from([
         "protocol".to_string(),
         "ToolInputStream".to_string(),
-        "Result".to_string(),
+        EFFECT_RESULT_ALIAS.to_string(),
     ]);
     visit(tool, name, 0, vec![], vec![], &mut c, &mut e, &mut u)?;
     Ok((c, e, u.into_iter().collect()))

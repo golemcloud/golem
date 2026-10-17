@@ -88,6 +88,51 @@ void produced
 }
 
 #[test]
+fn effect_guest_agent_named_result_and_effect_result_alias_compile() {
+    let outcome = SchemaType::result(ResultSpec {
+        ok: Some(Box::new(SchemaType::string())),
+        err: Some(Box::new(SchemaType::u32())),
+    });
+    let schema = agent(
+        "Result",
+        "effect",
+        vec![],
+        vec![
+            method("status", vec![], Some(SchemaType::string())),
+            method(
+                "outcome",
+                vec![field("value", ref_to("EffectResult"))],
+                Some(outcome.clone()),
+            ),
+        ],
+        vec![def("EffectResult", outcome)],
+        AgentMode::Durable,
+    );
+    let source = generate_and_compile(
+        schema,
+        "result-guest-client.ts",
+        r#"
+import { Effect, Result } from "effect"
+import { Result as GeneratedResult } from "./result-guest-client.js"
+const status = GeneratedResult.get().pipe(Effect.flatMap(client => client.status()))
+const outcome = GeneratedResult.get().pipe(
+  Effect.flatMap(client => client.outcome(Result.succeed("yes"))),
+)
+const checked: Effect.Effect<Result.Result<string, number>, unknown, unknown> = outcome
+void status
+void checked
+"#,
+    );
+    assert!(source.contains("export class Result "), "{source}");
+    assert!(
+        source.contains(
+            "import { Effect, Result as EffectResult, Stream as EffectStream } from 'effect';"
+        ),
+        "{source}"
+    );
+}
+
+#[test]
 fn effect_guest_scope_cards_on_awaited_calls_compile() {
     let card = || SchemaType::permission_card(PermissionCardSpec { polymorphic: false });
     for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
@@ -275,14 +320,14 @@ void program
 "#,
     );
     assert!(
-        source.contains("[outcome: Result.Result<string, number>]"),
+        source.contains("[outcome: EffectResult.Result<string, number>]"),
         "{source}"
     );
     assert!(
         source.contains("[first: string | undefined, count: number, last?: string]"),
         "{source}"
     );
-    assert!(source.contains("Result.succeed("), "{source}");
+    assert!(source.contains("EffectResult.succeed("), "{source}");
     assert!(!source.contains("{ ok:"), "{source}");
 }
 
@@ -322,7 +367,7 @@ void program
 "#,
     );
     assert!(
-        source.contains("const [Result1, Effect1] = __args;"),
+        source.contains("const [Result, Effect1] = __args;"),
         "{source}"
     );
 }

@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1
 
-use super::{effect_stream_alias, effect_type_reference};
+use super::{effect_result_alias, effect_stream_alias, effect_type_reference};
 use crate::bridge_gen::BridgeGenerator;
 use crate::bridge_gen::parameter_naming::ParameterNaming;
 use crate::bridge_gen::typescript::ts_writer::TsWriter;
@@ -23,13 +23,14 @@ impl BridgeGenerator for EffectGuestBridgeGenerator {
         testing: bool,
     ) -> anyhow::Result<Self> {
         let stream_alias = effect_stream_alias(&agent_type.type_name.0);
+        let result_alias = effect_result_alias(&agent_type.type_name.0);
         let mut inner = TypeScriptBridgeGenerator::new_guest_with_extra_reserved_names(
             agent_type,
             target_path,
             testing,
-            vec!["Effect".into(), "Result".into(), stream_alias],
+            vec!["Effect".into(), result_alias.clone(), stream_alias],
         )?;
-        inner.set_guest_result_repr(GuestResultRepr::Effect);
+        inner.set_guest_result_repr(GuestResultRepr::Effect(result_alias));
         Ok(Self { inner })
     }
 
@@ -42,8 +43,9 @@ impl BridgeGenerator for EffectGuestBridgeGenerator {
         self.class(&mut body)?;
         let mut writer = TsWriter::new();
         let stream_alias = effect_stream_alias(&inner.agent_type.type_name.0);
+        let result_alias = effect_result_alias(&inner.agent_type.type_name.0);
         writer.write_line(format!(
-            "import {{ Effect, Result, Stream as {stream_alias} }} from 'effect';"
+            "import {{ Effect, Result as {result_alias}, Stream as {stream_alias} }} from 'effect';"
         ));
         writer.write_line("import { Bridge as base } from '@golemcloud/effect-golem';");
         writer.write_line(inner.schema_graphs.borrow().definitions());
