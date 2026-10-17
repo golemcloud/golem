@@ -6,7 +6,7 @@ use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::resource_usage_metering::{
     FilesystemUsage, ScriptedFilesystemUsageForTest,
 };
-use golem_worker_executor::services::{HasOplog, UsesAllDeps};
+use golem_worker_executor::services::{HasOplog, HasOplogService, UsesAllDeps};
 use golem_worker_executor::worker::{MonthlyClockForTest, Worker};
 use pretty_assertions::assert_eq;
 use test_r::test;
@@ -137,13 +137,23 @@ async fn pending_scripted_storage(
     worker
         .owner_runtime_resources()
         .set_scripted_filesystem_usage_for_test(source.clone());
-    let (clock, mut polls) = MonthlyClockForTest::new();
-    worker.set_monthly_clock_for_test(clock.clone());
+    let (flushed, mut flushes) = tokio::sync::mpsc::unbounded_channel();
+    let usage_source: Arc<dyn ResourceUsageFlusher> = Arc::new(ObservedUsageFlusher {
+        owner: Arc::downgrade(&worker),
+        send: flushed,
+    });
+    worker
+        .owner_runtime_resources()
+        .register_resource_usage_flusher(Arc::downgrade(&usage_source));
+    let mut capacity_updates = limits
+        .subscribe_capacity_updates_for_test(context.account_id)
+        .await?;
+    capacity_updates.borrow_and_update();
     let mut attempts =
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
-    let invocation = tokio::spawn({
+    let invocation = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
         let name = name.clone();
@@ -159,7 +169,7 @@ async fn pending_scripted_storage(
                 )
                 .await
         }
-    });
+    }));
     let (mut socket, _) =
         tokio::time::timeout(Duration::from_secs(30), listener.accept()).await??;
     let chunk = tokio::time::timeout(Duration::from_secs(10), async {
@@ -172,16 +182,36 @@ async fn pending_scripted_storage(
             tokio::task::yield_now().await;
         }
     }).await.context("open receive chunk")??;
-    tokio::time::timeout(Duration::from_secs(10), polls.recv())
-        .await
-        .context("monthly timer armed")?
-        .unwrap();
     let initial = worker.current_monthly_proposal_for_test();
+    let mut next_flush = async || {
+        loop {
+            let window = flushes.recv().await.context("owner usage flusher closed")?;
+            if window == initial.diagnostic_window_id {
+                return Ok::<_, anyhow::Error>(());
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), next_flush())
+        .await
+        .context("initial monitor pre-wait flush")??;
+    let oplog = worker.all().oplog_service();
+    let read_stored = async || {
+        let last = oplog.get_last_index(&owned, mode).await;
+        oplog
+            .read_exact(&owned, mode, OplogIndex::INITIAL, last.as_u64())
+            .await
+    };
+    let prefix = read_stored().await;
+    let prefix_last = *prefix
+        .last_key_value()
+        .context("committed invocation prefix is empty")?
+        .0;
     let mut raw = worker.raw_interrupt_for_test();
     let acquisitions = worker.permit_acquisitions_for_test();
     assert_eq!(initial.exhaustion, None);
     assert!(worker.concurrent_agent_permit_is_held().await);
     let account = limits.initialize_account(context.account_id).await?;
+    assert_eq!(account.monthly_observer_count_for_test(), 2);
     assert!(!account.monthly_capacity_is_exhausted_for_test(mode));
     assert!(!invocation.is_finished());
     let observations_before_allocation = source.observations();
@@ -203,7 +233,11 @@ async fn pending_scripted_storage(
         !invocation.is_finished(),
         "no Store checkpoint runs while TCP is pending"
     );
-    clock.advance(Duration::from_secs(30));
+    // No policy/rate update triggers this check. The unchanged outer bound includes
+    // waiting for the real timer; the original proposal bound begins after its flush.
+    next_flush().await?;
+    assert!(!capacity_updates.has_changed()?);
+    drop(capacity_updates);
     let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
         .await
         .context("storage exhaustion proposal")?
@@ -248,7 +282,7 @@ async fn pending_scripted_storage(
     .context("physical window release")?;
     worker.join_accepted_stops_for_test().await?;
     worker.retained_cleanup_for_test().await?;
-    assert_eq!(clock.active_sleeps(), 0);
+    assert!(!worker.monthly_window_active_for_test());
     assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
     assert!(worker.unload_succeeded_for_test());
     assert_eq!(account.monthly_observer_count_for_test(), 0);
@@ -295,6 +329,16 @@ async fn pending_scripted_storage(
             worker.oplog().current_oplog_index().await.as_u64(),
         )
         .await;
+    let stopped_raw = read_stored().await;
+    assert_eq!(
+        stopped_raw.range(..=prefix_last).collect::<Vec<_>>(),
+        prefix.iter().collect::<Vec<_>>()
+    );
+    assert!(
+        !stopped_raw
+            .values()
+            .any(|entry| matches!(entry, OplogEntry::Jump { .. }))
+    );
     let errors: Vec<_> = entries
         .values()
         .filter_map(|e| match e {
@@ -334,6 +378,12 @@ async fn pending_scripted_storage(
             .into_typed::<Result<String, String>>()?;
         assert_eq!(result, Err("ErrorCode::ConnectionBroken".to_string()));
         let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let recovered_raw = read_stored().await;
+        let stopped_last = *stopped_raw.last_key_value().unwrap().0;
+        assert_eq!(
+            recovered_raw.range(..=stopped_last).collect::<Vec<_>>(),
+            stopped_raw.iter().collect::<Vec<_>>()
+        );
         assert_eq!(
             count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL),
             (2, 2)

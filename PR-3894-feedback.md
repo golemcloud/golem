@@ -342,6 +342,13 @@ Findings 11-14 have separate linked comments.
     actual-mode complete stored-prefix checks added. No runtime code or timer interface changes.
     Both native modes, the real-timer/tail composition batch, scoped strict lint and formatting pass.
     The clock producer and this checkbox remain open.
+    The matching scripted-storage cases reuse the same test-owned weak flusher and ordinary
+    timer, with no new policy revision driving exhaustion. Exact revision/window/resource, opposite
+    storage-class availability, typed outcomes, overshoot/disabled meters, closed sampling, physical
+    cleanup and recovery assertions remain, with actual-mode complete stored prefixes added. Only
+    the matching positive cases migrate; the dynamic nonmatching-update clock helper is unchanged.
+    The storage matrix and compute/retry/tail composition, scoped strict lint, formatting and
+    assertion audit pass. No production, test-utils or fixture code changes. The clock family remains open.
   - [ ] Address the keyed filesystem metadata gate and remaining protocol ordering controls.
   - [ ] For any hook proposed to remain, document the otherwise untestable guarantee, minimal scope
     and why its scheduling changes do not invalidate the test. Existing main-owned hooks are not

@@ -346,6 +346,16 @@ runtime field, event or timer interface. Both native modes and the small real-ti
 batch pass, as do scoped strict lint and formatting. The whole clock producer and other active
 clock consumers remain open.
 
+The matching scripted-storage cases reuse that same test-owned flusher. Observe the exact
+active window's initial pre-wait and actual post-wake callbacks, then require the original exact
+acceptance on the unchanged revision within its existing proposal bound. A temporary capacity watch
+must remain unchanged and is dropped before final subscription checks. This does not replace the
+real timer with a policy update. Keep opposite-class availability, exact outcomes, overshoot and
+disabled-meter accounting, closed-generation sampling, physical release and ordinary recovery.
+Stored prefixes use the actual agent mode. The dynamic nonmatching-update clock helper is unchanged;
+its tighter update/rearm proof is separate. The matching/nonmatching matrix, compute/retry/tail
+composition, scoped strict lint, formatting and assertion audit pass for this consumer slice.
+
 ### Root completion and live tail ownership
 
 `run_guest_call_settled` emits "Guest call root completed; settling tail work" immediately after

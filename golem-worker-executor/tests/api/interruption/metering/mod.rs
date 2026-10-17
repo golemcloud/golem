@@ -1,4 +1,27 @@
 use super::*;
+use golem_worker_executor::services::resource_limits::ResourceUsageFlusher;
+use golem_worker_executor::worker::Worker;
+use golem_worker_executor::workerctx::default::Context as WorkerContext;
+
+#[derive(Debug)]
+struct ObservedUsageFlusher {
+    owner: std::sync::Weak<Worker<WorkerContext>>,
+    send: tokio::sync::mpsc::UnboundedSender<u64>,
+}
+
+impl ResourceUsageFlusher for ObservedUsageFlusher {
+    fn flush_usage(&self) {
+        if let Some(owner) = self.owner.upgrade()
+            && owner.monthly_window_active_for_test()
+        {
+            let _ = self.send.send(
+                owner
+                    .current_monthly_proposal_for_test()
+                    .diagnostic_window_id,
+            );
+        }
+    }
+}
 
 mod compute;
 mod configuration;
