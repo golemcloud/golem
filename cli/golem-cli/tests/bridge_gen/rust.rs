@@ -2796,8 +2796,14 @@ fn guest_uuid_record_is_remapped_to_the_native_uuid() {
     let package_dir = Utf8Path::from_path(dir.path())
         .unwrap()
         .join("uuid-agent-guest");
+    let mut agent_type = uuid_remap_agent();
+    agent_type.methods.push(method(
+        "ids-stream",
+        vec![],
+        Some(SchemaType::stream(Some(ref_to("uuid.Uuid")))),
+    ));
     RustBridgeGenerator::new_with_mode(
-        uuid_remap_agent(),
+        agent_type,
         &package_dir,
         true,
         RustBridgeMode::GuestWasmRpc,
@@ -2810,6 +2816,7 @@ fn guest_uuid_record_is_remapped_to_the_native_uuid() {
     let mut source = std::fs::read_to_string(&lib_path).unwrap();
     assert!(!source.contains("UuidUuid"), "{source}");
     assert!(source.contains("pub id: golem_rust::Uuid"), "{source}");
+    assert!(source.contains("fn new_uuid_stream"), "{source}");
     source.push_str(
         r#"
 #[cfg(test)]

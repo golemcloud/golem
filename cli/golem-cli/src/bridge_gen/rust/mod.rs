@@ -1154,6 +1154,7 @@ impl RustBridgeGenerator {
             let json = serde_json::to_value(&item)?;
             let label = match self.type_naming.type_name_for_type(&item) {
                 Some(RustTypeName::Derived(name)) => name.to_snake_case(),
+                Some(RustTypeName::Remapped(RustRemappedType::Uuid)) => "uuid".to_string(),
                 _ => json["kind"]
                     .as_str()
                     .ok_or_else(|| anyhow!("Missing schema kind"))?
