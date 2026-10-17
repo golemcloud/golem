@@ -21,8 +21,8 @@ use crate::sharding::error::ShardManagerError;
 use crate::sharding::etcd_connection::connect_for_election;
 use crate::sharding::etcd_retry::retry_retriable_until;
 use etcd_client::{
-    Client, Compare, CompareOp, KvClient, LeaderKey, LeaseClient, LeaseKeepAliveStream,
-    LeaseKeeper, TxnOp, TxnOpResponse, TxnResponse,
+    Client, Compare, CompareOp, LeaderKey, LeaseClient, LeaseKeepAliveStream, LeaseKeeper, TxnOp,
+    TxnOpResponse, TxnResponse,
 };
 use golem_common::retriable_error::IsRetriableError;
 use std::collections::VecDeque;
@@ -372,9 +372,6 @@ pub struct LeadershipHandle {
     /// Shared with every clone, so the keepalive task can tell a revoke it asked for from one it
     /// did not.
     stepped_down: Arc<AtomicBool>,
-    /// For the delete before the revoke; see [`delete_campaign_key`].
-    kv_client: KvClient,
-    campaign_key: String,
 }
 
 impl LeadershipHandle {
@@ -388,12 +385,6 @@ impl LeadershipHandle {
         // A lease etcd no longer knows is already released; anything else is reported and the
         // lease is left to lapse on its own.
         let lease_id = self.lease_id;
-        delete_campaign_key(
-            &mut self.kv_client.clone(),
-            &self.campaign_key,
-            self.request_timeout,
-        )
-        .await;
         let mut lease_client = self.lease_client.clone();
         match bounded(self.request_timeout, lease_client.revoke(lease_id)).await {
             Ok(_) => {}
@@ -650,8 +641,6 @@ impl LeaderElection {
                 lease_id,
                 request_timeout: self.request_timeout,
                 stepped_down: Arc::new(AtomicBool::new(false)),
-                kv_client: self.client.kv_client(),
-                campaign_key: campaign_key(&self.election_name, lease_id),
             },
         })
     }
@@ -741,12 +730,6 @@ impl LeaderElection {
         if lease_id == 0 {
             return;
         }
-        delete_campaign_key(
-            &mut self.client.kv_client(),
-            &campaign_key(&self.election_name, lease_id),
-            self.request_timeout,
-        )
-        .await;
 
         let mut lease_client = self.client.lease_client();
         match self.bounded(lease_client.revoke(lease_id)).await {
@@ -801,27 +784,6 @@ fn is_no_leader(err: &ShardManagerError) -> bool {
         ShardManagerError::EtcdError(etcd_client::Error::GRpcStatus(status))
             if status.message().contains("no leader")
     )
-}
-
-/// The key etcd's election service gives a campaigner: the election name, a slash, and the lease
-/// id in hexadecimal.
-fn campaign_key(election_name: &str, lease_id: i64) -> String {
-    format!("{election_name}/{lease_id:x}")
-}
-
-/// Deletes this replica's own campaign key before its lease is revoked; best effort.
-///
-/// etcd-client sends no auth token on Lease calls, and an etcd with authentication enabled refuses
-/// to revoke a lease that still holds a key ("user name is empty"). The delete is a KV call, which
-/// carries the token, so the revoke that follows finds no key. Without authentication it only
-/// hands over a moment earlier. A failure is logged and the revoke is tried all the same.
-///
-/// For an abandoned campaign, the campaign's own write can still reach etcd after this delete; with
-/// authentication the revoke then fails, and the key waits out its lease as it did before.
-async fn delete_campaign_key(kv: &mut KvClient, key: &str, request_timeout: Duration) {
-    if let Err(err) = bounded(request_timeout, kv.delete(key, None)).await {
-        warn!(error = %err, key, "Cannot delete the campaign key before revoking its lease");
-    }
 }
 
 async fn bounded<T, F>(request_timeout: Duration, request: F) -> Result<T, ShardManagerError>

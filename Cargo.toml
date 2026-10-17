@@ -122,7 +122,7 @@ desert_rust = { version = "0.1.11", features = ["bigdecimal", "uuid", "chrono", 
 dir-diff = "0.3.3"
 dirs = "6.0.0"
 dotenvy = "0.15.7"
-etcd-client = { version = "0.19.0", features = ["tls"] }
+etcd-client = { version = "0.21.0", features = ["tls"] }
 evicting_cache_map = "0.4.0"
 expectrl = "0.8.0"
 fancy-regex = "0.14.0"
