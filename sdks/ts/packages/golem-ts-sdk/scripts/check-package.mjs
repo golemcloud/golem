@@ -105,7 +105,13 @@ export const publicModules = [${publicComponentModules.map((_, index) => `public
     input: 'virtual:agent-main',
     external: (id) => /^(golem:|wasi:|node:|wasm-rquickjs:)/.test(id),
     onwarn: (warning, warn) => {
-      if (warning.code !== 'CIRCULAR_DEPENDENCY') warn(warning);
+      if (warning.code === 'CIRCULAR_DEPENDENCY') return;
+      if (
+        warning.code === 'INVALID_ANNOTATION' &&
+        warning.id?.replaceAll('\\', '/').includes('/node_modules/')
+      )
+        return;
+      warn(warning);
     },
     plugins: [
       componentPlugin(componentConfiguration(componentInput), componentInput),
