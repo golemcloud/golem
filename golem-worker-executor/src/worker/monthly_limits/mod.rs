@@ -699,7 +699,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
     ) -> (
         tokio::sync::oneshot::Receiver<()>,
-        tokio::sync::oneshot::Sender<bool>,
+        tokio::sync::oneshot::Sender<()>,
     ) {
         let (entered, observe) = tokio::sync::oneshot::channel();
         let (release, wait) = tokio::sync::oneshot::channel();
@@ -719,7 +719,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let gate = self.test_support.lock().unwrap().idle_close_gate.take();
         if let Some((entered, release)) = gate {
             let _ = entered.send(());
-            assert!(!release.await.unwrap_or(false), "injected idle panic");
+            let _ = release.await;
         }
     }
 

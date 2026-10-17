@@ -354,6 +354,10 @@ failure, ordinary monitor response and cleanup still run through their productio
 does not use this extended window to claim normal timing or a resource-release deadline. Release
 joins actual disposal and retains failed health. This is a narrow documented exception, not approval
 to add another lifecycle protocol or a claim that all idle controls are removed.
+The remaining barrier's channel carries only release; the unused Boolean panic selector is removed
+separately. Sender cancellation still releases it. That source passes separate colocated library,
+affected native and custom-suspension/real-timer regression checks, strict lint, production compilation
+and browser verification. The full idle barrier remains open, distinct from this removed selector.
 
 The first positive guest growth can occur in construction. Arm its existing dependency interceptor
 before bootstrap and observe its entry before registering a later Finished hold. The entered append

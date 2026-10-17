@@ -843,7 +843,7 @@ struct ExecutionTestSupport {
 #[cfg(feature = "test-utils")]
 type StopTestGate = (
     tokio::sync::oneshot::Sender<()>,
-    tokio::sync::oneshot::Receiver<bool>,
+    tokio::sync::oneshot::Receiver<()>,
 );
 
 #[derive(Default, PartialEq, Eq)]

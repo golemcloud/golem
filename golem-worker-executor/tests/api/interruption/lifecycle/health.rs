@@ -672,7 +672,7 @@ async fn quota_monitor_cleanup_health_keeps_results_and_startup_refusal(
         // returned its committed result and now releases its remaining idle barrier.
         drop(finished);
         if let Some(release) = release_idle {
-            release.send(false).unwrap();
+            release.send(()).unwrap();
         }
         let error = tokio::time::timeout(Duration::from_secs(10), async {
             loop {

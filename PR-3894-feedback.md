@@ -250,6 +250,10 @@ Findings 11-14 have separate linked comments.
     strict integration/test-utils lint and formatting pass. This is a proposed narrow retention,
     not complete family removal or reviewer acceptance; this checkbox remains open. The barrier
     delays natural idle close only after successful publication and makes no normal timing claim.
+    The separate unused Boolean panic selector is removed and the sole caller uses a unit release
+    signal. Dropping that sender still releases the barrier. Separate library, affected native,
+    custom-suspension/real-timer regression, strict lint, production and browser checks pass.
+    The actor barrier itself remains; this is not full idle-control removal.
   - [x] Remove the completed-history replay-gate family. The local change deletes its Worker
     field, type, setter, history scan and pre-invocation await after both native consumers pass at
     the exact stored input-payload acquisition boundary. The supported external-payload setting
