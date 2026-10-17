@@ -2019,3 +2019,60 @@ async fn a_leader_value_written_before_the_json_form_is_seen_but_names_no_addres
     client.lease_revoke(lease).await.unwrap();
     watcher.abort();
 }
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A leader whose lease lapses during its startup must never send clients to itself: another
+// replica may already lead.
+async fn a_leader_whose_lease_lapsed_before_its_startup_ended_is_never_marked_ready(
+    etcd: &Arc<DockerEtcd>,
+) {
+    let proxy = BreakableProxy::start(&etcd.client_url()).await;
+    let election_name = unique_election_name();
+    let mut config = election_config(etcd);
+    config.endpoints = vec![proxy.url()];
+    let election = LeaderElection::connect(&config, election_name.clone())
+        .await
+        .expect("Connecting the election client to etcd should succeed")
+        .with_grpc_address(address(4201));
+    let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
+        .await
+        .expect("An uncontested campaign should finish")
+        .expect("An uncontested campaign should be won");
+    let belief = elected.keepalive.belief();
+    let granted_ttl = elected.granted_ttl;
+    let keepalive = tokio::spawn(elected.keepalive.run());
+
+    proxy.black_hole();
+    timeout(granted_ttl * 2, keepalive)
+        .await
+        .expect("the keepalive reports the loss within one lease TTL")
+        .expect("the keepalive task does not panic");
+    assert!(
+        !belief.held(),
+        "the gate must stop serving once the lease is lost"
+    );
+    // The watchdog gives the lease up before etcd does. Waiting out one more TTL without renewals
+    // is what makes the lease lapse in etcd too, and the key go away.
+    tokio::time::sleep(granted_ttl + Duration::from_millis(500)).await;
+    proxy.restore();
+
+    elected
+        .leadership
+        .publish_ready()
+        .await
+        .expect_err("a leader whose lease lapsed must not mark itself ready");
+    let locator = LeaderLocator::new(
+        inspection_client(etcd).await,
+        election_name,
+        TEST_REQUEST_TIMEOUT,
+    );
+    assert!(
+        locator
+            .leader()
+            .await
+            .expect("the inspection read succeeds")
+            .is_none_or(|value| !value.ready),
+        "no value of the lapsed leader may read ready"
+    );
+}
