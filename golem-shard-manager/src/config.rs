@@ -18,6 +18,7 @@ use golem_common::SafeDisplay;
 use golem_common::config::{
     ConfigExample, ConfigLoader, DbPostgresConfig, DbSqliteConfig, HasConfigExamples,
 };
+use golem_common::model::base64::Base64;
 use golem_common::model::{Empty, RetryConfig};
 use golem_common::tracing::TracingConfig;
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
@@ -214,6 +215,8 @@ impl HasConfigExamples<ShardManagerConfig> for ShardManagerConfig {
 ///   lease state and the quota state in one SQL database.
 /// * `Etcd` - **distributed mode**: the shard lease state and the quota state live in etcd,
 ///   each behind a compare-and-swap on a key's `mod_revision` and the leadership fence.
+// Built once per process, so the size of the etcd variant does not matter.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum PersistenceConfig {
@@ -294,24 +297,41 @@ pub struct EtcdConfig {
     pub username: Option<String>,
     /// The password of `username`; usually set from a secret through
     /// `GOLEM__PERSISTENCE__CONFIG__PASSWORD`. Serialized as `****`, so no configuration dump holds it.
+    /// Set this or `password_file`, not both.
     #[serde(default)]
     pub password: Option<EtcdPassword>,
+    /// A file that holds the password of `username`, such as a key of a Kubernetes Secret mounted
+    /// as files. Read once, at startup, as it is: only one trailing line ending is removed.
+    #[serde(default)]
+    pub password_file: Option<PathBuf>,
 }
 
 /// TLS to etcd. Set, every endpoint must be `https://`; unset, every endpoint must be `http://`.
 ///
-/// The files are read once, at startup: after a certificate is renewed, restart the replicas.
+/// Each item comes from a PEM file or from an inline value (the PEM, Base64-encoded), not both.
+/// Files and values are read once, at startup: after a certificate is renewed, restart the
+/// replicas.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EtcdTlsConfig {
     /// PEM file with the certificate of the CA that signed etcd's server certificate.
-    pub ca_cert_file: PathBuf,
+    #[serde(default)]
+    pub ca_cert_file: Option<PathBuf>,
+    /// `ca_cert_file` as an inline value.
+    #[serde(default)]
+    pub ca_cert: Option<Base64>,
     /// PEM file with this client's certificate, for an etcd that requires client certificates
-    /// (mTLS). Set together with `client_key_file`.
+    /// (mTLS). Set together with a client key.
     #[serde(default)]
     pub client_cert_file: Option<PathBuf>,
-    /// PEM file with the private key of `client_cert_file`.
+    /// `client_cert_file` as an inline value.
+    #[serde(default)]
+    pub client_cert: Option<Base64>,
+    /// PEM file with the private key of the client certificate.
     #[serde(default)]
     pub client_key_file: Option<PathBuf>,
+    /// `client_key_file` as an inline value; never shown or serialized.
+    #[serde(default)]
+    pub client_key: Option<EtcdTlsKey>,
     /// The name to check etcd's certificate against, when the endpoint host is an IP address or
     /// an alias that the certificate does not name.
     #[serde(default)]
@@ -322,6 +342,36 @@ pub struct EtcdTlsConfig {
 /// configuration nor a serialized configuration shows it.
 #[derive(Clone, PartialEq, Eq)]
 pub struct EtcdPassword(String);
+
+/// An inline private key for etcd TLS: the PEM, Base64-encoded. Neither its `Debug` form, the
+/// configuration display nor a serialized configuration shows it.
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[serde(transparent)]
+pub struct EtcdTlsKey(Base64);
+
+impl EtcdTlsKey {
+    pub fn expose(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl From<Vec<u8>> for EtcdTlsKey {
+    fn from(pem: Vec<u8>) -> Self {
+        Self(Base64(pem))
+    }
+}
+
+impl std::fmt::Debug for EtcdTlsKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("****")
+    }
+}
+
+impl Serialize for EtcdTlsKey {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str("****")
+    }
+}
 
 impl Serialize for EtcdPassword {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -468,6 +518,7 @@ impl Default for EtcdConfig {
             tls: None,
             username: None,
             password: None,
+            password_file: None,
         }
     }
 }
@@ -486,6 +537,7 @@ impl SafeDisplay for EtcdConfig {
             tls,
             username,
             password,
+            password_file,
         } = self;
 
         let mut result = String::new();
@@ -501,16 +553,21 @@ impl SafeDisplay for EtcdConfig {
             "compaction retention revisions: {compaction_retention_revisions}"
         );
         if let Some(tls) = tls {
-            let _ = writeln!(
-                &mut result,
-                "tls ca cert file: {}",
-                tls.ca_cert_file.display()
-            );
-            if let Some(file) = &tls.client_cert_file {
-                let _ = writeln!(&mut result, "tls client cert file: {}", file.display());
-            }
-            if let Some(file) = &tls.client_key_file {
-                let _ = writeln!(&mut result, "tls client key file: {}", file.display());
+            for (item, file, inline) in [
+                ("ca cert", &tls.ca_cert_file, tls.ca_cert.is_some()),
+                (
+                    "client cert",
+                    &tls.client_cert_file,
+                    tls.client_cert.is_some(),
+                ),
+                ("client key", &tls.client_key_file, tls.client_key.is_some()),
+            ] {
+                if let Some(file) = file {
+                    let _ = writeln!(&mut result, "tls {item} file: {}", file.display());
+                }
+                if inline {
+                    let _ = writeln!(&mut result, "tls {item}: inline value");
+                }
             }
             if let Some(name) = &tls.server_name {
                 let _ = writeln!(&mut result, "tls server name: {name}");
@@ -521,6 +578,9 @@ impl SafeDisplay for EtcdConfig {
         }
         if password.is_some() {
             let _ = writeln!(&mut result, "password: ****");
+        }
+        if let Some(file) = password_file {
+            let _ = writeln!(&mut result, "password file: {}", file.display());
         }
         result
     }

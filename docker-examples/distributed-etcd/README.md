@@ -32,7 +32,7 @@ and reports `shard_manager_is_leader 1` on its HTTP port's `/metrics`. On `SIGTE
 Both misconfigurations described below stop it at startup:
 
 - `https://` endpoint without TLS settings → exits 1 with `Error: Invalid configuration: etcd endpoint
-  https://... uses https://, which needs persistence.config.tls (at least ca_cert_file)`
+  https://... uses https://, which needs persistence.config.tls (at least ca_cert_file or ca_cert)`
 - unbracketed endpoint list → `Failed to load config: invalid type: found string "...", expected a
   sequence for key "PERSISTENCE"`. This one exits with status **0**, as every Golem service does on a
   config it cannot load, so `restart: on-failure` leaves the container stopped and it looks like a

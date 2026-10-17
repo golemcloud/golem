@@ -26,7 +26,7 @@ use crate::config::HealthCheckK8sConfig;
 use crate::config::{EtcdConfig, HealthCheckMode, PersistenceConfig};
 use crate::quota::{DbQuotaRepo, EtcdQuotaRepo, GrpcResourceDefinitionFetcher, QuotaService};
 use crate::registry_event_subscriber::ShardManagerRegistryInvalidationHandler;
-use crate::sharding::etcd_connection::connect_for_requests;
+use crate::sharding::etcd_connection::{EtcdConnectSettings, connect_requests_with};
 use crate::sharding::etcd_retry::{is_retriable_read, retry_retriable};
 use crate::sharding::healthcheck::GrpcHealthCheck;
 use crate::sharding::worker_executor::WorkerExecutorServiceDefault;
@@ -394,7 +394,8 @@ async fn start_distributed_mode(
         etcd.leader_lease_ttl
     );
 
-    let kv = connect_for_requests(etcd).await?;
+    let settings = EtcdConnectSettings::load(etcd)?;
+    let kv = connect_requests_with(etcd, &settings).await?;
     info!(
         endpoints = etcd.endpoints.join(", "),
         state_key = STATE_KEY,
@@ -423,7 +424,7 @@ async fn start_distributed_mode(
         ensure_shard_count_matches(stored, number_of_shards)?;
     }
 
-    let election = LeaderElection::connect(etcd, LEADER_ELECTION_NAME)
+    let election = LeaderElection::connect_with(etcd, &settings, LEADER_ELECTION_NAME)
         .await?
         .with_shutdown(shutdown);
     let elected = campaign_watching_startup(&election, join_set).await?;

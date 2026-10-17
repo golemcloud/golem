@@ -19,6 +19,7 @@
 
 use crate::Tracing;
 use etcd_client::{ConnectOptions, Permission, TlsOptions};
+use golem_common::model::base64::Base64;
 use golem_shard_manager::config::{
     EtcdConfig, EtcdPassword, EtcdTlsConfig, GrpcApiConfig, PersistenceConfig, ShardManagerConfig,
 };
@@ -108,9 +109,12 @@ impl TestPki {
     /// CA, client certificate and key; no server name.
     fn mtls(&self) -> EtcdTlsConfig {
         EtcdTlsConfig {
-            ca_cert_file: self.path("ca.pem"),
+            ca_cert_file: Some(self.path("ca.pem")),
+            ca_cert: None,
             client_cert_file: Some(self.path("client.pem")),
+            client_cert: None,
             client_key_file: Some(self.path("client-key.pem")),
+            client_key: None,
             server_name: None,
         }
     }
@@ -246,9 +250,12 @@ fn auth_config(url: &str, password: &str, pki: &TestPki) -> ShardManagerConfig {
     config(EtcdConfig {
         endpoints: vec![url.to_string()],
         tls: Some(EtcdTlsConfig {
-            ca_cert_file: pki.path("ca.pem"),
+            ca_cert_file: Some(pki.path("ca.pem")),
+            ca_cert: None,
             client_cert_file: None,
+            client_cert: None,
             client_key_file: None,
+            client_key: None,
             server_name: None,
         }),
         username: Some(USER.to_string()),
@@ -437,7 +444,7 @@ async fn a_replica_that_trusts_another_ca_does_not_start(
     let message = refused(tls_config(
         &etcd.client_url(),
         EtcdTlsConfig {
-            ca_cert_file: pki.path("other-ca.pem"),
+            ca_cert_file: Some(pki.path("other-ca.pem")),
             ..pki.mtls()
         },
     ))
@@ -484,6 +491,28 @@ async fn history_is_compacted(mut client: etcd_client::Client) {
     })
     .await
     .expect("The leader should compact etcd's history as the limited user");
+}
+
+#[test]
+// The other way to give each setting: the CA as an inline value instead of a file, and the
+// password from a file, as a Kubernetes Secret mounted as files provides it.
+async fn a_replica_with_an_inline_ca_and_a_password_file_elects_writes_and_hands_over(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
+    let pki = TestPki::new();
+    let etcd = auth_etcd(&pki, pki.etcd_options()).await;
+    let inspect = inspection_client_auth(&etcd.client_url(), &pki).await;
+    std::fs::write(pki.path("password"), format!("{PASSWORD}\n")).unwrap();
+    let mut config = auth_config(&etcd.client_url(), PASSWORD, &pki);
+    if let PersistenceConfig::Etcd(etcd) = &mut config.persistence {
+        etcd.password = None;
+        etcd.password_file = Some(pki.path("password"));
+        let tls = etcd.tls.as_mut().expect("the auth config has TLS");
+        tls.ca_cert_file = None;
+        tls.ca_cert = Some(Base64(pki.ca_pem.clone().into_bytes()));
+    }
+    elect_write_and_hand_over(config, inspect).await;
 }
 
 #[test]

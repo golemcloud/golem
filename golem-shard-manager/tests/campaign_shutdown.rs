@@ -64,6 +64,7 @@ fn unreachable_config() -> EtcdConfig {
         tls: None,
         username: None,
         password: None,
+        password_file: None,
     }
 }
 

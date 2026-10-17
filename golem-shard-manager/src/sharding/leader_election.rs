@@ -18,7 +18,7 @@
 use crate::config::EtcdConfig;
 use crate::metrics;
 use crate::sharding::error::ShardManagerError;
-use crate::sharding::etcd_connection::connect_for_election;
+use crate::sharding::etcd_connection::{EtcdConnectSettings, connect_election_with};
 use crate::sharding::etcd_retry::retry_retriable_until;
 use etcd_client::{
     Client, Compare, CompareOp, LeaderKey, LeaseClient, LeaseKeepAliveStream, LeaseKeeper, TxnOp,
@@ -432,8 +432,18 @@ impl LeaderElection {
         config: &EtcdConfig,
         election_name: impl Into<String>,
     ) -> Result<Self, ShardManagerError> {
+        Self::connect_with(config, &EtcdConnectSettings::load(config)?, election_name).await
+    }
+
+    /// [`Self::connect`] with settings already loaded, so that the election client and the
+    /// request client share one reading of the TLS files.
+    pub async fn connect_with(
+        config: &EtcdConfig,
+        settings: &EtcdConnectSettings,
+        election_name: impl Into<String>,
+    ) -> Result<Self, ShardManagerError> {
         Ok(Self {
-            client: connect_for_election(config).await?,
+            client: connect_election_with(config, settings).await?,
             election_name: election_name.into(),
             lease_ttl: config.leader_lease_ttl,
             request_timeout: config.request_timeout,
