@@ -99,6 +99,11 @@ impl From<ShardManagerError> for golem::shardmanager::v1::ShardManagerError {
                 duplicate.to_string(),
                 api::error_code::INTERNAL_UNKNOWN,
             ),
+            moved @ ShardManagerError::YieldedToNewerGeneration { .. } => error(
+                shard_manager_error::Error::Unknown,
+                moved.to_string(),
+                api::error_code::INTERNAL_SHARDING_NOT_READY,
+            ),
             ShardManagerError::ShutdownRequested => error(
                 shard_manager_error::Error::Unknown,
                 "The shard manager is shutting down".to_string(),

@@ -576,6 +576,13 @@ impl LeaderElection {
         self
     }
 
+    /// Sets the rollout generation that this replica announces in its election value: see
+    /// [`newer_generation_behind`].
+    pub fn with_rollout_generation(mut self, generation: Option<u64>) -> Self {
+        self.value.rollout_generation = generation;
+        self
+    }
+
     /// Checks the campaign against the watched view while this replica waits: see
     /// [`Self::watch_campaign`].
     pub fn with_watch(mut self, watch: ElectionWatch) -> Self {
@@ -626,6 +633,14 @@ impl LeaderElection {
 
             match self.campaign_once().await {
                 Ok(elected) => return Ok(elected),
+                // Not a failure: the lease was revoked with the key, and the next campaign queues
+                // at the end, behind the newer replica.
+                Err(ShardManagerError::YieldedToNewerGeneration { own, newer }) => {
+                    info!(
+                        own,
+                        newer, "Moved behind a newer rollout generation in the election queue"
+                    );
+                }
                 Err(err) if err.is_retriable() => {
                     metrics::record_campaign_attempt_failure();
                     warn!(error = %err, retry_in = ?backoff, "Campaign attempt failed; retrying");
@@ -846,17 +861,19 @@ impl LeaderElection {
         }
     }
 
-    /// Ends a waiting campaign when the watched view shows that it must not go on: another live
-    /// campaigner advertises this replica's address. Never returns without a watch.
+    /// Ends a waiting campaign when the watched view shows that it must not go on: a campaigner
+    /// of a newer rollout generation queues behind this replica (see [`newer_generation_behind`]),
+    /// or another live campaigner advertises this replica's address. Never returns without a
+    /// watch.
     ///
     /// A key of an earlier process of the same pod also carries this address, but nothing renews
     /// its lease, so it is gone within one TTL. A key still present two TTLs after this replica
     /// first saw it belongs to a live replica.
     async fn watch_campaign(&self, own_lease: i64) -> ShardManagerError {
-        let (Some(mut watch), Some(own)) = (self.watch.clone(), self.value.grpc_address.clone())
-        else {
+        let Some(mut watch) = self.watch.clone() else {
             return std::future::pending().await;
         };
+        let own = self.value.grpc_address.clone();
         let patience = self.lease_ttl.saturating_mul(2);
         let mut duplicate: Option<(Vec<u8>, Instant)> = None;
         // Wakes the loop with no change in the view, so that the patience is measured.
@@ -864,8 +881,20 @@ impl LeaderElection {
         recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             if let Some(view) = watch.view() {
-                match duplicate_of(&view, own_lease, &own) {
-                    Some(other) => {
+                if let Some(newer) =
+                    newer_generation_behind(&view, own_lease, self.value.rollout_generation)
+                {
+                    return ShardManagerError::YieldedToNewerGeneration {
+                        own: self.value.rollout_generation.unwrap_or_default(),
+                        newer,
+                    };
+                }
+                // The duplicate rule needs an address of our own to compare with.
+                let found = own
+                    .as_ref()
+                    .and_then(|own| duplicate_of(&view, own_lease, own).map(|other| (own, other)));
+                match found {
+                    Some((own, other)) => {
                         let since = match &duplicate {
                             Some((key, since)) if key == &other.key => *since,
                             _ => {
@@ -1071,6 +1100,29 @@ impl LeaderLocator {
     }
 }
 
+/// The generation of a campaigner queued behind this replica that is higher than this replica's
+/// own, if any. The head of the queue never moves: it is about to lead. Unknown generations move
+/// nothing.
+pub(crate) fn newer_generation_behind(
+    view: &CampaignView,
+    own_lease: i64,
+    own_generation: Option<u64>,
+) -> Option<u64> {
+    let own_generation = own_generation?;
+    let position = view
+        .campaigners
+        .iter()
+        .position(|campaigner| campaigner.lease == own_lease)?;
+    if position == 0 {
+        return None;
+    }
+    view.campaigners[position + 1..]
+        .iter()
+        .filter_map(|campaigner| campaigner.value.as_ref()?.rollout_generation)
+        .filter(|generation| *generation > own_generation)
+        .max()
+}
+
 /// Another campaigner that advertises `own`. The own key is told apart by its lease.
 pub(crate) fn duplicate_of<'a>(
     view: &'a CampaignView,
@@ -1134,6 +1186,87 @@ mod tests {
             host: "10.0.0.1".to_string(),
             port: 9001,
         }
+    }
+
+    fn with_generation(mut campaigner: Campaigner, generation: Option<u64>) -> Campaigner {
+        if let Some(value) = campaigner.value.as_mut() {
+            value.rollout_generation = generation;
+        }
+        campaigner
+    }
+
+    #[test]
+    fn a_standby_moves_for_a_newer_generation_behind_it() {
+        let view = CampaignView {
+            campaigners: vec![
+                with_generation(campaigner(1, 10, 9001), Some(1)),
+                with_generation(campaigner(2, 20, 9002), Some(1)),
+                with_generation(campaigner(3, 30, 9003), Some(2)),
+            ],
+        };
+        assert_eq!(newer_generation_behind(&view, 2, Some(1)), Some(2));
+    }
+
+    #[test]
+    fn the_head_of_the_queue_never_moves() {
+        let view = CampaignView {
+            campaigners: vec![
+                with_generation(campaigner(1, 10, 9001), Some(1)),
+                with_generation(campaigner(3, 30, 9003), Some(2)),
+            ],
+        };
+        assert_eq!(newer_generation_behind(&view, 1, Some(1)), None);
+    }
+
+    #[test]
+    fn a_newer_generation_ahead_is_no_reason_to_move() {
+        let view = CampaignView {
+            campaigners: vec![
+                with_generation(campaigner(1, 10, 9001), Some(1)),
+                with_generation(campaigner(3, 30, 9003), Some(2)),
+                with_generation(campaigner(2, 40, 9002), Some(1)),
+            ],
+        };
+        assert_eq!(newer_generation_behind(&view, 2, Some(1)), None);
+    }
+
+    #[test]
+    fn without_generations_nothing_moves() {
+        let view = CampaignView {
+            campaigners: vec![
+                with_generation(campaigner(1, 10, 9001), None),
+                with_generation(campaigner(2, 20, 9002), None),
+                with_generation(campaigner(3, 30, 9003), Some(2)),
+            ],
+        };
+        assert_eq!(
+            newer_generation_behind(&view, 2, None),
+            None,
+            "a replica without a generation never moves"
+        );
+        let view = CampaignView {
+            campaigners: vec![
+                with_generation(campaigner(1, 10, 9001), Some(1)),
+                with_generation(campaigner(2, 20, 9002), Some(1)),
+                with_generation(campaigner(3, 30, 9003), None),
+            ],
+        };
+        assert_eq!(
+            newer_generation_behind(&view, 2, Some(1)),
+            None,
+            "a campaigner without one is never newer"
+        );
+    }
+
+    #[test]
+    fn a_view_without_the_own_key_moves_nothing() {
+        let view = CampaignView {
+            campaigners: vec![
+                with_generation(campaigner(1, 10, 9001), Some(1)),
+                with_generation(campaigner(3, 30, 9003), Some(2)),
+            ],
+        };
+        assert_eq!(newer_generation_behind(&view, 2, Some(1)), None);
     }
 
     #[test]

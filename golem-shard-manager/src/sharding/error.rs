@@ -54,6 +54,10 @@ pub enum ShardManagerError {
          replica needs its own grpc.advertised_host, such as its pod IP; never a Service name"
     )]
     DuplicateAdvertisedAddress { address: String, other: String },
+    #[error(
+        "moved to the end of the election queue behind rollout generation {newer} (own: {own})"
+    )]
+    YieldedToNewerGeneration { own: u64, newer: u64 },
     #[error("Shutdown requested")]
     ShutdownRequested,
     #[error("DB error {0}")]
@@ -126,6 +130,8 @@ impl IsRetriableError for ShardManagerError {
             // The other replica keeps renewing its key, so a new campaign would meet it again;
             // only a change of configuration helps.
             ShardManagerError::DuplicateAdvertisedAddress { .. } => false,
+            // The lease was revoked with the key, so a new campaign queues at the end.
+            ShardManagerError::YieldedToNewerGeneration { .. } => true,
             // Retrying would be the process refusing the stop it was just asked for.
             ShardManagerError::ShutdownRequested => false,
             ShardManagerError::RepoError(_) => false,

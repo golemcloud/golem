@@ -213,6 +213,31 @@ async fn campaigner_values(etcd: &DockerEtcd) -> BTreeMap<Vec<u8>, ElectionValue
         .collect()
 }
 
+/// The advertised gRPC ports of the campaigners, in election queue order: etcd hands the
+/// leadership to the key with the lowest create revision.
+async fn queue_order(etcd: &DockerEtcd) -> Vec<u16> {
+    let response = etcd_client::Client::connect([etcd.client_url()], None)
+        .await
+        .expect("Cannot connect to etcd")
+        .kv_client()
+        .get(
+            format!("{LEADER_ELECTION_NAME}/"),
+            Some(etcd_client::GetOptions::new().with_prefix()),
+        )
+        .await
+        .expect("Cannot read the election prefix");
+    let mut campaigners: Vec<(i64, u16)> = response
+        .kvs()
+        .iter()
+        .filter_map(|kv| {
+            let port = ElectionValue::decode(kv.value())?.grpc_address?.port;
+            Some((kv.create_revision(), port))
+        })
+        .collect();
+    campaigners.sort();
+    campaigners.into_iter().map(|(_, port)| port).collect()
+}
+
 /// The gRPC address of the campaigner that joined after `before` was taken.
 async fn await_new_campaigner(etcd: &DockerEtcd, before: &BTreeSet<Vec<u8>>) -> LeaderAddress {
     timeout(STARTUP_TIMEOUT, async {
@@ -1849,6 +1874,7 @@ async fn a_standby_that_cannot_reach_etcd_does_not_export_itself_as_the_leader(
         retry_max_delay: Duration::from_secs(5),
         leader_lease_ttl: LEASE_TTL,
         compaction_retention_revisions: 0,
+        rollout_generation: None,
     });
 
     let shutdown = CancellationToken::new();
@@ -2149,4 +2175,75 @@ async fn an_earlier_process_key_with_the_same_address_is_waited_out(etcd: &Arc<D
         .expect("the replica leads once the earlier key's lease expires")
         .expect("the replica's startup reports its ports");
     replica.abort();
+}
+
+fn with_generation(mut config: ShardManagerConfig, generation: u64) -> ShardManagerConfig {
+    if let PersistenceConfig::Etcd(etcd) = &mut config.persistence {
+        etcd.rollout_generation = Some(generation);
+    }
+    config
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// In a rolling update, a new replica queues behind old standbys, and each old one that leads next
+// is replaced next: one handover per old pod. An old standby must step back behind a newer
+// replica, so that the old leader hands over to a new replica, once.
+async fn an_old_standby_moves_behind_a_newer_rollout_generation(etcd: &Arc<DockerEtcd>) {
+    wipe_state(etcd).await;
+    await_election_idle(etcd).await;
+    let config = distributed_config(etcd);
+
+    let old_leader = CancellationToken::new();
+    let (old_leader_task, old_leader_started) =
+        spawn_serving_replica(with_generation(config.clone(), 1), old_leader.clone());
+    timeout(STARTUP_TIMEOUT, old_leader_started)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let before = campaigner_keys(etcd).await;
+    let (old_standby, mut old_standby_started) =
+        spawn_serving_replica(with_generation(config.clone(), 1), CancellationToken::new());
+    let old_standby_address = await_new_campaigner(etcd, &before).await;
+
+    let before = campaigner_keys(etcd).await;
+    let (new_replica, new_started) =
+        spawn_serving_replica(with_generation(config.clone(), 2), CancellationToken::new());
+    let new_address = await_new_campaigner(etcd, &before).await;
+
+    // The old standby leaves and queues again, behind the new replica.
+    timeout(STARTUP_TIMEOUT, async {
+        loop {
+            let order: Vec<u16> = queue_order(etcd).await;
+            if order.len() == 3
+                && order.iter().position(|port| *port == new_address.port)
+                    < order
+                        .iter()
+                        .position(|port| *port == old_standby_address.port)
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the old standby should move behind the newer generation");
+
+    old_leader.cancel();
+    let new_port = timeout(STARTUP_TIMEOUT, new_started)
+        .await
+        .expect("the new replica leads after the old leader steps down")
+        .expect("the new replica reports its port");
+    assert_ne!(new_port, 0);
+    assert!(
+        timeout(Duration::from_millis(500), &mut old_standby_started)
+            .await
+            .is_err(),
+        "the old standby must not have led"
+    );
+
+    let _ = old_leader_task.await;
+    old_standby.abort();
+    new_replica.abort();
 }

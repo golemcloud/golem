@@ -288,6 +288,12 @@ pub struct EtcdConfig {
     /// keep their own history.
     #[serde(default = "default_etcd_compaction_retention_revisions")]
     pub compaction_retention_revisions: u64,
+    /// An optional number that the operator raises with each rollout, such as the Helm release
+    /// revision. A standby moves to the end of the election queue when a campaigner of a higher
+    /// generation queues behind it, so that a rolling update hands the leadership to a new replica
+    /// once, instead of to old replicas that are replaced next. Unset: the queue keeps its order.
+    #[serde(default)]
+    pub rollout_generation: Option<u64>,
 }
 
 fn default_etcd_connect_timeout() -> Duration {
@@ -334,6 +340,7 @@ impl Default for EtcdConfig {
             retry_max_delay: default_etcd_retry_max_delay(),
             leader_lease_ttl: default_leader_lease_ttl(),
             compaction_retention_revisions: default_etcd_compaction_retention_revisions(),
+            rollout_generation: None,
         }
     }
 }
@@ -349,6 +356,7 @@ impl SafeDisplay for EtcdConfig {
             retry_max_delay,
             leader_lease_ttl,
             compaction_retention_revisions,
+            rollout_generation,
         } = self;
 
         let mut result = String::new();
@@ -363,6 +371,7 @@ impl SafeDisplay for EtcdConfig {
             &mut result,
             "compaction retention revisions: {compaction_retention_revisions}"
         );
+        let _ = writeln!(&mut result, "rollout generation: {rollout_generation:?}");
         result
     }
 }
