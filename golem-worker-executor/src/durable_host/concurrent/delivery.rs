@@ -746,6 +746,8 @@ impl CompletionDelivery {
             golem_common::model::regions::DeletedRegions::default(),
             None,
             crate::durable_host::tool::operation::OwnerToolOperations::new(),
+            oplog.current_oplog_index().await,
+            None,
         )
         .await?;
         let recorder = CompletionMarkerRecorder::new(oplog, replay_state);
@@ -757,7 +759,6 @@ impl CompletionDelivery {
                 },
                 trap_context: DurableCallTrapContext {
                     retry_from: start_idx,
-                    in_atomic_region: false,
                 },
                 live_call_permit: None,
                 cleanup_sink: None,
@@ -800,7 +801,6 @@ impl CompletionDelivery {
             recorder,
             DurableCallTrapContext {
                 retry_from: start_idx,
-                in_atomic_region: false,
             },
             cleanup_sink,
             TeardownProbe::never(),

@@ -672,6 +672,7 @@ async fn delete_dir_sends_at_most_1000_keys_in_each_request() {
         &keys.iter().map(|key| (key.clone(), 4)).collect::<Vec<_>>(),
         None,
     );
+    let listed_bytes = 4 * keys.len() as u64;
     let (storage, requests) = scripted_storage("", move |request, _| {
         if request.is_list_objects() {
             Answer::new(200, listing.clone())
@@ -695,7 +696,7 @@ async fn delete_dir_sends_at_most_1000_keys_in_each_request() {
                 .collect::<Vec<_>>()
         ),
         (
-            true,
+            Some(listed_bytes),
             vec![(true, 0), (false, 1000), (false, 1000), (false, 1)]
         )
     );
@@ -2164,8 +2165,8 @@ enum RootValue {
     Found(bool),
     /// A write, a delete, `create_dir`, a copy or a move ended with no error.
     Done,
-    /// Tells if `delete_dir` deleted a directory.
-    Deleted(bool),
+    /// The answer of `delete_dir`.
+    Deleted(Option<u64>),
     /// The answer of `exists`.
     Exists(ExistsResult),
     /// The answer of `put_raw_if_absent`.
@@ -2373,7 +2374,7 @@ async fn a_root_path_sends_no_request() {
             ("delete", Ok(RootValue::Done), 0),
             ("delete_many", Ok(RootValue::Done), 0),
             ("create_dir", Ok(RootValue::Done), 0),
-            ("delete_dir", Ok(RootValue::Deleted(false)), 0),
+            ("delete_dir", Ok(RootValue::Deleted(None)), 0),
             ("exists", Ok(RootValue::Exists(ExistsResult::Directory)), 0),
             ("copy from the root", no_name(), 0),
             ("copy to the root", no_name(), 0),

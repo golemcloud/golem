@@ -87,6 +87,16 @@ use tokio_stream::wrappers::ReceiverStream;
 use wasmtime::Engine;
 use wasmtime::component::Component;
 
+/// Starts an executor with agent sockets enabled. The Rust tool streaming fixtures park at crash
+/// checkpoints and count trap attempts over raw TCP connections to the test.
+async fn start_with_agent_sockets(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    overrides: TestExecutorOverrides,
+) -> anyhow::Result<TestWorkerExecutor> {
+    start_with_overrides(deps, context, overrides.with_agent_sockets()).await
+}
+
 mod attachment_cost_contract;
 mod chunk_f_policy_acceptance;
 mod chunk_m_stream_deltas;
@@ -257,8 +267,7 @@ enum SingleStoreProbePrefix {
     Complete,
     /// The prefix ending with the first direct idempotency-key `Start` (its `End` is discarded).
     FirstDirectStart,
-    /// The prefix ending with the first direct idempotency-key `End`; the following direct atomic
-    /// region and all later guest calls are discarded.
+    /// The prefix ending with the first direct idempotency-key `End`; later calls are discarded.
     FirstDirectEnd,
 }
 
@@ -271,20 +280,18 @@ enum SingleStoreProbeGate {
 
 /// Records a single-Store history in which a host-side response body read (an accessor durable
 /// call whose scope, `Start` and `End` are appended by a host task) interleaves with direct,
-/// Store-holding guest durable calls (an idempotency key, then nested atomic regions with keys
-/// and oplog index reads), reverts the worker to the requested prefix, and replays it on a fresh
-/// executor while the replayed body admission is optionally paused at `gate` until the direct
-/// call has started waiting for its recorded resolution.
+/// Store-holding guest durable calls (idempotency keys), reverts the worker to the requested
+/// prefix, and replays it on a fresh executor while the replayed body admission is optionally
+/// paused at `gate` until the direct call has started waiting for its recorded resolution.
 ///
-/// A correct replay must neither consume the body scope or body `Start` for a positional direct
-/// read, nor let the Store-holding direct call wait for progress that only the paused body task
+/// A correct replay must neither consume the body scope or body `Start` for a direct call,
+/// nor let the Store-holding direct call wait for progress that only the paused body task
 /// can make.
-async fn run_single_store_http_atomic_probe(
+async fn run_single_store_http_probe(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     caller: &PrecompiledComponent,
     agent_name: &str,
-    atomic_first: bool,
     prefix: SingleStoreProbePrefix,
     gate: SingleStoreProbeGate,
 ) -> anyhow::Result<()> {
@@ -295,22 +302,20 @@ async fn run_single_store_http_atomic_probe(
         .await
         .expect("single-store probe semaphore is not closed");
     let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+    let executor =
+        start_with_agent_sockets(deps, &context, TestExecutorOverrides::default()).await?;
     let component = executor
         .component_dep(&context.default_environment_id, caller)
         .store()
         .await?;
     let (port, gate_port, server, mut checkpoints) = start_crash_checkpoint_server().await;
-    let mut env = HashMap::from([
+    let env = HashMap::from([
         ("CALLER_CRASH_CHECKPOINT_PORT".to_string(), port.to_string()),
         (
             "CALLER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
             gate_port.to_string(),
         ),
     ]);
-    if atomic_first {
-        env.insert("GOL581_ATOMIC_FIRST".to_string(), "1".to_string());
-    }
     // The shape under test has the host-side body scope complete before the guest's first
     // direct call, so that the gates below (not the recording) decide how the two interleave on
     // replay. The fixture only yields between dropping the body and the first direct call; a
@@ -430,22 +435,17 @@ async fn run_single_store_http_atomic_probe(
     }
     drop(executor);
 
-    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+    let executor =
+        start_with_agent_sockets(deps, &context, TestExecutorOverrides::default()).await?;
     let mut admission_gate = match gate {
         SingleStoreProbeGate::None => None,
         SingleStoreProbeGate::Admission(stage) => {
             Some(executor.gate_next_replay_access_admission(&worker_id, "consume-body", stage))
         }
     };
-    // The first direct call after the body read is either a strictly matched idempotency key or
-    // the positional atomic-region marker; the signal proves that it waits for replay progress
-    // while the body admission is paused.
-    let first_direct_call = if atomic_first {
-        "BeginAtomicRegion"
-    } else {
-        "generate_idempotency-key"
-    };
-    let mut direct_wait = executor.signal_next_direct_replay_wait(&worker_id, first_direct_call);
+    // The direct idempotency-key call waits for replay progress while body admission is paused.
+    let mut direct_wait =
+        executor.signal_next_direct_replay_wait(&worker_id, "generate_idempotency-key");
     let replay = async {
         let invoke = executor.invoke_and_await_agent(
             &component,
@@ -465,7 +465,7 @@ async fn run_single_store_http_atomic_probe(
                         .await
                         .map_err(|_| {
                             anyhow::anyhow!(
-                                "the guest's first direct call `{first_direct_call}` did not reach its replay wait while consume-body admission was paused"
+                                "the guest's direct call did not reach its replay wait while consume-body admission was paused"
                             )
                         })?;
                 eprintln!(
@@ -619,12 +619,11 @@ async fn single_store_body_read_and_direct_calls_replay_complete_history(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
+    run_single_store_http_probe(
         last_unique_id,
         deps,
         caller,
         "single-store-complete-control",
-        false,
         SingleStoreProbePrefix::Complete,
         SingleStoreProbeGate::None,
     )
@@ -640,12 +639,11 @@ async fn direct_call_waits_without_blocking_body_admission_paused_before_scope(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
+    run_single_store_http_probe(
         last_unique_id,
         deps,
         caller,
         "single-store-direct-before-scope",
-        false,
         SingleStoreProbePrefix::Complete,
         SingleStoreProbeGate::Admission(ReplayAdmissionStage::BeforeScope),
     )
@@ -661,54 +659,11 @@ async fn direct_call_waits_without_blocking_body_admission_paused_after_scope(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
+    run_single_store_http_probe(
         last_unique_id,
         deps,
         caller,
         "single-store-direct-after-scope",
-        false,
-        SingleStoreProbePrefix::Complete,
-        SingleStoreProbeGate::Admission(ReplayAdmissionStage::AfterScope),
-    )
-    .await
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("3m")]
-async fn positional_atomic_marker_does_not_consume_unclaimed_body_scope_start(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
-        last_unique_id,
-        deps,
-        caller,
-        "single-store-atomic-before-scope",
-        true,
-        SingleStoreProbePrefix::Complete,
-        SingleStoreProbeGate::Admission(ReplayAdmissionStage::BeforeScope),
-    )
-    .await
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("3m")]
-async fn positional_atomic_marker_does_not_consume_unclaimed_body_start(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
-        last_unique_id,
-        deps,
-        caller,
-        "single-store-atomic-after-scope",
-        true,
         SingleStoreProbePrefix::Complete,
         SingleStoreProbeGate::Admission(ReplayAdmissionStage::AfterScope),
     )
@@ -724,12 +679,11 @@ async fn retained_prefix_ending_at_direct_start_replays_with_paused_body_admissi
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
+    run_single_store_http_probe(
         last_unique_id,
         deps,
         caller,
         "single-store-prefix-direct-start",
-        false,
         SingleStoreProbePrefix::FirstDirectStart,
         SingleStoreProbeGate::Admission(ReplayAdmissionStage::AfterScope),
     )
@@ -745,12 +699,11 @@ async fn retained_prefix_ending_at_direct_end_replays_with_paused_body_admission
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
+    run_single_store_http_probe(
         last_unique_id,
         deps,
         caller,
         "single-store-prefix-direct-end",
-        false,
         SingleStoreProbePrefix::FirstDirectEnd,
         SingleStoreProbeGate::Admission(ReplayAdmissionStage::AfterScope),
     )
@@ -766,12 +719,11 @@ async fn retained_prefix_ending_at_direct_start_replays_under_natural_scheduling
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
+    run_single_store_http_probe(
         last_unique_id,
         deps,
         caller,
         "single-store-prefix-direct-start-control",
-        false,
         SingleStoreProbePrefix::FirstDirectStart,
         SingleStoreProbeGate::None,
     )
@@ -787,12 +739,11 @@ async fn retained_prefix_ending_at_direct_end_replays_under_natural_scheduling(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    run_single_store_http_atomic_probe(
+    run_single_store_http_probe(
         last_unique_id,
         deps,
         caller,
         "single-store-prefix-direct-end-control",
-        false,
         SingleStoreProbePrefix::FirstDirectEnd,
         SingleStoreProbeGate::None,
     )
@@ -3896,7 +3847,7 @@ async fn successful_middleware_parent_waits_for_admitted_dropped_child_observer(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -4402,7 +4353,7 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
         environment_state_service: Some(environment_state.clone()),
         ..Default::default()
     };
-    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let executor = start_with_agent_sockets(deps, &context, overrides()).await?;
     let (
         provider_checkpoint_port,
         provider_checkpoint_gate_port,
@@ -4573,7 +4524,7 @@ async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
     drop(provider_gate.release);
     drop(executor);
 
-    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let executor = start_with_agent_sockets(deps, &context, overrides()).await?;
     let resumed_executor = executor.clone();
     let resumed_component = caller_component.clone();
     let resumed_id = agent_id.clone();
@@ -4910,7 +4861,7 @@ async fn concurrent_tool_attempt_identity_survives_reordered_admission_and_repla
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(ReorderedToolActivationService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -5784,7 +5735,7 @@ async fn rust_generated_client_streams_live_and_handles_edges(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -7333,7 +7284,7 @@ async fn direct_stdin_reversed_replay_admission(
             Vec::new(),
         )
         .await?;
-    let mut live_write = (writes && !identical).then(|| {
+    let mut live_write = writes.then(|| {
         executor.gate_next_replay_access_admission(
             &worker,
             "tool-stdin-writer::write",
@@ -7357,19 +7308,33 @@ async fn direct_stdin_reversed_replay_admission(
     let synchronize = async {
         if let Some(gate) = &mut live_write {
             tokio::time::timeout(Duration::from_secs(30), gate.entered()).await?;
-            let second =
-                next_promise_checkpoint(&mut checkpoints, "second-stdin-write-done").await?;
-            wait_for_promise_checkpoint_to_await(&executor, &worker, &second).await?;
+            let first =
+                next_promise_checkpoint(&mut checkpoints, "first-stdin-write-accepted").await?;
+            wait_for_promise_checkpoint_to_await(&executor, &worker, &first).await?;
             executor
                 .complete_promise(
                     &PromiseId {
                         agent_id: worker.clone(),
-                        oplog_idx: second.oplog_idx,
+                        oplog_idx: first.oplog_idx,
                     },
                     Vec::new(),
                 )
                 .await?;
-            gate.release();
+            if !identical {
+                let second =
+                    next_promise_checkpoint(&mut checkpoints, "second-stdin-write-done").await?;
+                wait_for_promise_checkpoint_to_await(&executor, &worker, &second).await?;
+                executor
+                    .complete_promise(
+                        &PromiseId {
+                            agent_id: worker.clone(),
+                            oplog_idx: second.oplog_idx,
+                        },
+                        Vec::new(),
+                    )
+                    .await?;
+                gate.release();
+            }
         }
         if same_watcher {
             let started = next_promise_checkpoint(&mut checkpoints, "same-watcher-started").await?;
@@ -7387,6 +7352,12 @@ async fn direct_stdin_reversed_replay_admission(
         let checkpoint =
             next_promise_checkpoint(&mut checkpoints, "direct-stdin-waits-done").await?;
         wait_for_promise_checkpoint_to_await(&executor, &worker, &checkpoint).await?;
+        if identical {
+            live_write
+                .take()
+                .expect("first write delivery gate")
+                .release();
+        }
         let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
         let mut waits: Vec<_> = entries
             .iter()
@@ -7436,17 +7407,6 @@ async fn direct_stdin_reversed_replay_admission(
             );
         }
         let loads = executor.instance_load_count(&worker);
-        let mut prefill = identical.then(|| {
-            executor.gate_next_replay_access_admission(
-                &worker,
-                "tool-stdin-writer::write",
-                ReplayAdmissionStage::AfterScope,
-            )
-        });
-        if let Some(prefill) = &mut prefill {
-            executor.simulated_crash(&worker).await?;
-            tokio::time::timeout(Duration::from_secs(30), prefill.entered()).await?;
-        }
         let mut first_wait = executor.gate_next_replay_access_admission(
             &worker,
             if writes {
@@ -7467,15 +7427,10 @@ async fn direct_stdin_reversed_replay_admission(
             },
             ReplayAdmissionStage::BeforeScope,
         );
-        if let Some(prefill) = prefill {
-            prefill.release();
-        } else {
-            executor.simulated_crash(&worker).await?;
-        }
+        executor.simulated_crash(&worker).await?;
         tokio::time::timeout(Duration::from_secs(30), first_wait.entered()).await?;
-        // The second operation must complete while the first cannot claim its Start.
         tokio::time::timeout(Duration::from_secs(30), first_finish.entered()).await?;
-        if same_watcher {
+        if same_watcher || identical {
             let mut completed = executor.gate_next_replay_access_admission(
                 &worker,
                 "http::client::send",
@@ -7485,6 +7440,7 @@ async fn direct_stdin_reversed_replay_admission(
             tokio::time::timeout(Duration::from_secs(30), completed.entered()).await?;
             first_finish = completed;
         }
+        // The second operation must complete while the first cannot claim its Start.
         assert!(executor.instance_load_count(&worker) > loads);
         first_finish.release();
         first_wait.release();
@@ -7502,13 +7458,8 @@ async fn direct_stdin_reversed_replay_admission(
     let (result, ()) = tokio::try_join!(invocation, synchronize)?;
     assert_eq!(
         result.into_typed::<Vec<String>>()?,
-        if same_watcher {
+        if same_watcher || identical {
             vec!["ByteStreamCloseCause::Finished"]
-        } else if identical {
-            vec![
-                "ByteStreamCloseCause::Finished",
-                "StreamWriteError::ConcurrentOperation",
-            ]
         } else {
             vec![
                 "ByteStreamCloseCause::Finished",
@@ -7523,7 +7474,27 @@ async fn direct_stdin_reversed_replay_admission(
     if writes {
         assert_eq!(entries.iter().filter(|entry| matches!(&entry.entry,
             PublicOplogEntry::Start(start) if start.function_name == "golem::tool::host::tool-stdin-writer::write"
-        )).count(), if identical { 3 } else { 2 });
+        )).count(), 2);
+    }
+    if identical {
+        let write_starts: Vec<_> = entries
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if start.function_name == "golem::tool::host::tool-stdin-writer::write" =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .collect();
+        // The checkpoint admits the second write only after the first has its End.
+        assert!(entries.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::CompletionDiscarded(marker) if marker.start_index == write_starts[0]
+        )));
+        assert!(entries.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::CompletionDelivered(marker) if marker.start_index == write_starts[1]
+        )));
     }
     server.abort();
     executor.delete_worker(&worker).await?;
@@ -8836,7 +8807,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -9159,7 +9130,6 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
     let original_start = tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
             if let Some(active) = executor.active_entity_metadata(&overflow_owner).await
-                && active.reached_oplog_marker.is_some()
                 && active.tool_operations.operations.is_empty()
                 && matches!(active.lane.holder, Some(OwnerInvocationId::Agent(_)))
                 && active.lane.active_invocation_count == 1
@@ -9199,7 +9169,6 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
             if let Some(active) = executor.active_entity_metadata(&overflow_owner).await
-                && active.reached_oplog_marker.is_some()
                 && active.tool_operations.operations.is_empty()
                 && matches!(active.lane.holder, Some(OwnerInvocationId::Agent(_)))
                 && active.lane.active_invocation_count == 1
@@ -9366,7 +9335,7 @@ async fn completed_tool_replay_bypasses_current_attachment_memory_pressure(
         .expect("attachment-pressure test semaphore is not closed");
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -9562,7 +9531,7 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
         .expect("attachment-pressure test semaphore is not closed");
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -9770,37 +9739,15 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
             .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
         "attachment admission rejection must be an ordinary durable tool outcome"
     );
-    let (terminal_index, terminal_response) = oplog
+    let terminal_response = oplog
         .iter()
         .find_map(|entry| match &entry.entry {
-            PublicOplogEntry::End(params) if params.start_index == original_start => params
-                .response
-                .clone()
-                .map(|response| (entry.oplog_index, response)),
-            _ => None,
-        })
-        .expect("incomplete attachment upgrade rejection has one durable terminal");
-    let (jump_index, jump) = oplog
-        .iter()
-        .find_map(|entry| match &entry.entry {
-            PublicOplogEntry::Jump(params) if entry.oplog_index < terminal_index => {
-                Some((entry.oplog_index, params.jump.clone()))
+            PublicOplogEntry::End(params) if params.start_index == original_start => {
+                params.response.clone()
             }
             _ => None,
         })
-        .expect("incomplete atomic tail is jumped before the outer tool terminal");
-    assert!(
-        jump.start > original_start,
-        "the recovery Jump must preserve the outer tool Start"
-    );
-    assert!(
-        jump.end < jump_index,
-        "the recovery Jump must follow the abandoned atomic interval"
-    );
-    assert!(
-        jump.start <= jump.end,
-        "the recovery Jump must identify a non-empty abandoned atomic interval"
-    );
+        .expect("incomplete attachment upgrade rejection has one durable terminal");
     let terminal = SerializableToolOperationTerminal::from_value(terminal_response.value())?;
     assert_eq!(
         terminal.body_execution,
@@ -9993,6 +9940,193 @@ async fn capable_stdout_poll_does_not_launch_before_result_await(
 #[test]
 #[tracing::instrument]
 #[timeout("3m")]
+async fn gol838_accepted_scope_interest_survives_observer_detachment_before_store(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use crate::active_agents::{ComponentLoadGate, GatedComponentService};
+    use crate::tool_runtime_bypass::permission_admission::{
+        PermissionCardService, PermissionCards,
+    };
+    use golem_api_grpc::proto::golem::worker::{
+        AgentInvocationMode, InvocationFreshnessDisposition, InvocationStart,
+    };
+    use golem_common::model::card::{Card, CardId, ScopeCard, StoredCard};
+    use golem_common::model::oplog::OplogEntry;
+
+    let context = TestContext::new(last_unique_id);
+    let environment = Arc::new(TestEnvironmentStateService::default());
+    let cards = Arc::new(PermissionCards::default());
+    let load = Arc::new(ComponentLoadGate::new());
+    let wrapped_load = load.clone();
+    let registry = cards.clone();
+    let executor = start_with_agent_sockets(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment.clone()),
+            create_card_service: Some(Arc::new(move || {
+                Arc::new(PermissionCardService {
+                    cards: registry.clone(),
+                })
+            })),
+            wrap_component_service: Some(Arc::new(move |inner| {
+                Arc::new(GatedComponentService {
+                    inner,
+                    gate: wrapped_load.clone(),
+                })
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let (port, gate_port, _server, mut checkpoints) = start_crash_checkpoint_server().await;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    let agent = agent_id!("ToolStreamingCaller", "scope-interest-before-store");
+    let worker = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent,
+            HashMap::from([
+                ("CRASH_CHECKPOINT_PORT".to_string(), port.to_string()),
+                (
+                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    gate_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let owner = OwnedAgentId::new(context.default_environment_id, &worker);
+    let trigger = CardId::new();
+    let marker = CardId::new();
+    for id in [trigger, marker] {
+        cards.register(StoredCard::Concrete(Card {
+            card_id: id,
+            parent_ids: Vec::new(),
+            lower_positive: Vec::new(),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+            system_card: false,
+            managed_by: None,
+        }));
+    }
+    let scope = ScopeCard {
+        scope_card_id: CardId::new(),
+        root_card_ids: vec![trigger, marker],
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        expires_at: None,
+    };
+    let input = b"retained-before-store".to_vec();
+    let (_, value) = data_value!(input.clone()).into_parts();
+    let request = InvocationStart {
+        agent_id: Some(worker.clone().into()),
+        method_name: Some("hold_fire_and_forget_capable_staging".to_string()),
+        input: Some(value.try_into().map_err(anyhow::Error::msg)?),
+        mode: AgentInvocationMode::Await as i32,
+        schedule_at: None,
+        idempotency_key: Some(IdempotencyKey::fresh().into()),
+        component_owner_account_id: Some(caller_component.account_id.into()),
+        environment_id: Some(caller_component.environment_id.into()),
+        auth_ctx: Some(executor.auth_ctx().into()),
+        context: None,
+        principal: None,
+        freshness_disposition: InvocationFreshnessDisposition::MayExist as i32,
+        config: Vec::new(),
+        attempt_id: None,
+        expected_callee_fingerprint: None,
+        durable_input_mappings: Vec::new(),
+        scope_card: Some((&scope).try_into().map_err(anyhow::Error::msg)?),
+        origin_invocation: None,
+        external_tool: None,
+    };
+    let observer = tokio::spawn({
+        let executor = executor.clone();
+        async move { executor.invoke_agent_session(request).await }
+    });
+    let evidence = async {
+        let staging = tokio::time::timeout(Duration::from_secs(30), checkpoints.recv()).await?.unwrap();
+        assert_eq!(staging.name, "fire-capable-staging");
+        cards.revoke(trigger);
+        executor.queue_card_revocation(&worker, trigger).await?;
+        staging.release.send(()).unwrap();
+        let parent_open = tokio::time::timeout(Duration::from_secs(30), checkpoints.recv()).await?.unwrap();
+        assert_eq!(parent_open.name, "fire-capable-ready-parent-open");
+        executor.commit_oplog(&worker).await?;
+        assert!(executor.stored_oplog(&worker).await.iter().any(|entry| matches!(entry,
+            OplogEntry::CardRevokedCascade { revoked_card_ids, .. } if revoked_card_ids.contains(&trigger))));
+        let operation = executor.active_entity_metadata(&owner).await.unwrap().tool_operations.operations.into_iter().next().unwrap();
+        assert_eq!(operation.admission, ToolBodyAdmissionMetadata::Ready);
+        assert_eq!(operation.lane, ToolOperationLaneMetadata::None);
+        load.arm();
+        parent_open.release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(30), load.entered()).await?;
+        // Executable fetch precedes context/Store creation. The parent's next checkpoint
+        // authorization invalidated its whole scope; only the accepted child retains marker.
+        assert!(executor.active_agents().tracked_card_ids().await.contains(&marker));
+        observer.abort();
+        assert!(observer.await.unwrap_err().is_cancelled());
+        assert!(executor.active_agents().tracked_card_ids().await.contains(&marker),
+            "detaching the invocation observer must not drop accepted pre-Store interest");
+        load.release();
+        let body = tokio::time::timeout(Duration::from_secs(30), checkpoints.recv()).await?.unwrap();
+        assert_eq!(body.name, "capable-body");
+        assert!(!executor.active_agents().tracked_card_ids().await.contains(&marker),
+            "the child's own authorization must invalidate its inherited revoked-root scope");
+        body.release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if executor.active_entity_metadata(&owner).await.is_some_and(|metadata| metadata.tool_operations.operations.is_empty()) { break; }
+                tokio::task::yield_now().await;
+            }
+        }).await?;
+        assert_eq!(executor.get_file_contents(&worker, "/fire-capable-staging.bin").await?, input);
+        Ok::<_, anyhow::Error>(())
+    }.await;
+    load.release();
+    evidence
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
 async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -10002,7 +10136,7 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -10438,231 +10572,6 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
 #[test]
 #[tracing::instrument]
 #[timeout("3m")]
-async fn incomplete_entity_atomic_rollback_recovers_dependent_sibling(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
-    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            environment_state_service: Some(environment_state.clone()),
-            ..Default::default()
-        },
-    )
-    .await?;
-    let (provider_port, provider_gate_port, _provider_server, mut provider_arrivals) =
-        start_crash_checkpoint_server().await;
-    let (trap_port, trap_server, trap_attempts) = start_trap_attempt_server().await;
-    let _trap_server = tokio_util::task::AbortOnDropHandle::new(trap_server);
-
-    let provider_component = executor
-        .component_dep(&context.default_environment_id, provider)
-        .store()
-        .await?;
-    let caller_component = executor
-        .component_dep(&context.default_environment_id, caller)
-        .store()
-        .await?;
-    let provider_path = deps
-        .component_directory
-        .join(format!("{}.wasm", provider.wasm_name));
-    let metadata = extract_component_metadata(&provider_path, false, true).await?;
-    environment_state.set_tool_deployment(
-        context.default_environment_id,
-        caller_component.id,
-        caller_component.revision,
-        Some(deployment_state(
-            context.account_id,
-            provider_component.id,
-            provider_component.revision,
-            "golem-it:tool-streaming-rust-provider",
-            "ToolStreamingCaller",
-            metadata.tools,
-        )),
-    );
-
-    let agent_id = agent_id!("ToolStreamingCaller", "entity-ownership-rollback");
-    let worker_id = executor
-        .start_agent_with(
-            &caller_component.id,
-            agent_id.clone(),
-            HashMap::from([
-                ("TRAP_ONCE_PORT".to_string(), trap_port.to_string()),
-                (
-                    "PROVIDER_CRASH_CHECKPOINT_PORT".to_string(),
-                    provider_port.to_string(),
-                ),
-                (
-                    "PROVIDER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
-                    provider_gate_port.to_string(),
-                ),
-            ]),
-            Vec::new(),
-        )
-        .await?;
-    let invocation = tokio::time::timeout(
-        std::time::Duration::from_secs(60),
-        executor.invoke_and_await_agent(
-            &caller_component,
-            &agent_id,
-            "dependent_sibling_after_unjournaled_stdout",
-            data_value!(),
-        ),
-    );
-    let recover = async {
-        let provider_checkpoint =
-            tokio::time::timeout(std::time::Duration::from_secs(30), provider_arrivals.recv())
-                .await
-                .map_err(|_| anyhow::anyhow!("provider changing-stdout checkpoint timed out"))?
-                .ok_or_else(|| anyhow::anyhow!("provider checkpoint server stopped"))?;
-        assert_eq!(provider_checkpoint.name, "provider-changing-stdout");
-        let before_crash = tokio::time::timeout(std::time::Duration::from_secs(30), async {
-            loop {
-                executor.commit_oplog(&worker_id).await?;
-                let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-                let sibling = entries
-                    .iter()
-                    .filter_map(|entry| match &entry.entry {
-                        PublicOplogEntry::Start(params)
-                            if params.function_name == "golem::entity::invoke" =>
-                        {
-                            Some(entry.oplog_index)
-                        }
-                        _ => None,
-                    })
-                    .nth(1);
-                if sibling.is_some_and(|start| {
-                    entries.iter().any(|entry| matches!(
-                    &entry.entry, PublicOplogEntry::End(params) if params.start_index == start
-                ))
-                }) {
-                    break anyhow::Ok(entries);
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .map_err(|_| anyhow::anyhow!("dependent sibling did not complete"))??;
-        let entity_starts = before_crash
-            .iter()
-            .filter_map(|entry| match &entry.entry {
-                PublicOplogEntry::Start(params)
-                    if params.function_name == "golem::entity::invoke" =>
-                {
-                    Some(entry.oplog_index)
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(entity_starts.len(), 2, "outer and dependent sibling Starts");
-        assert!(before_crash.iter().all(|entry| !matches!(
-            &entry.entry,
-            PublicOplogEntry::End(params) if params.start_index == entity_starts[0]
-        )));
-        before_crash
-            .iter()
-            .find(|entry| {
-                matches!(
-                    &entry.entry,
-                    PublicOplogEntry::End(params) if params.start_index == entity_starts[1]
-                )
-            })
-            .expect("dependent sibling End is durable");
-        assert!(
-            before_crash
-                .iter()
-                .filter(|entry| matches!(entry.entry, PublicOplogEntry::BeginAtomicRegion(_)))
-                .count()
-                > before_crash
-                    .iter()
-                    .filter(|entry| matches!(entry.entry, PublicOplogEntry::EndAtomicRegion(_)))
-                    .count(),
-            "the provider's outer atomic region must still be incomplete"
-        );
-
-        executor.simulated_crash(&worker_id).await?;
-        Ok::<_, anyhow::Error>(entity_starts)
-    };
-    let (result, recovery) = tokio::join!(invocation, recover);
-    let original_starts = recovery?;
-    let replayed = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    if result.is_err() {
-        assert!(
-            replayed
-                .iter()
-                .any(|entry| matches!(entry.entry, PublicOplogEntry::Jump(_))),
-            "incomplete entity recovery must record its rollback Jump"
-        );
-        assert!(replayed.iter().any(|entry| matches!(
-            &entry.entry,
-            PublicOplogEntry::End(params) if params.start_index == original_starts[1]
-        )));
-        anyhow::bail!(
-            "recovery did not settle with the original dependent sibling Start/End at {} retained; external attempt reads={}, expected recovery to reread `second` after the original caller completed the sibling from `first`",
-            original_starts[1],
-            trap_attempts.load(Ordering::SeqCst)
-        );
-    }
-    let evidence: Vec<String> = result.expect("timeout handled above")?.into_typed()?;
-    assert_eq!(evidence, ["second", "no-stream:second"]);
-    assert_eq!(trap_attempts.load(Ordering::SeqCst), 2);
-
-    drop(executor);
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            environment_state_service: Some(environment_state),
-            ..Default::default()
-        },
-    )
-    .await?;
-    let reconstructed: String = tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        executor.invoke_and_await_agent(
-            &caller_component,
-            &agent_id,
-            "replay_probe",
-            data_value!(),
-        ),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("second reconstruction did not settle"))??
-    .into_typed()?;
-    assert_eq!(reconstructed, "replayed");
-    assert_eq!(trap_attempts.load(Ordering::SeqCst), 2);
-
-    let original_sibling_end = replayed
-        .iter()
-        .find(|entry| {
-            matches!(
-                &entry.entry,
-                PublicOplogEntry::End(params) if params.start_index == original_starts[1]
-            )
-        })
-        .unwrap()
-        .oplog_index;
-    assert!(
-        replayed.iter().any(|entry| matches!(
-            &entry.entry,
-            PublicOplogEntry::Jump(params)
-                if params.jump.contains(original_starts[1])
-                    && params.jump.contains(original_sibling_end)
-        )),
-        "the old sibling's complete history must be logically deleted, not merely left unclaimed"
-    );
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("3m")]
 async fn active_stream_crash_replays_pinned_activation_with_fresh_attachments(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -10801,7 +10710,7 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -11698,7 +11607,7 @@ async fn completed_reconstruction_validates_before_delivering_result(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -11866,7 +11775,7 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -12066,7 +11975,7 @@ async fn incomplete_custom_durability_waits_for_overlapping_completed_reconstruc
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -12297,7 +12206,7 @@ async fn run_clocked_stream_recovery(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -12595,10 +12504,6 @@ async fn deterministic_stream_crash_checkpoint_matrix(
             )
         }
 
-        fn expects_marker(self) -> bool {
-            self.checkpoint_file().is_some()
-        }
-
         fn attachment_progress_ready(self, operation: &ToolOperationMetadata) -> bool {
             let (Some(stdin), Some(stdout)) = (&operation.stdin, &operation.stdout) else {
                 return false;
@@ -12659,7 +12564,7 @@ async fn deterministic_stream_crash_checkpoint_matrix(
 
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -12835,10 +12740,10 @@ async fn deterministic_stream_crash_checkpoint_matrix(
         .ok_or_else(|| anyhow::anyhow!("crash checkpoint server stopped"))?;
         assert_eq!(original_checkpoint.name, checkpoint.name());
 
-        let (original_start, original_marker) = if let Some((expected_admission, expected_lane)) =
+        let original_start = if let Some((expected_admission, expected_lane)) =
             checkpoint.expected_operation()
         {
-            let (start, marker, admission, lane, attachment_count) =
+            let (start, admission, lane, attachment_count) =
                 tokio::time::timeout(std::time::Duration::from_secs(30), async {
                     loop {
                         if let Some(active) = executor.active_entity_metadata(&owned_agent_id).await
@@ -12848,8 +12753,6 @@ async fn deterministic_stream_crash_checkpoint_matrix(
                             && operation.lane == expected_lane
                             && operation.attachment_count == 2
                             && checkpoint.attachment_progress_ready(operation)
-                            && (!checkpoint.expects_marker()
-                                || active.reached_oplog_marker.is_some())
                             && (expected_admission != ToolBodyAdmissionMetadata::Running
                                 || active.slots.iter().any(|slot| {
                                     slot.invocations.iter().any(|invocation| {
@@ -12860,7 +12763,6 @@ async fn deterministic_stream_crash_checkpoint_matrix(
                         {
                             break (
                                 start,
-                                active.reached_oplog_marker,
                                 operation.admission,
                                 operation.lane,
                                 operation.attachment_count,
@@ -12894,14 +12796,12 @@ async fn deterministic_stream_crash_checkpoint_matrix(
                 "both fresh attachments must remain active at `{}`",
                 checkpoint.name()
             );
-            (start, marker)
+            start
         } else {
             let terminal_checkpoint =
                 tokio::time::timeout(std::time::Duration::from_secs(30), async {
                     loop {
                         if let Some(active) = executor.active_entity_metadata(&owned_agent_id).await
-                            && (!checkpoint.expects_marker()
-                                || active.reached_oplog_marker.is_some())
                             && active.tool_operations.operations.is_empty()
                             && active.slots.iter().all(|slot| slot.invocations.is_empty())
                         {
@@ -12921,7 +12821,7 @@ async fn deterministic_stream_crash_checkpoint_matrix(
                                 })
                                 .collect::<Vec<_>>();
                             if entity_starts.len() == 1 {
-                                break (entity_starts[0], active.reached_oplog_marker);
+                                break entity_starts[0];
                             }
                         }
                         tokio::task::yield_now().await;
@@ -12983,32 +12883,27 @@ async fn deterministic_stream_crash_checkpoint_matrix(
                 let checkpoint_ready = executor
                     .active_entity_metadata(&owned_agent_id)
                     .await
-                    .is_some_and(|active| {
-                        let marker_ready = original_marker
-                            .is_none_or(|marker| active.reached_oplog_marker == Some(marker));
-                        marker_ready
-                            && match checkpoint.expected_operation() {
-                                Some((admission, lane)) => {
-                                    active.tool_operations.operations.first().is_some_and(
-                                        |operation| {
-                                            operation.start_index == Some(original_start)
-                                                && operation.admission == admission
-                                                && operation.lane == lane
-                                                && operation.attachment_count == 2
-                                                && checkpoint.attachment_progress_ready(operation)
-                                                && (admission != ToolBodyAdmissionMetadata::Running
-                                                    || active.slots.iter().any(|slot| {
-                                                        slot.invocations.iter().any(|invocation| {
-                                                            invocation.invocation_id.start_index()
-                                                                == original_start
-                                                                && invocation.store_attached
-                                                        })
-                                                    }))
-                                        },
-                                    )
-                                }
-                                None => active.tool_operations.operations.is_empty(),
-                            }
+                    .is_some_and(|active| match checkpoint.expected_operation() {
+                        Some((admission, lane)) => active
+                            .tool_operations
+                            .operations
+                            .first()
+                            .is_some_and(|operation| {
+                                operation.start_index == Some(original_start)
+                                    && operation.admission == admission
+                                    && operation.lane == lane
+                                    && operation.attachment_count == 2
+                                    && checkpoint.attachment_progress_ready(operation)
+                                    && (admission != ToolBodyAdmissionMetadata::Running
+                                        || active.slots.iter().any(|slot| {
+                                            slot.invocations.iter().any(|invocation| {
+                                                invocation.invocation_id.start_index()
+                                                    == original_start
+                                                    && invocation.store_attached
+                                            })
+                                        }))
+                            }),
+                        None => active.tool_operations.operations.is_empty(),
                     });
                 if checkpoint_ready {
                     break;
@@ -13151,7 +13046,7 @@ async fn dual_output_reconstruction_preserves_independent_history_and_effects(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -13342,7 +13237,7 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {
@@ -13763,12 +13658,6 @@ async fn entity_generated_key_replay_reserves_position_for_incomplete_http_retry
         else {
             unreachable!()
         };
-        assert!(
-            oplog
-                .iter()
-                .any(|entry| matches!(&entry.entry, PublicOplogEntry::EndAtomicRegion(_))),
-            "the admitting atomic scope must close before the crash"
-        );
 
         executor.simulated_crash(&worker_id).await?;
         let retry_key = tokio::time::timeout(std::time::Duration::from_secs(30), attempts.recv())
@@ -13792,11 +13681,6 @@ async fn entity_generated_key_replay_reserves_position_for_incomplete_http_retry
     );
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert!(
-        oplog
-            .iter()
-            .any(|entry| matches!(&entry.entry, PublicOplogEntry::EndAtomicRegion(_)))
-    );
     assert_eq!(
         oplog
             .iter()
@@ -15689,6 +15573,174 @@ function verify() {{
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn builtin_node_eval_resolves_modules_from_working_directory(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let javascript_component = executor
+        .component_dep(&context.default_environment_id, javascript_tools)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", javascript_tools.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        javascript_component.id,
+        javascript_component.revision,
+        "golem:javascript-tools",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let agent_name = "node-eval-resolution";
+    let fixture_source = r#"
+const fs = require('node:fs');
+for (const [dir, value] of [['/workspace', 'workspace'], ['/workspace/project', 'project']]) {
+  fs.mkdirSync(`${dir}/node_modules/probe-package`, { recursive: true });
+  fs.writeFileSync(`${dir}/node_modules/probe-package/package.json`, JSON.stringify({ name: 'probe-package', main: 'main.js' }));
+  fs.writeFileSync(`${dir}/node_modules/probe-package/main.js`, `module.exports = 'package:${value}';\n`);
+  fs.writeFileSync(`${dir}/local.js`, `module.exports = 'local:${value}';\n`);
+}
+fs.writeFileSync('/workspace/project/entry.js', "console.log([require('probe-package'), require('./local.js')].join(','));\n");
+"#;
+    let fixture = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        agent_name,
+        "node",
+        "/workspace",
+        vec!["-e", fixture_source],
+    )
+    .await?;
+    assert_eq!(fixture.exit_code, 0, "fixture: {fixture:?}");
+
+    let source = "console.log([require('probe-package'), require('./local'), require('node:path').basename(process.cwd())].join(','))";
+    let mut failures = Vec::new();
+    for (cwd, expected) in [
+        (
+            "/workspace",
+            "package:workspace,local:workspace,workspace\n",
+        ),
+        (
+            "/workspace/project",
+            "package:project,local:project,project\n",
+        ),
+    ] {
+        for flag in ["-e", "--eval"] {
+            let result = invoke_cli_tool(
+                &executor,
+                &caller_component,
+                agent_name,
+                "node",
+                cwd,
+                vec![flag, source],
+            )
+            .await?;
+            if result.exit_code != 0
+                || result.stdout != expected.as_bytes()
+                || !result.stderr.is_empty()
+            {
+                failures.push(format!(
+                    "{flag} in {cwd}: exit {}; stdout: {}; stderr: {}",
+                    result.exit_code,
+                    String::from_utf8_lossy(&result.stdout),
+                    String::from_utf8_lossy(&result.stderr),
+                ));
+            }
+        }
+    }
+    for (cwd, source, expected) in [
+        (
+            "/workspace",
+            "const require = 7; console.log(require)",
+            "7\n",
+        ),
+        (
+            "/workspace",
+            "let require = 'shadowed'; console.log(require)",
+            "shadowed\n",
+        ),
+        (
+            "/workspace/project",
+            "setTimeout(() => console.log(require('probe-package')), 20)",
+            "package:project\n",
+        ),
+    ] {
+        let result = invoke_cli_tool(
+            &executor,
+            &caller_component,
+            agent_name,
+            "node",
+            cwd,
+            vec!["-e", source],
+        )
+        .await?;
+        if result.exit_code != 0
+            || result.stdout != expected.as_bytes()
+            || !result.stderr.is_empty()
+        {
+            failures.push(format!(
+                "{source:?} in {cwd}: exit {}; stdout: {}; stderr: {}",
+                result.exit_code,
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr),
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+
+    let file = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        agent_name,
+        "node",
+        "/workspace/project",
+        vec!["entry.js"],
+    )
+    .await?;
+    assert_eq!(file.exit_code, 0, "file: {file:?}");
+    assert_eq!(file.stdout, b"package:project,local:project\n");
     Ok(())
 }
 
@@ -20749,5 +20801,895 @@ async fn accepted_unread_tool_output_survives_cancellation_and_crash(
         executor.delete_worker(&worker).await?;
     }
     server.abort();
+    Ok(())
+}
+
+/// How the client closes the stdin of an external tool call.
+#[derive(Clone, Copy)]
+enum StdinClose {
+    Cancel,
+    End,
+}
+
+/// What `streaming run` writes to stdout first in the modes that these tests use.
+const RUN_MARKER: &[u8] = b"marker:";
+
+/// An external tool call whose body runs: its marker arrived on stdout, and the client holds
+/// its stdin open.
+struct RunningExternalToolCall {
+    context: TestContext,
+    environment_state: Arc<TestEnvironmentStateService>,
+    executor: TestWorkerExecutor,
+    worker_id: golem_common::model::AgentId,
+    sender: tokio::sync::mpsc::Sender<golem_api_grpc::proto::golem::worker::InvocationRequest>,
+    responses: tonic::Streaming<golem_api_grpc::proto::golem::worker::InvocationResponse>,
+    accepted: golem_api_grpc::proto::golem::worker::InvocationAccepted,
+    stdout: Vec<u8>,
+}
+
+/// An external tool call that ended with a success, with what a test needs to go on with its
+/// agent.
+struct EndedExternalToolCall {
+    stdout_after_marker: String,
+    context: TestContext,
+    environment_state: Arc<TestEnvironmentStateService>,
+    executor: TestWorkerExecutor,
+    worker_id: golem_common::model::AgentId,
+}
+
+/// Starts `streaming run` in `mode` from outside the agent, with stdin and stdout attached.
+async fn start_external_streaming_run(
+    executor: &TestWorkerExecutor,
+    context: &TestContext,
+    worker_id: &golem_common::model::AgentId,
+    mode: &str,
+) -> anyhow::Result<(
+    tokio::sync::mpsc::Sender<golem_api_grpc::proto::golem::worker::InvocationRequest>,
+    tonic::Streaming<golem_api_grpc::proto::golem::worker::InvocationResponse>,
+    golem_api_grpc::proto::golem::worker::InvocationAccepted,
+)> {
+    start_external_run_of(executor, context, worker_id, "streaming", mode).await
+}
+
+/// Starts the command `run` of the tool `tool` in `mode` from outside the agent, with stdin and
+/// stdout attached.
+async fn start_external_run_of(
+    executor: &TestWorkerExecutor,
+    context: &TestContext,
+    worker_id: &golem_common::model::AgentId,
+    tool: &str,
+    mode: &str,
+) -> anyhow::Result<(
+    tokio::sync::mpsc::Sender<golem_api_grpc::proto::golem::worker::InvocationRequest>,
+    tonic::Streaming<golem_api_grpc::proto::golem::worker::InvocationResponse>,
+    golem_api_grpc::proto::golem::worker::InvocationAccepted,
+)> {
+    use golem_api_grpc::proto::golem::worker::{
+        ExternalToolInvocation, InvocationRequest, InvocationStart, invocation_request,
+        invocation_response,
+    };
+    let metadata = executor.get_worker_metadata(worker_id).await?;
+    let input = TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::record(vec![
+            golem_common::schema::NamedFieldType {
+                name: "mode".to_string(),
+                body: SchemaType::string(),
+                metadata: Default::default(),
+            },
+        ])),
+        SchemaValue::Record {
+            fields: vec![SchemaValue::String(mode.to_string())],
+        },
+    );
+    let (sender, receiver) = tokio::sync::mpsc::channel(8);
+    sender
+        .send(InvocationRequest {
+            request: Some(invocation_request::Request::Start(InvocationStart {
+                agent_id: Some(worker_id.clone().into()),
+                idempotency_key: Some(IdempotencyKey::fresh().into()),
+                auth_ctx: Some(executor.auth_ctx().into()),
+                principal: Some(
+                    Principal::GolemUser(GolemUserPrincipal {
+                        account_id: context.account_id,
+                    })
+                    .into(),
+                ),
+                environment_id: Some(context.default_environment_id.into()),
+                component_owner_account_id: Some(context.account_id.into()),
+                expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+                attempt_id: Some(uuid::Uuid::new_v4().into()),
+                external_tool: Some(ExternalToolInvocation {
+                    tool_name: tool.to_string(),
+                    command_path: vec!["run".to_string()],
+                    input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+                    stdin: true,
+                    stdout: true,
+                    stderr: false,
+                    fresh_owner: false,
+                    expected_deployment_revision: None,
+                }),
+                ..Default::default()
+            })),
+        })
+        .await?;
+    let mut responses = executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+    let acceptance = responses.message().await?.expect("session acceptance");
+    let Some(invocation_response::Response::Accepted(accepted)) = acceptance.response else {
+        anyhow::bail!("the session was not accepted: {acceptance:?}");
+    };
+    Ok((sender, responses, accepted))
+}
+
+/// The request with which the client closes the stdin of an accepted external tool call.
+fn stdin_close_request(
+    accepted: &golem_api_grpc::proto::golem::worker::InvocationAccepted,
+    close: StdinClose,
+) -> golem_api_grpc::proto::golem::worker::InvocationRequest {
+    use golem_api_grpc::proto::golem::worker::{
+        InputStreamEnd, InvocationRequest, StreamCancel, StreamCancelReason, StreamCancelRole,
+        ToolByteStreamRole, invocation_request,
+    };
+    let stdin = accepted
+        .stream_mappings
+        .iter()
+        .find(|mapping| mapping.tool_byte_stream_role == Some(ToolByteStreamRole::Stdin as i32))
+        .expect("stdin role");
+    let transport_stream_id = stdin.transport_stream_id;
+    let durable_stream_id = stdin.handle.as_ref().unwrap().stream_id;
+    InvocationRequest {
+        request: Some(match close {
+            StdinClose::Cancel => invocation_request::Request::StreamCancel(StreamCancel {
+                transport_stream_id,
+                producer_sequence: 0,
+                role: StreamCancelRole::InputProducer as i32,
+                reason: StreamCancelReason::Cancelled as i32,
+                details: None,
+                durable_stream_id,
+                epoch: accepted.epoch,
+                durable_offset: Vec::new(),
+            }),
+            StdinClose::End => invocation_request::Request::InputEnd(InputStreamEnd {
+                transport_stream_id,
+                sequence: 0,
+                durable_stream_id,
+                epoch: accepted.epoch,
+            }),
+        }),
+    }
+}
+
+/// Reads the responses of an external tool call to their end and returns the rest of its
+/// stdout. Fails unless the tool returned a success and the session finished with a success.
+/// `awaited` names the end of the call in the error of the time limit.
+async fn stdout_of_a_successful_run(
+    responses: &mut tonic::Streaming<golem_api_grpc::proto::golem::worker::InvocationResponse>,
+    awaited: &str,
+) -> anyhow::Result<Vec<u8>> {
+    use golem_api_grpc::proto::golem::worker::{
+        invocation_response, invocation_session_completion, invocation_session_result,
+    };
+    use golem_common::model::oplog::PublicExternalToolResult;
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let mut stdout = Vec::new();
+        let mut succeeded = false;
+        let mut finished = false;
+        while let Some(response) = responses.message().await? {
+            match response.response {
+                Some(invocation_response::Response::OutputItem(item)) => {
+                    stdout.extend(item.packed_u8);
+                }
+                Some(invocation_response::Response::Result(result)) => {
+                    let Some(invocation_session_result::Result::ToolResult(result)) = result.result
+                    else {
+                        anyhow::bail!("the session returned a non-tool result");
+                    };
+                    let result: PublicExternalToolResult =
+                        result.try_into().map_err(anyhow::Error::msg)?;
+                    anyhow::ensure!(
+                        matches!(result, PublicExternalToolResult::Success(_)),
+                        "the tool call failed: {result:?}"
+                    );
+                    succeeded = true;
+                }
+                Some(invocation_response::Response::Finished(completion)) => {
+                    anyhow::ensure!(
+                        matches!(
+                            completion.outcome,
+                            Some(invocation_session_completion::Outcome::Success(_))
+                        ),
+                        "the session failed: {completion:?}"
+                    );
+                    finished = true;
+                }
+                _ => {}
+            }
+        }
+        anyhow::ensure!(succeeded, "the session ended without a tool result");
+        anyhow::ensure!(finished, "the session ended without its completion");
+        Ok(stdout)
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("waited 60 s for {awaited}"))?
+}
+
+/// Starts an executor and a new agent that has the `streaming` tool.
+async fn start_an_agent_with_the_streaming_tool(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    provider: &PrecompiledComponent,
+    caller: &PrecompiledComponent,
+    name: &str,
+    overrides: TestExecutorOverrides,
+) -> anyhow::Result<(
+    TestContext,
+    Arc<TestEnvironmentStateService>,
+    TestWorkerExecutor,
+    golem_common::model::AgentId,
+)> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..overrides
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    // The tool may use the files of the agent, as bash may. Only a call from outside gives such
+    // a tool a live stdin: an agent's call hands the stdin over when it has ended.
+    for bindings in deployment.tool_bindings.values_mut() {
+        bindings
+            .get_mut(&ToolName::try_from("streaming").unwrap())
+            .unwrap()
+            .filesystem_access = ToolFilesystemAccess::Allowed;
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let worker_id = executor
+        .start_agent(&caller_component.id, agent_id!("ToolStreamingCaller", name))
+        .await?;
+    Ok((context, environment_state, executor, worker_id))
+}
+
+/// Starts `streaming run` in `mode` from outside a new agent and waits for the marker on
+/// stdout: the tool body runs, and the client holds its stdin open.
+async fn start_an_external_tool_call(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    provider: &PrecompiledComponent,
+    caller: &PrecompiledComponent,
+    mode: &str,
+    overrides: TestExecutorOverrides,
+) -> anyhow::Result<RunningExternalToolCall> {
+    use golem_api_grpc::proto::golem::worker::invocation_response;
+    let (context, environment_state, executor, worker_id) = start_an_agent_with_the_streaming_tool(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        &format!("external-{mode}"),
+        overrides,
+    )
+    .await?;
+    let (sender, mut responses, accepted) =
+        start_external_streaming_run(&executor, &context, &worker_id, mode).await?;
+    let mut stdout = Vec::new();
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while stdout.len() < RUN_MARKER.len() {
+            match responses.message().await?.map(|response| response.response) {
+                Some(Some(invocation_response::Response::OutputItem(item))) => {
+                    stdout.extend(item.packed_u8);
+                }
+                other => anyhow::bail!("expected the marker on stdout, got {other:?}"),
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("waited 60 s for the marker on stdout"))??;
+    anyhow::ensure!(
+        stdout == RUN_MARKER,
+        "expected the marker on stdout, got {stdout:?}"
+    );
+    Ok(RunningExternalToolCall {
+        context,
+        environment_state,
+        executor,
+        worker_id,
+        sender,
+        responses,
+        accepted,
+        stdout,
+    })
+}
+
+/// The client closes the stdin of a running external tool call, and the call must end with a
+/// success. What the tool wrote to stdout after the marker says how its stdin ended.
+async fn close_the_stdin_of_an_external_tool_call(
+    call: RunningExternalToolCall,
+    close: StdinClose,
+) -> anyhow::Result<EndedExternalToolCall> {
+    let RunningExternalToolCall {
+        context,
+        environment_state,
+        executor,
+        worker_id,
+        sender,
+        mut responses,
+        accepted,
+        mut stdout,
+    } = call;
+    sender.send(stdin_close_request(&accepted, close)).await?;
+    stdout.extend(
+        stdout_of_a_successful_run(
+            &mut responses,
+            "the end of the call after its stdin was closed",
+        )
+        .await?,
+    );
+    Ok(EndedExternalToolCall {
+        stdout_after_marker: String::from_utf8_lossy(&stdout[RUN_MARKER.len()..]).into_owned(),
+        context,
+        environment_state,
+        executor,
+        worker_id,
+    })
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn stdin_cancel_reaches_a_tool_that_computes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let call = start_an_external_tool_call(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "stdin-or-spin",
+        Default::default(),
+    )
+    .await?;
+    // The body computes for a while before the client cancels.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let ended = close_the_stdin_of_an_external_tool_call(call, StdinClose::Cancel).await?;
+    assert_eq!(ended.stdout_after_marker, "stdin-cancelled");
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn stdin_cancel_reaches_a_tool_that_waits_on_a_long_clock(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let call = start_an_external_tool_call(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "stdin-or-clock",
+        TestExecutorOverrides {
+            // The interval of `long_clock_through_tool_entity_suspends_and_reconstructs_owner`,
+            // where the owner of a tool that waits on a clock is suspended.
+            configure: Some(Arc::new(|config| {
+                config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    // A client's open stdin keeps the owner in memory, so the cancel reaches a tool that was
+    // never unloaded.
+    let owned = OwnedAgentId::new(call.context.default_environment_id, &call.worker_id);
+    let loads = call.executor.instance_load_count(&call.worker_id);
+    let held_open = std::time::Instant::now();
+    while held_open.elapsed() < Duration::from_secs(3) {
+        assert!(
+            call.executor.worker_is_loaded(&owned).await,
+            "the owner was unloaded while a client held the stdin of its tool call open"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        call.executor
+            .get_oplog(&call.worker_id, OplogIndex::INITIAL)
+            .await?
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Suspend(_))),
+        "the owner was suspended while a client held the stdin of its tool call open"
+    );
+    let ended = close_the_stdin_of_an_external_tool_call(call, StdinClose::Cancel).await?;
+    assert_eq!(ended.stdout_after_marker, "stdin-cancelled");
+    assert_eq!(ended.executor.instance_load_count(&ended.worker_id), loads);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_clean_end_of_stdin_stays_a_clean_end(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let call = start_an_external_tool_call(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "stdin-or-spin",
+        Default::default(),
+    )
+    .await?;
+    let ended = close_the_stdin_of_an_external_tool_call(call, StdinClose::End).await?;
+    assert_eq!(ended.stdout_after_marker, "stdin-eof");
+    Ok(())
+}
+
+/// Covers a tool body that makes no other host call while it reads its stdin.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_cancelled_stdin_is_replayed_after_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let call = start_an_external_tool_call(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "stdin-or-spin",
+        Default::default(),
+    )
+    .await?;
+    let cancelled = close_the_stdin_of_an_external_tool_call(call, StdinClose::Cancel).await?;
+    assert_eq!(cancelled.stdout_after_marker, "stdin-cancelled");
+    let EndedExternalToolCall {
+        context,
+        environment_state,
+        executor,
+        worker_id,
+        ..
+    } = cancelled;
+    drop(executor);
+
+    // The new executor has no agent in memory. The next call loads the agent, and the load
+    // replays the cancelled call from the journals.
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let (_stdin, mut responses, _) =
+        start_external_streaming_run(&executor, &context, &worker_id, "empty").await?;
+    let next_call =
+        stdout_of_a_successful_run(&mut responses, "the end of the call after the restart").await;
+
+    // A replay that failed shows in the agent before it shows in the next call.
+    assert_ne!(
+        executor.get_worker_metadata(&worker_id).await?.status,
+        AgentStatus::Failed,
+        "the agent failed after the restart"
+    );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "the replay of the cancelled call must not fail"
+    );
+    next_call?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_call_that_ends_with_its_stdin_open_leaves_the_agent_usable(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let (context, environment_state, executor, worker_id) = start_an_agent_with_the_streaming_tool(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "open-stdin",
+        Default::default(),
+    )
+    .await?;
+    let loads = executor.instance_load_count(&worker_id);
+    // The tool returns without a read of its stdin, and the client never closes that stdin.
+    for call in 1..=3 {
+        let (_stdin, mut responses, _) =
+            start_external_streaming_run(&executor, &context, &worker_id, "empty").await?;
+        stdout_of_a_successful_run(
+            &mut responses,
+            &format!("the end of call {call} with an open stdin"),
+        )
+        .await?;
+    }
+    assert_eq!(
+        executor.instance_load_count(&worker_id),
+        loads,
+        "the agent was restarted between the calls"
+    );
+    drop(executor);
+
+    // The next call loads the agent on a new executor, and the load replays the three calls.
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let (_stdin, mut responses, _) =
+        start_external_streaming_run(&executor, &context, &worker_id, "empty").await?;
+    let next_call =
+        stdout_of_a_successful_run(&mut responses, "the end of the call after the restart").await;
+
+    assert_ne!(
+        executor.get_worker_metadata(&worker_id).await?.status,
+        AgentStatus::Failed,
+        "the agent failed after the restart"
+    );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "a call that ended with its stdin open must not fail the agent"
+    );
+    next_call?;
+    Ok(())
+}
+
+/// call, after `bytes_sent` earlier bytes.
+fn stdin_item_request(
+    accepted: &golem_api_grpc::proto::golem::worker::InvocationAccepted,
+    bytes_sent: u64,
+    bytes: &[u8],
+) -> golem_api_grpc::proto::golem::worker::InvocationRequest {
+    use golem_api_grpc::proto::golem::worker::{
+        InputStreamItem, InvocationRequest, ToolByteStreamRole, input_stream_item,
+        invocation_request,
+    };
+    let stdin = accepted
+        .stream_mappings
+        .iter()
+        .find(|mapping| mapping.tool_byte_stream_role == Some(ToolByteStreamRole::Stdin as i32))
+        .expect("stdin role");
+    InvocationRequest {
+        request: Some(invocation_request::Request::InputItem(InputStreamItem {
+            transport_stream_id: stdin.transport_stream_id,
+            sequence: bytes_sent,
+            payload: Some(input_stream_item::Payload::PackedU8(bytes.to_vec())),
+            durable_stream_id: stdin.handle.as_ref().unwrap().stream_id,
+            epoch: accepted.epoch,
+        })),
+    }
+}
+
+/// [`stdin_close_request`] for a stdin that the client sent `bytes_sent` bytes to.
+fn stdin_close_request_after(
+    accepted: &golem_api_grpc::proto::golem::worker::InvocationAccepted,
+    close: StdinClose,
+    bytes_sent: u64,
+) -> golem_api_grpc::proto::golem::worker::InvocationRequest {
+    use golem_api_grpc::proto::golem::worker::invocation_request;
+    let mut request = stdin_close_request(accepted, close);
+    match &mut request.request {
+        Some(invocation_request::Request::StreamCancel(cancel)) => {
+            cancel.producer_sequence = bytes_sent;
+        }
+        Some(invocation_request::Request::InputEnd(end)) => end.sequence = bytes_sent,
+        _ => unreachable!("a stdin close is a cancel or an end"),
+    }
+    request
+}
+
+impl RunningExternalToolCall {
+    /// Reads the call's stdout until it is `expected`. The body has then written all of it and
+    /// still runs.
+    async fn read_stdout_until_it_is(&mut self, expected: &str) -> anyhow::Result<()> {
+        use golem_api_grpc::proto::golem::worker::invocation_response;
+        tokio::time::timeout(Duration::from_secs(60), async {
+            while self.stdout.len() < expected.len() {
+                match self
+                    .responses
+                    .message()
+                    .await?
+                    .map(|response| response.response)
+                {
+                    Some(Some(invocation_response::Response::OutputItem(item))) => {
+                        self.stdout.extend(item.packed_u8);
+                    }
+                    // The answer to what the client sent to the stdin.
+                    Some(Some(invocation_response::Response::InputAck(_))) => {}
+                    other => anyhow::bail!("expected {expected:?} on stdout, got {other:?}"),
+                }
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("waited 60 s for {expected:?} on stdout"))??;
+        anyhow::ensure!(
+            self.stdout == expected.as_bytes(),
+            "expected {expected:?} on stdout, got {:?}",
+            String::from_utf8_lossy(&self.stdout)
+        );
+        Ok(())
+    }
+
+    /// Reads the answers of the call until the session has taken the client's stdin up to the
+    /// byte with the number `last`. What the call wrote to its stdout in between is kept.
+    async fn wait_until_the_stdin_was_taken(&mut self, last: u64) -> anyhow::Result<()> {
+        use golem_api_grpc::proto::golem::worker::invocation_response;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                match self
+                    .responses
+                    .message()
+                    .await?
+                    .map(|response| response.response)
+                {
+                    Some(Some(invocation_response::Response::InputAck(ack)))
+                        if ack.highest_contiguous_sequence == last =>
+                    {
+                        return Ok::<_, anyhow::Error>(());
+                    }
+                    Some(Some(invocation_response::Response::OutputItem(item))) => {
+                        self.stdout.extend(item.packed_u8);
+                    }
+                    Some(Some(
+                        ended @ (invocation_response::Response::Finished(_)
+                        | invocation_response::Response::Rejected(_)),
+                    )) => anyhow::bail!(
+                        "the call ended before it took the stdin of the client: {ended:?}"
+                    ),
+                    Some(_) => {}
+                    None => {
+                        anyhow::bail!("the session ended before it took the stdin of the client")
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("waited 30 s for the call to take the stdin of the client"))?
+    }
+
+    /// The client sends `bytes` to the stdin, after `bytes_sent` earlier bytes, and waits until
+    /// the session has taken them.
+    async fn send_to_the_stdin(&mut self, bytes_sent: u64, bytes: &[u8]) -> anyhow::Result<()> {
+        self.sender
+            .send(stdin_item_request(&self.accepted, bytes_sent, bytes))
+            .await?;
+        self.wait_until_the_stdin_was_taken(bytes_sent + bytes.len() as u64 - 1)
+            .await
+    }
+}
+
+/// The role and the details of each stream cancel in the oplog of an agent, in the order of the
+/// oplog.
+async fn stream_cancels(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+) -> anyhow::Result<
+    Vec<(
+        golem_common::model::durable_stream::StreamCancelRole,
+        String,
+    )>,
+> {
+    use golem_common::model::durable_stream::StreamCancelRecord;
+    let mut cancels = Vec::new();
+    for entry in executor.get_oplog(worker_id, OplogIndex::INITIAL).await? {
+        if let PublicOplogEntry::StreamCancel(cancel) = &entry.entry {
+            let record = StreamCancelRecord::from_value(cancel.record.value())
+                .map_err(anyhow::Error::msg)?;
+            cancels.push((record.role, record.details.unwrap_or_default()));
+        }
+    }
+    Ok(cancels)
+}
+
+/// Starts an executor that has the native test tool as `native-streaming`, with the component
+/// whose agents may call it.
+async fn start_an_executor_with_the_native_streaming_tool(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    caller: &PrecompiledComponent,
+) -> anyhow::Result<(
+    TestContext,
+    Arc<TestEnvironmentStateService>,
+    TestWorkerExecutor,
+    golem_common::model::component::ComponentId,
+)> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let mut streaming = native_streaming_tool_metadata();
+    streaming.commands.nodes[0].name = "native-streaming".to_string();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            native_tool_metadata: Some(streaming.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(native_deployment_state(
+            context.account_id,
+            "ToolStreamingCaller",
+            streaming,
+            native_test_tool_metadata(),
+        )),
+    );
+    Ok((context, environment_state, executor, caller_component.id))
+}
+
+/// Starts `native-streaming run` in `mode` from outside a new agent. The body is a native one:
+/// a host task reads the stdin of the call for it. The client holds that stdin open.
+async fn start_an_external_native_run(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    caller: &PrecompiledComponent,
+    mode: &str,
+) -> anyhow::Result<RunningExternalToolCall> {
+    let (context, environment_state, executor, caller_component) =
+        start_an_executor_with_the_native_streaming_tool(last_unique_id, deps, caller).await?;
+    let worker_id = executor
+        .start_agent(
+            &caller_component,
+            agent_id!("ToolStreamingCaller", "external-native"),
+        )
+        .await?;
+    let (sender, responses, accepted) =
+        start_external_run_of(&executor, &context, &worker_id, "native-streaming", mode).await?;
+    Ok(RunningExternalToolCall {
+        context,
+        environment_state,
+        executor,
+        worker_id,
+        sender,
+        responses,
+        accepted,
+        stdout: Vec::new(),
+    })
+}
+
+/// A native tool body writes each chunk of its stdin to its stdout. It gets what the client
+/// sent, and a clean end of the stdin ends its reading.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_native_tool_reads_the_stdin_of_a_client_call_to_its_clean_end(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let mut call = start_an_external_native_run(last_unique_id, deps, caller, "echo").await?;
+    call.read_stdout_until_it_is("native:").await?;
+    call.send_to_the_stdin(0, b"abc").await?;
+    call.send_to_the_stdin(3, b"de").await?;
+    call.sender
+        .send(stdin_close_request_after(
+            &call.accepted,
+            StdinClose::End,
+            5,
+        ))
+        .await?;
+    call.stdout.extend(
+        stdout_of_a_successful_run(&mut call.responses, "the end of the native call").await?,
+    );
+    assert_eq!(String::from_utf8_lossy(&call.stdout), "native:abcde");
+    let cancels = stream_cancels(&call.executor, &call.worker_id).await?;
+    assert!(
+        cancels.is_empty(),
+        "nothing cancels a stdin that was read to its clean end: {cancels:?}"
+    );
+    Ok(())
+}
+
+/// The client cancels the stdin of a call to a native tool body. The body's read must give the
+/// cancel, not the end of the stream: this tool fails on a read that fails, and it would end
+/// with a success on a clean end.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_native_tool_reads_a_cancelled_stdin_of_a_client_call_as_cancelled(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let mut call = start_an_external_native_run(last_unique_id, deps, caller, "echo").await?;
+    call.read_stdout_until_it_is("native:").await?;
+    call.send_to_the_stdin(0, b"abc").await?;
+    call.sender
+        .send(stdin_close_request_after(
+            &call.accepted,
+            StdinClose::Cancel,
+            3,
+        ))
+        .await?;
+    let failure = stdout_of_a_successful_run(&mut call.responses, "the end of the native call")
+        .await
+        .expect_err("the tool read a clean end for a stdin that the client cancelled");
+    let failure = format!("{failure:#}");
+    assert!(
+        failure.contains("ByteStreamFailure::Cancelled"),
+        "the call did not fail on the cancelled read of the tool: {failure}"
+    );
     Ok(())
 }

@@ -1,6 +1,5 @@
 use golem_rust::retry::{NamedPolicy, Policy, Predicate, Props, with_named_policy_async};
-use golem_rust::{agent_definition, agent_implementation, with_idempotence_mode_async};
-use std::time::Duration;
+use golem_rust::{agent_definition, agent_implementation};
 
 #[agent_definition]
 pub trait HttpClient4 {
@@ -8,10 +7,10 @@ pub trait HttpClient4 {
 
     async fn transition_clock_probe(&self, post: bool) -> u16;
 
-    /// Sends a POST request with assume_idempotence=false.
+    /// Sends a non-idempotent POST request.
     async fn post_non_idempotent(&self) -> String;
 
-    /// Sends a GET request with assume_idempotence=false.
+    /// Sends an idempotent GET request.
     async fn get_idempotent(&self) -> String;
 
     /// Sends a POST request with a large multi-chunk body.
@@ -34,30 +33,6 @@ pub trait HttpClient4 {
 
     /// Sends a GET request and reads the response body in chunks.
     async fn get_and_read_body_chunked(&self) -> String;
-
-    /// Sends a raw P2 GET, reads one byte, then blocking-reads the rest.
-    fn get_and_read_body_p2_blocking(&mut self, authority: String) -> String;
-
-    /// Splices a raw P2 TCP input into an already-dispatched HTTP request body.
-    fn post_tcp_body_p2(&self, authority: String, tcp_port: u16, len: u64) -> String;
-
-    /// Sends a raw WASI HTTP 0.2 GET and reads the response with blocking-read.
-    async fn get_and_blocking_read_body_p2(&self) -> String;
-
-    /// Sends the same GET with a guest-supplied Range header.
-    async fn get_and_blocking_read_body_p2_with_range(&self) -> String;
-
-    /// Sends the same GET while disabling the worker idempotence override.
-    async fn get_and_blocking_read_body_p2_without_idempotence_override(&self) -> String;
-
-    /// Sends the same request under an unbounded immediate retry policy.
-    async fn get_and_blocking_read_body_p2_with_unbounded_retry(&self) -> String;
-
-    /// Sends the same request under a periodic policy whose delay requires trap-based retry.
-    async fn get_and_blocking_read_body_p2_with_delayed_retry(&self) -> String;
-
-    /// Sends a raw WASI HTTP 0.2 GET and reads the response with non-blocking read.
-    async fn get_and_read_body_p2(&self) -> String;
 
     /// Sends a buffered POST with a body composed of: 4 bytes "HEAD", then 1024
     /// zero bytes, then 1024 bytes of 0xAB. The name is historical (the body was
@@ -84,6 +59,18 @@ pub trait HttpClient4 {
     /// `wit_stream` (no declared content-length), then echoes the response.
     async fn post_with_p3_streamed_body(&self) -> String;
 
+    /// Streams a raw wasip3 POST to `/inference` (a deterministic eight-chunk
+    /// request body, the response body read chunk by chunk to its end) while a
+    /// concurrent GET to `/sibling` runs next to it. Returns
+    /// `post=<status> <body>[ incomplete(<error>)] | get=<status> <body>`; a
+    /// failed send renders as `error(..)`.
+    async fn post_with_concurrent_get(&self) -> String;
+
+    async fn post_with_writer_get(&self) -> String;
+
+    /// Sends a non-idempotent POST concurrently with a GET.
+    async fn post_non_idempotent_with_concurrent_get(&self) -> String;
+
     /// Sends a raw wasip3 POST streaming a deterministic multi-megabyte body
     /// via `wit_stream` (each chunk larger than the oplog inline payload limit
     /// in the tests using it), then echoes the response.
@@ -97,9 +84,6 @@ pub trait HttpClient4 {
 
     /// Sends a buffered POST with a retry policy that retries HTTP 500 responses.
     async fn post_with_status_retry_policy(&self) -> String;
-
-    /// Sends the same status-retried POST through the WASI HTTP 0.2 API.
-    async fn post_with_status_retry_policy_p2(&self) -> String;
 
     /// Sends a raw wasip3 POST whose bounded body is terminal before send.
     async fn p3_terminal_post(&self) -> String;
@@ -227,11 +211,11 @@ impl HttpClient4 for HttpClient4Impl {
     }
 
     async fn post_non_idempotent(&self) -> String {
-        with_idempotence_mode_async(false, || do_post_request()).await
+        do_post_request().await
     }
 
     async fn get_idempotent(&self) -> String {
-        with_idempotence_mode_async(false, || do_get_request()).await
+        do_get_request().await
     }
 
     async fn post_large_body(&self) -> String {
@@ -240,6 +224,19 @@ impl HttpClient4 for HttpClient4Impl {
 
     async fn put_with_p3_oversized_body(&self) -> String {
         do_put_with_p3_oversized_body().await
+    }
+
+    async fn post_with_concurrent_get(&self) -> String {
+        do_post_with_concurrent_get().await
+    }
+
+    async fn post_with_writer_get(&self) -> String {
+        let port = std::env::var("PORT").unwrap();
+        do_post_inference_streamed(&port, true).await
+    }
+
+    async fn post_non_idempotent_with_concurrent_get(&self) -> String {
+        do_post_with_concurrent_get().await
     }
 
     async fn put_with_p3_small_body_open_until_response(&self) -> String {
@@ -256,94 +253,6 @@ impl HttpClient4 for HttpClient4Impl {
 
     async fn get_and_read_body_chunked(&self) -> String {
         do_get_chunked_read().await
-    }
-
-    fn get_and_read_body_p2_blocking(&mut self, authority: String) -> String {
-        let response = do_get_and_read_body_p2_blocking(authority);
-        self.last_full_response = Some(response.clone());
-        response
-    }
-
-    fn post_tcp_body_p2(&self, authority: String, tcp_port: u16, len: u64) -> String {
-        use wasi::http::{outgoing_handler, types};
-        use wasi::sockets::network::{IpAddressFamily, IpSocketAddress, Ipv4SocketAddress};
-
-        let request = types::OutgoingRequest::new(types::Fields::new());
-        request.set_method(&types::Method::Post).unwrap();
-        request.set_scheme(Some(&types::Scheme::Http)).unwrap();
-        request.set_authority(Some(&authority)).unwrap();
-        request.set_path_with_query(Some("/")).unwrap();
-        let body = request.body().unwrap();
-        let output = body.write().unwrap();
-        let response = outgoing_handler::handle(request, None).unwrap();
-
-        // Keep raw socket readiness inside the live attempt of the HTTP batch.
-        let socket =
-            wasi::sockets::tcp_create_socket::create_tcp_socket(IpAddressFamily::Ipv4).unwrap();
-        socket
-            .start_connect(
-                &wasi::sockets::instance_network::instance_network(),
-                IpSocketAddress::Ipv4(Ipv4SocketAddress {
-                    address: (127, 0, 0, 1),
-                    port: tcp_port,
-                }),
-            )
-            .unwrap();
-        socket.subscribe().block();
-        let (input, _output) = socket.finish_connect().unwrap();
-
-        let mut written = 0;
-        while written < len {
-            written += output.blocking_splice(&input, len - written).unwrap();
-        }
-        drop(output);
-        types::OutgoingBody::finish(body, None).unwrap();
-        let response = get_incoming_response_p2(&response);
-        let status = response.status();
-        let body = response.consume().unwrap();
-        let stream = body.stream().unwrap();
-        let mut bytes = Vec::new();
-        loop {
-            match stream.blocking_read(1024) {
-                Ok(chunk) => bytes.extend_from_slice(&chunk),
-                Err(wasi::io::streams::StreamError::Closed) => break,
-                Err(error) => panic!("P2 response read failed: {error:?}"),
-            }
-        }
-        format!("{status} {}", String::from_utf8(bytes).unwrap())
-    }
-
-    async fn get_and_blocking_read_body_p2(&self) -> String {
-        do_get_and_blocking_read_body_p2()
-    }
-
-    async fn get_and_blocking_read_body_p2_with_range(&self) -> String {
-        do_get_and_blocking_read_body_p2_impl(true)
-    }
-
-    async fn get_and_blocking_read_body_p2_without_idempotence_override(&self) -> String {
-        with_idempotence_mode_async(false, || async { do_get_and_blocking_read_body_p2() }).await
-    }
-
-    async fn get_and_blocking_read_body_p2_with_unbounded_retry(&self) -> String {
-        let policy = NamedPolicy::named("unbounded-http-recovery-test", Policy::immediate());
-        with_named_policy_async(&policy, || async { do_get_and_blocking_read_body_p2() })
-            .await
-            .unwrap()
-    }
-
-    async fn get_and_blocking_read_body_p2_with_delayed_retry(&self) -> String {
-        let policy = NamedPolicy::named(
-            "delayed-http-recovery-test",
-            Policy::periodic(Duration::from_secs(2)).max_retries(2),
-        );
-        with_named_policy_async(&policy, || async { do_get_and_blocking_read_body_p2() })
-            .await
-            .unwrap()
-    }
-
-    async fn get_and_read_body_p2(&self) -> String {
-        do_get_and_read_body_p2()
     }
 
     async fn post_with_write_zeroes(&self) -> String {
@@ -390,18 +299,6 @@ impl HttpClient4 for HttpClient4Impl {
         .applies_when(Predicate::eq(Props::STATUS_CODE, 500u16));
 
         with_named_policy_async(&policy, || async { do_p3_terminal_post().await })
-            .await
-            .unwrap()
-    }
-
-    async fn post_with_status_retry_policy_p2(&self) -> String {
-        let policy = NamedPolicy::named(
-            "http-status-retry-test-p2",
-            Policy::immediate().max_retries(10),
-        )
-        .applies_when(Predicate::eq(Props::STATUS_CODE, 500u16));
-
-        with_named_policy_async(&policy, || async { do_p2_terminal_post() })
             .await
             .unwrap()
     }
@@ -1086,6 +983,131 @@ async fn do_post_with_p3_streamed_body(chunk_count: usize, chunk_len: usize) -> 
     )
 }
 
+async fn do_post_with_concurrent_get() -> String {
+    use futures_concurrency::prelude::*;
+
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+    let post = do_post_inference_streamed(&port, false);
+    let get = async {
+        match wasi_fetch::Client::new()
+            .get(&format!("http://localhost:{port}/sibling"))
+            .send()
+            .await
+        {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                match response.into_body().text().await {
+                    Ok(body) => format!("get={status} {body}"),
+                    Err(error) => format!("get=error({error:?})"),
+                }
+            }
+            Err(error) => format!("get=error({error:?})"),
+        }
+    };
+    let (post, get) = (post, get).join().await;
+    format!("{post} | {get}")
+}
+
+/// Streams a POST with a deterministic eight-chunk request body to `/inference` and reads the
+/// response body to its end. The result reports the status and the body bytes the guest
+/// observed; a body that ends with an error (an incomplete response) is reported after them.
+async fn do_post_inference_streamed(port: &str, get_after_write: bool) -> String {
+    use futures_concurrency::prelude::*;
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::wit_bindgen::StreamResult;
+    use golem_rust::wasip3::{wit_future, wit_stream};
+
+    let headers =
+        types::Fields::from_list(&[("x-test".to_string(), b"concurrent-post".to_vec())]).unwrap();
+    let (mut body_tx, body_rx) = wit_stream::new();
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+
+    let (request, transmit) = types::Request::new(headers, Some(body_rx), trailers_rx, None);
+    request.set_method(&types::Method::Post).unwrap();
+    request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+    request
+        .set_authority(Some(&format!("localhost:{port}")))
+        .unwrap();
+    request.set_path_with_query(Some("/inference")).unwrap();
+
+    let (send_result, _transmit_result, sibling) = (
+        async { client::send(request).await },
+        async { transmit.await },
+        async {
+            for i in 0..8 {
+                let remaining = body_tx
+                    .write_all(format!("request-chunk-{i};").into_bytes())
+                    .await;
+                assert!(remaining.is_empty(), "request body receiver closed early");
+            }
+            drop(body_tx);
+            let _ = trailers_tx.write(Ok(None)).await;
+            if get_after_write {
+                let response = wasi_fetch::Client::new()
+                    .get(&format!("http://localhost:{port}/sibling"))
+                    .send()
+                    .await
+                    .expect("sibling request failed");
+                let status = response.status().as_u16();
+                let body = response
+                    .into_body()
+                    .text()
+                    .await
+                    .expect("sibling body failed");
+                Some(format!("get={status} {body}"))
+            } else {
+                None
+            }
+        },
+    )
+        .join()
+        .await;
+
+    let response = match send_result {
+        Ok(response) => response,
+        Err(error) => return format!("post=error({error:?})"),
+    };
+    let status = response.get_status_code();
+    let (response_done_tx, response_done_rx) = wit_future::new(|| Ok(()));
+    let (mut body, trailers) = types::Response::consume_body(response, response_done_rx);
+    if std::env::var_os("WAIT_BEFORE_RESPONSE_READ").is_some() {
+        wasi_fetch::Client::new()
+            .get(&format!("http://localhost:{port}/allow-body-read"))
+            .send()
+            .await
+            .expect("body-read permission failed");
+    }
+    let mut body_bytes = Vec::new();
+    let mut buffer = Vec::with_capacity(1024);
+    loop {
+        let (result, next_buffer) = body.read(buffer).await;
+        buffer = next_buffer;
+        match result {
+            StreamResult::Complete(n) => {
+                body_bytes.extend_from_slice(&buffer[..n]);
+                buffer.clear();
+                if get_after_write {
+                    golem_rust::oplog_commit(0);
+                }
+            }
+            StreamResult::Dropped => break,
+            StreamResult::Cancelled => panic!("response body read was cancelled"),
+        }
+    }
+    drop(body);
+    let trailers = trailers.await;
+    let _ = response_done_tx.write(Ok(())).await;
+    let body_text = String::from_utf8_lossy(&body_bytes);
+    let post = match trailers {
+        Ok(_) => format!("post={status} {body_text}"),
+        Err(error) => format!("post={status} {body_text} incomplete({error:?})"),
+    };
+    match sibling {
+        Some(sibling) => format!("{post} | {sibling}"),
+        None => post,
+    }
+}
+
 async fn do_put_with_p3_oversized_body() -> String {
     use futures_concurrency::prelude::*;
     use golem_rust::wasip3::http::{client, types};
@@ -1439,176 +1461,6 @@ async fn do_get_chunked_read() -> String {
         body.extend_from_slice(&chunk);
     }
     format!("{status} {}", String::from_utf8_lossy(&body))
-}
-
-fn do_get_and_read_body_p2_blocking(authority: String) -> String {
-    use wasi::http::{outgoing_handler, types};
-    use wasi::io::streams::StreamError;
-
-    let request = types::OutgoingRequest::new(types::Fields::new());
-    request.set_method(&types::Method::Get).unwrap();
-    request.set_scheme(Some(&types::Scheme::Http)).unwrap();
-    request.set_authority(Some(&authority)).unwrap();
-    request.set_path_with_query(Some("/")).unwrap();
-    types::OutgoingBody::finish(request.body().unwrap(), None).unwrap();
-    let response = outgoing_handler::handle(request, None).unwrap();
-    let response = loop {
-        match response.get() {
-            Some(Ok(Ok(response))) => break response,
-            Some(Ok(Err(error))) => panic!("HTTP response failed: {error:?}"),
-            Some(Err(error)) => panic!("HTTP response failed: {error:?}"),
-            None => {
-                let pollable = response.subscribe();
-                let _ = wasi::io::poll::poll(&[&pollable]);
-            }
-        }
-    };
-    let status = response.status();
-    let body = response.consume().unwrap();
-    let stream = body.stream().unwrap();
-    let mut bytes = stream.blocking_read(1).unwrap();
-    loop {
-        match stream.blocking_read(1) {
-            Ok(chunk) => bytes.extend_from_slice(&chunk),
-            Err(StreamError::Closed) => break,
-            Err(error) => panic!("P2 body read failed: {error:?}"),
-        }
-    }
-    format!("{status} {}", String::from_utf8_lossy(&bytes))
-}
-
-fn do_get_and_blocking_read_body_p2() -> String {
-    do_get_and_blocking_read_body_p2_impl(false)
-}
-
-fn do_get_and_blocking_read_body_p2_impl(with_range: bool) -> String {
-    let port = std::env::var("PORT").unwrap_or("9999".to_string());
-    let headers = if with_range {
-        wasi::http::types::Fields::from_list(&[("range".to_string(), b"bytes=0-1023".to_vec())])
-            .unwrap()
-    } else {
-        wasi::http::types::Fields::new()
-    };
-    let request = wasi::http::types::OutgoingRequest::new(headers);
-    request.set_method(&wasi::http::types::Method::Get).unwrap();
-    request.set_path_with_query(Some("/")).unwrap();
-    request
-        .set_scheme(Some(&wasi::http::types::Scheme::Http))
-        .unwrap();
-    request
-        .set_authority(Some(&format!("localhost:{port}")))
-        .unwrap();
-    wasi::http::types::OutgoingBody::finish(request.body().unwrap(), None).unwrap();
-
-    let future = wasi::http::outgoing_handler::handle(request, None).unwrap();
-    let response = get_incoming_response_p2(&future);
-    let status = response.status();
-    assert_eq!(status, 200, "unexpected HTTP status");
-    let incoming_body = response.consume().unwrap();
-    let stream = incoming_body.stream().unwrap();
-    let mut bytes = Vec::new();
-    loop {
-        match stream.blocking_read(256) {
-            Ok(mut chunk) => bytes.append(&mut chunk),
-            Err(wasi::io::streams::StreamError::Closed) => break,
-            Err(error) => panic!("Error: {error:?}"),
-        }
-    }
-    format!("{status} {}", String::from_utf8_lossy(&bytes))
-}
-
-fn do_get_and_read_body_p2() -> String {
-    let port = std::env::var("PORT").unwrap_or("9999".to_string());
-    let request = wasi::http::types::OutgoingRequest::new(wasi::http::types::Fields::new());
-    request.set_method(&wasi::http::types::Method::Get).unwrap();
-    request.set_path_with_query(Some("/")).unwrap();
-    request
-        .set_scheme(Some(&wasi::http::types::Scheme::Http))
-        .unwrap();
-    request
-        .set_authority(Some(&format!("localhost:{port}")))
-        .unwrap();
-    wasi::http::types::OutgoingBody::finish(request.body().unwrap(), None).unwrap();
-
-    let future = wasi::http::outgoing_handler::handle(request, None).unwrap();
-    let response = get_incoming_response_p2(&future);
-    let status = response.status();
-    assert_eq!(status, 200, "unexpected HTTP status");
-    let incoming_body = response.consume().unwrap();
-    let stream = incoming_body.stream().unwrap();
-    let mut bytes = Vec::new();
-    loop {
-        match stream.read(256) {
-            Ok(mut chunk) if !chunk.is_empty() => bytes.append(&mut chunk),
-            Ok(_) => {
-                let pollable = stream.subscribe();
-                let _ = wasi::io::poll::poll(&[&pollable]);
-            }
-            Err(wasi::io::streams::StreamError::Closed) => break,
-            Err(error) => panic!("Error: {error:?}"),
-        }
-    }
-    format!("{status} {}", String::from_utf8_lossy(&bytes))
-}
-
-fn get_incoming_response_p2(
-    future: &wasi::http::types::FutureIncomingResponse,
-) -> wasi::http::types::IncomingResponse {
-    match future.get() {
-        Some(Ok(Ok(response))) => response,
-        Some(Ok(Err(error))) => panic!("Error: {error:?}"),
-        Some(Err(error)) => panic!("Error: {error:?}"),
-        None => {
-            let pollable = future.subscribe();
-            let _ = wasi::io::poll::poll(&[&pollable]);
-            get_incoming_response_p2(future)
-        }
-    }
-}
-
-fn do_p2_terminal_post() -> String {
-    let port = std::env::var("PORT").unwrap_or("9999".to_string());
-    let headers = wasi::http::types::Fields::from_list(&[
-        ("x-test".to_string(), b"test-header".to_vec()),
-        ("content-length".to_string(), b"9".to_vec()),
-    ])
-    .unwrap();
-    let request = wasi::http::types::OutgoingRequest::new(headers);
-    request
-        .set_method(&wasi::http::types::Method::Post)
-        .unwrap();
-    request.set_path_with_query(Some("/")).unwrap();
-    request
-        .set_scheme(Some(&wasi::http::types::Scheme::Http))
-        .unwrap();
-    request
-        .set_authority(Some(&format!("localhost:{port}")))
-        .unwrap();
-
-    let body = request.body().unwrap();
-    let stream = body.write().unwrap();
-    let options = wasi::http::types::RequestOptions::new();
-    options
-        .set_first_byte_timeout(Some(30_000_000_000))
-        .unwrap();
-    let future = wasi::http::outgoing_handler::handle(request, Some(options)).unwrap();
-    stream.blocking_write_and_flush(b"test-body").unwrap();
-    drop(stream);
-    wasi::http::types::OutgoingBody::finish(body, None).unwrap();
-
-    let response = get_incoming_response_p2(&future);
-    let status = response.status();
-    let body = response.consume().unwrap();
-    let stream = body.stream().unwrap();
-    let mut bytes = Vec::new();
-    loop {
-        match stream.blocking_read(256) {
-            Ok(mut chunk) => bytes.append(&mut chunk),
-            Err(wasi::io::streams::StreamError::Closed) => break,
-            Err(error) => panic!("P2 body read failed: {error:?}"),
-        }
-    }
-    format!("{status} {}", String::from_utf8_lossy(&bytes))
 }
 
 async fn do_get_chunked_read_with_range() -> String {

@@ -23,6 +23,9 @@ import {
   type TypedSchemaValue,
 } from '../internal/schema-model';
 import type { Uuid } from '../uuid';
+import { borrowScopeCardInternal, type ScopeCard } from '../host/permissions';
+import { PERMISSION_CARD_INTERNAL } from '../internal/schema-model/permissionCardInternal';
+import { restoreGuestPermissionCardHandleFromWire } from '../internal/schema-model/permissionCardHandle';
 
 export type RemoteAgentError<Value = TypedSchemaValue> =
   | { readonly tag: 'invalid-input'; readonly details: string }
@@ -207,13 +210,41 @@ function disposeOwnedWitResources(tree: SchemaValueTree): void {
   }
 }
 
+/**
+ * Give the permission cards of an input tree that never reached the host back
+ * to their cards, and release every other resource the tree still owns.
+ */
+function returnUnsentWitResources(tree: SchemaValueTree): void {
+  for (const node of tree.valueNodes) {
+    if (
+      node.tag === 'permission-card-handle' &&
+      node.val !== undefined &&
+      restoreGuestPermissionCardHandleFromWire(PERMISSION_CARD_INTERNAL, node.val, node)
+    ) {
+      (node as { val: unknown }).val = undefined;
+    }
+  }
+  disposeOwnedWitResources(tree);
+}
+
 export interface RemoteAgentHandle<Value = SchemaValue> {
   readonly agentId: string;
-  invokeAndAwait(method: string, params: Value, signal?: AbortSignal): Promise<Value | undefined>;
+  /**
+   * Invoke `method` and await its result. A `scopeCard` is borrowed for the
+   * call: the callee holds its authority until the invocation ends, and the
+   * caller keeps the card.
+   */
+  invokeAndAwait(
+    method: string,
+    params: Value,
+    signal?: AbortSignal,
+    scopeCard?: ScopeCard,
+  ): Promise<Value | undefined>;
   invokeAndAwaitWithMetadata(
     method: string,
     params: Value,
     signal?: AbortSignal,
+    scopeCard?: ScopeCard,
   ): Promise<RemoteInvocationResult<Value>>;
   invoke(method: string, params: Value): void;
   invokeWithMetadata(method: string, params: Value): InvocationMetadata;
@@ -346,13 +377,26 @@ function remoteTransport<Value>(
     method: string,
     params: Value,
     signal?: AbortSignal,
+    scopeCard?: ScopeCard,
   ): Promise<RemoteInvocationResult<Value>> => {
     throwIfAborted(signal);
+    // Check the scope card before the input moves any argument capability.
+    if (scopeCard !== undefined) borrowScopeCardInternal(PERMISSION_CARD_INTERNAL, scopeCard);
     const input = await encodeAsync(params);
-    let invocation;
+    let scope;
     try {
       throwIfAborted(signal);
-      invocation = rpc.asyncInvokeAndAwait(method, input, undefined);
+      scope =
+        scopeCard === undefined
+          ? undefined
+          : borrowScopeCardInternal(PERMISSION_CARD_INTERNAL, scopeCard);
+    } catch (error) {
+      returnUnsentWitResources(input);
+      throw error;
+    }
+    let invocation;
+    try {
+      invocation = rpc.asyncInvokeAndAwait(method, input, scope);
     } catch (error) {
       disposeOwnedWitResources(input);
       throw error;
@@ -380,8 +424,8 @@ function remoteTransport<Value>(
   };
   return {
     agentId,
-    invokeAndAwait: async (method, params, signal) =>
-      (await awaitInvocation(method, params, signal)).value,
+    invokeAndAwait: async (method, params, signal, scopeCard) =>
+      (await awaitInvocation(method, params, signal, scopeCard)).value,
     invokeAndAwaitWithMetadata: awaitInvocation,
     invoke(method, params) {
       mapRpcError(`Remote agent ${agentId}.${method} errored`, () =>

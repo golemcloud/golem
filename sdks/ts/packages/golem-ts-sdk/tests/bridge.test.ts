@@ -6,10 +6,15 @@ import { SchemaValueStream, type SchemaValueTree } from 'golem:core/types@2.0.0'
 import type { ToolRpcError as RpcError } from 'golem:core/types@2.0.0';
 import { createStdin, ToolRpc, type ByteStreamFailure } from 'golem:tool/host@0.1.0';
 import { describe, expect, it, vi } from 'vitest';
-import { bridge, s, type PermissionCard } from '../src';
+import { bridge, s, type PermissionCard, PolymorphicPermissionCard } from '../src';
 import { compileSchema } from '../src/schema/adapter';
-import { peekGuestPermissionCardHandle } from '../src/internal/schema-model/permissionCardHandle';
-import { PERMISSION_CARD_INTERNAL } from '../src/internal/schema-model/permissionCardInternal';
+import {
+  fakeRawCard,
+  permissionCardFromRaw,
+  polymorphicPermissionCardFromRaw,
+  rawOfPermissionCard,
+  scopeCardFromRaw,
+} from './permissionCardTestSupport';
 import { GuestSchemaValueStreamHandle, validateSchemaGraph } from '../src/internal/schema-model';
 
 const graph = (root: bridge.SchemaType): bridge.SchemaGraph => ({ defs: new Map(), root });
@@ -561,7 +566,7 @@ describe('public bridge runtime', () => {
   });
 
   it('forwards an SDK-owned permission card through the generated-client bridge exactly once', () => {
-    const raw = { id: 'imported-card' } as never;
+    const raw = fakeRawCard({ id: 'imported-card' }) as never;
     const lifted = bridge.schemaValueFromWit({
       valueNodes: [{ tag: 'permission-card-handle', val: raw }],
       root: 0,
@@ -569,10 +574,10 @@ describe('public bridge runtime', () => {
     const card = compileSchema(s.permissionCard({ polymorphic: false })).fromValue(
       lifted,
     ) as PermissionCard;
-    const encoded = bridge.schemaValueToWit(bridge.permissionCardHandleToSchemaValue(card));
+    const encoded = bridge.schemaValueToWit(bridge.permissionCardToSchemaValue(card));
     expect(encoded.valueNodes[encoded.root]).toEqual({ tag: 'permission-card-handle', val: raw });
-    expect(peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, card)).toBeUndefined();
-    expect(() => bridge.schemaValueToWit(bridge.permissionCardHandleToSchemaValue(card))).toThrow(
+    expect(card.isMoved()).toBe(true);
+    expect(() => bridge.schemaValueToWit(bridge.permissionCardToSchemaValue(card))).toThrow(
       /already transferred/,
     );
   });
@@ -598,18 +603,28 @@ describe('public bridge runtime', () => {
     expect(() => bridge.secretHandleFromSchemaValue(secret)).toThrow(/already consumed/);
     expect(() => bridge.secretHandleToSchemaValue(secretRaw)).not.toThrow();
 
-    const cardRaw = { id: 'permission-card' } as never;
-    const card = bridge.permissionCardHandleToSchemaValue(cardRaw);
+    const cardRaw = fakeRawCard({ id: 'permission-card' }) as never;
+    const ownerCard = permissionCardFromRaw(cardRaw);
+    const card = bridge.permissionCardToSchemaValue(ownerCard);
+    if (card.tag !== 'permission-card') throw new Error('expected permission-card');
     assertOpaque(card.handle);
-    expect(() => bridge.permissionCardHandleToSchemaValue(cardRaw)).toThrow(/already owned/);
+    expect(() => permissionCardFromRaw(cardRaw)).toThrow(/already owned/);
     expect(() =>
       bridge.schemaValueFromWit({
         valueNodes: [{ tag: 'permission-card-handle', val: cardRaw }],
         root: 0,
       }),
     ).toThrow(/already owned/);
-    expect(bridge.permissionCardHandleFromSchemaValue(card)).toBe(cardRaw);
-    expect(() => bridge.permissionCardHandleFromSchemaValue(card)).toThrow(/already consumed/);
+    // Decoding never moves the resource of a card into a second card.
+    expect(() => bridge.permissionCardFromSchemaValue(card)).toThrow(
+      /already held by another card/,
+    );
+    expect(rawOfPermissionCard(ownerCard)).toBe(cardRaw);
+    const lowered = bridge.schemaValueToWit(card);
+    expect(ownerCard.isMoved()).toBe(true);
+    expect(
+      rawOfPermissionCard(bridge.permissionCardFromSchemaValue(bridge.schemaValueFromWit(lowered))),
+    ).toBe(cardRaw);
 
     const quotaRaw = { id: 'quota-token' } as never;
     const quotaValue = bridge.schemaValueFromWit({
@@ -924,6 +939,100 @@ describe('public bridge runtime', () => {
     }
   });
 
+  it('lifts only host permission-card resources and gives a lifted handle to one card', () => {
+    // Authority stays host-enforced: the decode paths of the public bridge never turn
+    // plain data into a card, and never wrap one lifted handle in two card objects.
+    expect(() =>
+      bridge.schemaValueFromWit({
+        valueNodes: [{ tag: 'permission-card-handle', val: { forged: true } as never }],
+        root: 0,
+      }),
+    ).toThrow(/not a host permission-card resource/);
+
+    const raw = fakeRawCard({ id: 'lifted-once' }) as never;
+    const lifted = bridge.schemaValueFromWit({
+      valueNodes: [{ tag: 'permission-card-handle', val: raw }],
+      root: 0,
+    });
+    const card = bridge.permissionCardFromSchemaValue(lifted);
+    expect(rawOfPermissionCard(card)).toBe(raw);
+    expect(() => bridge.permissionCardFromSchemaValue(lifted)).toThrow(
+      /already held by another card/,
+    );
+    expect(() => bridge.permissionCardToSchemaValue({} as PermissionCard)).toThrow(
+      /Expected a PermissionCard/,
+    );
+  });
+
+  it('keeps polymorphic bridge conversions to template cards', () => {
+    const raw = fakeRawCard({ id: 'template-card' }) as never;
+    const template = polymorphicPermissionCardFromRaw(raw);
+    const concrete = permissionCardFromRaw(fakeRawCard({ id: 'concrete-card' }));
+    expect(() =>
+      bridge.polymorphicPermissionCardToSchemaValue(
+        concrete as unknown as PolymorphicPermissionCard,
+      ),
+    ).toThrow(/Expected a PolymorphicPermissionCard/);
+    expect(() => bridge.permissionCardToSchemaValue(template as unknown as PermissionCard)).toThrow(
+      /Expected a PermissionCard/,
+    );
+
+    const value = bridge.polymorphicPermissionCardToSchemaValue(template);
+    expect(() => bridge.polymorphicPermissionCardFromSchemaValue(value)).toThrow(
+      /already held by another card/,
+    );
+    const lifted = bridge.schemaValueFromWit(bridge.schemaValueToWit(value));
+    expect(template.isMoved()).toBe(true);
+    const decoded = bridge.polymorphicPermissionCardFromSchemaValue(lifted);
+    expect(decoded).toBeInstanceOf(PolymorphicPermissionCard);
+    expect(rawOfPermissionCard(decoded)).toBe(raw);
+    expect(() => bridge.polymorphicPermissionCardFromSchemaValue(lifted)).toThrow(
+      /already held by another card/,
+    );
+    expect(() => bridge.polymorphicPermissionCardFromSchemaValue(bridge.v.bool(true))).toThrow(
+      /Expected a permission-card schema value/,
+    );
+  });
+
+  it('checks the scope card before moving argument cards and gives them back on early failure', async () => {
+    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+    };
+    const card = permissionCardFromRaw(fakeRawCard({ id: 'argument-card' }));
+    const template = polymorphicPermissionCardFromRaw(fakeRawCard({ id: 'template-argument' }));
+    const params = () =>
+      bridge.v.record([
+        bridge.permissionCardToSchemaValue(card),
+        bridge.polymorphicPermissionCardToSchemaValue(template),
+      ]);
+
+    const released = scopeCardFromRaw(fakeRawCard({ id: 'released-scope' }));
+    released.release();
+    await expect(remote.invokeAndAwait('run', params(), undefined, released)).rejects.toThrow(
+      /already been released/,
+    );
+    expect(card.isMoved()).toBe(false);
+    await expect(
+      remote.invokeAndAwait('run', params(), undefined, card as unknown as bridge.ScopeCard),
+    ).rejects.toThrow(/expected a ScopeCard/);
+    expect(card.isMoved()).toBe(false);
+
+    // Aborting while the input is encoded fails before the host call; the lowered
+    // argument card goes back to its card instead of being disposed.
+    const controller = new AbortController();
+    const scope = scopeCardFromRaw(fakeRawCard({ id: 'live-scope' }));
+    const pending = remote.invokeAndAwait('run', params(), controller.signal, scope);
+    controller.abort();
+    await expect(pending).rejects.toThrow();
+    expect(card.isMoved()).toBe(false);
+    expect(rawOfPermissionCard(card)).toMatchObject({ id: 'argument-card' });
+    expect(template.isMoved()).toBe(false);
+    expect(rawOfPermissionCard(template)).toMatchObject({ id: 'template-argument' });
+    expect(rpc.asyncInvokeAndAwait).not.toHaveBeenCalled();
+    expect(scope.isMoved()).toBe(false);
+  });
+
   it('disposes all still-owned WIT resources after partial RPC start lowering fails', async () => {
     const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
     const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
@@ -939,6 +1048,7 @@ describe('public bridge runtime', () => {
         }
       },
     }));
+    Object.setPrototypeOf(resources[3], Object.getPrototypeOf(fakeRawCard()));
     // A cleanup failure must not prevent disposal of later siblings.
     resources[1].drop.mockImplementation(() => {
       throw new Error('cleanup');

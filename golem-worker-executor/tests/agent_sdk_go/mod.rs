@@ -16,7 +16,6 @@
 //! by `test-components/build-components.sh go`). This is the foundational suite —
 //! more scenarios (durability/replay, RPC, config, …) build on this wiring.
 
-pub mod atomic_region;
 pub mod blobstore;
 pub mod config;
 pub mod durability;
@@ -24,6 +23,7 @@ pub mod http;
 pub mod invocation;
 pub mod keyvalue;
 pub mod logging;
+pub mod permissions;
 pub mod promise;
 pub mod rdbms;
 pub mod retry;
@@ -32,6 +32,7 @@ pub mod rich_types;
 pub mod rpc;
 pub mod schedule;
 pub mod snapshot;
+pub mod transaction_http;
 pub mod transactions;
 pub mod websocket;
 

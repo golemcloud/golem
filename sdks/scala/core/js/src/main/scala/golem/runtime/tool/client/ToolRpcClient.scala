@@ -22,14 +22,14 @@ import golem.host.js.tool.JsInvocationResult
 import golem.host.js.schema.JsTypedSchemaValue
 import golem.runtime.tool.JsToolInputStream
 import golem.runtime.tool.host.ToolHostApi
-import golem.schema.TypedSchemaValue
+import golem.schema.{AgentStreamOwnership, TypedSchemaValue}
 import golem.schema.wire.{SchemaWire, WitTypedSchemaValue}
 import golem.tool._
 
-import scala.concurrent.Future
+import scala.concurrent.{Future, Promise}
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
-import scala.util.{Failure, Success}
+import scala.util.{Failure, Success, Try}
 import zio.blocks.async.*
 import zio.blocks.streams.internal.StreamError
 
@@ -93,8 +93,7 @@ private[golem] final class JsWireToolRpcTransport(
     stdout: Boolean,
     stderr: Boolean
   ): Either[WireToolRpcFailure, WireToolRpcStarted] = {
-    var observer  = Option.empty[ToolHostApi.RawToolFutureInvokeResult]
-    var cancelled = false
+    val lease = new ToolResultObserver[Either[WireToolRpcFailure, WireToolInvokeResult]]
     try {
       val stdoutEndpoints = if (stdout) Some(createOutput()) else None
       val stderrEndpoints = if (stderr) Some(createOutput()) else None
@@ -114,21 +113,43 @@ private[golem] final class JsWireToolRpcTransport(
           stdoutEndpoints.map(_._1).orUndefined,
           stderrEndpoints.map(_._1).orUndefined
         )
-        observer = Some(started)
-        if (cancelled) started.cancel()
-        FutureInterop.fromPromise(started.get())
-      }
-        .map(value => Right(WireToolInvokeResult(value.result.toOption.map(SchemaWireInterop.typedFromJs))))
-        .recover { case js.JavaScriptException(error) => Left(ToolHostApi.decodeWireRpcFailure(error)) }
-        .recover { case error: Throwable =>
+        lease.observe(started)(
+          value => Right(WireToolInvokeResult(value.result.toOption.map(SchemaWireInterop.typedFromJs))),
+          {
+            case js.JavaScriptException(error) => Left(ToolHostApi.decodeWireRpcFailure(error))
+            case scala.util.control.NonFatal(error)
+                if !error.isInstanceOf[java.util.concurrent.CancellationException] =>
+              Left(
+                WireToolRpcFailure.ProtocolError(s"failed to decode tool result: ${String.valueOf(error.getMessage)}")
+              )
+            case error => throw error
+          },
+          {
+            case Right(_) | Left(WireToolRpcFailure.RemoteToolError(_)) => true
+            case _                                                      => false
+          },
+          {
+            case Right(result) =>
+              result.result.foreach(value => SchemaWire.releaseOwned(SchemaWire.typedSchemaValueFromWit(value).value))
+            case Left(WireToolRpcFailure.RemoteToolError(error)) =>
+              SchemaWire.releaseOwned(SchemaWire.typedSchemaValueFromWit(error.payload).value)
+            case _ => ()
+          }
+        )
+      }.recover {
+        case scala.util.control.NonFatal(error)
+            if !error.isInstanceOf[java.util.concurrent.CancellationException] && !error
+              .isInstanceOf[ToolResultDetached] =>
           Left(WireToolRpcFailure.ProtocolError(s"failed to encode tool input: ${String.valueOf(error.getMessage)}"))
-        }
+      }
+      result.onComplete(lease.complete)
       Right(
         WireToolRpcStarted(
           stdoutStream,
           stderrStream,
-          result,
-          () => { cancelled = true; observer.foreach(_.cancel()) }
+          lease.result,
+          () => lease.cancel(),
+          () => lease.detach()
         )
       )
     } catch {
@@ -177,12 +198,32 @@ private[golem] final class JsToolRpcTransport(rpc: ToolHostApi.RawToolRpc) exten
             stdoutEndpoints.map(_._1).orUndefined,
             stderrEndpoints.map(_._1).orUndefined
           )
+          val lease = new ToolResultObserver[Either[ToolRpcFailure, ToolInvokeResult]]
           Right(
             ToolRpcStarted(
               stdoutEndpoints.map(e => new JsToolInputStream(e._2)),
               stderrEndpoints.map(e => new JsToolInputStream(e._2)),
-              awaitFutureResult(observer),
-              () => observer.cancel()
+              lease.observe(observer)(
+                decodeResult,
+                {
+                  case js.JavaScriptException(error) => Left(ToolHostApi.decodeRpcFailure(error))
+                  case error                         => throw error
+                },
+                {
+                  case Right(_) | Left(ToolRpcFailure.RemoteToolError(_)) => true
+                  case _                                                  => false
+                },
+                {
+                  case Right(result)                                                                               => result.result.foreach(value => SchemaWire.releaseOwned(value.value))
+                  case Left(ToolRpcFailure.RemoteToolError(golem.tool.ToolInvokeError.UnknownToolError(_, value))) =>
+                    SchemaWire.releaseOwned(value.value)
+                  case Left(ToolRpcFailure.RemoteToolError(golem.tool.ToolInvokeError.Tool(value))) =>
+                    SchemaWire.releaseOwned(value.value)
+                  case _ => ()
+                }
+              ),
+              () => lease.cancel(),
+              () => lease.detach()
             )
           )
         } catch {
@@ -272,20 +313,6 @@ private[golem] final class JsToolRpcTransport(rpc: ToolHostApi.RawToolRpc) exten
     case ByteStreamFailure.Failed(message)   => js.Dynamic.literal(tag = "failed", `val` = message)
   }
 
-  /** Drives the host `future-invoke-result` to completion. */
-  private def awaitFutureResult(
-    futureResult: ToolHostApi.RawToolFutureInvokeResult
-  ): Future[Either[ToolRpcFailure, ToolInvokeResult]] =
-    try {
-      FutureInterop
-        .fromPromise(futureResult.get())
-        .map(result => decodeResult(result))
-        .recover { case js.JavaScriptException(e) => Left(ToolHostApi.decodeRpcFailure(e)) }
-    } catch {
-      case js.JavaScriptException(e) =>
-        Future.successful(Left(ToolHostApi.decodeRpcFailure(e)))
-    }
-
   private def decodeResult(result: JsInvocationResult): Either[ToolRpcFailure, ToolInvokeResult] =
     try {
       if (result.stdout.isDefined || result.stderr.isDefined)
@@ -300,4 +327,75 @@ private[golem] final class JsToolRpcTransport(rpc: ToolHostApi.RawToolRpc) exten
       case t: Throwable =>
         Left(ToolRpcFailure.ProtocolError(s"failed to decode tool result: ${String.valueOf(t.getMessage)}"))
     }
+}
+
+/**
+ * Owns one host result observer, independently of invocation and output
+ * lifetimes.
+ */
+private final class ToolResultObserver[A] {
+  private implicit val ec: scala.concurrent.ExecutionContext = ToolInvokerRuntime.executionContext
+  private var observer                                       = Option.empty[ToolHostApi.RawToolFutureInvokeResult]
+  private var detached                                       = false
+  private var disposed                                       = false
+  private var cancelled                                      = false
+  private val delivered                                      = Promise[A]()
+
+  val result: Future[A] = delivered.future
+
+  def complete(outcome: Try[A]): Unit = { delivered.tryComplete(outcome); () }
+
+  def cancel(): Unit =
+    if (!disposed) {
+      cancelled = true
+      observer.foreach(_.cancel())
+    }
+
+  def detach(): Unit = {
+    detached = true
+    delivered.tryFailure(new ToolResultDetached)
+    ()
+  }
+
+  def observe(raw: ToolHostApi.RawToolFutureInvokeResult)(
+    decode: JsInvocationResult => A,
+    failure: Throwable => A,
+    ownsCapabilities: A => Boolean,
+    discard: A => Unit
+  ): Future[A] = {
+    observer = Some(raw)
+    def dispose(): Unit = {
+      disposed = true
+      observer = None
+      val symbol = js.Dynamic.global.Symbol.selectDynamic("dispose")
+      val drop   = js.Dynamic.global.Reflect.applyDynamic("get")(raw, symbol)
+      drop.applyDynamic("call")(raw)
+      ()
+    }
+    val cancellation = Try(if (cancelled) raw.cancel())
+    if (detached) {
+      AgentStreamOwnership.cleanup { dispose(); Future.successful(()) }
+    } else {
+      val getting = cancellation match {
+        case Failure(error) => Future.failed(error)
+        case Success(_)     =>
+          try FutureInterop.fromPromise(raw.get())
+          catch { case scala.util.control.NonFatal(error) => Future.failed(error) }
+      }
+      getting.onComplete { result =>
+        val ownership = new AgentStreamOwnership
+        val decoded   = Try(AgentStreamOwnership.capture(ownership)(result.fold(failure, decode))).recover {
+          case scala.util.control.NonFatal(error) => AgentStreamOwnership.capture(ownership)(failure(error))
+        }
+        if (!detached && delivered.tryComplete(decoded) && decoded.toOption.exists(ownsCapabilities))
+          ownership.handoff()
+        else {
+          AgentStreamOwnership.cleanup { decoded.foreach(discard); Future.successful(()) }
+          AgentStreamOwnership.cleanup(ownership.close())
+        }
+        AgentStreamOwnership.cleanup { dispose(); Future.successful(()) }
+      }
+    }
+    delivered.future
+  }
 }

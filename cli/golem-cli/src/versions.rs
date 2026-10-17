@@ -130,7 +130,6 @@ pub mod rust_dep {
     pub const LOG: &str = "0.4.29";
     pub const SERDE: &str = "1";
     pub const SERDE_JSON: &str = "1";
-    pub const WSTD: &str = "=0.6.5";
 }
 
 pub mod scala_dep {

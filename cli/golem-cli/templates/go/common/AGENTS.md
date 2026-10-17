@@ -59,10 +59,9 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-cors-go` | Configuring CORS on HTTP endpoints |
 | `golem-add-webhook-go` | Receiving external webhook callbacks |
 | `golem-quota-go` | Resource quotas: rate limits, capacity and concurrency with quota tokens |
-| `golem-permission-card-go` | Passing permission cards (delegated authority) through agent and tool calls |
+| `golem-permission-card-go` | Passing, deriving, inspecting, installing and revoking permission cards, and lending scope cards to agent calls |
 | `golem-make-http-request-go` | Making outgoing HTTP requests via `net/http` |
 | `golem-mark-read-only-go` | Marking methods read-only (side-effect-free) with result caching |
-| `golem-atomic-block-go` | Atomic regions, custom durability (`DurableOp`), idempotence, oplog commit, idempotency keys |
 | `golem-retry-policies-go` | Configuring semantic retry policies |
 | `golem-add-transactions-go` | Saga-pattern transactions with compensation |
 | `golem-define-tool-go` | Defining and implementing a typed tool (`DefineTool`, `Tool.Command`, `Handle`) |
@@ -105,14 +104,15 @@ Key concepts:
 
 ## Durability & Automatic Retries
 
-Golem **automatically retries** failed operations using durable execution. **Do not add manual retry loops, `match` + retry patterns, or backoff utilities in agent code** — let operations fail and Golem will retry them. A built-in default policy (3 retries, exponential backoff with jitter, clamped to [100ms, 1s]) applies when no user-defined policy matches.
+Golem **automatically retries** retryable host-operation failures using durable execution and the applicable retry policy. **Do not add manual retry loops or backoff utilities around host operations** — let Golem apply the retry policy. The default retry policy applies when no user-defined policy matches.
 
 The following are retried transparently:
 
 - **HTTP requests** to external services (via `wasi:http` and friends)
 - **RPC calls** between agents
 - **Database / storage calls** — `golem:rdbms/postgres`, `golem:rdbms/mysql`, `wasi:blobstore`, `wasi:keyvalue`
-- **Panics** inside `durability.Atomically` — the invocation is retried from the start of the region. A panic anywhere else fails the agent
+
+An uncaught panic permanently fails the invocation. Sagas compensate caught panics and errors in reverse order; fallible helpers re-panic only after complete rollback, and partial rollback retains both failures. Recovery repairs eligible incomplete calls at their original `Start`. New saga attempts append history without rewinding; after complete rollback, infallible sagas use the bounded host policy and durable backoff. Handle the Result for compensation failure, exhaustion and policy errors, retaining the original failure.
 
 Only customize when the *strategy* needs to change (different backoff, give-up conditions, per-status-code policies). For that, see the Go SDK's retry-policy helpers.
 

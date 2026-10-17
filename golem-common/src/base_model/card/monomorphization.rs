@@ -139,7 +139,7 @@ fn monomorphize_polymorphic_card_for_agent(
     Card {
         card_id: card.card_id,
         parent_ids: card.parent_ids.clone(),
-        lower_positive: resolve_permissions_for_agent_context(&card.lower_positive, context),
+        lower_positive: resolve_lower_positives_for_agent_context(&card.lower_positive, context),
         lower_negative: resolve_permissions_for_agent_context(&card.lower_negative, context),
         upper_positive: resolve_permissions_for_agent_context(&card.upper_positive, context),
         upper_negative: resolve_permissions_for_agent_context(&card.upper_negative, context),
@@ -169,6 +169,26 @@ pub(crate) fn resolve_permissions_for_agent_context(
 ) -> Vec<PermissionPattern> {
     permissions
         .iter()
+        .map(|permission| monomorphize_permission(permission, context))
+        .collect()
+}
+
+/// Resolves a template's lower-bound grants for one holder.
+///
+/// Slots name the holder that uses a grant, so a template resolved for a holder contributes only
+/// the positive grants addressed to that holder. The template's denials and ceilings for other
+/// holders are resolved for this holder too, so they cannot be relied on to bound grants passed on
+/// to those holders; dropping such grants keeps derivation and installation within what the
+/// template grants. The holder's own surface is unaffected, because it only uses grants addressed
+/// to the holder. Ceilings and denials are kept, because they can only narrow.
+fn resolve_lower_positives_for_agent_context(
+    permissions: &[PolymorphicPermissionPattern],
+    context: &AgentPermissionMonomorphizationContext,
+) -> Vec<PermissionPattern> {
+    let holder = agent_recipient_pattern(context);
+    permissions
+        .iter()
+        .filter(|permission| permission.recipient().subsumes(&holder))
         .map(|permission| monomorphize_permission(permission, context))
         .collect()
 }
@@ -761,6 +781,7 @@ mod tests {
             lower_negative: Vec::new(),
             upper_positive: vec![grant],
             upper_negative: Vec::new(),
+            expires_at: None,
         };
 
         let without_scope = agent_effective_surface_from_wallet(&context, std::iter::empty());
@@ -811,6 +832,7 @@ mod tests {
             lower_negative: Vec::new(),
             upper_positive: vec![scope_ceiling],
             upper_negative: Vec::new(),
+            expires_at: None,
         };
         let request = agent_target(
             "owner@example.com/shop/prod/cart-svc/Cart(alice)",

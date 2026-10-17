@@ -3,6 +3,72 @@ use crate::durable_host::concurrent::HistoricalReconstruction;
 use crate::durable_host::tail_work::TailActivity;
 
 impl ReplayState {
+    /// Drives ordinary replay until the post-call audit is reached. Sibling event consumption
+    /// does not own the audit receipt; a later call from this Store cannot replace a missing audit.
+    pub(crate) async fn await_card_derivation(
+        &self,
+        card: CardId,
+        parent: Option<OplogIndex>,
+    ) -> Result<(), WorkerExecutorError> {
+        loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+            let done = self
+                .run_owned_cursor_op(move |state| async move {
+                    state
+                        .with_tx(async |tx| {
+                            let wallet = tx.cursor.wallet.clone().ok_or_else(|| {
+                                WorkerExecutorError::runtime(
+                                    "card audit replay requires its owner wallet",
+                                )
+                            })?;
+                            if wallet.has_recorded_derivation(card) {
+                                return Ok(true);
+                            }
+                            tx.try_get_oplog_entry(|_| false).await?;
+                            if wallet.has_recorded_derivation(card) || tx.cursor.is_live() {
+                                return Ok(true);
+                            }
+                            tx.check_parked_positional_read(cursor::PositionalReader::Ordinary)
+                                .await?;
+                            if tx.blocked_on_completion_delivery {
+                                return Ok(false);
+                            }
+                            let same_store = match (parent, tx.buffered_head_owner()) {
+                                (
+                                    None,
+                                    Some(
+                                        cursor::HeadOwner::Agent | cursor::HeadOwner::Unattributed,
+                                    ),
+                                ) => true,
+                                (
+                                    Some(parent),
+                                    Some(
+                                        cursor::HeadOwner::EntityBody(owner)
+                                        | cursor::HeadOwner::ParentStart(owner),
+                                    ),
+                                ) => parent == owner,
+                                _ => false,
+                            };
+                            if same_store {
+                                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                                    "runtime-card audit before the next operation from its Store",
+                                    format!("missing audit for {card}"),
+                                ));
+                            }
+                            Ok(false)
+                        })
+                        .await
+                })
+                .await?;
+            if done {
+                return Ok(());
+            }
+            progress.await;
+        }
+    }
+
     pub(crate) fn fail_stream_observation(&self, index: OplogIndex) -> WorkerExecutorError {
         let reason = format!(
             "cancelled native stream read cannot retain its recorded guest delivery at {index}"

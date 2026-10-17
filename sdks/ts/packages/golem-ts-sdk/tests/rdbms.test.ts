@@ -273,6 +273,16 @@ describe('isReader', () => {
 // ===========================================================================
 
 describe('RdbmsError', () => {
+  it('preserves nonresumable resource loss as a distinct reason', () => {
+    const err = new RdbmsError(
+      { tag: 'resource-lost', val: 'transaction lost' },
+      'execute',
+      'Postgres',
+    );
+    expect(err.reason).toBe('resource-lost');
+    expect(err.trace).toBe('transaction lost');
+  });
+
   it('classifies a tagged host error', () => {
     const err = new RdbmsError({ tag: 'connection-failure', val: 'refused' }, 'open', 'Postgres');
     expect(err.reason).toBe('connection-failure');

@@ -55,13 +55,15 @@ import {
   releaseGuestQuotaTokenHandle,
 } from '../internal/schema-model/quotaTokenHandle';
 import { QUOTA_INTERNAL } from '../internal/schema-model/quotaInternal';
-import {
-  adoptGuestPermissionCardHandle,
-  GuestPermissionCardHandle,
-  permissionCardHandleWasLiftedFromWire,
-  releaseGuestPermissionCardHandle,
-} from '../internal/schema-model/permissionCardHandle';
+import { GuestPermissionCardHandle } from '../internal/schema-model/permissionCardHandle';
 import { PERMISSION_CARD_INTERNAL } from '../internal/schema-model/permissionCardInternal';
+import {
+  PermissionCard,
+  permissionCardFromSchemaHandleInternal,
+  permissionCardToSchemaValueInternal,
+  PolymorphicPermissionCard,
+  polymorphicPermissionCardFromSchemaHandleInternal,
+} from '../host/permissions';
 import type {
   BinaryRestrictions,
   TextRestrictions,
@@ -71,7 +73,6 @@ import type {
   QuantityValue,
   Secret as RawSecret,
   QuotaToken as RawQuotaToken,
-  PermissionCard as RawPermissionCard,
 } from 'golem:core/types@2.0.0';
 import { SchemaCodec } from './codec';
 import { buildResultCodec } from './result';
@@ -829,26 +830,52 @@ function streamMarker<Output>(
 // Capability node: permission-card
 // ============================================================
 
-export interface PermissionCardOptions {
-  /** Whether the card schema may carry slot variables in its owner or resource id. */
-  polymorphic: boolean;
+export interface PermissionCardOptions<Polymorphic extends boolean = boolean> {
+  /**
+   * `true` for a template card, whose grants may contain slot variables;
+   * `false` for a concrete card. `s.permissionCard` needs a literal value.
+   */
+  polymorphic: Polymorphic;
 }
 
+/**
+ * A `permission-card` schema node. `polymorphic: false` declares a concrete
+ * {@link PermissionCard}; `polymorphic: true` declares a template
+ * {@link PolymorphicPermissionCard}. A received card is decoded into the
+ * declared type; the host keeps the card's real kind.
+ */
+function permissionCardMarker(options: PermissionCardOptions<false>): MarkerSchema<PermissionCard>;
+function permissionCardMarker(
+  options: PermissionCardOptions<true>,
+): MarkerSchema<PolymorphicPermissionCard>;
 function permissionCardMarker(
   options: PermissionCardOptions,
-): MarkerSchema<GuestPermissionCardHandle> {
-  const validate: Validator<GuestPermissionCardHandle> = (value) =>
-    value !== null && typeof value === 'object'
-      ? ok(value as GuestPermissionCardHandle)
-      : fail('Expected an opaque permission-card handle for WIT permission-card');
+): MarkerSchema<PermissionCard | PolymorphicPermissionCard> {
+  const polymorphic = options.polymorphic;
+  if (typeof polymorphic !== 'boolean') {
+    throw new TypeError('s.permissionCard expects { polymorphic: boolean }');
+  }
+  const validate: Validator<PermissionCard | PolymorphicPermissionCard> = polymorphic
+    ? (value) =>
+        value instanceof PolymorphicPermissionCard
+          ? ok(value)
+          : fail(
+              'Expected a PolymorphicPermissionCard for WIT permission-card { polymorphic: true }',
+            )
+    : (value) =>
+        value instanceof PermissionCard
+          ? ok(value)
+          : fail('Expected a PermissionCard for WIT permission-card { polymorphic: false }');
   const descriptor: MarkerDescriptor = () => ({
-    graph: { defs: new Map(), root: t.permissionCard(options) },
-    toValue: (value) =>
-      v.permissionCard(
-        value instanceof GuestPermissionCardHandle
-          ? value
-          : adoptGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value as RawPermissionCard),
-      ),
+    graph: { defs: new Map(), root: t.permissionCard({ polymorphic }) },
+    toValue: (value) => {
+      const issues = (validate(value) as StandardSchemaV1.FailureResult).issues;
+      if (issues !== undefined) throw new TypeError(issues[0].message);
+      return permissionCardToSchemaValueInternal(
+        PERMISSION_CARD_INTERNAL,
+        value as PermissionCard | PolymorphicPermissionCard,
+      );
+    },
     fromValue: (sv) => {
       const handle = (
         sv as {
@@ -856,10 +883,9 @@ function permissionCardMarker(
           handle: GuestPermissionCardHandle;
         }
       ).handle;
-      if (permissionCardHandleWasLiftedFromWire(PERMISSION_CARD_INTERNAL, handle)) return handle;
-      const raw = releaseGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, handle);
-      if (raw === undefined) throw new Error('permission-card handle was already consumed');
-      return raw;
+      return polymorphic
+        ? polymorphicPermissionCardFromSchemaHandleInternal(PERMISSION_CARD_INTERNAL, handle)
+        : permissionCardFromSchemaHandleInternal(PERMISSION_CARD_INTERNAL, handle);
     },
   });
   return marker(validate, descriptor);
@@ -1390,7 +1416,7 @@ export const s = {
   secret: <Output>(inner: StandardSchemaV1<Output>) => secretMarker(inner),
   quotaToken: () => quotaTokenMarker(),
   stream: <Output>(inner: StandardSchemaV1<Output>) => streamMarker(inner),
-  permissionCard: (options: PermissionCardOptions) => permissionCardMarker(options),
+  permissionCard: permissionCardMarker,
 
   // Principal carried as a data value (WIT `principal` variant).
   principal: () => principalMarker(),

@@ -573,7 +573,6 @@ fn test_entity_request(
             agent_id: owner.agent_id.clone(),
         }),
         plan: EntityInvocationPlanReference::Root { plan },
-        assume_idempotence: true,
         authority_wallet: Vec::new(),
     };
     HostRequestEntityInvocation {
@@ -623,10 +622,7 @@ async fn public_oplog_zero_start_reads_from_initial_index() {
     let timestamp = Timestamp::now_utc();
     assert_eq!(
         oplog
-            .add(OplogEntry::NoOp {
-                timestamp,
-                entity_parent_start_index: None,
-            })
+            .add(OplogEntry::RecoverySucceeded { timestamp })
             .await
             .unwrap(),
         OplogIndex::INITIAL
@@ -649,7 +645,10 @@ async fn public_oplog_zero_start_reads_from_initial_index() {
     assert_eq!(chunk.first_index_in_chunk, OplogIndex::INITIAL);
     assert_eq!(chunk.next_oplog_index, OplogIndex::from_u64(2));
     assert_eq!(chunk.entries.len(), 1);
-    assert!(matches!(chunk.entries[0].entry, PublicOplogEntry::NoOp(_)));
+    assert!(matches!(
+        chunk.entries[0].entry,
+        PublicOplogEntry::RecoverySucceeded(_)
+    ));
 }
 
 #[test]
@@ -687,7 +686,13 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         )
         .await;
 
-    let agent_entry = oplog.add(OplogEntry::no_op(None)).await.unwrap();
+    let agent_entry = oplog
+        .add(OplogEntry::remove_retry_policy(
+            None,
+            "test-policy".to_string(),
+        ))
+        .await
+        .unwrap();
     let observational_owner = oplog
         .add(OplogEntry::Start {
             timestamp: Timestamp::now_utc(),
@@ -728,7 +733,13 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         .await
         .unwrap();
 
-    let interleaved_agent_entry = oplog.add(OplogEntry::no_op(None)).await.unwrap();
+    let interleaved_agent_entry = oplog
+        .add(OplogEntry::remove_retry_policy(
+            None,
+            "test-policy".to_string(),
+        ))
+        .await
+        .unwrap();
     let child_start = oplog
         .add(OplogEntry::Start {
             timestamp: Timestamp::now_utc(),
@@ -809,13 +820,15 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             golem_common::model::oplog::OplogErrorKind::Invocation,
             golem_common::model::oplog::AgentError::TransientError("entity retry".to_string()),
             agent_entry,
-            false,
             None,
         ))
         .await
         .unwrap();
     let entity_marker = oplog
-        .add(OplogEntry::no_op(Some(tool_start)))
+        .add(OplogEntry::remove_retry_policy(
+            Some(tool_start),
+            "test-policy".to_string(),
+        ))
         .await
         .unwrap();
     let log_index = oplog
@@ -921,7 +934,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             invocation_id: None,
             observational_owner: None,
             request: None,
-            durable_function_type: DurableFunctionType::WriteRemoteTransaction(None),
+            durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,
         })
         .await
@@ -930,7 +943,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         .add(OplogEntry::BeginRemoteTransaction {
             timestamp: Timestamp::now_utc(),
             transaction_id: TransactionId::new("entity-transaction".to_string()),
-            original_begin_index: None,
+            original_begin_index: transaction_start,
         })
         .await
         .unwrap();
@@ -1267,7 +1280,7 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
         )
         .await;
 
-    let non_start = oplog.add(OplogEntry::no_op(None)).await.unwrap();
+    let non_start = oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
     let non_entity_start = oplog
         .add(OplogEntry::Start {
             timestamp: Timestamp::now_utc(),
@@ -1302,19 +1315,34 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
         .await
         .unwrap();
     let valid = oplog
-        .add(OplogEntry::no_op(Some(entity_start)))
+        .add(OplogEntry::remove_retry_policy(
+            Some(entity_start),
+            "test-policy".to_string(),
+        ))
         .await
         .unwrap();
-    let invalid_non_start = oplog.add(OplogEntry::no_op(Some(non_start))).await.unwrap();
+    let invalid_non_start = oplog
+        .add(OplogEntry::remove_retry_policy(
+            Some(non_start),
+            "test-policy".to_string(),
+        ))
+        .await
+        .unwrap();
     let invalid_non_entity = oplog
-        .add(OplogEntry::no_op(Some(non_entity_start)))
+        .add(OplogEntry::remove_retry_policy(
+            Some(non_entity_start),
+            "test-policy".to_string(),
+        ))
         .await
         .unwrap();
     let invalid_forward_index = invalid_non_entity.next();
     let future_entity_start = invalid_forward_index.next();
     assert_eq!(
         oplog
-            .add(OplogEntry::no_op(Some(future_entity_start)))
+            .add(OplogEntry::remove_retry_policy(
+                Some(future_entity_start),
+                "test-policy".to_string()
+            ))
             .await
             .unwrap(),
         invalid_forward_index
@@ -1921,4 +1949,338 @@ fn mcp_discovery_metadata_roundtrips_public_oplog_without_recursive_type_values(
                 public_entry.try_into().unwrap();
         }
     }
+}
+
+async fn open_test_oplog(
+    name: &str,
+) -> (
+    Arc<PrimaryOplogService>,
+    OwnedAgentId,
+    Arc<dyn crate::services::oplog::Oplog>,
+) {
+    let oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            Arc::new(InMemoryIndexedStorage::new()),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: golem_common::model::component::ComponentId(Uuid::new_v4()),
+        agent_id: name.to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id, account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            None,
+        )
+        .await;
+    (oplog_service, owned_agent_id, oplog)
+}
+
+fn log_entry(message_size: usize) -> OplogEntry {
+    OplogEntry::Log {
+        timestamp: Timestamp::now_utc(),
+        parent_start_index: None,
+        level: LogLevel::Stdout,
+        context: "context".to_string(),
+        message: "x".repeat(message_size),
+        trace_context: None,
+    }
+}
+
+fn page_limits(max_bytes: usize, max_entry_bytes: usize) -> PublicOplogPageLimits {
+    PublicOplogPageLimits {
+        count: 10,
+        max_bytes,
+        max_entry_bytes,
+    }
+}
+
+fn public_page_entries(
+    entries: &[golem_api_grpc::proto::golem::worker::OplogPageEntry],
+) -> Vec<PublicOplogPageEntry> {
+    entries
+        .iter()
+        .map(|entry| PublicOplogPageEntry::try_from(entry.clone()).unwrap())
+        .collect()
+}
+
+fn page_indices(
+    entries: &[golem_api_grpc::proto::golem::worker::OplogPageEntry],
+) -> Vec<(OplogIndex, bool)> {
+    public_page_entries(entries)
+        .iter()
+        .map(|entry| match entry {
+            PublicOplogPageEntry::Included(entry) => (entry.oplog_index, true),
+            PublicOplogPageEntry::Omitted(omitted) => (omitted.oplog_index, false),
+        })
+        .collect()
+}
+
+#[test]
+async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("omit-large-entries").await;
+    let small_index = oplog.add(log_entry(10)).await.unwrap();
+    let large_payload = vec![0xAB; 5000];
+    let snapshot_index = oplog
+        .add(OplogEntry::Snapshot {
+            timestamp: Timestamp::now_utc(),
+            data: oplog.upload_payload(&large_payload).await.unwrap(),
+            mime_type: "application/octet-stream".to_string(),
+            active_cards: Vec::new(),
+            wallet_generation: 0,
+            filesystem_snapshot: None,
+        })
+        .await
+        .unwrap();
+    let large_log_index = oplog.add(log_entry(5000)).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    let page_revision = ComponentRevision::new(5).unwrap();
+
+    let page = get_public_oplog_page(
+        Arc::new(PanicComponentService),
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        None,
+        page_revision,
+        OplogIndex::INITIAL,
+        page_limits(1_000_000, 1000),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        page_indices(&page.entries),
+        vec![
+            (small_index, true),
+            (snapshot_index, false),
+            (large_log_index, false)
+        ]
+    );
+
+    for (page_entry, entry_type) in public_page_entries(&page.entries)[1..]
+        .iter()
+        .zip(["Snapshot", "Log"])
+    {
+        let PublicOplogPageEntry::Omitted(omitted) = page_entry else {
+            unreachable!()
+        };
+        let full = get_public_oplog_entry(
+            Arc::new(PanicComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            omitted.oplog_index,
+            Some(omitted.component_revision),
+        )
+        .await
+        .unwrap();
+        let full_size = prost::Message::encoded_len(
+            &golem_api_grpc::proto::golem::worker::OplogEntryWithIndex::try_from(full.clone())
+                .unwrap(),
+        );
+        assert_eq!(omitted.entry_type, entry_type);
+        assert_eq!(full.entry.entry_type(), entry_type);
+        assert_eq!(omitted.timestamp, full.entry.timestamp());
+        assert_eq!(omitted.attribution, full.attribution);
+        assert_eq!(omitted.size, full_size as u64);
+        assert_eq!(omitted.component_revision, page_revision);
+        assert!(omitted.size > 5000);
+    }
+
+    let PublicOplogEntry::Snapshot(snapshot) = get_public_oplog_entry(
+        Arc::new(PanicComponentService),
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        None,
+        snapshot_index,
+        None,
+    )
+    .await
+    .unwrap()
+    .entry
+    else {
+        panic!("expected the snapshot entry");
+    };
+    assert_eq!(
+        snapshot.data,
+        golem_common::model::oplog::PublicSnapshotData::Raw(
+            golem_common::model::oplog::RawSnapshotData {
+                data: large_payload,
+                mime_type: "application/octet-stream".to_string(),
+            }
+        )
+    );
+
+    assert!(
+        get_public_oplog_entry(
+            Arc::new(PanicComponentService),
+            oplog_service,
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            large_log_index.next(),
+            None,
+        )
+        .await
+        .is_err()
+    );
+}
+
+#[test]
+async fn oplog_pages_end_at_the_byte_budget_and_resume_at_the_next_entry() {
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("page-byte-budget").await;
+    let mut indices = Vec::new();
+    for size in [1000, 1000, 5000, 1000] {
+        indices.push(oplog.add(log_entry(size)).await.unwrap());
+    }
+    oplog.commit(CommitLevel::Always).await.unwrap();
+
+    let read_page = |from: OplogIndex| {
+        get_public_oplog_page(
+            Arc::new(PanicComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            ComponentRevision::INITIAL,
+            from,
+            page_limits(2500, 1_000_000),
+        )
+    };
+
+    let first = read_page(OplogIndex::INITIAL).await.unwrap();
+    assert_eq!(
+        page_indices(&first.entries),
+        vec![(indices[0], true), (indices[1], true)]
+    );
+    assert_eq!(first.next_oplog_index, indices[2]);
+
+    // An entry larger than the budget still makes a page on its own.
+    let second = read_page(first.next_oplog_index).await.unwrap();
+    assert_eq!(page_indices(&second.entries), vec![(indices[2], true)]);
+    assert_eq!(second.next_oplog_index, indices[3]);
+
+    let third = read_page(second.next_oplog_index).await.unwrap();
+    assert_eq!(page_indices(&third.entries), vec![(indices[3], true)]);
+    assert_eq!(third.next_oplog_index, indices[3].next());
+}
+
+#[test]
+async fn oplog_search_pages_share_the_byte_budget_across_chunks_and_count_only_matches() {
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("search-byte-budget").await;
+    let mut matching = Vec::new();
+    for _ in 0..3 {
+        oplog.add(log_entry(0)).await.unwrap();
+        oplog.add(log_entry(2000)).await.unwrap();
+        matching.push(
+            oplog
+                .add(OplogEntry::Log {
+                    timestamp: Timestamp::now_utc(),
+                    parent_start_index: None,
+                    level: LogLevel::Stderr,
+                    context: "context".to_string(),
+                    message: format!("needle {}", "y".repeat(1000)),
+                    trace_context: None,
+                })
+                .await
+                .unwrap(),
+        );
+    }
+    oplog.commit(CommitLevel::Always).await.unwrap();
+
+    let search = |from: OplogIndex| {
+        search_public_oplog_page(
+            Arc::new(PanicComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            ComponentRevision::INITIAL,
+            from,
+            PublicOplogPageLimits {
+                count: 3,
+                max_bytes: 2500,
+                max_entry_bytes: 1_000_000,
+            },
+            "needle",
+        )
+    };
+
+    // Every internal chunk reads three entries. The 2000 byte log entries do not match and do
+    // not count against the budget, so the first two matches fit, from different chunks, and
+    // the third match ends the page.
+    let first = search(OplogIndex::INITIAL).await.unwrap();
+    assert_eq!(
+        page_indices(&first.entries),
+        vec![(matching[0], true), (matching[1], true)]
+    );
+    assert_eq!(first.next_oplog_index, matching[2]);
+
+    let second = search(first.next_oplog_index).await.unwrap();
+    assert_eq!(page_indices(&second.entries), vec![(matching[2], true)]);
+}
+
+#[test]
+async fn component_revision_lookup_reads_past_its_batch_size() {
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("revision-lookup").await;
+    let mut indices = Vec::new();
+    for i in 0..600 {
+        let entry = if i == 300 {
+            OplogEntry::SuccessfulUpdate {
+                timestamp: Timestamp::now_utc(),
+                target_revision: ComponentRevision::new(5).unwrap(),
+                new_component_size: 100,
+                new_total_linear_memory_size: None,
+                new_active_plugins: HashSet::new(),
+                snapshot_assisted_details: None,
+            }
+        } else {
+            log_entry(0)
+        };
+        indices.push(oplog.add(entry).await.unwrap());
+    }
+    oplog.commit(CommitLevel::Always).await.unwrap();
+
+    let revision_at = |index: OplogIndex| {
+        find_component_revision_at(
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            index,
+        )
+    };
+    // The lookup covers the entries before `start`, so the update applies from the next entry.
+    assert_eq!(
+        revision_at(indices[300]).await.unwrap(),
+        ComponentRevision::INITIAL
+    );
+    assert_eq!(
+        revision_at(indices[301]).await.unwrap(),
+        ComponentRevision::new(5).unwrap()
+    );
+    assert_eq!(
+        revision_at(indices[599].next().next()).await.unwrap(),
+        ComponentRevision::new(5).unwrap()
+    );
+    assert_eq!(
+        revision_at(OplogIndex::NONE).await.unwrap(),
+        ComponentRevision::INITIAL
+    );
 }

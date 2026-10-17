@@ -58,6 +58,34 @@ resp := golem.Must(http.DefaultClient.Do(req))
 defer resp.Body.Close()
 ```
 
+## Calling Golem Agent HTTP Endpoints
+
+When making HTTP requests to other Golem agent endpoints (or your own), ordinary structured body fields are decoded from a **JSON object** with the body field names as top-level keys. Include only fields not bound to path/query/header values. A single struct field named `Payload` needs `{"payload": {"name": "Widget", "count": 5}}`, not the bare inner object. Unstructured text and binary fields instead consume the raw body without this wrapper.
+
+For example, given this endpoint definition:
+
+```go
+type RecordIn struct{ Body string }
+
+var Record = Agent.Method[RecordIn, golem.Unit]("record", golem.HTTP(golem.POST("/record")))
+```
+
+The correct HTTP request sends a JSON object with a `body` field, **not** a raw text string:
+
+```go
+// ✅ CORRECT — JSON object with the field name as the key
+req := golem.Must(http.NewRequest("POST", "http://my-app.localhost:9006/recorder/main/record",
+	strings.NewReader(`{"body":"a"}`)))
+req.Header.Set("Content-Type", "application/json")
+
+// ❌ WRONG — a raw text body does not match Golem's JSON body mapping
+req = golem.Must(http.NewRequest("POST", "http://my-app.localhost:9006/recorder/main/record",
+	strings.NewReader("a")))
+req.Header.Set("Content-Type", "text/plain")
+```
+
+> **Rule of thumb:** For structured Golem agent bodies, send `application/json` with the body field names as JSON keys. For unstructured text, send raw UTF-8 text with `text/plain`; for unstructured binary, send raw bytes with the appropriate MIME type. Load `golem-http-params-go` for the restrictions and the separate CLI positional/Go-literal rules; do not reuse the HTTP wrapper for CLI arguments.
+
 ## Durability & retries
 
 - The HTTP call is a durable operation: on replay the recorded response is returned, so the external service is **not** hit again.

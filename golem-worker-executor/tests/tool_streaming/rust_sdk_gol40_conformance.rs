@@ -33,7 +33,7 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
+    let executor = start_with_agent_sockets(
         deps,
         &context,
         TestExecutorOverrides {

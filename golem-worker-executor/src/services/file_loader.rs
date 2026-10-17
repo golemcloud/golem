@@ -604,7 +604,7 @@ pub(crate) mod scripted_storage {
             op_label: &'static str,
             namespace: BlobStorageNamespace,
             path: &NormalizedBlobPath<'_>,
-        ) -> Result<bool, Error> {
+        ) -> Result<Option<u64>, Error> {
             self.inner
                 .delete_dir_at(target_label, op_label, namespace, path)
                 .await

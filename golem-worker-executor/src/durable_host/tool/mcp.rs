@@ -95,7 +95,7 @@ async fn invoke_inner<Ctx: WorkerCtx>(
             DurableFunctionType::WriteRemote,
         )
         .await?;
-    // Consume the logical atomic-region position on live AND replay, exactly as RPC does.
+    // Consume the logical entity position on live and replay, exactly as RPC does.
     let key = ctx.with_ctx(|ctx| ctx.derive_idempotency_key(call.begin_index()).to_string());
     let response = 'response: {
         if !call.is_live() {
@@ -248,8 +248,7 @@ async fn tool_presence<Ctx: WorkerCtx>(
 ) -> anyhow::Result<Result<Option<bool>, SerializableToolRpcError>> {
     // A protocol rejection does not distinguish removal from invalid arguments.
     // Record the subsequent observation separately, after committing the call:
-    // quota suspension or a crash repairs the read without resending tools/call
-    // (unless an enclosing atomic region is rolled back).
+    // quota suspension or a crash repairs the read without resending tools/call.
     let mut call =
         DurableCallSession::<McpToolPresence, LeaveIncompleteOnDrop>::start_context_with_agent_authority(
             ctx,

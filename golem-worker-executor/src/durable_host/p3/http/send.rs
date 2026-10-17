@@ -14,15 +14,13 @@
 
 use super::rebuild::AbortOnDropIoTask;
 use super::rebuild::P3HttpSendRebuild;
-use super::serialization::{
-    serialize_error_code, serialize_method, serialize_request, serialize_response_headers,
-};
+use super::serialization::{serialize_error_code, serialize_request, serialize_response_headers};
 use super::*;
 use crate::durable_host::authorization::targets::http_target;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CallSpanObserver, Cancellable, DeferredCallReplayOutcome, DropPolicy,
-    DurableCallSession, LeaveIncompleteOnDrop, authorize_live_permissions_at_serialized_access,
-    finish_span_in_memory, reserve_access_invocation_id,
+    DurableCallSession, authorize_live_permissions_at_serialized_access, finish_span_in_memory,
+    reserve_access_invocation_id,
 };
 use crate::durable_host::durability::{
     AsyncRetryDecision, ClassifiedHostError, DurabilityHost, HostFailureKind, InFunctionRetryHost,
@@ -30,10 +28,9 @@ use crate::durable_host::durability::{
     try_trigger_host_trap_retry,
 };
 use crate::durable_host::http::policy::{
-    apply_managed_http_headers, golem_managed_http_headers, http_transparent_retry_allowed,
-    is_http_request_idempotent, is_idempotent_http_method,
+    apply_managed_http_headers, classify_serializable_http_error_code, golem_managed_http_headers,
+    http_worker_state_allows_retry,
 };
-use crate::durable_host::http::types::classify_serializable_http_error_code;
 use crate::durable_host::p3::{DurableP3, DurableP3View, durable_worker_ctx, wasi_http_view};
 use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
@@ -51,9 +48,7 @@ use golem_common::model::oplog::{
     HostResponseP3HttpClientSendResult, OplogEntry, OplogIndex, SpanFinished, SpanKind,
     SpanStarted,
 };
-use golem_common::model::{
-    NamedRetryPolicy, OwnedAgentId, PredicateValue, RetryContext, RetryProperties,
-};
+use golem_common::model::{NamedRetryPolicy, OwnedAgentId, RetryContext, RetryProperties};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use http::HeaderMap;
 use http_body_util::BodyExt as _;
@@ -72,8 +67,8 @@ use wasmtime::AsContextMut;
 use wasmtime::component::{Accessor, AccessorTask, Resource, TerminalConsumption};
 use wasmtime_wasi_http::P3PooledConnection;
 use wasmtime_wasi_http::p3::WasiHttp;
+use wasmtime_wasi_http::p3::bindings::http::client;
 use wasmtime_wasi_http::p3::bindings::http::types::{ErrorCode, Request, Response};
-use wasmtime_wasi_http::p3::bindings::http::{client, types};
 
 impl<Ctx: WorkerCtx> client::Host for DurableP3View<'_, Ctx> {}
 
@@ -82,36 +77,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> client::HostWithStore<U> for DurableP3<C
         store: &Accessor<U, Self>,
         req: Resource<Request>,
     ) -> HttpResult<Resource<Response>> {
-        let method = {
-            let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
-            http_store.with(|mut access| {
-                let mut view = access.get();
-                types::HostRequest::get_method(&mut view, borrow_resource(&req))
-                    .map_err(HttpError::trap)
-            })?
-        };
-
-        if is_idempotent_http_method(&serialize_method(method)) {
-            send_with_durability::<Ctx, U, LeaveIncompleteOnDrop>(
-                store,
-                req,
-                DurableFunctionType::WriteRemote,
-            )
+        send_with_durability::<Ctx, U, Cancellable>(store, req, DurableFunctionType::WriteRemote)
             .await
-        } else {
-            send_with_durability::<Ctx, U, Cancellable>(
-                store,
-                req,
-                DurableFunctionType::WriteRemoteBatched(None),
-            )
-            .await
-        }
     }
 }
 
 pub(super) async fn send_with_durability<Ctx, U, P>(
     store: &Accessor<U, DurableP3<Ctx>>,
-    req: Resource<Request>,
+    mut req: Resource<Request>,
     function_type: DurableFunctionType,
 ) -> HttpResult<Resource<Response>>
 where
@@ -168,7 +141,7 @@ where
     // `request::new` wrapper (e.g. a forwarded incoming request); such a request
     // has no guest-held transmission future wired through us, so there is
     // nothing to record — deterministically on both live and replay paths.
-    let pending_transmission = store.with(|mut access| {
+    let mut pending_transmission = store.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
         ctx.state
             .pending_p3_http_request_transmissions
@@ -251,14 +224,8 @@ where
     let span_started_at = golem_common::model::Timestamp::now_utc();
     // Start admission itself can await a replay claim while the guest drops this send.
     // Keep request cleanup owned by the Store until either replay or live send takes it.
-    let replay_scope = Arc::new(Mutex::new(None));
     let (disarm_leak_guard_tx, disarm_leak_guard_rx) = oneshot::channel();
-    spawn_replayed_request_leak_guard::<Ctx, U>(
-        store,
-        req.rep(),
-        replay_scope.clone(),
-        disarm_leak_guard_rx,
-    );
+    spawn_replayed_request_leak_guard::<Ctx, U>(store, req.rep(), disarm_leak_guard_rx);
     let mut handle =
         DurableCallSession::<P3HttpClientSend, P>::start_access_with_options_and_indexed_span(
             store,
@@ -287,8 +254,6 @@ where
         )
         .await
         .map_err(HttpError::trap)?;
-    *replay_scope.lock().unwrap() = (handle.begin_index() != handle.start_index())
-        .then_some((function_type.clone(), handle.begin_index()));
     let send_start_index = handle.start_index();
     let observational_owner = handle.observational_owner();
 
@@ -343,33 +308,43 @@ where
         .map_err(HttpError::trap)?;
     handle.close_span_on_cancellation(span.span_id.clone());
 
+    let mut restored_body = None;
+    let mut restored_transmission = None;
     if !handle.is_live() {
+        // Intake cannot wait for send resolution: the guest writer can issue another durable
+        // call after its last write, whose retained completion must advance the replay cursor
+        // before this send can be classified as incomplete.
+        let _ = disarm_leak_guard_tx.send(());
+        let replayed_request_body_drain = consume_replayed_request::<Ctx, U>(
+            store,
+            req,
+            Some(ReplayedRequestBodyRecording {
+                send_start_index,
+                trap_context: handle.trap_context(),
+                recording_complete_at_end: false,
+            }),
+        )
+        .await
+        .map_err(|error| HttpError::trap(wasmtime::Error::from_anyhow(handle.trap(error))))?;
+        if let Some(drain) = &replayed_request_body_drain {
+            let progress = drain.progress.clone();
+            handle.require_incomplete_repair_readiness(
+                async move { progress.recording_ready().await },
+            );
+        }
+        let trap_context = handle.trap_context();
         match handle
             .replay_access_deferred(store, durable_worker_ctx::<Ctx, U>)
             .await
-            .map_err(HttpError::trap)?
-        {
+            .map_err(|error| {
+                HttpError::trap(wasmtime::Error::from_anyhow(
+                    crate::durable_host::durability::mark_durable_call_trap_context(
+                        error.into(),
+                        trap_context,
+                    ),
+                ))
+            })? {
             DeferredCallReplayOutcome::Replayed(response, delivery) => {
-                let _ = disarm_leak_guard_tx.send(());
-                // The live path consumes the request inside `WasiHttp::send`.
-                // On replay we never call `send`, so consume it here (delete
-                // it, drain its outgoing body) before returning the recorded
-                // response — otherwise the request leaks and a guest
-                // streaming a body or awaiting its transmission future hangs.
-                // The recorded-request-body metadata additionally lets the drain complete an
-                // interrupted frame recording (self-heal).
-                let recorded_request_body = match &response.result {
-                    SerializableP3HttpClientSendResult::SuccessWithRecordedRequestBody {
-                        recording_complete_at_end,
-                        ..
-                    } => Some(ReplayedRequestBodyRecording {
-                        send_start_index,
-                        recording_complete_at_end: *recording_complete_at_end,
-                    }),
-                    SerializableP3HttpClientSendResult::HttpError(_) => None,
-                };
-                let replayed_request_body_drain =
-                    consume_replayed_request::<Ctx, U>(store, req, recorded_request_body).await?;
                 let recorded_status = match &response.result {
                     SerializableP3HttpClientSendResult::SuccessWithRecordedRequestBody {
                         headers,
@@ -408,10 +383,6 @@ where
                                 span: span.clone(),
                                 method: serialized_request.method.to_string(),
                                 uri: outgoing_http_request_uri(&serialized_request),
-                                is_idempotent: effective_method_idempotence::<Ctx, U>(
-                                    store,
-                                    &serialized_request.method,
-                                ),
                                 resend: Some(P3HttpSendRebuild {
                                     request: serialized_request,
                                     injected_headers,
@@ -486,8 +457,120 @@ where
                 }
             }
             DeferredCallReplayOutcome::Incomplete(live_handle) => {
-                let _ = disarm_leak_guard_tx.send(());
-                handle = live_handle
+                handle = live_handle;
+                let continuation = replayed_request_body_drain
+                    .as_ref()
+                    .and_then(|drain| drain.progress.take_continuation());
+                let mut rebuild = P3HttpSendRebuild {
+                    request: serialized_request.clone(),
+                    injected_headers: Vec::new(),
+                    recorded_status: 0,
+                    recorded_request_body: send_start_index,
+                    durable_body: None,
+                    replayed_request_body_drain,
+                };
+                let recovery = RequestBodyRecovery::default();
+                if recorded_request_body_replayability(
+                    store,
+                    &mut rebuild,
+                    recovery.clone(),
+                    continuation.is_some(),
+                )
+                .await
+                .is_err()
+                {
+                    if let Some(error) = recovery.error() {
+                        return Err(HttpError::trap(wasmtime::Error::from_anyhow(
+                            handle.trap(error),
+                        )));
+                    }
+                    let error_code = ErrorCode::HttpResponseIncomplete;
+                    let (_, delivery) = handle
+                        .complete_access_deferred_with_span(
+                            store,
+                            durable_worker_ctx::<Ctx, U>,
+                            HostResponseP3HttpClientSendResult {
+                                result: SerializableP3HttpClientSendResult::HttpError(
+                                    serialize_error_code(&error_code),
+                                ),
+                            },
+                            p3_send_span_finished(
+                                &span,
+                                golem_common::model::oplog::SpanOutcome::Failed,
+                            ),
+                        )
+                        .await
+                        .map_err(HttpError::trap)?;
+                    if let Err(error) = finish_p3_send_span_in_memory::<Ctx, U>(store, &span) {
+                        delivery.suppress();
+                        return Err(HttpError::trap(error));
+                    }
+                    start_transmission_recording::<Ctx, U>(
+                        store,
+                        pending_transmission,
+                        observational_owner,
+                        invocation_id,
+                    );
+                    span.claim_closure();
+                    send_terminal
+                        .attach(store, delivery)
+                        .await
+                        .map_err(HttpError::trap)?;
+                    return Err(error_code.into());
+                }
+                let oplog = store.with(|mut access| {
+                    durable_worker_ctx::<Ctx, U>(access.data_mut())
+                        .state
+                        .oplog
+                        .clone()
+                });
+                let scan = scan_recorded_request_body_frames(oplog.clone(), send_start_index)
+                    .await
+                    .map_err(|error| {
+                        let error = error
+                            .recovery_error()
+                            .unwrap_or_else(|| WorkerExecutorError::runtime(error.to_string()));
+                        HttpError::trap(wasmtime::Error::from_anyhow(handle.trap(error)))
+                    })?;
+                let recording_tasks = store.with(|mut access| {
+                    durable_worker_ctx::<Ctx, U>(access.data_mut())
+                        .public_state
+                        .worker()
+                        .runtime_append_tasks()
+                });
+                let continuation = match continuation {
+                    Some(continuation) => {
+                        restored_transmission = continuation.transmission;
+                        continuation.body
+                    }
+                    None => http_body_util::Empty::new()
+                        .map_err(|never| match never {})
+                        .boxed_unsync(),
+                };
+                restored_body = Some(DurableRequestBody::from_recording(
+                    continuation,
+                    oplog,
+                    send_start_index,
+                    recording_tasks,
+                    scan,
+                    recovery,
+                ));
+                let request = build_rebuilt_request(
+                    &rebuild,
+                    &[],
+                    restored_body.as_ref().unwrap().replayer().boxed_unsync(),
+                )
+                .map_err(|error| {
+                    HttpError::trap(wasmtime::Error::from_anyhow(
+                        handle.trap(WorkerExecutorError::runtime(error)),
+                    ))
+                })?;
+                req = store
+                    .with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>)
+                    .with(|mut access| access.get().table.push(request))
+                    .map_err(|error| {
+                        HttpError::trap(wasmtime::Error::from_anyhow(handle.trap(error)))
+                    })?;
             }
         }
     } else {
@@ -575,6 +658,8 @@ where
         req,
         handle.start_index(),
         recording_enabled,
+        restored_body,
+        restored_transmission,
     )
     .await
     {
@@ -644,6 +729,9 @@ where
         }
     };
     let PhysicalSend::Replayable(physical) = converted;
+    if let Some(pending) = pending_transmission.as_mut() {
+        pending.recovery = physical.body.recovery.clone();
+    }
     let mut retry_state = InFunctionRetryState::new();
     let mut retry_task_ctx = make_p3_http_retry_task_context::<Ctx, U>(
         store,
@@ -671,17 +759,16 @@ where
             }
         };
 
+        if let Some(error) = physical.body.recovery.error() {
+            return Err(HttpError::trap(wasmtime::Error::from_anyhow(
+                handle.trap(error),
+            )));
+        }
         match attempt_result {
             Ok((response, io, pooled_connection)) => {
-                // A send whose lease is still owned by an open atomic region may not retry
-                // inline (that would skip the region's rollback semantics), so
-                // `inline_retry_eligible` is false — but a matching user-defined status-code
-                // policy must still be honoured. Escalate to trap+replay keyed on the owning
-                // region (via the call's execution scope): without this the guest would see
-                // the rejected response, throw, and trap with an impoverished context (no
-                // `status-code`), silently falling back to the default trap policy. Mirrors
-                // `try_status_code_retry`'s atomic-region fallback on the p2 path.
-                if (handle.trap_context().in_atomic_region || handle.is_observational())
+                // Observational calls cannot retry inline, but must still honour a matching
+                // status-code policy through the worker's trap-based retry path.
+                if handle.is_observational()
                     && store.with(|mut access| {
                         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
                         ctx.state.is_live() && !ctx.state.snapshotting_mode
@@ -710,7 +797,7 @@ where
                         &serialized_request.method,
                     );
                     let for_retry: Result<(), String> = Err(format!(
-                        "HTTP status {status} matched a status-code retry policy inside an atomic region"
+                        "HTTP status {status} matched a status-code retry policy in an observational call"
                     ));
                     handle
                         .try_trigger_retry_access(
@@ -895,6 +982,7 @@ where
                 http_response,
                 io,
                 physical.final_transmission_tx,
+                physical.body.recovery.clone(),
             )?;
             let headers = serialize_response_headers::<Ctx, U>(store, borrow_resource(&response))?;
             // When the request body was recorded as durable frames, the
@@ -932,10 +1020,6 @@ where
                     span: span.clone(),
                     method: retry_method.clone(),
                     uri: retry_uri.clone(),
-                    is_idempotent: effective_method_idempotence::<Ctx, U>(
-                        store,
-                        &serialized_request.method,
-                    ),
                     resend: Some(P3HttpSendRebuild {
                         request: serialized_request,
                         injected_headers,
@@ -1147,12 +1231,15 @@ pub(super) async fn convert_physical_send_request<Ctx, U>(
     req: Resource<Request>,
     send_start_index: OplogIndex,
     recording_enabled: bool,
+    restored_body: Option<DurableRequestBody>,
+    restored_transmission: Option<oneshot::Sender<Result<(), ErrorCode>>>,
 ) -> Result<PhysicalSend<Ctx>, PhysicalSendConversionError>
 where
     Ctx: WorkerCtx,
     U: Send + 'static,
 {
     let (final_transmission_tx, final_transmission_rx) = oneshot::channel();
+    let final_transmission_tx = restored_transmission.unwrap_or(final_transmission_tx);
     let (pool, oplog) = store.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
         (
@@ -1208,13 +1295,15 @@ where
         uri: parts.uri,
         version: parts.version,
         headers: parts.headers,
-        body: DurableRequestBody::new(
-            body,
-            oplog,
-            send_start_index,
-            recording_enabled,
-            structural_append_tasks,
-        ),
+        body: restored_body.unwrap_or_else(|| {
+            DurableRequestBody::new(
+                body,
+                oplog,
+                send_start_index,
+                recording_enabled,
+                structural_append_tasks,
+            )
+        }),
         options,
         final_transmission_tx,
         _phantom: PhantomData,
@@ -1226,6 +1315,7 @@ pub(super) fn response_resource_from_http<Ctx, U>(
     response: http::Response<UnsyncBoxBody<Bytes, ErrorCode>>,
     io: Box<dyn Future<Output = Result<(), ErrorCode>> + Send>,
     final_transmission_tx: oneshot::Sender<Result<(), ErrorCode>>,
+    recovery: RequestBodyRecovery,
 ) -> HttpResult<Resource<Response>>
 where
     Ctx: WorkerCtx,
@@ -1245,7 +1335,7 @@ where
                 debug!(?result, "p3 HTTP send I/O future finished");
                 let _ = io_result_tx.send(result);
             });
-            let io_guard = AbortOnDropIoTask(io_task);
+            let io_guard = AbortOnDropIoTask(io_task, recovery);
             tokio::task::spawn(async move {
                 let result = io_result_rx.await.unwrap_or(Ok(()));
                 let _ = final_transmission_tx.send(result);
@@ -1330,46 +1420,23 @@ where
 }
 
 pub(super) fn http_retry_properties<Ctx, U>(
-    store: &Accessor<U, DurableP3<Ctx>>,
+    _store: &Accessor<U, DurableP3<Ctx>>,
     method: &str,
     uri: &str,
     status_code: Option<u16>,
     error_type: &str,
-    serialized_method: &SerializableHttpMethod,
+    _serialized_method: &SerializableHttpMethod,
 ) -> RetryProperties
 where
     Ctx: WorkerCtx,
     U: Send + 'static,
 {
-    let mut properties = RetryContext::http_with_response(method, uri, status_code, error_type);
-    let effective_idempotence = effective_method_idempotence::<Ctx, U>(store, serialized_method);
-    apply_method_idempotence(&mut properties, effective_idempotence);
-    properties
-}
-
-/// Effective idempotence of a request for retry decisions: the worker-level
-/// `assume_idempotence` override, or an idempotent HTTP method.
-pub(super) fn effective_method_idempotence<Ctx, U>(
-    store: &Accessor<U, DurableP3<Ctx>>,
-    serialized_method: &SerializableHttpMethod,
-) -> bool
-where
-    Ctx: WorkerCtx,
-    U: Send + 'static,
-{
-    store.with(|mut access| {
-        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-        is_http_request_idempotent(ctx.state.assume_idempotence, serialized_method)
-    })
-}
-
-pub(super) fn apply_method_idempotence(properties: &mut RetryProperties, is_idempotent: bool) {
-    properties.set("is-idempotent", PredicateValue::Boolean(is_idempotent));
+    RetryContext::http_with_response(method, uri, status_code, error_type)
 }
 
 pub(super) fn inline_retry_eligible_for_method<Ctx, U>(
     store: &Accessor<U, DurableP3<Ctx>>,
-    method: &SerializableHttpMethod,
+    _method: &SerializableHttpMethod,
 ) -> bool
 where
     Ctx: WorkerCtx,
@@ -1377,12 +1444,7 @@ where
 {
     store.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-        http_transparent_retry_allowed(
-            &ctx.durable_execution_state(),
-            ctx.in_atomic_region(),
-            method,
-        )
-        .is_ok()
+        http_worker_state_allows_retry(&ctx.durable_execution_state()).is_ok()
     })
 }
 
@@ -1896,9 +1958,8 @@ mod terminal_tests {
         for abandon_before_start in [true, false] {
             let oplog = FrameTestOplog::new();
             oplog
-                .add(OplogEntry::NoOp {
+                .add(OplogEntry::RecoverySucceeded {
                     timestamp: Timestamp::now_utc(),
-                    entity_parent_start_index: None,
                 })
                 .await
                 .unwrap();
@@ -1948,9 +2009,8 @@ mod terminal_tests {
         ] {
             let oplog = FrameTestOplog::new();
             oplog
-                .add(OplogEntry::NoOp {
+                .add(OplogEntry::RecoverySucceeded {
                     timestamp: Timestamp::now_utc(),
-                    entity_parent_start_index: None,
                 })
                 .await
                 .unwrap();
@@ -1975,9 +2035,8 @@ mod terminal_tests {
         for persisted in [true, false] {
             let oplog = FrameTestOplog::new();
             oplog
-                .add(OplogEntry::NoOp {
+                .add(OplogEntry::RecoverySucceeded {
                     timestamp: Timestamp::now_utc(),
-                    entity_parent_start_index: None,
                 })
                 .await
                 .unwrap();

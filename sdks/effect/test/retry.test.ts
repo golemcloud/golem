@@ -22,6 +22,8 @@ afterEach(() => {
 const RetryStub = Layer.succeed(
   RetryClient,
   RetryClient.of({
+    now: () => 0n,
+    nextRetryDelay: () => ({ state: new Uint8Array(), delay: undefined }),
     getRetryPolicies: () => RetryMock.getRetryPolicies(),
     getRetryPolicyByName: (name) => RetryMock.getRetryPolicyByName(name),
     resolveRetryPolicy: (verb, nounUri, properties) =>
@@ -306,6 +308,8 @@ describe("Retry — host wrappers (set/remove/get)", () => {
       const FailingSet = Layer.succeed(
         RetryClient,
         RetryClient.of({
+          now: () => 0n,
+          nextRetryDelay: () => ({ state: new Uint8Array(), delay: undefined }),
           getRetryPolicies: () => RetryMock.getRetryPolicies(),
           getRetryPolicyByName: (name) => RetryMock.getRetryPolicyByName(name),
           resolveRetryPolicy: () => undefined,
@@ -333,6 +337,8 @@ describe("Retry — host wrappers (set/remove/get)", () => {
       const ObservingResolve = Layer.succeed(
         RetryClient,
         RetryClient.of({
+          now: () => 0n,
+          nextRetryDelay: () => ({ state: new Uint8Array(), delay: undefined }),
           getRetryPolicies: () => RetryMock.getRetryPolicies(),
           getRetryPolicyByName: (name) => RetryMock.getRetryPolicyByName(name),
           resolveRetryPolicy: (_verb, _noun, props) => {

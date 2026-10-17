@@ -8,6 +8,9 @@ repository = "https://github.com/golemcloud/golem"
 readme = "README.md"
 description = "Single Golem executable for testing"
 
+[features]
+embed-builtin-artifacts = ["golem-registry-service/embed-builtin-artifacts"]
+
 [lints]
 workspace = true
 

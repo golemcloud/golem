@@ -2,6 +2,7 @@ mod capabilities;
 mod config;
 mod durable_streams;
 mod http;
+mod large_oplog_entries;
 mod phantom_http;
 pub mod quota_rpc;
 mod readonly;

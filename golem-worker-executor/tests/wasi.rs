@@ -26,7 +26,7 @@ use golem_common::model::worker::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind, RevertToOplogIndex,
     RevertWorkerTarget,
 };
-use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex, RetryConfig};
+use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::ResultValuePayload;
 #[cfg(target_os = "linux")]
@@ -4578,8 +4578,8 @@ async fn interrupt_while_parked_in_p3_sleep(
 /// but the peer never sends any bytes) must deliver the interrupt promptly: the parked durable
 /// receive task races the worker's interrupt signal, abandons its open chunk child and parent
 /// durable calls (both `Start`s stay incomplete for replay) and unwinds the event loop
-/// cooperatively, closing the socket. After resume, the retained invocation replays: the guest
-/// reconnects live and completes against the now-responding server.
+/// cooperatively, closing the socket. After resume, the retained invocation reports connection
+/// loss; only a new guest call opens another connection.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -4590,20 +4590,29 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::data_value;
+    use golem_common::model::oplog::PublicOplogEntry;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides::agent_sockets_enabled(),
+    )
+    .await?;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     let (connected_tx, mut connected_rx) = tokio::sync::mpsc::unbounded_channel();
     let (closed_tx, mut closed_rx) = tokio::sync::mpsc::unbounded_channel();
+    let connections = Arc::new(AtomicUsize::new(0));
+    let server_connections = connections.clone();
 
     let tcp_server = spawn(
         async move {
             let mut first = true;
             while let Ok((mut stream, _)) = listener.accept().await {
+                server_connections.fetch_add(1, Ordering::SeqCst);
                 let is_first = first;
                 first = false;
                 let connected_tx = connected_tx.clone();
@@ -4634,15 +4643,18 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
+    let key = IdempotencyKey::fresh();
+    let invocation_key = key.clone();
     let executor_clone = executor.clone();
     let component_clone = component.clone();
     let agent_id_clone = agent_id.clone();
     let fiber = spawn(
         async move {
             executor_clone
-                .invoke_and_await_agent(
+                .invoke_and_await_agent_with_key(
                     &component_clone,
                     &agent_id_clone,
+                    &invocation_key,
                     "tcp_collect_p3",
                     data_value!(port),
                 )
@@ -4675,6 +4687,18 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
             Duration::from_secs(10),
         )
         .await?;
+    let interrupted_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let receive_start = interrupted_oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name == "sockets::types::tcp-socket::receive-chunk" =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("interrupted receive must retain its incomplete child");
 
     assert!(
         tokio::time::timeout(Duration::from_secs(10), closed_rx.recv())
@@ -4683,24 +4707,224 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
         "interrupting the worker must close the in-flight TCP connection"
     );
 
-    // Resuming replays the worker; the retained invocation reconnects live and completes
-    // against the now-responding server.
+    // The original call settles with loss instead of silently opening a new connection.
     executor.resume(&worker_id, false).await?;
     executor
         .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
         .await?;
+    let recovered = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &key,
+            "tcp_collect_p3",
+            data_value!(port),
+        )
+        .await?
+        .into_typed::<Result<String, String>>()?;
+    assert_eq!(recovered, Err("ErrorCode::ConnectionBroken".to_string()));
+    assert_eq!(connections.load(Ordering::SeqCst), 1);
+    let recovered_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        recovered_oplog
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::End(end) if end.start_index == receive_start
+            ))
+            .count(),
+        1,
+        "the incomplete receive child must complete under its original Start"
+    );
 
     let result2 = executor
         .invoke_and_await_agent(&component, &agent_id, "tcp_collect_p3", data_value!(port))
         .await?
         .into_typed::<Result<String, String>>()?;
     assert_eq!(result2, Ok("hello".to_string()));
+    assert_eq!(connections.load(Ordering::SeqCst), 2);
+
+    executor.simulated_crash(&worker_id).await?;
+    let result3 = executor
+        .invoke_and_await_agent(&component, &agent_id, "tcp_collect_p3", data_value!(port))
+        .await?
+        .into_typed::<Result<String, String>>()?;
+    assert_eq!(result3, Ok("hello".to_string()));
+    assert_eq!(
+        connections.load(Ordering::SeqCst),
+        3,
+        "replaying completed receive results must not open extra connections"
+    );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     tcp_server.abort();
 
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn incomplete_p3_udp_receive_repairs_original_start_and_replays_completed_datagram(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+    use golem_common::model::oplog::PublicOplogEntry;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides::agent_sockets_enabled(),
+    )
+    .await?;
+    let peer = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
+    let ready_port = peer.local_addr()?.port();
+    let reservation = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
+    let address = reservation.local_addr()?;
+    let port = address.port();
+    drop(reservation);
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Networking", "incomplete-p3-udp-receive");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let key = IdempotencyKey::fresh();
+    let invocation = spawn({
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        let key = key.clone();
+        async move {
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &agent_id,
+                    &key,
+                    "udp_receive_p3",
+                    data_value!(port, ready_port),
+                )
+                .await
+        }
+    });
+    let mut buffer = [0; 32];
+    let (len, source) =
+        tokio::time::timeout(Duration::from_secs(30), peer.recv_from(&mut buffer)).await??;
+    assert_eq!(&buffer[..len], b"ready");
+    assert_eq!(source, address);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    executor.interrupt(&worker_id).await?;
+    let interrupted = invocation
+        .await?
+        .expect_err("pending receive must be interrupted");
+    assert!(
+        interrupted
+            .to_string()
+            .contains("Interrupted via the Golem API")
+    );
+    executor
+        .wait_for_status(
+            &worker_id,
+            AgentStatus::Interrupted,
+            Duration::from_secs(10),
+        )
+        .await?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let receive_start = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name == "sockets::types::udp-socket::receive" =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("receive must retain its original Start");
+    assert!(!oplog.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == receive_start)));
+
+    executor.resume(&worker_id, false).await?;
+    // Reconstruction rebinds the socket and repairs the original receive with the next datagram.
+    let recovered = tokio::time::timeout(Duration::from_secs(30), async {
+        let result = executor.invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &key,
+            "udp_receive_p3",
+            data_value!(port, ready_port),
+        );
+        tokio::pin!(result);
+        let mut interval = tokio::time::interval(Duration::from_millis(10));
+        loop {
+            tokio::select! {
+                result = &mut result => break result,
+                _ = interval.tick() => { peer.send_to(b"later", address).await?; }
+            }
+        }
+    })
+    .await??
+    .into_typed::<Result<String, String>>()?;
+    assert_eq!(recovered, Ok("later".to_string()));
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == receive_start)).count(), 1);
+    assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "sockets::types::udp-socket::receive")).count(), 1);
+
+    for payload in ["fresh", "after-restart"] {
+        if payload == "after-restart" {
+            executor.simulated_crash(&worker_id).await?;
+            let replayed = executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &agent_id,
+                    &key,
+                    "udp_receive_p3",
+                    data_value!(port, ready_port),
+                )
+                .await?
+                .into_typed::<Result<String, String>>()?;
+            assert_eq!(replayed, Ok("later".to_string()));
+        }
+        let (result, sent) = tokio::join!(
+            executor.invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "udp_receive_p3",
+                data_value!(port, ready_port)
+            ),
+            async {
+                let (len, source) =
+                    tokio::time::timeout(Duration::from_secs(30), peer.recv_from(&mut buffer))
+                        .await??;
+                assert_eq!(&buffer[..len], b"ready");
+                assert_eq!(source, address);
+                peer.send_to(payload.as_bytes(), source).await
+            }
+        );
+        sent?;
+        assert_eq!(
+            result?.into_typed::<Result<String, String>>()?,
+            Ok(payload.to_string())
+        );
+    }
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "sockets::types::udp-socket::receive")).count(), 3);
+    assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "sockets::types::udp-socket::send")).count(), 3);
+    assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == receive_start)).count(), 1);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), peer.recv_from(&mut buffer))
+            .await
+            .is_err(),
+        "completed replay must not send another readiness datagram"
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
 }
 
@@ -5319,61 +5543,6 @@ async fn sleep_and_awaiting_parallel_responses(
         "Ok(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\n"
     );
     assert!(healthcheck_result);
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("4m")]
-async fn jump_with_in_flight_durable_call_fails(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
-
-    let context = TestContext::new(last_unique_id);
-    let overrides = TestExecutorOverrides {
-        configure: Some(Arc::new(|config| {
-            config.retry = RetryConfig {
-                max_attempts: 1,
-                min_delay: Duration::from_millis(10),
-                max_delay: Duration::from_millis(10),
-                multiplier: 1.0,
-                max_jitter_factor: None,
-            };
-        })),
-        ..Default::default()
-    };
-    let executor = start_with_overrides(deps, &context, overrides).await?;
-
-    let (port, server) = simulated_slow_request_server(Duration::from_secs(2)).await;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
-        .store()
-        .await?;
-    let agent_id = agent_id!("Clock", "jump-during-request");
-    executor
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
-
-    let result = executor
-        .invoke_and_await_agent(&component, &agent_id, "jump_during_request", data_value!())
-        .await;
-
-    drop(executor);
-    server.abort();
-
-    assert!(result.is_err());
-    let err = format!("{}", result.unwrap_err());
-    assert!(
-        err.contains("durable host calls are still in flight"),
-        "Unexpected error: {err}"
-    );
 
     Ok(())
 }
@@ -6952,7 +7121,12 @@ async fn ip_address_resolve(
     use golem_common::{agent_id, data_value};
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides::agent_sockets_enabled(),
+    )
+    .await?;
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
@@ -6970,7 +7144,12 @@ async fn ip_address_resolve(
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     drop(executor);
-    let executor = start(deps, &context).await?;
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides::agent_sockets_enabled(),
+    )
+    .await?;
 
     // If the recovery succeeds, that means that the replayed IP address resolution produced the same result as expected
 
@@ -7007,7 +7186,12 @@ async fn p3_ip_address_resolve(
     use golem_common::data_value;
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides::agent_sockets_enabled(),
+    )
+    .await?;
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
@@ -7030,7 +7214,12 @@ async fn p3_ip_address_resolve(
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     drop(executor);
-    let executor = start(deps, &context).await?;
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides::agent_sockets_enabled(),
+    )
+    .await?;
 
     // If the recovery succeeds, the replayed P3 DNS resolution produced the same recorded result
 
@@ -7092,7 +7281,12 @@ async fn p3_ip_address_resolve_permanent_failure_is_guest_visible_without_retry(
     use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides::agent_sockets_enabled(),
+    )
+    .await?;
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)

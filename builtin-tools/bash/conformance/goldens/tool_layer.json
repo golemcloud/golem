@@ -1250,6 +1250,16 @@
     "text": "st=124\nst=0\nst=124\nst=124\n"
    }
   },
+  "tool-layer: timeout stops a loop of pipelines": {
+   "script": "435a00a0f3653b9c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=124\nst=124\n"
+   }
+  },
   "tool-layer: timeout that KILLs": {
    "script": "3a4071fad94e8237",
    "status": 0,

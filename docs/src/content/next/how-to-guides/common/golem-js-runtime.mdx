@@ -34,13 +34,10 @@ These Node.js-compatible modules can be imported:
 | `node:buffer` | Buffer API |
 | `node:child_process` | Constrained in-runtime JavaScript execution; no host processes or general shell |
 | `node:crypto` | Hashes, HMAC, ciphers, key generation, sign/verify, DH, ECDH, X509, etc. |
-| `node:dgram` | UDP sockets |
-| `node:dns` | DNS resolution |
 | `node:events` | EventEmitter |
 | `node:fs`, `node:fs/promises` | Comprehensive filesystem API (read, write, stat, mkdir, readdir, etc.) |
-| `node:http`, `node:https` | HTTP client and server |
+| `node:http`, `node:https` | HTTP client; socket-free servers through custom HTTP routers (see below) |
 | `node:module` | Module utilities |
-| `node:net` | TCP sockets and servers |
 | `node:os` | OS information |
 | `node:path` | Path manipulation |
 | `node:perf_hooks` | Performance measurement |
@@ -68,6 +65,18 @@ These modules exist for compatibility but will throw or no-op when used:
 - `node:inspector`
 - `node:tls`
 - `node:worker_threads`
+
+## Unsupported Network Modules
+
+Golem does not support `node:net`, `node:dgram` and `node:dns`. The modules load, but the worker executor refuses WASI sockets by default, so every TCP connect, UDP send, bind and DNS lookup fails. Only an operator can turn WASI sockets on, with the executor setting `agent_sockets.enabled`.
+
+Do not use these modules, or npm packages that open raw TCP connections through them (for example `pg`, `mysql2` or `ioredis`). Use these instead:
+
+- `fetch` or the `node:http` / `node:https` client for HTTP requests
+- the Golem WebSocket API for WebSocket connections
+- `golem:rdbms` for PostgreSQL and MySQL
+
+Socket-backed servers (`net.createServer`, or `http.createServer` with a port `listen()`) do not work. To serve HTTP with an `http.createServer` request listener, mount the server as a custom HTTP router with `nodeHttpHandler` from `@golemcloud/golem-ts-sdk/http-router`.
 
 ## npm Package Compatibility
 
@@ -148,7 +157,7 @@ node_modules/@golemcloud/golem-ts-sdk/dist/index.d.mts
 ```
 
 Grep there (and in the `dist/host/` and `dist/lib/` subdirectories under the same package) when
-you need the exact signature of a helper such as `withIdempotenceMode`, `atomically`,
+you need the exact signature of a helper such as `durable`,
 `withRetryPolicy`, `Duration`, `Predicate`, `Policy`, `NamedPolicy`, etc. The shipped
 `dist/index.mjs` is a single-line minified bundle and is **not** a useful reference; always read
 the `.d.mts` instead.

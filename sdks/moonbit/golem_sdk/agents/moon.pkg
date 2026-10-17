@@ -15,4 +15,9 @@ import {
 import {
 } for "test"
 
+import {
+  "golemcloud/golem_sdk/internal/permission_card" @card,
+  "golemcloud/golem_sdk/internal/test_support",
+} for "wbtest"
+
 supported_targets = "+wasm"

@@ -34,30 +34,16 @@ import scala.scalajs.js.typedarray.Uint8Array
  */
 object HostApi {
 
-  // ----- Core oplog / atomic region ---------------------------------------------------------
+  // ----- Oplog persistence -----------------------------------------------------------------
 
   type OplogIndex = BigInt
-
-  def getOplogIndex(): OplogIndex =
-    fromJsBigInt(AgentHostApi.getOplogIndex())
-
-  def setOplogIndex(index: OplogIndex): Unit =
-    AgentHostApi.setOplogIndex(toJsBigInt(index))
-
-  def markBeginOperation(): OplogIndex =
-    fromJsBigInt(AgentHostApi.markBeginOperation())
-
-  def markEndOperation(begin: OplogIndex): Unit =
-    AgentHostApi.markEndOperation(toJsBigInt(begin))
 
   /**
    * Unconditionally traps the current invocation with the given reason.
    *
    * This call never returns: it surfaces as an uncatchable wasm trap on the
-   * host side and the worker enters the standard trap-recovery flow. SDK guard
-   * helpers use this to guarantee that a failed atomic region always leads to a
-   * trap, regardless of whether the guest language could otherwise catch the
-   * failure.
+   * host side and fails the invocation. Handle recoverable failures in guest
+   * code.
    */
   def trap(reason: String): Nothing = {
     AgentHostApi.trap(reason)
@@ -69,14 +55,6 @@ object HostApi {
 
   def oplogCommit(replicas: Int): Unit =
     AgentHostApi.oplogCommit(replicas)
-
-  // ----- Idempotence -----------------------------------------------------------------------
-
-  def getIdempotenceMode(): Boolean =
-    AgentHostApi.getIdempotenceMode()
-
-  def setIdempotenceMode(flag: Boolean): Unit =
-    AgentHostApi.setIdempotenceMode(flag)
 
   // ----- Agent management / registry ------------------------------------------------------
 

@@ -18,50 +18,16 @@ declare module 'golem:api/host@1.5.0' {
    */
   export function completePromise(promiseId: PromiseId, data: Uint8Array): boolean;
   /**
-   * Returns the current position in the persistent op log
-   */
-  export function getOplogIndex(): OplogIndex;
-  /**
-   * Makes the current agent travel back in time and continue execution from the given position in the persistent
-   * op log.
-   */
-  export function setOplogIndex(oplogIdx: OplogIndex): void;
-  /**
    * Blocks the execution until the oplog has been written to at least the specified number of replicas,
    * or the maximum number of replicas if the requested number is higher.
    */
   export function oplogCommit(replicas: number): void;
   /**
-   * Marks the beginning of an atomic operation.
-   * In case of a failure within the region selected by `mark-begin-operation` and `mark-end-operation`
-   * the whole region will be reexecuted on retry.
-   * The end of the region is when `mark-end-operation` is called with the returned oplog-index.
-   */
-  export function markBeginOperation(): OplogIndex;
-  /**
-   * Commits this atomic operation. After `mark-end-operation` is called for a given index, further calls
-   * with the same parameter will do nothing.
-   */
-  export function markEndOperation(begin: OplogIndex): void;
-  /**
    * Unconditionally traps the current invocation with the given reason.
    * This call never returns: it surfaces as an uncatchable wasm trap on the host side
-   * and the worker enters the standard trap-recovery flow. SDK guard helpers use this
-   * to guarantee that a failed atomic region always leads to a trap, regardless of
-   * whether the guest language could otherwise catch the failure.
+   * and fails the invocation. Recoverable failures must be handled by guest code.
    */
   export function trap(reason: string): void;
-  /**
-   * Gets the current idempotence mode. See `set-idempotence-mode` for details.
-   */
-  export function getIdempotenceMode(): boolean;
-  /**
-   * Sets the current idempotence mode. The default is true.
-   * True means side-effects are treated idempotent and Golem guarantees at-least-once semantics.
-   * In case of false the executor provides at-most-once semantics, failing the agent in case it is
-   * not known if the side effect was already executed.
-   */
-  export function setIdempotenceMode(idempotent: boolean): void;
   /**
    * Generates an idempotency key. This operation will never be replayed —
    * i.e. not only is this key generated, but it is persisted and committed, such that the key can be used in third-party systems (e.g. payment processing)

@@ -1944,20 +1944,6 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
         3,
         "a fresh logical call must create a distinct child"
     );
-    let rejected = executor
-        .invoke_and_await_agent(
-            &component,
-            &source,
-            "self_fork_atomic_result",
-            data_value!(),
-        )
-        .await?
-        .into_typed::<Result<String, String>>()?;
-    assert!(rejected.unwrap_err().contains("atomic region"));
-    let (_, after_rejection) = executor
-        .get_workers_metadata(&component.id, None, ScanCursor::default(), 100, true)
-        .await?;
-    assert_eq!(after_rejection.len(), 3);
     Ok(())
 }
 

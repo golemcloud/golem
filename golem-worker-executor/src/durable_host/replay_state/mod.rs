@@ -24,7 +24,6 @@ use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     AtomicOplogIndex, DurableFunctionType, DurableInvocationId, EntityAttribution, HostResponse,
     HostResponseGolemApiFork, LogLevel, OplogEntry, OplogIndex, OplogScopeProjection,
-    ScopeScanState,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
@@ -47,6 +46,10 @@ const CHUNK_SIZE: u64 = 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReplayEvent {
+    Projected {
+        event: Box<ReplayEvent>,
+        receipt: crate::worker::owner_wallet::WalletReplayReceipt,
+    },
     ReplayFinished,
     UpdateReplayed {
         new_revision: ComponentRevision,
@@ -55,6 +58,7 @@ pub enum ReplayEvent {
         new_phantom_id: Uuid,
     },
     InvocationWalletPinned {
+        oplog_index: OplogIndex,
         wallet_pin: InvocationWalletPin,
     },
     CardInstalled {
@@ -100,6 +104,27 @@ pub enum ReplayEvent {
     },
 }
 
+impl ReplayEvent {
+    pub(crate) fn kind(&self) -> &Self {
+        match self {
+            Self::Projected { event, .. } => event.kind(),
+            event => event,
+        }
+    }
+
+    pub(crate) fn into_projection(
+        self,
+    ) -> (
+        Self,
+        Option<crate::worker::owner_wallet::WalletReplayReceipt>,
+    ) {
+        match self {
+            Self::Projected { event, receipt } => (*event, Some(receipt)),
+            event => (event, None),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AgentInvocationStartedEntry {
     pub oplog_index: OplogIndex,
@@ -119,31 +144,27 @@ pub struct ClaimedConcurrentStart {
     pub timestamp: Timestamp,
 }
 
-pub(crate) enum ScopeStartClaimOutcome {
-    Claimed {
-        begin_index: OplogIndex,
-        handle: ReplayCallHandle,
-    },
-    Missing,
-    MissingSettling {
-        replay_target: OplogIndex,
-    },
-}
-
 /// Internal claim result. `Missing` is a completed semantic search with no matching `Start`;
 /// payload loading and decoding failures remain errors and must not enter missing-claim recovery.
 enum StartClaimAttempt {
     Claimed(ReplayCallHandle, Box<OplogEntry>),
     Blocked(BlockedOn),
     Missing,
-    MissingSettling { replay_target: OplogIndex },
+}
+
+/// The decision on a `Start` claim that found no match, taken after the cursor moved past the
+/// records of other owners ([`CursorTx::decide_missing_start`]).
+enum MissingStart {
+    /// The cursor reached the replay target: the call has no recorded `Start` and continues live.
+    ReplayEnded,
+    /// The cursor stopped at an entry that its owner can still consume.
+    Blocked(BlockedOn),
 }
 
 /// Why a claim cannot be decided in its current cursor transaction, and therefore what it waits
 /// for before it runs again.
 enum BlockedOn {
-    /// The cursor must move first: a reserved `CompletionDelivered` marker bounds the claim, or
-    /// the guest must consume a retained atomic Begin before a host subtask continues live.
+    /// The cursor must move first: a reserved `CompletionDelivered` marker bounds the claim.
     CursorProgress,
     /// No matching `Start` was found, but the entry at the cursor head belongs to an entity body
     /// that is still active. The body, or the supervisor that drains its recorded terminal, can
@@ -171,13 +192,9 @@ mod abandoned;
 mod claims;
 mod cursor;
 mod resolution;
-mod rollback;
 
 use abandoned::AbandonedStarts;
 pub(crate) use claims::{CustomStartClaimOutcome, ReplayStartClaimOutcome, StartClaim};
-#[cfg(test)]
-use rollback::atomic_rollback_region;
-pub use rollback::suffix_rollback_region;
 
 #[derive(Debug, Clone)]
 pub struct ReplayState {
@@ -214,6 +231,7 @@ enum ReplayTransitionPhase {
 }
 
 type CompletionMarkers = HashMap<OplogIndex, CompletionMarker>;
+type TransactionMarkers = HashMap<OplogIndex, std::collections::BTreeMap<OplogIndex, OplogEntry>>;
 type StreamObservationPositions = HashMap<OplogIndex, Option<OplogIndex>>;
 
 /// Storage coordinates only; neither a Start claim nor permission to publish an effect.
@@ -470,6 +488,7 @@ impl ToolAttachmentReconstruction {
 struct ReplayCursor {
     owned_agent_id: OwnedAgentId,
     oplog: Arc<dyn Oplog>,
+    wallet: Option<Arc<crate::worker::owner_wallet::OwnerWallet>>,
     owner_tool_operations: Arc<crate::durable_host::tool::operation::OwnerToolOperations>,
     /// Serializes every cursor-advance transaction. A transaction that consumes a
     /// `CompletionDelivered` marker transfers this guard to the matching replay delivery token;
@@ -522,6 +541,8 @@ struct ReplayCursor {
     /// recorder is an owned tokio task that must not queue on the cursor lock, and all accesses
     /// are short synchronous map operations that never hold the lock across an `await`.
     completion_markers: std::sync::Mutex<CompletionMarkers>,
+    /// Transaction protocol markers are resolved by scope owner, never by cursor position.
+    transaction_markers: std::sync::Mutex<TransactionMarkers>,
     /// Retained accepted output writes and their ancestor links, independent of Start claims
     /// and acknowledgment disposition. Contains no argument or output bytes.
     tool_attachment_reconstruction: std::sync::Mutex<ToolAttachmentReconstruction>,
@@ -718,7 +739,7 @@ struct CursorState {
     /// therefore commits past it and retains it here, where the owner's later claim finds it in
     /// oplog order ([`CursorTx::claim_retained_start`]). Entries leave this map when claimed, when
     /// the invocation-boundary reader folds them into the abandoned-record tolerance, or when a
-    /// target shrink / rollback deletes their region.
+    /// target shrink or external history cut deletes their region.
     retained_starts: std::collections::BTreeMap<OplogIndex, RetainedStart>,
 }
 
