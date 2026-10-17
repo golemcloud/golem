@@ -164,7 +164,7 @@ impl DbDirectStreamAttachmentConsumerProbe {
                 &key.session_key.idempotency_key,
             )
             .await
-            .map_err(StreamStoreError::Oplog)?
+            .map_err(StreamStoreError::from)?
         else {
             return Ok(ConsumerAttachmentStatus::Missing);
         };
@@ -254,7 +254,7 @@ impl DbDirectStreamAttachmentConsumerProbe {
                 &key.session_key,
             )
             .await
-            .map_err(StreamStoreError::Oplog)?;
+            .map_err(StreamStoreError::from)?;
         if !metadata.is_loaded() {
             return Ok(ConsumerAttachmentStatus::Missing);
         }
@@ -349,7 +349,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                 &key.session_key,
             )
             .await
-            .map_err(StreamStoreError::Oplog)?;
+            .map_err(StreamStoreError::from)?;
         let readers = control.readers_for_attachment(key);
         if readers.is_empty() {
             return Ok(None);
@@ -357,7 +357,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         let current = self
             .oplog_service
             .get_last_index(&consumer, AgentMode::Durable)
-            .await;
+            .await?;
         if !current.is_defined() {
             return Ok(None);
         }
@@ -391,7 +391,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                 OplogIndex::INITIAL,
                 current.as_u64(),
             )
-            .await
+            .await?
         {
             if lineage.deleted_regions().is_in_deleted_region(index) {
                 continue;
@@ -408,7 +408,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                 let original = self
                     .oplog_service
                     .read_exact(&consumer, AgentMode::Durable, original_index, 1)
-                    .await;
+                    .await?;
                 let Some(OplogEntry::StreamSession {
                     record: original, ..
                 }) = original.get(&original_index)
@@ -569,7 +569,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                 &key.session_key,
             )
             .await
-            .map_err(StreamStoreError::Oplog)?;
+            .map_err(StreamStoreError::from)?;
         let readers = control.readers_for_attachment(key);
         if readers.is_empty() {
             return Ok(None);
@@ -588,7 +588,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                     .collect(),
             )
             .await
-            .map_err(StreamStoreError::Oplog)?;
+            .map_err(StreamStoreError::from)?;
         let heads = rows
             .into_iter()
             .map(|row| match row {

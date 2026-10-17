@@ -618,7 +618,8 @@ async fn public_oplog_zero_start_reads_from_initial_index() {
             default_execution_status(AgentMode::Durable),
             None,
         )
-        .await;
+        .await
+        .unwrap();
     let timestamp = Timestamp::now_utc();
     assert_eq!(
         oplog
@@ -684,7 +685,8 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             default_execution_status(AgentMode::Durable),
             None,
         )
-        .await;
+        .await
+        .unwrap();
 
     let agent_entry = oplog
         .add(OplogEntry::remove_retry_policy(
@@ -1278,7 +1280,8 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
             default_execution_status(AgentMode::Durable),
             None,
         )
-        .await;
+        .await
+        .unwrap();
 
     let non_start = oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
     let non_entity_start = oplog
@@ -1451,7 +1454,8 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             default_execution_status(AgentMode::Durable),
             None,
         )
-        .await;
+        .await
+        .unwrap();
 
     let cases: Vec<(HostFunctionName, HostRequest, HostResponse)> = vec![
         (
@@ -1741,7 +1745,8 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
 
     let last_index = oplog_service
         .get_last_index(&owned_agent_id, AgentMode::Durable)
-        .await;
+        .await
+        .unwrap();
     let raw_entries = oplog_service
         .read_exact(
             &owned_agent_id,
@@ -1749,7 +1754,8 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             OplogIndex::INITIAL,
             Into::<u64>::into(last_index),
         )
-        .await;
+        .await
+        .unwrap();
 
     let components: Arc<dyn ComponentService> = Arc::new(PanicComponentService);
 
@@ -1987,7 +1993,8 @@ async fn open_test_oplog(
             default_execution_status(AgentMode::Durable),
             None,
         )
-        .await;
+        .await
+        .unwrap();
     (oplog_service, owned_agent_id, oplog)
 }
 

@@ -88,7 +88,7 @@ use crate::services::linear_memory::{LinearMemoryTracker, SHARED_LINEAR_MEMORY_E
 use crate::services::oplog::plugin::ForwardingOplog;
 use crate::services::oplog::{
     ArchiveWait, CommitLevel, EphemeralOplog, MultiLayerOplog, Oplog, OplogError, OplogFence,
-    OplogLifecycleGuard, OplogOps, downcast_oplog,
+    OplogLifecycleGuard, OplogOps, OplogRefusal, UnreadableOplog, downcast_oplog,
 };
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::resource_usage_metering::ResourceUsageAccount;
@@ -911,7 +911,7 @@ impl DurableTopologyRecoveryCache {
         owner: &OwnedAgentId,
         mode: AgentMode,
         fingerprint: AgentFingerprint,
-    ) -> Result<(), String> {
+    ) -> Result<(), SessionError> {
         let metadata = service
             .lookup_durable_stream_recovery_metadata(owner, mode, fingerprint)
             .await?;
@@ -942,7 +942,7 @@ impl DurableTopologyRecoveryCache {
         owner: &OwnedAgentId,
         mode: AgentMode,
         fingerprint: AgentFingerprint,
-    ) -> Result<(), String> {
+    ) -> Result<(), SessionError> {
         let current = oplog.current_oplog_index().await;
         self.refresh_through(current, oplog, service, owner, mode, fingerprint)
             .await
@@ -956,13 +956,13 @@ impl DurableTopologyRecoveryCache {
         owner: &OwnedAgentId,
         mode: AgentMode,
         fingerprint: AgentFingerprint,
-    ) -> Result<(), String> {
+    ) -> Result<(), SessionError> {
         if !self.initialized {
             self.reload(service, owner, mode, fingerprint).await?;
         }
         'suffix: while self.covered_through < current {
             let count = (current.as_u64() - self.covered_through.as_u64()).min(1024);
-            let entries = oplog.read_exact(self.covered_through.next(), count).await;
+            let entries = oplog.read_exact(self.covered_through.next(), count).await?;
             for (index, entry) in &entries {
                 let OplogEntry::StreamSession { record, .. } = entry else {
                     continue;
@@ -1139,7 +1139,7 @@ impl<Ctx: WorkerCtx> DurableStreamConsumerJournal for WorkerDurableStreamConsume
         self.state_actor
             .commit_and_update_state(CommitLevel::Always)
             .await
-            .map_err(SessionError::Fenced)?;
+            .map_err(|refusal| SessionError::from(OplogError::from(refusal)))?;
         Ok(())
     }
 
@@ -1158,7 +1158,6 @@ impl<Ctx: WorkerCtx> DurableStreamConsumerJournal for WorkerDurableStreamConsume
             )
             .await
             .map(|session| session.and_then(|session| session.finished))
-            .map_err(SessionError::from)
     }
 }
 
@@ -1797,21 +1796,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         }
                     };
                     if let Some(entry) = entry {
-                        // Refused, the shard moved during this retirement: nothing is cached for
-                        // the invocation the new owner resumes, and its waiters are sent there.
                         if let Err(error) = self.add_and_commit_oplog(entry).await {
-                            let fence = match error {
-                                OplogError::Fenced(fence) => Some(fence),
-                                OplogError::Payload(_) | OplogError::Maintenance(_) => None,
-                            };
-                            self.record_retirement(
-                                InterruptKind::ShardLost,
-                                RetirementReason::Fenced(fence),
-                            );
-                            self.fail_pending_invocations(WorkerExecutorError::runtime(
-                                "Worker ownership has retired",
-                            ))
-                            .await;
+                            self.terminal_write_failed(error).await;
                         } else if matches!(pending.kind, InterruptKind::Interrupt(_))
                             && let Some(key) = &status.current_idempotency_key
                         {
@@ -2212,7 +2198,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 last_known_status,
             )
             .await
-            .map_err(WorkerExecutorError::runtime)?
+            .map_err(WorkerExecutorError::from)?
             else {
                 return Ok(None);
             };
@@ -2554,8 +2540,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     None,
                     initial_status.clone(),
                 )
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
+                .await?;
             persisted_status = Some(initial_status);
         } else {
             let reconstructed_status = current_status.load_full();
@@ -3694,7 +3679,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             for (_, entry) in self
                 .oplog
                 .read_exact(OplogIndex::INITIAL, current.as_u64())
-                .await
+                .await?
             {
                 let OplogEntry::StreamSession { record, .. } = entry else {
                     continue;
@@ -3989,7 +3974,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         index: OplogIndex,
     ) -> Result<golem_common::model::durable_stream::StreamExportForkCandidate, WorkerExecutorError>
     {
-        if let OplogEntry::StreamSession { record, .. } = self.oplog.read(index).await
+        if let OplogEntry::StreamSession { record, .. } = self.oplog.read(index).await?
             && let StreamSessionRecord::ExportForkAdmitted(record) = self
                 .oplog
                 .download_payload(record)
@@ -4535,7 +4520,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 idempotency_key: accepted_key,
                 payload,
                 ..
-            } = self.oplog.read(index).await
+            } = self.oplog.read(index).await?
             else {
                 return Err(WorkerExecutorError::runtime(
                     "native session does not reference a pending invocation",
@@ -5186,7 +5171,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         pending: &PendingInvocationRef,
     ) -> Result<HydratedInvocation, WorkerExecutorError> {
-        let entry = self.oplog.read(pending.oplog_index).await;
+        let entry = self.oplog.read(pending.oplog_index).await?;
         match entry {
             OplogEntry::PendingAgentInvocation {
                 idempotency_key,
@@ -5228,7 +5213,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         pending: &PendingUpdateRef,
     ) -> Result<HydratedUpdate, WorkerExecutorError> {
-        let entry = self.oplog.read(pending.oplog_index).await;
+        let entry = self.oplog.read(pending.oplog_index).await?;
         match entry {
             OplogEntry::PendingUpdate { description, .. } => Ok(HydratedUpdate {
                 reference: pending.clone(),
@@ -7030,7 +7015,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 || attached.attempt_id != prepared.attempt.attempt_id
                 || attached.epoch == 0
                 || !matches!(
-                    self.oplog.read(attached.pending_invocation_oplog_index).await,
+                    self.oplog.read(attached.pending_invocation_oplog_index).await?,
                     OplogEntry::PendingAgentInvocation { idempotency_key, .. }
                         if idempotency_key == prepared.attempt.session_key.idempotency_key
                 ))
@@ -7197,7 +7182,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     ),
                 )
                 .await
-                .map_err(|fence| self.retired_by(fence))?;
+                .map_err(|refusal| self.refused_by(refusal))?;
         }
         if !retained_acceptance && let WorkerInstance::Running(running) = &*instance_guard {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
@@ -7539,7 +7524,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 session_key,
             )
             .await
-            .map_err(WorkerExecutorError::runtime)?;
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         let mut resume_offset = match attempt {
             Some(attempt) => service
                 .lookup_durable_stream_resume_offset(
@@ -7550,7 +7535,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     attempt,
                 )
                 .await
-                .map_err(WorkerExecutorError::runtime)?,
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?,
             None => None,
         };
         let current = self.oplog.current_oplog_index().await;
@@ -7561,7 +7546,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     metadata.covered_through().next(),
                     (current.as_u64() - metadata.covered_through().as_u64()).min(1024),
                 )
-                .await;
+                .await?;
             for (index, entry) in entries {
                 if let OplogEntry::StreamSession { record, .. } = entry {
                     let record = self
@@ -7578,7 +7563,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 session_key,
                             )
                             .await
-                            .map_err(WorkerExecutorError::runtime)?;
+                            .map_err(|error| {
+                                error.into_worker_executor_error(WorkerExecutorError::runtime)
+                            })?;
                         if metadata.covered_through() < index {
                             return Err(WorkerExecutorError::runtime(
                                 "fork marker is not committed to the session index",
@@ -7594,7 +7581,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                     attempt,
                                 )
                                 .await
-                                .map_err(WorkerExecutorError::runtime)?,
+                                .map_err(|error| {
+                                    error.into_worker_executor_error(WorkerExecutorError::runtime)
+                                })?,
                             None => None,
                         };
                         continue 'suffix;
@@ -7671,7 +7660,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 idempotency_key,
             )
             .await
-            .map_err(WorkerExecutorError::runtime)
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
     }
 
     async fn read_stream_session_record(
@@ -8193,7 +8182,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await?;
             if cache.consumer_deleting {
-                return Ok::<_, String>(Vec::new());
+                return Ok::<_, SessionError>(Vec::new());
             }
             Ok(cache
                 .dirty
@@ -8212,7 +8201,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .finish_on_drop(refresh)
             .await
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
-            .map_err(WorkerExecutorError::runtime)?;
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         let mut recoverable = Vec::new();
         let mut first_error = None;
         for (key, metadata) in sessions {
@@ -8302,7 +8291,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     || attached.attempt_id != prepared.attempt.attempt_id
                     || attached.epoch == 0
                     || attached.attachment_id != prepared.attempt.attachment_id
-                    || !matches!(self.oplog.read(attached.pending_invocation_oplog_index).await,
+                    || !matches!(self.oplog.read(attached.pending_invocation_oplog_index).await?,
                         OplogEntry::PendingAgentInvocation { idempotency_key, .. } if idempotency_key == key.idempotency_key)
                 {
                     return Err(WorkerExecutorError::runtime(
@@ -8867,19 +8856,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// holds. The fence latches on the oplog, so the invocation's next write is refused too and
     /// unwinds the loop, which is where the stop belongs.
     ///
+    /// A failed archive write is latched on the oplog in the same way, so it also gives
+    /// `OplogIndex::NONE`, and the next write that can report it stops the agent with the cause.
     /// Every other storage failure keeps the fail-stop behaviour it has always had.
     pub async fn add_to_oplog_or_retire(&self, entry: OplogEntry) -> OplogIndex {
         match self.add_to_oplog(entry).await {
             Ok(index) => index,
-            Err(OplogError::Fenced(_)) => OplogIndex::NONE,
-            Err(error) => panic!("oplog write: {error}"),
+            Err(error) => match error.into_refusal() {
+                Ok(_) => OplogIndex::NONE,
+                Err(error) => panic!("oplog write: {error}"),
+            },
         }
     }
 
     /// Commits the buffered entries and folds them into the published status.
     ///
-    /// A commit the storage refused is returned as `OplogError::Fenced`, and the agent is marked
-    /// retired for a lost shard. It has to be reported rather than folded into "nothing changed": below the
+    /// A commit the oplog refused is returned as the refusal: `OplogError::Fenced`, for which the
+    /// agent is marked retired for a lost shard, `OplogError::ArchiveWrite`, or
+    /// `OplogError::Unreadable` when the status after the commit does not read. It has to be
+    /// reported rather than folded into "nothing changed": below the
     /// commit threshold an add only buffers, so this commit is where a takeover is found, and a
     /// caller about to run a side effect, publish a result or acknowledge a request must not do
     /// it for entries that never reached the storage. The status actor has already started the
@@ -8890,15 +8885,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<OplogIndex, OplogError> {
         match self.state_actor.commit_and_update_state(commit_level).await {
             Ok((index, _)) => Ok(index),
-            Err(fence) => Err(self.retired_by(fence)),
+            Err(refusal) => Err(self.refused_by(refusal)),
         }
     }
 
     /// Enqueues an actor-owned commit + fold and waits only until the commit is acknowledged.
     /// Later ordered status reads remain behind the fold on the same FIFO queue.
     ///
-    /// A refused commit is acknowledged with the fence, reported as `OplogError::Fenced` (see
-    /// [`Self::commit_oplog_and_update_state`]). No acknowledgement at all means the actor
+    /// A refused commit is acknowledged with the refusal, reported as in
+    /// [`Self::commit_oplog_and_update_state`]. No acknowledgement at all means the actor
     /// stopped, which stays fatal.
     pub async fn commit_oplog_before_status_update(
         &self,
@@ -8910,7 +8905,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
         {
             Ok(Ok(())) => Ok(()),
-            Ok(Err(fence)) => Err(self.retired_by(fence)),
+            Ok(Err(refusal)) => Err(self.refused_by(refusal)),
             Err(_) => panic!(
                 "Worker state actor for {} stopped before acknowledging commit",
                 self.owned_agent_id
@@ -8918,8 +8913,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    /// Adds an entry and commits it, reporting a refusal of either as `OplogError::Fenced` (see
-    /// [`Self::commit_oplog_and_update_state`]).
+    /// Adds an entry and commits it, reporting a refusal of either as in
+    /// [`Self::commit_oplog_and_update_state`].
     ///
     /// Every other storage failure keeps the fail-stop behaviour of
     /// [`Self::add_to_oplog_or_retire`].
@@ -8938,6 +8933,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             RetirementReason::Fenced(Some(fence.clone())),
         );
         OplogError::Fenced(fence)
+    }
+
+    /// Returns a refusal of the oplog for the caller to propagate, and records the lost shard
+    /// first when the refusal is a fence.
+    pub(crate) fn refused_by(&self, refusal: OplogRefusal) -> OplogError {
+        match refusal {
+            OplogRefusal::Fenced(fence) => self.retired_by(fence),
+            refusal => refusal.into(),
+        }
     }
 
     pub async fn queue_card_revocation(
@@ -9103,7 +9107,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .state_actor
             .commit_and_update_state(CommitLevel::Always)
             .await
-            .map_err(|fence| self.retired_by(fence))?;
+            .map_err(|refusal| self.refused_by(refusal))?;
 
         if changed
             && let Some(wakeup) = wakeup
@@ -9340,7 +9344,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let entries = self
             .oplog
             .read_exact(OplogIndex::INITIAL, region_end.as_u64())
-            .await;
+            .await?;
 
         {
             cut_point::validate_snapshot_update_boundaries(
@@ -9364,18 +9368,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             if let Some(spanning) = cut_point::find_construct_spanning_cut_point(
                 |idx| {
-                    std::future::ready(
+                    std::future::ready(Ok::<_, std::convert::Infallible>(
                         entries
                             .get(&idx)
                             .expect("read_exact must return every requested oplog entry")
                             .clone(),
-                    )
+                    ))
                 },
                 last_oplog_index,
                 region_end,
                 &validation_regions,
             )
             .await
+            .unwrap_or_else(|never| match never {})
             {
                 return Err(WorkerExecutorError::invalid_request(format!(
                     "Cannot revert worker to oplog index {last_oplog_index}: the cut point is inside {spanning}"
@@ -9465,7 +9470,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 key,
                             )
                             .await
-                            .map_err(WorkerExecutorError::runtime)?
+                            .map_err(|error| {
+                                error.into_worker_executor_error(WorkerExecutorError::runtime)
+                            })?
                             .is_some_and(|session| session.prepared.is_some())
                     {
                         entries.push(DurableStreamOplogRecord::InlineEntry(
@@ -9576,7 +9583,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         snapshot_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        match self.oplog.read(snapshot_index).await {
+        match self.oplog.read(snapshot_index).await? {
             OplogEntry::PendingUpdate {
                 description: UpdateDescription::SnapshotBased { payload, .. },
                 ..
@@ -9729,20 +9736,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             crate::metrics::workers::record_invocation_result_resolution("bloom_negative");
             None
         } else {
-            self.resolve_old_invocation_result_index(&status, key)
-                .await
-                .map(|oplog_idx| (Arc::new(InvocationResult::Lazy { oplog_idx }), oplog_idx))
+            // An oplog that does not read is not a miss: the key may well have a result there.
+            match self.resolve_old_invocation_result_index(&status, key).await {
+                Ok(oplog_idx) => oplog_idx
+                    .map(|oplog_idx| (Arc::new(InvocationResult::Lazy { oplog_idx }), oplog_idx)),
+                Err(error) => return LookupResult::Complete(Err(error.into())),
+            }
         };
         if let Some((mut result, result_oplog_idx)) = maybe_result {
-            if matches!(result.as_ref(), InvocationResult::Lazy { .. }) {
-                Arc::make_mut(&mut result)
+            if matches!(result.as_ref(), InvocationResult::Lazy { .. })
+                && let Err(error) = Arc::make_mut(&mut result)
                     .cache(
                         &self.owned_agent_id,
                         self.agent_mode(),
                         self.initial_worker_metadata.fingerprint,
                         self,
                     )
-                    .await;
+                    .await
+            {
+                return LookupResult::Complete(Err(error.into()));
             }
             self.hydrated_invocation_results.write().await.insert(
                 key.clone(),
@@ -9769,7 +9781,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         status: &AgentStatusRecord,
         key: &IdempotencyKey,
-    ) -> Option<OplogIndex> {
+    ) -> Result<Option<OplogIndex>, UnreadableOplog> {
         let worker_service = self.deps.worker_service();
         let lookup = worker_service
             .lookup_invocation_result_index(
@@ -9782,11 +9794,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         match lookup {
             Ok(InvocationResultIndexLookup::Found(index)) => {
                 crate::metrics::workers::record_invocation_result_resolution("physical_hit");
-                return Some(index);
+                return Ok(Some(index));
             }
             Ok(InvocationResultIndexLookup::DefinitiveMiss) => {
                 crate::metrics::workers::record_invocation_result_resolution("physical_miss");
-                return None;
+                return Ok(None);
             }
             Ok(InvocationResultIndexLookup::Incomplete) | Err(_) => {
                 crate::metrics::workers::record_invocation_result_resolution("physical_incomplete");
@@ -9814,11 +9826,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             {
                 Ok(InvocationResultIndexLookup::Found(index)) => {
                     crate::metrics::workers::record_invocation_result_resolution("physical_hit");
-                    return Some(index);
+                    return Ok(Some(index));
                 }
                 Ok(InvocationResultIndexLookup::DefinitiveMiss) => {
                     crate::metrics::workers::record_invocation_result_resolution("physical_miss");
-                    return None;
+                    return Ok(None);
                 }
                 Ok(InvocationResultIndexLookup::Incomplete) | Err(_) => {}
             }
@@ -9841,7 +9853,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .deps
                 .oplog_service()
                 .read_exact(&self.owned_agent_id, self.agent_mode(), first, count)
-                .await;
+                .await?;
             if entries.is_empty() {
                 break;
             }
@@ -9858,7 +9870,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             );
             first = entries.keys().max().unwrap().next();
         }
-        result
+        Ok(result)
     }
 
     async fn stop_internal(
@@ -10274,6 +10286,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await;
     }
 
+    /// Settles the pending invocations after the terminal entry of an interrupt was not written.
+    ///
+    /// Refused by a fence, the shard moved during this retirement: nothing is cached for the
+    /// invocation the new owner resumes, and its waiters are sent there. Any other failure, such as
+    /// an archive layer of an ephemeral oplog that did not store the entries, is this agent's own:
+    /// the waiters get the error with its cause, and the agent is not retired for a lost shard.
+    async fn terminal_write_failed(&self, error: OplogError) {
+        let error = match terminal_write_failure(error) {
+            Err(fence) => {
+                self.record_retirement(
+                    InterruptKind::ShardLost,
+                    RetirementReason::Fenced(Some(fence)),
+                );
+                WorkerExecutorError::runtime("Worker ownership has retired")
+            }
+            Ok(error) => error,
+        };
+        self.fail_pending_invocations(error).await;
+    }
+
     async fn fail_pending_invocations(&self, error: WorkerExecutorError) {
         // The early completion receipt does not join its fold. Wait before taking locks also
         // needed by success publication, so cleanup cannot turn that receipt into a fold barrier.
@@ -10463,7 +10495,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             last_known_status,
         )
         .await
-        .map_err(WorkerExecutorError::runtime)?
+        .map_err(WorkerExecutorError::from)?
         .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
 
         // Reconstruction is pinned to the revision and mode recorded by the Create entry.
@@ -10514,7 +10546,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 read_only_lock::std::ReadOnlyLock::new(execution_status.clone()),
                 shard_epoch,
             )
-            .await;
+            .await?;
 
         Ok(GetOrCreateWorkerResult {
             initial_worker_metadata,
@@ -10755,7 +10787,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             shard_epoch,
                         )
                         .await
-                };
+                }?;
 
                 {
                     let mut status = initial_status.load_full().as_ref().clone();
@@ -11218,6 +11250,15 @@ pub(crate) fn epoch_superseded(held: Option<ShardEpoch>, assigned: Option<ShardE
     matches!((held, assigned), (Some(held), Some(assigned)) if held < assigned)
 }
 
+/// What a failed terminal entry of an interrupt means for the pending invocations: the fence of a
+/// lost shard as `Err`, or the error, with its cause, that the waiters get.
+fn terminal_write_failure(error: OplogError) -> Result<WorkerExecutorError, OplogFence> {
+    match error {
+        OplogError::Fenced(fence) => Err(fence),
+        error => Ok(WorkerExecutorError::from(error)),
+    }
+}
+
 /// Whether a delivered `assignment` takes `agent_id` away from this executor. `held` is the epoch
 /// the agent's oplog asserts, `None` when it asserts none or the agent has no oplog yet.
 ///
@@ -11434,6 +11475,12 @@ enum StartFilesystemError {
     Other(WorkerExecutorError),
 }
 
+impl From<UnreadableOplog> for StartFilesystemError {
+    fn from(error: UnreadableOplog) -> Self {
+        Self::Other(error.into())
+    }
+}
+
 /// A materialization of a start baseline that failed, with the filesystem to clean up, the error
 /// of the agent filesystem and the replay inputs of the start.
 struct StartFilesystemFailure {
@@ -11470,7 +11517,7 @@ impl StartFilesystem {
                 }
             }
             snapshot_selection::SelectedBaseline::ManualPromoted { index } => {
-                match parent.oplog.read(*index).await {
+                match parent.oplog.read(*index).await? {
                     OplogEntry::PendingUpdate {
                         description:
                             UpdateDescription::SnapshotBased {
@@ -11514,7 +11561,7 @@ impl StartFilesystem {
                 let source_revision = match source {
                     filesystem_snapshots::SourceRevision::Current => status.component_revision,
                     filesystem_snapshots::SourceRevision::Before(index) => {
-                        RunningWorker::revision_before(parent, status, *index).await
+                        RunningWorker::revision_before(parent, status, *index).await?
                     }
                 };
                 let source_files = RunningWorker::initial_files_of(parent, source_revision)
@@ -11745,14 +11792,16 @@ impl RunningWorker {
         parent: &Arc<Worker<Ctx>>,
         status: &AgentStatusRecord,
         before: OplogIndex,
-    ) -> ComponentRevision {
-        match filesystem_snapshots::revision_before(&status.successful_updates, before) {
-            Some(revision) => revision,
-            None => match parent.oplog.read(OplogIndex::INITIAL).await {
-                OplogEntry::Create { parameters, .. } => parameters.component_revision,
-                _ => status.component_revision_for_replay,
+    ) -> Result<ComponentRevision, UnreadableOplog> {
+        Ok(
+            match filesystem_snapshots::revision_before(&status.successful_updates, before) {
+                Some(revision) => revision,
+                None => match parent.oplog.read(OplogIndex::INITIAL).await? {
+                    OplogEntry::Create { parameters, .. } => parameters.component_revision,
+                    _ => status.component_revision_for_replay,
+                },
             },
-        }
+        )
     }
 
     /// Gives the initial files of the agent in the component revision `revision`.
@@ -13031,10 +13080,10 @@ impl InvocationResult {
         agent_mode: AgentMode,
         agent_fingerprint: AgentFingerprint,
         services: &T,
-    ) {
+    ) -> Result<(), UnreadableOplog> {
         if let Self::Lazy { oplog_idx } = self {
             let oplog_idx = *oplog_idx;
-            let entry = services.oplog().read(oplog_idx).await;
+            let entry = services.oplog().read(oplog_idx).await?;
 
             let result = match entry {
                 OplogEntry::AgentInvocationFinished {
@@ -13094,6 +13143,7 @@ impl InvocationResult {
 
             *self = Self::Cached { result }
         }
+        Ok(())
     }
 }
 
@@ -13181,6 +13231,34 @@ mod tests {
     use golem_common::model::{AssistedSelection, UsableAutomaticSnapshot};
     use golem_common::schema::SchemaValue;
     use test_r::test;
+
+    /// A terminal entry of an interrupt that an archive layer did not store fails the waiters
+    /// with the cause. Only a fence is a lost shard, whose waiters are sent to the new owner.
+    #[test]
+    fn only_a_fenced_terminal_write_is_a_lost_shard() {
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "terminal-write".to_string(),
+        };
+        assert!(matches!(
+            terminal_write_failure(OplogError::ArchiveWrite(crate::services::oplog::ArchiveWriteFailure {
+                agent_id: agent_id.clone(),
+                level: 0,
+                details: "injected archive failure".to_string(),
+            })),
+            Ok(WorkerExecutorError::OplogFailed { details, .. })
+                if details.contains("injected archive failure")
+        ));
+        let fence = OplogFence {
+            agent_id,
+            expected_epoch: ShardEpoch(1),
+            actual_epoch: Some(ShardEpoch(2)),
+        };
+        assert_eq!(
+            terminal_write_failure(OplogError::Fenced(fence.clone())),
+            Err(fence)
+        );
+    }
 
     #[test]
     fn an_ephemeral_agent_takes_no_snapshot_and_a_durable_agent_keeps_its_policy() {
@@ -14726,6 +14804,18 @@ mod tests {
         assert_eq!(claimed.unload_request.reason, UnloadReason::Deleting);
         assert!(matches!(state, WorkerInterruptState::TerminalClaimed));
     }
+}
+
+/// What follows a failed invocation.
+#[derive(Clone, Debug)]
+pub enum InvocationFailureDecision {
+    /// Retry the invocation, or stop, as the retry decision says.
+    Retry(RetryDecision),
+    /// The oplog refused the record of the failure. A `RecoveryRequired` error, a storage that did
+    /// not answer, sends the agent to infrastructure recovery, and the invocation stays pending, so
+    /// it continues when the storage answers again. An `OplogFailed` error stops the agent, and the
+    /// stop gives the error, with its cause, to the waiting callers.
+    Infrastructure(WorkerExecutorError),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]

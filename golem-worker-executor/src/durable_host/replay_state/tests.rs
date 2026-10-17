@@ -1,4 +1,5 @@
 use super::*;
+use crate::services::oplog::UnreadableOplog;
 use crate::services::oplog::{CommitLevel, OplogAddReceipt, OrderedOplogStart, PendingUpload};
 use async_trait::async_trait;
 use golem_common::model::card::{
@@ -140,7 +141,7 @@ impl Oplog for InMemoryOplog {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         let entries = self.entries.lock().unwrap();
         let start: u64 = oplog_index.into();
         let mut result = BTreeMap::new();
@@ -154,11 +155,11 @@ impl Oplog for InMemoryOplog {
             result.insert(OplogIndex::from_u64(i), entry.clone());
             self.reads.lock().unwrap().push(OplogIndex::from_u64(i));
         }
-        result
+        Ok(result)
     }
 
-    async fn length(&self) -> u64 {
-        self.entries.lock().unwrap().len() as u64
+    async fn length(&self) -> Result<u64, UnreadableOplog> {
+        Ok(self.entries.lock().unwrap().len() as u64)
     }
 
     async fn upload_raw_payload(&self, _data: Vec<u8>) -> Result<RawOplogPayload, String> {
@@ -1196,7 +1197,7 @@ async fn primary_publication_requires_completed_reconstruction_validation() {
             let memory = memory.clone();
             move |state| async move {
                 state
-                    .with_tx(async |tx| Ok(tx.finish_primary_settling(target, &memory).await))
+                    .with_tx(async |tx| Ok(tx.finish_primary_settling(target, &memory).await?))
                     .await
             }
         })
@@ -1584,7 +1585,9 @@ async fn old_settler_cannot_publish_a_grown_target() {
             move |state| async move {
                 state
                     .with_tx(async |tx| {
-                        Ok(tx.finish_primary_settling(old_target, &stale_memory).await)
+                        Ok(tx
+                            .finish_primary_settling(old_target, &stale_memory)
+                            .await?)
                     })
                     .await
             }
@@ -1603,7 +1606,7 @@ async fn old_settler_cannot_publish_a_grown_target() {
                     .with_tx(async |tx| {
                         Ok(tx
                             .finish_primary_settling(second_target, &current_memory)
-                            .await)
+                            .await?)
                     })
                     .await
             }
@@ -6534,6 +6537,64 @@ async fn store_already_live_claim_reports_replay_ended_once_the_cursor_reaches_t
 }
 
 #[test]
+async fn claim_of_a_call_cancelled_before_delivery_drains_its_host_internal_calls() {
+    // [RecoverySucceeded, Start(wait=2), Start(read=3 ← 2), <read terminal>, <wait terminal>]. A wait that
+    // makes host-internal calls and was cancelled before it delivered anything parks at its
+    // `Cancelled` and never makes the read again, so its claim drains the read's records. A
+    // completed wait replays the read itself, and a call that makes no host-internal calls
+    // drains nothing.
+    let cases = [
+        // (read closed, wait cancelled, host-internal calls, read left unclaimed)
+        (true, true, true, false),
+        (false, true, true, false),
+        (true, true, false, true),
+        (true, false, true, true),
+    ];
+    for (read_closed, wait_cancelled, host_internal_calls, read_left) in cases {
+        let mut entries = vec![
+            OplogEntry::RecoverySucceeded {
+                timestamp: Timestamp::now_utc(),
+            },
+            start_now(),
+            owned_start_now(2),
+        ];
+        if read_closed {
+            entries.push(end_for(3, 43));
+        }
+        entries.push(if wait_cancelled {
+            cancelled_for(2)
+        } else {
+            end_for(2, 42)
+        });
+        let rs = replay_state_over(entries).await;
+        let claim = StartClaim::unowned(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .with_host_internal_calls(host_internal_calls);
+        let ReplayStartClaimOutcome::Claimed { handle: wait, .. } =
+            rs.claim_start_for_store(claim, false).await.unwrap()
+        else {
+            panic!("expected the wait's Start to be claimed");
+        };
+        assert_eq!(wait.start_idx(), OplogIndex::from_u64(2));
+        match rs.await_resolution(wait).await.unwrap() {
+            Resolution::Cancelled { partial: None, .. } => assert!(wait_cancelled),
+            Resolution::Completed { .. } => assert!(!wait_cancelled),
+            other => panic!("unexpected resolution {other:?}"),
+        }
+        assert_eq!(
+            rs.unclaimed_retained_descendant(OplogIndex::from_u64(2), HashSet::new())
+                .await
+                .unwrap(),
+            read_left.then(|| OplogIndex::from_u64(3)),
+            "read closed: {read_closed}, wait cancelled: {wait_cancelled}, \
+             host-internal calls: {host_internal_calls}"
+        );
+    }
+}
+
+#[test]
 async fn unclaimed_retained_descendant_reports_only_settled_subtrees() {
     // [RecoverySucceeded, Start(root=2), Start(child=3 ← 2), Start(grandchild=4 ← 3), End(2→5), End(3→6),
     // End(4→7)] — root and child are claimed; awaiting root retains the grandchild. While the
@@ -7933,7 +7994,9 @@ async fn visible_terminal_scan_crosses_multiple_chunks() {
     let rs = replay_state_over(entries).await;
 
     assert!(
-        rs.has_visible_terminal(OplogIndex::from_u64(2)).await,
+        rs.has_visible_terminal(OplogIndex::from_u64(2))
+            .await
+            .unwrap(),
         "entity execution mode classification must scan through the complete replay prefix"
     );
 }
@@ -7952,7 +8015,8 @@ async fn visible_scope_descendant_distinguishes_owned_work_from_siblings() {
     assert!(
         !only_sibling
             .has_visible_scope_descendant(OplogIndex::from_u64(2))
-            .await,
+            .await
+            .unwrap(),
         "a later sibling must not be mistaken for historical entity-body work"
     );
 
@@ -7968,7 +8032,8 @@ async fn visible_scope_descendant_distinguishes_owned_work_from_siblings() {
     assert!(
         owned_child
             .has_visible_scope_descendant(OplogIndex::from_u64(2))
-            .await,
+            .await
+            .unwrap(),
         "a nested Start proves the historical entity body began execution"
     );
 }

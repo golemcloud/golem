@@ -14,10 +14,10 @@
 
 use crate::durable_host::DurabilityHost;
 use crate::durable_host::concurrent::{
-    Cancellable, DeferredCallReplayOutcome, DurableCallSession, NotCancellable,
-    reserve_invocation_id_before_await,
+    AccessClaimOptions, CallReplayOutcome, Cancellable, DeferredCallReplayOutcome,
+    DurableCallSession, NotCancellable, reserve_invocation_id_before_await,
 };
-use crate::durable_host::p3::{DurableP3, DurableP3View, run_read_access};
+use crate::durable_host::p3::{DurableP3, DurableP3View};
 use crate::durable_host::suspendable_wait::{
     ParkOutcome, ephemeral_sleep_too_long_error, wait_for_ready,
 };
@@ -129,19 +129,34 @@ impl<U: Send + 'static, Ctx: WorkerCtx> monotonic_clock::HostWithStore<U> for Du
         when: monotonic_clock::Mark,
     ) -> wasmtime::Result<()> {
         reserve_invocation_id_before_await(store, super::durable_worker_ctx::<Ctx, U>)?;
+        // The call is started before the first await, so a guest that drops the wait at any
+        // point finds its `Start` recorded or claimed.
+        let wait = DurableCallSession::<P3MonotonicClockWaitUntil, Cancellable>::start_access(
+            store,
+            super::durable_worker_ctx::<Ctx, U>,
+            HostRequestMonotonicClockTimestamp { nanos: when },
+            DurableFunctionType::ReadLocal,
+        )
+        .await?;
         // A timer must return STARTED even when its deadline has passed. An inline live
         // delivery followed by a direct host call can deadlock replay when that call holds
         // the Store before the replayed timer reaches its guest-delivery boundary.
         tokio::task::yield_now().await;
-        run_read_access::<_, _, Ctx, P3MonotonicClockWaitUntil, _>(
-            store,
-            HostRequestMonotonicClockTimestamp { nanos: when },
-            DurableFunctionType::ReadLocal,
-            || async {
-                wait_until_live::<U, Ctx>(store, when).await?;
-                Ok(HostResponseP3MonotonicClockUnit {})
-            },
-        )
+        let wait = if wait.is_live() {
+            wait
+        } else {
+            match wait
+                .replay_access(store, super::durable_worker_ctx::<Ctx, U>)
+                .await?
+            {
+                CallReplayOutcome::Replayed(_) => return Ok(()),
+                CallReplayOutcome::Incomplete(wait) => wait,
+            }
+        };
+        wait.run_live_action_access(store, super::durable_worker_ctx::<Ctx, U>, async || {
+            wait_until_live::<U, Ctx>(store, when).await?;
+            Ok::<_, wasmtime::Error>(HostResponseP3MonotonicClockUnit {})
+        })
         .await
         .map(|_| ())
     }
@@ -151,16 +166,23 @@ impl<U: Send + 'static, Ctx: WorkerCtx> monotonic_clock::HostWithStore<U> for Du
         how_long: types::Duration,
     ) -> wasmtime::Result<()> {
         // The outer session owns cancellation throughout deadline reconstruction, including
-        // after the internal read completed but before the timer started waiting.
-        let wait = DurableCallSession::<P3MonotonicClockWaitFor, Cancellable>::start_access(
-            store,
-            super::durable_worker_ctx::<Ctx, U>,
-            HostRequestMonotonicClockDuration {
-                duration_in_nanos: how_long,
-            },
-            DurableFunctionType::ReadLocal,
-        )
-        .await?;
+        // after the internal read completed but before the timer started waiting. On replay, a
+        // recorded `Cancelled` makes the claim drain the records of the internal read, which a
+        // parked wait never makes again.
+        let wait =
+            DurableCallSession::<P3MonotonicClockWaitFor, Cancellable>::start_access_with_options(
+                store,
+                super::durable_worker_ctx::<Ctx, U>,
+                DurableFunctionType::ReadLocal,
+                AccessClaimOptions {
+                    host_internal_calls: true,
+                    ..Default::default()
+                },
+                HostRequestMonotonicClockDuration {
+                    duration_in_nanos: how_long,
+                },
+            )
+            .await?;
         let owner = wait.host_internal_owner();
         let (mut wait, replayed) = if wait.is_live() {
             (Some(wait), None)

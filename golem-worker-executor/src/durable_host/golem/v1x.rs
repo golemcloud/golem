@@ -454,15 +454,17 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
             accessor,
             accessor.getter(),
             DurableFunctionType::WriteLocal,
-            async |context| {
-                if context.is_live {
-                    crate::durable_host::call_coordinator::synchronize_live_agent_authority_access(
-                        accessor,
-                        accessor.getter(),
-                    )
-                    .await?;
-                }
-                Ok(HostRequestNoInput {})
+            |context, accessor| {
+                Box::pin(async move {
+                    if context.is_live {
+                        crate::durable_host::call_coordinator::synchronize_live_agent_authority_access(
+                            accessor,
+                            accessor.getter(),
+                        )
+                        .await?;
+                    }
+                    Ok(HostRequestNoInput {})
+                })
             },
         )
         .await?;
@@ -885,7 +887,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         result.last_known_status,
                     )
                     .await
-                    .map_err(anyhow::Error::msg)?
+                    .map_err(|error| anyhow::Error::from(WorkerExecutorError::from(error)))?
                     {
                         metadata.last_known_status = status;
                     }

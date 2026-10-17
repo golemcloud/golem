@@ -35,6 +35,22 @@ call reruns its whole body, so the library must make repeated attempts safe.
 Use the SDK combinator rather than managing the resource manually. See
 [custom durable invocations](/next/develop/additional) for the lifecycle and SDK entry points.
 
+**TypeScript, Effect, Scala, MoonBit, and Go: sequential execution only.** In these SDKs, a custom operation's execution scope remains installed while its body waits. Do not run unrelated guest work concurrently with it, including ordinary host calls or another custom operation. A sibling's effects can be attributed to the wrong operation, causing incorrect replay or invocation failure. The SDKs do not reliably detect this misuse.
+
+Sequential and properly nested custom operations remain supported. An asynchronous body can await host operations when no unrelated guest work runs during those waits. For example, a library can perform a sequence of remote calls and persist one typed result. Complete one custom operation before starting the next; await each nested operation before continuing its parent.
+
+Do not leave detached promises, fibers, futures, tasks, goroutines, or callbacks running after the body exits. This applies to failure and cancellation as well as success. Stop and join outstanding work before closing the operation. A fail-fast combinator such as `Promise.all` does not join surviving siblings on rejection, and joining at the end does not make concurrent custom scopes supported.
+
+| SDK | Custom operation restriction |
+| --- | --- |
+| TypeScript | Use `durable` sequentially; do not overlap it with other promises or callbacks. |
+| Effect | Use `Durability.wrap` and `wrapInfallible` sequentially; do not overlap them with other fibers or concurrent effects. |
+| Scala | Use `DurabilityApi.durable` and `durableAsync` sequentially; do not overlap them with other futures or callbacks. |
+| MoonBit | Use `@api.durable` and `durable_async` sequentially; do not overlap them with other tasks. |
+| Go | Use `durability.Run` sequentially; its blocking body can yield to other goroutines, so a synchronous-looking call is not a concurrency safeguard. |
+
+These restrictions concern custom durability in the five SDKs above, not ordinary built-in durable HTTP/RPC APIs or the Rust scope integration.
+
 ## Nonresumable handles
 
 A live connection is not durable state. Nonresumable handles report typed loss after

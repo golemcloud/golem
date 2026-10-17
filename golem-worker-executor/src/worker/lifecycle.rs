@@ -460,14 +460,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let oplog_service = deps.oplog_service();
         let observed_oplog_index = oplog_service
             .get_last_index(owned_agent_id, agent_mode)
-            .await;
+            .await?;
         let mut current = observed_oplog_index;
         let mut found = 0;
 
         loop {
             let entries = oplog_service
                 .read_exact(owned_agent_id, agent_mode, current, 1)
-                .await;
+                .await?;
             let entry = entries.get(&current).ok_or_else(|| {
                 WorkerExecutorError::invalid_request(format!(
                     "Could not read oplog entry {current} while resolving revert"

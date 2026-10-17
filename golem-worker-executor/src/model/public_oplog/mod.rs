@@ -587,6 +587,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
             .oplog_service
             .read_exact(self.owned_agent_id, self.agent_mode, index, 1)
             .await
+            .map_err(|error| error.to_string())?
             .remove(&index);
         let start = entry
             .as_ref()
@@ -730,7 +731,7 @@ pub async fn get_public_oplog_entry(
 ) -> Result<PublicOplogEntryWithIndex, WorkerExecutorError> {
     let last_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
-        .await;
+        .await?;
     if oplog_index < OplogIndex::INITIAL || oplog_index > last_index {
         return Err(WorkerExecutorError::invalid_request(format!(
             "agent {owned_agent_id} has no oplog entry at index {oplog_index}"
@@ -787,7 +788,8 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
     let initial_oplog_index = initial_oplog_index.max(OplogIndex::INITIAL);
     let last_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
-        .await;
+        .await
+        .map_err(|error| error.to_string())?;
     let available = if initial_oplog_index <= last_index {
         last_index.as_u64() - initial_oplog_index.as_u64() + 1
     } else {
@@ -800,7 +802,8 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
             initial_oplog_index,
             (count as u64).min(available),
         )
-        .await;
+        .await
+        .map_err(|error| error.to_string())?;
 
     let mut entries = Vec::new();
     let mut current_component_revision = initial_component_revision;
@@ -991,7 +994,7 @@ pub async fn find_component_revision_at(
     let mut initial_component_revision = ComponentRevision::INITIAL;
     let last_oplog_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
-        .await;
+        .await?;
     const BATCH_SIZE: u64 = 256;
     let end = start.min(last_oplog_index.next());
     let mut current = OplogIndex::INITIAL;
@@ -999,7 +1002,7 @@ pub async fn find_component_revision_at(
         let count = (end.as_u64() - current.as_u64()).min(BATCH_SIZE);
         let entries = oplog_service
             .read_exact(owned_agent_id, agent_mode, current, count)
-            .await;
+            .await?;
         for entry in entries.into_values() {
             if let Some(revision) = entry.specifies_component_revision() {
                 initial_component_revision = revision;

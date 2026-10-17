@@ -55,7 +55,10 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use serde::{Deserialize, Serialize};
 
 pub use ephemeral::EphemeralOplog;
-pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchive, OplogArchiveService};
+pub use multilayer::{
+    MultiLayerOplog, MultiLayerOplogService, OplogArchive, OplogArchiveError, OplogArchiveResult,
+    OplogArchiveService,
+};
 pub use primary::PrimaryOplogService;
 use std::any::{Any, TypeId};
 use std::collections::BTreeMap;
@@ -80,8 +83,10 @@ mod reader;
 #[cfg(test)]
 pub use ephemeral::tests::fixture as gated_ephemeral_fixture;
 
+pub use reader::{OplogReadError, UnreadableOplog};
+
 #[cfg(test)]
-pub(crate) use reader::{OplogReadSource, checked_range_end, exact_from_source, fail_stop};
+pub(crate) use reader::{OplogReadSource, checked_range_end, exact_from_source};
 
 #[cfg(test)]
 pub mod tests;
@@ -208,7 +213,7 @@ pub trait OplogService: Debug + Send + Sync {
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog>;
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError>;
 
     /// Creates an oplog whose absence has already been established by the caller.
     ///
@@ -225,7 +230,7 @@ pub trait OplogService: Debug + Send + Sync {
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog>;
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError>;
 
     /// Opens an existing oplog for the given worker.
     ///
@@ -246,20 +251,25 @@ pub trait OplogService: Debug + Send + Sync {
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog>;
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError>;
 
     async fn get_last_index(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogIndex;
+    ) -> Result<OplogIndex, UnreadableOplog>;
 
+    /// The last index for archive maintenance: every storage failure is returned, not only an
+    /// unreadable archive.
     async fn try_get_last_index(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
     ) -> Result<OplogIndex, String> {
-        Ok(self.get_last_index(owned_agent_id, agent_mode).await)
+        Ok(self
+            .get_last_index(owned_agent_id, agent_mode)
+            .await
+            .map_err(|error| error.to_string())?)
     }
 
     /// Deletes the agent's oplog, in every layer. With `expected_epoch` - the epoch the caller's
@@ -293,7 +303,7 @@ pub trait OplogService: Debug + Send + Sync {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry>;
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog>;
 
     /// Reads the part of the requested range physically present in this service.
     ///
@@ -305,19 +315,28 @@ pub trait OplogService: Debug + Send + Sync {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         self.read_exact(owned_agent_id, agent_mode, idx, n).await
     }
 
     /// Checks whether the oplog exists in the oplog, without opening it
-    async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool;
+    async fn exists(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<bool, UnreadableOplog>;
 
+    /// Existence for archive maintenance: every storage failure is returned, not only an
+    /// unreadable archive.
     async fn try_exists(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
     ) -> Result<bool, String> {
-        Ok(self.exists(owned_agent_id, agent_mode).await)
+        Ok(self
+            .exists(owned_agent_id, agent_mode)
+            .await
+            .map_err(|error| error.to_string())?)
     }
 
     /// Scans the oplog for all workers belonging to the given component, in a paginated way.
@@ -570,11 +589,7 @@ pub(crate) async fn record_owning_epoch(
     key: &str,
     shard_epoch: ShardEpoch,
 ) -> Option<OplogFence> {
-    let (svc_name, metric_op) = match namespace {
-        IndexedStorageNamespace::CompressedOpLog { .. } => ("compressed_oplog", "archive_record"),
-        IndexedStorageNamespace::BlobOplogManifest { .. } => ("blob_oplog", "archive_record"),
-        _ => ("oplog", "record"),
-    };
+    let svc_name = epoch_record_service(&namespace);
     let outcome = retry_storage_op_fenceable(retry_config, "set_key_epoch", key, || {
         let namespace = namespace.clone();
         async move {
@@ -584,8 +599,44 @@ pub(crate) async fn record_owning_epoch(
         }
     })
     .await;
-    record_oplog_epoch_fence(metric_op, outcome.is_err());
-    let fence = OplogFence::refused(agent_id.clone(), outcome.err()?);
+    match epoch_record_verdict(&namespace, agent_id, outcome) {
+        Ok(fence) => fence,
+        Err(error) => unreachable!("a fenceable storage write failed without a fence: {error}"),
+    }
+}
+
+/// The service name an epoch record of `namespace` is labelled with.
+pub(crate) fn epoch_record_service(namespace: &IndexedStorageNamespace) -> &'static str {
+    match namespace {
+        IndexedStorageNamespace::CompressedOpLog { .. } => "compressed_oplog",
+        IndexedStorageNamespace::BlobOplogManifest { .. } => "blob_oplog",
+        _ => "oplog",
+    }
+}
+
+/// What the outcome of an epoch record of `namespace` gives: no fence when it was stored, the
+/// fence when a newer owner's record refused it, and any other storage failure as it is.
+pub(crate) fn epoch_record_verdict(
+    namespace: &IndexedStorageNamespace,
+    agent_id: &AgentId,
+    outcome: Result<(), IndexedStorageError>,
+) -> Result<Option<OplogFence>, IndexedStorageError> {
+    let svc_name = epoch_record_service(namespace);
+    let metric_op = match namespace {
+        IndexedStorageNamespace::CompressedOpLog { .. }
+        | IndexedStorageNamespace::BlobOplogManifest { .. } => "archive_record",
+        _ => "record",
+    };
+    let refusal = match outcome {
+        Ok(()) => {
+            record_oplog_epoch_fence(metric_op, false);
+            return Ok(None);
+        }
+        Err(refusal @ IndexedStorageError::Fenced { .. }) => refusal,
+        Err(error) => return Err(error),
+    };
+    record_oplog_epoch_fence(metric_op, true);
+    let fence = OplogFence::refused(agent_id.clone(), refusal);
     tracing::warn!(
         agent_id = %agent_id,
         store = svc_name,
@@ -593,7 +644,7 @@ pub(crate) async fn record_owning_epoch(
         actual_epoch = ?fence.actual_epoch.map(|epoch| epoch.0),
         "Oplog opened at a stale shard epoch: the shard has a new owner"
     );
-    Some(fence)
+    Ok(Some(fence))
 }
 
 /// Records the verdict of an epoch-checked storage write: accepted, or refused because a newer
@@ -862,11 +913,62 @@ impl OplogFence {
 /// writes keep their fail-stop semantics inside the oplog implementation. Fallible archive
 /// maintenance returns `Maintenance`, allowing the fenced cleanup to be retried without stopping
 /// the executor. `Payload` is an entry whose payload the caller-supplied builder could not produce.
+/// `ArchiveWrite` is a write to an archive layer that failed after its retries: it is latched, so
+/// the agent stops, and only that agent. `Unreadable` is a commit whose entries were stored, but
+/// whose status could not be rebuilt because the oplog does not read: the agent stops with the
+/// cause, and only that agent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OplogError {
     Fenced(OplogFence),
     Payload(String),
     Maintenance(String),
+    ArchiveWrite(ArchiveWriteFailure),
+    Unreadable(UnreadableOplog),
+}
+
+/// A write of the oplog of `agent_id` to the archive layer `level` that failed after its retries.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArchiveWriteFailure {
+    pub agent_id: AgentId,
+    pub level: usize,
+    pub details: String,
+}
+
+impl Display for ArchiveWriteFailure {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "failed to write oplog data of {} to archive layer {}: {}",
+            self.agent_id, self.level, self.details
+        )
+    }
+}
+
+/// An archive layer that did not store the oplog fails the agent for good.
+impl From<ArchiveWriteFailure> for WorkerExecutorError {
+    fn from(failure: ArchiveWriteFailure) -> Self {
+        WorkerExecutorError::oplog_failed(
+            failure.agent_id,
+            format!(
+                "failed to write oplog data to archive layer {}: {}",
+                failure.level, failure.details
+            ),
+        )
+    }
+}
+
+impl OplogError {
+    /// The failure of the agent that this error is: an archive layer that did not store the oplog,
+    /// or an oplog that does not read. It is `OplogFailed` for good, or `RecoveryRequired` when a
+    /// later read can pass. A fence, which moves the agent to the new owner of its shard, and a
+    /// write that failed alone give `None`.
+    pub fn agent_failure(&self) -> Option<WorkerExecutorError> {
+        match self {
+            Self::ArchiveWrite(failure) => Some(failure.clone().into()),
+            Self::Unreadable(unreadable) => Some(unreadable.clone().into()),
+            Self::Fenced(_) | Self::Payload(_) | Self::Maintenance(_) => None,
+        }
+    }
 }
 
 impl From<String> for OplogError {
@@ -885,6 +987,8 @@ impl From<OplogError> for WorkerExecutorError {
             ),
             OplogError::Payload(details) => WorkerExecutorError::runtime(details),
             OplogError::Maintenance(details) => WorkerExecutorError::runtime(details),
+            OplogError::ArchiveWrite(failure) => WorkerExecutorError::from(failure),
+            OplogError::Unreadable(unreadable) => WorkerExecutorError::from(unreadable),
         }
     }
 }
@@ -904,11 +1008,74 @@ impl Display for OplogError {
             ),
             OplogError::Payload(details) => write!(f, "oplog payload error: {details}"),
             OplogError::Maintenance(details) => write!(f, "oplog maintenance error: {details}"),
+            OplogError::ArchiveWrite(failure) => write!(f, "{failure}"),
+            OplogError::Unreadable(unreadable) => write!(f, "{unreadable}"),
         }
     }
 }
 
 impl std::error::Error for OplogError {}
+
+/// A write after which the agent cannot go on. Every other `OplogError` stays fail-stop.
+///
+/// `Fenced` (the shard has a new owner) and `ArchiveWrite` (an archive layer of an ephemeral oplog
+/// did not store its entries after its retries) are latched on the oplog: every later add and
+/// commit fails the same way, so a path that cannot report the refusal leaves it to the next write
+/// that can.
+///
+/// `Unreadable` is not latched. Only the commit of the status task gives it, after the entries of
+/// that commit were stored, when the status could not be rebuilt because the oplog does not read.
+/// A later write can succeed, so the caller that receives it fails the agent with the cause.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OplogRefusal {
+    Fenced(OplogFence),
+    ArchiveWrite(ArchiveWriteFailure),
+    Unreadable(UnreadableOplog),
+}
+
+impl OplogRefusal {
+    /// The fence, when the refusal means that the shard has a new owner.
+    pub fn fence(&self) -> Option<&OplogFence> {
+        match self {
+            Self::Fenced(fence) => Some(fence),
+            Self::ArchiveWrite(_) | Self::Unreadable(_) => None,
+        }
+    }
+}
+
+impl OplogError {
+    /// Splits the refusal off a write error; every other error is returned as it is.
+    pub fn into_refusal(self) -> Result<OplogRefusal, OplogError> {
+        match self {
+            Self::Fenced(fence) => Ok(OplogRefusal::Fenced(fence)),
+            Self::ArchiveWrite(failure) => Ok(OplogRefusal::ArchiveWrite(failure)),
+            Self::Unreadable(unreadable) => Ok(OplogRefusal::Unreadable(unreadable)),
+            error @ (Self::Payload(_) | Self::Maintenance(_)) => Err(error),
+        }
+    }
+}
+
+impl From<OplogRefusal> for OplogError {
+    fn from(refusal: OplogRefusal) -> Self {
+        match refusal {
+            OplogRefusal::Fenced(fence) => Self::Fenced(fence),
+            OplogRefusal::ArchiveWrite(failure) => Self::ArchiveWrite(failure),
+            OplogRefusal::Unreadable(unreadable) => Self::Unreadable(unreadable),
+        }
+    }
+}
+
+impl From<OplogRefusal> for WorkerExecutorError {
+    fn from(refusal: OplogRefusal) -> Self {
+        OplogError::from(refusal).into()
+    }
+}
+
+impl Display for OplogRefusal {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", OplogError::from(self.clone()))
+    }
+}
 
 /// A single oplog append that has already been synchronously enqueued in the oplog's ordering
 /// domain. Creating this receipt reserves the entry's position; awaiting it returns the assigned
@@ -1095,41 +1262,52 @@ pub trait Oplog: Any + Debug + Send + Sync {
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> Result<bool, OplogError>;
 
     /// Reads exactly `n` contiguous entries starting at `oplog_index`.
-    async fn read_exact(&self, oplog_index: OplogIndex, n: u64)
-    -> BTreeMap<OplogIndex, OplogEntry>;
+    async fn read_exact(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog>;
 
     /// Reads the part of the requested range physically present in this oplog.
     async fn read_source(
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         self.read_exact(oplog_index, n).await
     }
 
+    /// The part of the range present in this oplog, for archive maintenance: every storage failure
+    /// is returned, not only an unreadable archive.
     async fn try_read_source(
         &self,
         oplog_index: OplogIndex,
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, String> {
-        Ok(self.read_source(oplog_index, n).await)
+        Ok(self
+            .read_source(oplog_index, n)
+            .await
+            .map_err(|error| error.to_string())?)
     }
 
     /// Reads the entry at the given oplog index.
-    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-        self.read_exact(oplog_index, 1)
-            .await
+    async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, UnreadableOplog> {
+        Ok(self
+            .read_exact(oplog_index, 1)
+            .await?
             .remove(&oplog_index)
             .unwrap_or_else(|| {
                 panic!("Missing oplog entry {oplog_index} after an exact single-entry read")
-            })
+            }))
     }
 
     /// Gets the total number of entries in the oplog
-    async fn length(&self) -> u64;
+    async fn length(&self) -> Result<u64, UnreadableOplog>;
 
+    /// The length for archive maintenance: every storage failure is returned, not only an
+    /// unreadable archive.
     async fn try_length(&self) -> Result<u64, String> {
-        Ok(self.length().await)
+        Ok(self.length().await.map_err(|error| error.to_string())?)
     }
 
     /// Adds an entry to the oplog and immediately commits it
@@ -1839,7 +2017,7 @@ impl OpenOplogs {
         lifecycle: &mut OplogLifecycleGuard,
         agent_id: &AgentId,
         constructor: impl OplogConstructor,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         lifecycle.assert_agent(agent_id);
         let requested_epoch = constructor.shard_epoch();
         let slot = self.slot(agent_id).await;
@@ -1863,7 +2041,7 @@ impl OpenOplogs {
             Some(oplog) if !oplog.is_retired() => {
                 let opened_with = cached.and_then(|entry| entry.requested_epoch);
                 if can_reuse(&*oplog, opened_with, requested_epoch) {
-                    return oplog;
+                    return Ok(oplog);
                 }
                 // Replaced without waiting for it to close: see `can_reuse`.
             }
@@ -1883,7 +2061,8 @@ impl OpenOplogs {
         let close_agent_id = agent_id.clone();
         let close_slot = slot.clone();
         let close = Box::new(move || owner.release_if_unused(&close_agent_id, &close_slot));
-        let oplog = constructor.create_oplog(lifecycle, close).await;
+        // A failed open caches nothing: the slot keeps what it held, and the next open tries again.
+        let oplog = constructor.create_oplog(lifecycle, close).await?;
         let closed = oplog.closed();
         let entry = Some(OpenOplogEntry {
             oplog: Arc::downgrade(&oplog),
@@ -1904,7 +2083,7 @@ impl OpenOplogs {
             let _ = closed.await;
             owner.release_if_unused(&agent_id, &cleanup_slot);
         });
-        oplog
+        Ok(oplog)
     }
 }
 
@@ -1940,7 +2119,7 @@ pub trait OplogConstructor: Send {
         self,
         lifecycle: &mut OplogLifecycleGuard,
         close: Box<dyn FnOnce() + Send + Sync>,
-    ) -> Arc<dyn Oplog>;
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError>;
 
     /// The epoch the oplog this constructor builds is asked to assert, or `None` when it asserts
     /// none. The open-oplog cache compares it with the epoch a cached
