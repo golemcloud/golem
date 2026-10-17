@@ -124,6 +124,104 @@ if needed, configurable synchronous import bindings. A TypeScript-only bundle re
 cover fresh execution runtimes or all Golem JavaScript SDKs. Avoid new Rust feature flags unless
 the measured implementation actually requires them.
 
-The next acceptance gate is a real synchronous JavaScript call into a filesystem-capable Golem
-tool, with bounded output, then cancellation and reconstruction. Do not treat the scalar tests
-as that acceptance gate or as evidence of production performance.
+The real filesystem gate below now passes. Child stream collection, limits, cancellation and
+policy refusal are still separate gates. Neither the scalar nor filesystem probe implements
+`child_process` or establishes production readiness.
+
+## Real executor fixture
+
+`tool-probe.js` is an opt-in tool provider for
+`tool_streaming::node_tool_processes::node_sync_native_import_waits_for_filesystem_tool` in the
+executor integration tests. It uses the normal tool dispatcher, bindings and owner filesystem,
+without a test-only linker hook. It is not a `child_process` implementation.
+
+Its controls write with `node:fs`; its nested variants synchronously call the actual `write-file`
+tool. Both run in the main QuickJS runtime and a fresh execution job. Each case immediately reads
+the file through `node:fs`. The harness warms all four cases, then takes five interleaved samples
+of each, checks both output channels and exit status, tears down/restarts the executor, and reads
+the last file. It requires exactly 25 outer entity calls and 12 nested writes, each with one End.
+The JS fixture rejects retained globals/environment between tool invocations and inherited parent
+globals in fresh jobs. The parent tool's output is tested; the nested `write-file` tool has no
+stdin/stdout/stderr attachments.
+These counts do not independently prove effect deduplication; crash-window effect counting,
+child stream transport, cancellation and policy refusal still need separate gates.
+
+Build this fixture before running the test; the test never starts a compiler:
+
+1. Use wasm-rquickjs CLI 0.4.13. Refresh the TS SDK declarations and preserved runtime modules
+   from current source. In `sdks/ts/packages/golem-ts-sdk`, run `pnpm run generate-dts`, with that
+   CLI on PATH, and build the first configuration returned by `rollup.config.js`. The complete SDK
+   build is also suitable, but its declaration-bundle stage can need more than Node's default
+   heap. Do not use leftover `dist` modules from another branch.
+2. Rollup `tool-probe.js` into an ESM bundle. Use `@rollup/plugin-node-resolve`; leave `golem:`,
+   `wasi:`, `node:` and `wasm-rquickjs:` imports external. Treat those external modules as having
+   no load-time side effects, while retaining internal SDK schema-registration side effects.
+3. Copy `tool-world/tool-probe.wit` into a fresh temporary WIT root, and link its `deps` directory
+   to the repository's canonical `wit/deps`. This world includes the existing
+   `golem:tool/tool-guest@0.1.0`; no production interface changes are needed. Generate a temporary
+   wrapper with `--wit <temporary-wit-root> --world tool-probe --js-modules probe=@slot
+   --target wasi-p3`. The injectable slot permits JS-only iterations without recompiling Rust.
+   The bundle must export the SDK tool guest as `guest`, the short interface name this world uses.
+4. In the generated wrapper only, add the following wit-bindgen option, retaining the upstream
+   async WIT signature:
+
+   ```rust
+   async: ["-import:golem:tool/host@0.1.0#[method]tool-rpc.invoke-and-await"],
+   ```
+
+   In `src/modules/golem_tool_0_1_0_host.rs`, make `ToolRpc::invoke_and_await` a non-async method,
+   remove `.await` from its generated binding call, and pass `command_path.0.as_slice()` instead
+   of the owned vector. No other method changes. This is an experimental binding override, not
+   a supported compiler option or a patch to upstream CLI source.
+5. Build the generated crate for `wasm32-wasip2` with `--release --no-default-features
+   --features p3,encoding`. Inject the Rollup bundle using `wasm-rquickjs inject-js`, then Wizer
+   preinitialize the injected artifact using `wasm-rquickjs optimize`.
+6. Ensure the Rust tool-streaming caller and filesystem tools are built according to their
+   existing component build instructions, including the caller's local provider/bridge dependency.
+   Use a current-main CLI and verify the copied top-level WASMs, not just intermediate outputs.
+   Set `GOLEM_NODE_TOOL_EXECUTOR_PROBE_WASM` to the
+   absolute Wizer-enabled fixture path and run:
+
+   ```sh
+   RUST_MIN_STACK=33554432 cargo test --locked --offline --profile dev-ci -j 4 \
+     -p golem-worker-executor --features test-utils --test integration -- \
+     node_sync_native_import_waits_for_filesystem_tool --include-ignored \
+     --test-threads 1 --nocapture --report-time
+   ```
+
+Direct prebuilt-binary runs must start in `golem-worker-executor/`, matching Cargo's test working
+directory. They also require `RUST_MIN_STACK=33554432`.
+
+### October 17 result
+
+The focused test passed, including all twenty timed calls, the invocation-isolation guards and
+the reconstruction check. The [executor observations](observations-2026-10-17-executor.json)
+retain every sample, artifact/source hashes and the unvalidated cases.
+
+| Runtime | `node:fs` control median | Synchronous `write-file` median |
+| --- | ---: | ---: |
+| Main | 53.129 ms | 66.942 ms |
+| Fresh execution job | 169.716 ms | 184.781 ms |
+
+These end-to-end timings include the owner agent, outer tool admission/result/output collection,
+and the JS work; nested cases additionally include discovery, encoding and the real filesystem
+tool. They exclude warmup and initial component analysis. Verbose DEBUG tracing was enabled and
+another local build was active. This is a feasibility measurement, not a production performance
+comparison. Whole-process maximum RSS was 854,376,448 bytes, including setup and reconstruction;
+no per-variant RSS or isolated output-collection cost was measured.
+
+The initially stale Rust caller imported the removed `golem:api/host.get-oplog-index` function.
+Rebuilding the caller/provider and filesystem tool with current-main CLI resolved that blocker.
+The component rebuild also refreshed the fixture's managed `AGENTS.md`; retain that migration.
+
+A full-SDK-world prototype completed Wizer, but the native executor run spent 420 seconds in
+component analysis before it was stopped, without reaching JS. A Wizer stack sample showed
+Cranelift register allocation. Using the existing tool world reduced the fixture's scope and
+made Wizer complete in seconds. Do not attribute that cold compiler cost to a particular unused
+interface without a narrower compiler reproducer.
+
+Machine-local sources remain in `golem-alt-02` on `feat/node-tool-processes`. The authorized
+wasm-rquickjs workspace is now `/Users/noise64/workspace/wasm-rquickjs-alt-02`, also on
+`feat/node-tool-processes`, starting from main `f8da7c10`. No upstream runtime source change or
+rquickjs fork is involved in this proof. The installed compiler was not replaced; the probe used
+the temporary released 0.4.13 CLI.
