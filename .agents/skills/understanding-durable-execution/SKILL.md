@@ -349,7 +349,11 @@ of `commit_oplog_before_status_update` does not wait for the refusal, so the own
 itself: the invocation loop chooses work only from `Worker::get_repaired_status`, which rebuilds a
 detached status first, and a rebuild that fails again is recorded like a failed recovery and
 ends in infrastructure recovery or in a stop with `OplogFailed` (`unrepaired_status_outcome`).
-`AppendInvocationIfVersion` also rebuilds a detached status before it checks the key. When
+`AppendInvocationIfVersion` also rebuilds a detached status before it checks the key. A detached
+status can still name an invocation whose completion was committed and published as current, so
+the hydrated result cache keeps the keys of committed completions that the status has not folded
+yet, apart from the evictable payloads, and the terminal stop (`fail_pending_invocations`) does not
+fail those keys. When
 `on_invocation_failure` cannot record the failure of an invocation, the refusal takes the
 classification of its agent error (`terminal_entry_refusal` in `durable_host/mod.rs`). An oplog
 that failed for good fails the invocation with its cause. A storage that did not answer returns

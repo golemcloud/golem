@@ -24,7 +24,7 @@ use futures::stream::BoxStream;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::host_functions::HostFunctionName;
-use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+use golem_common::model::oplog::{OplogEntry, OplogIndex, PublicOplogEntry};
 use golem_common::model::{AgentId, AgentStatus, OwnedAgentId};
 use golem_common::{agent_id, data_value};
 use golem_service_base::replayable_stream::ErasedReplayableStream;
@@ -33,7 +33,11 @@ use golem_service_base::storage::blob::{
     BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
 };
 use golem_test_framework::dsl::{AgentResult, TestDsl};
+use golem_worker_executor::model::LookupResult;
+use golem_worker_executor::services::HasEvents;
+use golem_worker_executor::services::events::Event;
 use golem_worker_executor::services::golem_config::OplogConfig;
+use golem_worker_executor::services::oplog::{CommitLevel, CompressedOplogChunk};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, agent_oplog_length, archived_oplog_chunks,
@@ -42,7 +46,7 @@ use golem_worker_executor_test_utils::{
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 
@@ -271,39 +275,77 @@ const ARCHIVE_UP: u8 = 0;
 const ARCHIVE_UNAVAILABLE: u8 = 1;
 const ARCHIVE_CORRUPT: u8 = 2;
 
-/// How a [`FlakyArchiveStorage`] answers the reads of archived oplog chunks, and how many it
-/// refused.
+/// How a [`FlakyArchiveStorage`] answers the reads of archived oplog chunks, and how many error
+/// entries it archived since the history failed.
+///
+/// The fault applies only to the history: the chunks whose last entry is at or before
+/// `history_end`. A status rebuild reads that history.
 #[derive(Debug, Default)]
 struct ArchiveFault {
     mode: AtomicU8,
-    refused: AtomicUsize,
+    history_end: AtomicU64,
+    archived_errors: AtomicUsize,
 }
 
 impl ArchiveFault {
-    fn set(&self, mode: u8) {
+    fn fail_history(&self, mode: u8, history_end: OplogIndex) {
+        self.history_end
+            .store(u64::from(history_end), Ordering::SeqCst);
+        self.archived_errors.store(0, Ordering::SeqCst);
         self.mode.store(mode, Ordering::SeqCst);
     }
 
-    fn refused(&self) -> usize {
-        self.refused.load(Ordering::SeqCst)
+    fn restore(&self) {
+        self.mode.store(ARCHIVE_UP, Ordering::SeqCst);
     }
 
-    /// The answer to a read in `namespace` that replaces the stored one. An unavailable archive
-    /// fails the read as a backend whose outage outlived its retries, so the failure is transient.
-    /// A corrupt archive gives bytes of the current serialization version that do not decode.
-    fn read(&self, namespace: &BlobStorageNamespace) -> Option<anyhow::Result<Option<Vec<u8>>>> {
+    /// The error entries archived since the history failed. The archive receives every committed
+    /// entry, so this shows a recorded error without a read of the history.
+    fn archived_errors(&self) -> usize {
+        self.archived_errors.load(Ordering::SeqCst)
+    }
+
+    fn observe_write(&self, namespace: &BlobStorageNamespace, data: &[u8]) {
+        if !matches!(namespace, BlobStorageNamespace::CompressedOplog { .. }) {
+            return;
+        }
+        let entries = golem_common::serialization::deserialize::<CompressedOplogChunk>(data)
+            .expect("the archive stores compressed oplog chunks")
+            .decompress()
+            .expect("an archived chunk decompresses");
+        let errors = entries
+            .iter()
+            .filter(|entry| matches!(entry, OplogEntry::Error { .. }))
+            .count();
+        self.archived_errors.fetch_add(errors, Ordering::SeqCst);
+    }
+
+    /// The answer to a read of the object at `path` in `namespace` that replaces the stored one.
+    /// An unavailable archive fails the read as a backend whose outage outlived its retries, so
+    /// the failure is transient. A corrupt archive gives bytes of the current serialization
+    /// version that do not decode.
+    fn read(
+        &self,
+        namespace: &BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Option<anyhow::Result<Option<Vec<u8>>>> {
         if !matches!(namespace, BlobStorageNamespace::CompressedOplog { .. }) {
             return None;
         }
+        // Archived chunk objects are named `<last index>-<uuid>`.
+        let chunk_end = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.split('-').next())
+            .and_then(|index| index.parse::<u64>().ok());
+        if chunk_end.is_none_or(|end| end > self.history_end.load(Ordering::SeqCst)) {
+            return None;
+        }
         match self.mode.load(Ordering::SeqCst) {
-            ARCHIVE_UNAVAILABLE => {
-                self.refused.fetch_add(1, Ordering::SeqCst);
-                Some(Err(anyhow::anyhow!(
-                    "injected 503: the oplog archive is down"
-                )))
-            }
+            ARCHIVE_UNAVAILABLE => Some(Err(anyhow::anyhow!(
+                "injected 503: the oplog archive is down"
+            ))),
             ARCHIVE_CORRUPT => {
-                self.refused.fetch_add(1, Ordering::SeqCst);
                 let mut bytes = vec![golem_common::serialization::SERIALIZATION_VERSION_V3];
                 bytes.extend_from_slice(b"not a compressed oplog chunk");
                 Some(Ok(Some(bytes)))
@@ -330,7 +372,7 @@ impl BlobStorageBackend for FlakyArchiveStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        if let Some(answer) = self.fault.read(&namespace) {
+        if let Some(answer) = self.fault.read(&namespace, path) {
             return answer;
         }
         self.inner
@@ -398,6 +440,7 @@ impl BlobStorageBackend for FlakyArchiveStorage {
         path: &NormalizedBlobPath<'_>,
         data: &[u8],
     ) -> anyhow::Result<()> {
+        self.fault.observe_write(&namespace, data);
         self.inner
             .put_raw(target_label, op_label, namespace, path, data)
             .await
@@ -411,6 +454,7 @@ impl BlobStorageBackend for FlakyArchiveStorage {
         path: &NormalizedBlobPath<'_>,
         data: &[u8],
     ) -> anyhow::Result<PutIfAbsent> {
+        self.fault.observe_write(&namespace, data);
         self.inner
             .put_raw_if_absent(target_label, op_label, namespace, path, data)
             .await
@@ -561,6 +605,7 @@ impl ArchiveFaultAgent {
         deps: &WorkerExecutorTestDependencies,
         host_api_tests: &PrecompiledComponent,
         name: &str,
+        result_cache_capacity: Option<usize>,
     ) -> anyhow::Result<Self> {
         let context = TestContext::new(last_unique_id);
         let fault = Arc::new(ArchiveFault::default());
@@ -569,7 +614,12 @@ impl ArchiveFaultAgent {
             deps,
             &context,
             TestExecutorOverrides {
-                configure: Some(Arc::new(|config| config.oplog = blob_archiving_config())),
+                configure: Some(Arc::new(move |config| {
+                    config.oplog = blob_archiving_config();
+                    if let Some(capacity) = result_cache_capacity {
+                        config.invocation_results.hydrated_cache_capacity = capacity;
+                    }
+                })),
                 wrap_blob_storage: Some(Arc::new(move |inner| {
                     Arc::new(FlakyArchiveStorage {
                         inner,
@@ -614,12 +664,14 @@ impl ArchiveFaultAgent {
     ///
     /// The invocation is held at the end of its only host call. Meanwhile the buffered entries
     /// are committed past the status task, so the next receipt of the status task has a gap, and
-    /// the entries move to the archive. The archive fails, and the invocation is released.
-    /// Returns the result of that invocation and the last oplog index before the archive failed.
+    /// the entries move to the archive. Then `while_held` runs, the archived history fails, and
+    /// the invocation is released. Returns the result of that invocation and the last oplog index
+    /// of the failed history.
     async fn succeed_over_a_failing_rebuild(
         self: &Arc<Self>,
         deps: &WorkerExecutorTestDependencies,
         mode: u8,
+        while_held: impl AsyncFnOnce(&Self) -> anyhow::Result<()>,
     ) -> anyhow::Result<(anyhow::Result<AgentResult>, OplogIndex)> {
         let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, &self.agent_id);
         let (entered, release) = self.executor.gate_next_oplog_function_end(
@@ -634,10 +686,11 @@ impl ArchiveFaultAgent {
         entered
             .await
             .map_err(|_| anyhow::anyhow!("the host call must reach its End"))?;
+        while_held(self.as_ref()).await?;
         self.executor.commit_oplog(&self.agent_id).await?;
         wait_until_archived(deps, &self.context, &owned_agent_id).await?;
         let before_failure = self.executor.oplog_max_index(&self.agent_id).await?;
-        self.fault.set(mode);
+        self.fault.fail_history(mode, before_failure);
         release
             .send(())
             .map_err(|_| anyhow::anyhow!("the End must still wait"))?;
@@ -675,28 +728,28 @@ async fn an_unavailable_archive_after_an_early_commit_receipt_recovers_the_agent
             deps,
             host_api_tests,
             "early-receipt-unavailable-archive",
+            None,
         )
         .await?,
     );
 
-    let (result, before_failure) = agent
-        .succeed_over_a_failing_rebuild(deps, ARCHIVE_UNAVAILABLE)
+    let (result, _) = agent
+        .succeed_over_a_failing_rebuild(deps, ARCHIVE_UNAVAILABLE, async |_| Ok(()))
         .await?;
     result.expect("an invocation whose entries were committed must stay successful");
 
-    // The owner tries to repair the status again while the archive is down, without any new
-    // request reaching the agent.
-    let refused = agent.fault.refused();
+    // While the history is down, the owner fails to repair the status and records the failure,
+    // without any new request reaching the agent.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-    while agent.fault.refused() <= refused {
+    while agent.fault.archived_errors() == 0 {
         anyhow::ensure!(
             tokio::time::Instant::now() < deadline,
-            "the owner did not try to repair the detached status"
+            "the owner must record the failed rebuild as a recovery failure"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    agent.fault.set(ARCHIVE_UP);
+    agent.fault.restore();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
     loop {
         let metadata = agent.executor.get_worker_metadata(&agent.agent_id).await?;
@@ -710,10 +763,6 @@ async fn an_unavailable_archive_after_an_early_commit_receipt_recovers_the_agent
         );
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
-    assert!(
-        agent.records_an_error_after(before_failure).await?,
-        "the owner must record the failed rebuild as a recovery failure"
-    );
     agent.invoke().await?;
     Ok(())
 }
@@ -737,12 +786,13 @@ async fn a_corrupt_archive_after_an_early_commit_receipt_fails_the_agent(
             deps,
             host_api_tests,
             "early-receipt-corrupt-archive",
+            None,
         )
         .await?,
     );
 
     let (result, before_failure) = agent
-        .succeed_over_a_failing_rebuild(deps, ARCHIVE_CORRUPT)
+        .succeed_over_a_failing_rebuild(deps, ARCHIVE_CORRUPT, async |_| Ok(()))
         .await?;
     result.expect("an invocation whose entries were committed must stay successful");
 
@@ -756,7 +806,7 @@ async fn a_corrupt_archive_after_an_early_commit_receipt_fails_the_agent(
         "the failure does not name the agent and the decode error: {error}"
     );
 
-    agent.fault.set(ARCHIVE_UP);
+    agent.fault.restore();
     assert!(
         agent.records_an_error_after(before_failure).await?,
         "the owner must record the failed rebuild"
@@ -778,6 +828,117 @@ async fn a_corrupt_archive_after_an_early_commit_receipt_fails_the_agent(
             .await?
             .status,
         AgentStatus::Failed
+    );
+    Ok(())
+}
+
+/// As [`a_corrupt_archive_after_an_early_commit_receipt_fails_the_agent`], with a result cache of
+/// one entry and a second invocation queued behind the first. The stop that fails the agent fails
+/// the queued invocation, whose result takes the only cache entry. The detached status still names
+/// the committed invocation as current, and the stop must not fail it: no second completion is
+/// published for it, and its result reads as the success once the archive answers again.
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn a_failed_rebuild_does_not_fail_a_committed_invocation_whose_result_left_the_cache(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let agent = Arc::new(
+        ArchiveFaultAgent::start(
+            last_unique_id,
+            deps,
+            host_api_tests,
+            "early-receipt-evicted-result",
+            Some(1),
+        )
+        .await?,
+    );
+    let owned_agent_id = OwnedAgentId::new(agent.context.default_environment_id, &agent.agent_id);
+    let worker = agent
+        .executor
+        .active_agents()
+        .try_get(&owned_agent_id)
+        .await
+        .expect("the agent is loaded after its first invocation");
+    let mut events = worker.events().subscribe();
+
+    let (result, _) = agent
+        .succeed_over_a_failing_rebuild(deps, ARCHIVE_CORRUPT, async |agent| {
+            agent
+                .executor
+                .invoke_agent(
+                    &agent.component,
+                    &agent.agent,
+                    "get_self_metadata_result",
+                    data_value!(),
+                )
+                .await?;
+            // The enqueue folds every entry before it, so the receipt gap needs one more entry
+            // committed past the status task.
+            agent
+                .executor
+                .commit_oplog_entry_bypassing_worker_status(
+                    &agent.agent_id,
+                    OplogEntry::grow_memory(0),
+                )
+                .await
+                .map(|_| ())
+        })
+        .await?;
+    result.expect("an invocation whose entries were committed must stay successful");
+    let (committed, succeeded) = events
+        .wait_for(|event| match event {
+            Event::InvocationCompleted {
+                agent_id,
+                idempotency_key,
+                result,
+            } if agent_id == &agent.agent_id => Some((idempotency_key.clone(), result.is_ok())),
+            _ => None,
+        })
+        .await?;
+    assert!(
+        succeeded,
+        "the first completion must be the committed success"
+    );
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    while agent.executor.worker_is_loaded(&owned_agent_id).await {
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "the agent whose status does not rebuild must stop"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let republished = tokio::time::timeout(
+        Duration::from_millis(500),
+        events.wait_for(|event| match event {
+            Event::InvocationCompleted {
+                agent_id,
+                idempotency_key,
+                result,
+            } if agent_id == &agent.agent_id && idempotency_key == &committed => {
+                Some(result.clone())
+            }
+            _ => None,
+        }),
+    )
+    .await;
+    assert!(
+        republished.is_err(),
+        "the stop published a second completion for the committed invocation: {republished:?}"
+    );
+
+    agent.fault.restore();
+    worker
+        .commit_oplog_and_update_state(CommitLevel::Always)
+        .await?;
+    let lookup = worker.lookup_invocation_result(&committed).await;
+    assert!(
+        matches!(lookup, LookupResult::Complete(Ok(_))),
+        "the committed invocation must read as its success: {lookup:?}"
     );
     Ok(())
 }
