@@ -3,7 +3,7 @@ import { ToolRpc, createCollectedOutput, createStdin } from 'golem:tool/host@0.1
 import { runJavaScript } from 'wasm-rquickjs:execution';
 import { ok, processExitStatusSchema, toolDefinition } from '../../../../sdks/ts/packages/golem-ts-sdk/dist/runtime/index.mjs';
 import { getToolType } from '../../../../sdks/ts/packages/golem-ts-sdk/dist/runtime/toolReflection.mjs';
-import { typedSchemaValueToWit } from '../../../../sdks/ts/packages/golem-ts-sdk/dist/runtime/internal/schema-model/wit.mjs';
+import { typedSchemaValueToWit, typedSchemaValueFromWit } from '../../../../sdks/ts/packages/golem-ts-sdk/dist/runtime/internal/schema-model/wit.mjs';
 import { z } from '../../../../sdks/ts/packages/golem-ts-sdk/node_modules/zod/v4/index.js';
 
 export { golemTool010Guest, golemTool010Guest as guest } from '../../../../sdks/ts/packages/golem-ts-sdk/dist/runtime/index.mjs';
@@ -28,17 +28,20 @@ function summarize(output) {
     return JSON.stringify({
         stdout: channel(output.stdout), stderr: channel(output.stderr),
         terminal: output.result.tag === 'ok' ? 'ok' : output.result.val.tag,
-    });
+        structured: output.result.tag === 'ok' ? output.result.val.result : undefined,
+    }, (_key, value) => typeof value === 'bigint' ? value.toString() : value);
 }
 
 async function collect(mode, effectUrl) {
     const echo = mode === 'streams-echo-collect';
     const pressure = mode === 'streams-pressure-collect';
-    const path = [echo ? 'run' : pressure ? 'produce' : 'dual-reconstruct'];
+    const finite = mode === 'streams-finite-stdin';
+    const inputSize = 4 * 65536 + 17;
+    const path = [echo || finite ? 'run' : pressure ? 'produce' : 'dual-reconstruct'];
     const command = getToolType('streaming').command(path);
     const wireInput = typedSchemaValueToWit({
         graph: command.inputSchema.graph,
-        value: command.packJson(echo ? { mode: 'echo' } : pressure
+        value: command.packJson(finite ? { mode: 'historical-reconstruction-exclusive' } : echo ? { mode: 'echo' } : pressure
             ? { 'chunk-count': 512, 'chunk-size': 65536 }
             : { mode: 'redaction-terminals' }),
     });
@@ -61,8 +64,11 @@ async function collect(mode, effectUrl) {
         collected = future.collect(stdout, undefined);
         future[Symbol.dispose]?.();
     } else {
-        const request = JSON.stringify({ path, input: wireInput, stderr: !pressure });
-        const result = spawnSync('streaming', [request], { maxBuffer: pressure ? 4096 : 65536 });
+        const request = JSON.stringify({ path, input: wireInput, stderr: !pressure && !finite });
+        const result = spawnSync('streaming', [request], {
+            maxBuffer: pressure ? 4096 : 65536,
+            input: finite ? Uint8Array.from({ length: inputSize }, (_, index) => index % 256) : undefined,
+        });
         collected = result.collected;
         if (!collected || result.stdout.length !== collected.stdout.bytes.length) {
             throw new Error('Process backend did not preserve collected output');
@@ -79,6 +85,7 @@ async function collect(mode, effectUrl) {
                 const { spawnSync } = await import('node:child_process');
                 const result = spawnSync('streaming', [${JSON.stringify(request)}], {
                     maxBuffer: ${pressure ? 4096 : 65536},
+                    input: ${finite} ? Uint8Array.from({ length: ${inputSize} }, (_, index) => index % 256) : undefined,
                 });
                 if (!result.collected) throw new Error('Fresh job has no process backend');
                 return (${summarize.toString()})(result.collected);
@@ -102,6 +109,16 @@ async function collect(mode, effectUrl) {
     if (collected.result.tag !== 'ok' || !collected.result.val.result) {
         throw new Error(`Unexpected child result: ${JSON.stringify(collected.result)}`);
     }
+    if (finite) {
+        const summary = command.unpackResult(typedSchemaValueFromWit(collected.result.val.result).value);
+        if (String(summary.bytes_read) !== String(inputSize) || summary.chunks_read !== 5 || summary.output_closed) {
+            throw new Error(`Finite stdin did not reach its terminal: ${JSON.stringify(summary)}`);
+        }
+        if (collected.stdout.bytes.length || collected.stdout.failure || collected.stdout.overflow) {
+            throw new Error('Finite stdin summary unexpectedly wrote stdout');
+        }
+        return `${mode}:${inputSize}:5\n`;
+    }
     const describe = output => {
         if (!output) return [0, 0];
         if (output.failure || output.overflow) throw new Error('Unexpected collected output failure');
@@ -118,7 +135,7 @@ probe.implement({
         globalThis.nodeToolProbeInvoked = true;
         process.env.GOLEM_NODE_TOOL_PROBE_INVOCATION = 'active';
         const [mode, effectUrl] = input.args;
-        if (!['streams-collect', 'streams-echo-collect', 'streams-pressure-collect'].includes(mode)) {
+        if (!['streams-collect', 'streams-echo-collect', 'streams-pressure-collect', 'streams-finite-stdin'].includes(mode)) {
             throw new Error(`Unexpected probe mode: ${mode}`);
         }
         const writer = context.stdout.getWriter();

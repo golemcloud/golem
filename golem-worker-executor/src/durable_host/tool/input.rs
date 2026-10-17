@@ -495,6 +495,7 @@ impl NativeAttachmentInput {
         let binding = controller
             .observer()
             .identity()
+            .filter(|_| controller.requires_input_journal())
             .map(|attachment| {
                 ctx.state
                     .get_current_idempotency_key()

@@ -28,6 +28,7 @@ pub(crate) mod input;
 mod mcp;
 pub(crate) mod operation;
 mod output_creation;
+mod stdin_creation;
 mod streams;
 
 pub use attachment::{
@@ -2358,7 +2359,7 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
     prepare_guest_call(&mut store, &display_name).await;
     let stdin = stdin
         .map(|stdin| -> anyhow::Result<_> {
-            if stdin.controller().observer().identity().is_some() {
+            if stdin.controller().requires_input_journal() {
                 let input = input::AttachmentInputProducer::new(
                     stdin.consumer,
                     |ctx: &mut Ctx| ctx.durable_ctx_mut(),
@@ -6526,6 +6527,13 @@ fn allocate_stdin<Ctx: WorkerCtx>(
 }
 
 impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWorkerCtx<Ctx>> {
+    async fn create_stdin_from_bytes(
+        accessor: &Accessor<U, Self>,
+        bytes: Vec<u8>,
+    ) -> anyhow::Result<Result<Resource<ToolStdinEntry>, ToolRpcError>> {
+        stdin_creation::create_finite(accessor, bytes).await
+    }
+
     async fn create_stdin_from_stream(
         accessor: &Accessor<U, Self>,
         source: StreamReader<Result<Vec<u8>, ByteStreamFailure>>,

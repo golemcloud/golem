@@ -1,11 +1,12 @@
 // Feasibility adapter only. The probe prepares typed wire inputs, not CLI argv.
 import { setProcessBackend } from 'wasm-rquickjs:child-process';
-import { ToolRpc, createCollectedOutput } from 'golem:tool/host@0.1.0';
+import { ToolRpc, createCollectedOutput, createStdinFromBytes } from 'golem:tool/host@0.1.0';
 
 setProcessBackend({
     spawnSync(command, args, options) {
         if (command !== 'streaming') return undefined;
         const request = JSON.parse(args[0]);
+        const stdin = options.input === undefined ? undefined : createStdinFromBytes(options.input);
         const [target, stdout] = createCollectedOutput(BigInt(options.maxBuffer));
         let stderr;
         try {
@@ -16,7 +17,7 @@ setProcessBackend({
             throw error;
         }
         const rpc = new ToolRpc(command);
-        const future = rpc.asyncInvokeAndAwait(request.path, request.input, undefined, target, stderr?.[0]);
+        const future = rpc.asyncInvokeAndAwait(request.path, request.input, stdin, target, stderr?.[0]);
         const collected = future.collect(stdout, stderr?.[1]);
         future[Symbol.dispose]?.();
         return {

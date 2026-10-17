@@ -1,0 +1,60 @@
+{
+  "scope": "Host-owned immutable stdin transport checkpoint; production Node command adapter remains incomplete",
+  "golemBase": "2e19020ce",
+  "wrqjsSource": "7ac83d441ae056632f9ec679f966efd343ec6a34",
+  "wasm": {
+    "path": "/private/tmp/node-tool-processes-probe.pQOFN4/finite-stdin-wizer-v2.wasm",
+    "sha256": "5b1e04549fce4c685ed92da571eb3256a90a8fb235b222798019a83bbade3e1f",
+    "wizer": true,
+    "features": ["p3", "encoding"]
+  },
+  "nativeBinary": {
+    "path": "target/dev-ci/deps/integration-d7453dd34cf5128b",
+    "sha256": "eeee34801226562a407bf8802ea3ba3334a314c8c674a4d0b65238e03a83d5da",
+    "profile": "dev-ci",
+    "note": "This binary predates the explicit constructor request-digest validation added after the passing transport test. That guard still requires a fresh build and tests."
+  },
+  "transport": {
+    "constructor": "create-stdin-from-bytes(bytes) -> result<tool-stdin, tool-rpc-error>",
+    "inputBytes": 262161,
+    "attachmentCapacity": 65536,
+    "chunksObserved": 5,
+    "entry": "spawnSync('streaming', request, { input, maxBuffer: 65536 })",
+    "runtimeCases": ["main QuickJS runtime", "fresh runJavaScript job"],
+    "resultFields": ["chunks_read", "bytes_read", "output_closed"],
+    "externalEffects": "One counted HTTP effect before each runtime case; server stopped before executor reconstruction",
+    "reconstruction": "Offline replay returned successfully; raw stored oplog prefix unchanged; subsequent invocation succeeded",
+    "log": "/private/tmp/node-tool-processes-finite-stdin-native-v2.log",
+    "testSeconds": 7.193,
+    "timingClaim": "Functional test duration, not a controlled performance measurement"
+  },
+  "unitCoverage": {
+    "passed": 12,
+    "log": "/private/tmp/node-tool-processes-finite-stdin-executor-unit-v1.log",
+    "covers": [
+      "Binary chunks available without a producer",
+      "Historical retained memory upgrades and releases",
+      "Partial finite input admission refusal",
+      "Zero-capacity input behavior",
+      "Historical admission bypasses current memory pressure",
+      "Existing output prefix allocation, overflow and reconstruction behavior"
+    ],
+    "notYetRun": ["New changed-input request-digest validation test"]
+  },
+  "fixtureCorrections": [
+    "The first fixture checked kebab-case result keys. The real provider correctly returned snake_case keys with 262161 bytes and five chunks. The second fixture fixes that assertion.",
+    "The common host-function inventory needed create-stdin-from-bytes. Its source is corrected, but the complete common test group still needs rebuilding."
+  ],
+  "remainingGates": [
+    "Build and test explicit recorded length/digest validation, including changed regenerated input",
+    "Re-run the corrected common contract inventory",
+    "Native admission refusal without a child effect",
+    "Completed replay under changed pressure and incomplete live activation",
+    "Canonical CLI parsing and result/error policy",
+    "Golem-owned runtime registration and per-component disable control",
+    "Asynchronous Node API behavior, stdin modes, deadlines and cancellation",
+    "Mid-call crash-window tests and successful follow-up invocations",
+    "SDK/template builds, strict Golem lint, executor guide and walkthrough updates",
+    "Production tool-level performance measurements and Golem draft PR"
+  ]
+}

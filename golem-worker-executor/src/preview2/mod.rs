@@ -53,6 +53,7 @@ wasmtime::component::bindgen!({
         "golem:tool/host.create-stdin-from-stream": store | async | trappable,
         "golem:tool/host.create-output": store | async | trappable,
         "golem:tool/host.create-collected-output": store | async | trappable,
+        "golem:tool/host.create-stdin-from-bytes": store | async | trappable,
         "golem:tool/host.[method]future-invoke-result.collect": store | async | trappable,
         "golem:tool/host.get-invoke-results": store | async | trappable,
         "golem:tool/host.[method]tool-rpc.invoke": store | async | trappable,

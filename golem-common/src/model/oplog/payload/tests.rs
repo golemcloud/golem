@@ -788,6 +788,23 @@ mod tool_attachment {
         );
         for admitted in [false, true] {
             super::assert_host_payload_pair_schema_roundtrip::<
+                host_functions::GolemToolCreateStdinFromBytes,
+            >(
+                HostRequestToolFiniteStdinCreate {
+                    length: 13,
+                    digest: blake3::hash(b"finite-stdin!").as_bytes().to_vec(),
+                },
+                HostResponseToolFiniteStdinCreated {
+                    created: ToolFiniteStdinCreated {
+                        attachment: ToolAttachmentCreated {
+                            attachment: read.attachment,
+                            capacity_bytes: 3,
+                        },
+                        admitted,
+                    },
+                },
+            );
+            super::assert_host_payload_pair_schema_roundtrip::<
                 host_functions::GolemToolCreateCollectedOutput,
             >(
                 HostRequestToolCollectedOutputCreate { max_bytes: 13 },

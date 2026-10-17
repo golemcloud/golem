@@ -70,7 +70,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use tool_attachment::{
     ToolAttachmentCreated, ToolAttachmentTerminalOutcome, ToolAttachmentWriteOutcome,
-    ToolAttachmentWriteRequest, ToolCollectedOutputCreated,
+    ToolAttachmentWriteRequest, ToolCollectedOutputCreated, ToolFiniteStdinCreated,
 };
 use uuid::Uuid;
 
@@ -424,6 +424,7 @@ oplog_payload! {
             agent_id: String
         },
         ToolCollectedOutputCreate { max_bytes: u64 },
+        ToolFiniteStdinCreate { length: u64, digest: Vec<u8> },
         ToolAttachmentWrite { request: ToolAttachmentWriteRequest },
         ToolAttachmentEndpoint { attachment: ToolAttachmentId, operation_ordinal: u64 },
         ToolAttachmentFail { attachment: ToolAttachmentId, operation_ordinal: u64, reason: ByteStreamFailure },
@@ -767,6 +768,7 @@ oplog_payload! {
         },
         ToolAttachmentCreated { created: ToolAttachmentCreated },
         ToolCollectedOutputCreated { created: ToolCollectedOutputCreated },
+        ToolFiniteStdinCreated { created: ToolFiniteStdinCreated },
         ToolAttachmentWrite { outcome: ToolAttachmentWriteOutcome },
         ToolAttachmentTerminalResult { outcome: ToolAttachmentTerminalOutcome },
         ToolAttachmentClosed { cause: ByteStreamCloseCause },
@@ -1033,6 +1035,7 @@ pub mod host_functions {
         (GolemToolCreateStdin => "golem::tool::host", "create-stdin", NoInput, ToolAttachmentCreated),
         (GolemToolCreateOutput => "golem::tool::host", "create-output", NoInput, ToolAttachmentCreated),
         (GolemToolCreateCollectedOutput => "golem::tool::host", "create-collected-output", ToolCollectedOutputCreate, ToolCollectedOutputCreated),
+        (GolemToolCreateStdinFromBytes => "golem::tool::host", "create-stdin-from-bytes", ToolFiniteStdinCreate, ToolFiniteStdinCreated),
         (GolemToolStdinWrite => "golem::tool::host::tool-stdin-writer", "write", ToolAttachmentWrite, ToolAttachmentWrite),
         (GolemToolStdinFinish => "golem::tool::host::tool-stdin-writer", "finish", ToolAttachmentFinish, ToolAttachmentTerminalResult),
         (GolemToolStdinFail => "golem::tool::host::tool-stdin-writer", "fail", ToolAttachmentFail, ToolAttachmentTerminalResult),

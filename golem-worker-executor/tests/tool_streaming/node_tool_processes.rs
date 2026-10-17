@@ -31,6 +31,7 @@ async fn node_native_tool_stream_scheduling_probe(
         environment_state_service: Some(environment.clone()),
         configure: Some(Arc::new(|config| {
             config.retry.max_attempts = 0;
+            config.limits.max_tool_attachment_bytes = 65536;
             config.oplog.default_snapshotting =
                 golem_worker_executor::services::golem_config::SnapshotPolicy::Disabled;
         })),
@@ -108,7 +109,10 @@ async fn node_native_tool_stream_scheduling_probe(
     let mut effect_probe = if replay_probe {
         anyhow::ensure!(cases.split(',').all(|mode| matches!(
             mode,
-            "streams-collect" | "streams-echo-collect" | "streams-pressure-collect"
+            "streams-collect"
+                | "streams-echo-collect"
+                | "streams-pressure-collect"
+                | "streams-finite-stdin"
         )));
         Some(middleware_acceptance::start_probe_effect_server().await)
     } else {
@@ -130,6 +134,7 @@ async fn node_native_tool_stream_scheduling_probe(
                 | "streams-collect"
                 | "streams-echo-collect"
                 | "streams-pressure-collect"
+                | "streams-finite-stdin"
         ));
         println!("node-tool-stream starting mode={mode}");
         let started = Instant::now();
@@ -152,6 +157,14 @@ async fn node_native_tool_stream_scheduling_probe(
         .map_err(|_| anyhow::anyhow!("stream scheduling probe timed out: {mode}"))??;
         assert_eq!(result.exit_code, 0, "{mode}: {result:?}");
         assert!(result.stderr.is_empty(), "{mode}: {result:?}");
+        if mode == "streams-finite-stdin" {
+            assert_eq!(result.stdout, b"streams-finite-stdin:262161:5\n");
+            println!(
+                "node-tool-stream completed mode={mode} elapsed_us={}",
+                started.elapsed().as_micros()
+            );
+            continue;
+        }
         if mode == "streams-pressure-collect" {
             assert_eq!(
                 String::from_utf8(result.stdout)?,

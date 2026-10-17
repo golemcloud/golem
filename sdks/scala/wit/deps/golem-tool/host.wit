@@ -85,6 +85,12 @@ interface host {
   /// stream items that cannot rendezvous within one Component Model task.
   create-stdin-from-stream: func(source: stream<byte-stream-item>) -> own<tool-stdin>;
 
+  /// Creates an immutable, host-owned stdin source. The complete input is
+  /// admitted to host memory before this returns. The source requires no
+  /// caller-side pump and can exceed the streaming attachment buffer size.
+  /// Admission failure creates no endpoint. Replay preserves that decision.
+  create-stdin-from-bytes: func(bytes: list<u8>) -> result<own<tool-stdin>, tool-rpc-error>;
+
   /// Single-use output target consumed by one result-bearing invocation.
   /// Dropping it unused fails the paired reader as abandoned.
   resource tool-output;

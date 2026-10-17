@@ -33,6 +33,12 @@ pub struct ToolCollectedOutputCreated {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, BinaryCodec, IntoSchema, FromSchema)]
+pub struct ToolFiniteStdinCreated {
+    pub attachment: ToolAttachmentCreated,
+    pub admitted: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec, IntoSchema, FromSchema)]
 pub struct ToolAttachmentWriteRequest {
     pub attachment: ToolAttachmentId,
     pub operation_ordinal: u64,

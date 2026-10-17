@@ -78,6 +78,7 @@ fn middleware_bypass_wit_exposes_only_definition_discovery_and_runtime_owned_und
             "create-output",
             "create-stdin",
             "create-stdin-from-stream",
+            "create-stdin-from-bytes",
             "fail",
             "finish",
             "get",

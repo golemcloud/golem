@@ -126,7 +126,7 @@ impl AttachmentMemory {
     }
 
     /// Called before the new attachment is registered or exposed, so live
-    /// activation cannot race admission of its retained output buffer.
+    /// activation cannot race admission of a retained byte buffer.
     pub(super) async fn collection_buffer(
         &self,
         limit: usize,
@@ -135,7 +135,7 @@ impl AttachmentMemory {
             AttachmentReservationOutcome::Reserved(reservation) => reservation,
             AttachmentReservationOutcome::Rejected => return Ok(None),
             AttachmentReservationOutcome::Pending => {
-                anyhow::bail!("new output collection has pending memory activation")
+                anyhow::bail!("new retained buffer has pending memory activation")
             }
         };
         let mut bytes = Vec::new();
@@ -508,6 +508,7 @@ pub(super) fn terminal_metadata(cause: &ByteStreamCloseCause) -> ToolAttachmentT
 
 struct AttachmentState {
     identity: Option<ToolAttachmentId>,
+    immutable_input: bool,
     mode: AttachmentMode,
     chunks: VecDeque<BufferedChunk>,
     observed_writes: BTreeSet<golem_common::model::OplogIndex>,
@@ -550,6 +551,7 @@ impl ByteAttachment {
             producer_operation: AtomicBool::new(false),
             state: Mutex::new(AttachmentState {
                 identity: None,
+                immutable_input: false,
                 mode: AttachmentMode::Pending,
                 chunks: VecDeque::new(),
                 observed_writes: BTreeSet::new(),
@@ -584,6 +586,7 @@ impl ByteAttachment {
             producer_operation: AtomicBool::new(false),
             state: Mutex::new(AttachmentState {
                 identity: None,
+                immutable_input: false,
                 mode: AttachmentMode::Discard,
                 chunks: VecDeque::new(),
                 observed_writes: BTreeSet::new(),
@@ -1814,6 +1817,11 @@ impl WeakAttachmentController {
 }
 
 impl AttachmentController {
+    pub(super) fn requires_input_journal(&self) -> bool {
+        let state = self.attachment.state.lock().unwrap();
+        state.identity.is_some() && !state.immutable_input
+    }
+
     pub(crate) fn downgrade(&self) -> WeakAttachmentController {
         WeakAttachmentController(Arc::downgrade(&self.attachment))
     }
@@ -2527,6 +2535,42 @@ pub(crate) fn attachment_pair(
             guest_watcher: None,
         },
     )
+}
+
+/// Every chunk is present before publication. Reads have no external input,
+/// producer scheduling, or further memory admission to reproduce on replay.
+pub(super) fn finite_stdin(
+    limit: usize,
+    memory: AttachmentMemory,
+    identity: Option<ToolAttachmentId>,
+    buffers: Vec<CollectionBuffer>,
+) -> AttachmentConsumer {
+    let attachment = ByteAttachment::new(limit, memory);
+    {
+        let mut state = attachment.state.lock().unwrap();
+        state.identity = identity;
+        state.immutable_input = true;
+        state.producer_active = false;
+        state.terminal = Some(ByteStreamCloseCause::Finished);
+        for CollectionBuffer {
+            bytes,
+            _reservation: reservation,
+        } in buffers
+        {
+            state.buffered_bytes += bytes.len();
+            state.chunks.push_back(BufferedChunk {
+                bytes: AttachmentWriteBody::Inline(bytes),
+                charge: Some(AttachmentCharge::new(
+                    reservation,
+                    attachment.charged_bytes.clone(),
+                )),
+                published: Arc::new(AtomicBool::new(true)),
+                source_end: None,
+            });
+        }
+        state.accepted_bytes = state.buffered_bytes as u64;
+    }
+    AttachmentConsumer { attachment }
 }
 
 pub(crate) fn discard_producer(memory: AttachmentMemory) -> AttachmentProducer {
@@ -4724,6 +4768,84 @@ mod tests {
                 .unwrap()
                 .host_resource_exhausted
         );
+    }
+
+    #[test]
+    async fn finite_stdin_reads_all_pre_admitted_chunks_without_a_producer() {
+        let memory = AttachmentMemory::inert();
+        let mut buffers = Vec::new();
+        for chunk in [b"\0\xff\x80".as_slice(), b"\r\n\0", b"\xfe\x01"] {
+            let mut buffer = memory
+                .collection_buffer(chunk.len())
+                .await
+                .unwrap()
+                .unwrap();
+            buffer.bytes.extend_from_slice(chunk);
+            buffers.push(buffer);
+        }
+        let identity = ToolAttachmentId {
+            creation_start: golem_common::model::OplogIndex::INITIAL,
+            slot: golem_common::model::oplog::attachment::ToolAttachmentSlot::Stdin,
+        };
+        let consumer = finite_stdin(3, memory, Some(identity), buffers);
+        let controller = consumer.controller();
+        assert!(!controller.requires_input_journal());
+        assert!(!controller.metadata().producer_active);
+        assert_eq!(controller.metadata().charged_bytes, 8);
+        assert_eq!(controller.metadata().buffered_bytes, 8);
+        assert!(controller.configure_live());
+        let mut source = consumer.into_stream_producer();
+        let mut received = Vec::new();
+        loop {
+            let item = std::future::poll_fn(|cx| source.poll_read(cx))
+                .await
+                .unwrap();
+            match item {
+                AttachmentStreamRead::Chunk { bytes, source_end } => {
+                    assert!(source_end.is_none());
+                    assert!(bytes.len() <= 3);
+                    received.extend(bytes);
+                }
+                AttachmentStreamRead::Terminal {
+                    result: StreamResult::Dropped,
+                    ..
+                } => break,
+                _ => panic!("immutable input selected a different terminal"),
+            }
+        }
+        assert_eq!(received, [0, 255, 128, 13, 10, 0, 254, 1]);
+        assert_eq!(controller.metadata().charged_bytes, 0);
+        assert_eq!(controller.metadata().delivered_bytes, 8);
+    }
+
+    #[test]
+    async fn finite_stdin_reconstruction_upgrades_and_releases_retained_memory() {
+        let requested = Arc::new(AtomicU64::new(0));
+        let requested_for_memory = requested.clone();
+        let memory = AttachmentMemory::with_test_reservation(false, move |bytes| {
+            requested_for_memory.fetch_add(bytes, Ordering::AcqRel);
+            async move { Some(MemoryGrant::inert(bytes)) }
+        });
+        let mut buffers = Vec::new();
+        for chunk in b"finite-stdin!".chunks(3) {
+            let mut buffer = memory
+                .collection_buffer(chunk.len())
+                .await
+                .unwrap()
+                .unwrap();
+            buffer.bytes.extend_from_slice(chunk);
+            buffers.push(buffer);
+        }
+        let consumer = finite_stdin(3, memory.clone(), None, buffers);
+        let controller = consumer.controller();
+        assert_eq!(requested.load(Ordering::Acquire), 0);
+        assert_eq!(memory.historical_charges.bytes(), 13);
+        assert!(controller.prepare_live_memory_accounting().await);
+        controller.commit_live_memory_accounting();
+        assert_eq!(requested.load(Ordering::Acquire), 13);
+        drop(consumer);
+        assert_eq!(memory.historical_charges.bytes(), 0);
+        assert_eq!(controller.metadata().charged_bytes, 0);
     }
 
     #[test]
