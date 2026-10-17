@@ -293,7 +293,7 @@ pub struct EtcdConfig {
     #[serde(default)]
     pub username: Option<String>,
     /// The password of `username`; usually set from a secret through
-    /// `GOLEM__PERSISTENCE__CONFIG__PASSWORD`.
+    /// `GOLEM__PERSISTENCE__CONFIG__PASSWORD`. Serialized as `****`, so no configuration dump holds it.
     #[serde(default)]
     pub password: Option<EtcdPassword>,
 }
@@ -318,11 +318,16 @@ pub struct EtcdTlsConfig {
     pub server_name: Option<String>,
 }
 
-/// The password of an etcd user. Neither its `Debug` form, the configuration display nor a refused
-/// configuration shows it.
-#[derive(Clone, PartialEq, Eq, Serialize)]
-#[serde(transparent)]
+/// The password of an etcd user. Neither its `Debug` form, the configuration display, a refused
+/// configuration nor a serialized configuration shows it.
+#[derive(Clone, PartialEq, Eq)]
 pub struct EtcdPassword(String);
+
+impl Serialize for EtcdPassword {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str("****")
+    }
+}
 
 const PASSWORD_NOT_TEXT: &str = "persistence.config.password must be text, but its value was read \
      as a number, a boolean or a list; in an environment variable, wrap the whole value in double \
@@ -355,6 +360,8 @@ impl<'de> serde::de::Visitor<'de> for PasswordVisitor {
         Ok(EtcdPassword(value))
     }
 
+    // Every arm below refuses with the same message on purpose: serde's default for each of them
+    // builds a message that contains the value, and that message is printed at startup.
     fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<EtcdPassword, E> {
         Err(E::custom(PASSWORD_NOT_TEXT))
     }
@@ -787,7 +794,7 @@ pub fn reject_legacy_db_env_vars() -> Result<(), String> {
 mod tests {
     use test_r::test;
 
-    use crate::config::{EtcdConfig, legacy_db_env_vars, make_config_loader};
+    use crate::config::{EtcdConfig, EtcdPassword, legacy_db_env_vars, make_config_loader};
 
     #[test]
     pub fn config_is_loadable() {
@@ -851,6 +858,18 @@ mod tests {
             );
             assert!(!message.contains(shown), "{message}");
         }
+    }
+
+    #[test]
+    pub fn a_serialized_configuration_shows_the_password_as_stars() {
+        let config = EtcdConfig {
+            password: Some(EtcdPassword::from("s3cr3t-value")),
+            ..EtcdConfig::default()
+        };
+        let password = figment::Figment::from(figment::providers::Serialized::defaults(&config))
+            .find_value("password")
+            .expect("a set password is serialized");
+        assert_eq!(password.as_str(), Some("****"));
     }
 
     #[test]

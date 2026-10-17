@@ -61,6 +61,9 @@ pub enum ShardManagerError {
     IoError(#[from] std::io::Error),
     #[error("Internal error: {0}")]
     Internal(String),
+    /// A setting that cannot work, found at startup; the message names the setting.
+    #[error("Invalid configuration: {0}")]
+    InvalidConfig(String),
 }
 
 impl ShardManagerError {
@@ -92,6 +95,7 @@ impl ShardManagerError {
             },
             Self::ShutdownRequested => Self::ShutdownRequested,
             Self::Internal(message) => Self::Internal(message.clone()),
+            Self::InvalidConfig(message) => Self::InvalidConfig(message.clone()),
             other => Self::Internal(other.to_string()),
         }
     }
@@ -163,6 +167,8 @@ impl IsRetriableError for ShardManagerError {
             ShardManagerError::MigrationError(_) => false,
             ShardManagerError::IoError(_) => false,
             ShardManagerError::Internal(_) => false,
+            // The configuration does not change while the process runs.
+            ShardManagerError::InvalidConfig(_) => false,
         }
     }
 

@@ -124,6 +124,12 @@ impl From<ShardManagerError> for golem::shardmanager::v1::ShardManagerError {
                 details,
                 api::error_code::INTERNAL_UNKNOWN,
             ),
+            // Found only at startup, before any request is served.
+            ShardManagerError::InvalidConfig(details) => error(
+                shard_manager_error::Error::Unknown,
+                details,
+                api::error_code::INTERNAL_UNKNOWN,
+            ),
         }
     }
 }

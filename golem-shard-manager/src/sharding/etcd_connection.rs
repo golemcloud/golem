@@ -25,45 +25,40 @@ use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::path::Path;
 
-fn refused(message: String) -> ShardManagerError {
-    ShardManagerError::Internal(message)
+fn invalid_config(message: String) -> ShardManagerError {
+    ShardManagerError::InvalidConfig(message)
 }
 
 fn check_endpoints(config: &EtcdConfig) -> Result<(), ShardManagerError> {
     if config.endpoints.is_empty() {
-        return Err(refused(
+        return Err(invalid_config(
             "etcd shard state persistence requires at least one endpoint".to_string(),
         ));
     }
 
-    // Strict both ways, so that a typo cannot turn TLS off; anything else - a scheme-less
-    // `host:port` included - would otherwise fail at connect time with an opaque error.
-    let scheme = if config.tls.is_some() {
-        "https://"
-    } else {
-        "http://"
-    };
-    if let Some(endpoint) = config
-        .endpoints
-        .iter()
-        .find(|endpoint| !endpoint.starts_with(scheme))
-    {
-        return Err(refused(if config.tls.is_some() {
-            format!(
+    // Strict both ways, so that a mistake stops the startup with the setting's name. etcd-client
+    // refuses an `http://` endpoint with TLS options only when it connects, without naming a
+    // setting; an `https://` endpoint without them fails only at its first handshake; and a
+    // scheme-less `host:port` fails at connect time with an opaque error.
+    let tls = config.tls.is_some();
+    for endpoint in &config.endpoints {
+        let message = match (tls, endpoint.starts_with("https://")) {
+            (true, true) => continue,
+            (false, false) if endpoint.starts_with("http://") => continue,
+            (true, false) => format!(
                 "etcd endpoint {endpoint} must start with https://, because \
                  persistence.config.tls is set"
-            )
-        } else if endpoint.starts_with("https://") {
-            format!(
+            ),
+            (false, true) => format!(
                 "etcd endpoint {endpoint} uses https://, which needs persistence.config.tls \
                  (at least ca_cert_file)"
-            )
-        } else {
-            format!(
+            ),
+            (false, false) => format!(
                 "etcd endpoint {endpoint} must start with http://, or with https:// together with \
                  persistence.config.tls"
-            )
-        }));
+            ),
+        };
+        return Err(invalid_config(message));
     }
 
     Ok(())
@@ -73,13 +68,13 @@ fn check_credentials(config: &EtcdConfig) -> Result<(), ShardManagerError> {
     match (&config.username, &config.password) {
         (None, None) => Ok(()),
         (Some(_), Some(_)) if config.tls.is_some() => Ok(()),
-        (Some(_), Some(_)) => Err(refused(
+        (Some(_), Some(_)) => Err(invalid_config(
             "persistence.config.username and persistence.config.password need \
              persistence.config.tls: over http:// the password, and then the auth token on every \
              request, would cross the network in plain text"
                 .to_string(),
         )),
-        _ => Err(refused(
+        _ => Err(invalid_config(
             "persistence.config.username and persistence.config.password must be set together"
                 .to_string(),
         )),
@@ -96,7 +91,7 @@ enum Pem {
 /// the startup with the setting's name instead of failing every TLS handshake later.
 fn read_pem(setting: &str, path: &Path, expected: Pem) -> Result<Vec<u8>, ShardManagerError> {
     let bytes = std::fs::read(path).map_err(|err| {
-        refused(format!(
+        invalid_config(format!(
             "cannot read persistence.config.tls.{setting} {}: {err}",
             path.display()
         ))
@@ -109,7 +104,7 @@ fn read_pem(setting: &str, path: &Path, expected: Pem) -> Result<Vec<u8>, ShardM
         Pem::PrivateKey => (PrivateKeyDer::from_pem_slice(&bytes).is_ok(), "private key"),
     };
     if !found {
-        return Err(refused(format!(
+        return Err(invalid_config(format!(
             "persistence.config.tls.{setting} {} holds no PEM {kind}",
             path.display()
         )));
@@ -128,7 +123,7 @@ fn tls_options(tls: &EtcdTlsConfig) -> Result<TlsOptions, ShardManagerError> {
         }
         (None, None) => {}
         _ => {
-            return Err(refused(
+            return Err(invalid_config(
                 "persistence.config.tls.client_cert_file and \
                  persistence.config.tls.client_key_file must be set together"
                     .to_string(),
@@ -251,7 +246,7 @@ mod tests {
     }
 
     #[test]
-    fn an_https_endpoint_without_tls_settings_is_refused() {
+    fn an_https_endpoint_without_tls_settings_is_invalid_config() {
         let message = refusal(&config("https://etcd:2379", None));
         assert!(
             message.contains("uses https://, which needs persistence.config.tls"),
@@ -260,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn an_http_endpoint_with_tls_settings_is_refused() {
+    fn an_http_endpoint_with_tls_settings_is_invalid_config() {
         let message = refusal(&config("http://etcd:2379", Some(PemFiles::new().mtls())));
         assert!(
             message.contains("must start with https://, because persistence.config.tls is set"),
@@ -269,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn an_endpoint_without_a_scheme_is_refused() {
+    fn an_endpoint_without_a_scheme_is_invalid_config() {
         let message = refusal(&config("etcd:2379", None));
         assert!(message.contains("http://"), "{message}");
     }
@@ -306,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn a_file_without_a_certificate_is_refused() {
+    fn a_file_without_a_certificate_is_invalid_config() {
         let files = PemFiles::new();
         let tls = EtcdTlsConfig {
             ca_cert_file: files.path("key.pem"),
@@ -317,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn a_key_file_without_a_key_is_refused() {
+    fn a_key_file_without_a_key_is_invalid_config() {
         let files = PemFiles::new();
         let tls = EtcdTlsConfig {
             client_key_file: Some(files.path("cert.pem")),
@@ -349,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn a_user_without_tls_is_refused() {
+    fn a_user_without_tls_is_invalid_config() {
         let message = refusal(&EtcdConfig {
             username: Some("golem".to_string()),
             password: Some(EtcdPassword::from("secret")),
