@@ -32,7 +32,7 @@ mod raw {
     use golem_rust::{ComponentId, Uuid};
 
     pub use golem_rust::schema::wit::wire::PermissionCard as Card;
-    pub use types::{PermissionError, WalletCard};
+    pub use types::{PatternGrant, PermissionError, WalletCard};
 
     fn card_id(id: wire::CardId) -> CardId {
         CardId::new(Uuid::from(id.uuid))
@@ -112,6 +112,16 @@ mod raw {
             .expect("persistent card derivation failed")
     }
 
+    /// Derives a child of `parent` that retains its card inspection only for `recipient`.
+    pub fn derive_child_for_recipient(parent: &Card, recipient: &str) -> Card {
+        let grant = types::PatternGrant {
+            recipient: recipient.to_string(),
+            ..inspect_grant(parent)
+        };
+        derive::derive(parent, &[grant], &[], &[], &[], None)
+            .expect("recipient-restricted card derivation failed")
+    }
+
     pub fn install(
         card: Card,
         component_id: ComponentId,
@@ -137,6 +147,13 @@ mod raw {
         let lifespan = lifespan.map(|iso_8601| types::Duration { iso_8601 });
         derive::derive(parent, &[grant], &[], &[], &[], lifespan.as_ref())
             .expect("persistent card derivation failed")
+    }
+
+    /// Derives a card from the wallet that grants exactly `grants` in its lower bound.
+    pub fn derive_from_wallet_granting(
+        grants: &[types::PatternGrant],
+    ) -> Result<Card, PermissionError> {
+        derive::derive_from_wallet(grants, &[], &[], &[], None)
     }
 
     /// Derives a child of `parent` that retains none of its grants.
@@ -373,6 +390,22 @@ pub trait ScopeCardAgent {
     /// The observations kept by the last `remember_wallet_*` call.
     fn remembered_wallet_observations(&self) -> Vec<u64>;
 
+    /// Makes the card operation `operation` twice and keeps the outcome of each call in agent
+    /// state: `ok`, or the kind of the permission error. Between the two calls the agent logs
+    /// `CARD_DECISION_GAP_MARKER` and then busy-loops `spin` iterations without a host call, so
+    /// no recorded entry separates the two calls. `install-card` inspects and then installs cards
+    /// restricted to a foreign recipient on `target_agent_id` of `component_id`.
+    fn remember_card_decisions_around_gap(
+        &self,
+        operation: String,
+        spin: u64,
+        component_id: ComponentId,
+        target_agent_id: String,
+    ) -> Vec<String>;
+
+    /// The outcomes kept by the last `remember_card_decisions_around_gap` call.
+    fn remembered_card_decisions(&self) -> Vec<String>;
+
     fn authorize_repeatedly(&self, repetitions: u32) -> bool;
 
     fn inspect_repeatedly(&self, repetitions: u32) -> bool;
@@ -554,8 +587,16 @@ pub struct ScopeCardAgentImpl {
     _name: String,
     kept_scope_card: RefCell<Option<KeptScopeCard>>,
     wallet_observations: RefCell<Vec<u64>>,
+    card_decisions: RefCell<Vec<String>>,
     kept_cards: RefCell<KeptCards>,
 }
+
+/// A recipient that no agent of the test environment matches, so installing a card restricted to
+/// it on any agent is a recipient mismatch.
+const CARD_DECISION_FOREIGN_RECIPIENT: &str = "nobody@example.com/*/*/*/*";
+
+/// The message that `remember_card_decisions_around_gap` logs between its two calls.
+const CARD_DECISION_GAP_MARKER: &str = "card-decision-gap";
 
 #[agent_implementation]
 impl ScopeCardAgent for ScopeCardAgentImpl {
@@ -564,6 +605,7 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
             _name: name,
             kept_scope_card: RefCell::new(None),
             wallet_observations: RefCell::new(Vec::new()),
+            card_decisions: RefCell::new(Vec::new()),
             kept_cards: RefCell::new(KeptCards::default()),
         }
     }
@@ -846,6 +888,76 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         self.wallet_observations.borrow().clone()
     }
 
+    fn remember_card_decisions_around_gap(
+        &self,
+        operation: String,
+        spin: u64,
+        component_id: ComponentId,
+        target_agent_id: String,
+    ) -> Vec<String> {
+        let mut decide: Box<dyn FnMut() -> String> = match operation.as_str() {
+            "derive-scope" => {
+                let scope = raw::derive_scope_card();
+                Box::new(move || raw::outcome(&raw::derive_scope(&[&scope])))
+            }
+            "inspect-card" => {
+                let template = raw::template();
+                Box::new(move || raw::outcome(&raw::view(&template)))
+            }
+            "derive" => {
+                let template = raw::template();
+                Box::new(move || raw::outcome(&raw::try_derive_empty_child(&template)))
+            }
+            "derive-from-wallet" => {
+                let grants = ["inspect", "derive"].map(|verb| raw::PatternGrant {
+                    class: "card".to_string(),
+                    owner: "*".to_string(),
+                    recipient: "*".to_string(),
+                    verb: verb.to_string(),
+                    resource_id: "*".to_string(),
+                });
+                Box::new(move || raw::outcome(&raw::derive_from_wallet_granting(&grants)))
+            }
+            "install-card" => {
+                let template = raw::template();
+                let mut cards = vec![
+                    raw::derive_child_for_recipient(&template, CARD_DECISION_FOREIGN_RECIPIENT),
+                    raw::derive_child_for_recipient(&template, CARD_DECISION_FOREIGN_RECIPIENT),
+                ];
+                Box::new(move || {
+                    let card = cards.remove(0);
+                    // The inspection applies a pending card event at its authority boundary,
+                    // before any recorded entry of this call.
+                    raw::view(&card).expect("failed to inspect the card to install");
+                    raw::outcome(&raw::install(
+                        card,
+                        component_id.clone(),
+                        target_agent_id.clone(),
+                    ))
+                })
+            }
+            operation => panic!("unknown card operation {operation}"),
+        };
+        let first = decide();
+        golem_rust::bindings::wasi::logging::logging::log(
+            golem_rust::bindings::wasi::logging::logging::Level::Info,
+            "",
+            CARD_DECISION_GAP_MARKER,
+        );
+        let mut x = 0u64;
+        for i in 0..spin {
+            x = std::hint::black_box(x.wrapping_mul(6364136223846793005).wrapping_add(i));
+        }
+        std::hint::black_box(x);
+        let second = decide();
+        let outcomes = vec![first, second];
+        *self.card_decisions.borrow_mut() = outcomes.clone();
+        outcomes
+    }
+
+    fn remembered_card_decisions(&self) -> Vec<String> {
+        self.card_decisions.borrow().clone()
+    }
 
     fn authorize_repeatedly(&self, repetitions: u32) -> bool {
         let parent = parent_card();

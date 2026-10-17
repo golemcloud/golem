@@ -210,6 +210,33 @@ pub enum PermissionCardDeriveError {
     NotPermitted(String),
 }
 
+/// A `golem:permissions` permission error that a recorded authorization decision returns to the
+/// guest.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializablePermissionError {
+    NotPermitted(String),
+    LowerBoundTooBroad(String),
+    UpperBoundTooBroad(String),
+    WalletMultiSourceRequired(String),
+    CardRevoked(String),
+    CardExpired(String),
+    InstallRecipientMismatch(String),
+    UnknownResourceClass(String),
+    InvalidPattern(String),
+    InvalidVerb(String),
+    InvalidOwner(String),
+    InvalidRecipient(String),
+}
+
 /// The liveness of the card behind a permission-card handle when an operation used the handle.
 #[derive(
     Debug,
