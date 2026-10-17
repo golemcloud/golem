@@ -185,8 +185,6 @@ async fn cross_socket_pending(
             .owner_runtime_resources()
             .set_scripted_filesystem_usage_for_test(source_usage.clone());
     }
-    let (clock, mut polls) = MonthlyClockForTest::new();
-    worker.set_monthly_clock_for_test(clock.clone());
     let mut attempts =
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let mut phases = crate::native_waits::input(worker.get_initial_worker_metadata().fingerprint);
@@ -217,130 +215,192 @@ async fn cross_socket_pending(
         let phase = pending_phase(&mut phases, Operation::Splice, &key).await?;
         let runtime = phase.runtime;
         let mut byte = [0];
-        ensure!(tokio::time::timeout(Duration::from_millis(25), output.read(&mut byte)).await.is_err(),
-            "destination must not receive data before A supplies input");
+        ensure!(
+            tokio::time::timeout(Duration::from_millis(25), output.read(&mut byte))
+                .await
+                .is_err(),
+            "destination must not receive data before A supplies input"
+        );
         executor.commit_oplog(&id).await?;
         let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         let starts = cross_setup(&entries, 2)?;
         ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
-        tokio::time::timeout(Duration::from_secs(10), polls.recv()).await?.context("monitor timer closed")?;
         let initial = worker.current_monthly_proposal_for_test();
         let acquisitions = worker.permit_acquisitions_for_test();
         let mut raw = worker.raw_interrupt_for_test();
         let account = limits.initialize_account(context.account_id).await?;
         ensure!(initial.exhaustion.is_none() && initial == runtime);
         ensure!(phase.state() == WaitState::Pending);
-        ensure!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await && !request_is_finished(&invocation));
+        ensure!(
+            worker.is_loaded().await
+                && worker.concurrent_agent_permit_is_held().await
+                && !request_is_finished(&invocation)
+        );
         if resource == Resource::Compute {
-            ensure!(initial.fuel_generation.is_some() && initial.fuel_generation == account.settled_fuel_generation_for_test());
+            ensure!(
+                initial.fuel_generation.is_some()
+                    && initial.fuel_generation == account.settled_fuel_generation_for_test()
+            );
             ensure!(account.monthly_capacity_is_exhausted_for_test(mode));
-            clock.advance(Duration::from_secs(30));
-            tokio::time::timeout(Duration::from_secs(10), async {
-                while polls.recv().await.unwrap().deadline != Duration::from_secs(60) {}
-            }).await?;
-            ensure!(attempts.try_recv().is_err() && worker.current_monthly_proposal_for_test() == initial);
+            ensure!(
+                attempts.try_recv().is_err()
+                    && worker.current_monthly_proposal_for_test() == initial
+            );
         }
         if resource == Resource::Storage {
-            source_usage.set(FilesystemUsage::Authoritative { allocated_bytes: 101, filesystem_objects: 1 });
-            clock.advance(Duration::from_secs(30));
-        } else {
-            let mut exhausted = policy.clone();
-            if resource == Resource::Memory { exhausted.available_memory_gb_seconds = 0; }
-            else { exhausted.available_fuel = 0; }
-            registry.set_policy(exhausted);
-            start_refresh(&limits, &registry, context.account_id, &mut refresh).await?;
+            source_usage.set(FilesystemUsage::Authoritative {
+                allocated_bytes: 1 << 30,
+                filesystem_objects: 1,
+            });
         }
-        let mut storage_now = Duration::from_secs(30);
-        let attempt = tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                tokio::select! {
-                    biased;
-                    attempt = attempts.recv() => return attempt.context("acceptance observer closed"),
-                    poll = polls.recv(), if resource == Resource::Storage => {
-                        let poll = poll.context("storage monitor timer closed")?;
-                        if poll.now != storage_now || poll.deadline <= storage_now { continue; }
-                        worker.drain_lifecycle_for_test().await?;
-                        tokio::select! {
-                            biased;
-                            attempt = attempts.recv() => return attempt.context("acceptance observer closed"),
-                            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
-                        }
-                        storage_now += Duration::from_secs(30);
-                        clock.advance(Duration::from_secs(30));
-                    }
-                }
-            }
-        }).await.context("monthly proposal")??;
-        ensure!(attempt.proposal.policy_revision == initial.policy_revision + u64::from(resource != Resource::Storage));
-        ensure!(attempt.proposal.period == initial.period && attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id);
+        let mut exhausted = policy.clone();
+        match resource {
+            Resource::Memory => exhausted.available_memory_gb_seconds = 0,
+            Resource::Compute => exhausted.available_fuel = 0,
+            Resource::Storage if durable => exhausted.available_durable_storage_byte_seconds = 0,
+            Resource::Storage => exhausted.available_ephemeral_storage_byte_seconds = 0,
+        }
+        registry.set_policy(exhausted);
+        start_refresh(&limits, &registry, context.account_id, &mut refresh).await?;
+        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
+            .await
+            .context("monthly proposal")?
+            .context("acceptance observer closed")?;
+        ensure!(attempt.proposal.policy_revision == initial.policy_revision + 1);
+        ensure!(
+            attempt.proposal.period == initial.period
+                && attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id
+        );
         ensure!(attempt.proposal.resident_generation == initial.resident_generation);
         ensure!(attempt.proposal.fuel_generation == initial.fuel_generation);
         ensure!(attempt.proposal.exhaustion == Some(resource.reason(durable)));
         ensure!(attempt.accepted);
         let signal = tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
-        ensure!(matches!(signal, InterruptKind::Suspend(_)) && worker.monthly_stop_for_test() == Some(signal));
+        ensure!(
+            matches!(signal, InterruptKind::Suspend(_))
+                && worker.monthly_stop_for_test() == Some(signal)
+        );
         ensure!(worker.owner_stop_for_test().await == Some(signal));
-        if resource == Resource::Compute { ensure!(account.settled_fuel_generation_for_test() > initial.fuel_generation); }
+        if resource == Resource::Compute {
+            ensure!(account.settled_fuel_generation_for_test() > initial.fuel_generation);
+        }
         if resource == Resource::Storage {
-            let other = if durable { AgentMode::Ephemeral } else { AgentMode::Durable };
+            let other = if durable {
+                AgentMode::Ephemeral
+            } else {
+                AgentMode::Durable
+            };
             ensure!(!account.monthly_capacity_is_exhausted_for_test(other));
         }
         // Both TCP connections must close while A has still sent nothing.
         let closed = tokio::time::timeout(Duration::from_secs(10), input.read(&mut byte)).await;
-        ensure!(closed.is_ok(), "A still open: loaded={}, permit={}, finished={}",
-            worker.is_loaded().await, worker.concurrent_agent_permit_is_held().await, request_is_finished(&invocation));
+        ensure!(
+            closed.is_ok(),
+            "A still open: loaded={}, permit={}, finished={}",
+            worker.is_loaded().await,
+            worker.concurrent_agent_permit_is_held().await,
+            request_is_finished(&invocation)
+        );
         ensure!(closed.unwrap()? == 0);
         ensure!(tokio::time::timeout(Duration::from_secs(10), output.read(&mut byte)).await?? == 0);
         tokio::time::timeout(Duration::from_secs(10), async {
-            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await { tokio::task::yield_now().await; }
-        }).await.context("physical window closure")?;
-        tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
+            while worker.is_loaded().await || worker.concurrent_agent_permit_is_held().await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .context("physical window closure")?;
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            worker.join_accepted_stops_for_test(),
+        )
+        .await??;
         tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
-        if refresh.is_some() { join_request(&mut refresh, "stop refresh").await?; }
-        ensure!(worker.unload_succeeded_for_test() && worker.permit_acquisitions_for_test() == acquisitions);
-        ensure!(clock.active_sleeps() == 0 && account.monthly_observer_count_for_test() == 0);
+        if refresh.is_some() {
+            join_request(&mut refresh, "stop refresh").await?;
+        }
+        ensure!(
+            worker.unload_succeeded_for_test()
+                && worker.permit_acquisitions_for_test() == acquisitions
+        );
+        ensure!(account.monthly_observer_count_for_test() == 0);
         ensure!(!worker.monthly_window_active_for_test());
         ensure!(phase.state() == WaitState::Dropped);
-        ensure!(phases.try_recv().is_err(), "unexpected extra native splice observation");
+        ensure!(
+            phases.try_recv().is_err(),
+            "unexpected extra native splice observation"
+        );
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(cross_setup(&stopped, 2)? == starts);
-        let entries = worker.oplog().read_exact(OplogIndex::INITIAL,
-            worker.oplog().current_oplog_index().await.as_u64()).await;
-        let errors: Vec<_> = entries.values().filter_map(|entry| match entry {
-            OplogEntry::Error { error, .. } => Some(error), _ => None,
-        }).collect();
-        let suspends = entries.values().filter(|entry| matches!(entry, OplogEntry::Suspend { .. })).count();
+        let entries = worker
+            .oplog()
+            .read_exact(
+                OplogIndex::INITIAL,
+                worker.oplog().current_oplog_index().await.as_u64(),
+            )
+            .await;
+        let errors: Vec<_> = entries
+            .values()
+            .filter_map(|entry| match entry {
+                OplogEntry::Error { error, .. } => Some(error),
+                _ => None,
+            })
+            .collect();
+        let suspends = entries
+            .values()
+            .filter(|entry| matches!(entry, OplogEntry::Suspend { .. }))
+            .count();
         if durable {
             ensure!(errors.is_empty() && suspends == 1 && !request_is_finished(&invocation));
             ensure!(count_agent_invocation_pair_since(&stopped, OplogIndex::INITIAL) == (2, 1));
         } else {
             ensure!(suspends == 0);
             match resource {
-                Resource::Compute => ensure!(matches!(errors.as_slice(), [AgentError::EphemeralFuelExhausted(_)])),
-                _ => ensure!(matches!(errors.as_slice(), [AgentError::EphemeralCannotSuspend(reason)]
-                    if reason.reason == resource.reason(false))),
+                Resource::Compute => ensure!(matches!(
+                    errors.as_slice(),
+                    [AgentError::EphemeralFuelExhausted(_)]
+                )),
+                _ => ensure!(
+                    matches!(errors.as_slice(), [AgentError::EphemeralCannotSuspend(reason)]
+                    if reason.reason == resource.reason(false))
+                ),
             }
-            ensure!(join_request(&mut invocation, "invocation result").await?.is_err());
+            ensure!(
+                join_request(&mut invocation, "invocation result")
+                    .await?
+                    .is_err()
+            );
         }
         let observations = source_usage.observations();
         limits.run_batch_for_test().await;
         let updates = registry.applied_updates();
-        check_accounting(&updates[baseline_updates..], resource, durable, initial.policy_revision, initial.period)?;
+        check_accounting(
+            &updates[baseline_updates..],
+            resource,
+            durable,
+            initial.policy_revision + u64::from(resource == Resource::Storage),
+            initial.period,
+        )?;
         let settled_count = updates.len();
         limits.run_batch_for_test().await;
         ensure!(source_usage.observations() == observations);
         for update in &registry.applied_updates()[settled_count..] {
-            ensure!(update.fuel_delta == 0 && update.memory_gb_seconds_delta == 0
-                && update.memory_byte_nanoseconds_remainder == 0
-                && update.durable_storage_byte_seconds_delta == 0
-                && update.durable_storage_byte_nanoseconds_remainder == 0
-                && update.ephemeral_storage_byte_seconds_delta == 0
-                && update.ephemeral_storage_byte_nanoseconds_remainder == 0,
-                "closed window accrued: {update:?}");
+            ensure!(
+                update.fuel_delta == 0
+                    && update.memory_gb_seconds_delta == 0
+                    && update.memory_byte_nanoseconds_remainder == 0
+                    && update.durable_storage_byte_seconds_delta == 0
+                    && update.durable_storage_byte_nanoseconds_remainder == 0
+                    && update.ephemeral_storage_byte_seconds_delta == 0
+                    && update.ephemeral_storage_byte_nanoseconds_remainder == 0,
+                "closed window accrued: {update:?}"
+            );
         }
         if durable {
             let mut grant = policy;
-            if resource == Resource::Storage { grant.available_durable_storage_byte_seconds = u64::MAX; }
+            if resource == Resource::Storage {
+                grant.available_durable_storage_byte_seconds = u64::MAX;
+            }
             registry.set_policy(grant);
             start_refresh(&limits, &registry, context.account_id, &mut refresh).await?;
             join_request(&mut refresh, "policy refresh").await?;
@@ -351,20 +411,48 @@ async fn cross_socket_pending(
             ensure!(reconstructed.runtime.start_attempt != initial.start_attempt);
             ensure!(reconstructed.runtime.fingerprint == initial.fingerprint);
             echo(&mut input, &mut output).await?;
-            ensure!(join_request(&mut invocation, "invocation result").await??
-                .into_typed::<Result<u64, String>>()? == Ok(1));
+            ensure!(
+                join_request(&mut invocation, "invocation result")
+                    .await??
+                    .into_typed::<Result<u64, String>>()?
+                    == Ok(1)
+            );
             ensure!(reconstructed.state() == WaitState::Returned);
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(cross_setup(&recovered, 2)? == starts);
             assert_settled_history(&recovered)?;
             ensure!(count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));
-            ensure!(executor.invoke_and_await_agent_with_key(&component, &name, &key, METHOD,
-                data_value!(source_port, destination_port)).await?.into_typed::<Result<u64, String>>()? == Ok(1));
-            ensure!(tokio::time::timeout(Duration::from_millis(100), source.accept()).await.is_err());
-            ensure!(tokio::time::timeout(Duration::from_millis(100), destination.accept()).await.is_err());
+            ensure!(
+                executor
+                    .invoke_and_await_agent_with_key(
+                        &component,
+                        &name,
+                        &key,
+                        METHOD,
+                        data_value!(source_port, destination_port)
+                    )
+                    .await?
+                    .into_typed::<Result<u64, String>>()?
+                    == Ok(1)
+            );
+            ensure!(
+                tokio::time::timeout(Duration::from_millis(100), source.accept())
+                    .await
+                    .is_err()
+            );
+            ensure!(
+                tokio::time::timeout(Duration::from_millis(100), destination.accept())
+                    .await
+                    .is_err()
+            );
             let fresh_key = IdempotencyKey::fresh();
-            let fresh = executor.invoke_and_await_agent_with_key(&component, &name, &fresh_key, METHOD,
-                data_value!(source_port, destination_port));
+            let fresh = executor.invoke_and_await_agent_with_key(
+                &component,
+                &name,
+                &fresh_key,
+                METHOD,
+                data_value!(source_port, destination_port),
+            );
             let fresh_peers = async {
                 let (mut input, mut output) = peers(&source, &destination).await?;
                 let phase = pending_phase(&mut phases, Operation::Splice, &fresh_key).await?;
@@ -374,39 +462,75 @@ async fn cross_socket_pending(
             };
             let (fresh, ()) = tokio::time::timeout(Duration::from_secs(10), async {
                 tokio::try_join!(fresh, fresh_peers)
-            }).await??;
+            })
+            .await??;
             ensure!(fresh.into_typed::<Result<u64, String>>()? == Ok(1));
-            ensure!(tokio::time::timeout(Duration::from_millis(100), source.accept()).await.is_err());
-            ensure!(tokio::time::timeout(Duration::from_millis(100), destination.accept()).await.is_err());
+            ensure!(
+                tokio::time::timeout(Duration::from_millis(100), source.accept())
+                    .await
+                    .is_err()
+            );
+            ensure!(
+                tokio::time::timeout(Duration::from_millis(100), destination.accept())
+                    .await
+                    .is_err()
+            );
             let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(count_agent_invocation_pair_since(&history, OplogIndex::INITIAL) == (3, 3));
             ensure!(cross_setup(&history, 4)?.len() == 4);
             assert_settled_history(&history)?;
         } else {
             let mut grant = policy;
-            if resource == Resource::Storage { grant.available_ephemeral_storage_byte_seconds = u64::MAX; }
+            if resource == Resource::Storage {
+                grant.available_ephemeral_storage_byte_seconds = u64::MAX;
+            }
             registry.set_policy(grant);
             start_refresh(&limits, &registry, context.account_id, &mut refresh).await?;
             join_request(&mut refresh, "policy refresh").await?;
-            ensure!(executor.invoke_and_await_agent_with_key(&component, &name, &key, METHOD,
-                data_value!(source_port, destination_port)).await.is_err());
-            ensure!(tokio::time::timeout(Duration::from_millis(100), source.accept()).await.is_err());
-            ensure!(tokio::time::timeout(Duration::from_millis(100), destination.accept()).await.is_err());
+            ensure!(
+                executor
+                    .invoke_and_await_agent_with_key(
+                        &component,
+                        &name,
+                        &key,
+                        METHOD,
+                        data_value!(source_port, destination_port)
+                    )
+                    .await
+                    .is_err()
+            );
+            ensure!(
+                tokio::time::timeout(Duration::from_millis(100), source.accept())
+                    .await
+                    .is_err()
+            );
+            ensure!(
+                tokio::time::timeout(Duration::from_millis(100), destination.accept())
+                    .await
+                    .is_err()
+            );
             let probe_name = agent_id!("EphemeralNetworking", "p2-cross-socket-splice-probe");
             let probe_key = IdempotencyKey::fresh();
-            let probe = executor.invoke_and_await_agent_with_key(&component,
-                &probe_name, &probe_key, METHOD, data_value!(source_port, destination_port));
+            let probe = executor.invoke_and_await_agent_with_key(
+                &component,
+                &probe_name,
+                &probe_key,
+                METHOD,
+                data_value!(source_port, destination_port),
+            );
             let probe_peers = async {
                 let (mut input, mut output) = peers(&source, &destination).await?;
                 echo(&mut input, &mut output).await
             };
             let (probe, ()) = tokio::time::timeout(Duration::from_secs(10), async {
                 tokio::try_join!(probe, probe_peers)
-            }).await??;
+            })
+            .await??;
             ensure!(probe.into_typed::<Result<u64, String>>()? == Ok(1));
         }
         Ok::<_, anyhow::Error>(())
-    }.await;
+    }
+    .await;
     drop(source);
     drop(destination);
     finish_input_test(

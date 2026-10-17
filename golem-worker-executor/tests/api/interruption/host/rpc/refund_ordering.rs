@@ -1,7 +1,8 @@
 use super::*;
 use crate::monthly_acceptance::Acceptance;
 use golem_worker_executor::services::oplog::CommitLevel;
-use golem_worker_executor::worker::{MonthlyProposalForTest, MonthlyTimerPollForTest};
+use golem_worker_executor::services::resource_limits::ResourceUsageFlusher;
+use golem_worker_executor::worker::MonthlyProposalForTest;
 use golem_worker_executor::workerctx::default::Context;
 use golem_worker_executor_test_utils::TestWorkerExecutor;
 use test_r::test;
@@ -54,18 +55,39 @@ async fn prepaid_target_refund_rejects_queued_caller_stop_then_rpc_recovers(
     .await
 }
 
-pub(super) async fn timer(
-    polls: &mut mpsc::UnboundedReceiver<MonthlyTimerPollForTest>,
-    now: u64,
-    deadline: u64,
+pub(super) fn observe_usage(
+    worker: &Arc<Worker<Context>>,
+) -> (
+    Arc<dyn ResourceUsageFlusher>,
+    mpsc::UnboundedReceiver<(u64, u64)>,
+) {
+    let (send, receive) = mpsc::unbounded_channel();
+    let source: Arc<dyn ResourceUsageFlusher> = Arc::new(ObservedUsageFlusher {
+        owner: Arc::downgrade(worker),
+        send,
+    });
+    worker
+        .owner_runtime_resources()
+        .register_resource_usage_flusher(Arc::downgrade(&source));
+    (source, receive)
+}
+
+pub(super) async fn usage_flushes(
+    flushes: &mut mpsc::UnboundedReceiver<(u64, u64)>,
+    proposal: MonthlyProposalForTest,
+    count: usize,
 ) -> anyhow::Result<()> {
-    let poll = tokio::time::timeout(Duration::from_secs(5), polls.recv())
-        .await?
-        .context("monthly timer closed")?;
-    ensure!(
-        poll.now == Duration::from_secs(now) && poll.deadline == Duration::from_secs(deadline),
-        "unexpected monitor wait: {poll:?}, expected now={now}, deadline={deadline}"
-    );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut seen = 0;
+        while seen < count {
+            let current = flushes.recv().await.context("owner usage flusher closed")?;
+            if current == (proposal.diagnostic_window_id, proposal.policy_revision) {
+                seen += 1;
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await??;
     Ok(())
 }
 

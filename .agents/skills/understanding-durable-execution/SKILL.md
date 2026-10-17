@@ -389,7 +389,8 @@ a panicking adapter through the existing weak owner-usage-flusher interface. Ini
 selected-result recording and already-published success need distinct proof boundaries; see
 [idle health with distinct success boundaries](reference/testing-patterns.md#idle-health-with-distinct-success-boundaries).
 Cleanup, startup refusal and the original error remain strict without changing the monitor's await
-graph. Monthly-time support and the actor cell's existing idle barrier remain unfinished work.
+graph. The actor cell retains only its documented post-success idle barrier. Monthly monitoring
+uses the same ordinary Tokio timer in production and test builds.
 
 The actor-loss change removes both test-only actor-stop methods and the monthly target's exit
 token and task guard. Native tests fail a real positive GrowMemory append through the existing oplog
@@ -401,7 +402,7 @@ deletion, retained failed health, startup refusal and unchanged generation and a
 Initial idle precedes guest execution, so its manual-stop-only actor cell retires with that producer.
 Real monitor failure and startup refusal remain covered there. The actual append-fault baseline
 passes. Separate post-removal library/native, strict lint, production and browser checks pass locally.
-No new production event or Worker control is added. Remaining A1/F10/F11 work stays open.
+No new production event or Worker control is added.
 
 The settlement-loss selector is removed. It previously completed settlement
 successfully, then dropped the reply through Worker and window flags. The ordinary ObserverLost
@@ -413,7 +414,8 @@ this test's known clock fault occurs before settlement.
 The native fake reply-drop cells retire with their producer; the native health helper retains its
 other exact cleanup and startup assertions. This is not native settlement-task panic coverage.
 Post-removal library, combined native, strict lint, production and browser checks pass locally.
-Idle, replay and monthly-time controls remain open. Actor-loss removal has separate validation above.
+Actor-loss removal has separate validation above. The post-success idle exception is described in
+the linked testing patterns; it is not a model for adding more runtime gates.
 
 A temporary Registry policy outage is an execution failure, not a disposal failure. The monitor
 requests the same cooperative stop and retains this error separately from cleanup health. After
@@ -486,7 +488,7 @@ prefix through reconstruction. Private pre-fence snapshots and forced Pending/he
 with their producer, not as weaker replacements for surviving effects or cleanup. Separate
 post-removal library, affected native and custom-suspension/acceptance regression batches, strict
 lint, production compilation and browser checks pass. No replacement runtime gate or diagnostic
-producer is added. This does not close the remaining A1/F10/F11 work.
+producer is added.
 
 The completed-history replay-gate removal deletes its Worker field, gate type, setter, history-scan
 helper and pre-invocation await. Its consumers pass beforehand without that producer. They use the
@@ -498,14 +500,14 @@ window identity, policy, receipt, cleanup and result assertions remain, with ful
 no-Jump checks added. Separate post-removal library, affected native and custom-suspension/acceptance
 regression batches, strict executor/test-utils lint, production compilation and browser checks pass.
 The adapter and its interests remain entirely in test-utils, outside Worker ownership and production
-replay code. This does not close the remaining A1/F10/F11 work.
+replay code.
 
 The Worker-owned tail observer is removed after passing dual observation.
 Normal root-completion diagnostics and live reads of the existing owner tracker replace its transport;
 see [root completion and live tail ownership](reference/testing-patterns.md#root-completion-and-live-tail-ownership).
-Separate producer-free native/library, strict lint, production and browser checks pass. Idle,
-monthly-time, deletion and other controls remain open F10/F11 work;
-isolating their fields under test configuration does not justify or complete their removal.
+Separate producer-free native/library, strict lint, production and browser checks pass. The remaining
+idle exception needs its concrete post-success justification; feature gating alone is not a reason
+to retain a runtime control.
 
 An accepted stop in `WaitingForPermit` takes that attempt's exact task handle before signalling
 Loading subscribers. The driver cancels and joins the task without acquiring its blocked permit,
@@ -566,7 +568,8 @@ stop guard. A deadline remains unchanged and the queued stop retains its own exa
 Admission has no test-only pause. Real Worker selection tests retain actual timer expiry, storage
 append backpressure, effect/key/raw-prefix assertions and ordinary reconstruction. Their queued-work
 window is not a pre-admission timing claim. Teardown controls remain separate. Establishment
-restoration passes its affected checks; the broader retained-change review in A1 remains open.
+restoration passes its affected checks. The retained startup, health and permit-wait changes have
+concrete monthly admission or cleanup dependencies, not a stronger quota/completion ordering rule.
 
 After guest success, the invocation loop uses the ordinary `Interrupts::claim_pending_terminal`
 check before success finalization. A queued terminal waits for its own establishment and takes the
@@ -594,8 +597,8 @@ checks through the real oplog dependency. Selection and host completion cases re
 key/history and ordinary reconstruction, but no longer require raw stop signalling to wait for the
 callback's commit. The idle-after-success observer and private pending/committed-writer projections
 are removed with their protocol. Setup uses actual invocation completion and execution-permit release.
-Remaining monthly-time and other cleanup controls remain open F10/F11 work. The local restoration removes
-the general stop protocol and passes its affected checks; that does not close all architectural work.
+The local restoration removes the general stop protocol and passes its affected checks. Monthly
+monitoring uses ordinary timers; test-side observations do not own result or cleanup transitions.
 
 The default 10 ms epoch increment still does not wake pending host futures. Real silent-TCP tests
 cover monthly-memory detection by both the local tick and applied Registry update, cooperative
@@ -762,14 +765,16 @@ runs; unload must drain that work before deletion and actual permit release. Kno
 syscalls cannot be preempted inside a future poll, and started blocking tasks may delay drain. Cleanup
 failures and unknown writers remain observable, not successful release.
 
-`tests/api/interruption/host/blob_filesystem.rs` verifies representative monthly memory in both agent modes.
-Its blob override observes the container-exists read Pending and stays withheld through physical release. Its
-keyed filesystem gate observes admitted stat waiting before native execution, not a stalled native
-syscall. Durable cases retain and complete the original Start under the same invocation key after a
-grant; ephemeral cases persist the typed monthly failure. The lifecycle test
+`tests/api/interruption/host/blob_filesystem.rs` verifies monthly memory in both agent modes through
+a real blob provider read. Its container-exists dependency stays Pending through physical release.
+Durable cases retain and complete the original Start under the same invocation key after capacity
+returns; ephemeral cases persist the typed monthly failure. The keyed pre-poll filesystem gate and
+its synthetic stat cells are removed. They never established Pending of the metadata operation.
+The lifecycle test
 `interrupted_guest_observation_retains_started_call_and_drain` holds a started scripted flush and
 proves deletion waits after typed observation interruption. These are separate observation and
-physical-drain witnesses, not a native-XFS stall or universal release bound.
+physical-drain witnesses, not a native-XFS stall or universal release bound. Keep that evidence split
+instead of building a new filesystem backend or suspension point to recreate the discarded claim.
 
 `services/blob_store.rs` tests explicitly poll the actual provider-await helper and
 DefaultBlobStoreService into backend Pending after positive stock reservation. They deliver the
@@ -973,7 +978,7 @@ A timed WebSocket receive is another distinct frame read: `live.reader.lock().aw
 before `reader.next()` is wrapped by the timeout and raced against the composed typed signal.
 `tests/api/interruption/host/websocket/timed_receive.rs` observes the *native read's* first Pending after a
 valid Upgrade while the peer withholds its frame, matched to the timed Receive Start, invocation
-key and runtime. The guest's 300-second deadline is not driven by the monthly test clock. Six
+key and runtime. The guest's 300-second deadline remains an ordinary guest timer. Six
 resource/mode cases check stop and physical socket/Store/permit/window release with the frame
 still withheld, durable same-key repair of the original timed Start and ephemeral typed failure
 with a fresh Worker probe. A separate one-second timeout-first control returns `None` before

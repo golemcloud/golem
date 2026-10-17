@@ -346,8 +346,7 @@ retains the complete stored raw prefix and checks invocation counts independentl
 Join full Registry refresh tasks after the silent invocation unloads. Monthly policy application
 precedes the batch's unrelated filesystem-limit reply, which requires the occupied invocation loop.
 The completed rejection diagnostic proves that the policy applied; joining the whole batch before
-allowing interruption deadlocks the test. Keep both full joins after physical cleanup. The other
-time-driving consumers and Worker clock support remain separate open work.
+allowing interruption deadlocks the test. Keep both full joins after physical cleanup.
 
 The prepaid-compute cases observe the ordinary timer through a test-owned weak usage flusher,
 registered before invocation. It reports the exact active window ID, so startup flushes cannot
@@ -362,8 +361,7 @@ The native prepaid generation, no false stop, later authoritative compute exhaus
 fuel refund, disabled meters and physical cleanup stay strict. Actual-mode stored prefixes survive
 stop and recovery. Precise cadence remains on the actual paused-Tokio primitive tests. This adds no
 runtime field, event or timer interface. Both native modes and the small real-timer/tail composition
-batch pass, as do scoped strict lint and formatting. The whole clock producer and other active
-clock consumers remain open.
+batch pass, as do scoped strict lint and formatting.
 
 The matching scripted-storage cases reuse that same test-owned flusher. Observe the exact
 active window's initial pre-wait and actual post-wake callbacks, then require the original exact
@@ -390,7 +388,7 @@ polled. The native two-minute bound includes the real cadence, while all non-clo
 identity, positive matching accounting, disabled dimensions, no false stop, user interruption and
 physical-cleanup assertions remain, with complete actual-mode prefixes added. The native storage
 matrix and compute/retry/tail composition, full monthly library, strict all-target lint, formatting
-and browser verification pass. The whole clock producer and overall A1/F10/F11 remain open.
+and browser verification pass.
 
 The P2 input-poll cases reuse the same weak flusher, now in interruption test support. Only
 its compute/storage branches need it; memory and repeated-memory-stop already use ordinary timers
@@ -412,6 +410,31 @@ All original non-clock assertions remain, with full actual-mode prefixes through
 completed-history replay. Virtual retry delays and receiver projections are gone. Both UDP native
 batches, unchanged completion-first/tail collateral, scoped strict lint, format and source audits pass.
 
+### Native host waits without virtual clocks
+
+The monitor has no alternate test clock, Worker clock field or clock setter. Both builds use the same
+Tokio sleep. Per-export host matrices apply a real exhausted policy after their native peer, promise
+or RPC dependency establishes the wait. Positive storage accounting belongs to that newly applied
+revision. Only the matching storage cap changes. The scripted allocation is one GiB so a real short
+interval produces a positive whole-unit charge; it does not claim a native XFS allocation.
+
+Keep exact original effects, keys, durable records, typed outcomes, refunds, disabled-meter zeros,
+physical release and reconstruction assertions. Shared native metering cases above retain real
+periodic/prepaid checks; do not repeat virtual cadence choreography for every host export. The
+repeated-stop cases wait for ordinary ticks while their real outcome append remains held, within
+their existing whole-test timeout. They still reject a second terminal and a changed-resource update.
+
+RPC refund ordering reuses the test-owned weak usage flusher. Observe each exact original window
+before applying the update. Its post-wake flush and next pre-wait flush bracket synchronous proposal
+submission while the real GrowMemory appends keep both actors occupied. A pre-wait flush alone is
+not an armed-timer receipt. Target cleanup must refund real fuel before caller validation rejects
+the queued stale exhaustion proposal.
+
+A policy update can stop guest observation before a new allocation read finishes. Check that the
+source was sampled after the existing cleanup join, not before stop acceptance. Keep the same
+positive sampling assertion and the later no-resampling/no-accrual assertions. Exact short-guest
+deadline reconstruction remains a separate test contract, not a quota detection deadline.
+
 ### Root completion and live tail ownership
 
 `run_guest_call_settled` emits "Guest call root completed; settling tail work" immediately after
@@ -431,8 +454,7 @@ Worker sender, observer methods and root-wrapper producer. The observer-free sou
 ordinary tail deadline, Notify, acceptance and cleanup owners. Exact request and invocation identity,
 incomplete chunk history, one Suspend, accounting and receipts remain, with the complete stored
 prefix and no-Jump checks added. Separate producer-free capture/native, custom-suspension/real-timer
-regression, library, strict lint, production, formatting and browser checks pass. The other idle,
-monthly-time and deletion controls remain open.
+regression, library, strict lint, production, formatting and browser checks pass.
 
 ### Idle health with distinct success boundaries
 
@@ -450,8 +472,8 @@ Actor loss has a different limit. At that earlier append hold it can fail the in
 the actual lifecycle-actor error. That does not prove preservation of an already-published result.
 The actor cell therefore retains the existing idle-close barrier. It observes
 the successful result before faulting the held actual positive growth append, then releases that
-barrier. There is no new registry or runtime hook. Complete idle-control removal stays open; moving
-this fault earlier or allowing an error would weaken the surviving result guarantee.
+barrier. There is no new registry or runtime hook. This is the retained minimal idle exception;
+moving this fault earlier or allowing an error would weaken the surviving result guarantee.
 
 This barrier delays only the natural idle close after result publication. The actor's real append
 failure, ordinary monitor response and cleanup still run through their production owners. The test
@@ -461,7 +483,8 @@ to add another lifecycle protocol or a claim that all idle controls are removed.
 The remaining barrier's channel carries only release; the unused Boolean panic selector is removed
 separately. Sender cancellation still releases it. That source passes separate colocated library,
 affected native and custom-suspension/real-timer regression checks, strict lint, production compilation
-and browser verification. The full idle barrier remains open, distinct from this removed selector.
+and browser verification. The retained barrier is distinct from that removed selector and is not
+claimed to have reviewer approval merely because its local checks pass.
 
 The first positive guest growth can occur in construction. Arm its existing dependency interceptor
 before bootstrap and observe its entry before registering a later Finished hold. The entered append
@@ -582,8 +605,8 @@ remains. Guest-failure, timeout and automatic-Suspend regressions demonstrated t
 was calling failure twice. It now reads FIFO-folded status and records retry interruption only for
 Running or Retrying. Those native assertions remain exact and passed after the source repair.
 The pure monthly mapper cannot replace a deadline or unrelated error with a queued stop.
-The subsequent establishment restoration passes its combined affected checks. Keep the broader
-A1 review and remaining F10/F11 controls open; this is not full upstream SDK or managed-XFS evidence.
+The subsequent establishment restoration passes its combined affected checks. This is not full
+upstream SDK or managed-XFS evidence.
 
 ### Retained stop markers and physical release
 
@@ -603,7 +626,7 @@ still refuse the retained structural failure. Hold that lease through ordinary p
 permissions are restored, then require verified root removal with generation and acquisition count
 unchanged. Returned execution capacity is not successful filesystem cleanup.
 Keep this real-Worker evidence separate from queue/predecessor and EntityFence body checks.
-Other teardown and monitor controls remain separate.
+The narrowly retained post-success idle barrier has a separate justification.
 
 `execution_window_closes_before_filesystem_deletion` calls the actual unload body and captures
 settlement, permit and Store-drop facts at the dependency's entered pending deletion. Require settled
@@ -656,8 +679,8 @@ Do not accept an additional signal or acknowledgement. The append
 owns the instance mutex: do not query it or submit another stop while held. Started can precede Running
 and promise no public receipt. Keep exact marker, key, result, cleanup and reconstruction assertions.
 Monthly native tests use test-side `published_interrupt_receipt` while provider or oplog work is held;
-it observes ordinary status rather than invent a Worker receipt. Teardown, idle, monthly-time and
-replay controls remain unfinished work.
+it observes ordinary status rather than invent a Worker receipt. Read-only status is not a pause
+point or a separate lifecycle protocol.
 
 ### Stop freeze capture and native prerequisites
 
@@ -738,6 +761,15 @@ or persistence/deletion hold and finish physical cleanup before joining every ba
 exhaustion/credit tails before replacement replay begins. Pre-Worker credit has no filesystem target,
 so its full joins are safe. These are read-only dependency observations, not a new Worker interface.
 
+### Filesystem observation without a pre-poll gate
+
+The keyed filesystem gate waited on its own semaphore before polling metadata. Remove its registry,
+public type, stat/stat-at wrappers and synthetic native cells together. Do not rename that wait as
+native metadata Pending. Real blob-provider Worker tests retain effects, original Start and key,
+typed monthly stop and joined physical cleanup. Actual filesystem body tests separately retain a
+started call and its generation lease after guest observation is interrupted, then require drain
+before deletion. This factorized evidence does not claim a stalled native metadata syscall.
+
 ### Deletion dependency entry and consistent service composition
 
 Use actual `OplogService::delete` entry for storage-removal backpressure, keyed by the real
@@ -754,18 +786,18 @@ production default returns the same Arc; it adds no Worker state, per-lifecycle 
 It replaces the late test-bootstrap override and forwarding shim rather than creating another path.
 
 The quota-first case needs no extra ExecutionFenced pause after selecting its actual terminal. The
-deleting-first case still retains the existing isolated fence before any terminal is queued, with
-outer Deleting around a matching Running resident. Interrupt-mutex contention would also reject
-acceptance and could mask a missing production outer guard. The colocated guard tests do not execute
-that whole transaction. Keep this narrow exception explicit; do not claim complete deletion-gate
-removal. All original first-cause, exact terminal/error/result, key, receipt, identity, accounting and
-physical-cleanup oracles stay strict. The user-only case retains its original resident history read.
-The remaining PR-added hook is restricted to `pause_next_deletion_fence_for_test`, with no
-stage argument or stored stage selector. It can hold only the same ExecutionFenced boundary.
-Main's stage enum and hook still cover every production stage. Separate selector-removal library,
-native retirement/replay/window/health, unchanged main stage-failure/retry and cache-removal/
-caller-cancellation, strict lint, production and formatting checks pass. This removes the unused
-selector, not the justified native fence itself.
+deleting-first case retains one fixed fence before any terminal is queued, with outer Deleting
+around a matching Running resident. Interrupt-mutex contention would also reject acceptance and
+could mask a missing production outer guard. This is the minimal deletion exception, with no
+stage selector. Dropping its release sender also releases it.
+
+Main's WorkerDeletionHook is wired by TestWorkerCtx, not production Context, which uses
+NoAdditionalDeps and the default None hook. These quota cases deliberately use production Context
+for real accounting. Installing the existing DeletionStageHook on the test graph cannot pause that
+worker. Do not add a new Context bridge or change the test's context just to replace this one
+boundary. Keep the exception explicit instead. All original first-cause, exact terminal/error/result,
+key, receipt, identity, accounting and physical-cleanup oracles stay strict. The user-only case
+retains its original resident history read.
 
 For prepaid RPC caller-first cases, an applied account update wakes both Stores. The target can stop
 and refund at invocation exit before the caller's proposal is validated. A terminal-append hold is

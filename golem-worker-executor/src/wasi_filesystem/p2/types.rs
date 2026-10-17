@@ -1096,11 +1096,6 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             agent_filesystem::attributes(&generation_handle, AgentTarget::Open(node))
                 .map_err(|error| p2_agent_error(AgentFilesystemError::Access(error)))
         })?;
-        #[cfg(feature = "test-utils")]
-        let call = crate::wasi_filesystem::gated_filesystem_observation_for_test(
-            crate::workerctx::InvocationManagement::get_current_idempotency_key(self).await,
-            call,
-        );
         let native = observe_filesystem_operation(self.create_interrupt_signal(), call)
             .await
             .map_err(|kind| {
@@ -1223,11 +1218,6 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let call =
             agent_filesystem::attributes(&generation_handle, AgentTarget::Path(&target, follow))
                 .map_err(|error| p2_agent_error(AgentFilesystemError::Access(error)))?;
-        #[cfg(feature = "test-utils")]
-        let call = crate::wasi_filesystem::gated_filesystem_observation_for_test(
-            crate::workerctx::InvocationManagement::get_current_idempotency_key(self).await,
-            call,
-        );
         let native = observe_filesystem_operation(self.create_interrupt_signal(), call)
             .await
             .map_err(|kind| {

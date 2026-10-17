@@ -1,7 +1,6 @@
 use super::*;
 use crate::monthly_acceptance::Acceptance;
 use golem_common::model::Timestamp;
-use golem_worker_executor::worker::MonthlyTimerPollForTest;
 use test_r::test;
 
 macro_rules! repeated_stop_case {
@@ -46,21 +45,6 @@ repeated_stop_case!(
     Ephemeral,
     true
 );
-
-async fn armed_timer(
-    polls: &mut tokio::sync::mpsc::UnboundedReceiver<MonthlyTimerPollForTest>,
-    now: Duration,
-) -> anyhow::Result<()> {
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            let poll = polls.recv().await.context("monthly timer closed")?;
-            if poll.now == now && poll.deadline > now {
-                return Ok(());
-            }
-        }
-    })
-    .await?
-}
 
 async fn next_attempt(
     attempts: &mut tokio::sync::mpsc::UnboundedReceiver<Acceptance>,
@@ -159,8 +143,6 @@ async fn repeated_stop(
     worker
         .owner_runtime_resources()
         .set_scripted_filesystem_usage_for_test(source.clone());
-    let (clock, mut polls) = MonthlyClockForTest::new();
-    worker.set_monthly_clock_for_test(clock.clone());
     let mut attempts =
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let mut phases = crate::native_waits::input(worker.get_initial_worker_metadata().fingerprint);
@@ -187,11 +169,11 @@ async fn repeated_stop(
     let result = async {
         let (mut peer, _) = tokio::time::timeout(Duration::from_secs(30), listener.accept()).await??;
         let phase = pending_phase(&mut phases, Operation::Read, &key).await?;
-        armed_timer(&mut polls, Duration::ZERO).await?;
         let initial = worker.current_monthly_proposal_for_test();
         ensure!(initial == phase.runtime && initial.exhaustion.is_none());
         let acquisitions = worker.permit_acquisitions_for_test();
         let account = limits.initialize_account(context.account_id).await?;
+        ensure!(worker.monthly_window_active_for_test() && account.monthly_observer_count_for_test() == 1);
         let mut raw = worker.raw_interrupt_for_test();
         let helper = worker.await_interrupt_for_test();
         let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
@@ -208,33 +190,9 @@ async fn repeated_stop(
             signal = Some(kind);
         }
         source.set(FilesystemUsage::Authoritative { allocated_bytes: 101, filesystem_objects: 1 });
-        let mut now = Duration::from_secs(30);
-        let mut armed = false;
-        clock.advance(now);
-        let first = tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                tokio::select! {
-                    biased;
-                    attempt = attempts.recv() => return attempt.context("monthly acceptance observer closed"),
-                    poll = polls.recv() => {
-                        let poll = poll.context("monthly timer closed")?;
-                        if poll.now != now || poll.deadline <= now {
-                            continue;
-                        }
-                        armed = true;
-                        worker.drain_lifecycle_for_test().await?;
-                        tokio::select! {
-                            biased;
-                            attempt = attempts.recv() => return attempt.context("monthly acceptance observer closed"),
-                            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
-                        }
-                        now += Duration::from_secs(30);
-                        armed = false;
-                        clock.advance(Duration::from_secs(30));
-                    }
-                }
-            }
-        }).await??;
+        // Let the real monitor check this allocation. The existing whole-test timeout bounds
+        // both ordinary cadence waits; no private clock or ordering retry is involved.
+        let first = attempts.recv().await.context("monthly acceptance observer closed")?;
         let mut expected = initial;
         expected.exhaustion = Some(Resource::Storage.reason(durable));
         ensure!(first.proposal == expected, "{:?} != {expected:?}", first.proposal);
@@ -264,20 +222,13 @@ async fn repeated_stop(
         ensure!(matches!(receipt.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty)));
         info!(?mode, user_stop, ?signal, ?first.proposal, "Selected outcome holds TerminalClaimed with active monthly window and permit");
 
-        // Monitor rearming follows submission. No pending earlier tick may stand in for this tick.
-        if !armed {
-            armed_timer(&mut polls, now).await?;
-        }
         worker.drain_lifecycle_for_test().await?;
         ensure!(attempts.try_recv().is_err());
-        now += Duration::from_secs(30);
-        clock.advance(Duration::from_secs(30));
-        let repeated = next_attempt(&mut attempts).await?;
+        let repeated = attempts.recv().await.context("repeated monthly acceptance closed")?;
         ensure!(repeated.proposal == first.proposal);
         let accepted = repeated.accepted;
         info!(?mode, user_stop, accepted, retained = ?worker.monthly_stop_for_test(), ?signal, "Second tick at claimed terminal");
         ensure!(!accepted, "second tick accepted a monthly stop after TerminalClaimed");
-        armed_timer(&mut polls, now).await?;
         worker.drain_lifecycle_for_test().await?;
         ensure!(attempts.try_recv().is_err());
 
@@ -322,7 +273,7 @@ async fn repeated_stop(
         ensure!(worker.unload_succeeded_for_test());
         ensure!(!worker.monthly_window_active_for_test());
         ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-        ensure!(clock.active_sleeps() == 0 && account.monthly_observer_count_for_test() == 0);
+        ensure!(account.monthly_observer_count_for_test() == 0);
         ensure!(receipt.try_recv().is_err(), "one stop receipt only");
         ensure!(raw.try_recv().is_err(), "one typed publication only");
         ensure!(phase.state() == WaitState::Dropped);
@@ -355,7 +306,6 @@ async fn repeated_stop(
             }).await.context("ephemeral archival removes the stopped owner")?;
         }
         let samples = source.observations();
-        clock.advance(Duration::from_secs(30));
         limits.run_batch_for_test().await;
         ensure!(source.observations() == samples);
         ensure!(attempts.try_recv().is_err());

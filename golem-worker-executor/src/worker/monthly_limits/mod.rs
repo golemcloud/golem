@@ -15,10 +15,6 @@ use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-#[cfg(feature = "test-utils")]
-mod test_clock;
-#[cfg(feature = "test-utils")]
-pub use test_clock::{MonthlyClockForTest, MonthlyTimerPollForTest};
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -365,8 +361,6 @@ impl ExecutionWindow {
             let memory = window.monthly_memory_tracker();
             let mut memory_check = MonthlyMemoryCheck::new(worker.resource_entry.clone(), memory);
             let mut health = window.subscribe_enforcement_failure();
-            #[cfg(feature = "test-utils")]
-            let clock = worker.monthly_clock.lock().unwrap().clone();
             let task = tokio::spawn(async move {
                 let result = std::panic::AssertUnwindSafe(async {
                     loop {
@@ -376,12 +370,6 @@ impl ExecutionWindow {
                         worker.owner_runtime_resources.settle_resource_usage();
                         let duration = memory_check.duration();
                         drop(worker);
-                        #[cfg(feature = "test-utils")]
-                        let tick = match &clock {
-                            Some(clock) => futures::future::Either::Left(clock.sleep(duration)),
-                            None => futures::future::Either::Right(tokio::time::sleep(duration)),
-                        };
-                        #[cfg(not(feature = "test-utils"))]
                         let tick = tokio::time::sleep(duration);
                         tokio::select! {
                             biased;
@@ -898,11 +886,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub fn resident_generation_for_test(&self) -> u64 {
         self.resident_generation
             .load(std::sync::atomic::Ordering::Acquire)
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn set_monthly_clock_for_test(&self, clock: Arc<MonthlyClockForTest>) {
-        *self.monthly_clock.lock().unwrap() = Some(clock);
     }
 
     #[cfg(feature = "test-utils")]

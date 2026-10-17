@@ -16,7 +16,7 @@ use golem_worker_executor::services::resource_usage_metering::{
     FilesystemUsage, ScriptedFilesystemUsageForTest,
 };
 use golem_worker_executor::services::{HasOplog, HasPromiseService, UsesAllDeps};
-use golem_worker_executor::worker::{MonthlyClockForTest, Worker};
+use golem_worker_executor::worker::Worker;
 use golem_worker_executor_test_utils::{RecordingRpc, start_with_resource_limits_and_overrides};
 use test_r::test;
 
@@ -248,9 +248,7 @@ async fn pending_rpc_scenario(
             .owner_runtime_resources()
             .set_scripted_filesystem_usage_for_test(zero_usage);
     }
-    // Keep the target's independent local tick still; applied account updates remain real.
-    let (target_clock, mut target_polls) = MonthlyClockForTest::new();
-    target.set_monthly_clock_for_test(target_clock.clone());
+    let (_target_usage, mut target_flushes) = refund_ordering::observe_usage(&target);
     let mut target_attempts = held_growth.then(|| {
         crate::monthly_acceptance::observe(target.get_initial_worker_metadata().fingerprint)
     });
@@ -295,7 +293,7 @@ async fn pending_rpc_scenario(
             }
         })
         .await
-        .context("caller setup permit release before clock installation")?;
+        .context("caller setup permit release")?;
     }
     let worker = Worker::get_or_create_suspended(
         target.all(),
@@ -317,8 +315,7 @@ async fn pending_rpc_scenario(
             .owner_runtime_resources()
             .set_scripted_filesystem_usage_for_test(source.clone());
     }
-    let (clock, mut polls) = MonthlyClockForTest::new();
-    worker.set_monthly_clock_for_test(clock.clone());
+    let (_caller_usage, mut caller_flushes) = refund_ordering::observe_usage(&worker);
     let mut attempts =
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let mut pending_results =
@@ -361,11 +358,10 @@ async fn pending_rpc_scenario(
                 tokio::task::yield_now().await;
             }
         }).await.context("committed accepted pending RPC")??;
-        let first_poll = tokio::time::timeout(Duration::from_secs(5), polls.recv()).await?.context("monthly timer closed")?;
-        if held_growth {
-            ensure!(first_poll.now == Duration::ZERO && first_poll.deadline == Duration::from_secs(30), "{first_poll:?}");
-        }
         let initial = worker.current_monthly_proposal_for_test();
+        if caller_user_stop {
+            refund_ordering::usage_flushes(&mut caller_flushes, initial, 1).await?;
+        }
         let pending_result = if asynchronous {
             let pending = tokio::time::timeout(Duration::from_secs(5), pending_results.recv()).await?.context("future-invoke-result.get Pending")?;
             ensure!(pending.start == original.start && pending.runtime == initial);
@@ -406,10 +402,10 @@ async fn pending_rpc_scenario(
             ensure!(pending_result.as_ref().unwrap().state() == WaitState::Pending);
             ensure!(worker.is_loaded().await && target.is_loaded().await);
             ensure!(worker.concurrent_agent_permit_is_held().await && target.concurrent_agent_permit_is_held().await);
-            let poll = tokio::time::timeout(Duration::from_secs(5), target_polls.recv()).await?
-                .context("target monthly timer closed")?;
-            ensure!(poll.now == Duration::ZERO && poll.deadline == Duration::from_secs(30), "{poll:?}");
             let target_initial = target.current_monthly_proposal_for_test();
+            if caller_user_stop {
+                refund_ordering::usage_flushes(&mut target_flushes, target_initial, 1).await?;
+            }
             ensure!(target_initial.exhaustion.is_none());
             ensure!(target_initial.fuel_generation == initial.fuel_generation);
             info!(?caller_entry, ?target_entry, ?initial, ?target_initial,
@@ -458,12 +454,7 @@ async fn pending_rpc_scenario(
             if resource == Resource::Compute {
                 ensure!(initial.fuel_generation.is_some() && initial.fuel_generation == account.settled_fuel_generation_for_test());
                 ensure!(account.monthly_capacity_is_exhausted_for_test(mode), "two real Stores must prepay the remaining account fuel");
-                clock.advance(Duration::from_secs(30));
-                if caller_user_stop {
-                    refund_ordering::timer(&mut polls, 30, 30).await?;
-                    refund_ordering::timer(&mut polls, 30, 60).await?;
-                } else {
-                    while polls.recv().await.context("negative tick")?.deadline != Duration::from_secs(60) {}
+                if !caller_user_stop {
                     worker.drain_lifecycle_for_test().await?;
                 }
                 if caller_user_stop {
@@ -472,26 +463,29 @@ async fn pending_rpc_scenario(
                 ensure!(worker.current_monthly_proposal_for_test() == initial);
                 ensure!(worker.concurrent_agent_permit_is_held().await && !invocation.is_finished());
             }
-            let refresh = if resource == Resource::Storage {
-                source.set(FilesystemUsage::Authoritative { allocated_bytes: 101, filesystem_objects: 1 });
-                clock.advance(Duration::from_secs(30));
-                None
-            } else {
-                let mut exhausted = policy.clone();
-                if resource == Resource::Memory { exhausted.available_memory_gb_seconds = 0; } else { exhausted.available_fuel = 0; }
-                registry.set_policy(exhausted);
-                Some(applied_refresh(&limits, &registry, context.account_id).await?)
-            };
+            if resource == Resource::Storage {
+                source.set(FilesystemUsage::Authoritative { allocated_bytes: 1 << 30, filesystem_objects: 1 });
+            }
+            let mut exhausted = policy.clone();
+            match resource {
+                Resource::Memory => exhausted.available_memory_gb_seconds = 0,
+                Resource::Compute => exhausted.available_fuel = 0,
+                Resource::Storage if durable => exhausted.available_durable_storage_byte_seconds = 0,
+                Resource::Storage => exhausted.available_ephemeral_storage_byte_seconds = 0,
+            }
+            registry.set_policy(exhausted);
+            let refresh = Some(applied_refresh(&limits, &registry, context.account_id).await?);
             if let Some(refresh) = refresh { refreshes.push(refresh); }
             let proposal = if caller_user_stop {
                 let expected_caller = worker.current_monthly_proposal_for_test();
                 let expected_target = target.current_monthly_proposal_for_test();
                 refund_ordering::exhausted_proposal(initial, expected_caller)?;
                 refund_ordering::exhausted_proposal(target_initial.unwrap(), expected_target)?;
-                // Each next wait follows the monitor's synchronous FIFO proposal send.
+                // A post-wake flush followed by the next pre-wait flush brackets the monitor's
+                // synchronous FIFO proposal send for this applied revision.
                 // Neither lifecycle actor can dequeue it while its GrowMemory add is held.
-                refund_ordering::timer(&mut polls, 30, 60).await?;
-                refund_ordering::timer(&mut target_polls, 0, 30).await?;
+                refund_ordering::usage_flushes(&mut caller_flushes, expected_caller, 2).await?;
+                refund_ordering::usage_flushes(&mut target_flushes, expected_target, 2).await?;
                 refund_ordering::no_attempt(&mut attempts)?;
                 refund_ordering::no_attempt(target_attempts.as_mut().unwrap())?;
                 ensure!(worker.monthly_stop_for_test().is_none() && target.monthly_stop_for_test().is_none());
@@ -515,7 +509,7 @@ async fn pending_rpc_scenario(
                 let (caller_entry, target_entry) = growth_entries.as_ref().unwrap();
                 refund_ordering::entry_count(&target, target_entry, 1).await?;
                 refund_ordering::entry_count(&worker, caller_entry, 0).await?;
-                ensure!(target.permit_acquisitions_for_test() == target_acquisitions && target_clock.active_sleeps() == 0);
+                ensure!(target.permit_acquisitions_for_test() == target_acquisitions && !target.monthly_window_active_for_test());
                 ensure!(account.effective_fuel_for_test() > 0, "target cleanup must return its actual unused reservation");
                 let mut restored = expected_caller;
                 restored.exhaustion = None;
@@ -554,26 +548,8 @@ async fn pending_rpc_scenario(
                 receipt.recv().await?;
                 None
             } else {
-            let mut storage_now = Duration::from_secs(30);
-            let attempt = loop {
-                tokio::select! {
-                    biased;
-                    attempt = attempts.recv() => break attempt.context("monthly acceptance closed")?,
-                    poll = polls.recv(), if resource == Resource::Storage => {
-                        let poll = poll.context("storage timer closed")?;
-                        if poll.now != storage_now || poll.deadline <= storage_now { continue; }
-                        worker.drain_lifecycle_for_test().await?;
-                        tokio::select! {
-                            biased;
-                            attempt = attempts.recv() => break attempt.context("monthly acceptance closed")?,
-                            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
-                        }
-                        storage_now += Duration::from_secs(30);
-                        clock.advance(Duration::from_secs(30));
-                    }
-                }
-            };
-            ensure!(attempt.proposal.policy_revision == initial.policy_revision + u64::from(resource != Resource::Storage));
+            let attempt = attempts.recv().await.context("monthly acceptance closed")?;
+            ensure!(attempt.proposal.policy_revision == initial.policy_revision + 1);
             ensure!(attempt.proposal.period == initial.period && attempt.proposal.fingerprint == initial.fingerprint);
             ensure!(attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id && attempt.proposal.resident_generation == initial.resident_generation);
             ensure!(attempt.proposal.start_attempt == initial.start_attempt && attempt.proposal.fuel_generation == initial.fuel_generation);
@@ -607,7 +583,7 @@ async fn pending_rpc_scenario(
             // Full refresh also waits for the live target's filesystem-limit reply. Join it
             // after target completion, not as part of the caller's physical stop bound.
             ensure!(worker.unload_succeeded_for_test());
-            ensure!(worker.permit_acquisitions_for_test() == acquisitions && clock.active_sleeps() == 0);
+            ensure!(worker.permit_acquisitions_for_test() == acquisitions && !worker.monthly_window_active_for_test());
             if !completion_first { ensure!(!pending.is_ready().await && pending.get().await.is_none()); }
             if resource == Resource::Compute { ensure!(account.settled_fuel_generation_for_test() > initial.fuel_generation); }
             if resource == Resource::Storage {
@@ -671,7 +647,7 @@ async fn pending_rpc_scenario(
         }
         let observations = source.observations();
         tokio::time::sleep(Duration::from_millis(100)).await;
-        ensure!(worker.permit_acquisitions_for_test() == acquisitions && clock.active_sleeps() == 0);
+        ensure!(worker.permit_acquisitions_for_test() == acquisitions && !worker.monthly_window_active_for_test());
         ensure!(!worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await);
         ensure!(source.observations() == observations);
         if resource == Resource::Compute && !hold_target_acceptance {
@@ -700,7 +676,7 @@ async fn pending_rpc_scenario(
                 && update.durable_storage_byte_seconds_delta == 0 && update.durable_storage_byte_nanoseconds_remainder == 0
                 && update.ephemeral_storage_byte_seconds_delta == 0 && update.ephemeral_storage_byte_nanoseconds_remainder == 0));
         } else if resource != Resource::Compute {
-            check_accounting(&updates, resource, durable, initial.policy_revision, initial.period)?;
+            check_accounting(&updates, resource, durable, initial.policy_revision + u64::from(resource == Resource::Storage), initial.period)?;
         }
         if !completion_first { ensure!(promises.complete(promise.clone(), vec![]).await?); }
         // A target continuation and a caller continuation are independent. Completion of

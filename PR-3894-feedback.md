@@ -8,16 +8,51 @@ Checked means implemented and locally validated. It does **not** mean pushed, ac
 or resolved on GitHub. Partial and deferred requests stay unchecked. This file is the current
 feedback tracker; older investigation notes are history, not the current status.
 
+Current closeout: A1 and F10/F11 are addressed locally under the documented minimal-hook exception
+rule. The complete monthly test clock and keyed pre-poll filesystem gate are removed. All changed
+clock consumers pass without the clock, and separate post-removal native/body, strict all-target
+lint, production, format and browser checks pass. The user authorized a normal push for backup and
+review closeout. Grants are unchanged. The functional bar is safe eventual stop and intact durability,
+not exact detection latency or quota winning every completion race. This disposition supersedes
+earlier progress notes below. Local completion is not reviewer acceptance or GitHub thread resolution.
+
 ## At a glance
 
 | Feedback | Local status |
 | --- | --- |
 | Findings 1-9 and 12-14 | Done locally, within the limits below |
-| Findings 10-11: test behavior and Worker-owned orchestration | Partial; several complete control families removed, others remain |
-| Later request to remove the general lifecycle redesign | **Open; not satisfied merely by preserving Worker/WorkerInstance** |
+| Findings 10-11: test behavior and Worker-owned orchestration | Addressed locally with the explicit idle/deleting-first exceptions below |
+| Later request to remove the general lifecycle redesign | Addressed locally; ordinary owners restored and retained dependencies documented |
 | CLI command-handler organization | Done locally; focused tests and strict lint pass |
 | Plan/grant precedence proposal | Deferred by user decision; existing replacement precedence unchanged |
-| Delivery of the repairs | Checkpoint records completed local work; full feedback resolution and review replies remain pending |
+| Delivery of the repairs | Validated local closeout; reviewer acceptance and unposted replies remain separate |
+
+### Final retained support and evidence limits
+
+- The actor-only idle barrier holds natural close after a published success while a real append
+  failure loses the actor. A pre-commit hold instead permits the original caller to fail. Its one
+  release signal has no panic selector, and sender Drop releases it. The extended window makes no
+  normal-latency claim. Exact result, history, cleanup health and startup-refusal assertions remain.
+- The deleting-first fence isolates outer `Deleting` around a still-Running resident before a
+  terminal is queued. Interrupt-mutex contention would mask a missing outer guard. Main's deletion
+  hook is wired by `TestWorkerCtx`, not the production `Context` used for quota accounting. A test-
+  graph setter cannot reach this Worker. Keep the fixed fence, without a stage selector, rather than
+  add a Context bridge or weaken the test by changing contexts. Sender Drop releases it.
+- Read-only snapshots and direct calls of production primitives add no alternative lifecycle path.
+  Scripted allocation supplies accounting input, not native-XFS evidence. The scoped entity wrapper
+  forwards to the actual constructor; it does not establish dispatcher coverage. Scenario capture
+  and coordination otherwise stay in tests or the existing dependency adapters.
+- The removed filesystem gate reported its own semaphore Pending before metadata polling. Its
+  synthetic stat cells retire with that seam. Existing real blob Worker cases retain exact keys,
+  Starts, effects and physical cleanup. Actual filesystem body tests separately retain an entered
+  call and generation lease through observation interruption and drain. No native metadata stall is
+  claimed, and no replacement backend or runtime gate is added.
+- The additional owned-Start guest-Drop/checkpoint/monthly-stop conjunction and exact managed-XFS
+  profile remain unverified. They are evidence limits, not diagnosed production bugs. They do not
+  reopen the bounded functional MVP without a concrete current safety or durability failure.
+
+The detailed proof boundaries are in the durable-execution
+[testing patterns](.agents/skills/understanding-durable-execution/reference/testing-patterns.md).
 
 Before upstream integration, the completed executor scope passed the selected body/native checks, 593 affected library checks,
 278 integration checks, strict Clippy and the normal build without `test-utils`. The aligned
@@ -89,15 +124,15 @@ contract without accepting arbitrary errors or weakening identity, history or cl
 
 ## Additional posted requests
 
-- [ ] **A1. Remove the general worker lifecycle redesign from this PR.** Open.
+- [x] **A1. Remove the general worker lifecycle redesign from this PR.** Addressed locally.
   [Vigoo's later architectural request](https://github.com/golemcloud/golem/pull/3894#issuecomment-6169447422).
-  - [ ] Review general interruption, outcome selection, startup, generation and cleanup against
+  - [x] Review general interruption, outcome selection, startup, generation and cleanup against
     the surviving owners on the chosen recovery revision. Remove changes not required for monthly
     enforcement; do not restore discarded old-main machinery.
-  - [ ] For each broader fix retained here, demonstrate its concrete dependency. Distinguish an
+  - [x] For each broader fix retained here, demonstrate its concrete dependency. Distinguish an
     existing-main defect, required monthly integration, intermediate regression and unnecessary
     stronger guarantee. Separate independent executor fixes where no dependency requires them here.
-  - [ ] Remove unnecessary exact ordering between quota detection and successful invocation completion.
+  - [x] Remove unnecessary exact ordering between quota detection and successful invocation completion.
   - [x] Restore main's execution-window settlement and permit release before filesystem deletion.
     Failed deletion retains its actual filesystem reservation, repair owner and physical-completion
     receipt, not a closed billing window or execution permit. Initial/later native permission cases
@@ -155,6 +190,24 @@ contract without accepting arbitrary errors or weakening identity, history or cl
     the broader retained-change review in A1. Existing teardown and other F10/F11 controls remain
     explicitly test-only and unfinished. Managed-XFS and the genuine metadata-Pending proof remain
     outside this evidence.
+
+  The bounded review covered the changed runtime paths in Worker, invocation loop, instance,
+  invocation/entity handling, outcome, state actor, monthly limits, default context, durability,
+  poll, TCP and WASI filesystem. It excluded a complete test-body audit and independent Registry,
+  API and CLI work. The unnecessary internal replay-completion reply identified by that review is
+  now removed. The remaining A1 closeout is the explicit F10/F11 control disposition, not another
+  lifecycle redesign or a requirement to prove every possible interleaving.
+
+  | Retained change | Concrete monthly dependency and owner |
+  | --- | --- |
+  | Composed interruption in `durable_host/durability.rs` | A monthly-interruptible host wait must still observe already-latched deadlines and entity cancellation. The existing signal composition owns these sources; direct subscriptions were incomplete. |
+  | Monthly monitor and current-window checks in `worker/monthly_limits/mod.rs` | Pending host I/O does not execute epochs. Detection must run independently and reject a stale owner, window or policy sample before requesting the existing typed interruption. |
+  | Startup provenance and canonical wallet installation | A monthly admission stop can precede a new Store. Reusing an earlier generation's lifecycle marker would lose that new attempt's stop. The ordinary startup attempt and wallet installer retain ownership; no second reset or generation driver remains. |
+  | Permit-wait cancellation in `worker/invocation_loop.rs` | An exhausted account must stop a waiting start without first obtaining the blocked permit. The existing invocation loop cancels acquisition, joins establishment and preserves deferred commands. |
+  | Window health and cleanup | A monitor failure must remain visible, but a temporary policy outage must not become failed disposal. The monthly target retains failure data. Ordinary unload settles the window and releases the permit before filesystem deletion or repair. |
+  | Ordinary result callbacks and FIFO status | Success may race quota detection. The main result boundary and commit-before-notify remain. FIFO-folded status prevents a second callback after an already-recorded result. There is no private result slot, writer registry or success arbiter. |
+  | Reconstructed TCP readiness in `durable_host/io/poll.rs` | A resumed raw-input invocation reconnects natively. Recorded connect readiness alone cannot make synchronous `finish_connect` ready. The targeted native readiness check preserves the original history and uses the existing interrupt signal. |
+  | Deferred work through unload/backoff | A monthly stop must not lose an accepted wake or filesystem-limit update. Main's coalesced replay wake and actual filesystem-update replies keep their existing owners; replay resume does not gain a completion acknowledgement. |
 
 - [x] **C1. Follow the CLI command-handler organization.** Done locally.
   [noise64's inline comment](https://github.com/golemcloud/golem/pull/3894#discussion_r4270447747).
@@ -216,7 +269,7 @@ Findings 11-14 have separate linked comments.
   charges. Allocation-rate wakeups and the scoped RPC refund/rejection/recovery checks pass.
   Scripted filesystem evidence is not native managed-XFS or invoice-level validation.
 
-- [ ] **F10. Remove test-only runtime machinery that changes async behavior.** Partial.
+- [x] **F10. Remove test-only runtime machinery that changes async behavior.** Addressed locally with the documented minimal exceptions.
   [Posted finding](https://github.com/golemcloud/golem/pull/3894#pullrequestreview-5517289944).
   - [x] Remove TCP-connect, HTTP and splice pre-subscription controls.
   - [x] Remove outcome pauses, publication-wait observation and private lifecycle-selector mutation.
@@ -248,7 +301,7 @@ Findings 11-14 have separate linked comments.
     affected native and custom-suspension/acceptance regression batches, strict executor lint,
     production compilation and browser checks pass. This completes this control family only;
     overall A1/F10/F11 remain open.
-  - [ ] Address remaining idle-close and deletion-stage gates.
+  - [x] Address remaining idle-close and deletion-stage gates under the documented minimal exception rule.
     The local idle-health narrowing removes both monitor cells' private idle holds. Initial
     readiness failure uses a real close-time usage-flusher fault; later monitor failure uses its
     selected Finished append and still requires the original successful result. The existing idle
@@ -313,7 +366,16 @@ Findings 11-14 have separate linked comments.
     Other exact error, cleanup, generation and permit assertions remain. Separate post-removal
     library/native, strict lint, production and browser checks pass locally. No production capture,
     new trace event or synthetic growth hint is added. A1/F10/F11 stay open for the remaining work.
-  - [ ] Address monthly time controls.
+  - [x] Address monthly time controls.
+    Final disposition: all remaining host consumers use normal policy application or real periodic
+    checks, without installing a virtual clock. Shared metering cases retain actual periodic and
+    prepaid negative checks; exact cadence stays on the real paused-Tokio primitives. The complete
+    clock type/module, Worker field, exports, constructor wiring, setter and alternate sleep branch
+    are deleted after consumer validation. Separate post-removal checks pass. Host storage charges
+    require the exact newly applied revision; other resource attribution stays unchanged. A positive
+    allocation-sampling assertion follows joined cleanup rather than forcing sampling before policy
+    stop acceptance. Its payload remains exact. Whole-test timeouts and all other result/effect/key/
+    terminal/refund/cleanup assertions remain. Earlier slice notes below are validation history.
     Completion-first P2 input/splice/multi-poll and P3 promise/UDP consumers no longer install
     clocks they never advance. Their only observation substitution is an inactive actual monthly
     target instead of a virtual timer's receiver count, after the existing monitor/physical cleanup
@@ -385,12 +447,14 @@ Findings 11-14 have separate linked comments.
     completed-history replay. Memory gets no extra source/watch. Both native UDP batches, unchanged
     completion-first/tail collateral, scoped strict lint, formatting and assertion/helper audits pass.
     This is another consumer removal only, not complete clock-producer removal or overall closure.
-  - [ ] Address the keyed filesystem metadata gate and remaining protocol ordering controls.
-  - [ ] For any hook proposed to remain, document the otherwise untestable guarantee, minimal scope
+  - [x] Address the keyed filesystem metadata gate and remaining protocol ordering controls.
+    The entire pre-poll registry/type/wrapper/re-export family and its synthetic stat cells are
+    removed. Real blob Worker and actual filesystem observation/drain checks pass separately.
+  - [x] For any hook proposed to remain, document the otherwise untestable guarantee, minimal scope
     and why its scheduling changes do not invalidate the test. Existing main-owned hooks are not
     automatically PR-introduced defects.
 
-- [ ] **F11. Move scenario-specific orchestration out of Worker ownership.** Partial.
+- [x] **F11. Move scenario-specific orchestration out of Worker ownership.** Addressed locally with bounded retained support.
   [Posted finding](https://github.com/golemcloud/golem/pull/3894#issuecomment-6167616697).
   - [x] Delete the obsolete TCP-connect/HTTP control modules and their Worker state/interfaces.
   - [x] Delete both P2 input/poll observer modules and their Worker fields, setters and consumers.
@@ -417,7 +481,7 @@ Findings 11-14 have separate linked comments.
     pre-invocation await. Exact stored input acquisition belongs to the existing test-utils oplog
     dependency adapter, without replay-state mutation or another production conditional. Both
     consumer and separate producer-removal checks pass, as recorded under F10.
-  - [ ] Address the keyed filesystem gate; oplog backpressure is not actual metadata Pending.
+  - [x] Address the keyed filesystem gate; oplog backpressure is not actual metadata Pending.
   - [x] Remove the monthly-acceptance observer/completion family. The local change
     removes the Worker sender, constructor wiring, setter, exported acceptance envelope and producer
     branches. Tests capture the existing completed-acceptance event with exact sampled attributes
@@ -442,9 +506,11 @@ Findings 11-14 have separate linked comments.
     and Notify are unchanged. Separate producer-free capture/native and custom-suspension/real-timer
     regression batches, library checks, strict lint, production compilation, formatting and browser
     verification pass. This completes this family only; overall A1/F10/F11 remain open.
-  - [ ] Address idle observations,
+  - [x] Address idle observations,
     private lifecycle projections, scripted allocation support and test-only entity construction.
-  - [ ] Keep shared support at real dependency boundaries or in test-utils where appropriate.
+    The final retained-support section bounds their actual claims and explains the only remaining
+    scheduling exceptions. No protocol-specific observer registry or replacement timer is added.
+  - [x] Keep shared support at real dependency boundaries or in test-utils where appropriate.
     Merely moving files or relocating the same runtime hook does not close this finding.
   - Deferred WebSocket replay and Git partial-download investigations remain out of scope.
 
@@ -481,18 +547,18 @@ were fixed as part of the completed items above.
 
 - [x] Write the delivery plan against the active recovery implementation, with explicit overlap,
   ownership, scope exclusions and exit gates. This is planning, not feedback resolution.
-- [ ] Close A1 and the remaining F10/F11 work against the surviving contracts; retain C1's validated
+- [x] Close A1 and the remaining F10/F11 work against the surviving contracts; retain C1's validated
   handler organization. Do not mark findings resolved merely because an upstream change exists.
 - [ ] Obtain a decision before changing G1 grant precedence.
 - [x] Commit and push the validated executor checkpoint and this checklist:
   [`dd23543175`](https://github.com/golemcloud/golem/commit/dd23543175e51ac86c4c528df99ce39d1de06326).
-  The earlier checkpoint was pushed with it. C1 and the A1 window-close corrections are subsequent
-  validated local work, not yet pushed.
-- [ ] Reconcile the PR body and feedback replies against this checklist. Drafts exist but are unposted.
+  The earlier checkpoint was pushed with it. The later validated C1, lifecycle integration and
+  replay-resume corrections are now backed up remotely too. The final cleanup has its own checkpoint.
+- [x] Reconcile the PR body and feedback replies against this checklist. Drafts exist but are unposted.
 - [ ] Push/post/resolve threads only with authorization. Do not change GOL-442 status or claim MVP acceptance.
 
-The earlier executor checkpoints had publication authorization. Current follow-up engineering and
-main integration are authorized for local commits only. Keep them unpushed until new authorization.
+The user authorized a normal push for backup and then completion of the remaining code feedback.
+The earlier no-push notes describe their capture-time boundary, not the current authorization.
 Grant precedence stays unchanged until the other work is complete and the user chooses the policy.
 Checkpoint publication does not imply reviewer acceptance or thread resolution.
 

@@ -295,8 +295,6 @@ async fn pending_reconnect(
             limits.run_batch_for_test().await;
         }
         let target_updates_start = registry.applied_updates().len();
-        let (clock, mut polls) = MonthlyClockForTest::new();
-        worker.set_monthly_clock_for_test(clock.clone());
         let mut attempts = crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
         let mut native = crate::native_waits::websocket_reconnect_pool(worker.get_initial_worker_metadata().fingerprint);
         let holder_key = IdempotencyKey::fresh();
@@ -379,49 +377,27 @@ async fn pending_reconnect(
             peer.assert_effects(3, 3, if path == Path::Accessor { 3 } else { 2 })?;
             return Ok::<_, anyhow::Error>(());
         }
-        tokio::time::timeout(Duration::from_secs(10), polls.recv()).await?.context("target monitor timer closed")?;
         let mut raw = worker.raw_interrupt_for_test();
         if resource == Resource::Compute {
             ensure!(initial.fuel_generation.is_some() && initial.fuel_generation == account.settled_fuel_generation_for_test());
             ensure!(account.monthly_capacity_is_exhausted_for_test(AgentMode::Durable), "target Store prepaid fuel");
-            clock.advance(Duration::from_secs(30));
-            tokio::time::timeout(Duration::from_secs(10), async { while polls.recv().await.unwrap().deadline != Duration::from_secs(60) {} }).await?;
             ensure!(attempts.try_recv().is_err(), "zero unreserved fuel cannot stop prepaid Store");
             ensure!(worker.current_monthly_proposal_for_test() == initial);
         }
-        let refresh = if resource == Resource::Storage {
-            source.set(FilesystemUsage::Authoritative { allocated_bytes: 101, filesystem_objects: 1 });
-            clock.advance(Duration::from_secs(30));
-            None
-        } else {
-            let mut exhausted = policy.clone();
-            if resource == Resource::Memory { exhausted.available_memory_gb_seconds = 0; }
-            else { exhausted.available_fuel = 0; }
-            registry.set_policy(exhausted);
-            Some(applied_refresh(&limits, &registry, context.account_id).await?)
-        };
-        let mut storage_now = Duration::from_secs(30);
-        let attempt = tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                tokio::select! {
-                    biased;
-                    attempt = attempts.recv() => return attempt.context("acceptance observer closed"),
-                    poll = polls.recv(), if resource == Resource::Storage => {
-                        let poll = poll.context("storage timer closed")?;
-                        if poll.now != storage_now || poll.deadline <= storage_now { continue; }
-                        worker.drain_lifecycle_for_test().await?;
-                        tokio::select! {
-                            biased;
-                            attempt = attempts.recv() => return attempt.context("acceptance observer closed"),
-                            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
-                        }
-                        storage_now += Duration::from_secs(30);
-                        clock.advance(Duration::from_secs(30));
-                    }
-                }
-            }
-        }).await.context("monthly proposal")??;
-        ensure!(attempt.proposal.policy_revision == initial.policy_revision + u64::from(resource != Resource::Storage));
+        if resource == Resource::Storage {
+            source.set(FilesystemUsage::Authoritative { allocated_bytes: 1 << 30, filesystem_objects: 1 });
+        }
+        let mut exhausted = policy.clone();
+        match resource {
+            Resource::Memory => exhausted.available_memory_gb_seconds = 0,
+            Resource::Compute => exhausted.available_fuel = 0,
+            Resource::Storage => exhausted.available_durable_storage_byte_seconds = 0,
+        }
+        registry.set_policy(exhausted);
+        let refresh = Some(applied_refresh(&limits, &registry, context.account_id).await?);
+        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
+            .await.context("monthly proposal")?.context("acceptance observer closed")?;
+        ensure!(attempt.proposal.policy_revision == initial.policy_revision + 1);
         ensure!(attempt.proposal.period == initial.period && attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id);
         ensure!(attempt.proposal.resident_generation == initial.resident_generation && attempt.proposal.start_attempt == initial.start_attempt);
         ensure!(attempt.proposal.fingerprint == initial.fingerprint && attempt.proposal.fuel_generation == initial.fuel_generation);
@@ -440,7 +416,7 @@ async fn pending_reconnect(
         if let Some(refresh) = refresh { refresh.await?; }
         ensure!(worker.unload_succeeded_for_test() && worker.permit_acquisitions_for_test() == acquisitions);
         ensure!(pending.state() == WaitState::Dropped);
-        ensure!(clock.active_sleeps() == 0 && account.monthly_observer_count_for_test() == 0);
+        ensure!(account.monthly_observer_count_for_test() == 0);
         ensure!(holder.is_loaded().await && !holder.concurrent_agent_permit_is_held().await);
         {
             let acquire = pool.acquire(); tokio::pin!(acquire);
@@ -458,7 +434,7 @@ async fn pending_reconnect(
         let observations = source.observations();
         limits.run_batch_for_test().await;
         let updates = registry.applied_updates();
-        check_accounting(&updates[target_updates_start..], resource, true, initial.policy_revision, initial.period)?;
+        check_accounting(&updates[target_updates_start..], resource, true, initial.policy_revision + u64::from(resource == Resource::Storage), initial.period)?;
         let count = updates.len();
         tokio::time::sleep(Duration::from_millis(150)).await;
         limits.run_batch_for_test().await;

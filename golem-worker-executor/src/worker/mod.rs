@@ -37,7 +37,7 @@ mod lifecycle_tests;
 mod monthly_limits;
 mod outcome;
 #[cfg(feature = "test-utils")]
-pub use monthly_limits::{MonthlyClockForTest, MonthlyProposalForTest, MonthlyTimerPollForTest};
+pub use monthly_limits::MonthlyProposalForTest;
 pub mod owner_lane;
 pub(crate) mod owner_wallet;
 pub mod read_only_cache;
@@ -760,8 +760,6 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     #[cfg(any(test, feature = "test-utils"))]
     test_support: Arc<StdMutex<ExecutionTestSupport>>,
     monthly_window: StdMutex<Option<Arc<monthly_limits::MonthlyWindowTarget>>>,
-    #[cfg(feature = "test-utils")]
-    monthly_clock: StdMutex<Option<Arc<MonthlyClockForTest>>>,
     resident_generation: AtomicU64,
     #[cfg(feature = "test-utils")]
     deletion_stage_gate: StdMutex<Option<DeletionStageTestGate>>,
@@ -2813,8 +2811,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             #[cfg(any(test, feature = "test-utils"))]
             test_support: Arc::default(),
             monthly_window: StdMutex::new(None),
-            #[cfg(feature = "test-utils")]
-            monthly_clock: StdMutex::new(None),
             resident_generation: AtomicU64::new(0),
             #[cfg(feature = "test-utils")]
             deletion_stage_gate: StdMutex::new(None),

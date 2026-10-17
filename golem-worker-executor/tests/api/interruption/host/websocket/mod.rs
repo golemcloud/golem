@@ -19,7 +19,7 @@ use golem_worker_executor::services::resource_usage_metering::{
     FilesystemUsage, ScriptedFilesystemUsageForTest,
 };
 use golem_worker_executor::services::{HasOplog, HasWebSocketConnectionPool, UsesAllDeps};
-use golem_worker_executor::worker::{MonthlyClockForTest, Worker};
+use golem_worker_executor::worker::Worker;
 use test_r::test;
 
 use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
@@ -235,8 +235,6 @@ async fn pending_receive(
             .owner_runtime_resources()
             .set_scripted_filesystem_usage_for_test(source.clone());
     }
-    let (clock, mut polls) = MonthlyClockForTest::new();
-    worker.set_monthly_clock_for_test(clock.clone());
     let mut attempts =
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let mut peer = Peer::start().await?;
@@ -274,9 +272,6 @@ async fn pending_receive(
                 tokio::task::yield_now().await;
             }
         }).await.context("committed open receive under unfinished method")??;
-        tokio::time::timeout(Duration::from_secs(10), polls.recv())
-            .await?
-            .context("timer closed")?;
         let initial = worker.current_monthly_proposal_for_test();
         let mut raw = worker.raw_interrupt_for_test();
         let acquisitions = worker.permit_acquisitions_for_test();
@@ -303,11 +298,6 @@ async fn pending_receive(
                 account.monthly_capacity_is_exhausted_for_test(mode),
                 "Store must prepay the remaining fuel"
             );
-            clock.advance(Duration::from_secs(30));
-            tokio::time::timeout(Duration::from_secs(10), async {
-                while polls.recv().await.unwrap().deadline != Duration::from_secs(60) {}
-            })
-            .await?;
             ensure!(
                 attempts.try_recv().is_err(),
                 "zero unreserved fuel must not exhaust prepaid fuel"
@@ -317,53 +307,26 @@ async fn pending_receive(
         }
         ensure!(!invocation.is_finished());
         peer.assert_counts(1, 0)?;
-        let refresh = if resource == Resource::Storage {
+        if resource == Resource::Storage {
             source.set(FilesystemUsage::Authoritative {
-                allocated_bytes: 101,
+                allocated_bytes: 1 << 30,
                 filesystem_objects: 1,
             });
-            clock.advance(Duration::from_secs(30));
-            None
-        } else {
-            let mut exhausted = policy.clone();
-            if resource == Resource::Memory {
-                exhausted.available_memory_gb_seconds = 0;
-            } else {
-                exhausted.available_fuel = 0;
-            }
-            registry.set_policy(exhausted);
-            Some(applied_refresh(&limits, &registry, context.account_id).await?)
-        };
-        let mut storage_now = Duration::from_secs(30);
-        let attempt = tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                tokio::select! {
-                    biased;
-                    attempt = attempts.recv() => return attempt.context("acceptance observer closed"),
-                    poll = polls.recv(), if resource == Resource::Storage => {
-                        let poll = poll.context("storage monitor timer closed")?;
-                        if poll.now != storage_now || poll.deadline <= storage_now {
-                            continue;
-                        }
-                        // Rearming follows settlement and proposal submission. Drain that tick's
-                        // lifecycle work and observe its first proposal before advancing again.
-                        worker.drain_lifecycle_for_test().await?;
-                        tokio::select! {
-                            biased;
-                            attempt = attempts.recv() => return attempt.context("acceptance observer closed"),
-                            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
-                        }
-                        storage_now += Duration::from_secs(30);
-                        clock.advance(Duration::from_secs(30));
-                    }
-                }
-            }
-        })
-        .await
-        .context("monthly proposal")??;
+        }
+        let mut exhausted = policy.clone();
+        match resource {
+            Resource::Memory => exhausted.available_memory_gb_seconds = 0,
+            Resource::Compute => exhausted.available_fuel = 0,
+            Resource::Storage if durable => exhausted.available_durable_storage_byte_seconds = 0,
+            Resource::Storage => exhausted.available_ephemeral_storage_byte_seconds = 0,
+        }
+        registry.set_policy(exhausted);
+        let refresh = Some(applied_refresh(&limits, &registry, context.account_id).await?);
+        let attempt = tokio::time::timeout(Duration::from_secs(10), attempts.recv())
+            .await.context("monthly proposal")?.context("acceptance observer closed")?;
         ensure!(
             attempt.proposal.policy_revision
-                == initial.policy_revision + u64::from(resource != Resource::Storage)
+                == initial.policy_revision + 1
         );
         ensure!(attempt.proposal.period == initial.period);
         ensure!(attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id);
@@ -412,7 +375,6 @@ async fn pending_receive(
             .await.context("retired socket must release WebSocket slot")??;
         drop(released_slot);
         ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-        ensure!(clock.active_sleeps() == 0);
         ensure!(account.monthly_observer_count_for_test() == 0);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         assert_invocation(&stopped, &key, 0)?;
@@ -488,7 +450,7 @@ async fn pending_receive(
             &settled,
             resource,
             durable,
-            initial.policy_revision,
+            initial.policy_revision + u64::from(resource == Resource::Storage),
             initial.period,
         )?;
         info!(?resource, ?mode, ?settled, "WebSocket stopped execution window settlement");

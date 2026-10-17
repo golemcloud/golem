@@ -123,6 +123,21 @@ not close A1 or the remaining F10/F11 requests.
 
 ## Scope decisions
 
+### Code-review closeout
+
+A1 and F10/F11 are addressed locally. The complete virtual monthly clock and pre-poll filesystem
+gate are removed, with consumer validation followed by separate producer-removal checks. The
+ordinary lifecycle and retained-change dependencies are documented in `PR-3894-feedback.md`.
+The only retained scheduling exceptions are the post-success actor idle barrier and fixed deleting-
+first fence, with their concrete limits and production-Context constraint. Read-only snapshots,
+scripted accounting input and actual entity construction keep their bounded claims.
+
+The additional owned-Start conjunction, genuine native metadata Pending and exact managed-XFS
+profile remain unverified, not silently passed. They are not a new implementation queue under the
+user's safe-stop/durability MVP bar. Scoped native/body, strict lint, production, format and browser
+checks pass for this closeout. Broader CI and reviewer acceptance are separate. The user authorized
+remote backup and review closeout; grants and tracker state remain unchanged.
+
 ### Fixed closure queue
 
 The MVP acceptance bar is safe eventual stopping, not a perfect executor or an instantaneous hard
@@ -163,9 +178,9 @@ separate from a diagnosed correctness blocker, and report unverified claims as s
 | A1 retained runtime delta | Resolve the concrete internal `Worker::resume_replay` scope finding: monthly admission is required, but changing enqueue acknowledgement into replay-completion acknowledgement is not demonstrated as required. Retain the reviewed interruption, window, startup, health and unload owners. Remove the unrelated reply protocol or document a concrete monthly dependency. No new general lifecycle mechanism. |
 | F10/F11 controls | Record an explicit bounded disposition for the remaining monthly-clock and keyed-filesystem-gate families. Do not make a perfect historical test-control purge a functional MVP gate without a current production/durability dependency. Preserve business assertions; retire removed-producer projections and unnecessary precise timing/order guarantees under the acceptance bar above. A pre-wait observation is not timer-ready or deadline evidence. If removing a family, validate consumers before deleting its complete producer and validate that deletion separately. Report any remaining review cleanup honestly. |
 | Retained test support | Keep the actor-after-published-success and deleting-first fence only under their documented minimal-scope justifications. Bound scripted allocation, entity construction and read-only projections to accounting/entity/ownership evidence. Do not call them native-XFS, syscall Pending, dispatcher coverage or reviewer acceptance. No further abstraction, renaming or helper extraction is required by the completed standards review. |
-| Owned-Start composition | Exercise actual guest Drop and a later real guest checkpoint while the entered Start remains held, then apply monthly interruption. Require accepted-work ownership, exact original history/terminals, settlement, physical release and ordinary reconstruction. The existing owned-start interrupt race alone does not close this gap. Diagnose an actual failure before any runtime fix. |
-| Filesystem evidence and profile | Replace the misleading pre-poll keyed gate without relabeling withheld delivery as native metadata-future Pending. Run the exact required managed-XFS profile cases, or report the observed environment blocker precisely. Do not start a new filesystem/backend project or claim unexecuted profile coverage. |
-| Final delivery validation | After the required changes form one coherent candidate, run the affected native/body checks and final lint/production/format/documentation checks for that source. Preserve failed receipts and explicit remaining limitations. Write the PR explanation in simple technical English, without verification transcripts, test counts or commit hashes. No push, review/tracker mutation or grant-precedence change. |
+| Owned-Start composition | Keep the additional guest-Drop/checkpoint/monthly-stop conjunction explicitly unverified. Existing owned-Start and custom/accepted-End composition evidence is scoped, not a claim of every combination. Reopen implementation only for a concrete current production safety/durability failure. |
+| Filesystem evidence and profile | The misleading pre-poll keyed gate is removed without relabeling delivery Pending as native metadata Pending. Existing started-call observation/drain and real Worker proofs remain separate. The exact managed-XFS profile is unexecuted. No new filesystem/backend project is needed for the bounded closeout. |
+| Final delivery validation | Affected native/body, strict all-target lint, production, format and browser checks pass. Preserve failed receipts and explicit remaining limitations. The unposted PR explanation uses simple technical English without verification transcripts, test counts or commit hashes. Remote backup is authorized; review/tracker mutation and grant-precedence changes remain separate. |
 
 The bounded standards review found no new documented-standard breach. The scope review found one
 additional acknowledgement-contract justification item, not a new diagnosed runtime bug. These
@@ -173,6 +188,9 @@ reviews support the queue; neither is a blanket A1 completion or a full-reposito
 outside this queue require a demonstrated monthly dependency before they become delivery work.
 
 ### Remaining integration queue
+
+This earlier queue records the integration work and its intermediate boundaries. The code-review
+closeout above and current feedback checklist supersede its capture-time open statuses.
 
 | Group | Next action |
 | --- | --- |

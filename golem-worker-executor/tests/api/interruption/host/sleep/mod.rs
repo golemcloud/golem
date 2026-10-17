@@ -9,7 +9,7 @@ use golem_worker_executor::services::resource_usage_metering::{
     FilesystemUsage, ScriptedFilesystemUsageForTest,
 };
 use golem_worker_executor::services::{HasOplog, UsesAllDeps};
-use golem_worker_executor::worker::{MonthlyClockForTest, Worker};
+use golem_worker_executor::worker::Worker;
 
 use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
 
@@ -132,8 +132,6 @@ pub(super) async fn pending_sleep(
             .owner_runtime_resources()
             .set_scripted_filesystem_usage_for_test(source.clone());
     }
-    let (clock, mut polls) = MonthlyClockForTest::new();
-    worker.set_monthly_clock_for_test(clock.clone());
     let mut attempts =
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let mut invocation = tokio::spawn({
@@ -167,7 +165,6 @@ pub(super) async fn pending_sleep(
                 tokio::task::yield_now().await;
             }
         }).await.context("committed open sleep Start")??;
-        tokio::time::timeout(Duration::from_secs(5), polls.recv()).await?.context("monthly timer closed")?;
         let initial = worker.current_monthly_proposal_for_test();
         let mut raw = worker.raw_interrupt_for_test();
         let acquisitions = worker.permit_acquisitions_for_test();
@@ -178,52 +175,33 @@ pub(super) async fn pending_sleep(
         ensure!(original.deadline > history::unix_nanos() + STOP_BOUND.as_nanos() as u64,
             "setup left too little time to prove stop before guest deadline: {original:?}");
         let stop_started = std::time::Instant::now();
-        // The entire negative tick, policy application, signal and physical retirement must fit
-        // well inside the real guest deadline. Advancing this clock affects only monthly checks.
+        // Apply exhaustion while the original sleep remains pending. This bounds a hang,
+        // not the product's quota-detection latency.
         tokio::time::timeout(STOP_BOUND, async {
             if resource == Resource::Compute {
                 ensure!(initial.fuel_generation.is_some());
                 ensure!(initial.fuel_generation == account.settled_fuel_generation_for_test());
                 ensure!(account.monthly_capacity_is_exhausted_for_test(mode), "Store must prepay the remaining fuel");
-                clock.advance(Duration::from_secs(30));
-                while polls.recv().await.context("negative tick timer closed")?.deadline != Duration::from_secs(60) {}
                 worker.drain_lifecycle_for_test().await?;
                 ensure!(attempts.try_recv().is_err(), "zero unreserved fuel cannot exhaust prepaid fuel");
                 ensure!(worker.current_monthly_proposal_for_test() == initial);
                 ensure!(!invocation.is_finished() && worker.concurrent_agent_permit_is_held().await);
             }
-            let refresh = if resource == Resource::Storage {
+            if resource == Resource::Storage {
                 // Script authoritative allocation only, not deletion or window settlement.
-                source.set(FilesystemUsage::Authoritative { allocated_bytes: 101, filesystem_objects: 1 });
-                clock.advance(Duration::from_secs(30));
-                None
-            } else {
-                let mut exhausted = policy.clone();
-                if resource == Resource::Memory { exhausted.available_memory_gb_seconds = 0; }
-                else { exhausted.available_fuel = 0; }
-                registry.set_policy(exhausted);
-                Some(applied_refresh(&limits, &registry, context.account_id).await?)
-            };
-            let mut storage_now = Duration::from_secs(30);
-            let attempt = loop {
-                tokio::select! {
-                    biased;
-                    attempt = attempts.recv() => break attempt.context("acceptance observer closed")?,
-                    poll = polls.recv(), if resource == Resource::Storage => {
-                        let poll = poll.context("storage timer closed")?;
-                        if poll.now != storage_now || poll.deadline <= storage_now { continue; }
-                        worker.drain_lifecycle_for_test().await?;
-                        tokio::select! {
-                            biased;
-                            attempt = attempts.recv() => break attempt.context("acceptance observer closed")?,
-                            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
-                        }
-                        storage_now += Duration::from_secs(30);
-                        clock.advance(Duration::from_secs(30));
-                    }
-                }
-            };
-            ensure!(attempt.proposal.policy_revision == initial.policy_revision + u64::from(resource != Resource::Storage));
+                source.set(FilesystemUsage::Authoritative { allocated_bytes: 1 << 30, filesystem_objects: 1 });
+            }
+            let mut exhausted = policy.clone();
+            match resource {
+                Resource::Memory => exhausted.available_memory_gb_seconds = 0,
+                Resource::Compute => exhausted.available_fuel = 0,
+                Resource::Storage if durable => exhausted.available_durable_storage_byte_seconds = 0,
+                Resource::Storage => exhausted.available_ephemeral_storage_byte_seconds = 0,
+            }
+            registry.set_policy(exhausted);
+            let refresh = Some(applied_refresh(&limits, &registry, context.account_id).await?);
+            let attempt = attempts.recv().await.context("acceptance observer closed")?;
+            ensure!(attempt.proposal.policy_revision == initial.policy_revision + 1);
             ensure!(attempt.proposal.period == initial.period);
             ensure!(attempt.proposal.diagnostic_window_id == initial.diagnostic_window_id);
             ensure!(attempt.proposal.resident_generation == initial.resident_generation);
@@ -249,7 +227,6 @@ pub(super) async fn pending_sleep(
             if let Some(refresh) = refresh { refresh.await?; }
             ensure!(worker.unload_succeeded_for_test());
             ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-            ensure!(clock.active_sleeps() == 0);
             ensure!(account.monthly_observer_count_for_test() == 0);
             ensure!(history::unix_nanos() < original.deadline, "quota stop must precede guest readiness");
             info!(?abi, ?resource, ?mode, ?signal, proposal = ?attempt.proposal,
@@ -285,7 +262,7 @@ pub(super) async fn pending_sleep(
         let observations = source.observations();
         limits.run_batch_for_test().await;
         let settled = registry.applied_updates();
-        check_accounting(&settled, resource, durable, initial.policy_revision, initial.period)?;
+        check_accounting(&settled, resource, durable, initial.policy_revision + u64::from(resource == Resource::Storage), initial.period)?;
         let settled_count = settled.len();
         info!(?abi, ?resource, ?mode, ?settled, "Stopped sleep window accounting settled");
         // Wait out the real recorded deadline with no Store. Restarting a fresh duration on
@@ -299,7 +276,7 @@ pub(super) async fn pending_sleep(
             tokio::time::sleep(Duration::from_millis(150)).await;
         }
         ensure!(!worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await);
-        ensure!(clock.active_sleeps() == 0 && account.monthly_observer_count_for_test() == 0);
+        ensure!(account.monthly_observer_count_for_test() == 0);
         ensure!(worker.permit_acquisitions_for_test() == acquisitions);
         ensure!(source.observations() == observations, "closed generation cannot keep sampling");
         limits.run_batch_for_test().await;

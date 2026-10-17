@@ -604,9 +604,6 @@ mod tcp_input_tests {
     }
 }
 
-#[cfg(feature = "test-utils")]
-pub use crate::wasi_filesystem::FilesystemObservationGateForTest;
-
 #[cfg(test)]
 mod file_observation_tests {
     use super::*;
