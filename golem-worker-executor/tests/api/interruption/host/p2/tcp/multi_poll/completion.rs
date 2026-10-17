@@ -76,8 +76,6 @@ async fn completion_and_history(
         }
     })
     .await?;
-    let (clock, _polls) = MonthlyClockForTest::new();
-    worker.set_monthly_clock_for_test(clock.clone());
     let mut phases = crate::native_waits::poll(worker.get_initial_worker_metadata().fingerprint);
     let mut attempts =
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
@@ -150,7 +148,7 @@ async fn completion_and_history(
         ensure!(!worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await);
         ensure!(worker.unload_succeeded_for_test());
         ensure!(worker.permit_acquisitions_for_test() == acquisitions);
-        ensure!(clock.active_sleeps() == 0);
+        ensure!(!worker.monthly_window_active_for_test());
         ensure!(limits.initialize_account(context.account_id).await?.monthly_observer_count_for_test() == 0);
         closed_pair(&mut peers, &mut effects).await?;
         ensure!(effects.accepts == [1, 1] && effects.closed == [1, 1] && effects.sent == [0, 1]);

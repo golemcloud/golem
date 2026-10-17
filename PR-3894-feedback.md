@@ -272,6 +272,13 @@ Findings 11-14 have separate linked comments.
     library/native, strict lint, production and browser checks pass locally. No production capture,
     new trace event or synthetic growth hint is added. A1/F10/F11 stay open for the remaining work.
   - [ ] Address monthly time controls.
+    Completion-first P2 input/splice/multi-poll and P3 promise/UDP consumers no longer install
+    clocks they never advance. Their only observation substitution is an inactive actual monthly
+    target instead of a virtual timer's receiver count, after the existing monitor/physical cleanup
+    joins. Zero-subscription checks remain. An exact source audit retains all other result, effect,
+    identity, history, accounting, timeout and concurrency assertions. Baseline and ordinary-timer
+    native batches plus scoped strict lint pass. This is an unused-freeze consumer cleanup only;
+    the clock producer and genuinely time-driving consumers remain open.
   - [ ] Address the keyed filesystem metadata gate and remaining protocol ordering controls.
   - [ ] For any hook proposed to remain, document the otherwise untestable guarantee, minimal scope
     and why its scheduling changes do not invalidate the test. Existing main-owned hooks are not

@@ -293,6 +293,13 @@ guest execution until policy recovery, checks one Suspend and the complete raw p
 the next fresh Counter effect. Admission-before-establishment release-order variants have no
 surviving production protocol to reproduce.
 
+Completion-first cases do not need a virtual timer when real native completion, the required host
+records and an entered invocation-outcome append already establish the scenario. Let the monitor
+use its ordinary timer. After the existing actual monitor and physical-cleanup joins, require the
+monthly target to be inactive and capacity subscriptions to be gone. A virtual clock's receiver
+count is not an additional physical-release guarantee. The P2 input/splice/multi-poll and P3
+promise/UDP completion cases retain their other oracles unchanged without those unused freezes.
+
 ### Native wait observations without Worker hooks
 
 Use production tracing fields for real-Worker native Pending observations, including P2, RPC, UDP

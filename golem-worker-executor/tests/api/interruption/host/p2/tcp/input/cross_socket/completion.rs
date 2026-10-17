@@ -51,8 +51,6 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
         }
     })
     .await?;
-    let (clock, _polls) = MonthlyClockForTest::new();
-    worker.set_monthly_clock_for_test(clock.clone());
     let mut phases = crate::native_waits::input(worker.get_initial_worker_metadata().fingerprint);
     let mut attempts =
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
@@ -138,7 +136,7 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
             worker.unload_succeeded_for_test()
                 && worker.permit_acquisitions_for_test() == acquisitions
         );
-        ensure!(clock.active_sleeps() == 0);
+        ensure!(!worker.monthly_window_active_for_test());
         ensure!(
             limits
                 .initialize_account(context.account_id)
