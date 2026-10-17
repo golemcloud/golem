@@ -2376,7 +2376,7 @@ elif equals ${component} filesystem-tools
     build_task = set build-filesystem-tools
     wasm = set builtin-tools/filesystem-tools.wasm
     artifact_id = set filesystem_tools
-    exports_json = set "{\"tools\":[\"read-file@0.4.1\",\"write-file@0.4.1\",\"edit-file@0.4.1\",\"ls@0.1.1\",\"grep@0.1.1\"],\"middlewares\":[\"path-policy@0.1.1\"]}"
+    exports_json = set "{\"tools\":[\"read-file@0.4.1\",\"write-file@0.4.1\",\"edit-file@0.4.1\",\"ls@0.1.2\",\"grep@0.1.2\"],\"middlewares\":[\"path-policy@0.1.1\"]}"
     licenses = set LICENSE
     sbom = set ""
 elif equals ${component} javascript-tools
