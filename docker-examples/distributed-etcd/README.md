@@ -33,8 +33,8 @@ and reports `shard_manager_is_leader 1` on its HTTP port's `/metrics`. On `SIGTE
 
 Both misconfigurations described below stop it at startup:
 
-- `https://` endpoint → exits 1 with `Error: Internal error: etcd endpoint https://... must start
-  with http:// (TLS is not supported)`
+- `https://` endpoint without TLS settings → exits 1 with `Error: Invalid configuration: etcd endpoint
+  https://... uses https://, which needs persistence.config.tls (at least ca_cert_file or ca_cert)`
 - unbracketed endpoint list → `Failed to load config: invalid type: found string "...", expected a
   sequence for key "PERSISTENCE"`. This one exits with status **0**, as every Golem service does on a
   config it cannot load, so `restart: on-failure` leaves the container stopped and it looks like a
@@ -49,8 +49,50 @@ Both misconfigurations described below stop it at startup:
 | Quota state | in Postgres | in etcd, with the shard state |
 
 The endpoint list must be bracketed — `'["http://etcd:2379"]'`. Unbracketed it is read as a single
-string and fails to deserialize. Only `http://` endpoints are accepted: TLS is not configurable and
-the shard manager refuses to start on `https://`.
+string and fails to deserialize. The etcd here is plaintext, so the endpoint is `http://`.
+
+### With TLS and an etcd user
+
+For an etcd that requires TLS, client certificates or a user, the shard manager takes the
+certificates as files (or as Base64 values in `__TLS__CA_CERT`, `__TLS__CLIENT_CERT` and
+`__TLS__CLIENT_KEY`) and the password from a file, and every endpoint is `https://`. A user without
+TLS is refused, so switch both on together. The deployment guide has the details.
+
+```yaml
+services:
+  golem-shard-manager:
+    environment:
+      GOLEM__PERSISTENCE__TYPE: Etcd
+      GOLEM__PERSISTENCE__CONFIG__ENDPOINTS: '["https://etcd:2379"]'
+      GOLEM__PERSISTENCE__CONFIG__TLS__CA_CERT_FILE: /etc/etcd-tls/ca.pem
+      GOLEM__PERSISTENCE__CONFIG__TLS__CLIENT_CERT_FILE: /etc/etcd-tls/client.pem
+      GOLEM__PERSISTENCE__CONFIG__TLS__CLIENT_KEY_FILE: /etc/etcd-tls/client-key.pem
+      GOLEM__PERSISTENCE__CONFIG__USERNAME: golem-shard-manager
+      GOLEM__PERSISTENCE__CONFIG__PASSWORD_FILE: /run/secrets/etcd-password
+    volumes:
+      - ./etcd-tls:/etc/etcd-tls:ro
+    secrets:
+      - etcd-password
+  etcd:
+    command:
+      - /usr/local/bin/etcd
+      - --listen-client-urls=https://0.0.0.0:2379
+      - --advertise-client-urls=https://etcd:2379
+      - --cert-file=/etc/etcd-tls/server.pem
+      - --key-file=/etc/etcd-tls/server-key.pem
+      - --trusted-ca-file=/etc/etcd-tls/ca.pem
+      - --client-cert-auth
+    volumes:
+      - ./etcd-tls:/etc/etcd-tls:ro
+
+secrets:
+  etcd-password:
+    file: ./etcd-password.txt
+```
+
+etcd's server certificate must name `etcd` (the endpoint host), or set
+`GOLEM__PERSISTENCE__CONFIG__TLS__SERVER_NAME` to a name it holds. The etcd user and its role
+(`readwrite` on `/golem/`) are created with `etcdctl` before authentication is enabled.
 
 ## Limitations of this example
 

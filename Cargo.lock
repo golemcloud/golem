@@ -3187,9 +3187,9 @@ checksum = "5692dd7b5a1978a5aeb0ce83b7655c58ca8efdcb79d21036ea249da95afec2c6"
 
 [[package]]
 name = "etcd-client"
-version = "0.19.0"
+version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef5da6e9a6ae89f4a91f80ba1caae45a5a924397a19947e18f5121a43285e9bc"
+checksum = "3034352d0da33f5ae45de4f4c631857edde3f7f145af6416e50646e7f6b36fac"
 dependencies = [
  "http 1.5.0",
  "prost",
@@ -4489,16 +4489,19 @@ dependencies = [
  "anyhow",
  "async-rwlock",
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "conditional-trait-gen",
  "desert_rust",
  "etcd-client",
+ "figment",
  "futures",
  "golem-api-grpc",
  "golem-common",
  "golem-schema",
  "golem-service-base",
  "golem-test-framework",
+ "hex",
  "http 1.5.0",
  "humantime-serde",
  "include_dir",
@@ -4508,9 +4511,12 @@ dependencies = [
  "kube",
  "prometheus",
  "prost-types",
+ "rcgen",
+ "rsa",
  "rustls",
  "scc",
  "serde",
+ "sha2 0.10.9",
  "sqlx",
  "tempfile",
  "test-r",
@@ -4527,6 +4533,7 @@ dependencies = [
  "tracing-test",
  "url",
  "uuid",
+ "x509-parser",
 ]
 
 [[package]]
@@ -6053,7 +6060,7 @@ checksum = "5a87cc7a48537badeae96744432de36f4be2b4a34a05a5ef32e9dd8a1c169dde"
 dependencies = [
  "base64 0.22.1",
  "js-sys",
- "pem",
+ "pem 3.0.6",
  "ring",
  "serde",
  "serde_json",
@@ -6124,7 +6131,7 @@ dependencies = [
  "jsonpath-rust",
  "k8s-openapi",
  "kube-core",
- "pem",
+ "pem 3.0.6",
  "rustls",
  "rustls-pemfile",
  "secrecy",
@@ -7373,6 +7380,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pem"
+version = "4.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d354a98a3d1251555de99e8fdd8afda05573c31b82f59063a7b0a29b5527f120"
+dependencies = [
+ "base64 0.23.1",
+ "serde_core",
+]
+
+[[package]]
 name = "pem-rfc7468"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8445,6 +8462,7 @@ version = "0.14.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8774e05a7d0de114588e6a28fe7e71694b82614ed569d86d8b389dfbc98b8ad8"
 dependencies = [
+ "pem 4.0.0",
  "ring",
  "rustls-pki-types",
  "time",

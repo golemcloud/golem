@@ -61,6 +61,12 @@ pub enum ShardManagerError {
     IoError(#[from] std::io::Error),
     #[error("Internal error: {0}")]
     Internal(String),
+    /// A setting that cannot work, found at startup; the message names the setting.
+    #[error("Invalid configuration: {0}")]
+    InvalidConfig(String),
+    /// A certificate refused during startup; the source says which and why.
+    #[error("TLS handshake with etcd failed")]
+    TlsHandshakeFailed(#[source] etcd_client::Error),
 }
 
 impl ShardManagerError {
@@ -92,9 +98,72 @@ impl ShardManagerError {
             },
             Self::ShutdownRequested => Self::ShutdownRequested,
             Self::Internal(message) => Self::Internal(message.clone()),
+            Self::InvalidConfig(message) => Self::InvalidConfig(message.clone()),
             other => Self::Internal(other.to_string()),
         }
     }
+}
+
+/// etcd's election service runs on etcd's in-process client, which loses the gRPC code: a write
+/// that the user's role does not allow comes back as `Unknown` with etcd's text instead of
+/// `PermissionDenied`. The role does not change while the replica runs, so a retry could only loop.
+fn is_denied_by_election(status: &tonic::Status) -> bool {
+    status.code() == tonic::Code::Unknown && status.message() == "etcdserver: permission denied"
+}
+
+/// The alerts with which a TLS peer refuses a certificate.
+const CERTIFICATE_ALERTS: [rustls::AlertDescription; 7] = [
+    rustls::AlertDescription::BadCertificate,
+    rustls::AlertDescription::UnsupportedCertificate,
+    rustls::AlertDescription::CertificateRevoked,
+    rustls::AlertDescription::CertificateExpired,
+    rustls::AlertDescription::CertificateUnknown,
+    rustls::AlertDescription::UnknownCA,
+    rustls::AlertDescription::CertificateRequired,
+];
+
+/// Whether an etcd error is a refused certificate: one that etcd rejected, or one of etcd's that
+/// this replica rejected. Other TLS errors - a damaged record, a non-TLS reply from a proxy during
+/// an outage - are network faults like any other, and stay retriable.
+pub(crate) fn is_certificate_failure(err: &etcd_client::Error) -> bool {
+    // etcd-client's error does not expose its cause, so the walk starts at what it wraps.
+    let start: &(dyn std::error::Error + 'static) = match err {
+        etcd_client::Error::GRpcStatus(status) => status,
+        etcd_client::Error::TransportError(error) => error,
+        _ => return false,
+    };
+    let mut current = Some(start);
+    while let Some(error) = current {
+        // tokio-rustls wraps a rustls error in an `InvalidData` I/O error, whose `source` skips
+        // the wrapped error itself.
+        let io_inner = error
+            .downcast_ref::<std::io::Error>()
+            .filter(|io| io.kind() == std::io::ErrorKind::InvalidData)
+            .and_then(|io| io.get_ref());
+        let rustls_error = error
+            .downcast_ref::<rustls::Error>()
+            .or_else(|| io_inner.and_then(|inner| inner.downcast_ref::<rustls::Error>()));
+        if let Some(rustls_error) = rustls_error {
+            return match rustls_error {
+                rustls::Error::InvalidCertificate(_) | rustls::Error::NoCertificatesPresented => {
+                    true
+                }
+                rustls::Error::AlertReceived(alert) => CERTIFICATE_ALERTS.contains(alert),
+                _ => false,
+            };
+        }
+        // A refusal that etcd sends after the handshake - a missing or rejected client
+        // certificate under TLS 1.3 - is read through h2, which keeps only the text of the I/O
+        // error's inner error. That text is rustls's own for the alert.
+        if let Some(inner) = io_inner {
+            let text = inner.to_string();
+            return CERTIFICATE_ALERTS
+                .iter()
+                .any(|alert| text == rustls::Error::AlertReceived(*alert).to_string());
+        }
+        current = error.source();
+    }
+    false
 }
 
 impl IsRetriableError for ShardManagerError {
@@ -121,7 +190,11 @@ impl IsRetriableError for ShardManagerError {
             // Retrying would be the process refusing the stop it was just asked for.
             ShardManagerError::ShutdownRequested => false,
             ShardManagerError::RepoError(_) => false,
+            // A refused certificate is retried like a network fault while the replica runs:
+            // etcd's certificate can be fixed on etcd's side. Before the campaign it becomes
+            // `TlsHandshakeFailed` instead, and a watch stops a replica whose files changed.
             ShardManagerError::EtcdError(err) => match err {
+                etcd_client::Error::GRpcStatus(status) if is_denied_by_election(status) => false,
                 etcd_client::Error::GRpcStatus(status) => status.is_retriable(),
                 etcd_client::Error::TransportError(_)
                 | etcd_client::Error::IoError(_)
@@ -134,6 +207,10 @@ impl IsRetriableError for ShardManagerError {
             ShardManagerError::MigrationError(_) => false,
             ShardManagerError::IoError(_) => false,
             ShardManagerError::Internal(_) => false,
+            // The configuration does not change while the process runs.
+            ShardManagerError::InvalidConfig(_) => false,
+            // Startup stops on it: the files were just read, so a retry presents the same ones.
+            ShardManagerError::TlsHandshakeFailed(_) => false,
         }
     }
 
@@ -200,7 +277,7 @@ impl IsRetriableError for HealthCheckError {
 mod tests {
     use test_r::test;
 
-    use super::ShardManagerError;
+    use super::{ShardManagerError, is_certificate_failure};
     use crate::sharding::model::ExecutorId;
     use golem_common::retriable_error::IsRetriableError;
 
@@ -223,5 +300,92 @@ mod tests {
             }
             .is_retriable()
         );
+    }
+
+    /// An etcd error as tonic reports a connection that failed: `UNAVAILABLE`, with the
+    /// connector's error, and under it `cause`, as its source.
+    fn connect_failure(
+        cause: impl std::error::Error + Send + Sync + 'static,
+    ) -> etcd_client::Error {
+        let status = tonic::Status::from_error(Box::new(tonic::ConnectError(Box::new(cause))));
+        etcd_client::Error::GRpcStatus(status)
+    }
+
+    /// A rustls error as tokio-rustls reports it.
+    fn tls(error: rustls::Error) -> std::io::Error {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, error)
+    }
+
+    #[test]
+    // A damaged record, a reply that is not TLS, or a network fault can pass on a retry; only a
+    // refused certificate is a setting or a certificate to fix.
+    fn only_a_refused_certificate_counts_as_a_certificate_failure() {
+        use rustls::{AlertDescription, CertificateError};
+
+        for refused in [
+            tls(rustls::Error::InvalidCertificate(
+                CertificateError::UnknownIssuer,
+            )),
+            tls(rustls::Error::InvalidCertificate(CertificateError::Expired)),
+            tls(rustls::Error::NoCertificatesPresented),
+            tls(rustls::Error::AlertReceived(
+                AlertDescription::CertificateRequired,
+            )),
+            tls(rustls::Error::AlertReceived(
+                AlertDescription::BadCertificate,
+            )),
+            // The same alert after the handshake, as h2 passes it on: the text only.
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                rustls::Error::AlertReceived(AlertDescription::CertificateRequired).to_string(),
+            ),
+        ] {
+            let failure = connect_failure(refused);
+            assert!(is_certificate_failure(&failure), "{failure}");
+        }
+        for fault in [
+            tls(rustls::Error::DecryptError),
+            tls(rustls::Error::InvalidMessage(
+                rustls::InvalidMessage::InvalidContentType,
+            )),
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "not a TLS record"),
+            std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "network fault"),
+            std::io::Error::new(std::io::ErrorKind::ConnectionReset, "network fault"),
+            std::io::Error::new(std::io::ErrorKind::TimedOut, "network fault"),
+            std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "network fault"),
+        ] {
+            let failure = connect_failure(fault);
+            assert!(!is_certificate_failure(&failure), "{failure}");
+            assert!(ShardManagerError::EtcdError(failure).is_retriable());
+        }
+    }
+
+    #[test]
+    fn a_write_denied_by_the_election_service_is_not_retriable() {
+        let denied = |code| {
+            ShardManagerError::EtcdError(etcd_client::Error::GRpcStatus(tonic::Status::new(
+                code,
+                "etcdserver: permission denied",
+            )))
+        };
+        assert!(!denied(tonic::Code::Unknown).is_retriable());
+        assert!(!denied(tonic::Code::PermissionDenied).is_retriable());
+        let other_unknown = ShardManagerError::EtcdError(etcd_client::Error::GRpcStatus(
+            tonic::Status::new(tonic::Code::Unknown, "h2 protocol error"),
+        ));
+        assert!(other_unknown.is_retriable());
+    }
+
+    #[test]
+    // While the replica runs, etcd's certificate can be fixed on etcd's side, so a refusal is
+    // retried; before the campaign the startup turns it into `TlsHandshakeFailed` and stops.
+    fn a_refused_certificate_is_retried_at_run_time_but_stops_the_startup() {
+        let refused = || {
+            connect_failure(tls(rustls::Error::InvalidCertificate(
+                rustls::CertificateError::UnknownIssuer,
+            )))
+        };
+        assert!(ShardManagerError::EtcdError(refused()).is_retriable());
+        assert!(!ShardManagerError::TlsHandshakeFailed(refused()).is_retriable());
     }
 }
