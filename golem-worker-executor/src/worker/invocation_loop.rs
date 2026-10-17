@@ -139,7 +139,7 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub idle_since_millis: Arc<AtomicU64>,
     /// `ResumeReplay` is not represented in the internal queue, so we track it
     /// explicitly to avoid evicting a worker that is blocked waking up for it.
-    pub resume_replay_pending: Arc<AtomicU64>,
+    pub resume_replay_pending: Arc<AtomicBool>,
     pub start_attempt: Uuid,
     /// What this worker's phase spans link back to, and the fields they carry.
     pub worker_trace: WorkerTrace,
@@ -255,7 +255,7 @@ struct PendingFilesystemLimitUpdate {
 
 #[derive(Default)]
 struct DelayedRetryCommands {
-    resume_replay: Vec<WorkerCommand>,
+    resume_replay: bool,
     filesystem_limit_updates: Vec<Sender<Result<(), WorkerExecutorError>>>,
 }
 
@@ -320,7 +320,7 @@ fn coalesce_delayed_retry_prefix<Ctx: WorkerCtx>(
         match command {
             WorkerCommand::WorkAvailable => work_available = true,
             WorkerCommand::InternalStatusChanged => {}
-            command @ WorkerCommand::ResumeReplay { .. } => commands.resume_replay.push(command),
+            WorkerCommand::ResumeReplay => commands.resume_replay = true,
             WorkerCommand::UpdateFilesystemLimit { sender, .. } => {
                 commands.filesystem_limit_updates.push(sender);
             }
@@ -344,11 +344,11 @@ fn apply_delayed_retry_commands_after_unload<Ctx: WorkerCtx>(
     for sender in commands.filesystem_limit_updates {
         let _ = sender.send(Ok(()));
     }
-    if !commands.resume_replay.is_empty() && delayed && !has_recovery_failure {
+    if commands.resume_replay && delayed && !has_recovery_failure {
         *final_decision = Some(RetryDecision::Immediate);
     }
-    for command in commands.resume_replay {
-        InvocationLoop::<Ctx>::defer_wakeup(deferred_wakeups, command);
+    if commands.resume_replay {
+        InvocationLoop::<Ctx>::defer_wakeup(deferred_wakeups, WorkerCommand::ResumeReplay);
     }
 }
 
@@ -561,7 +561,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             }
                             match command {
                                 WorkerCommand::InternalStatusChanged => {}
-                                WorkerCommand::WorkAvailable | WorkerCommand::ResumeReplay { .. } => {
+                                WorkerCommand::WorkAvailable | WorkerCommand::ResumeReplay => {
                                     Self::defer_wakeup(&mut deferred_wakeups, command);
                                 }
                                 WorkerCommand::UpdateFilesystemLimit { sender, .. } => {
@@ -685,7 +685,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     continue 'outer;
                                 }
                                 match command {
-                                    WorkerCommand::WorkAvailable | WorkerCommand::ResumeReplay { .. } => {
+                                    WorkerCommand::WorkAvailable | WorkerCommand::ResumeReplay => {
                                         Self::defer_wakeup(&mut deferred_wakeups, command);
                                     }
                                     WorkerCommand::InternalStatusChanged => {}
@@ -1300,7 +1300,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                         }
                                         debug!(%agent_id, "Invocation queue loop retained work during infrastructure recovery backoff");
                                     }
-                                    command @ WorkerCommand::ResumeReplay { .. } => {
+                                    command @ WorkerCommand::ResumeReplay => {
                                         Self::defer_wakeup(&mut deferred_wakeups, command);
                                         if recovery_failure.is_none() {
                                             debug!(%agent_id, "Invocation queue loop woke up for resume replay during delayed retry");
@@ -1809,7 +1809,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             WorkerCommand::WorkAvailable => deferred_wakeups
                 .iter()
                 .any(|command| matches!(command, WorkerCommand::WorkAvailable)),
-            WorkerCommand::ResumeReplay { .. } => false,
+            WorkerCommand::ResumeReplay => deferred_wakeups
+                .iter()
+                .any(|command| matches!(command, WorkerCommand::ResumeReplay)),
             WorkerCommand::InternalStatusChanged => true,
             WorkerCommand::UpdateFilesystemLimit { .. } => false,
         };
@@ -2262,7 +2264,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     permit_state:
         &'a mut ConcurrentAgentPermitState<crate::services::active_agents::ConcurrentAgentPermit>,
     idle_since_millis: Arc<AtomicU64>,
-    resume_replay_pending: Arc<AtomicU64>,
+    resume_replay_pending: Arc<AtomicBool>,
     deferred_wakeups: &'a mut VecDeque<WorkerCommand>,
     /// What this worker's phase spans link back to, and the fields they carry.
     worker_trace: WorkerTrace,
@@ -2469,7 +2471,10 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                         }
                     }
                 }
-                WorkerCommand::ResumeReplay { sender } => self.resume_replay(sender).await,
+                WorkerCommand::ResumeReplay => {
+                    self.resume_replay_pending.store(false, Ordering::Release);
+                    self.resume_replay().await
+                }
                 WorkerCommand::UpdateFilesystemLimit { .. } => unreachable!(),
             };
             match outcome {
@@ -2922,60 +2927,30 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     ///
     /// Returns `CommandOutcome` if this fails and the invocation loop should be stopped.
     /// Otherwise, it returns the new retry decision to be used by the outer invocation loop.
-    async fn resume_replay(
-        &self,
-        sender: Sender<Result<(), WorkerExecutorError>>,
-    ) -> CommandOutcome {
+    async fn resume_replay(&self) -> CommandOutcome {
         async {
-            match monthly_resource_admission(&self.parent.resource_entry, self.parent.agent_mode())
-            {
-                MonthlyResourceAdmission::Admit => {}
-                MonthlyResourceAdmission::Unavailable => {
-                    self.resume_replay_pending.fetch_sub(1, Ordering::AcqRel);
-                    let _ = sender.send(Err(MonthlyResourceCapacityError::unavailable_error()));
-                    return CommandOutcome::Continue;
-                }
-                MonthlyResourceAdmission::Suspend => {
-                    self.resume_replay_pending.fetch_sub(1, Ordering::AcqRel);
-                    let _ = sender.send(Err(WorkerExecutorError::Interrupted {
-                        kind: InterruptKind::Suspend(Timestamp::now_utc()),
-                    }));
-                    return CommandOutcome::Continue;
-                }
-                MonthlyResourceAdmission::FailInvocation(exhaustion) => {
-                    self.resume_replay_pending.fetch_sub(1, Ordering::AcqRel);
-                    let _ = sender.send(Err(monthly_resource_exhausted_invocation_error(
-                        &self.parent.config(),
-                        exhaustion,
-                    )));
-                    return CommandOutcome::Continue;
-                }
+            if !matches!(
+                monthly_resource_admission(&self.parent.resource_entry, self.parent.agent_mode()),
+                MonthlyResourceAdmission::Admit
+            ) {
+                return CommandOutcome::Continue;
             }
             let mut store = self.store.lock().await;
 
             let resume_replay_result = Ctx::resume_replay(&mut *store, self.instance, true).await;
-            self.resume_replay_pending.fetch_sub(1, Ordering::AcqRel);
 
             match resume_replay_result {
-                Ok(None) => {
-                    let _ = sender.send(Ok(()));
-                    CommandOutcome::Continue
-                }
-                Ok(Some(decision)) => {
-                    let _ = sender.send(Ok(()));
-                    CommandOutcome::BreakInnerLoop(decision)
-                }
+                Ok(None) => CommandOutcome::Continue,
+                Ok(Some(decision)) => CommandOutcome::BreakInnerLoop(decision),
                 Err(WorkerExecutorError::Interrupted {
                     kind: InterruptKind::Jump,
                 }) => {
                     store.data().set_suspended();
-                    let _ = sender.send(Ok(()));
                     CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
                 }
                 Err(err) => {
                     warn!("Failed to resume replay: {err}");
                     store.data().set_suspended();
-                    let _ = sender.send(Err(err.clone()));
                     CommandOutcome::BreakOuterLoop(Some(err))
                 }
             }
@@ -4999,10 +4974,7 @@ mod tests {
             assert_eq!(acquisitions.load(Ordering::SeqCst), 1);
             assert_eq!(cancelled.load(Ordering::SeqCst), 0);
 
-            let (resume, resumed) = futures::channel::oneshot::channel();
-            sender
-                .send(WorkerCommand::ResumeReplay { sender: resume })
-                .unwrap();
+            sender.send(WorkerCommand::ResumeReplay).unwrap();
             let (update, updated) = futures::channel::oneshot::channel();
             sender
                 .send(WorkerCommand::UpdateFilesystemLimit {
@@ -5043,11 +5015,10 @@ mod tests {
             assert_eq!(acquisitions.load(Ordering::SeqCst), 1);
             assert_eq!(cancelled.load(Ordering::SeqCst), 1);
             assert_eq!(semaphore.available_permits(), 0);
-            let Some(WorkerCommand::ResumeReplay { sender }) = deferred.pop_front() else {
-                panic!("the earlier replay command must retain its reply");
-            };
-            sender.send(Ok(())).unwrap();
-            resumed.await.unwrap().unwrap();
+            assert!(matches!(
+                deferred.pop_front(),
+                Some(WorkerCommand::ResumeReplay)
+            ));
             let Some(WorkerCommand::UpdateFilesystemLimit {
                 allocated_bytes,
                 sender,
@@ -5463,12 +5434,8 @@ mod tests {
         commands.send(WorkerCommand::WorkAvailable).unwrap();
         commands.send(WorkerCommand::WorkAvailable).unwrap();
         commands.send(WorkerCommand::InternalStatusChanged).unwrap();
-        let (resume_sender, resume_result) = futures::channel::oneshot::channel();
-        commands
-            .send(WorkerCommand::ResumeReplay {
-                sender: resume_sender,
-            })
-            .unwrap();
+        commands.send(WorkerCommand::ResumeReplay).unwrap();
+        commands.send(WorkerCommand::ResumeReplay).unwrap();
         commands
             .send(WorkerCommand::UpdateFilesystemLimit {
                 allocated_bytes: 4096,
@@ -5485,7 +5452,7 @@ mod tests {
             prefix_len,
         );
 
-        assert_eq!(captured.resume_replay.len(), 1);
+        assert!(captured.resume_replay);
         assert_eq!(captured.filesystem_limit_updates.len(), 1);
         assert_eq!(deferred_wakeups.len(), 1);
         assert!(matches!(
@@ -5497,19 +5464,19 @@ mod tests {
             Ok(WorkerCommand::WorkAvailable)
         ));
 
-        let WorkerCommand::ResumeReplay { sender } =
-            captured.resume_replay.into_iter().next().unwrap()
-        else {
-            panic!("captured replay receipt expected");
-        };
-        sender.send(Ok(())).unwrap();
-        assert!(resume_result.await.unwrap().is_ok());
-        let _ = captured
-            .filesystem_limit_updates
-            .into_iter()
-            .next()
-            .unwrap()
-            .send(Ok(()));
+        let mut final_decision = Some(RetryDecision::Delayed(Duration::from_secs(1)));
+        apply_delayed_retry_commands_after_unload::<Context>(
+            captured,
+            &mut final_decision,
+            false,
+            &mut deferred_wakeups,
+        );
+        assert_eq!(final_decision, Some(RetryDecision::Immediate));
+        assert!(matches!(
+            deferred_wakeups.pop_front(),
+            Some(WorkerCommand::ResumeReplay)
+        ));
+        assert!(deferred_wakeups.is_empty());
         assert!(limit_result.await.unwrap().is_ok());
     }
 
@@ -5518,12 +5485,7 @@ mod tests {
         for decision in [RetryDecision::Immediate, RetryDecision::None] {
             let (commands, mut receiver) = tokio::sync::mpsc::unbounded_channel();
             let (limit_sender, limit_result) = futures::channel::oneshot::channel();
-            let (resume_sender, resume_result) = futures::channel::oneshot::channel();
-            commands
-                .send(WorkerCommand::ResumeReplay {
-                    sender: resume_sender,
-                })
-                .unwrap();
+            commands.send(WorkerCommand::ResumeReplay).unwrap();
             commands
                 .send(WorkerCommand::UpdateFilesystemLimit {
                     allocated_bytes: 4096,
@@ -5544,11 +5506,10 @@ mod tests {
 
             assert_eq!(final_decision, Some(decision));
             assert!(limit_result.await.unwrap().is_ok());
-            let Some(WorkerCommand::ResumeReplay { sender }) = deferred_wakeups.pop_front() else {
-                panic!("deferred replay receipt expected");
-            };
-            sender.send(Ok(())).unwrap();
-            assert!(resume_result.await.unwrap().is_ok());
+            assert!(matches!(
+                deferred_wakeups.pop_front(),
+                Some(WorkerCommand::ResumeReplay)
+            ));
             assert!(deferred_wakeups.is_empty());
         }
     }

@@ -249,6 +249,13 @@ older policy. Admission in `worker/invocation_loop.rs` checks the latest cached 
 instance creation, replay resumption, and invocation. Reconstruction must pass those checks too;
 a resume or queued invocation cannot bypass an exhausted applicable cap.
 
+Internal `Worker::resume_replay` acknowledges enqueue, not replay completion. The invocation loop
+clears its pending wake before checking monthly admission, so refusal cannot strand a pending-work
+flag. Duplicate replay wakes coalesce, as in main; there is no per-command replay-completion reply.
+This is distinct from the ordinary agent-resume RPC and does not weaken invocation commit-before-
+notify. See [replay-resume request acknowledgement](reference/testing-patterns.md#replay-resume-request-acknowledgement)
+for the real held-input regression and the retired reply-only assertions.
+
 During guest execution, `Context::ensure_fuel`, the `FuelManagement` implementation in
 `workerctx/default.rs`, calls `ensure_monthly_resource_capacity` to check enabled live compute,
 then monthly memory and the agent's matching storage class. `worker/instance/mod.rs` calls it from the
@@ -434,7 +441,7 @@ by a terminal request. The queue can replace Restart before it is taken, but an 
 may already have signalled Restart. There is no frozen elected cause or shared publication leader.
 
 The invocation loop takes the exact queued request and waits for its establishment. At an idle permit
-wait it drops acquisition before that wait. It keeps deferred commands and their replies. A taken
+wait it drops acquisition before that wait. It keeps deferred commands and filesystem-limit replies. A taken
 no-body stop retains its unwritten lifecycle marker through disposal, and the unloaded-stop handler
 writes it once. This does not replace a completed invocation's result or invent a result for queued
 work that has not started. A Restart can leave the same loop waiting without a loaded Store.
@@ -1053,8 +1060,8 @@ restart does not fail the invocation waiter or append `Interrupted`.
 When a trap chooses `RetryDecision::Delayed`, the invocation loop snapshots the finite command
 prefix already queued before teardown. Duplicate `WorkAvailable` edges in that prefix collapse to
 one resident-work hint; commands arriving after the snapshot remain queued and can shorten the
-delay. `ResumeReplay` is retained separately and applied after successful unload even if a newer
-restart changes the retry decision. This preserves replay requests and lifecycle-control
+delay. `ResumeReplay` is retained as one coalesced demand and applied after successful unload even if
+a newer restart changes the retry decision. This preserves replay demand and lifecycle-control
 semantics without treating every edge notification as independent work or claiming blanket FIFO
 ordering between coalesced hints and replay requests.
 

@@ -123,6 +123,55 @@ not close A1 or the remaining F10/F11 requests.
 
 ## Scope decisions
 
+### Fixed closure queue
+
+The MVP acceptance bar is safe eventual stopping, not a perfect executor or an instantaneous hard
+cap. The applicable exhausted monthly cap must reach the existing Worker stop path. Extra detection
+or safe-unwind latency, including another normal monitor interval, is acceptable. Committed history,
+invocation identity, entered effects, settlement and ordinary reconstruction must remain correct.
+Ephemeral work keeps its resource-specific terminal outcome rather than being replayed. Keep actual
+usage through window closure; delay is not permission to discard work or refund it prematurely.
+
+Exact stop-time bounds, quota winning every race with a short guest timeout, and exhaustive rare-
+interleaving proofs are not MVP delivery gates. If success or a guest timeout wins naturally, retain
+its actual result instead of forcing a quota outcome. Use sensible timeouts to catch hangs, not as
+new product latency guarantees. Relax only timing/order expectations under this decision, not the
+durability, accounting, effect, identity, terminal or cleanup assertions. Broader review cleanup must
+stay explicitly reported; this acceptance bar does not silently mark unresolved F10/F11 requests done.
+
+This is a disposition queue, not a requirement to build a new test or infrastructure layer for every
+listed uncertainty. Only a concrete current production safety/durability issue blocks the functional
+MVP. Reuse the existing Worker interruption/reconstruction guarantees and already-valid evidence.
+Unverified combinations and unexecuted backend profiles stay visible limitations, not invented bugs
+or silently completed review requests.
+
+The remaining work is limited to this queue. Do not refill it with optional cleanup or build a new
+framework to preserve discarded private-state projections. Keep the reviewed integration baseline
+and reuse source-bound validation for unchanged code. Batch related changes rather than treating
+each native helper as a separate refactor and verification project.
+
+New edge-case work must first show a reachable path in the current production code, using supported
+inputs, APIs or realistic operating failures. A hypothetical future caller, changed production code,
+impossible private state or invented ordering guarantee is not a delivery blocker. A fixture may
+observe the current path or reproduce a delay/error that the real dependency can produce; it must
+not manufacture a new contract. Existing fast regressions need not be removed or weakened, but do
+not expand them into another fault-injection or infrastructure project. Keep explicit review cleanup
+separate from a diagnosed correctness blocker, and report unverified claims as such.
+
+| Work item | Required disposition and exit |
+| --- | --- |
+| A1 retained runtime delta | Resolve the concrete internal `Worker::resume_replay` scope finding: monthly admission is required, but changing enqueue acknowledgement into replay-completion acknowledgement is not demonstrated as required. Retain the reviewed interruption, window, startup, health and unload owners. Remove the unrelated reply protocol or document a concrete monthly dependency. No new general lifecycle mechanism. |
+| F10/F11 controls | Record an explicit bounded disposition for the remaining monthly-clock and keyed-filesystem-gate families. Do not make a perfect historical test-control purge a functional MVP gate without a current production/durability dependency. Preserve business assertions; retire removed-producer projections and unnecessary precise timing/order guarantees under the acceptance bar above. A pre-wait observation is not timer-ready or deadline evidence. If removing a family, validate consumers before deleting its complete producer and validate that deletion separately. Report any remaining review cleanup honestly. |
+| Retained test support | Keep the actor-after-published-success and deleting-first fence only under their documented minimal-scope justifications. Bound scripted allocation, entity construction and read-only projections to accounting/entity/ownership evidence. Do not call them native-XFS, syscall Pending, dispatcher coverage or reviewer acceptance. No further abstraction, renaming or helper extraction is required by the completed standards review. |
+| Owned-Start composition | Exercise actual guest Drop and a later real guest checkpoint while the entered Start remains held, then apply monthly interruption. Require accepted-work ownership, exact original history/terminals, settlement, physical release and ordinary reconstruction. The existing owned-start interrupt race alone does not close this gap. Diagnose an actual failure before any runtime fix. |
+| Filesystem evidence and profile | Replace the misleading pre-poll keyed gate without relabeling withheld delivery as native metadata-future Pending. Run the exact required managed-XFS profile cases, or report the observed environment blocker precisely. Do not start a new filesystem/backend project or claim unexecuted profile coverage. |
+| Final delivery validation | After the required changes form one coherent candidate, run the affected native/body checks and final lint/production/format/documentation checks for that source. Preserve failed receipts and explicit remaining limitations. Write the PR explanation in simple technical English, without verification transcripts, test counts or commit hashes. No push, review/tracker mutation or grant-precedence change. |
+
+The bounded standards review found no new documented-standard breach. The scope review found one
+additional acknowledgement-contract justification item, not a new diagnosed runtime bug. These
+reviews support the queue; neither is a blanket A1 completion or a full-repository pass. Findings
+outside this queue require a demonstrated monthly dependency before they become delivery work.
+
 ### Remaining integration queue
 
 | Group | Next action |

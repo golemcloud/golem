@@ -11,6 +11,151 @@ mod completed_history {
 
     #[test]
     #[timeout("60s")]
+    async fn replay_resume_acknowledges_enqueue_while_completed_input_is_held(
+        last_unique_id: &LastUniqueId,
+        deps: &WorkerExecutorTestDependencies,
+        #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+        _tracing: &Tracing,
+    ) -> anyhow::Result<()> {
+        let metering = Resource::Memory.metering();
+        let registry = Arc::new(MutableResourceLimitsRegistry::new(
+            Resource::Memory.policy(),
+        ));
+        let shutdown = CancellationToken::new();
+        let _shutdown = shutdown.clone().drop_guard();
+        let limits = ResourceLimitsGrpc::new(
+            registry,
+            Duration::from_secs(3600),
+            Duration::ZERO,
+            metering,
+            shutdown,
+        );
+        let context = TestContext::new(last_unique_id);
+        let executor = start_with_resource_limits_and_configure(
+            deps,
+            &context,
+            limits,
+            Arc::new(move |config| {
+                config.resource_usage_metering = metering;
+                config.oplog.max_payload_size = 1;
+            }),
+        )
+        .await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, agent_counters)
+            .store()
+            .await?;
+        let name = agent_id!("Counter", "replay-resume-enqueue-ack");
+        let id = executor.start_agent(&component.id, name.clone()).await?;
+        let key = IdempotencyKey::fresh();
+        assert_eq!(
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &name,
+                    &key,
+                    "increment",
+                    data_value!()
+                )
+                .await?
+                .into_typed::<u32>()?,
+            1
+        );
+        let worker = executor
+            .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &id))
+            .await
+            .context("the original Counter must remain cached")?
+            .primary();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while worker.concurrent_agent_permit_is_held().await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        let generation = worker.resident_generation_for_test();
+        let fingerprint = worker.get_initial_worker_metadata().fingerprint;
+        let original = worker
+            .oplog()
+            .read_exact(
+                OplogIndex::INITIAL,
+                worker.oplog().current_oplog_index().await.as_u64(),
+            )
+            .await;
+        let original_raw = executor.stored_oplog(&id).await;
+        let (started, finished, payload) = completed_invocation_payload(&original, &key)?;
+        let (entered, release) = executor.gate_next_oplog_payload_read(&id, payload);
+        worker.set_interrupting(InterruptKind::Restart).await?;
+        tokio::time::timeout(Duration::from_secs(10), entered)
+            .await
+            .context("completed invocation input must be held during actual reconstruction")??;
+        assert!(worker.is_loaded().await && worker.concurrent_agent_permit_is_held().await);
+        assert!(worker.resident_generation_for_test() > generation);
+
+        let acknowledged =
+            tokio::time::timeout(Duration::from_secs(10), worker.resume_replay()).await;
+        // Release the real dependency even when the acknowledgement assertion fails.
+        release.send(()).unwrap();
+        acknowledged.context("enqueue acknowledgement must not wait for held replay input")??;
+
+        let fresh_key = IdempotencyKey::fresh();
+        assert_eq!(
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                executor.invoke_and_await_agent_with_key(
+                    &component,
+                    &name,
+                    &fresh_key,
+                    "increment",
+                    data_value!(),
+                ),
+            )
+            .await??
+            .into_typed::<u32>()?,
+            2
+        );
+        let recovered = executor.stored_oplog(&id).await;
+        assert!(recovered.len() >= original_raw.len());
+        assert_eq!(&recovered[..original_raw.len()], original_raw.as_slice());
+        assert_eq!(
+            worker.get_initial_worker_metadata().fingerprint,
+            fingerprint
+        );
+        assert_eq!(recovered.iter().filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
+        assert_eq!(recovered.iter().filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &fresh_key)).count(), 1);
+        assert_eq!(
+            recovered
+                .iter()
+                .filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { .. }))
+                .count(),
+            3
+        );
+        assert_eq!(
+            recovered
+                .iter()
+                .filter(|entry| matches!(entry, OplogEntry::AgentInvocationFinished { .. }))
+                .count(),
+            3
+        );
+        assert!(
+            !recovered
+                .iter()
+                .any(|entry| matches!(entry, OplogEntry::Error { .. } | OplogEntry::Jump { .. }))
+        );
+        assert_eq!(
+            worker
+                .oplog()
+                .read_exact(started, finished.as_u64() - started.as_u64() + 1)
+                .await,
+            original
+                .range(started..=finished)
+                .map(|(index, entry)| (*index, entry.clone()))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[timeout("60s")]
     async fn memory_quota_stop_is_accepted_during_completed_history_replay(
         last_unique_id: &LastUniqueId,
         deps: &WorkerExecutorTestDependencies,

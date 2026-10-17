@@ -112,6 +112,16 @@ contract without accepting arbitrary errors or weakening identity, history or cl
   - Next: reduce the executor delta against main and use surviving interruption
     and unload owners. Do not restore old-main files wholesale or resurrect removed recovery paths.
     The completed narrow corrections do not by themselves close A1.
+  - [x] Restore main's internal replay-resume enqueue acknowledgement. The bounded scope review
+    found no demonstrated monthly dependency for waiting on replay completion for every request.
+    The change removes that per-command reply/counter/vector, restores the coalesced wake and
+    Boolean pending marker, and keeps monthly admission before replay. The flag clears at dequeue,
+    including refusal, while actual filesystem-limit replies and deferred command ownership remain.
+    This internal method is not the ordinary agent-resume RPC. A real held completed-input regression
+    fails before the correction and passes unchanged afterward, with Counter effects, original keys,
+    full raw prefix and exact history. Worker library, affected reconstruction/admission/window/
+    cleanup and custom/accepted-End/permit cases, strict all-target lint, production compilation,
+    formatting, source audits and browser checks pass. This closes this scoped item, not all A1.
   - [x] Remove failure-origin arbitration and its extra callback. Failure keeps its actual boundary
     cause without waiting for private stop publication. The ordinary typed callback acknowledges
     only an exact matching, published terminal request. All native assertions remain unchanged;
