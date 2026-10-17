@@ -1383,6 +1383,37 @@ impl TestWorkerExecutor {
         (entered_rx, release_tx)
     }
 
+    /// Holds one external-payload download in the oplog dependency wrapper. The receipt
+    /// follows an actual Pending poll of the withheld delivery, not a native filesystem poll.
+    pub fn gate_next_oplog_payload_read(
+        &self,
+        agent_id: &AgentId,
+        payload_id: PayloadId,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let owner = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        assert!(
+            self.additional_test_deps
+                .oplog_payload_read_gates
+                .lock()
+                .unwrap()
+                .insert(
+                    (owner, payload_id.0),
+                    OplogReadGate {
+                        entered_tx,
+                        release_rx
+                    }
+                )
+                .is_none(),
+            "a payload read gate is already registered for this owner and payload"
+        );
+        (entered_rx, release_tx)
+    }
+
     /// Pauses a runtime-card audit lookup only in the task that claimed its real Start.
     pub fn gate_next_runtime_card_audit_lookup(
         &self,
@@ -6437,6 +6468,29 @@ impl Oplog for TestOplog {
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, RawOplogPayloadDownloadError> {
+        let gate = self
+            .additional_test_deps
+            .oplog_payload_read_gates
+            .lock()
+            .unwrap()
+            .remove(&(self.owned_agent_id.clone(), payload_id.0));
+        if let Some(OplogReadGate {
+            entered_tx,
+            mut release_rx,
+        }) = gate
+        {
+            let mut entered = Some(entered_tx);
+            let _ = futures::future::poll_fn(|cx| {
+                let result = std::future::Future::poll(std::pin::Pin::new(&mut release_rx), cx);
+                if result.is_pending()
+                    && let Some(entered) = entered.take()
+                {
+                    let _ = entered.send(());
+                }
+                result
+            })
+            .await;
+        }
         {
             let mut failures = self
                 .additional_test_deps
@@ -6918,6 +6972,7 @@ pub struct AdditionalTestDeps {
     empty_snapshot_payloads: Arc<std::sync::Mutex<HashSet<(AgentId, OplogIndex)>>>,
     non_snapshot_oplog_reads: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), usize>>>,
     oplog_read_gates: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), OplogReadGate>>>,
+    oplog_payload_read_gates: Arc<std::sync::Mutex<HashMap<(OwnedAgentId, Uuid), OplogReadGate>>>,
     runtime_card_audit_gates:
         Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), RuntimeCardAuditGate>>>,
     wallet_install_commit_gates: Arc<std::sync::Mutex<HashMap<AgentId, OplogReadGate>>>,
@@ -7002,6 +7057,7 @@ impl AdditionalTestDeps {
             empty_snapshot_payloads: Arc::new(std::sync::Mutex::new(HashSet::new())),
             non_snapshot_oplog_reads: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_read_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            oplog_payload_read_gates: Arc::default(),
             runtime_card_audit_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             wallet_install_commit_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             append_after_commit: Arc::new(std::sync::Mutex::new(HashSet::new())),

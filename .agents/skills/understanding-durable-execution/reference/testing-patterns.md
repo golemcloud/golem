@@ -109,6 +109,25 @@ Copy: `tests/api/mod.rs::p3_promise_suspend_survives_executor_restart`,
 `tests/rpc.rs::ts_cancel_survives_executor_restart`,
 `tests/durability.rs::snapshot_based_recovery_preserves_state_across_multiple_restarts`.
 
+### Completed-history input acquisition without a Worker pause
+
+The completed Counter increment is pure guest code. Use the supported
+`oplog.max_payload_size = 1` inline threshold to store its invocation input externally, then select
+the exact payload from its original Started and require a Finished before the next invocation.
+Require uncached external data and no Jump. The normal replay path must acquire that recorded input
+through the oplog dependency before lowering and invoking the guest.
+
+The test-utils payload-read adapter is keyed by the full owner and actual payload UUID. Its entry
+receipt follows a Pending poll of withheld delivery, then release calls the unchanged classified
+download path. This is a real data-acquisition boundary, not a native syscall Pending witness or a
+claim that the guest has already executed. It neither sets replay state nor adds a Worker hook.
+
+Keep the memory-stop and same-cached-Worker window-replacement assertions strict: exact acceptance,
+period/revision/fuel facts, old/new attempts and generations, held permits, receipts, physical cleanup
+and original Started/Finished/results. Compare the complete raw prefix after each stop and later
+reconstruction. A repeated-key result is not enough; the next fresh Counter result must also prove
+that completed replay did not repeat its effect.
+
 ## Pattern 5: completed replay performs no new effect
 
 Mistake caught: re-executing a recorded call during replay.

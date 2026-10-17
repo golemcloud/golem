@@ -238,7 +238,16 @@ Findings 11-14 have separate linked comments.
     affected native and custom-suspension/acceptance regression batches, strict executor lint,
     production compilation and browser checks pass. This completes this control family only;
     overall A1/F10/F11 remain open.
-  - [ ] Address remaining idle-close, completed-replay and deletion-stage gates.
+  - [ ] Address remaining idle-close and deletion-stage gates.
+  - [x] Remove the completed-history replay-gate family. The local change deletes its Worker
+    field, type, setter, history scan and pre-invocation await after both native consumers pass at
+    the exact stored input-payload acquisition boundary. The supported external-payload setting
+    provides real uncached data; test-utils holds its actual download without changing replay state.
+    All native assertion bodies remain apart from observation substitutions, with full raw prefixes
+    and no-Jump checks added. The receipt does not claim native syscall or guest-instruction Pending.
+    Separate producer-removal library, affected native and custom-suspension/acceptance regression
+    batches, strict executor/test-utils lint, production compilation and browser checks pass.
+    This completes this family only; overall A1/F10/F11 stay open.
   - [x] Remove the complete invocation-deadline control family. The Worker watch field, forced-expiry
     setter and test-feature timer branch are removed. Native selection tests use the configured
     timer and preserve their original assertions, with complete raw-prefix and exact timeout-text
@@ -291,6 +300,10 @@ Findings 11-14 have separate linked comments.
   - [x] Delete the Worker-owned teardown-fence field, pause methods, snapshot/gate types and
     invocation-loop test await. The consumer baseline and separate producer-removal checks pass,
     as recorded under F10. No replacement runtime coordination or trace producer is introduced.
+  - [x] Delete the Worker-owned completed-history replay field, gate type, setter, history scan and
+    pre-invocation await. Exact stored input acquisition belongs to the existing test-utils oplog
+    dependency adapter, without replay-state mutation or another production conditional. Both
+    consumer and separate producer-removal checks pass, as recorded under F10.
   - [ ] Address the keyed filesystem gate; oplog backpressure is not actual metadata Pending.
   - [x] Remove the monthly-acceptance observer/completion family. The local change
     removes the Worker sender, constructor wiring, setter, exported acceptance envelope and producer

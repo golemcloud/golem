@@ -5595,12 +5595,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 .clear_invocation_scope_card().await;
                             break Err(error);
                         }
-                        #[cfg(feature = "test-utils")]
-                        worker.wait_completed_replay_for_test(
-                            &idempotency_key,
-                            oplog_index,
-                            &store.as_context().data().durable_ctx().state.replay_state,
-                        ).await;
                         let invoke_result = invoke_observed_and_traced(
                             lowered,
                             store,

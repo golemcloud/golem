@@ -46,7 +46,10 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
         deps,
         &context,
         limits.clone(),
-        Arc::new(move |config| config.resource_usage_metering = metering),
+        Arc::new(move |config| {
+            config.resource_usage_metering = metering;
+            config.oplog.max_payload_size = 1;
+        }),
     )
     .await?;
     let component = executor
@@ -78,11 +81,14 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
         .oplog()
         .read_exact(OplogIndex::INITIAL, original_tip.as_u64())
         .await;
-    let (old_replay, release_old_replay) = worker.pause_completed_replay_for_test(key.clone());
+    let original_raw = executor.stored_oplog(&id).await;
+    let (_, _, payload) = completed_invocation_payload(&original, &key)?;
+    let (old_replay, release_old_replay) =
+        executor.gate_next_oplog_payload_read(&id, payload.clone());
     worker.set_interrupting(InterruptKind::Restart).await?;
     tokio::time::timeout(Duration::from_secs(10), old_replay)
         .await
-        .context("old completed replay")??;
+        .context("old completed invocation payload acquisition")??;
     let account = limits.initialize_account(context.account_id).await?;
     let old_acquisitions = worker.permit_acquisitions_for_test();
     assert!(worker.concurrent_agent_permit_is_held().await);
@@ -110,7 +116,7 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
     });
     tokio::time::timeout(Duration::from_secs(10), updates.changed())
         .await
-        .context("old exhausted capacity applied before filesystem reply")??;
+        .context("old exhausted capacity applied before recorded invocation payload delivery")??;
     let old = worker.current_monthly_proposal_for_test();
     assert_eq!(old.exhaustion, Some("monthly memory exhausted"));
     assert_eq!(old.policy_revision, initial.policy_revision + 1);
@@ -159,6 +165,9 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
     })
     .await
     .context("old window physical cleanup")??;
+    let old_raw = executor.stored_oplog(&id).await;
+    assert!(old_raw.len() >= original_raw.len());
+    assert_eq!(&old_raw[..original_raw.len()], original_raw.as_slice());
     assert_eq!(account.monthly_observer_count_for_test(), 0);
     assert_eq!(worker.permit_acquisitions_for_test(), old_acquisitions);
     assert_eq!(worker.monthly_stop_for_test(), None);
@@ -168,7 +177,7 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
     let mut attempts =
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
 
-    let (new_replay, release_new_replay) = worker.pause_completed_replay_for_test(key.clone());
+    let (new_replay, release_new_replay) = executor.gate_next_oplog_payload_read(&id, payload);
     let resume = tokio::spawn({
         let executor = executor.clone();
         let id = id.clone();
@@ -176,7 +185,7 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
     });
     tokio::time::timeout(Duration::from_secs(10), new_replay)
         .await
-        .context("replacement completed replay")??;
+        .context("replacement completed invocation payload acquisition")??;
     let current = worker.current_monthly_proposal_for_test();
     assert!(Arc::ptr_eq(
         &worker,
@@ -292,6 +301,14 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
             worker.oplog().current_oplog_index().await.as_u64(),
         )
         .await;
+    let stopped_raw = executor.stored_oplog(&id).await;
+    assert!(stopped_raw.len() >= old_raw.len());
+    assert_eq!(&stopped_raw[..old_raw.len()], old_raw.as_slice());
+    assert!(
+        !stopped
+            .values()
+            .any(|entry| matches!(entry, OplogEntry::Jump { .. }))
+    );
     assert_eq!(
         stopped
             .values()

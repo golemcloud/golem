@@ -47,7 +47,10 @@ mod completed_history {
             deps,
             &context,
             limits.clone(),
-            Arc::new(move |config| config.resource_usage_metering = metering),
+            Arc::new(move |config| {
+                config.resource_usage_metering = metering;
+                config.oplog.max_payload_size = 1;
+            }),
         )
         .await?;
         let component = executor
@@ -80,6 +83,7 @@ mod completed_history {
             .oplog()
             .read_exact(OplogIndex::INITIAL, original_tip.as_u64())
             .await;
+        let original_raw = executor.stored_oplog(&id).await;
         let started = |entries: &std::collections::BTreeMap<OplogIndex, OplogEntry>,
                        key: &IdempotencyKey| {
             entries
@@ -114,13 +118,16 @@ mod completed_history {
             2
         );
         eprintln!("[monthly-replay] original committed oplog: {original:#?}");
-        let (replay, release_replay) = worker.pause_completed_replay_for_test(key.clone());
+        let (replay_start, replay_finished, payload) =
+            completed_invocation_payload(&original, &key)?;
+        assert_eq!((replay_start, replay_finished), (starts[0], finished_index));
+        let (replay, release_replay) = executor.gate_next_oplog_payload_read(&id, payload);
         // The public crash API ignores Idle. Restart the resident Worker through the same stop path.
         worker.set_interrupting(InterruptKind::Restart).await?;
-        let replay_indices = tokio::time::timeout(Duration::from_secs(10), replay)
+        tokio::time::timeout(Duration::from_secs(10), replay)
             .await
-            .context("completed-history replay boundary after Restart")??;
-        assert_eq!(replay_indices, (starts[0], finished_index));
+            .context("completed invocation input acquisition during replay after Restart")??;
+        let replay_indices = (replay_start, replay_finished);
         let generation = worker.resident_generation_for_test();
         assert!(generation > initial_generation);
         assert!(worker.concurrent_agent_permit_is_held().await);
@@ -216,6 +223,9 @@ mod completed_history {
             original
         );
         assert_eq!(started(&stopped, &key), starts);
+        let stopped_raw = executor.stored_oplog(&id).await;
+        assert!(stopped_raw.len() >= original_raw.len());
+        assert_eq!(&stopped_raw[..original_raw.len()], original_raw.as_slice());
         assert_eq!(
             stopped
                 .values()
@@ -305,6 +315,9 @@ mod completed_history {
         );
         assert_eq!(started(&recovered, &key), starts);
         assert_eq!(started(&recovered, &new_key).len(), 1);
+        let recovered_raw = executor.stored_oplog(&id).await;
+        assert!(recovered_raw.len() >= stopped_raw.len());
+        assert_eq!(&recovered_raw[..stopped_raw.len()], stopped_raw.as_slice());
         assert_eq!(
             recovered
                 .values()

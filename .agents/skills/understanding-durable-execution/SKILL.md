@@ -479,7 +479,19 @@ post-removal library, affected native and custom-suspension/acceptance regressio
 lint, production compilation and browser checks pass. No replacement runtime gate or diagnostic
 producer is added. This does not close the remaining A1/F10/F11 work.
 
-Idle, monthly-time, completed-replay, deletion and other test controls remain open F10/F11 work;
+The completed-history replay-gate removal deletes its Worker field, gate type, setter, history-scan
+helper and pre-invocation await. Its consumers pass beforehand without that producer. They use the
+supported external-payload threshold and hold the exact stored invocation input at the existing
+oplog dependency adapter. The Started/Finished pair and uncached payload reference come from actual
+committed history; no replay flag or cursor is changed. The receipt witnesses Pending of withheld
+dependency delivery, not a guest instruction or native filesystem syscall. All native acceptance,
+window identity, policy, receipt, cleanup and result assertions remain, with full raw-prefix and
+no-Jump checks added. Separate post-removal library, affected native and custom-suspension/acceptance
+regression batches, strict executor/test-utils lint, production compilation and browser checks pass.
+The adapter and its interests remain entirely in test-utils, outside Worker ownership and production
+replay code. This does not close the remaining A1/F10/F11 work.
+
+Idle, tail, monthly-time, deletion and other test controls remain open F10/F11 work;
 isolating their fields under test configuration does not justify or complete their removal.
 
 An accepted stop in `WaitingForPermit` takes that attempt's exact task handle before signalling

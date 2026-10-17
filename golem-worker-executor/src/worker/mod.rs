@@ -828,8 +828,6 @@ struct DeletionStageTestGate {
 #[derive(Default)]
 struct ExecutionTestSupport {
     #[cfg(feature = "test-utils")]
-    completed_replay_gate: Option<CompletedReplayTestGate>,
-    #[cfg(feature = "test-utils")]
     tail_drain_observer:
         Option<tokio::sync::oneshot::Sender<crate::durable_host::tail_work::TailWorkTracker>>,
     #[cfg(feature = "test-utils")]
@@ -840,13 +838,6 @@ struct ExecutionTestSupport {
     permit_acquisitions: usize,
     #[cfg(test)]
     window_close_tasks: usize,
-}
-
-#[cfg(feature = "test-utils")]
-struct CompletedReplayTestGate {
-    key: IdempotencyKey,
-    entered: tokio::sync::oneshot::Sender<(OplogIndex, OplogIndex)>,
-    release: tokio::sync::oneshot::Receiver<()>,
 }
 
 #[cfg(feature = "test-utils")]
