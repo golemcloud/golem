@@ -1548,6 +1548,27 @@ a different oplog shape. The host-call observation counter is still incremented 
 fast path. The check lives in `services/agent_filesystem/lifecycle/mod.rs::is_immutable_initial_file`;
 the P2/P3 adapters live in `wasi_filesystem/{p2/types.rs,p3/mod.rs}`.
 
+Filesystem permission decisions have a track in the oplog. Every protected P2/P3 filesystem import
+records its permission decision in a normal durable call (`ReadLocal`), allowed or denied, so replay
+returns the recorded decision and never checks a policy. Most imports record a separate
+`filesystem::permissions::check` call before their effect; its request holds the verbs and the
+guest paths, and its response is `Ok(())` or `Err(reason)`. A recorded denial returns
+`not-permitted`. `stat`/`stat-at` (P2 and P3) check inside their own durable call and record a
+denial as their `not-permitted` result; their immutable initial-file fast path records a separate
+check. P3 `write-via-stream` and `append-via-stream` record the decision in their admission call
+(`admit_stream_write`). The live check (`live_permission_decision`,
+`p3_live_permission_decision`) runs only while the Store is live: when an incomplete check `Start`
+is repaired during replay, the repair completes it as allowed, because live authorization cannot
+run then. A new check in the replay tail has no recorded `Start`, so the call switches to live and
+checks the policy. P3 imports that await before their check reserve their invocation id first
+(`reserve_invocation_id_before_await`). Test:
+`tests/scope_cards.rs::denied_filesystem_imports_are_recorded_and_replayed_after_restart`.
+
+P2 TCP `start-connect` records its decision in the same way, in a
+`sockets::tcp::permissions::check-connect` call (the request holds the remote address). A recorded
+denial returns `access-denied`, and its replay does not connect. Test:
+`tests/scope_cards.rs::p2_tcp_connect_denial_is_recorded_and_does_not_reach_the_backend_on_replay`.
+
 Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic
 capability escape refusal as `SandboxEscape`; P2/P3 return `access`, or EACCES, and keep the
 filesystem generation valid. Other `PermissionDenied` failures are terminal. The lifecycle can
