@@ -1005,7 +1005,8 @@ impl golem_worker_executor::services::card::CardService for SaveHookCardService 
         &self,
         card: golem_common::model::card::StoredCard,
         provenance: golem_common::model::card::CardManagedByRuntimeDerived,
-    ) -> Result<golem_common::model::card::StoredCard, WorkerExecutorError> {
+    ) -> Result<golem_worker_executor::services::card::RuntimeCardCreation, WorkerExecutorError>
+    {
         golem_worker_executor_test_utils::TestCardService
             .create_runtime_card(card, provenance)
             .await

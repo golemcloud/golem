@@ -47,7 +47,9 @@ use golem_test_framework::components::rdb::docker_ignite::DockerIgniteRdb;
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::dsl::TestDsl;
-use golem_worker_executor::services::card::{CardRevokeResult, CardService, CardState};
+use golem_worker_executor::services::card::{
+    CardRevokeResult, CardService, CardState, RuntimeCardCreation,
+};
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::{
@@ -166,7 +168,14 @@ struct ScopeCardAuthority {
     /// The number of `check_cards` calls naming a runtime card that answer before every runtime
     /// card is revoked externally.
     runtime_card_checks_before_revocation: std::sync::Mutex<Option<usize>>,
+    create_card_gate: std::sync::Mutex<Option<CardServiceGate>>,
     revoke_card_gate: std::sync::Mutex<Option<CardServiceGate>>,
+    /// The number of later `revoke_card` calls that revoke their card and then fail, as if the
+    /// executor crashed after the revocation.
+    failing_revocations: AtomicUsize,
+    /// The number of later `create_runtime_card` calls that create their card and then fail, as
+    /// if the executor crashed after the creation.
+    failing_creations: AtomicUsize,
     record_revoked_cards_gate: std::sync::Mutex<Option<CardServiceGate>>,
     check_cards_gate: std::sync::Mutex<Option<CheckCardsGate>>,
     fail_gated_check_cards: AtomicBool,
@@ -380,6 +389,10 @@ impl ScopeCardAuthority {
         CardServiceGate::install(&self.revoke_card_gate)
     }
 
+    fn gate_create_card(&self) -> CardServiceGateHandle {
+        CardServiceGate::install(&self.create_card_gate)
+    }
+
     fn gate_record_revoked_cards(&self) -> CardServiceGateHandle {
         CardServiceGate::install(&self.record_revoked_cards_gate)
     }
@@ -432,6 +445,20 @@ struct ScopeCardService {
     authority: Arc<ScopeCardAuthority>,
 }
 
+fn card_is_expired(card: &StoredCard) -> bool {
+    card.expires_at()
+        .is_some_and(|expires_at| expires_at <= Utc::now())
+}
+
+/// Decrements `counter` if it is positive, and returns whether it was.
+fn take_one(counter: &AtomicUsize) -> bool {
+    counter
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+            remaining.checked_sub(1)
+        })
+        .is_ok()
+}
+
 #[async_trait]
 impl CardService for ScopeCardService {
     async fn record_revoked_cards(&self, card_ids: &[CardId]) {
@@ -449,21 +476,34 @@ impl CardService for ScopeCardService {
         &self,
         card: StoredCard,
         _provenance: CardManagedByRuntimeDerived,
-    ) -> Result<StoredCard, WorkerExecutorError> {
+    ) -> Result<RuntimeCardCreation, WorkerExecutorError> {
         self.authority
             .create_card_count
             .fetch_add(1, Ordering::SeqCst);
-        if let Some(parent_id) = card
-            .parent_ids()
-            .iter()
-            .find(|parent_id| self.authority.is_revoked_card(**parent_id))
-        {
+        CardServiceGate::pass(&self.authority.create_card_gate).await;
+        // As the registry does, a revoked runtime card is never created again, and a revoked or
+        // expired parent refuses its child.
+        if self.authority.is_revoked_card(card.card_id()) {
+            return Ok(RuntimeCardCreation::Revoked);
+        }
+        if let Some(parent_id) = card.parent_ids().iter().find(|parent_id| {
+            self.authority.is_revoked_card(**parent_id)
+                || self
+                    .authority
+                    .card(**parent_id)
+                    .is_some_and(|parent| card_is_expired(&parent))
+        }) {
             return Err(WorkerExecutorError::runtime(format!(
                 "Failed creating runtime permission card: parent card {parent_id} not found"
             )));
         }
         self.authority.add_card(card.clone());
-        Ok(card)
+        if take_one(&self.authority.failing_creations) {
+            return Err(WorkerExecutorError::runtime(
+                "injected failure after the runtime card was created",
+            ));
+        }
+        Ok(RuntimeCardCreation::Created(Box::new(card)))
     }
 
     async fn revoke_card(&self, card_id: CardId) -> Result<CardRevokeResult, WorkerExecutorError> {
@@ -471,9 +511,13 @@ impl CardService for ScopeCardService {
             .revoke_card_count
             .fetch_add(1, Ordering::SeqCst);
         CardServiceGate::pass(&self.authority.revoke_card_gate).await;
-        Ok(CardRevokeResult::Revoked(
-            self.authority.revoke_subtree(card_id),
-        ))
+        let revoked = self.authority.revoke_subtree(card_id);
+        if take_one(&self.authority.failing_revocations) {
+            return Err(WorkerExecutorError::runtime(
+                "injected failure after the card was revoked",
+            ));
+        }
+        Ok(CardRevokeResult::Revoked(revoked))
     }
 
     async fn live_ancestor_ids_including_self(
@@ -520,7 +564,12 @@ impl CardService for ScopeCardService {
                 } else if self.authority.is_revoked_card(card_id) {
                     CardState::Revoked
                 } else if let Some(card) = self.authority.card(card_id) {
-                    CardState::Live(Box::new(card))
+                    // As the card service does, an expired card is reported as revoked.
+                    if card_is_expired(&card) {
+                        CardState::Revoked
+                    } else {
+                        CardState::Live(Box::new(card))
+                    }
                 } else {
                     CardState::Unknown
                 };
@@ -6760,6 +6809,217 @@ async fn derive_from_a_card_revoked_after_its_liveness_check_records_a_typed_ref
     );
     executor.check_oplog_is_queryable(&holder_worker).await?;
     Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn derive_from_a_card_that_expires_before_its_creation_records_card_expired(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let (component, holder, _holder_worker) = start_card_handle_agent(
+        &executor,
+        &authority,
+        &context,
+        host_api_tests,
+        "late-expired-derive-parent-holder",
+    )
+    .await?;
+    let (_, child_id) = executor
+        .invoke_and_await_agent(
+            &component,
+            &holder,
+            "keep_derived_cards",
+            data_value!(Some("PT5S".to_string())),
+        )
+        .await?
+        .into_typed::<(SchemaCardId, SchemaCardId)>()?;
+    let child_expires_at = authority
+        .card(CardId(child_id.uuid))
+        .and_then(|child| child.expires_at())
+        .ok_or_else(|| anyhow::anyhow!("the kept child has no expiry"))?;
+
+    // The derive checks the liveness of the child while it is live, and the card service creates
+    // the derived card only after the child expired. The card service reports the expired parent
+    // as revoked.
+    let mut create_gate = authority.gate_create_card();
+    let derive = executor.invoke_and_await_agent(
+        &component,
+        &holder,
+        "derive_from_kept_child",
+        data_value!(Some("PT1S".to_string())),
+    );
+    let expire_during_creation = async {
+        create_gate.entered().await?;
+        let remaining = (child_expires_at - Utc::now()).to_std().unwrap_or_default();
+        tokio::time::sleep(remaining + Duration::from_millis(500)).await;
+        create_gate.release();
+        Ok::<_, anyhow::Error>(())
+    };
+    let (outcome, ()) = tokio::try_join!(derive, expire_during_creation)?;
+    assert_eq!(
+        outcome.into_typed::<String>()?,
+        "card-expired",
+        "a parent that expires between the liveness check and the creation must give card-expired"
+    );
+
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    assert_eq!(
+        use_kept_child(&executor, &component, &holder).await?,
+        vec!["card-expired", "card-expired"],
+        "reconstruction must replay the recorded refusal"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("3m")]
+#[tracing::instrument]
+async fn a_refused_repair_that_fails_after_revoking_its_card_settles_with_card_revoked(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::OwnedAgentId;
+
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let (component, holder, holder_worker) = start_card_handle_agent(
+        &executor,
+        &authority,
+        &context,
+        host_api_tests,
+        "refused-repair-holder",
+    )
+    .await?;
+    let root_card_id = authority
+        .root_card_id()
+        .ok_or_else(|| anyhow::anyhow!("the scope-card root is not configured"))?;
+    // The parent does not descend from the root, so revoking the root takes the card:derive
+    // authority of the agent and leaves the parent live.
+    let parent = unparented_card("inspect");
+    let parent_id = parent.card_id();
+    authority.add_card(parent.clone());
+    executor.queue_card_install(&holder_worker, parent).await?;
+    assert!(
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &holder,
+                "has_card",
+                data_value!(SchemaCardId::from(parent_id.0))
+            )
+            .await?
+            .into_typed::<bool>()?
+    );
+    let owner = executor
+        .active_agent(&OwnedAgentId::new(
+            context.default_environment_id,
+            &holder_worker,
+        ))
+        .await
+        .ok_or_else(|| anyhow::anyhow!("the holder is not active"))?;
+    let created_before = authority.create_card_count.load(Ordering::SeqCst);
+    let revoked_before = authority.revoke_card_count();
+
+    // The creation fails after the card service created the card, so the call is repaired. The
+    // repair is refused because the agent lost card:derive; it revokes the created card and fails
+    // before it records the refusal. The agent gets card:derive back before the next repair.
+    authority.failing_creations.store(1, Ordering::SeqCst);
+    authority.failing_revocations.store(1, Ordering::SeqCst);
+    let mut create_gate = authority.gate_create_card();
+    let mut revoke_gate = authority.gate_revoke_card();
+    let derive = executor.invoke_and_await_agent(
+        &component,
+        &holder,
+        "derive_from_wallet_card",
+        data_value!(SchemaCardId::from(parent_id.0)),
+    );
+    let change_authority_between_attempts = async {
+        create_gate.entered().await?;
+        let card_ids = [root_card_id];
+        let primary = owner.primary();
+        let revoke_root = primary.queue_card_revocations(&card_ids);
+        tokio::pin!(revoke_root);
+        let _ = futures::poll!(&mut revoke_root);
+        create_gate.release();
+        revoke_root.await?;
+
+        revoke_gate.entered().await?;
+        let derive_authority = unparented_card("derive");
+        authority.add_card(derive_authority.clone());
+        executor
+            .queue_card_install(&holder_worker, derive_authority)
+            .await?;
+        revoke_gate.release();
+        Ok::<_, anyhow::Error>(())
+    };
+    let (outcome, ()) = tokio::try_join!(derive, change_authority_between_attempts)?;
+    assert_eq!(
+        outcome.into_typed::<String>()?,
+        "card-revoked",
+        "a card revoked by a refused repair can never be created again, so the next repair \
+         must settle the refusal"
+    );
+    assert_eq!(
+        authority.create_card_count.load(Ordering::SeqCst),
+        created_before + 2,
+        "the first attempt and the authorized repair each try to create the card"
+    );
+    assert_eq!(
+        authority.revoke_card_count(),
+        revoked_before + 1,
+        "only the refused repair revokes the card"
+    );
+
+    drop(owner);
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    assert!(
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &holder,
+                "has_card",
+                data_value!(SchemaCardId::from(parent_id.0))
+            )
+            .await?
+            .into_typed::<bool>()?,
+        "reconstruction must replay the recorded refusal"
+    );
+    assert_eq!(
+        authority.create_card_count.load(Ordering::SeqCst),
+        created_before + 2,
+        "replay of the recorded refusal must not create the card again"
+    );
+    Ok(())
+}
+
+/// A concrete card without parents that grants the card `verb`.
+fn unparented_card(verb: &str) -> StoredCard {
+    StoredCard::Concrete(Card {
+        card_id: CardId::new(),
+        parent_ids: Vec::new(),
+        lower_positive: vec![
+            parse_permission_fields("card", "*", "*", verb, "*").expect("valid card grant"),
+        ],
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: Utc::now(),
+        expires_at: None,
+        system_card: false,
+        managed_by: None,
+    })
 }
 
 #[test]
