@@ -47,6 +47,46 @@ interface host {
   /// has no binding for it; the two cases are not distinguished.
   get-tool: func(name: string) -> option<registered-tool>;
 
+  record command-input {
+    command-path: list<string>,
+    input: typed-schema-value,
+    stdin: bool,
+    stdout: bool,
+    stderr: bool,
+  }
+
+  record command-output {
+    exit-code: u8,
+    stdout: list<u8>,
+    stderr: list<u8>,
+  }
+
+  /// An immutable CLI projection, not invocation authority. Invoke its input
+  /// through the ordinary tool-rpc so bindings and permissions still apply.
+  resource prepared-command {
+    input: func() -> command-input;
+    /// Projects a terminal using named ProcessExitStatus, declared error
+    /// statuses and redacted result text. Append this output after the
+    /// collected streams. Preserve any prior stream failure or cancellation.
+    render-result: func(terminal: result<invocation-result, tool-rpc-error>) -> command-output;
+  }
+
+  variant command-preparation {
+    /// Help or a CLI diagnostic; no tool invocation is needed.
+    output(command-output),
+    invoke(own<prepared-command>),
+  }
+
+  /// Discovers a currently bound tool and uses the canonical CLI parser.
+  /// `none` means the name is unavailable. Variables supply only declared
+  /// environment defaults; they are not forwarded as a process environment.
+  /// Discovery uses its ordinary durable read; parsing itself has no effects.
+  prepare-command: func(
+    name: string,
+    args: list<string>,
+    variables: list<tuple<string, string>>,
+  ) -> option<command-preparation>;
+
   /// Producer endpoint for caller-provided stdin. Exactly one write, finish,
   /// or fail operation may be outstanding. The first terminal is immutable;
   /// dropping an open writer selects `abandoned`.
@@ -173,6 +213,12 @@ interface host {
     /// cancels the invocation and reports overflow on that channel.
     /// Dropping the wait does not itself cancel the invocation.
     collect: func(
+      stdout: option<own<output-collection>>,
+      stderr: option<own<output-collection>>,
+    ) -> collected-invocation;
+    /// The same collection with an asynchronous guest boundary, so the
+    /// calling runtime can continue to drive timers and explicit cancellation.
+    collect-async: async func(
       stdout: option<own<output-collection>>,
       stderr: option<own<output-collection>>,
     ) -> collected-invocation;

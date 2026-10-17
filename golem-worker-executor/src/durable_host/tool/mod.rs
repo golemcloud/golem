@@ -22,6 +22,7 @@
 
 pub(crate) mod attachment;
 pub(crate) mod boundary;
+mod cli;
 mod collect;
 pub(crate) mod durability;
 pub(crate) mod input;
@@ -34,6 +35,7 @@ mod streams;
 pub use attachment::{
     ToolAttachmentMetadata, ToolAttachmentModeMetadata, ToolAttachmentTerminalMetadata,
 };
+pub use cli::PreparedCommandEntry;
 pub use operation::{
     ToolBodyAdmissionMetadata, ToolOperationLaneMetadata, ToolOperationMetadata,
     ToolOperationSetMetadata, ToolOperationWinnerMetadata, ToolOwnerFailureMetadata,
@@ -6405,6 +6407,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolOutputWriterWithStore<U>
 }
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
+    async fn prepare_command(
+        &mut self,
+        name: String,
+        args: Vec<String>,
+        variables: Vec<(String, String)>,
+    ) -> anyhow::Result<Option<crate::preview2::golem::tool::host::CommandPreparation>> {
+        cli::prepare_command(self, name, args, variables).await
+    }
+
     async fn get_all_tools(&mut self) -> anyhow::Result<Vec<WitRegisteredTool>> {
         self.get_all_tools_model()
             .await?
@@ -6996,6 +7007,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
 impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
     for HasSelf<DurableWorkerCtx<Ctx>>
 {
+    async fn collect_async(
+        accessor: &Accessor<U, Self>,
+        self_: Resource<FutureInvokeResultEntry>,
+        stdout: Option<Resource<OutputCollectionEntry>>,
+        stderr: Option<Resource<OutputCollectionEntry>>,
+    ) -> anyhow::Result<CollectedInvocation> {
+        Self::collect(accessor, self_, stdout, stderr).await
+    }
+
     async fn collect(
         accessor: &Accessor<U, Self>,
         self_: Resource<FutureInvokeResultEntry>,
