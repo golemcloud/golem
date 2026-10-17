@@ -1703,3 +1703,143 @@ async fn a_refused_stream_leaves_the_requests_beside_it_alone() {
     )
     .await;
 }
+
+const REDIRECT_MARKER: &[u8] = b"go-elsewhere";
+
+fn is_redirect(status: &tonic::Status) -> bool {
+    status.details() == REDIRECT_MARKER
+}
+
+/// Answers every request with `Unavailable` and the redirect marker, as a shard manager standby
+/// does, and counts the requests.
+#[derive(Clone)]
+struct RedirectingExecutor {
+    requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl tonic::server::NamedService for RedirectingExecutor {
+    const NAME: &'static str = "golem.workerexecutor.v1.WorkerExecutor";
+}
+
+impl tonic::codegen::Service<http::Request<tonic::body::Body>> for RedirectingExecutor {
+    type Response = http::Response<tonic::body::Body>;
+    type Error = std::convert::Infallible;
+    type Future = std::future::Ready<Result<Self::Response, Self::Error>>;
+
+    fn poll_ready(
+        &mut self,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, _: http::Request<tonic::body::Body>) -> Self::Future {
+        self.requests
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let status = tonic::Status::with_details(
+            tonic::Code::Unavailable,
+            "go elsewhere",
+            bytes::Bytes::from_static(REDIRECT_MARKER),
+        );
+        std::future::ready(Ok(status.into_http()))
+    }
+}
+
+async fn serve_redirecting_peer() -> (TestPeer, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    let counter = connections.clone();
+    let incoming = futures::StreamExt::inspect(
+        tokio_stream::wrappers::TcpListenerStream::new(listener),
+        move |accepted| {
+            if accepted.is_ok() {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        },
+    );
+    let service = RedirectingExecutor {
+        requests: requests.clone(),
+    };
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let _ = tonic::transport::Server::builder()
+            .add_service(service)
+            .serve_with_incoming_shutdown(incoming, async move {
+                let _ = rx.await;
+            })
+            .await;
+    });
+
+    (
+        TestPeer {
+            addr,
+            connections,
+            shutdown: Some(tx),
+            server,
+        },
+        requests,
+    )
+}
+
+/// Retries on, so that a test can tell a redirect that stops them from one that does not.
+fn retrying_config() -> GrpcClientConfig {
+    GrpcClientConfig {
+        retries_on_unavailable: RetryConfig {
+            max_attempts: 2,
+            min_delay: Duration::from_millis(10),
+            max_delay: Duration::from_millis(50),
+            multiplier: 2.0,
+            max_jitter_factor: None,
+        },
+        ..config()
+    }
+}
+
+#[test]
+async fn a_redirect_is_returned_at_once_and_keeps_its_connection() {
+    let (peer, requests) = serve_redirecting_peer().await;
+    let client = executor_client(retrying_config()).with_redirect(is_redirect);
+    let target: Uri = format!("http://{}", peer.addr).parse().unwrap();
+
+    for _ in 0..2 {
+        let status = ping(&client, target.clone())
+            .await
+            .expect_err("the peer only redirects");
+        assert!(
+            is_redirect(&status),
+            "expected the redirect itself, got {status:?}"
+        );
+    }
+
+    assert_eq!(
+        requests.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "each call must reach the peer exactly once"
+    );
+    assert_eq!(
+        peer.connections.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "a redirect must not cost the connection"
+    );
+    peer.shutdown().await;
+}
+
+#[test]
+async fn without_a_redirect_check_the_same_answer_is_retried() {
+    let (peer, requests) = serve_redirecting_peer().await;
+    let client = executor_client(retrying_config());
+    let target: Uri = format!("http://{}", peer.addr).parse().unwrap();
+
+    ping(&client, target)
+        .await
+        .expect_err("the peer only answers Unavailable");
+
+    assert!(
+        requests.load(std::sync::atomic::Ordering::SeqCst) > 1,
+        "an Unavailable answer is retried by default"
+    );
+    peer.shutdown().await;
+}

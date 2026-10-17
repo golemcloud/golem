@@ -288,6 +288,12 @@ pub struct EtcdConfig {
     /// keep their own history.
     #[serde(default = "default_etcd_compaction_retention_revisions")]
     pub compaction_retention_revisions: u64,
+    /// An optional number that the operator raises with each rollout, such as the Helm release
+    /// revision. A standby moves to the end of the election queue when a campaigner of a higher
+    /// generation queues behind it, so that a rolling update hands the leadership to a new replica
+    /// once, instead of to old replicas that are replaced next. Unset: the queue keeps its order.
+    #[serde(default)]
+    pub rollout_generation: Option<u64>,
 }
 
 fn default_etcd_connect_timeout() -> Duration {
@@ -334,6 +340,7 @@ impl Default for EtcdConfig {
             retry_max_delay: default_etcd_retry_max_delay(),
             leader_lease_ttl: default_leader_lease_ttl(),
             compaction_retention_revisions: default_etcd_compaction_retention_revisions(),
+            rollout_generation: None,
         }
     }
 }
@@ -349,6 +356,7 @@ impl SafeDisplay for EtcdConfig {
             retry_max_delay,
             leader_lease_ttl,
             compaction_retention_revisions,
+            rollout_generation,
         } = self;
 
         let mut result = String::new();
@@ -363,6 +371,7 @@ impl SafeDisplay for EtcdConfig {
             &mut result,
             "compaction retention revisions: {compaction_retention_revisions}"
         );
+        let _ = writeln!(&mut result, "rollout generation: {rollout_generation:?}");
         result
     }
 }
@@ -443,6 +452,15 @@ impl Default for QuotaServiceConfig {
 pub struct GrpcApiConfig {
     pub port: u16,
     pub tls: GrpcServerTlsConfig,
+    /// The host other processes reach this replica's gRPC port at: the pod IP on Kubernetes, the
+    /// service name in Docker Compose. Required in distributed mode, where a standby tells clients
+    /// the leader's advertised host and `port`; unused in local mode.
+    #[serde(default)]
+    pub advertised_host: Option<String>,
+    /// The port other processes reach this replica's gRPC port at, when it differs from `port`
+    /// (port mapping, NAT). Defaults to the bound port.
+    #[serde(default)]
+    pub advertised_port: Option<u16>,
 }
 
 impl SafeDisplay for GrpcApiConfig {
@@ -450,6 +468,8 @@ impl SafeDisplay for GrpcApiConfig {
         let mut result = String::new();
 
         let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "advertised_host: {:?}", self.advertised_host);
+        let _ = writeln!(&mut result, "advertised_port: {:?}", self.advertised_port);
 
         let _ = writeln!(&mut result, "tls:");
         let _ = writeln!(&mut result, "{}", self.tls.to_safe_string_indented());
@@ -463,6 +483,8 @@ impl Default for GrpcApiConfig {
         Self {
             port: 9092,
             tls: GrpcServerTlsConfig::disabled(),
+            advertised_host: None,
+            advertised_port: None,
         }
     }
 }

@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::grpc::client::{GrpcClient, GrpcClientConfig};
+use crate::clients::shard_manager_router::{Attempts, LeaderRouter};
+use crate::grpc::client::GrpcClientConfig;
 use crate::model::quota_lease::{PendingReservation, QuotaLease};
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 use golem_api_grpc::proto::golem::shardmanager::v1::{
     AcquireQuotaLeaseRequest, BatchRenewQuotaLeasesRequest, DeregisterRequest,
     ExecutorEndpoint as GrpcExecutorEndpoint, GetRoutingTableRequest, RegisterRequest,
@@ -41,9 +41,6 @@ use std::fmt::Write;
 use std::future::Future;
 use std::net::IpAddr;
 use std::time::Instant;
-use tonic::codec::CompressionEncoding;
-use tonic::transport::Channel;
-use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use uuid::Uuid;
 
 /// Client for the shard manager service.
@@ -284,26 +281,14 @@ impl HasConfigExamples<GrpcShardManagerConfig> for GrpcShardManagerConfig {
 
 #[derive(Clone)]
 pub struct GrpcShardManager {
-    client: GrpcClient<ShardManagerServiceClient<OtelGrpcService<Channel>>>,
+    router: LeaderRouter,
     retries: RetryConfig,
 }
 
 impl GrpcShardManager {
     pub fn new(config: &GrpcShardManagerConfig) -> Self {
-        let client = GrpcClient::new(
-            "shard_manager",
-            |channel, max_message_size| {
-                ShardManagerServiceClient::new(channel)
-                    .send_compressed(CompressionEncoding::Gzip)
-                    .accept_compressed(CompressionEncoding::Gzip)
-                    .max_decoding_message_size(max_message_size)
-                    .max_encoding_message_size(max_message_size)
-            },
-            config.uri(),
-            config.client_config.clone(),
-        );
         Self {
-            client,
+            router: LeaderRouter::new(config),
             retries: config.retries.clone(),
         }
     }
@@ -313,8 +298,8 @@ impl GrpcShardManager {
 impl ShardManager for GrpcShardManager {
     async fn get_routing_table(&self) -> Result<RoutingTable, ShardManagerError> {
         let response = self
-            .client
-            .call("get_routing_table", move |client| {
+            .router
+            .call("get_routing_table", Attempts::Retried, move |client| {
                 Box::pin(client.get_routing_table(GetRoutingTableRequest {}))
             })
             .await?
@@ -340,11 +325,12 @@ impl ShardManager for GrpcShardManager {
             "register",
             Some(format!("{pod_name:?}")),
             &self.retries,
-            &(self.client.clone(), endpoint, pod_name, executor_id),
-            |(client, endpoint, pod_name, executor_id)| {
+            &(self.clone(), endpoint, pod_name, executor_id),
+            |(shard_manager, endpoint, pod_name, executor_id)| {
                 Box::pin(async move {
-                    let (sent_at, response) = client
-                        .call("register", move |client| {
+                    let (sent_at, response) = shard_manager
+                        .router
+                        .call("register", Attempts::Retried, move |client| {
                             let request = RegisterRequest {
                                 endpoint: Some((*endpoint).into()),
                                 pod_name: pod_name.clone(),
@@ -398,8 +384,8 @@ impl ShardManager for GrpcShardManager {
         shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     ) -> Result<ShardLease, ShardLeaseError> {
         let (sent_at, response) = self
-            .client
-            .call_without_retry("renew_shard_lease", move |client| {
+            .router
+            .call("renew_shard_lease", Attempts::Once, move |client| {
                 let request = RenewShardLeaseRequest {
                     executor_id: executor_id.to_string(),
                     shard_epochs: shard_epochs_to_proto(
@@ -430,8 +416,8 @@ impl ShardManager for GrpcShardManager {
         shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     ) -> Result<(), ShardLeaseError> {
         let response = self
-            .client
-            .call_without_retry("deregister", move |client| {
+            .router
+            .call("deregister", Attempts::Once, move |client| {
                 let request = DeregisterRequest {
                     executor_id: executor_id.to_string(),
                     shard_epochs: shard_epochs_to_proto(
@@ -459,8 +445,8 @@ impl ShardManager for GrpcShardManager {
         endpoint: ExecutorEndpoint,
     ) -> Result<QuotaLease, QuotaError> {
         let response = self
-            .client
-            .call("acquire_quota_lease", move |client| {
+            .router
+            .call("acquire_quota_lease", Attempts::Retried, move |client| {
                 let request = AcquireQuotaLeaseRequest {
                     environment_id: Some(environment_id.into()),
                     resource_name: resource_name.0.clone(),
@@ -490,8 +476,8 @@ impl ShardManager for GrpcShardManager {
         pending_reservations: Vec<PendingReservation>,
     ) -> Result<QuotaLease, QuotaError> {
         let response = self
-            .client
-            .call("renew_quota_lease", move |client| {
+            .router
+            .call("renew_quota_lease", Attempts::Retried, move |client| {
                 let request = RenewQuotaLeaseRequest {
                     resource_definition_id: Some(resource_definition_id.into()),
                     endpoint: Some(endpoint.into()),
@@ -535,14 +521,18 @@ impl ShardManager for GrpcShardManager {
             .collect();
 
         let response = self
-            .client
-            .call("batch_renew_quota_leases", move |client| {
-                Box::pin(
-                    client.batch_renew_quota_leases(BatchRenewQuotaLeasesRequest {
-                        renewals: grpc_renewals.clone(),
-                    }),
-                )
-            })
+            .router
+            .call(
+                "batch_renew_quota_leases",
+                Attempts::Retried,
+                move |client| {
+                    Box::pin(
+                        client.batch_renew_quota_leases(BatchRenewQuotaLeasesRequest {
+                            renewals: grpc_renewals.clone(),
+                        }),
+                    )
+                },
+            )
             .await?
             .into_inner();
 
@@ -569,8 +559,8 @@ impl ShardManager for GrpcShardManager {
         unused: u64,
     ) -> Result<(), QuotaError> {
         let response = self
-            .client
-            .call("release_quota_lease", move |client| {
+            .router
+            .call("release_quota_lease", Attempts::Retried, move |client| {
                 let request = ReleaseQuotaLeaseRequest {
                     resource_definition_id: Some(resource_definition_id.into()),
                     endpoint: Some(endpoint.into()),

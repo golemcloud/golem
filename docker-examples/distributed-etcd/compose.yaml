@@ -2,6 +2,26 @@ x-aliases:
   blob-storage-env-vars: &blob-storage-env-vars
     GOLEM__BLOB_STORAGE__TYPE: "LocalFileSystem"
     GOLEM__BLOB_STORAGE__CONFIG__ROOT: "/data/blob_storage"
+  shard-manager-env-vars: &shard-manager-env-vars
+    RUST_BACKTRACE: 1
+    RUST_LOG=info,h2=warn,hyper=warn,tower: warn
+    GOLEM__ENVIRONMENT: local
+
+    GOLEM__HTTP_PORT: ${SHARD_MANAGER_HTTP_PORT}
+    GOLEM__GRPC__PORT: ${SHARD_MANAGER_GRPC_PORT}
+
+    GOLEM__REGISTRY_SERVICE__HOST: golem-registry-service
+    GOLEM__REGISTRY_SERVICE__PORT: ${REGISTRY_SERVICE_GRPC_PORT}
+
+    # Distributed mode. The shard lease state lives in etcd behind a compare-and-swap,
+    # and one replica wins an etcd lease campaign and drives all topology decisions.
+    # The endpoint list must be bracketed: unbracketed, it is read as a single string
+    # and fails to deserialize. Only http:// endpoints are accepted - the shard
+    # manager refuses to start on https://, because TLS is not configurable.
+    GOLEM__PERSISTENCE__TYPE: Etcd
+    GOLEM__PERSISTENCE__CONFIG__ENDPOINTS: '["http://etcd:2379"]'
+    # connect_timeout (10s), request_timeout (5s), leader_lease_ttl (10s) and
+    # compaction_retention_revisions (1000) keep their defaults here.
 
 services:
   router:
@@ -17,7 +37,9 @@ services:
       GOLEM_WORKER_SERVICE_PORT: ${WORKER_SERVICE_HTTP_PORT}
     depends_on:
       - golem-worker-service
-      - golem-shard-manager
+      - golem-shard-manager-1
+      - golem-shard-manager-2
+      - golem-shard-manager-3
       - golem-component-compilation-service
       - golem-registry-service
     volumes:
@@ -109,35 +131,37 @@ services:
       postgres:
         condition: service_healthy
 
-  golem-shard-manager:
+  # Three shard managers. Every replica serves its gRPC port; a standby answers each call with
+  # the leader's address, and the executors and the worker service then call the leader
+  # directly. They reach any replica through the shared network alias `golem-shard-manager`,
+  # and each replica advertises its own service name as the host to reach it at.
+  golem-shard-manager-1: &shard-manager
     image: golemservices/golem-shard-manager:${GOLEM_IMAGES_VERSION}
     pull_policy: always
     restart: on-failure
     environment:
-      RUST_BACKTRACE: 1
-      RUST_LOG=info,h2=warn,hyper=warn,tower: warn
-      GOLEM__ENVIRONMENT: local
-
-      GOLEM__HTTP_PORT: ${SHARD_MANAGER_HTTP_PORT}
-      GOLEM__GRPC__PORT: ${SHARD_MANAGER_GRPC_PORT}
-
-      GOLEM__REGISTRY_SERVICE__HOST: golem-registry-service
-      GOLEM__REGISTRY_SERVICE__PORT: ${REGISTRY_SERVICE_GRPC_PORT}
-
-      # Distributed mode. The shard lease state lives in etcd behind a compare-and-swap,
-      # and one replica wins an etcd lease campaign and drives all topology decisions.
-      # The endpoint list must be bracketed: unbracketed, it is read as a single string
-      # and fails to deserialize. Only http:// endpoints are accepted - the shard
-      # manager refuses to start on https://, because TLS is not configurable.
-      GOLEM__PERSISTENCE__TYPE: Etcd
-      GOLEM__PERSISTENCE__CONFIG__ENDPOINTS: '["http://etcd:2379"]'
-      # connect_timeout (10s), request_timeout (5s), leader_lease_ttl (10s) and
-      # compaction_retention_revisions (1000) keep their defaults here.
+      <<: *shard-manager-env-vars
+      GOLEM__GRPC__ADVERTISED_HOST: golem-shard-manager-1
+    networks:
+      default:
+        aliases: [golem-shard-manager]
     depends_on:
       etcd:
         condition: service_healthy
       golem-registry-service:
         condition: service_started
+
+  golem-shard-manager-2:
+    <<: *shard-manager
+    environment:
+      <<: *shard-manager-env-vars
+      GOLEM__GRPC__ADVERTISED_HOST: golem-shard-manager-2
+
+  golem-shard-manager-3:
+    <<: *shard-manager
+    environment:
+      <<: *shard-manager-env-vars
+      GOLEM__GRPC__ADVERTISED_HOST: golem-shard-manager-3
 
   golem-worker-service:
     image: golemservices/golem-worker-service:${GOLEM_IMAGES_VERSION}
@@ -175,7 +199,11 @@ services:
         condition: service_started
       golem-worker-executor:
         condition: service_started
-      golem-shard-manager:
+      golem-shard-manager-1:
+        condition: service_started
+      golem-shard-manager-2:
+        condition: service_started
+      golem-shard-manager-3:
         condition: service_started
       golem-registry-service:
         condition: service_started
@@ -263,7 +291,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      golem-shard-manager:
+      golem-shard-manager-1:
+        condition: service_started
+      golem-shard-manager-2:
+        condition: service_started
+      golem-shard-manager-3:
         condition: service_started
       golem-registry-service:
         condition: service_started

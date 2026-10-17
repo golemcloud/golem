@@ -14,11 +14,11 @@
 
 //! Leadership metrics for distributed mode.
 //!
-//! A standby never binds its gRPC port, so over its one remaining listener it is indistinguishable
-//! from a wedged process. The gauges say who the leader is - `sum(shard_manager_is_leader) != 1`
-//! is the alert - and the failure counter separates a replica queued behind a live leader (flat)
-//! from one that cannot reach etcd (rising). It counts the read before the campaign too, because a
-//! replica wedged there never reaches the campaign to fail one.
+//! A standby serves no call, so over its listeners it is indistinguishable from a wedged process.
+//! The gauges say who holds the leadership - `sum(shard_manager_is_leader) != 1` is the alert - and
+//! which replica serves, `shard_manager_is_serving`. The failure counter separates a replica queued
+//! behind a live leader (flat) from one that cannot reach etcd (rising). It counts the read before
+//! the campaign too, because a replica wedged there never reaches the campaign to fail one.
 //!
 //! The lease expiry counter is the one view of an executor that stopped renewing which does not
 //! depend on that executor still answering a scrape.
@@ -32,6 +32,15 @@ static IS_LEADER: LazyLock<Gauge> = LazyLock::new(|| {
         "1 while this replica holds the etcd leadership lease, 0 while it is standing by"
     )
     .expect("Cannot register the shard_manager_is_leader gauge")
+});
+
+static IS_SERVING: LazyLock<Gauge> = LazyLock::new(|| {
+    register_gauge!(
+        "shard_manager_is_serving",
+        "1 while this replica serves shard manager calls: a leader whose startup has completed, or \
+         a local-mode shard manager; 0 otherwise"
+    )
+    .expect("Cannot register the shard_manager_is_serving gauge")
 });
 
 static LEADER_SINCE: LazyLock<Gauge> = LazyLock::new(|| {
@@ -53,6 +62,7 @@ static CAMPAIGN_ATTEMPT_FAILURES: LazyLock<IntCounter> = LazyLock::new(|| {
 /// Registers the leadership metrics at their standing-by values.
 pub fn record_standing_by() {
     IS_LEADER.set(0.0);
+    IS_SERVING.set(0.0);
     LEADER_SINCE.set(0.0);
     LazyLock::force(&CAMPAIGN_ATTEMPT_FAILURES);
     LazyLock::force(&EXECUTOR_LEASES_EXPIRED);
@@ -61,6 +71,12 @@ pub fn record_standing_by() {
 /// Counts one retriable failure on the way to leadership.
 pub fn record_campaign_attempt_failure() {
     CAMPAIGN_ATTEMPT_FAILURES.inc();
+}
+
+/// This replica takes calls: set once its startup has completed and, in distributed mode, its
+/// election value is marked ready. `shard_manager_is_leader` turns on earlier, at the election.
+pub fn record_serving() {
+    IS_SERVING.set(1.0);
 }
 
 pub fn record_elected(elected_at_epoch_secs: f64) {

@@ -61,6 +61,7 @@ fn unreachable_config() -> EtcdConfig {
         retry_max_delay: Duration::from_secs(5),
         leader_lease_ttl: TEST_LEASE_TTL,
         compaction_retention_revisions: 0,
+        rollout_generation: None,
     }
 }
 
@@ -157,6 +158,7 @@ fn unreachable_shard_manager_config() -> ShardManagerConfig {
         http_port: 0,
         grpc: GrpcApiConfig {
             port: 0,
+            advertised_host: Some("127.0.0.1".to_string()),
             ..GrpcApiConfig::default()
         },
         persistence: PersistenceConfig::Etcd(unreachable_config()),

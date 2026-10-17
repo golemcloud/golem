@@ -15,6 +15,7 @@
 pub mod config;
 pub mod error;
 mod grpc;
+mod leader_gate;
 mod metrics;
 pub mod quota;
 mod registry_event_subscriber;
@@ -24,13 +25,13 @@ use self::grpc::ShardManagerServiceImpl;
 #[cfg(feature = "kubernetes")]
 use crate::config::HealthCheckK8sConfig;
 use crate::config::{EtcdConfig, HealthCheckMode, PersistenceConfig};
+use crate::leader_gate::{GatedService, LeaderGate};
 use crate::quota::{DbQuotaRepo, EtcdQuotaRepo, GrpcResourceDefinitionFetcher, QuotaService};
 use crate::registry_event_subscriber::ShardManagerRegistryInvalidationHandler;
 use crate::sharding::etcd_connection::connect_for_requests;
 use crate::sharding::etcd_retry::{is_retriable_read, retry_retriable};
 use crate::sharding::healthcheck::GrpcHealthCheck;
 use crate::sharding::worker_executor::WorkerExecutorServiceDefault;
-#[cfg(feature = "kubernetes")]
 use anyhow::Context;
 use config::ShardManagerConfig;
 use etcd_client::Client;
@@ -39,15 +40,17 @@ use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server::ShardManagerServiceServer;
 use golem_common::base_model::shard_lease;
 use golem_service_base::clients::registry::GrpcRegistryService;
+use golem_service_base::clients::shard_manager_leader::LeaderAddress;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use include_dir::include_dir;
 use prometheus::Registry;
+pub use sharding::election_watch::{CampaignView, Campaigner, ElectionWatch, ElectionWatcher};
 pub use sharding::error::{HealthCheckError, ShardManagerError};
 pub use sharding::etcd_retry::ReadRetry;
 pub use sharding::healthcheck::HealthCheck;
 pub use sharding::leader_election::{
-    Elected, LEADER_ELECTION_NAME, LeaderElection, LeaderFence, LeadershipHandle, LeaseKeepAlive,
-    LeaseLossReason, LeaseLost,
+    Elected, ElectionValue, LEADER_ELECTION_NAME, LeaderElection, LeaderFence, LeaderLocator,
+    LeadershipHandle, LeaseBelief, LeaseKeepAlive, LeaseLossReason, LeaseLost, RetryDelays,
 };
 pub use sharding::persistence::{
     DbRoutingTablePersistence, EtcdRoutingTablePersistence, ExternalRevision, NO_REVISION,
@@ -279,6 +282,114 @@ mod lease_timing_tests {
     }
 }
 
+#[cfg(test)]
+mod advertised_host_tests {
+    use super::{advertised_address, validate_advertised_host};
+    use crate::config::{EtcdConfig, GrpcApiConfig, PersistenceConfig, ShardManagerConfig};
+    use golem_service_base::clients::shard_manager_leader::LeaderAddress;
+    use test_r::test;
+
+    fn distributed(host: Option<&str>) -> ShardManagerConfig {
+        ShardManagerConfig {
+            persistence: PersistenceConfig::Etcd(EtcdConfig::default()),
+            grpc: GrpcApiConfig {
+                advertised_host: host.map(str::to_string),
+                ..GrpcApiConfig::default()
+            },
+            ..ShardManagerConfig::default()
+        }
+    }
+
+    #[test]
+    fn a_missing_or_blank_host_is_refused() {
+        for host in [None, Some(""), Some("   ")] {
+            let error = validate_advertised_host(&distributed(host)).expect_err("must be refused");
+            assert!(
+                error.to_string().contains("grpc.advertised_host"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unspecified_address_is_refused() {
+        for host in ["0.0.0.0", "::", "[::]"] {
+            validate_advertised_host(&distributed(Some(host))).expect_err(host);
+        }
+    }
+
+    #[test]
+    fn a_loopback_host_starts_with_a_warning() {
+        for host in ["127.0.0.1", "::1", "localhost", "LOCALHOST"] {
+            let named = validate_advertised_host(&distributed(Some(host)))
+                .expect(host)
+                .expect("a loopback host must warn");
+            assert_eq!(named, host.to_string());
+        }
+    }
+
+    #[test]
+    fn a_routable_host_is_accepted_silently() {
+        for host in [
+            "10.0.3.7",
+            "fd00::7",
+            "golem-shard-manager-1",
+            "sm-0.sm.golem.svc",
+        ] {
+            assert_eq!(
+                validate_advertised_host(&distributed(Some(host))).expect(host),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn an_ipv6_host_is_accepted_without_brackets() {
+        let address = advertised_address(&distributed(Some("[fd00::7]")), 9002).unwrap();
+        assert_eq!(address.host, "fd00::7");
+        assert_eq!(address.port, 9002);
+    }
+
+    #[test]
+    fn advertised_address_strips_brackets_and_uses_the_advertised_port() {
+        let mut config = distributed(Some("[::1]"));
+        config.grpc.advertised_port = Some(19092);
+        let address = advertised_address(&config, 9092).unwrap();
+        assert_eq!(
+            address,
+            LeaderAddress {
+                host: "::1".to_string(),
+                port: 19092
+            }
+        );
+    }
+
+    #[test]
+    fn advertised_address_defaults_to_the_bound_port() {
+        assert_eq!(
+            advertised_address(&distributed(Some("10.0.0.7")), 9092)
+                .unwrap()
+                .port,
+            9092
+        );
+    }
+
+    #[test]
+    fn an_advertised_port_of_zero_is_refused() {
+        let mut config = distributed(Some("10.0.0.7"));
+        config.grpc.advertised_port = Some(0);
+        assert!(validate_advertised_host(&config).is_err());
+    }
+
+    #[test]
+    fn local_mode_does_not_need_a_host() {
+        assert_eq!(
+            validate_advertised_host(&ShardManagerConfig::default()).unwrap(),
+            None
+        );
+    }
+}
+
 pub static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 
 pub struct RunDetails {
@@ -292,7 +403,11 @@ type Persistence = (
     Arc<dyn RoutingTablePersistence>,
     Arc<dyn crate::quota::QuotaRepo>,
     Option<LeadershipHandle>,
+    Option<LeaseBelief>,
 );
+
+/// The shard manager service as the gate serves it once this replica leads.
+type ShardManagerGrpcService = ShardManagerServiceServer<ShardManagerServiceImpl>;
 
 /// Whether this process is a dedicated shard manager or is embedded in the single `golem` binary.
 #[derive(Clone, Debug)]
@@ -361,8 +476,10 @@ async fn start_distributed_mode(
     etcd: &EtcdConfig,
     deployment: &Deployment,
     number_of_shards: usize,
+    gate: &LeaderGate<ShardManagerGrpcService>,
+    own: LeaderAddress,
     join_set: &mut JoinSet<anyhow::Result<()>>,
-) -> anyhow::Result<(Client, LeaderFence, LeadershipHandle)> {
+) -> anyhow::Result<(Client, LeaderFence, LeadershipHandle, LeaseBelief)> {
     let shutdown = match deployment {
         Deployment::Standalone { shutdown } => shutdown.clone(),
         Deployment::Embedded => anyhow::bail!(
@@ -401,6 +518,19 @@ async fn start_distributed_mode(
         "Configured the etcd client for shard lease state persistence"
     );
 
+    let election = LeaderElection::connect(etcd, LEADER_ELECTION_NAME)
+        .await?
+        .with_shutdown(shutdown.clone())
+        .with_grpc_address(own.clone())
+        .with_rollout_generation(etcd.rollout_generation);
+    let (watch, watcher) = election.watch();
+    // The campaign reads the same view, to find a replica that advertises this one's address.
+    let election = election.with_watch(watch.clone());
+    join_set.spawn(watcher.run().in_current_span());
+    // From here a call to this replica is answered from the watched view of the election, which
+    // costs no etcd read per call.
+    gate.stand_by(Arc::new(watch.clone()), own.clone(), etcd.leader_lease_ttl);
+
     metrics::record_standing_by();
 
     let stored_count = retry_retriable(
@@ -423,9 +553,6 @@ async fn start_distributed_mode(
         ensure_shard_count_matches(stored, number_of_shards)?;
     }
 
-    let election = LeaderElection::connect(etcd, LEADER_ELECTION_NAME)
-        .await?
-        .with_shutdown(shutdown);
     let elected = campaign_watching_startup(&election, join_set).await?;
 
     metrics::record_elected(
@@ -437,6 +564,7 @@ async fn start_distributed_mode(
 
     // The keepalive can only end in an error, and that error ends the process: a lost lease must
     // stop this replica rather than leave it serving a table it can no longer write.
+    let belief = elected.keepalive.belief();
     let keepalive = elected.keepalive;
     let leadership = elected.leadership;
     let stepping_down = leadership.clone();
@@ -457,7 +585,61 @@ async fn start_distributed_mode(
         .in_current_span(),
     );
 
-    Ok((kv, elected.fence, leadership))
+    Ok((kv, elected.fence, leadership, belief))
+}
+
+/// The advertised host as written, without the brackets an IPv6 literal may carry.
+fn advertised_host(config: &ShardManagerConfig) -> Option<&str> {
+    config
+        .grpc
+        .advertised_host
+        .as_deref()
+        .map(|host| host.trim().trim_start_matches('[').trim_end_matches(']'))
+        .filter(|host| !host.is_empty())
+}
+
+/// Checks the host a replica publishes for its gRPC port. Only distributed mode uses it: there
+/// clients connect to the leader at that host. Returns the host when it works only when every
+/// process runs on this machine, so that the caller can warn about it.
+fn validate_advertised_host(config: &ShardManagerConfig) -> anyhow::Result<Option<String>> {
+    if !matches!(config.persistence, PersistenceConfig::Etcd(_)) {
+        return Ok(None);
+    }
+    let host = advertised_host(config).context(
+        "grpc.advertised_host must be set in distributed mode: it is the address clients connect \
+         to when this replica leads. On Kubernetes, set GOLEM__GRPC__ADVERTISED_HOST from the pod \
+         IP (fieldRef status.podIP).",
+    )?;
+    let ip = host.parse::<std::net::IpAddr>().ok();
+    anyhow::ensure!(
+        !ip.is_some_and(|ip| ip.is_unspecified()),
+        "grpc.advertised_host is {host}, which names no single host. Set it to the address other \
+         processes reach this replica at, such as its pod IP."
+    );
+    anyhow::ensure!(
+        config.grpc.advertised_port != Some(0),
+        "grpc.advertised_port is 0, which no client can connect to. Leave it unset to advertise \
+         the bound port."
+    );
+    let local_only = match ip {
+        Some(ip) => ip.is_loopback(),
+        None => host.eq_ignore_ascii_case("localhost"),
+    };
+    Ok(local_only.then(|| host.to_string()))
+}
+
+/// Where this replica serves gRPC to other processes: the advertised host, and the advertised port
+/// or else the bound one.
+fn advertised_address(
+    config: &ShardManagerConfig,
+    grpc_port: u16,
+) -> anyhow::Result<LeaderAddress> {
+    let host =
+        advertised_host(config).context("grpc.advertised_host must be set in distributed mode")?;
+    Ok(LeaderAddress {
+        host: host.to_string(),
+        port: config.grpc.advertised_port.unwrap_or(grpc_port),
+    })
 }
 
 /// Checks the configured startup, persistence, retry, and lease timings, returning warnings worth
@@ -576,20 +758,35 @@ pub async fn run(
     for warning in validate_timing_config(shard_manager_config)? {
         warn!("{warning}");
     }
+    if let Some(host) = validate_advertised_host(shard_manager_config)? {
+        warn!(
+            advertised_host = host,
+            "grpc.advertised_host is a loopback name: clients can reach this replica only if \
+             they run on the same host"
+        );
+    }
+
+    let gate: LeaderGate<ShardManagerGrpcService> = LeaderGate::new();
 
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
+    // NOT_SERVING until this replica serves: a standby accepts calls only to send them on. The
+    // overall status ("") stays SERVING, because the process is healthy.
     health_reporter
-        .set_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
+        .set_not_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
         .await;
 
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
         .build_v1()?;
 
-    let http_port = golem_service_base::observability::start_health_and_metrics_server(
+    let http_port = golem_service_base::observability::start_health_metrics_and_readiness_server(
         shard_manager_config.http_addr(),
         registry,
         "shard manager is running",
+        {
+            let gate = gate.clone();
+            move || gate.is_ready()
+        },
         join_set,
     )
     .await?;
@@ -618,7 +815,30 @@ pub async fn run(
         ),
     };
 
-    let (persistence_service, quota_repo, leadership): Persistence = {
+    // Opened before the persistence below, which in distributed mode blocks in the campaign.
+    // Every replica serves this port from the start, so that an orchestrator sees each one as
+    // ready; until this replica leads, the gate answers for the service.
+    let listener = golem_service_base::net::bind_tcp_listener(shard_manager_config.grpc_addr())?;
+    let grpc_port = listener.local_addr()?.port();
+
+    join_set.spawn({
+        let mut server = Server::builder();
+
+        if let GrpcServerTlsConfig::Enabled(tls) = &shard_manager_config.grpc.tls {
+            server = server.tls_config(tls.to_tonic())?;
+        }
+
+        server
+            .layer(middleware::server::OtelGrpcLayer::default().filter(filters::reject_healthcheck))
+            .add_service(reflection_service)
+            .add_service(GatedService::new(gate.clone()))
+            .add_service(health_service)
+            .serve_with_incoming(TcpListenerStream::new(listener))
+            .map_err(anyhow::Error::from)
+            .in_current_span()
+    });
+
+    let (persistence_service, quota_repo, leadership, lease_belief): Persistence = {
         use golem_service_base::db;
         use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 
@@ -640,6 +860,7 @@ pub async fn run(
                     )),
                     Arc::new(DbQuotaRepo::logged(pool)),
                     None,
+                    None,
                 )
             }
             PersistenceConfig::Sqlite(sqlite) => {
@@ -653,13 +874,17 @@ pub async fn run(
                     )),
                     Arc::new(DbQuotaRepo::logged(pool)),
                     None,
+                    None,
                 )
             }
             PersistenceConfig::Etcd(etcd) => {
-                let (kv, fence, leadership) = start_distributed_mode(
+                let own = advertised_address(&shard_manager_config, grpc_port)?;
+                let (kv, fence, leadership, belief) = start_distributed_mode(
                     etcd,
                     &deployment,
                     shard_manager_config.number_of_shards,
+                    &gate,
+                    own,
                     join_set,
                 )
                 .await?;
@@ -680,6 +905,7 @@ pub async fn run(
                         ReadRetry::from_config(etcd),
                     )),
                     Some(leadership),
+                    Some(belief),
                 )
             }
         }
@@ -739,40 +965,27 @@ pub async fn run(
             join_set,
         );
 
-        let shard_manager = ShardManagerServiceImpl::new(shard_management, quota_service);
+        gate.serve(
+            ShardManagerServiceServer::new(ShardManagerServiceImpl::new(
+                shard_management,
+                quota_service,
+            ))
+            .accept_compressed(CompressionEncoding::Gzip)
+            .send_compressed(CompressionEncoding::Gzip),
+            lease_belief.clone(),
+        );
+        health_reporter
+            .set_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
+            .await;
 
-        let service = ShardManagerServiceServer::new(shard_manager);
+        // After `serve`: a standby names this leader from the moment its value is ready, and the
+        // leader must already serve by then.
+        if let Some(leadership) = &leadership {
+            leadership.publish_ready().await?;
+        }
+        metrics::record_serving();
 
-        let listener =
-            golem_service_base::net::bind_tcp_listener(shard_manager_config.grpc_addr())?;
-
-        let grpc_port = listener.local_addr()?.port();
-
-        join_set.spawn({
-            let mut server = Server::builder();
-
-            if let GrpcServerTlsConfig::Enabled(tls) = &shard_manager_config.grpc.tls {
-                server = server.tls_config(tls.to_tonic())?;
-            }
-
-            server
-                .layer(
-                    middleware::server::OtelGrpcLayer::default()
-                        .filter(filters::reject_healthcheck),
-                )
-                .add_service(reflection_service)
-                .add_service(
-                    service
-                        .accept_compressed(CompressionEncoding::Gzip)
-                        .send_compressed(CompressionEncoding::Gzip),
-                )
-                .add_service(health_service)
-                .serve_with_incoming(TcpListenerStream::new(listener))
-                .map_err(anyhow::Error::from)
-                .in_current_span()
-        });
-
-        anyhow::Ok(grpc_port)
+        anyhow::Ok(())
     };
 
     let started = match &deployment {
@@ -784,16 +997,13 @@ pub async fn run(
         Deployment::Embedded => startup.await,
     };
 
-    let grpc_port = match started {
-        Ok(grpc_port) => grpc_port,
-        Err(err) => {
-            // Awaited, not just requested: a task still running could reach an executor after a
-            // standby has taken over.
-            join_set.shutdown().await;
-            release_leadership(leadership.as_ref()).await;
-            return Err(err);
-        }
-    };
+    if let Err(err) = started {
+        // Awaited, not just requested: a task still running could reach an executor after a
+        // standby has taken over.
+        join_set.shutdown().await;
+        release_leadership(leadership.as_ref()).await;
+        return Err(err);
+    }
 
     info!("Started shard manager on ports: grpc: {grpc_port}");
 

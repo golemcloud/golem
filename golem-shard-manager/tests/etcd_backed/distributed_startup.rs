@@ -22,25 +22,37 @@
 use super::proxy::BreakableProxy;
 use anyhow::anyhow;
 use chrono::DateTime;
+use golem_api_grpc::proto::golem::shardmanager::v1::GetRoutingTableRequest;
+use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
+use golem_common::model::RetryConfig;
+use golem_service_base::clients::shard_manager::{
+    GrpcShardManager, GrpcShardManagerConfig, ShardManager,
+};
+use golem_service_base::clients::shard_manager_leader::{LeaderAddress, leader_of};
+use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_shard_manager::config::{
     EtcdConfig, GrpcApiConfig, PersistenceConfig, ShardManagerConfig,
 };
 use golem_shard_manager::{
-    Deployment, EtcdRoutingTablePersistence, ExecutorAddr, ExecutorId, LEADER_ELECTION_NAME,
-    LeaderElection, LeaderFence, LeaseKeepAlive, LeaseLossReason, LeaseLost, NO_REVISION,
-    ReadRetry, RoutingTablePersistence, RunDetails, STATE_KEY, ShardLeaseState, ShardManagerError,
+    Deployment, ElectionValue, EtcdRoutingTablePersistence, ExecutorAddr, ExecutorId,
+    LEADER_ELECTION_NAME, LeaderElection, LeaderFence, LeaseKeepAlive, LeaseLossReason, LeaseLost,
+    NO_REVISION, ReadRetry, RoutingTablePersistence, RunDetails, STATE_KEY, ShardLeaseState,
+    ShardManagerError,
 };
 use golem_test_framework::components::etcd::docker_etcd::DockerEtcd;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Instant, timeout};
 use tokio_util::sync::CancellationToken;
+use tonic_health::pb::HealthCheckRequest;
+use tonic_health::pb::health_check_response::ServingStatus;
+use tonic_health::pb::health_client::HealthClient;
 use tracing::info;
 use uuid::Uuid;
 
@@ -79,6 +91,8 @@ fn distributed_config(etcd: &DockerEtcd) -> ShardManagerConfig {
         http_port: 0,
         grpc: GrpcApiConfig {
             port: 0,
+            // Every replica of these tests runs in this process.
+            advertised_host: Some("127.0.0.1".to_string()),
             ..GrpcApiConfig::default()
         },
         persistence: PersistenceConfig::Etcd(etcd_config(etcd)),
@@ -189,51 +203,156 @@ fn spawn_replica(
     (handle, ports)
 }
 
+/// Every campaigner's election value under the production election name, by key.
+async fn campaigner_values(etcd: &DockerEtcd) -> BTreeMap<Vec<u8>, ElectionValue> {
+    etcd_client::Client::connect([etcd.client_url()], None)
+        .await
+        .expect("Cannot connect to etcd")
+        .kv_client()
+        .get(
+            format!("{LEADER_ELECTION_NAME}/"),
+            Some(etcd_client::GetOptions::new().with_prefix()),
+        )
+        .await
+        .expect("Cannot read the election prefix")
+        .kvs()
+        .iter()
+        .filter_map(|kv| Some((kv.key().to_vec(), ElectionValue::decode(kv.value())?)))
+        .collect()
+}
+
+/// The advertised gRPC ports of the campaigners, in election queue order: etcd hands the
+/// leadership to the key with the lowest create revision.
+async fn queue_order(etcd: &DockerEtcd) -> Vec<u16> {
+    let response = etcd_client::Client::connect([etcd.client_url()], None)
+        .await
+        .expect("Cannot connect to etcd")
+        .kv_client()
+        .get(
+            format!("{LEADER_ELECTION_NAME}/"),
+            Some(etcd_client::GetOptions::new().with_prefix()),
+        )
+        .await
+        .expect("Cannot read the election prefix");
+    let mut campaigners: Vec<(i64, u16)> = response
+        .kvs()
+        .iter()
+        .filter_map(|kv| {
+            let port = ElectionValue::decode(kv.value())?.grpc_address?.port;
+            Some((kv.create_revision(), port))
+        })
+        .collect();
+    campaigners.sort();
+    campaigners.into_iter().map(|(_, port)| port).collect()
+}
+
+/// The gRPC address of the campaigner that joined after `before` was taken.
+async fn await_new_campaigner(etcd: &DockerEtcd, before: &BTreeSet<Vec<u8>>) -> LeaderAddress {
+    timeout(STARTUP_TIMEOUT, async {
+        loop {
+            if let Some(value) = campaigner_values(etcd)
+                .await
+                .into_iter()
+                .find_map(|(key, value)| (!before.contains(&key)).then_some(value))
+            {
+                return value.grpc_address.expect("a replica publishes its address");
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("The second replica should join the campaign")
+}
+
+/// One `GetRoutingTable` call straight to a replica's port, with no client routing.
+async fn routing_table_status(port: u16) -> Result<(), tonic::Status> {
+    let mut client = ShardManagerServiceClient::connect(format!("http://127.0.0.1:{port}"))
+        .await
+        .expect("Every replica serves its gRPC port");
+    client
+        .get_routing_table(GetRoutingTableRequest {})
+        .await
+        .map(|_| ())
+}
+
+/// The status `grpc.health.v1.Health/Check` reports for `service` on a replica's gRPC port.
+async fn health_status(port: u16, service: &str) -> i32 {
+    let channel = tonic::transport::Endpoint::from_shared(format!("http://127.0.0.1:{port}"))
+        .expect("The replica's address is a valid endpoint")
+        .connect()
+        .await
+        .expect("Every replica serves its gRPC port");
+    HealthClient::new(channel)
+        .check(HealthCheckRequest {
+            service: service.to_string(),
+        })
+        .await
+        .expect("The health service answers for a known service")
+        .into_inner()
+        .status
+}
+
 #[test]
 #[tracing::instrument(skip_all)]
-// The whole distributed path in one pass: the leader serves, the standby blocks in its campaign,
-// and takeover costs a lease expiry rather than a revoke.
-async fn a_standby_does_not_serve_until_the_leader_goes_away(etcd: &Arc<DockerEtcd>) {
+// The whole distributed path in one pass: the leader serves; the standby serves its port but
+// sends callers to the leader; takeover costs a lease expiry rather than a revoke; the promoted
+// standby then serves on the port it had all along.
+async fn a_standby_sends_callers_to_the_leader_until_the_leader_goes_away(etcd: &Arc<DockerEtcd>) {
     wipe_state(etcd).await;
     let config = distributed_config(etcd);
 
     let (leader, leader_ports) = spawn_replica(config.clone(), CancellationToken::new());
     let leader_details = timeout(STARTUP_TIMEOUT, leader_ports)
         .await
-        .expect(
-            "The first replica should win an uncontested campaign and finish starting. A timeout \
-             here means `run()` campaigns but never completes - check that the keepalive is \
-             spawned and that the campaign is not running on the request-timeout client.",
-        )
+        .expect("The first replica should win an uncontested campaign and finish starting")
         .expect("The leader's startup should report its ports");
+    routing_table_status(leader_details.grpc_port)
+        .await
+        .expect("The leader serves the routing table");
 
-    assert!(
-        TcpStream::connect(("127.0.0.1", leader_details.grpc_port))
-            .await
-            .is_ok(),
-        "The leader reported gRPC port {} but nothing is listening on it.",
-        leader_details.grpc_port
+    let before = campaigner_keys(etcd).await;
+    let (standby, mut standby_ports) = spawn_replica(config.clone(), CancellationToken::new());
+    let standby_address = await_new_campaigner(etcd, &before).await;
+
+    let refusal = routing_table_status(standby_address.port)
+        .await
+        .expect_err("A standby must not serve the routing table");
+    assert_eq!(
+        leader_of(&refusal),
+        Some(LeaderAddress {
+            host: "127.0.0.1".to_string(),
+            port: leader_details.grpc_port
+        }),
+        "The standby should name the ready leader, but answered {refusal:?}"
     );
 
-    let (standby, mut standby_ports) = spawn_replica(config.clone(), CancellationToken::new());
+    // Load balancers that probe per service must send traffic only to the leader, while the
+    // process-wide status stays healthy on both replicas.
+    const SERVICE: &str = "golem.shardmanager.v1.ShardManagerService";
+    let serving = ServingStatus::Serving as i32;
+    let not_serving = ServingStatus::NotServing as i32;
+    assert_eq!(
+        health_status(leader_details.grpc_port, SERVICE).await,
+        serving
+    );
+    assert_eq!(
+        health_status(standby_address.port, SERVICE).await,
+        not_serving
+    );
+    assert_eq!(health_status(leader_details.grpc_port, "").await, serving);
+    assert_eq!(health_status(standby_address.port, "").await, serving);
 
     // Longer than one lease TTL: a standby that stopped renewing during its campaign would
     // already have lost its lease by now.
     let observed_for = LEASE_TTL * 2;
     assert!(
         timeout(observed_for, &mut standby_ports).await.is_err(),
-        "The second replica finished starting while the first still held the leadership. Both \
-         would be serving a routing table and driving topology at once, which is precisely what \
-         leader election exists to prevent."
+        "The second replica finished starting while the first still held the leadership."
     );
     assert!(
         !standby.is_finished(),
         "The standby's startup ended instead of blocking in the campaign."
     );
-
-    // No port to probe, because it never reached its gRPC bind - which is itself the readiness
-    // signal: a probe against gRPC is refused, so the Service routes only to the leader.
-    info!("Standby stayed blocked for {observed_for:?}; killing the leader");
 
     let killed_at = Instant::now();
     leader.abort();
@@ -250,20 +369,115 @@ async fn a_standby_does_not_serve_until_the_leader_goes_away(etcd: &Arc<DockerEt
     assert!(
         failover >= LEASE_TTL - renewal_interval,
         "The standby was elected {failover:?} after the leader was killed, sooner than its \
-         {LEASE_TTL:?} lease could lapse. Something released the leadership instead of letting it \
-         expire."
+         {LEASE_TTL:?} lease could lapse."
     );
-
-    assert!(
-        TcpStream::connect(("127.0.0.1", standby_details.grpc_port))
-            .await
-            .is_ok(),
-        "The promoted standby reported gRPC port {} but nothing is listening on it.",
-        standby_details.grpc_port
+    assert_eq!(
+        standby_details.grpc_port, standby_address.port,
+        "A replica serves the same port as a standby and as the leader"
     );
+    routing_table_status(standby_details.grpc_port)
+        .await
+        .expect("The promoted standby serves the routing table");
 
     standby.abort();
     info!(?failover, "Standby took over and began serving");
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A standby sends clients only to a value marked ready, so only a leader past its startup may
+// carry the mark.
+async fn only_a_started_leader_is_marked_ready(etcd: &Arc<DockerEtcd>) {
+    wipe_state(etcd).await;
+    let config = distributed_config(etcd);
+    let (leader, leader_ports) = spawn_replica(config.clone(), CancellationToken::new());
+    let leader_details = timeout(STARTUP_TIMEOUT, leader_ports)
+        .await
+        .expect("The first replica should finish starting")
+        .expect("The leader's startup should report its ports");
+
+    let before = campaigner_keys(etcd).await;
+    let (standby, _standby_ports) = spawn_replica(config, CancellationToken::new());
+    let standby_address = await_new_campaigner(etcd, &before).await;
+
+    let values: Vec<ElectionValue> = campaigner_values(etcd).await.into_values().collect();
+    let leader_value = values
+        .iter()
+        .find(|value| {
+            value.grpc_address.as_ref().map(|address| address.port)
+                == Some(leader_details.grpc_port)
+        })
+        .expect("The leader's value is under the election prefix");
+    let standby_value = values
+        .iter()
+        .find(|value| value.grpc_address.as_ref() == Some(&standby_address))
+        .expect("The standby's value is under the election prefix");
+    assert!(
+        leader_value.ready,
+        "A leader whose run() returned is ready: {leader_value:?}"
+    );
+    assert!(
+        !standby_value.ready,
+        "A standby is never ready: {standby_value:?}"
+    );
+
+    leader.abort();
+    standby.abort();
+}
+
+const IS_SERVING_METRIC: &str = "shard_manager_is_serving";
+
+/// The current reading of a gauge on the process-wide default registry, or `None` while it has
+/// never been set. This replica's only because this suite runs sequentially.
+fn gauge(name: &str) -> Option<f64> {
+    prometheus::default_registry()
+        .gather()
+        .into_iter()
+        .find(|family| family.name() == name)
+        .and_then(|family| {
+            family
+                .get_metric()
+                .first()
+                .and_then(|metric| metric.get_gauge().as_ref())
+                .map(|gauge| gauge.value())
+        })
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// `shard_manager_is_leader` turns on at the election, before the state restore and the executor
+// health check; only `shard_manager_is_serving` says the replica takes calls.
+async fn the_serving_gauge_is_on_while_the_leader_serves_and_drops_on_step_down(
+    etcd: &Arc<DockerEtcd>,
+) {
+    wipe_state(etcd).await;
+    let (leader, leader_ports) = spawn_replica(distributed_config(etcd), CancellationToken::new());
+    let details = timeout(STARTUP_TIMEOUT, leader_ports)
+        .await
+        .expect("The replica should finish starting")
+        .expect("The leader's startup should report its ports");
+
+    assert_eq!(
+        gauge(IS_SERVING_METRIC),
+        Some(1.0),
+        "A leader whose startup completed serves"
+    );
+
+    details
+        .leadership
+        .as_ref()
+        .expect("A distributed leader has a leadership handle")
+        .step_down()
+        .await
+        .expect("Stepping down should succeed");
+    timeout(STARTUP_TIMEOUT, async {
+        while gauge(IS_SERVING_METRIC) != Some(0.0) {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("A replica that stepped down no longer serves");
+    leader.abort();
 }
 
 #[test]
@@ -1317,6 +1531,13 @@ fn spawn_serving_replica(
             Ok(details) => details,
             Err(err) => {
                 join_set.abort_all();
+                // A stop requested during the startup is the caller's doing, not a failure.
+                if matches!(
+                    err.downcast_ref::<ShardManagerError>(),
+                    Some(ShardManagerError::ShutdownRequested)
+                ) {
+                    return Err(err);
+                }
                 panic!("The replica failed to start: {err:#}");
             }
         };
@@ -1341,6 +1562,51 @@ async fn await_campaigners(etcd: &DockerEtcd, count: usize) {
     .unwrap_or_else(|_| {
         panic!("Only {count} campaigners should be queued, and they never were");
     });
+}
+
+/// Polls `condition` until it holds, and panics if it does not within `within`.
+async fn await_until<F, Fut>(within: Duration, mut condition: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    timeout(within, async {
+        while !condition().await {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("A condition did not hold within {within:?}"));
+}
+
+/// A port that was free a moment ago. A replica's HTTP port is not reported while it campaigns,
+/// so a test that needs it must choose it first; a collision fails loudly with "address in use"
+/// at startup and cannot make a test pass wrongly.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .expect("A local port is free")
+        .local_addr()
+        .expect("The listener has an address")
+        .port()
+}
+
+/// GET `/readyz` on a replica's HTTP port; `true` for 200. Raw HTTP/1.1: the crate has no HTTP
+/// client among its dependencies.
+async fn readyz(http_port: u16) -> bool {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let Ok(mut stream) = tokio::net::TcpStream::connect(("127.0.0.1", http_port)).await else {
+        return false;
+    };
+    stream
+        .write_all(b"GET /readyz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .await
+        .expect("the request is written");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .await
+        .expect("the response is read");
+    response.starts_with("HTTP/1.1 200")
 }
 
 /// What a handover may cost. Under `LEASE_TTL - renewal_interval`, the soonest an unrevoked
@@ -1656,6 +1922,7 @@ async fn a_standby_that_cannot_reach_etcd_does_not_export_itself_as_the_leader(
         retry_max_delay: Duration::from_secs(5),
         leader_lease_ttl: LEASE_TTL,
         compaction_retention_revisions: 0,
+        rollout_generation: None,
     });
 
     let shutdown = CancellationToken::new();
@@ -1730,4 +1997,536 @@ async fn the_drain_waits_for_its_tasks_before_releasing_the_leadership(etcd: &Ar
          The leadership is released as soon as it returns, so that task could command an executor \
          after a standby had already taken over."
     );
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+async fn a_replica_without_an_advertised_host_is_refused_before_campaigning(
+    etcd: &Arc<DockerEtcd>,
+) {
+    let mut config = distributed_config(etcd);
+    config.grpc.advertised_host = None;
+
+    let message = startup_refusal(&config).await;
+
+    assert!(
+        message.contains("grpc.advertised_host"),
+        "The refusal should name the missing setting, but was: {message}"
+    );
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// The worker executor's and worker service's client, pointed at a standby, gets its answers from
+// the leader: the standby's answer and the client's routing agree on the wire.
+async fn a_client_pointed_at_a_standby_reaches_the_leader(etcd: &Arc<DockerEtcd>) {
+    wipe_state(etcd).await;
+    let config = distributed_config(etcd);
+    let (leader, leader_ports) = spawn_replica(config.clone(), CancellationToken::new());
+    timeout(STARTUP_TIMEOUT, leader_ports)
+        .await
+        .expect("The first replica should finish starting")
+        .expect("The leader's startup should report its ports");
+
+    let before = campaigner_keys(etcd).await;
+    let (standby, _standby_ports) = spawn_replica(config, CancellationToken::new());
+    let standby_address = await_new_campaigner(etcd, &before).await;
+
+    let client = GrpcShardManager::new(&GrpcShardManagerConfig {
+        host: "127.0.0.1".to_string(),
+        port: standby_address.port,
+        ..GrpcShardManagerConfig::default()
+    });
+    let table = client
+        .get_routing_table()
+        .await
+        .expect("The standby sends the client to the leader");
+    assert_eq!(table.number_of_shards.value, NUMBER_OF_SHARDS);
+
+    leader.abort();
+    standby.abort();
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A replica cut off from etcd must leave the rollout's count of ready replicas, and must still
+// answer callers from what it last saw.
+async fn a_standby_cut_off_from_etcd_stops_being_ready_but_still_names_the_leader(
+    etcd: &Arc<DockerEtcd>,
+) {
+    wipe_state(etcd).await;
+    let config = distributed_config(etcd);
+    let (leader, leader_ports) = spawn_replica(config.clone(), CancellationToken::new());
+    let leader_details = timeout(STARTUP_TIMEOUT, leader_ports)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let proxy = BreakableProxy::start(&etcd.client_url()).await;
+    let mut standby_config = config.clone();
+    standby_config.http_port = free_port();
+    if let PersistenceConfig::Etcd(etcd_config) = &mut standby_config.persistence {
+        etcd_config.endpoints = vec![proxy.url()];
+    }
+    let before = campaigner_keys(etcd).await;
+    let (standby, _) = spawn_replica(standby_config.clone(), CancellationToken::new());
+    let standby_address = await_new_campaigner(etcd, &before).await;
+    await_until(STARTUP_TIMEOUT, || readyz(standby_config.http_port)).await;
+
+    proxy.black_hole();
+    let refusal = routing_table_status(standby_address.port)
+        .await
+        .expect_err("a standby never serves");
+    assert_eq!(
+        leader_of(&refusal).map(|address| address.port),
+        Some(leader_details.grpc_port),
+        "the standby answers from its last view while etcd is unreachable"
+    );
+    await_until(LEASE_TTL * 3, || async {
+        !readyz(standby_config.http_port).await
+    })
+    .await;
+
+    proxy.restore();
+    await_until(STARTUP_TIMEOUT, || readyz(standby_config.http_port)).await;
+    leader.abort();
+    standby.abort();
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A leader cut off from etcd must stop serving within one lease TTL: from then on another replica
+// may lead.
+async fn a_leader_cut_off_from_etcd_stops_serving_within_one_lease_ttl(etcd: &Arc<DockerEtcd>) {
+    wipe_state(etcd).await;
+    let proxy = BreakableProxy::start(&etcd.client_url()).await;
+    let mut config = distributed_config(etcd);
+    if let PersistenceConfig::Etcd(etcd_config) = &mut config.persistence {
+        etcd_config.endpoints = vec![proxy.url()];
+    }
+    let (leader, ports) = spawn_replica(config, CancellationToken::new());
+    let details = timeout(STARTUP_TIMEOUT, ports).await.unwrap().unwrap();
+    routing_table_status(details.grpc_port)
+        .await
+        .expect("the leader serves");
+
+    let cut_at = Instant::now();
+    proxy.black_hole();
+    // Either the gate refuses the call, or the replica has already stopped as a lost lease makes
+    // it do, and its port refuses the connection: in both cases it serves nothing.
+    await_until(LEASE_TTL * 2, || async {
+        match ShardManagerServiceClient::connect(format!("http://127.0.0.1:{}", details.grpc_port))
+            .await
+        {
+            Err(_) => true,
+            Ok(mut client) => client
+                .get_routing_table(GetRoutingTableRequest {})
+                .await
+                .is_err(),
+        }
+    })
+    .await;
+    assert!(cut_at.elapsed() <= LEASE_TTL + Duration::from_millis(500));
+    leader.abort();
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// Two replicas that advertise one address would each name the other as the leader, and clients
+// would never find the real one: the second must refuse to go on, and say why.
+async fn a_replica_that_advertises_another_live_replicas_address_is_refused(
+    etcd: &Arc<DockerEtcd>,
+) {
+    wipe_state(etcd).await;
+    let config = distributed_config(etcd);
+    let (leader, leader_ports) = spawn_replica(config.clone(), CancellationToken::new());
+    let leader_details = timeout(STARTUP_TIMEOUT, leader_ports)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let mut duplicate = config.clone();
+    duplicate.grpc.advertised_port = Some(leader_details.grpc_port);
+    let mut join_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
+    let started = timeout(
+        LEASE_TTL * 4,
+        golem_shard_manager::run(
+            &duplicate,
+            Deployment::Standalone {
+                shutdown: CancellationToken::new(),
+            },
+            prometheus::Registry::new(),
+            &mut join_set,
+        ),
+    )
+    .await
+    .expect("the duplicate replica must stop within two lease TTLs and some slack");
+    join_set.abort_all();
+    let message = match started {
+        Ok(_) => panic!("a replica that duplicates a live replica's address must not start"),
+        Err(err) => format!("{err:#}"),
+    };
+    assert!(
+        message.contains("advertises the same gRPC address"),
+        "{message}"
+    );
+    leader.abort();
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A restarted process finds the key of its own previous process, which carries the same address
+// until its lease expires. That key is no duplicate: the replica must wait it out and lead.
+async fn an_earlier_process_key_with_the_same_address_is_waited_out(etcd: &Arc<DockerEtcd>) {
+    wipe_state(etcd).await;
+    await_election_idle(etcd).await;
+    let mut config = distributed_config(etcd);
+    let reserved_port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    config.grpc.advertised_port = Some(reserved_port);
+
+    let mut client = etcd_client::Client::connect([etcd.client_url()], None)
+        .await
+        .unwrap();
+    let lease = client
+        .lease_grant(LEASE_TTL.as_secs() as i64, None)
+        .await
+        .unwrap()
+        .id();
+    let stale = ElectionValue {
+        identity: "earlier-process".to_string(),
+        grpc_address: Some(LeaderAddress {
+            host: "127.0.0.1".to_string(),
+            port: reserved_port,
+        }),
+        ready: true,
+        rollout_generation: None,
+    };
+    client
+        .put(
+            format!("{LEADER_ELECTION_NAME}/{lease:x}"),
+            stale.encode(),
+            Some(etcd_client::PutOptions::new().with_lease(lease)),
+        )
+        .await
+        .unwrap();
+
+    let (replica, ports) = spawn_replica(config, CancellationToken::new());
+    timeout(STARTUP_TIMEOUT, ports)
+        .await
+        .expect("the replica leads once the earlier key's lease expires")
+        .expect("the replica's startup reports its ports");
+    replica.abort();
+}
+
+fn with_generation(mut config: ShardManagerConfig, generation: u64) -> ShardManagerConfig {
+    if let PersistenceConfig::Etcd(etcd) = &mut config.persistence {
+        etcd.rollout_generation = Some(generation);
+    }
+    config
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// In a rolling update, a new replica queues behind old standbys, and each old one that leads next
+// is replaced next: one handover per old pod. An old standby must step back behind a newer
+// replica, so that the old leader hands over to a new replica, once.
+async fn an_old_standby_moves_behind_a_newer_rollout_generation(etcd: &Arc<DockerEtcd>) {
+    wipe_state(etcd).await;
+    await_election_idle(etcd).await;
+    let config = distributed_config(etcd);
+
+    let old_leader = CancellationToken::new();
+    let (old_leader_task, old_leader_started) =
+        spawn_serving_replica(with_generation(config.clone(), 1), old_leader.clone());
+    timeout(STARTUP_TIMEOUT, old_leader_started)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let before = campaigner_keys(etcd).await;
+    let (old_standby, mut old_standby_started) =
+        spawn_serving_replica(with_generation(config.clone(), 1), CancellationToken::new());
+    let old_standby_address = await_new_campaigner(etcd, &before).await;
+
+    let before = campaigner_keys(etcd).await;
+    let (new_replica, new_started) =
+        spawn_serving_replica(with_generation(config.clone(), 2), CancellationToken::new());
+    let new_address = await_new_campaigner(etcd, &before).await;
+
+    // The old standby leaves and queues again, behind the new replica.
+    timeout(STARTUP_TIMEOUT, async {
+        loop {
+            let order: Vec<u16> = queue_order(etcd).await;
+            if order.len() == 3
+                && order.iter().position(|port| *port == new_address.port)
+                    < order
+                        .iter()
+                        .position(|port| *port == old_standby_address.port)
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the old standby should move behind the newer generation");
+
+    old_leader.cancel();
+    let new_port = timeout(STARTUP_TIMEOUT, new_started)
+        .await
+        .expect("the new replica leads after the old leader steps down")
+        .expect("the new replica reports its port");
+    assert_eq!(new_port, new_address.port);
+    assert!(
+        timeout(Duration::from_millis(500), &mut old_standby_started)
+            .await
+            .is_err(),
+        "the old standby must not have led"
+    );
+
+    let _ = old_leader_task.await;
+    old_standby.abort();
+    new_replica.abort();
+}
+
+/// The client that executors and worker services use, pointed at `port`, with a retry budget that
+/// covers one lease TTL plus a startup: what the docs recommend for executors that must survive a
+/// failover.
+fn failover_client(port: u16) -> GrpcShardManager {
+    GrpcShardManager::new(&GrpcShardManagerConfig {
+        host: "127.0.0.1".to_string(),
+        port,
+        client_config: GrpcClientConfig {
+            retries_on_unavailable: RetryConfig {
+                max_attempts: 30,
+                min_delay: Duration::from_millis(100),
+                max_delay: Duration::from_millis(500),
+                multiplier: 2.0,
+                max_jitter_factor: None,
+            },
+            ..GrpcClientConfig::default()
+        },
+        ..GrpcShardManagerConfig::default()
+    })
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// An executor's client, pointed at a standby, must ride out a crash of the leader: the standby
+// names the dead leader until its lease expires, then the promoted standby starts and serves. The
+// docs promise this with the recommended retry budget.
+async fn the_client_rides_out_an_ungraceful_failover_with_the_recommended_budget(
+    etcd: &Arc<DockerEtcd>,
+) {
+    wipe_state(etcd).await;
+    let config = distributed_config(etcd);
+    let (leader, leader_ports) = spawn_replica(config.clone(), CancellationToken::new());
+    let leader_details = timeout(STARTUP_TIMEOUT, leader_ports)
+        .await
+        .unwrap()
+        .unwrap();
+    let before = campaigner_keys(etcd).await;
+    let (standby, _standby_ports) = spawn_replica(config, CancellationToken::new());
+    let standby_address = await_new_campaigner(etcd, &before).await;
+
+    let client = failover_client(standby_address.port);
+    client
+        .get_routing_table()
+        .await
+        .expect("the standby names the leader");
+
+    leader.abort();
+    // An abort takes effect only after the task is polled again, and the leader keeps answering
+    // until then. The call must start after that, or the dying leader answers it and nothing is
+    // shown.
+    await_until(STARTUP_TIMEOUT, || async {
+        let url = format!("http://127.0.0.1:{}", leader_details.grpc_port);
+        match ShardManagerServiceClient::connect(url).await {
+            Ok(mut dead_or_alive) => dead_or_alive
+                .get_routing_table(GetRoutingTableRequest {})
+                .await
+                .is_err(),
+            Err(_) => true,
+        }
+    })
+    .await;
+    let table = timeout(STARTUP_TIMEOUT, client.get_routing_table())
+        .await
+        .expect("the call must end within the startup timeout")
+        .expect("the call rides out the failover");
+    assert_eq!(table.number_of_shards.value, NUMBER_OF_SHARDS);
+    standby.abort();
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A rolling update without a pause between pods can stop a leader that has just been elected.
+// The second leader is stopped while its startup is held by the initial health check (the stored
+// lease has expired and the executor never answers), so it is never serving when it goes. The
+// client must still find the replica that ends up leading.
+async fn the_client_rides_out_two_handovers_in_a_row(etcd: &Arc<DockerEtcd>) {
+    wipe_state(etcd).await;
+    await_election_idle(etcd).await;
+    let config = ShardManagerConfig {
+        // Short enough to keep the test quick, long enough to hold a startup open while the
+        // test cancels it.
+        initial_health_check_timeout: Duration::from_secs(2),
+        ..distributed_config(etcd)
+    };
+
+    let first = CancellationToken::new();
+    let (first_task, first_started) = spawn_serving_replica(config.clone(), first.clone());
+    timeout(STARTUP_TIMEOUT, first_started)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // Stored only now, so that the first leader started without a check. Accepts and then says
+    // nothing, so a check against it runs out its timeout, and its lease was granted long ago,
+    // so every leader that starts from here on must run that check.
+    let silent_executor = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("Cannot bind the stand-in executor");
+    let silent_addr = silent_executor
+        .local_addr()
+        .expect("The stand-in executor should report its address");
+    wipe_state(etcd).await;
+    write_state_with_executor(
+        etcd,
+        ExecutorAddr {
+            ip: silent_addr.ip(),
+            port: silent_addr.port(),
+        },
+    )
+    .await;
+
+    let before = campaigner_keys(etcd).await;
+    let second = CancellationToken::new();
+    let (second_task, mut second_started) = spawn_serving_replica(config.clone(), second.clone());
+    let second_address = await_new_campaigner(etcd, &before).await;
+    let before = campaigner_keys(etcd).await;
+    let (third_task, third_started) =
+        spawn_serving_replica(config.clone(), CancellationToken::new());
+    let third_address = await_new_campaigner(etcd, &before).await;
+
+    let client = failover_client(third_address.port);
+    client
+        .get_routing_table()
+        .await
+        .expect("reaches the first leader");
+
+    first.cancel();
+    // Stopped as soon as etcd names it the leader, as a pod is that Kubernetes stops next.
+    timeout(STARTUP_TIMEOUT, async {
+        while queue_order(etcd).await.first() != Some(&second_address.port) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the second replica should be elected after the first steps down");
+    second.cancel();
+    // Waited for, so that the call below cannot be answered by the second leader while it drains.
+    let second_result = second_task
+        .await
+        .expect("The second replica's task should not panic");
+    let second_err = second_result
+        .expect_err("A replica stopped during its startup must report that, not finish starting");
+    assert!(
+        matches!(
+            second_err.downcast_ref::<ShardManagerError>(),
+            Some(ShardManagerError::ShutdownRequested)
+        ),
+        "The second replica ended with `{second_err:#}` rather than a shutdown during its startup."
+    );
+    assert!(
+        second_started.try_recv().is_err(),
+        "The second replica reported its port, so it was serving when it was stopped."
+    );
+
+    let table = timeout(STARTUP_TIMEOUT, client.get_routing_table())
+        .await
+        .expect("the call must end within the startup timeout")
+        .expect("the third replica serves after two handovers");
+    assert_eq!(table.number_of_shards.value, NUMBER_OF_SHARDS);
+    assert_eq!(
+        timeout(STARTUP_TIMEOUT, third_started)
+            .await
+            .unwrap()
+            .unwrap(),
+        third_address.port
+    );
+    let _ = first_task.await;
+    third_task.abort();
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// Clients can reach a standby but not the leader (a network policy, a partition): the call must
+// fail within its budget instead of hanging, and succeed once the leadership moves to a replica
+// that clients can reach.
+async fn a_client_that_cannot_reach_the_named_leader_recovers_when_the_leadership_moves(
+    etcd: &Arc<DockerEtcd>,
+) {
+    wipe_state(etcd).await;
+    await_election_idle(etcd).await;
+    let mut leader_config = distributed_config(etcd);
+    // A documentation address (RFC 5737) that no network routes: a connection to it gets no answer
+    // at all, like one to the IP of a pod that clients cannot reach. A refused port would fail at
+    // once and not exercise the client's connect timeout.
+    leader_config.grpc.advertised_host = Some("192.0.2.1".to_string());
+    let leader_token = CancellationToken::new();
+    let (leader_task, leader_started) = spawn_serving_replica(leader_config, leader_token.clone());
+    timeout(STARTUP_TIMEOUT, leader_started)
+        .await
+        .unwrap()
+        .unwrap();
+    let before = campaigner_keys(etcd).await;
+    let (standby_task, standby_started) =
+        spawn_serving_replica(distributed_config(etcd), CancellationToken::new());
+    let standby_address = await_new_campaigner(etcd, &before).await;
+
+    let client = GrpcShardManager::new(&GrpcShardManagerConfig {
+        host: "127.0.0.1".to_string(),
+        port: standby_address.port,
+        client_config: GrpcClientConfig {
+            retries_on_unavailable: RetryConfig {
+                max_attempts: 3,
+                min_delay: Duration::from_millis(50),
+                max_delay: Duration::from_millis(100),
+                multiplier: 2.0,
+                max_jitter_factor: None,
+            },
+            ..GrpcClientConfig::default()
+        },
+        ..GrpcShardManagerConfig::default()
+    });
+    let started = Instant::now();
+    timeout(STARTUP_TIMEOUT, client.get_routing_table())
+        .await
+        .expect("the call must end within its budget instead of hanging")
+        .expect_err("nothing serves at the address the standby names");
+    // The client's connect timeout is 10 s by default, but towards a named leader it is capped at
+    // 2 s, and a pass that failed on the named leader skips it once. Two tries cost about 4 s; two
+    // 10 s connects would cost 20 s.
+    assert!(
+        started.elapsed() < Duration::from_secs(9),
+        "the call took {:?}; an unreachable leader must cost the short leader connect timeout, \
+         not the configured one",
+        started.elapsed()
+    );
+
+    leader_token.cancel();
+    timeout(STARTUP_TIMEOUT, standby_started)
+        .await
+        .unwrap()
+        .unwrap();
+    timeout(STARTUP_TIMEOUT, client.get_routing_table())
+        .await
+        .expect("the call must end within the startup timeout")
+        .expect("the promoted standby serves the same client");
+    let _ = leader_task.await;
+    standby_task.abort();
 }

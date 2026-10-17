@@ -17,19 +17,22 @@
 
 use crate::config::EtcdConfig;
 use crate::metrics;
+use crate::sharding::election_watch::{CampaignView, Campaigner, ElectionWatch, ElectionWatcher};
 use crate::sharding::error::ShardManagerError;
 use crate::sharding::etcd_connection::connect_for_election;
 use crate::sharding::etcd_retry::retry_retriable_until;
 use etcd_client::{
-    Client, Compare, CompareOp, LeaderKey, LeaseClient, LeaseKeepAliveStream, LeaseKeeper, TxnOp,
-    TxnOpResponse, TxnResponse,
+    Client, Compare, CompareOp, LeaderKey, LeaseClient, LeaseKeepAliveStream, LeaseKeeper,
+    ProclaimOptions, TxnOp, TxnOpResponse, TxnResponse,
 };
 use golem_common::retriable_error::IsRetriableError;
+use golem_service_base::clients::shard_manager_leader::LeaderAddress;
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::future::Future;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering};
+use std::sync::{Arc, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::{Instant, MissedTickBehavior, interval, sleep, sleep_until, timeout};
 use tokio_util::sync::CancellationToken;
@@ -157,6 +160,37 @@ pub struct LeaseLost {
     pub source: Option<etcd_client::Error>,
 }
 
+/// Until when this replica may believe that it holds its leadership lease: one TTL after the send
+/// of the last renewal that etcd acknowledged. The keepalive moves it; the gate serves only before
+/// it, so a leader that was paused past its lease (a long GC pause, CPU throttling) serves nothing
+/// after it resumes, even before its keepalive task runs and stops the process.
+#[derive(Clone, Debug)]
+pub struct LeaseBelief {
+    deadline: Arc<std::sync::Mutex<Instant>>,
+}
+
+impl LeaseBelief {
+    fn new(deadline: Instant) -> Self {
+        Self {
+            deadline: Arc::new(std::sync::Mutex::new(deadline)),
+        }
+    }
+
+    fn set(&self, deadline: Instant) {
+        *self.deadline.lock().unwrap_or_else(PoisonError::into_inner) = deadline;
+    }
+
+    pub fn held(&self) -> bool {
+        Instant::now() < *self.deadline.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// A belief that ends at `deadline`. **Tests only.**
+    #[doc(hidden)]
+    pub fn until(deadline: Instant) -> Self {
+        Self::new(deadline)
+    }
+}
+
 /// Bounds how long this replica may believe it holds the lease: a black-holed connection yields
 /// neither an error nor a close, so silence has to become a bounded detection. Kept apart from
 /// [`LeaseKeepAlive`] so the anchoring rule can be tested without a live stream.
@@ -169,6 +203,8 @@ struct RenewalWatchdog {
     /// and the send is the earlier of the two instants, so a watchdog that errs gives the lease up
     /// sooner.
     unacknowledged: VecDeque<Instant>,
+    /// The same deadline, shared with the gate.
+    belief: LeaseBelief,
 }
 
 impl RenewalWatchdog {
@@ -179,6 +215,7 @@ impl RenewalWatchdog {
             ttl,
             deadline: sent_at + ttl,
             unacknowledged: VecDeque::new(),
+            belief: LeaseBelief::new(sent_at + ttl),
         }
     }
 
@@ -197,6 +234,7 @@ impl RenewalWatchdog {
     fn record_acknowledgement(&mut self) {
         if let Some(sent_at) = self.unacknowledged.pop_front() {
             self.deadline = sent_at + self.ttl;
+            self.belief.set(self.deadline);
         }
     }
 
@@ -210,6 +248,7 @@ impl RenewalWatchdog {
     /// performs when a reconnect succeeds.
     fn rearm_at(&mut self, sent_at: Instant) {
         self.deadline = sent_at + self.ttl;
+        self.belief.set(self.deadline);
     }
 }
 
@@ -226,6 +265,11 @@ pub struct LeaseKeepAlive {
 }
 
 impl LeaseKeepAlive {
+    /// Shared with the gate; see [`LeaseBelief`].
+    pub fn belief(&self) -> LeaseBelief {
+        self.watchdog.belief.clone()
+    }
+
     /// A third of the TTL, as etcd's own client does, with a floor so a short test TTL is not a
     /// busy loop. Public so the failover test's bound is derived from the same formula.
     pub fn renewal_interval(ttl: Duration) -> Duration {
@@ -362,6 +406,22 @@ pub struct Elected {
     pub leadership: LeadershipHandle,
 }
 
+/// How fast a retriable etcd failure is retried: from `min`, doubling, up to `max`.
+#[derive(Clone, Copy, Debug)]
+pub struct RetryDelays {
+    pub min: Duration,
+    pub max: Duration,
+}
+
+impl RetryDelays {
+    pub fn from_config(config: &EtcdConfig) -> Self {
+        Self {
+            min: config.retry_min_delay,
+            max: config.retry_max_delay,
+        }
+    }
+}
+
 /// Releases the leadership on request. Cloned out of [`Elected`] before its other fields move,
 /// so a shutdown can hand over while the keepalive task still renews.
 #[derive(Clone)]
@@ -372,9 +432,55 @@ pub struct LeadershipHandle {
     /// Shared with every clone, so the keepalive task can tell a revoke it asked for from one it
     /// did not.
     stepped_down: Arc<AtomicBool>,
+    /// For `publish_ready`: the election channel, the key this replica won, its value, and how
+    /// long and how fast a retriable failure is retried.
+    client: Client,
+    leader_key: LeaderKey,
+    value: ElectionValue,
+    ready_budget: Duration,
+    retry: RetryDelays,
 }
 
 impl LeadershipHandle {
+    /// Marks this leader's election value ready, which is when the standbys start sending clients
+    /// here. Called once its gRPC service serves.
+    ///
+    /// Retried, unlike the other writes in distributed mode: it only sets this replica's own value
+    /// again, so a retriable failure - a member that refuses connections among several endpoints,
+    /// say - is retried within one lease TTL, past which the lease is lost anyway. etcd refuses it
+    /// for good once the key is no longer this replica's, and that fails the startup, which steps
+    /// down.
+    pub async fn publish_ready(&self) -> Result<(), ShardManagerError> {
+        let value = ElectionValue {
+            ready: true,
+            ..self.value.clone()
+        }
+        .encode();
+        let deadline = Instant::now()
+            .checked_add(self.ready_budget)
+            .unwrap_or_else(Instant::now);
+        retry_retriable_until(
+            "marking the shard manager leader ready",
+            || {
+                let mut election_client = self.client.election_client();
+                let options = ProclaimOptions::new().with_leader(self.leader_key.clone());
+                let value = value.clone();
+                async move {
+                    bounded(
+                        self.request_timeout,
+                        election_client.proclaim(value, Some(options)),
+                    )
+                    .await
+                    .map(|_| ())
+                }
+            },
+            deadline,
+            self.retry.min,
+            self.retry.max,
+        )
+        .await
+    }
+
     /// Revokes the lease, which deletes the election key: without it a stopped replica costs the
     /// deployment a full TTL with no routing table.
     pub async fn step_down(&self) -> Result<(), ShardManagerError> {
@@ -413,10 +519,9 @@ pub struct LeaderElection {
     election_name: String,
     lease_ttl: Duration,
     request_timeout: Duration,
-    retry_min_delay: Duration,
-    retry_max_delay: Duration,
+    retry: RetryDelays,
     standby_log_interval: Duration,
-    identity: String,
+    value: ElectionValue,
     shutdown: CancellationToken,
     confirm_hook: Option<ConfirmHook>,
     /// Counts every confirming read this election has made, across campaigns, so that the hook can
@@ -425,6 +530,9 @@ pub struct LeaderElection {
     /// The lease of the attempt in flight, or 0. Set after the grant and cleared when the attempt
     /// finishes, so a caller that drops the campaign can still revoke what it left behind.
     pending_lease: AtomicI64,
+    /// The watched view of the election, when the replica has one: the campaign checks it for a
+    /// replica that advertises the same address.
+    watch: Option<ElectionWatch>,
 }
 
 impl LeaderElection {
@@ -437,14 +545,19 @@ impl LeaderElection {
             election_name: election_name.into(),
             lease_ttl: config.leader_lease_ttl,
             request_timeout: config.request_timeout,
-            retry_min_delay: config.retry_min_delay,
-            retry_max_delay: config.retry_max_delay,
+            retry: RetryDelays::from_config(config),
             standby_log_interval: STANDBY_LOG_INTERVAL,
-            identity: identity(),
+            value: ElectionValue {
+                identity: identity(),
+                grpc_address: None,
+                ready: false,
+                rollout_generation: None,
+            },
             shutdown: CancellationToken::new(),
             confirm_hook: None,
             confirm_attempts: AtomicU32::new(0),
             pending_lease: AtomicI64::new(0),
+            watch: None,
         })
     }
 
@@ -453,6 +566,27 @@ impl LeaderElection {
     /// handover.
     pub fn with_shutdown(mut self, shutdown: CancellationToken) -> Self {
         self.shutdown = shutdown;
+        self
+    }
+
+    /// Records where this replica serves gRPC in its election value, so that once it leads and is
+    /// ready, the standbys can send clients to it.
+    pub fn with_grpc_address(mut self, address: LeaderAddress) -> Self {
+        self.value.grpc_address = Some(address);
+        self
+    }
+
+    /// Sets the rollout generation that this replica announces in its election value: see
+    /// [`newer_generation_behind`].
+    pub fn with_rollout_generation(mut self, generation: Option<u64>) -> Self {
+        self.value.rollout_generation = generation;
+        self
+    }
+
+    /// Checks the campaign against the watched view while this replica waits: see
+    /// [`Self::watch_campaign`].
+    pub fn with_watch(mut self, watch: ElectionWatch) -> Self {
+        self.watch = Some(watch);
         self
     }
 
@@ -481,7 +615,7 @@ impl LeaderElection {
     pub async fn campaign_until_elected(&self) -> Result<Elected, ShardManagerError> {
         info!(
             election = self.election_name,
-            identity = self.identity,
+            identity = self.value.identity,
             lease_ttl = ?self.lease_ttl,
             "Campaigning for shard manager leadership"
         );
@@ -490,7 +624,7 @@ impl LeaderElection {
     }
 
     async fn campaign_loop(&self) -> Result<Elected, ShardManagerError> {
-        let mut backoff = self.retry_min_delay;
+        let mut backoff = self.retry.min;
 
         loop {
             if self.shutdown.is_cancelled() {
@@ -499,6 +633,14 @@ impl LeaderElection {
 
             match self.campaign_once().await {
                 Ok(elected) => return Ok(elected),
+                // Not a failure: the lease was revoked with the key, and the next campaign queues
+                // at the end, behind the newer replica.
+                Err(ShardManagerError::YieldedToNewerGeneration { own, newer }) => {
+                    info!(
+                        own,
+                        newer, "Moved behind a newer rollout generation in the election queue"
+                    );
+                }
                 Err(err) if err.is_retriable() => {
                     metrics::record_campaign_attempt_failure();
                     warn!(error = %err, retry_in = ?backoff, "Campaign attempt failed; retrying");
@@ -508,7 +650,7 @@ impl LeaderElection {
                             return Err(ShardManagerError::ShutdownRequested);
                         }
                     }
-                    backoff = std::cmp::min(backoff.saturating_mul(2), self.retry_max_delay);
+                    backoff = std::cmp::min(backoff.saturating_mul(2), self.retry.max);
                 }
                 Err(err) => return Err(err),
             }
@@ -580,7 +722,7 @@ impl LeaderElection {
 
         let mut election_client = self.client.election_client();
         let campaign =
-            election_client.campaign(self.election_name.clone(), self.identity.clone(), lease_id);
+            election_client.campaign(self.election_name.clone(), self.value.encode(), lease_id);
 
         // The keepalive runs *during* the campaign: etcd's election server orphans the session it
         // builds from this lease, so nothing renews it server-side, and a standby that waited would
@@ -592,6 +734,7 @@ impl LeaderElection {
                 return Err(ShardManagerError::LeaseLostWhileCampaigning(lost));
             }
             won = campaign => won?,
+            refused = self.watch_campaign(lease_id, granted_ttl) => return Err(refused),
             _ = self.shutdown.cancelled() => return Err(ShardManagerError::ShutdownRequested),
             never = self.announce_standby() => match never {},
         };
@@ -622,7 +765,7 @@ impl LeaderElection {
             create_revision = fence.create_revision(),
             lease_id,
             granted_ttl = ?granted_ttl,
-            identity = self.identity,
+            identity = self.value.identity,
             "Elected as the shard manager leader"
         );
 
@@ -636,6 +779,11 @@ impl LeaderElection {
                 lease_id,
                 request_timeout: self.request_timeout,
                 stepped_down: Arc::new(AtomicBool::new(false)),
+                client: self.client.clone(),
+                leader_key: leader.clone(),
+                value: self.value.clone(),
+                ready_budget: granted_ttl,
+                retry: self.retry,
             },
         })
     }
@@ -671,8 +819,8 @@ impl LeaderElection {
                 }
             },
             deadline,
-            self.retry_min_delay,
-            self.retry_max_delay,
+            self.retry.min,
+            self.retry.max,
         )
         .await?;
 
@@ -701,13 +849,98 @@ impl LeaderElection {
         loop {
             announce.tick().await;
             match self.current_leader().await {
-                Ok(Some(leader)) => {
-                    info!(leader, "Still standing by; leadership is held elsewhere")
-                }
+                Ok(Some(leader)) => info!(
+                    leader = leader.identity,
+                    leader_address = leader.grpc_address.as_ref().map(ToString::to_string),
+                    leader_ready = leader.ready,
+                    "Still standing by; leadership is held elsewhere"
+                ),
                 Ok(None) => info!("Still standing by; no leader is currently recorded"),
                 Err(err) => warn!(error = %err, "Still standing by; cannot read the leader"),
             }
         }
+    }
+
+    /// Ends a waiting campaign when the watched view shows that it must not go on: a campaigner
+    /// of a newer rollout generation queues behind this replica (see [`newer_generation_behind`]),
+    /// or another live campaigner advertises this replica's address. Never returns without a
+    /// watch.
+    ///
+    /// A key of an earlier process of the same pod also carries this address, but nothing renews
+    /// its lease, so it is gone within one TTL. A key still present two TTLs after this replica
+    /// first saw it belongs to a live replica. The TTL is the one etcd granted, which can exceed
+    /// the configured one, and the earlier process's key was granted the same.
+    async fn watch_campaign(&self, own_lease: i64, granted_ttl: Duration) -> ShardManagerError {
+        let Some(mut watch) = self.watch.clone() else {
+            return std::future::pending().await;
+        };
+        let own = self.value.grpc_address.clone();
+        let patience = granted_ttl.saturating_mul(2);
+        let mut duplicate: Option<(Vec<u8>, Instant)> = None;
+        // Wakes the loop with no change in the view, so that the patience is measured.
+        let mut recheck = interval(granted_ttl / 4);
+        recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        loop {
+            if let Some(view) = watch.view() {
+                if let Some(newer) =
+                    newer_generation_behind(&view, own_lease, self.value.rollout_generation)
+                {
+                    return ShardManagerError::YieldedToNewerGeneration {
+                        own: self.value.rollout_generation.unwrap_or_default(),
+                        newer,
+                    };
+                }
+                // The duplicate rule needs an address of our own to compare with.
+                let found = own
+                    .as_ref()
+                    .and_then(|own| duplicate_of(&view, own_lease, own).map(|other| (own, other)));
+                match found {
+                    Some((own, other)) => {
+                        let since = match &duplicate {
+                            Some((key, since)) if key == &other.key => *since,
+                            _ => {
+                                warn!(
+                                    address = %own,
+                                    other = other.value.as_ref().map(|value| value.identity.as_str()),
+                                    patience = ?patience,
+                                    "Another shard manager replica advertises this replica's gRPC address"
+                                );
+                                let now = Instant::now();
+                                duplicate = Some((other.key.clone(), now));
+                                now
+                            }
+                        };
+                        if since.elapsed() >= patience {
+                            return ShardManagerError::DuplicateAdvertisedAddress {
+                                address: own.to_string(),
+                                other: other
+                                    .value
+                                    .as_ref()
+                                    .map(|value| value.identity.clone())
+                                    .unwrap_or_default(),
+                            };
+                        }
+                    }
+                    None => duplicate = None,
+                }
+            }
+            tokio::select! {
+                _ = watch.changed() => {}
+                _ = recheck.tick() => {}
+            }
+        }
+    }
+
+    /// The view of this election and the task that keeps it current. The task must be spawned;
+    /// it runs until the replica stops.
+    pub fn watch(&self) -> (ElectionWatch, ElectionWatcher) {
+        ElectionWatcher::new(
+            self.client.clone(),
+            &self.election_name,
+            self.request_timeout,
+            self.lease_ttl,
+            self.retry,
+        )
     }
 
     /// Bounds one request on the election channel, which has no channel-level timeout: only the
@@ -739,22 +972,15 @@ impl LeaderElection {
         }
     }
 
-    /// The value recorded by whichever replica currently holds the leadership, for diagnostics.
-    pub async fn current_leader(&self) -> Result<Option<String>, ShardManagerError> {
-        let mut election_client = self.client.election_client();
-        let response = match self
-            .bounded(election_client.leader(self.election_name.clone()))
-            .await
-        {
-            Ok(response) => response,
-            // etcd reports a leaderless election as an error with the same `Unknown` code as a
-            // transport fault; the message is the only thing that tells the two apart.
-            Err(err) if is_no_leader(&err) => return Ok(None),
-            Err(err) => return Err(err),
-        };
-        Ok(response
-            .kv()
-            .map(|kv| String::from_utf8_lossy(kv.value()).into_owned()))
+    /// The value recorded by whichever replica currently holds the leadership.
+    pub async fn current_leader(&self) -> Result<Option<ElectionValue>, ShardManagerError> {
+        LeaderLocator::new(
+            self.client.clone(),
+            self.election_name.clone(),
+            self.request_timeout,
+        )
+        .leader()
+        .await
     }
 }
 
@@ -781,7 +1007,10 @@ fn is_no_leader(err: &ShardManagerError) -> bool {
     )
 }
 
-async fn bounded<T, F>(request_timeout: Duration, request: F) -> Result<T, ShardManagerError>
+pub(crate) async fn bounded<T, F>(
+    request_timeout: Duration,
+    request: F,
+) -> Result<T, ShardManagerError>
 where
     F: Future<Output = Result<T, etcd_client::Error>>,
 {
@@ -791,7 +1020,127 @@ where
         .map_err(ShardManagerError::from)
 }
 
-/// The value under this replica's election key, diagnostic only. The pid and start time answer
+/// What a replica records under its election key. JSON, so that `etcdctl get` shows it.
+///
+/// Every replica writes its value when it joins the campaign, with `ready` false. The leader
+/// rewrites its own value with `ready` true once its startup has completed
+/// ([`LeadershipHandle::publish_ready`]), and a standby names only a ready leader, so a client is
+/// never sent to a leader that cannot serve yet.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ElectionValue {
+    /// Diagnostic only; see [`identity`].
+    pub identity: String,
+    /// Where this replica serves gRPC to other processes. `None` only for a campaigner that serves
+    /// nothing, as in tests of the election alone.
+    pub grpc_address: Option<LeaderAddress>,
+    pub ready: bool,
+    /// The operator's rollout generation of this replica, if set. A standby moves behind a
+    /// campaigner of a higher generation, so that a rolling update hands the leadership to a new
+    /// replica. Absent from values of replicas that have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollout_generation: Option<u64>,
+}
+
+impl ElectionValue {
+    pub fn encode(&self) -> Vec<u8> {
+        serde_json::to_vec(self).expect("an election value always serializes")
+    }
+
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        serde_json::from_slice(bytes).ok()
+    }
+}
+
+/// Reads the current leader's election value: how a standby learns where to send clients.
+#[derive(Clone)]
+pub struct LeaderLocator {
+    client: Client,
+    election_name: String,
+    request_timeout: Duration,
+}
+
+impl LeaderLocator {
+    pub fn new(
+        client: Client,
+        election_name: impl Into<String>,
+        request_timeout: Duration,
+    ) -> Self {
+        Self {
+            client,
+            election_name: election_name.into(),
+            request_timeout,
+        }
+    }
+
+    /// `None` while no replica leads.
+    pub async fn leader(&self) -> Result<Option<ElectionValue>, ShardManagerError> {
+        let mut election_client = self.client.election_client();
+        let response = match bounded(
+            self.request_timeout,
+            election_client.leader(self.election_name.clone()),
+        )
+        .await
+        {
+            Ok(response) => response,
+            // etcd reports a leaderless election as an error with the same `Unknown` code as a
+            // transport fault; the message is the only thing that tells the two apart.
+            Err(err) if is_no_leader(&err) => return Ok(None),
+            Err(err) => return Err(err),
+        };
+        response
+            .kv()
+            .map(|kv| {
+                ElectionValue::decode(kv.value()).ok_or_else(|| {
+                    ShardManagerError::Internal(format!(
+                        "the shard manager leader's election value is not readable: {}",
+                        String::from_utf8_lossy(kv.value())
+                    ))
+                })
+            })
+            .transpose()
+    }
+}
+
+/// The generation of a campaigner queued behind this replica that is higher than this replica's
+/// own, if any. The head of the queue never moves: it is about to lead. Unknown generations move
+/// nothing.
+pub(crate) fn newer_generation_behind(
+    view: &CampaignView,
+    own_lease: i64,
+    own_generation: Option<u64>,
+) -> Option<u64> {
+    let own_generation = own_generation?;
+    let position = view
+        .campaigners
+        .iter()
+        .position(|campaigner| campaigner.lease == own_lease)?;
+    if position == 0 {
+        return None;
+    }
+    view.campaigners[position + 1..]
+        .iter()
+        .filter_map(|campaigner| campaigner.value.as_ref()?.rollout_generation)
+        .filter(|generation| *generation > own_generation)
+        .max()
+}
+
+/// Another campaigner that advertises `own`. The own key is told apart by its lease.
+pub(crate) fn duplicate_of<'a>(
+    view: &'a CampaignView,
+    own_lease: i64,
+    own: &LeaderAddress,
+) -> Option<&'a Campaigner> {
+    view.campaigners.iter().find(|campaigner| {
+        campaigner.lease != own_lease
+            && campaigner
+                .value
+                .as_ref()
+                .and_then(|value| value.grpc_address.as_ref())
+                == Some(own)
+    })
+}
+
+/// This replica's identity in its election value, diagnostic only. The pid and start time answer
 /// the failover-time question "is that key the old pod, or my own from before the restart?".
 fn identity() -> String {
     let host = std::env::var("POD_NAME")
@@ -815,6 +1164,135 @@ mod tests {
     use super::*;
 
     const TTL: Duration = Duration::from_secs(10);
+
+    fn campaigner(lease: i64, revision: i64, port: u16) -> Campaigner {
+        Campaigner {
+            key: format!("e/{lease:x}").into_bytes(),
+            lease,
+            create_revision: revision,
+            value: Some(ElectionValue {
+                identity: format!("sm-{lease}"),
+                grpc_address: Some(LeaderAddress {
+                    host: "10.0.0.1".to_string(),
+                    port,
+                }),
+                ready: false,
+                rollout_generation: None,
+            }),
+        }
+    }
+
+    fn own() -> LeaderAddress {
+        LeaderAddress {
+            host: "10.0.0.1".to_string(),
+            port: 9001,
+        }
+    }
+
+    fn with_generation(mut campaigner: Campaigner, generation: Option<u64>) -> Campaigner {
+        if let Some(value) = campaigner.value.as_mut() {
+            value.rollout_generation = generation;
+        }
+        campaigner
+    }
+
+    #[test]
+    fn a_standby_moves_for_a_newer_generation_behind_it() {
+        let view = CampaignView {
+            campaigners: vec![
+                with_generation(campaigner(1, 10, 9001), Some(1)),
+                with_generation(campaigner(2, 20, 9002), Some(1)),
+                with_generation(campaigner(3, 30, 9003), Some(2)),
+            ],
+        };
+        assert_eq!(newer_generation_behind(&view, 2, Some(1)), Some(2));
+    }
+
+    #[test]
+    fn the_head_of_the_queue_never_moves() {
+        let view = CampaignView {
+            campaigners: vec![
+                with_generation(campaigner(1, 10, 9001), Some(1)),
+                with_generation(campaigner(3, 30, 9003), Some(2)),
+            ],
+        };
+        assert_eq!(newer_generation_behind(&view, 1, Some(1)), None);
+    }
+
+    #[test]
+    fn a_newer_generation_ahead_is_no_reason_to_move() {
+        let view = CampaignView {
+            campaigners: vec![
+                with_generation(campaigner(1, 10, 9001), Some(1)),
+                with_generation(campaigner(3, 30, 9003), Some(2)),
+                with_generation(campaigner(2, 40, 9002), Some(1)),
+            ],
+        };
+        assert_eq!(newer_generation_behind(&view, 2, Some(1)), None);
+    }
+
+    #[test]
+    fn without_generations_nothing_moves() {
+        let view = CampaignView {
+            campaigners: vec![
+                with_generation(campaigner(1, 10, 9001), None),
+                with_generation(campaigner(2, 20, 9002), None),
+                with_generation(campaigner(3, 30, 9003), Some(2)),
+            ],
+        };
+        assert_eq!(
+            newer_generation_behind(&view, 2, None),
+            None,
+            "a replica without a generation never moves"
+        );
+        let view = CampaignView {
+            campaigners: vec![
+                with_generation(campaigner(1, 10, 9001), Some(1)),
+                with_generation(campaigner(2, 20, 9002), Some(1)),
+                with_generation(campaigner(3, 30, 9003), None),
+            ],
+        };
+        assert_eq!(
+            newer_generation_behind(&view, 2, Some(1)),
+            None,
+            "a campaigner without one is never newer"
+        );
+    }
+
+    #[test]
+    fn a_view_without_the_own_key_moves_nothing() {
+        let view = CampaignView {
+            campaigners: vec![
+                with_generation(campaigner(1, 10, 9001), Some(1)),
+                with_generation(campaigner(3, 30, 9003), Some(2)),
+            ],
+        };
+        assert_eq!(newer_generation_behind(&view, 2, Some(1)), None);
+    }
+
+    #[test]
+    fn another_campaigner_with_this_address_is_a_duplicate() {
+        let view = CampaignView {
+            campaigners: vec![campaigner(1, 10, 9001), campaigner(2, 20, 9001)],
+        };
+        assert_eq!(duplicate_of(&view, 2, &own()).map(|c| c.lease), Some(1));
+    }
+
+    #[test]
+    fn this_replicas_own_key_is_not_a_duplicate() {
+        let view = CampaignView {
+            campaigners: vec![campaigner(2, 20, 9001)],
+        };
+        assert_eq!(duplicate_of(&view, 2, &own()), None);
+    }
+
+    #[test]
+    fn a_view_without_the_own_key_yet_still_finds_a_duplicate_of_another() {
+        let view = CampaignView {
+            campaigners: vec![campaigner(1, 10, 9001)],
+        };
+        assert_eq!(duplicate_of(&view, 2, &own()).map(|c| c.lease), Some(1));
+    }
 
     /// How much later than its send a response is read. Long enough that dating the deadline by
     /// the read instead of the send is unambiguous, short enough to cost nothing.

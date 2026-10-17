@@ -627,6 +627,30 @@ where
             .call_without_retry(description, self.endpoint.clone(), f)
             .await
     }
+
+    /// [`Self::call`] or [`Self::call_without_retry`], chosen by `retry_the_call`.
+    pub(crate) async fn call_with_retry<F, R>(
+        &self,
+        description: impl AsRef<str>,
+        retry_the_call: bool,
+        f: F,
+    ) -> Result<R, Status>
+    where
+        F: for<'a> Fn(&'a mut T) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
+            + Send,
+    {
+        self.inner
+            .call_with_retry(description, self.endpoint.clone(), retry_the_call, f)
+            .await
+    }
+
+    /// See [`MultiTargetGrpcClient::with_redirect`].
+    pub fn with_redirect(self, is_redirect: fn(&Status) -> bool) -> Self {
+        Self {
+            endpoint: self.endpoint,
+            inner: self.inner.with_redirect(is_redirect),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -635,6 +659,8 @@ pub struct MultiTargetGrpcClient<T: Clone> {
     connections: Connections<T>,
     client_factory: ClientFactory<T>,
     target_name: String,
+    /// Recognises an answer that sends the caller to another target. See [`Self::with_redirect`].
+    redirect: Option<fn(&Status) -> bool>,
 }
 
 impl<T> MultiTargetGrpcClient<T>
@@ -667,7 +693,19 @@ where
             connections: Connections::new(idle_ttl, prune_interval),
             client_factory: Arc::new(client_factory),
             target_name: target_name.as_ref().to_string(),
+            redirect: None,
         }
+    }
+
+    /// Returns a status that `is_redirect` accepts to the caller on its first attempt: no retry,
+    /// and the connection it came over stays cached.
+    ///
+    /// A redirect is an answer, not a failure. The peer is healthy and has said where to go
+    /// instead, so asking it again gets the same answer, and replacing the connection would
+    /// discard one that works.
+    pub fn with_redirect(mut self, is_redirect: fn(&Status) -> bool) -> Self {
+        self.redirect = Some(is_redirect);
+        self
     }
 
     pub async fn call<F, R>(
@@ -702,7 +740,7 @@ where
         self.call_with_retry(description, endpoint, false, f).await
     }
 
-    async fn call_with_retry<F, R>(
+    pub(crate) async fn call_with_retry<F, R>(
         &self,
         description: impl AsRef<str>,
         endpoint: Uri,
@@ -752,6 +790,10 @@ where
                 Ok(result) => {
                     attempts.succeeded(started.elapsed());
                     break Ok(result);
+                }
+                Err(e) if self.redirect.is_some_and(|is_redirect| is_redirect(&e)) => {
+                    attempts.redirected(&e);
+                    break Err(e);
                 }
                 Err(e) if requires_reconnect(&e) => {
                     self.retire(&endpoint, &entry, &e).await;
@@ -926,7 +968,9 @@ pub struct EnabledGrpcClientTlsConfig {
     pub client_key: Base64,
     /// CA certificate used to validate server certificates (PEM)
     pub server_ca_cert: Base64,
-    /// expected server domain/SAN. If None the domain name validation is disabled
+    /// The name the server's certificate must carry. Without it, the certificate is checked
+    /// against the host of the address the client connects to (an IPv6 literal without its
+    /// brackets).
     pub server_domain_name: Option<String>,
 }
 
@@ -1072,6 +1116,13 @@ impl<'a> CallAttempts<'a> {
         record_internal_grpc_failure(self.target_name, self.description, e);
     }
 
+    /// Records an answer that sends the caller elsewhere: neither a success nor a failure of this
+    /// target.
+    fn redirected(&self, e: &Status) {
+        self.span
+            .in_scope(|| debug!(answer = e.message(), "gRPC call redirected"));
+    }
+
     /// Records a failure there is no point retrying.
     fn gave_up(&self, e: &Status) {
         self.span
@@ -1084,7 +1135,7 @@ impl<'a> CallAttempts<'a> {
     }
 }
 
-fn requires_reconnect(e: &Status) -> bool {
+pub(crate) fn requires_reconnect(e: &Status) -> bool {
     // A request that ran out of its own time says nothing about the health of
     // the connection it ran on. Without this the registry client
     // (request_timeout = 30s) would tear down the channel every caller shares

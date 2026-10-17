@@ -15,12 +15,13 @@
 use super::proxy::BreakableProxy;
 use chrono::DateTime;
 use etcd_client::{Client, ConnectOptions, EventType, GetOptions, WatchOptions};
+use golem_service_base::clients::shard_manager_leader::LeaderAddress;
 use golem_shard_manager::LEADER_ELECTION_NAME;
 use golem_shard_manager::config::EtcdConfig;
 use golem_shard_manager::{
-    Elected, EtcdRoutingTablePersistence, ExecutorAddr, ExecutorId, LeaderElection, LeaderFence,
-    LeaseKeepAlive, LeaseLossReason, NO_REVISION, RoutingTablePersistence, STATE_KEY,
-    ShardLeaseState, ShardManagerError,
+    CampaignView, Elected, ElectionValue, ElectionWatch, EtcdRoutingTablePersistence, ExecutorAddr,
+    ExecutorId, LeaderElection, LeaderFence, LeaderLocator, LeaseKeepAlive, LeaseLossReason,
+    NO_REVISION, RoutingTablePersistence, STATE_KEY, ShardLeaseState, ShardManagerError,
 };
 use golem_test_framework::components::etcd::docker_etcd::DockerEtcd;
 use std::net::{IpAddr, Ipv4Addr};
@@ -60,6 +61,7 @@ fn election_config(etcd: &DockerEtcd) -> EtcdConfig {
         retry_max_delay: Duration::from_secs(5),
         leader_lease_ttl: TEST_LEASE_TTL,
         compaction_retention_revisions: 0,
+        rollout_generation: None,
     }
 }
 
@@ -1176,10 +1178,11 @@ async fn a_standby_logs_who_holds_the_leadership_while_it_waits(etcd: &Arc<Docke
          the log, which is the only thing an operator has to go on. Captured instead:\n{logged}"
     );
     assert!(
-        logged.contains(&recorded_leader),
+        logged.contains(&recorded_leader.identity),
         "B announced that it was standing by, but not who holds the leadership: etcd records \
-         `{recorded_leader}` and the announcement must carry it, or the log says nothing about \
-         which replica to go and look at. Captured:\n{logged}"
+         `{}` and the announcement must carry it, or the log says nothing about \
+         which replica to go and look at. Captured:\n{logged}",
+        recorded_leader.identity
     );
 }
 
@@ -1638,5 +1641,458 @@ async fn a_reconnect_that_finds_the_lease_gone_reports_it_as_expired(etcd: &Arc<
          watchdog ran out on its own.",
         lost.reason,
         broken_at.elapsed()
+    );
+}
+
+fn address(port: u16) -> LeaderAddress {
+    LeaderAddress {
+        host: "127.0.0.1".to_string(),
+        port,
+    }
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A standby sends clients only to a leader whose value is ready, so a new leader must not look
+// ready before it says so.
+async fn a_new_leader_is_named_with_its_address_but_not_ready(etcd: &Arc<DockerEtcd>) {
+    let election_name = unique_election_name();
+    let election = LeaderElection::connect(&election_config(etcd), election_name.clone())
+        .await
+        .expect("Connecting the election client to etcd should succeed")
+        .with_grpc_address(address(4001));
+    let _elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
+        .await
+        .expect("An uncontested campaign should finish")
+        .expect("An uncontested campaign should be won");
+
+    let locator = LeaderLocator::new(
+        inspection_client(etcd).await,
+        election_name,
+        TEST_REQUEST_TIMEOUT,
+    );
+    let value = locator
+        .leader()
+        .await
+        .expect("The leader should be readable")
+        .expect("There is a leader");
+
+    assert_eq!(value.grpc_address, Some(address(4001)));
+    assert!(
+        !value.ready,
+        "A leader is not ready before it publishes so: {value:?}"
+    );
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+async fn a_published_leader_is_named_ready(etcd: &Arc<DockerEtcd>) {
+    let election_name = unique_election_name();
+    let election = LeaderElection::connect(&election_config(etcd), election_name.clone())
+        .await
+        .expect("Connecting the election client to etcd should succeed")
+        .with_grpc_address(address(4002));
+    let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
+        .await
+        .expect("An uncontested campaign should finish")
+        .expect("An uncontested campaign should be won");
+
+    elected
+        .leadership
+        .publish_ready()
+        .await
+        .expect("Publishing should succeed while leading");
+
+    let locator = LeaderLocator::new(
+        inspection_client(etcd).await,
+        election_name,
+        TEST_REQUEST_TIMEOUT,
+    );
+    let value = locator
+        .leader()
+        .await
+        .expect("The leader should be readable")
+        .expect("There is a leader");
+    assert_eq!(value.grpc_address, Some(address(4002)));
+    assert!(
+        value.ready,
+        "The published value should be ready: {value:?}"
+    );
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+async fn a_leader_that_stepped_down_cannot_publish(etcd: &Arc<DockerEtcd>) {
+    let election_name = unique_election_name();
+    let election = LeaderElection::connect(&election_config(etcd), election_name.clone())
+        .await
+        .expect("Connecting the election client to etcd should succeed")
+        .with_grpc_address(address(4003));
+    let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
+        .await
+        .expect("An uncontested campaign should finish")
+        .expect("An uncontested campaign should be won");
+
+    elected
+        .leadership
+        .step_down()
+        .await
+        .expect("Stepping down should succeed");
+
+    elected
+        .leadership
+        .publish_ready()
+        .await
+        .expect_err("A replica that no longer leads must not mark itself ready");
+    let locator = LeaderLocator::new(
+        inspection_client(etcd).await,
+        election_name,
+        TEST_REQUEST_TIMEOUT,
+    );
+    assert_eq!(locator.leader().await.expect("readable"), None);
+}
+
+#[test]
+fn an_election_value_reads_back() {
+    let value = ElectionValue {
+        identity: "sm-1/pid-7/1792000000".to_string(),
+        grpc_address: Some(address(9002)),
+        ready: true,
+        rollout_generation: None,
+    };
+    assert_eq!(ElectionValue::decode(&value.encode()), Some(value));
+    assert_eq!(ElectionValue::decode(b"sm-1/pid-7/1792000000"), None);
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// etcd-client keeps a member that refuses connections in its rotation, so a single attempt lands
+// on it about half the time. Marking the leader ready only sets the same value again, so it must
+// ride that out instead of failing the startup.
+async fn marking_the_leader_ready_survives_a_dead_member_in_the_endpoint_list(
+    etcd: &Arc<DockerEtcd>,
+) {
+    let election_name = unique_election_name();
+    let config = EtcdConfig {
+        endpoints: vec!["http://127.0.0.1:1".to_string(), etcd.client_url()],
+        // A refusing member takes a share of the requests at random; a short backoff gives the
+        // campaign and each mark many attempts inside their budgets.
+        retry_min_delay: Duration::from_millis(10),
+        retry_max_delay: Duration::from_millis(50),
+        ..election_config(etcd)
+    };
+    let election = LeaderElection::connect(&config, election_name.clone())
+        .await
+        .expect("Connecting the election client to etcd should succeed")
+        .with_grpc_address(address(4004));
+    let elected = timeout(CAMPAIGN_TIMEOUT * 2, election.campaign_until_elected())
+        .await
+        .expect("The campaign should finish despite the dead member")
+        .expect("The campaign should be won");
+
+    // Nothing else renews the lease while the marks run, and the marks must not depend on
+    // finishing inside one lease TTL.
+    let keepalive = tokio::spawn(elected.keepalive.run());
+    for attempt in 1..=10 {
+        elected
+            .leadership
+            .publish_ready()
+            .await
+            .unwrap_or_else(|err| panic!("Marking ready failed on attempt {attempt}: {err}"));
+    }
+    keepalive.abort();
+}
+
+/// Waits until the watch's view satisfies `ready`.
+async fn await_view(
+    watch: &mut ElectionWatch,
+    ready: impl Fn(&CampaignView) -> bool,
+) -> CampaignView {
+    timeout(CAMPAIGN_TIMEOUT, async {
+        loop {
+            if let Some(view) = watch.view()
+                && ready(&view)
+            {
+                return view;
+            }
+            watch.changed().await;
+        }
+    })
+    .await
+    .expect("the election watch should reach the expected view")
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A standby answers callers from this view, so it must follow a new leader and a proclaimed
+// `ready` without a read per call.
+async fn the_election_watch_follows_campaigners_and_the_ready_mark(etcd: &Arc<DockerEtcd>) {
+    let election_name = unique_election_name();
+    let first = LeaderElection::connect(&election_config(etcd), election_name.clone())
+        .await
+        .expect("Connecting the election client to etcd should succeed")
+        .with_grpc_address(address(4101));
+    let (mut watch, watcher) = first.watch();
+    let watcher = tokio::spawn(watcher.run());
+
+    let elected = timeout(CAMPAIGN_TIMEOUT, first.campaign_until_elected())
+        .await
+        .expect("An uncontested campaign should finish")
+        .expect("An uncontested campaign should be won");
+    let view = await_view(&mut watch, |view| view.leader().is_some()).await;
+    assert_eq!(
+        view.leader()
+            .and_then(|leader| leader.value.clone())
+            .and_then(|value| value.grpc_address),
+        Some(address(4101))
+    );
+
+    elected
+        .leadership
+        .publish_ready()
+        .await
+        .expect("Marking ready should succeed");
+    await_view(&mut watch, |view| {
+        view.leader()
+            .and_then(|leader| leader.value.as_ref())
+            .is_some_and(|value| value.ready)
+    })
+    .await;
+    assert!(watch.answered_within(Duration::from_secs(5)));
+
+    elected
+        .leadership
+        .step_down()
+        .await
+        .expect("Stepping down should succeed");
+    await_view(&mut watch, |view| view.campaigners.is_empty()).await;
+    watcher.abort();
+}
+
+/// Puts a campaigner's key under the election directly in etcd, so that the change does not travel
+/// through the connection under test.
+async fn add_campaigner_directly(etcd: &DockerEtcd, election_name: &str, lease_ttl: i64) -> i64 {
+    let mut client = inspection_client(etcd).await;
+    let lease = client.lease_grant(lease_ttl, None).await.unwrap().id();
+    client
+        .put(
+            format!("{election_name}/{lease:x}"),
+            "sm-direct/pid-1/1700000000",
+            Some(etcd_client::PutOptions::new().with_lease(lease)),
+        )
+        .await
+        .unwrap();
+    lease
+}
+
+/// Waits until the watch is established on etcd's side, not merely until the first read is
+/// published: a campaigner that comes and goes is seen only through the watch stream.
+async fn await_established_watch(
+    etcd: &DockerEtcd,
+    watch: &mut ElectionWatch,
+    election_name: &str,
+) {
+    await_view(watch, |view| view.campaigners.is_empty()).await;
+    let lease = add_campaigner_directly(etcd, election_name, 10).await;
+    await_view(watch, |view| view.campaigners.len() == 1).await;
+    inspection_client(etcd)
+        .await
+        .lease_revoke(lease)
+        .await
+        .unwrap();
+    await_view(watch, |view| view.campaigners.is_empty()).await;
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A watch that loses its stream, whether etcd cancelled it (a compaction past its revision) or the
+// connection broke, ends in an error that `run` answers by reading the election again. This drives
+// that path with a dropped connection: a watch at an already compacted revision cannot be provoked
+// from outside, because the watcher always watches from the revision it has just read.
+async fn the_election_watch_recovers_after_its_connection_drops(etcd: &Arc<DockerEtcd>) {
+    let proxy = BreakableProxy::start(&etcd.client_url()).await;
+    let config = EtcdConfig {
+        endpoints: vec![proxy.url()],
+        ..election_config(etcd)
+    };
+    let election_name = unique_election_name();
+    let election = LeaderElection::connect(&config, election_name.clone())
+        .await
+        .expect("Connecting the election client through the proxy should succeed");
+    let (mut watch, watcher) = election.watch();
+    let watcher = tokio::spawn(watcher.run());
+    await_established_watch(etcd, &mut watch, &election_name).await;
+
+    let restarts_before = watch.restarts();
+    proxy.drop_all_connections().await;
+    let lease = add_campaigner_directly(etcd, &election_name, 10).await;
+
+    let view = await_view(&mut watch, |view| view.campaigners.len() == 1).await;
+    assert_eq!(view.leader().map(|leader| leader.lease), Some(lease));
+    assert!(
+        watch.restarts() > restarts_before,
+        "The watcher should have restarted after its connection dropped"
+    );
+
+    inspection_client(etcd)
+        .await
+        .lease_revoke(lease)
+        .await
+        .unwrap();
+    await_view(&mut watch, |view| view.campaigners.is_empty()).await;
+    watcher.abort();
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A black-holed connection yields neither an error nor a close, so only the silence tells the
+// watcher to give up the stream and read again once etcd is reachable.
+async fn the_election_watch_recovers_after_etcd_goes_silent(etcd: &Arc<DockerEtcd>) {
+    let proxy = BreakableProxy::start(&etcd.client_url()).await;
+    let config = EtcdConfig {
+        endpoints: vec![proxy.url()],
+        ..election_config(etcd)
+    };
+    let election_name = unique_election_name();
+    let election = LeaderElection::connect(&config, election_name.clone())
+        .await
+        .expect("Connecting the election client through the proxy should succeed");
+    let (mut watch, watcher) = election.watch();
+    let watcher = tokio::spawn(watcher.run());
+    // Established first: a watch still being created when the hole opens would time out, which
+    // is a restart, but not one caused by the silence.
+    await_established_watch(etcd, &mut watch, &election_name).await;
+    assert!(watch.answered_within(TEST_LEASE_TTL));
+
+    let restarts_before = watch.restarts();
+    proxy.black_hole();
+    // Nothing but the quiet limit can fail while the connection is silent: it yields neither an
+    // error nor a close. So a restart before `restore` proves the watcher gave up the stream on
+    // its own, rather than receiving bytes the proxy held back and delivers on `restore`.
+    timeout(TEST_LEASE_TTL * 4, async {
+        while watch.restarts() == restarts_before {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("The watcher should restart on its own while etcd is silent");
+    assert!(!watch.answered_within(TEST_LEASE_TTL));
+
+    let lease = add_campaigner_directly(etcd, &election_name, 10).await;
+    assert!(
+        watch.view().is_some_and(|view| view.campaigners.is_empty()),
+        "The view must keep its last value while etcd is silent"
+    );
+
+    proxy.restore();
+    let view = await_view(&mut watch, |view| view.campaigners.len() == 1).await;
+    assert_eq!(view.leader().map(|leader| leader.lease), Some(lease));
+    assert!(watch.answered_within(TEST_LEASE_TTL));
+
+    inspection_client(etcd)
+        .await
+        .lease_revoke(lease)
+        .await
+        .unwrap();
+    watcher.abort();
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A value written before the JSON form (a plain identity) must not break a standby: the leader is
+// seen, its value is not, so nobody is named and the client retries.
+async fn a_leader_value_written_before_the_json_form_is_seen_but_names_no_address(
+    etcd: &Arc<DockerEtcd>,
+) {
+    let election_name = unique_election_name();
+    let mut client = inspection_client(etcd).await;
+    let lease = client.lease_grant(10, None).await.unwrap().id();
+    client
+        .put(
+            format!("{election_name}/{lease:x}"),
+            "sm-old/pid-1/1700000000",
+            Some(etcd_client::PutOptions::new().with_lease(lease)),
+        )
+        .await
+        .unwrap();
+
+    let election = LeaderElection::connect(&election_config(etcd), election_name.clone())
+        .await
+        .expect("Connecting the election client to etcd should succeed");
+    let (mut watch, watcher) = election.watch();
+    let watcher = tokio::spawn(watcher.run());
+    await_view(&mut watch, |view| view.leader().is_some()).await;
+    assert_eq!(watch.leader_value(), Some(None));
+
+    client.lease_revoke(lease).await.unwrap();
+    watcher.abort();
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A leader whose lease lapses during its startup must never send clients to itself: another
+// replica may already lead.
+async fn a_leader_whose_lease_lapsed_before_its_startup_ended_is_never_marked_ready(
+    etcd: &Arc<DockerEtcd>,
+) {
+    let proxy = BreakableProxy::start(&etcd.client_url()).await;
+    let election_name = unique_election_name();
+    let mut config = election_config(etcd);
+    config.endpoints = vec![proxy.url()];
+    let election = LeaderElection::connect(&config, election_name.clone())
+        .await
+        .expect("Connecting the election client to etcd should succeed")
+        .with_grpc_address(address(4201));
+    let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
+        .await
+        .expect("An uncontested campaign should finish")
+        .expect("An uncontested campaign should be won");
+    let belief = elected.keepalive.belief();
+    let granted_ttl = elected.granted_ttl;
+    let keepalive = tokio::spawn(elected.keepalive.run());
+
+    proxy.black_hole();
+    timeout(granted_ttl * 2, keepalive)
+        .await
+        .expect("the keepalive reports the loss within one lease TTL")
+        .expect("the keepalive task does not panic");
+    assert!(
+        !belief.held(),
+        "the gate must stop serving once the lease is lost"
+    );
+    // The watchdog gives the lease up before etcd does. Reading through the direct connection, not
+    // the proxy, until the lapsed leader's key is gone is what makes the lease lapse in etcd too,
+    // however late its expiry scan runs.
+    let locator = LeaderLocator::new(
+        inspection_client(etcd).await,
+        election_name.clone(),
+        TEST_REQUEST_TIMEOUT,
+    );
+    timeout(CAMPAIGN_TIMEOUT, async {
+        while locator
+            .leader()
+            .await
+            .expect("the inspection read succeeds")
+            .is_some()
+        {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("etcd should expire the lease once renewals stop");
+    proxy.restore();
+
+    elected
+        .leadership
+        .publish_ready()
+        .await
+        .expect_err("a leader whose lease lapsed must not mark itself ready");
+    assert!(
+        locator
+            .leader()
+            .await
+            .expect("the inspection read succeeds")
+            .is_none_or(|value| !value.ready),
+        "no value of the lapsed leader may read ready"
     );
 }
