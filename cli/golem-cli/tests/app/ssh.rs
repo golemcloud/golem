@@ -942,7 +942,7 @@ async fn ssh_prompt_feels_like_a_shell() {
         session.expect_str(MARKER)?;
 
         enter(session, "sleep 2; printf 'sle%s\\n' pt")?;
-        session.expect_str("Ctrl+C to stop waiting")?;
+        session.expect_str("Ctrl+C to stop\x1b[K")?;
         session.expect_str("\x1b[2K")?;
         session.expect_str("slept")?;
         answer_cursor_query(session)?;
@@ -951,7 +951,7 @@ async fn ssh_prompt_feels_like_a_shell() {
     })
     .await;
 
-    // Ctrl+C stops waiting for a running command without ending the session.
+    // Ctrl+C stops a running command without ending the session.
     ctx.cli_interactive(["ssh", OWNER], move |session| {
         session.set_expect_timeout(Some(Duration::from_secs(120)));
         answer_cursor_query(session)?;
@@ -961,16 +961,12 @@ async fn ssh_prompt_feels_like_a_shell() {
         session.expect_str(MARKER)?;
 
         enter(session, "sleep 6")?;
-        session.expect_str("Ctrl+C to stop waiting")?;
+        session.expect_str("Ctrl+C to stop\x1b[K")?;
         session.send("\u{3}")?;
-        // Golem does not stop a call that has started, and says so without an error.
-        session.expect_str("\x1b[2KStopped waiting. The command is still running on")?;
-        session.expect_str("--lookup")?;
         answer_cursor_query(session)?;
         session.expect_str("[130]")?;
 
-        // The session goes on. The next command is sent once the one left running has ended.
-        std::thread::sleep(Duration::from_secs(10));
+        // The session goes on, and the next command does not wait behind the stopped one.
         enter(session, "printf 'aft%s\\n' er")?;
         session.expect_str("after")?;
         answer_cursor_query(session)?;
@@ -1060,7 +1056,6 @@ async fn stop_a_command(
 }
 
 #[cfg(unix)]
-#[ignore = "needs a bash whose `run` takes an input stream (release 0.3.0)"]
 #[test]
 #[timeout("20 minutes")]
 async fn ssh_ctrl_c_stops_the_command() {
