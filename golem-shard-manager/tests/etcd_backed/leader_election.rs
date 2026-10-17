@@ -1860,45 +1860,101 @@ async fn the_election_watch_follows_campaigners_and_the_ready_mark(etcd: &Arc<Do
     watcher.abort();
 }
 
+/// Puts a campaigner's key under the election directly in etcd, so that the change does not travel
+/// through the connection under test.
+async fn add_campaigner_directly(etcd: &DockerEtcd, election_name: &str, lease_ttl: i64) -> i64 {
+    let mut client = inspection_client(etcd).await;
+    let lease = client.lease_grant(lease_ttl, None).await.unwrap().id();
+    client
+        .put(
+            format!("{election_name}/{lease:x}"),
+            "sm-direct/pid-1/1700000000",
+            Some(etcd_client::PutOptions::new().with_lease(lease)),
+        )
+        .await
+        .unwrap();
+    lease
+}
+
 #[test]
 #[tracing::instrument(skip_all)]
-// The leader compacts etcd's history, and etcd cancels a watch whose next revision is compacted.
-// The view must recover by reading again instead of freezing.
-async fn the_election_watch_survives_a_compaction(etcd: &Arc<DockerEtcd>) {
+// A watch that loses its stream, whether etcd cancelled it (a compaction past its revision) or the
+// connection broke, ends in an error that `run` answers by reading the election again. This drives
+// that path with a dropped connection: a watch at an already compacted revision cannot be provoked
+// from outside, because the watcher always watches from the revision it has just read.
+async fn the_election_watch_recovers_after_its_connection_drops(etcd: &Arc<DockerEtcd>) {
+    let proxy = BreakableProxy::start(&etcd.client_url()).await;
+    let config = EtcdConfig {
+        endpoints: vec![proxy.url()],
+        ..election_config(etcd)
+    };
     let election_name = unique_election_name();
-    let election = LeaderElection::connect(&election_config(etcd), election_name.clone())
+    let election = LeaderElection::connect(&config, election_name.clone())
         .await
-        .expect("Connecting the election client to etcd should succeed");
+        .expect("Connecting the election client through the proxy should succeed");
     let (mut watch, watcher) = election.watch();
     let watcher = tokio::spawn(watcher.run());
     await_view(&mut watch, |view| view.campaigners.is_empty()).await;
 
-    let mut kv = inspection_client(etcd).await.kv_client();
-    // Moves the store past the watch's start revision, then compacts that history away.
-    for i in 0..5 {
-        kv.put(format!("{election_name}-filler"), format!("{i}"), None)
-            .await
-            .unwrap();
-    }
-    let revision = kv
-        .get("x", None)
-        .await
-        .unwrap()
-        .header()
-        .unwrap()
-        .revision();
-    let _ = kv.compact(revision, None).await;
+    proxy.drop_all_connections().await;
+    let lease = add_campaigner_directly(etcd, &election_name, 10).await;
 
-    let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
+    let view = await_view(&mut watch, |view| view.campaigners.len() == 1).await;
+    assert_eq!(view.leader().map(|leader| leader.lease), Some(lease));
+
+    inspection_client(etcd)
         .await
-        .expect("An uncontested campaign should finish")
-        .expect("An uncontested campaign should be won");
-    await_view(&mut watch, |view| view.campaigners.len() == 1).await;
-    elected
-        .leadership
-        .step_down()
+        .lease_revoke(lease)
         .await
-        .expect("Stepping down should succeed");
+        .unwrap();
+    await_view(&mut watch, |view| view.campaigners.is_empty()).await;
+    watcher.abort();
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A black-holed connection yields neither an error nor a close, so only the silence tells the
+// watcher to give up the stream and read again once etcd is reachable.
+async fn the_election_watch_recovers_after_etcd_goes_silent(etcd: &Arc<DockerEtcd>) {
+    let proxy = BreakableProxy::start(&etcd.client_url()).await;
+    let config = EtcdConfig {
+        endpoints: vec![proxy.url()],
+        ..election_config(etcd)
+    };
+    let election_name = unique_election_name();
+    let election = LeaderElection::connect(&config, election_name.clone())
+        .await
+        .expect("Connecting the election client through the proxy should succeed");
+    let (mut watch, watcher) = election.watch();
+    let watcher = tokio::spawn(watcher.run());
+    await_view(&mut watch, |view| view.campaigners.is_empty()).await;
+    assert!(watch.answered_within(TEST_LEASE_TTL));
+
+    proxy.black_hole();
+    timeout(TEST_LEASE_TTL * 2, async {
+        while watch.answered_within(TEST_LEASE_TTL) {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("The watch should report etcd's silence within two lease TTLs");
+
+    let lease = add_campaigner_directly(etcd, &election_name, 10).await;
+    assert!(
+        watch.view().is_some_and(|view| view.campaigners.is_empty()),
+        "The view must keep its last value while etcd is silent"
+    );
+
+    proxy.restore();
+    let view = await_view(&mut watch, |view| view.campaigners.len() == 1).await;
+    assert_eq!(view.leader().map(|leader| leader.lease), Some(lease));
+    assert!(watch.answered_within(TEST_LEASE_TTL));
+
+    inspection_client(etcd)
+        .await
+        .lease_revoke(lease)
+        .await
+        .unwrap();
     watcher.abort();
 }
 
