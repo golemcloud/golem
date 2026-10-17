@@ -284,6 +284,9 @@ impl TypeScriptBridgeGenerator {
         }
         let mut naming = ParameterNaming::new();
         naming.reserve("base");
+        if self.guest_result_repr == GuestResultRepr::Effect {
+            naming.reserve_many(["Effect", "Result"]);
+        }
         naming.reserve(self.agent_type.type_name.0.clone());
         for (_, type_name) in self.type_naming.types() {
             naming.reserve(format!("encode{type_name}"));

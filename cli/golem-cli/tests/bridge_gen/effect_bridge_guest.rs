@@ -286,6 +286,47 @@ void program
     assert!(!source.contains("{ ok:"), "{source}");
 }
 
+#[test]
+fn effect_guest_parameter_named_result_does_not_shadow_effect_result() {
+    let result = SchemaType::result(ResultSpec {
+        ok: Some(Box::new(SchemaType::string())),
+        err: Some(Box::new(SchemaType::u32())),
+    });
+    let schema = agent(
+        "ShadowEffectAgent",
+        "typescript",
+        vec![field("name", SchemaType::string())],
+        vec![method(
+            "check",
+            vec![
+                field("Result", result.clone()),
+                field("Effect", SchemaType::string()),
+            ],
+            Some(result),
+        )],
+        vec![],
+        AgentMode::Durable,
+    );
+    let source = generate_and_compile(
+        schema,
+        "shadow-effect-agent-guest-client.ts",
+        r#"
+import { Effect, Result } from "effect"
+import { ShadowEffectAgent } from "./shadow-effect-agent-guest-client.js"
+const program = Effect.gen(function*() {
+  const client = yield* ShadowEffectAgent.get("name")
+  const checked: Result.Result<string, number> = yield* client.check(Result.succeed("yes"), "effect")
+  return checked
+})
+void program
+"#,
+    );
+    assert!(
+        source.contains("const [Result1, Effect1] = __args;"),
+        "{source}"
+    );
+}
+
 fn generate_and_compile(
     schema: golem_common::schema::AgentTypeSchema,
     filename: &str,

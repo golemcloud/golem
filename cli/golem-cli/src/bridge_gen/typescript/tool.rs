@@ -635,6 +635,9 @@ impl TypeScriptToolBridgeGenerator {
             "decodeError",
             "expectedResultGraph",
         ]);
+        if self.inner.guest_result_repr == GuestResultRepr::Effect {
+            naming.reserve_many(["Effect", "Result", "Scope"]);
+        }
         for (_, type_name) in self.inner.type_naming.types() {
             naming.reserve(format!("encode{type_name}"));
             naming.reserve(format!("decode{type_name}"));
