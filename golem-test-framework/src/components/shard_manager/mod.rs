@@ -38,8 +38,9 @@ pub trait ShardManager: Send + Sync {
 
     async fn get_routing_table(&self) -> crate::Result<RoutingTable> {
         // Retry with backoff to tolerate transient port-forward reconnects.
-        // The port-forward watchdog restarts in ~500ms, so 10 attempts with
-        // 1s delay gives ~10s of tolerance before giving up.
+        // The port-forward watchdog restarts in ~500ms, so 10 attempts with a 1s delay give at
+        // least ~10s of tolerance before giving up. Each attempt can take longer, because the
+        // client retries inside it.
         let max_attempts = 10;
         let retry_delay = Duration::from_secs(1);
         let mut last_err = anyhow!("get_routing_table: no attempts made");
