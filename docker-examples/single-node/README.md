@@ -20,7 +20,8 @@ docker compose up -d
   and MCP on one port, 9881, and routes by host.
 - Run exactly one server: two servers on one database can run the same agent twice.
 - Litestream (`GOLEM_LITESTREAM=true`) is backup and restore for one server, not high availability.
-  It replicates the SQLite databases asynchronously, about once a second, so the newest writes can be
-  lost with the disk, and at startup it restores only the databases that are missing. Use it only
-  where the disk is ephemeral or belongs to one host. See
+  It replicates the SQLite databases asynchronously, about once a second, so the newest writes can
+  be lost with the disk, and at startup it restores only the databases that are missing. It does not
+  replicate the cache of the built-in plugins and tools, so a restore onto a new volume downloads
+  them again from GitHub. Use it only where the disk is ephemeral or belongs to one host. See
   [Litestream limits](https://learn.golem.cloud/next/deploy/server#litestream-limits).

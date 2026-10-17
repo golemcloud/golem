@@ -81,6 +81,10 @@ The registry service creates the `default` plan from `initial_plans.default` at 
   With the default `Temporary` agent filesystem storage, an agent whose plan has a finite `max_disk_space_per_worker` does not start: the invocation fails with `failed to install limits without quota authority`. Set `GOLEM__INITIAL_PLANS__DEFAULT__MAX_DISK_SPACE_PER_WORKER=1000000000000000000`, the unlimited value, unless the executors use [`ManagedXfs` storage](/next/operate/filesystem_snapshots#xfs-storage-with-project-quotas-managedxfs). Executors cache the limits they have read, so restart them after you change the plan.
 </Callout>
 
+## Built-in plugins and tools
+
+At every start, the registry service provisions Golem's built-in plugins and tools from its cache, and downloads from the [golem-builtins releases](https://github.com/golemcloud/golem-builtins/releases) on GitHub each one that the cache does not have or that does not match its checksum. If a download fails, the registry service does not start. In the image, the cache is `/app/builtin-artifacts`, inside the container, so every new registry container downloads them again, which takes about a minute and needs outgoing HTTPS connections to GitHub. To keep the cache, set `GOLEM__BUILTIN_ARTIFACTS__CACHE_DIR` to a directory on a persistent volume.
+
 ## Shard manager
 
 Run **one** shard manager replica in SQL mode (`GOLEM__PERSISTENCE__TYPE=Postgres`), and configure the platform to stop the old replica before it starts the new one. Two shard managers on one database can run the same agent twice. See [One shard manager](/next/deploy/modes#one-shard-manager).

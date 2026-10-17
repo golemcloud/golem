@@ -29,13 +29,15 @@ One ECS service runs one task of the [`golemservices/golem` image](/next/deploy/
 | Desired count | **1** |
 | Deployment | Minimum healthy 0%, maximum 100% |
 | Container port | 9881 |
-| Environment | The output of [`generate-env.sh`](/next/deploy/server#environment-file) with `GOLEM_POSTGRES_HOST`, and `GOLEM__ROUTER__MANAGEMENT_HOST` set to the management host |
+| Environment | The `GOLEM__` settings that [`generate-env.sh`](/next/deploy/server#environment-file) prints, and `GOLEM__ROUTER__MANAGEMENT_HOST` set to the management host |
 | Target group | Port 9881, health check `/healthcheck`, a grace period of at least 120 seconds |
 | Listener | The default action of the HTTPS listener forwards to the target group |
 
 The deployment settings make ECS stop the old task before it starts the new one, in a deploy and when it replaces a failed task. The default deployment (minimum healthy 100%, maximum 200%) starts the new task first, and for a while two servers would run on the same database, which can run the same agent twice. See [One shard manager](/next/deploy/modes#one-shard-manager). Do not use the AWS access key variables: the task role gives the S3 client its credentials.
 
-The first start downloads the built-in plugins and tools, which takes about a minute, so give the service a health check grace period. To move to a fixed cluster later, follow [Moving from the all-in-one server](/next/deploy/cluster#moving-from-the-all-in-one-server).
+Run `generate-env.sh` with the bucket and the database inputs, such as `GOLEM_S3_BUCKET`, `GOLEM_S3_REGION`, `GOLEM_POSTGRES_HOST`, `GOLEM_POSTGRES_USER` and `GOLEM_POSTGRES_PASSWORD`. These are inputs of the script, not of the image: the task definition needs what the script prints. That is the secrets, the S3 settings of every service, and for each of the six stores `GOLEM__<STORE>__TYPE=Postgres` and its `GOLEM__<STORE>__CONFIG__*` settings, such as `GOLEM__REGISTRY_SERVICE__DB__CONFIG__HOST`. See [Managed Postgres](/next/deploy/server#managed-postgres) for the stores. Keep the secrets and the passwords in AWS Secrets Manager, and give them to the container as `secrets` of the task definition.
+
+The task has no volume, so every start of a task downloads the [built-in plugins and tools](/next/deploy/server#built-in-plugins-and-tools) again: in a deploy, when ECS replaces a failed task, and at a restart. A download takes about a minute, so give the service a health check grace period, and let the task open HTTPS connections to GitHub, for example through a NAT gateway. If it cannot, the task does not start. To download only once, mount an Amazon EFS file system at `/var/lib/golem` through an access point whose POSIX user and root directory owner are uid and gid 65534, the user of the image. To move to a fixed cluster later, follow [Moving from the all-in-one server](/next/deploy/cluster#moving-from-the-all-in-one-server).
 
 ## Fixed cluster
 

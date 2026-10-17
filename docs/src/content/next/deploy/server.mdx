@@ -196,11 +196,17 @@ pending_login_expiration = "1h"
 cleanup_interval = "5m"
 ```
 
-The services create their schemas and tables at startup, so the database user must be able to create schemas in the database. To keep the password out of the file, set it with environment variables such as `GOLEM__REGISTRY_SERVICE__DB__CONFIG__PASSWORD`. The `data_dir` then holds only caches, such as the downloaded built-in plugins and tools, and does not need a volume.
+The services create their schemas and tables at startup, so the database user must be able to create schemas in the database. To keep the password out of the file, set it with environment variables such as `GOLEM__REGISTRY_SERVICE__DB__CONFIG__PASSWORD`. The `data_dir` then holds only caches. The server runs without a volume, but then every start downloads the [built-in plugins and tools](#built-in-plugins-and-tools) again.
 
 <Callout type="warning">
   Run exactly one server on one database, and deploy it stop-then-start. Two servers on the same database each run a shard manager in SQL mode, and the same agent can run twice. See [One shard manager](/next/deploy/modes#one-shard-manager).
 </Callout>
+
+## Built-in plugins and tools
+
+At every start, the registry service provisions Golem's built-in plugins and tools from its cache, `builtin-artifacts` in the data directory. It downloads from the [golem-builtins releases](https://github.com/golemcloud/golem-builtins/releases) on GitHub each one that the cache does not have or that does not match its checksum, which takes about a minute. If a download fails, for example because the server cannot open HTTPS connections to GitHub, the server does not start.
+
+Keep the data directory on a persistent volume, so that only the first start downloads. Without one, every start downloads again and needs GitHub.
 
 ## Container image
 
@@ -214,7 +220,7 @@ The `golemservices/golem` image runs `golem server run`. It serves everything on
 
 The router listens on all addresses, so the server does not start until the [secrets](#secrets) have secret values. Set `GOLEM__ROUTER__MANAGEMENT_HOST` to the host name of the management API. The image arguments are the arguments of `golem`, `server run` by default, so a `--config` file still works; on a platform without files, configure everything with environment variables.
 
-`/healthcheck` answers `503` while the server starts and `200` once it serves requests. Use it as the health check of the platform: the first start downloads the built-in plugins and tools and takes about a minute.
+`/healthcheck` answers `503` while the server starts and `200` once it serves requests. Use it as the health check of the platform: a start that downloads the [built-in plugins and tools](#built-in-plugins-and-tools) takes about a minute.
 
 ### Volume ownership
 
@@ -276,6 +282,7 @@ With Litestream, the worker executor keeps its key-value storage and its indexed
 - **One server only.** Exactly one container may write to a `GOLEM_LITESTREAM_REPLICA_URL`. Two containers that replicate to the same replica corrupt it. Litestream is backup and restore: it gives no high availability and no failover to a second server.
 - **Asynchronous replication.** Litestream copies the changes about once a second by default. When the container stops abruptly and its volume is lost, the newest writes, including oplog entries, can be lost. Agents then replay from a slightly earlier point of their oplog and can run side effects again. This is weaker than the durability of Postgres in the [managed Postgres](#managed-postgres) mode or in a [fixed cluster](/next/deploy/cluster); use those for production durability.
 - **Only the SQLite databases.** Litestream does not replicate blobs. Keep the blobs in S3, for example in [one bucket](/next/operate/persistence#one-bucket-for-all-blobs), not in the local `blobs` directory of the data directory.
+- **Not the cache of the built-in plugins and tools.** Litestream does not replicate `builtin-artifacts`, so a restore onto a new volume downloads the [built-in plugins and tools](#built-in-plugins-and-tools) again, and that start needs HTTPS connections to GitHub.
 - **Restore fills in missing databases only.** At startup, the image restores only the databases that are missing from the data directory. A restart on a volume that still has its data restores nothing, and an older replica never overwrites newer local data.
 
 ## Connect the CLI
