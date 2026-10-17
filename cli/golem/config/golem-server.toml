@@ -217,7 +217,7 @@ port = 9881
 
 [shard_manager]
 bind_address = "127.0.0.1"
-initial_health_check_timeout = "15s"
+initial_health_check_timeout = "3s"
 number_of_shards = 1024
 rebalance_threshold = 0.1
 runtime_metrics_sampling_interval = "5s"
@@ -1097,7 +1097,7 @@ type = "Disabled"
 #
 # [shard_manager]
 # bind_address = "127.0.0.1"
-# initial_health_check_timeout = "15s"
+# initial_health_check_timeout = "3s"
 # number_of_shards = 1024
 # rebalance_threshold = 0.1
 # runtime_metrics_sampling_interval = "5s"
