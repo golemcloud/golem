@@ -1,9 +1,10 @@
 use super::*;
 use anyhow::Context as _;
 use golem_common::model::Timestamp;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_service_base::error::worker_executor::InterruptKind;
-use golem_worker_executor::services::HasOplog;
+use golem_worker_executor::services::{HasOplog, HasOplogService, UsesAllDeps};
 use pretty_assertions::assert_eq;
 use test_r::test;
 use tokio::io::AsyncReadExt;
@@ -152,13 +153,30 @@ async fn stop_order(
     .await??;
     let generation = worker.resident_generation_for_test();
     let acquisitions = worker.permit_acquisitions_for_test();
+    let mode = if durable {
+        AgentMode::Durable
+    } else {
+        AgentMode::Ephemeral
+    };
+    let source = worker.all().oplog_service();
+    let original_last = source.get_last_index(&owned, mode).await;
+    let original_prefix = source
+        .read_exact(&owned, mode, OplogIndex::INITIAL, original_last.as_u64())
+        .await;
+    assert!(
+        !original_prefix.is_empty(),
+        "the committed invocation prefix must be present in its actual storage mode"
+    );
     let mut raw = worker.raw_interrupt_for_test();
     let helper = worker.await_interrupt_for_test();
     let (mut selected, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
     let mut deleting = None;
-    let mut fence = (first != FirstStop::User)
+    // This one native proof isolates the outer Deleting guard before any terminal is queued.
+    // Interrupt-mutex contention would mask a missing outer guard rather than replace it.
+    let mut fence = (first == FirstStop::Deletion)
         .then(|| worker.pause_next_deletion_stage_for_test(WorkerDeletionStage::ExecutionFenced));
-    let mut before_remove = None;
+    let mut before_remove =
+        (first != FirstStop::User).then(|| executor.gate_next_oplog_delete(&owned, mode));
     let delete = || {
         tokio::spawn({
             let executor = executor.clone();
@@ -215,14 +233,8 @@ async fn stop_order(
     let accepted_quota_stop = worker.monthly_stop_for_test();
     if first == FirstStop::Quota {
         deleting = Some(delete());
-        tokio::time::timeout(Duration::from_secs(10), &mut fence.as_mut().unwrap().0)
-            .await
-            .context("deletion claim after quota")??;
     }
     if let Some((_, release_fence)) = fence.take() {
-        before_remove = Some(
-            worker.pause_next_deletion_stage_for_test(WorkerDeletionStage::DurableStateRemoved),
-        );
         release_fence.send(()).unwrap();
     }
     if first != FirstStop::Quota {
@@ -260,7 +272,7 @@ async fn stop_order(
             &mut before_remove.as_mut().unwrap().0,
         )
         .await
-        .context("storage removal stage")??;
+        .context("actual oplog-service delete before storage changes")??;
     }
     let mut byte = [0];
     assert!(matches!(
@@ -274,16 +286,45 @@ async fn stop_order(
     })
     .await?;
     worker.retained_cleanup_for_test().await?;
-    let entries = worker
-        .oplog()
-        .read_exact(
-            OplogIndex::INITIAL,
-            worker.oplog().current_oplog_index().await.as_u64(),
-        )
+    // Deletion has closed the resident oplog by this storage boundary. Read its actual
+    // mode through the service; the user-only case keeps its original resident read below.
+    let last = source.get_last_index(&owned, mode).await;
+    let stored = source
+        .read_exact(&owned, mode, OplogIndex::INITIAL, last.as_u64())
         .await;
+    assert!(stored.len() >= original_prefix.len());
+    assert_eq!(
+        stored
+            .range(..=original_last)
+            .map(|(index, entry)| (*index, entry.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        original_prefix
+    );
+    let entries = if first == FirstStop::User {
+        worker
+            .oplog()
+            .read_exact(
+                OplogIndex::INITIAL,
+                worker.oplog().current_oplog_index().await.as_u64(),
+            )
+            .await
+    } else {
+        stored
+    };
+    assert!(
+        !entries
+            .values()
+            .any(|entry| matches!(entry, OplogEntry::Jump { .. }))
+    );
     if let Some(deleting) = deleting {
         before_remove.take().unwrap().1.send(()).unwrap();
         tokio::time::timeout(Duration::from_secs(10), deleting).await???;
+        assert!(
+            !source
+                .try_exists(&owned, mode)
+                .await
+                .map_err(anyhow::Error::msg)?
+        );
     }
     refresh.await?;
     assert_eq!(worker.resident_generation_for_test(), generation);

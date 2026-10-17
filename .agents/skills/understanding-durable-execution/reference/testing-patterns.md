@@ -634,6 +634,29 @@ or persistence/deletion hold and finish physical cleanup before joining every ba
 exhaustion/credit tails before replacement replay begins. Pre-Worker credit has no filesystem target,
 so its full joins are safe. These are read-only dependency observations, not a new Worker interface.
 
+### Deletion dependency entry and consistent service composition
+
+Use actual `OplogService::delete` entry for storage-removal backpressure, keyed by the real
+`OwnedAgentId` and `AgentMode`. The test-owned service adapter waits before delegating storage
+mutation. Its receipt is not native filesystem Pending or completed deletion, and sender Drop
+releases it. `OwnedWorkJoined` has closed the resident oplog at this point. Read the authoritative
+service in the actual mode, retain the complete committed prefix without Jump and require storage
+absence after deletion. A durable-only helper or a read from the closed actor is not equivalent.
+
+Apply the existing service decoration once at bootstrap construction, before worker metadata,
+enumeration, schedulers and executing workers retain the service. Decorating only the late `All`
+graph leaves already-constructed consumers holding the raw service. The construction decorator's
+production default returns the same Arc; it adds no Worker state, per-lifecycle callback or protocol.
+It replaces the late test-bootstrap override and forwarding shim rather than creating another path.
+
+The quota-first case needs no extra ExecutionFenced pause after selecting its actual terminal. The
+deleting-first case still retains the existing isolated fence before any terminal is queued, with
+outer Deleting around a matching Running resident. Interrupt-mutex contention would also reject
+acceptance and could mask a missing production outer guard. The colocated guard tests do not execute
+that whole transaction. Keep this narrow exception explicit; do not claim complete deletion-gate
+removal. All original first-cause, exact terminal/error/result, key, receipt, identity, accounting and
+physical-cleanup oracles stay strict. The user-only case retains its original resident history read.
+
 For prepaid RPC caller-first cases, an applied account update wakes both Stores. The target can stop
 and refund at invocation exit before the caller's proposal is validated. A terminal-append hold is
 too late to prevent that refund. Use the existing real target GrowMemory-append dependency to keep

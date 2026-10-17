@@ -254,6 +254,17 @@ Findings 11-14 have separate linked comments.
     signal. Dropping that sender still releases the barrier. Separate library, affected native,
     custom-suspension/real-timer regression, strict lint, production and browser checks pass.
     The actor barrier itself remains; this is not full idle-control removal.
+    The deletion-stage candidate removes the quota case's redundant ExecutionFenced hold and both
+    private DurableStateRemoved waits. Actual OplogService::delete backpressure belongs to the
+    test-only dependency adapter. The decorated service is constructed before metadata, enumeration,
+    scheduler and runtime consumers capture it; the old late bootstrap shim is removed. Production
+    defaults keep the same Arc and no Worker/lifecycle callback is added. Mode-correct service history
+    retains a nonempty complete committed prefix and exact storage absence after deletion; the
+    original terminal/result/key assertion block is byte-identical. The deleting-first native fence
+    remains to isolate the production outer-Deleting guard, which mutex contention would mask.
+    Retirement, metadata/replay/health/after-End and custom/quiet-stdin checks pass, along with
+    colocated library checks, strict executor/test-utils lint, production compilation, formatting
+    and browser verification. This is a proposed narrow retention, not complete deletion-gate removal.
   - [x] Remove the completed-history replay-gate family. The local change deletes its Worker
     field, type, setter, history scan and pre-invocation await after both native consumers pass at
     the exact stored input-payload acquisition boundary. The supported external-payload setting

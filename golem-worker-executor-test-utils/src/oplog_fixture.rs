@@ -193,6 +193,16 @@ impl OplogService for OplogFixtureService {
         mode: AgentMode,
         epoch: Option<ShardEpoch>,
     ) -> Result<(), OplogError> {
+        let gate = self
+            .deps
+            .oplog_delete_gates
+            .lock()
+            .unwrap()
+            .remove(&(id.clone(), mode));
+        if let Some(gate) = gate {
+            let _ = gate.entered_tx.send(());
+            let _ = gate.release_rx.await;
+        }
         self.inner.delete(lifecycle, id, mode, epoch).await
     }
 

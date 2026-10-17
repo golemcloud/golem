@@ -411,6 +411,12 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         blob_storage
     }
 
+    /// Decorates the final oplog service before dependent services retain it. Worker metadata,
+    /// enumeration, scheduling and executing workers must share the same service instance.
+    fn wrap_oplog_service(&self, oplog_service: Arc<dyn OplogService>) -> Arc<dyn OplogService> {
+        oplog_service
+    }
+
     fn create_blob_store_service(
         &self,
         blob_storage: &Arc<dyn BlobStorage>,
@@ -1103,6 +1109,7 @@ pub async fn create_worker_executor_impl<
     } else {
         forwarding_oplog_service
     };
+    let oplog_service = bootstrap.wrap_oplog_service(oplog_service);
 
     let worker_service = Arc::new(DefaultWorkerService::new(
         key_value_storage.clone(),

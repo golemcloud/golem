@@ -1414,6 +1414,36 @@ impl TestWorkerExecutor {
         (entered_rx, release_tx)
     }
 
+    /// Holds one actual oplog-service delete call before storage changes. The receipt
+    /// observes dependency entry, not native filesystem Pending or completed deletion.
+    pub fn gate_next_oplog_delete(
+        &self,
+        owner: &OwnedAgentId,
+        mode: AgentMode,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        assert!(
+            self.additional_test_deps
+                .oplog_delete_gates
+                .lock()
+                .unwrap()
+                .insert(
+                    (owner.clone(), mode),
+                    OplogReadGate {
+                        entered_tx,
+                        release_rx
+                    }
+                )
+                .is_none(),
+            "a delete interest is already registered for this owner and mode"
+        );
+        (entered_rx, release_tx)
+    }
+
     /// Pauses a runtime-card audit lookup only in the task that claimed its real Start.
     pub fn gate_next_runtime_card_audit_lookup(
         &self,
@@ -4292,21 +4322,6 @@ struct ProductionContextTestServerBootstrap {
     oplog: Arc<std::sync::OnceLock<Arc<dyn golem_worker_executor::services::oplog::OplogService>>>,
 }
 
-struct ProductionServicesWithOplogFixture<'a>(&'a ProductionContextTestServerBootstrap);
-
-#[async_trait]
-impl Bootstrap<golem_worker_executor::workerctx::default::Context>
-    for ProductionServicesWithOplogFixture<'_>
-{
-    fn create_additional_deps(&self, registry: Arc<dyn RegistryService>) -> NoAdditionalDeps {
-        self.0.create_additional_deps(registry)
-    }
-
-    fn wrap_rpc(&self, rpc: Arc<dyn Rpc>) -> Arc<dyn Rpc> {
-        self.0.wrap_rpc(rpc)
-    }
-}
-
 /// Builds the active agents of an executor that runs in the test process.
 ///
 /// The test process shares its RSS with the test framework, the other services and every other
@@ -4352,101 +4367,14 @@ async fn in_process_active_agents<Ctx: WorkerCtx>(
 impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     for ProductionContextTestServerBootstrap
 {
-    async fn create_services(
+    fn wrap_oplog_service(
         &self,
-        direct_invocation_auth_service: Arc<dyn DirectInvocationAuthService>,
-        active_agents: Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>,
-        engine: Arc<Engine>,
-        linker: Arc<Linker<golem_worker_executor::workerctx::default::Context>>,
-        runtime: tokio::runtime::Handle,
-        card_service: Arc<dyn CardService>,
-        component_service: Arc<dyn ComponentService>,
-        shard_manager_service: Arc<
-            dyn golem_worker_executor::services::shard_manager::ShardManagerService,
-        >,
-        worker_service: Arc<dyn golem_worker_executor::services::worker::WorkerService>,
-        worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
-        running_worker_enumeration_service: Arc<dyn golem_worker_executor::services::worker_enumeration::RunningWorkerEnumerationService>,
-        promise_service: Arc<dyn golem_worker_executor::services::promise::PromiseService>,
-        config: Arc<GolemConfig>,
-        shard_service: Arc<dyn ShardService>,
-        key_value_service: Arc<dyn KeyValueService>,
-        blob_store_service: Arc<dyn BlobStoreService>,
-        rdbms_service: Arc<dyn RdbmsService>,
-        worker_activator: Arc<
-            dyn golem_worker_executor::services::worker_activator::WorkerActivator<
-                    golem_worker_executor::workerctx::default::Context,
-                >,
-        >,
-        oplog_service: Arc<dyn golem_worker_executor::services::oplog::OplogService>,
-        scheduler_service: Arc<dyn golem_worker_executor::services::scheduler::SchedulerService>,
-        worker_proxy: Arc<dyn WorkerProxy>,
-        events: Arc<golem_worker_executor::services::events::Events>,
-        file_loader: Arc<FileLoader>,
-        oplog_processor_plugin: Arc<
-            dyn golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin,
-        >,
-        agent_types_service: Arc<dyn AgentTypesService>,
-        environment_state_service: Arc<dyn EnvironmentStateService>,
-        agent_filesystem_snapshots: Arc<
-            golem_worker_executor::services::agent_filesystem_snapshots::AgentFilesystemSnapshots,
-        >,
-        agent_webhooks_service: Arc<AgentWebhooksService>,
-        resource_limits: Arc<dyn ResourceLimits>,
-        quota_service: Arc<dyn QuotaService>,
-        additional_deps: NoAdditionalDeps,
-        shutdown: tokio_util::sync::CancellationToken,
-        http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
-        websocket_connection_pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
-        mcp_transport: Arc<golem_worker_executor::services::mcp::McpTransport>,
-        leak_sentinel: Arc<()>,
-    ) -> anyhow::Result<
-        golem_worker_executor::services::All<golem_worker_executor::workerctx::default::Context>,
-    > {
-        let oplog_service = Arc::new(oplog_fixture::OplogFixtureService::new(
-            oplog_service,
+        service: Arc<dyn golem_worker_executor::services::oplog::OplogService>,
+    ) -> Arc<dyn golem_worker_executor::services::oplog::OplogService> {
+        Arc::new(oplog_fixture::OplogFixtureService::new(
+            service,
             self.test_oplog_deps.clone(),
-        ));
-        ProductionServicesWithOplogFixture(self)
-            .create_services(
-                direct_invocation_auth_service,
-                active_agents,
-                engine,
-                linker,
-                runtime,
-                card_service,
-                component_service,
-                shard_manager_service,
-                worker_service,
-                worker_enumeration_service,
-                running_worker_enumeration_service,
-                promise_service,
-                config,
-                shard_service,
-                key_value_service,
-                blob_store_service,
-                rdbms_service,
-                worker_activator,
-                oplog_service,
-                scheduler_service,
-                worker_proxy,
-                events,
-                file_loader,
-                oplog_processor_plugin,
-                agent_types_service,
-                environment_state_service,
-                agent_filesystem_snapshots,
-                agent_webhooks_service,
-                resource_limits,
-                quota_service,
-                additional_deps,
-                shutdown,
-                http_connection_pool,
-                websocket_connection_pool,
-                mcp_transport,
-                leak_sentinel,
-            )
-            .await
+        ))
     }
 
     fn create_shard_service(&self) -> Arc<dyn ShardService> {
@@ -6985,6 +6913,7 @@ pub struct AdditionalTestDeps {
     non_snapshot_oplog_reads: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), usize>>>,
     oplog_read_gates: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), OplogReadGate>>>,
     oplog_payload_read_gates: Arc<std::sync::Mutex<HashMap<(OwnedAgentId, Uuid), OplogReadGate>>>,
+    oplog_delete_gates: Arc<std::sync::Mutex<HashMap<(OwnedAgentId, AgentMode), OplogReadGate>>>,
     runtime_card_audit_gates:
         Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), RuntimeCardAuditGate>>>,
     wallet_install_commit_gates: Arc<std::sync::Mutex<HashMap<AgentId, OplogReadGate>>>,
@@ -7070,6 +6999,7 @@ impl AdditionalTestDeps {
             non_snapshot_oplog_reads: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_read_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_payload_read_gates: Arc::default(),
+            oplog_delete_gates: Arc::default(),
             runtime_card_audit_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             wallet_install_commit_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             append_after_commit: Arc::new(std::sync::Mutex::new(HashSet::new())),
