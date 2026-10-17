@@ -1779,6 +1779,23 @@ impl TestWorkerExecutor {
         handle
     }
 
+    /// Pauses after the next entry that `matches` is appended for `agent_id`, committing the
+    /// retained prefix first. The host call that appends the entry waits until the handle is
+    /// dropped, so a test can change agent state at that exact point of the guest's execution.
+    pub async fn gate_after_next_append(
+        &self,
+        agent_id: &AgentId,
+        matches: fn(&OplogEntry) -> bool,
+    ) -> AgentInitializationEnqueueGateHandle {
+        let handle = self
+            .additional_test_deps
+            .gate_next_append(agent_id.clone(), matches)
+            .await;
+        handle.gate.after_append.store(true, Ordering::SeqCst);
+        handle.gate.commit_prefix.store(true, Ordering::SeqCst);
+        handle
+    }
+
     /// Arms a one-shot gate immediately before the next p3 HTTP consume-body scope
     /// `Start` is appended for `agent_id`.
     pub async fn gate_next_consume_body_scope_start(
