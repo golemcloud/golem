@@ -37,6 +37,10 @@ use golem_service_base::clients::shard_manager_leader::{LeaderAddress, not_leade
 use golem_service_base::grpc::client::{
     EnabledGrpcClientTlsConfig, GrpcClientConfig, GrpcClientTlsConfig,
 };
+use rcgen::{
+    BasicConstraints, CertificateParams, CertifiedIssuer, DnType, ExtendedKeyUsagePurpose, IsCa,
+    Issuer, KeyPair, KeyUsagePurpose,
+};
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -294,14 +298,56 @@ async fn run_replica_with(mode: Mode, tls: Option<tonic::transport::ServerTlsCon
     }
 }
 
-const TLS_FIXTURES: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/fixtures/shard-manager-tls"
-);
+/// The certificates of the TLS test, made in memory.
+struct TestPki {
+    ca_pem: String,
+    server_pem: String,
+    server_key_pem: String,
+    client_pem: String,
+    client_key_pem: String,
+}
 
-fn fixture(name: &str) -> Vec<u8> {
-    std::fs::read(format!("{TLS_FIXTURES}/{name}"))
-        .unwrap_or_else(|err| panic!("cannot read the TLS fixture {name}: {err}"))
+impl TestPki {
+    /// The server certificate names only `localhost`, as a shard manager certificate names its
+    /// service host and not a pod IP. It has no IP address name.
+    fn new() -> Self {
+        let ca = test_ca("shard manager test CA");
+        let (server_pem, server_key_pem) =
+            signed_by(&ca, "localhost", ExtendedKeyUsagePurpose::ServerAuth);
+        let (client_pem, client_key_pem) =
+            signed_by(&ca, "client", ExtendedKeyUsagePurpose::ClientAuth);
+        Self {
+            ca_pem: ca.pem(),
+            server_pem,
+            server_key_pem,
+            client_pem,
+            client_key_pem,
+        }
+    }
+}
+
+fn test_ca(name: &str) -> CertifiedIssuer<'static, KeyPair> {
+    let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
+    params.distinguished_name.push(DnType::CommonName, name);
+    params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+    CertifiedIssuer::self_signed(params, KeyPair::generate().unwrap()).unwrap()
+}
+
+/// A certificate for `name` and its private key, both PEM.
+fn signed_by(
+    ca: &CertifiedIssuer<'static, KeyPair>,
+    name: &str,
+    usage: ExtendedKeyUsagePurpose,
+) -> (String, String) {
+    let mut params = CertificateParams::new(vec![name.to_string()]).unwrap();
+    params.distinguished_name.push(DnType::CommonName, name);
+    params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+    params.extended_key_usages = vec![usage];
+    let key = KeyPair::generate().unwrap();
+    let issuer: &Issuer<'static, KeyPair> = ca;
+    let cert = params.signed_by(&key, issuer).unwrap();
+    (cert.pem(), key.serialize_pem())
 }
 
 /// A loopback port that refuses connections and that no other process can take while the socket
@@ -672,10 +718,11 @@ async fn a_retried_call_rides_out_a_dead_leader_that_is_still_named() {
 // does not name. With no server name configured, the client must check the leader's certificate
 // against the host it was configured with, the name the certificate is issued for.
 async fn a_redirect_over_tls_checks_the_leader_against_the_configured_host() {
+    let pki = TestPki::new();
     let server_tls = || {
         tonic::transport::ServerTlsConfig::new().identity(tonic::transport::Identity::from_pem(
-            fixture("server.crt"),
-            fixture("server.key"),
+            pki.server_pem.clone(),
+            pki.server_key_pem.clone(),
         ))
     };
     let leader = run_replica_with(Mode::Leader, Some(server_tls())).await;
@@ -694,9 +741,9 @@ async fn a_redirect_over_tls_checks_the_leader_against_the_configured_host() {
                 max_jitter_factor: None,
             },
             tls: GrpcClientTlsConfig::Enabled(EnabledGrpcClientTlsConfig {
-                client_cert: Base64(fixture("client.crt")),
-                client_key: Base64(fixture("client.key")),
-                server_ca_cert: Base64(fixture("ca.crt")),
+                client_cert: Base64(pki.client_pem.clone().into_bytes()),
+                client_key: Base64(pki.client_key_pem.clone().into_bytes()),
+                server_ca_cert: Base64(pki.ca_pem.clone().into_bytes()),
                 server_domain_name: None,
             }),
             ..GrpcClientConfig::default()
