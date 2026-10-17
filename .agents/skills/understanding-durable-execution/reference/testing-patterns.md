@@ -300,6 +300,14 @@ monthly target to be inactive and capacity subscriptions to be gone. A virtual c
 count is not an additional physical-release guarantee. The P2 input/splice/multi-poll and P3
 promise/UDP completion cases retain their other oracles unchanged without those unused freezes.
 
+The provider, transaction and quiet-stdin cases also use ordinary timers. Their existing actual
+provider/session checkpoint, active monthly target and capacity-watch subscriber establish the
+pre-update prerequisite. `MonthlyMemoryCheck::new` subscribes before spawning the monitor, so an
+applied update remains observable even before its first sleep poll. At an entered effect, keep the
+target active and subscribed. After the real cleanup joins, require an inactive target and zero
+subscriptions. These checks replace unused virtual-sleep observations only; they do not establish
+native filesystem metadata Pending or change the entered-effect and session proofs.
+
 ### Monitor cadence with the normal timer
 
 Check exact deadlines on `MonthlyMemoryCheck::duration` and `wait` in a standard paused Tokio

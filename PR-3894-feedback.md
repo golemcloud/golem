@@ -289,6 +289,14 @@ Findings 11-14 have separate linked comments.
     application remains proved by exact rejection snapshots. Failed runs remain recorded. Final
     strict lint, monthly library checks and the small custom-suspension composition batch pass.
     No timer interface or production change was added; the clock family and this checkbox remain open.
+    Provider/KV/RDBMS/entered-commit, blob/filesystem-adapter and quiet-stdin consumers also no longer
+    install never-advanced clocks. Their existing provider/session checkpoints plus the actual
+    active target and watch subscription establish the pre-update prerequisite. Entered effects
+    retain their target/subscription; joined cleanup requires an inactive target and no subscription.
+    An exact source audit retains all other assertion bodies, timeouts and in-scene concurrency.
+    Unchanged baselines, ordinary-timer native batches, scoped strict lint and formatting pass.
+    No production or fixture change is included. The filesystem case remains adapter evidence,
+    not a native metadata-future Pending proof.
   - [ ] Address the keyed filesystem metadata gate and remaining protocol ordering controls.
   - [ ] For any hook proposed to remain, document the otherwise untestable guarantee, minimal scope
     and why its scheduling changes do not invalidate the test. Existing main-owned hooks are not

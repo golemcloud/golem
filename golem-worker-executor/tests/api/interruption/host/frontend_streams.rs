@@ -14,7 +14,6 @@ use golem_common::schema::{SchemaGraph, SchemaType, TypedSchemaValue};
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::oplog::OplogOps;
 use golem_worker_executor::services::{HasOplog, HasOplogService};
-use golem_worker_executor::worker::MonthlyClockForTest;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::start_with_resource_limits_and_overrides;
 use test_r::{inherit_test_dep, test};
@@ -118,8 +117,6 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
     let fingerprint = executor.get_worker_metadata(&id).await?.fingerprint;
     let key = IdempotencyKey::fresh();
     let mut result_wait = crate::invocation_waits::result_wait(&id, &key);
-    let (clock, mut polls) = MonthlyClockForTest::new();
-    worker.set_monthly_clock_for_test(clock.clone());
     let mut attempts =
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let input = TypedSchemaValue::new(
@@ -185,15 +182,15 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
         .context("stdin mapping")?;
     let stdin_id = mapping.transport_stream_id;
     let durable_stream_id = mapping.handle.as_ref().unwrap().stream_id;
-    tokio::time::timeout(Duration::from_secs(10), polls.recv())
-        .await?
-        .context("monthly window timer")?;
     tokio::time::timeout(Duration::from_secs(10), result_wait.entered())
         .await
         .context("session startup requests complete before quota exhaustion")??;
     // This is an open-window prerequisite, not an observation of reader.next Pending.
-    ensure!(worker.concurrent_agent_permit_is_held().await);
+    ensure!(
+        worker.concurrent_agent_permit_is_held().await && worker.monthly_window_active_for_test()
+    );
     let account = limits.initialize_account(context.account_id).await?;
+    ensure!(account.monthly_observer_count_for_test() == 1);
     let mut exhausted = policy.clone();
     exhausted.available_memory_gb_seconds = 0;
     registry.set_policy(exhausted);
@@ -219,7 +216,9 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
     worker.retained_cleanup_for_test().await?;
     refresh.await?;
     ensure!(worker.unload_succeeded_for_test());
-    ensure!(clock.active_sleeps() == 0 && account.monthly_observer_count_for_test() == 0);
+    ensure!(
+        !worker.monthly_window_active_for_test() && account.monthly_observer_count_for_test() == 0
+    );
     ensure!(worker.monthly_stop_for_test() == Some(expected));
     ensure!(worker.owner_stop_for_test().await == Some(expected));
     ensure!(worker.monthly_stop_reason_for_test() == Some("monthly memory exhausted"));

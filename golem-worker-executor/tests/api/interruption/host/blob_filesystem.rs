@@ -5,7 +5,6 @@ use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::durable_host::io::streams::FilesystemObservationGateForTest;
 use golem_worker_executor::services::{HasOplog, UsesAllDeps};
-use golem_worker_executor::worker::MonthlyClockForTest;
 use golem_worker_executor_test_utils::{
     BlobStoreExistsGate, FailingBlobStoreService, start_with_resource_limits_and_overrides,
 };
@@ -130,8 +129,6 @@ async fn pending_stop(
         Principal::anonymous(),
     )
     .await?;
-    let (clock, mut polls) = MonthlyClockForTest::new();
-    worker.set_monthly_clock_for_test(clock.clone());
     let mut attempts =
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let gate = filesystem.then(|| FilesystemObservationGateForTest::install(key.clone()));
@@ -170,8 +167,8 @@ async fn pending_stop(
         let start = starts[0];
         ensure!(terminal_count(&before, start) == 0);
         ensure!(!invocation.is_finished() && worker.concurrent_agent_permit_is_held().await);
-        tokio::time::timeout(Duration::from_secs(10), polls.recv()).await?.context("monthly timer")?;
         let account = limits.initialize_account(context.account_id).await?;
+        ensure!(worker.monthly_window_active_for_test() && account.monthly_observer_count_for_test() == 1);
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy.clone(); exhausted.available_memory_gb_seconds = 0;
         registry.set_policy(exhausted);
@@ -187,7 +184,7 @@ async fn pending_stop(
         worker.retained_cleanup_for_test().await?;
         refresh.await?;
         ensure!(worker.unload_succeeded_for_test());
-        ensure!(clock.active_sleeps() == 0 && account.monthly_observer_count_for_test() == 0);
+        ensure!(!worker.monthly_window_active_for_test() && account.monthly_observer_count_for_test() == 0);
         if let Some(gate) = &gate { ensure!(gate.dropped.load(Ordering::SeqCst) == 1); }
         else { ensure!(blob.dropped.load(Ordering::SeqCst) == 1 && blob.attempts.load(Ordering::SeqCst) == 1); }
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
