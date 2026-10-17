@@ -29,15 +29,27 @@ use std::ops::Range;
 use std::sync::LazyLock;
 
 /// An sbt module id: `"org" % "name" % "version"`, with `%`, `%%` or `%%%` after the org.
+/// Use [`module_ids`] to find the module ids that only have plain string literals.
 static MODULE_ID: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#""(?P<org>[^"]+)"\s*%{1,3}\s*"(?P<name>[^"]+)"\s*%\s*"(?P<version>[^"]*)""#)
+    Regex::new(r#""(?P<org>[^"\\]+)"\s*%{1,3}\s*"(?P<name>[^"\\]+)"\s*%\s*"(?P<version>[^"\\]*)""#)
         .unwrap()
 });
 
-static THIS_BUILD_SETTING: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^ThisBuild\s*/\s*(?P<key>[A-Za-z0-9_]+)\s*:=").unwrap());
+/// A complete `ThisBuild / <key> := "<value>"` statement, with a plain string literal value.
+static THIS_BUILD_SETTING: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"^ThisBuild\s*/\s*(?P<key>[A-Za-z0-9_]+)\s*:=\s*"[^"\\]*"$"#).unwrap()
+});
 
-static SBT_PLUGIN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^addSbtPlugin\s*\(").unwrap());
+/// A complete `addSbtPlugin("org" % "name" % "version")` statement, with plain string literals.
+static SBT_PLUGIN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"^addSbtPlugin\s*\(\s*"(?P<org>[^"\\]+)"\s*%\s*"(?P<name>[^"\\]+)"\s*%\s*"[^"\\]*"\s*\)$"#,
+    )
+    .unwrap()
+});
+
+static SBT_PLUGIN_CALL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\baddSbtPlugin\b").unwrap());
 
 static COMPONENT_DIR: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"\.in\s*\(\s*file\s*\(\s*"(?P<dir>[^"]*)"\s*\)\s*\)"#).unwrap());
@@ -52,13 +64,30 @@ fn module_coordinates(org: &str, name: &str) -> Regex {
     .unwrap()
 }
 
-/// Any change of the setting `key` with an sbt setting operator.
-fn setting_change(key: &str) -> Regex {
-    Regex::new(&format!(
-        r"\b{}\s*(?:\+\+=|--=|:=|~=|\+=|-=)",
-        regex::escape(key)
-    ))
-    .unwrap()
+/// The module ids in `text` whose strings are complete plain string literals: a match that
+/// starts or ends inside a triple-quoted or an interpolated string is left out.
+fn module_ids(text: &str) -> impl Iterator<Item = regex::Captures<'_>> {
+    MODULE_ID.captures_iter(text).filter(move |captures| {
+        let module_id = captures.get(0).unwrap();
+        let before = text[..module_id.start()].chars().next_back();
+        let after = text[module_id.end()..].chars().next();
+        !before.is_some_and(|c| c == '"' || c == '_' || c.is_alphanumeric()) && after != Some('"')
+    })
+}
+
+/// Whether `statement` uses the setting `key` in any way other than reading its value, for
+/// example in `scalaVersion in ThisBuild := ...` or in `inThisBuild(scalaVersion := ...)`.
+fn uses_setting(statement: &str, key: &str) -> bool {
+    let key = regex::escape(key);
+    let mentions = Regex::new(&format!(r"\b{key}\b"))
+        .unwrap()
+        .find_iter(statement)
+        .count();
+    let reads = Regex::new(&format!(r"\b{key}\s*\)?\s*\.\s*value\b"))
+        .unwrap()
+        .find_iter(statement)
+        .count();
+    mentions > reads
 }
 
 /// Merges a component sbt file: the current file is kept, and the versions of the
@@ -67,8 +96,7 @@ pub fn merge_component_sbt(current: &str, new: &str) -> anyhow::Result<String> {
     let current_source = SbtSource::parse(current)?;
     let new_source = SbtSource::parse(new)?;
 
-    let new_versions = MODULE_ID
-        .captures_iter(&new_source.masked)
+    let new_versions = module_ids(&new_source.masked)
         .map(|captures| {
             (
                 (captures["org"].to_string(), captures["name"].to_string()),
@@ -81,20 +109,19 @@ pub fn merge_component_sbt(current: &str, new: &str) -> anyhow::Result<String> {
         let declared = module_coordinates(org, name)
             .find_iter(&current_source.masked)
             .count();
-        let recognized = MODULE_ID
-            .captures_iter(&current_source.masked)
+        let recognized = module_ids(&current_source.masked)
             .filter(|captures| &captures["org"] == org && &captures["name"] == name)
             .count();
         if declared != recognized {
             bail!(
-                "cannot set the version of `\"{org}\" % \"{name}\"`, because the version is not a string literal"
+                "cannot set the version of `\"{org}\" % \"{name}\"`, because the version is not a plain string literal"
             );
         }
     }
 
     let mut result = String::with_capacity(current.len());
     let mut pos = 0;
-    for captures in MODULE_ID.captures_iter(&current_source.masked) {
+    for captures in module_ids(&current_source.masked) {
         if let Some(new_version) =
             new_versions.get(&(captures["org"].to_string(), captures["name"].to_string()))
         {
@@ -108,8 +135,9 @@ pub fn merge_component_sbt(current: &str, new: &str) -> anyhow::Result<String> {
     Ok(result)
 }
 
-/// Merges `build.sbt`: each `ThisBuild / <key> := ...` statement of the template replaces the
-/// current statement with the same key, or is appended.
+/// Merges `build.sbt`: each `ThisBuild / <key> := "<value>"` statement of the template replaces
+/// the current statement with the same key, or is appended. Any other use of a template key is
+/// an error.
 pub fn merge_build_sbt(current: &str, new: &str) -> anyhow::Result<String> {
     merge_keyed_statements(
         current,
@@ -119,31 +147,25 @@ pub fn merge_build_sbt(current: &str, new: &str) -> anyhow::Result<String> {
                 .captures(statement)
                 .map(|captures| captures["key"].to_string())
         },
-        |statement, key| setting_change(key).is_match(statement),
+        uses_setting,
     )
 }
 
-/// Merges `project/plugins.sbt`: each `addSbtPlugin(...)` statement of the template replaces the
-/// current statement that adds the same plugin, or is appended.
+/// Merges `project/plugins.sbt`: each `addSbtPlugin("org" % "name" % "version")` statement of
+/// the template replaces the current statement that adds the same plugin, or is appended. Any
+/// other `addSbtPlugin` statement, and any other use of a template plugin, is an error.
 pub fn merge_plugins_sbt(current: &str, new: &str) -> anyhow::Result<String> {
     merge_keyed_statements(
         current,
         new,
         |statement| {
-            if !SBT_PLUGIN.is_match(statement) {
-                return None;
-            }
-            let mut module_ids = MODULE_ID.captures_iter(statement);
-            match (module_ids.next(), module_ids.next()) {
-                (Some(captures), None) => {
-                    Some(format!("{}:{}", &captures["org"], &captures["name"]))
-                }
-                _ => None,
-            }
+            SBT_PLUGIN
+                .captures(statement)
+                .map(|captures| format!("{}:{}", &captures["org"], &captures["name"]))
         },
         |statement, key| {
             let (org, name) = key.split_once(':').unwrap();
-            SBT_PLUGIN.is_match(statement) || module_coordinates(org, name).is_match(statement)
+            SBT_PLUGIN_CALL.is_match(statement) || module_coordinates(org, name).is_match(statement)
         },
     )
 }
@@ -405,6 +427,8 @@ impl SbtSource {
                     } else {
                         if bytes[i] != b'\n' {
                             masked[i] = b' ';
+                        } else if brackets.is_empty() {
+                            separators.push((i, false));
                         }
                         i += 1;
                     }
@@ -717,6 +741,17 @@ lazy val component_name = project
     }
 
     #[test]
+    fn component_sbt_merge_rejects_triple_quoted_versions() {
+        let current =
+            "libraryDependencies += \"cloud.golem\" %% \"golem-scala-core\" % \"\"\"0.1.0\"\"\"\n";
+        let new = flat_sbt().replace("% \"0.1.0\"", "% \"0.2.0\"");
+
+        let err = merge_component_sbt(current, &new).unwrap_err();
+
+        assert!(err.to_string().contains("golem-scala-core"), "{err}");
+    }
+
+    #[test]
     fn build_sbt_merge_replaces_template_settings_and_keeps_user_settings() {
         let current = "ThisBuild / scalaVersion := \"3.3.0\"\nThisBuild / organization := \"me\"\n";
         let new = "ThisBuild / scalaVersion := \"3.7.1\"\n";
@@ -750,6 +785,19 @@ lazy val component_name = project
     }
 
     #[test]
+    fn build_sbt_merge_keeps_settings_after_a_multiline_block_comment() {
+        let current = indoc::indoc! {r#"
+            ThisBuild / scalaVersion := "3.3.0" /* comment
+            */ ThisBuild / organization := "example"
+        "#};
+        let new = "ThisBuild / scalaVersion := \"3.7.1\"\n";
+
+        let merged = merge_build_sbt(current, new).unwrap();
+
+        assert_eq!(merged, current.replace("3.3.0", "3.7.1"));
+    }
+
+    #[test]
     fn build_sbt_merge_replaces_multiline_settings_and_skips_comments() {
         let current = indoc::indoc! {r#"
             // ThisBuild / scalaVersion := "2.13.0"
@@ -779,6 +827,10 @@ lazy val component_name = project
             "inThisBuild(Seq(scalaVersion := \"3.3.0\"))\n",
             "scalaVersion := \"3.3.0\"\n",
             "ThisBuild / scalaVersion := \"3.3.0\"\nThisBuild / scalaVersion := \"3.3.1\"\n",
+            "ThisBuild / scalaVersion := \"3.3.0\"\nscalaVersion in ThisBuild := \"3.6.4\"\n",
+            "ThisBuild / scalaVersion := sys.props.get(\"scala.version\") getOrElse\n  \"3.3.0\"\n",
+            "ThisBuild / scalaVersion := \"3\" + \".3.0\"\n",
+            "ThisBuild / scalaVersion := \"\"\"3.3.0\"\"\"\n",
         ] {
             let err = merge_build_sbt(current, new).unwrap_err();
             assert!(err.to_string().contains("scalaVersion"), "{current}: {err}");
@@ -786,7 +838,7 @@ lazy val component_name = project
 
         assert!(
             merge_build_sbt(
-                "ThisBuild / crossScalaVersions := Seq(scalaVersion.value)\n",
+                "ThisBuild / crossScalaVersions := Seq(scalaVersion.value, (ThisBuild / scalaVersion).value)\n",
                 new
             )
             .is_ok()
@@ -845,6 +897,9 @@ lazy val component_name = project
         for current in [
             "val golemVersion = \"0.1.0\"\naddSbtPlugin(\"cloud.golem\" % \"golem-scala-sbt\" % golemVersion)\n",
             "addSbtPlugin(myPlugin)\n",
+            "addSbtPlugin(\"cloud.golem\" % \"golem-scala-sbt\" % \"\"\"0.1.0\"\"\")\n",
+            "addSbtPlugin(\"cloud.golem\" % \"golem-scala-sbt\" % \"0.1.0\" exclude(\"a\", \"b\"))\n",
+            "addSbtPlugin(\"cloud.golem\" % \"golem-scala-sbt\" % \"0.1.0\") getOrElse\n  x\n",
             "val golemPlugin = \"cloud.golem\" % \"golem-scala-sbt\" % \"0.1.0\"\naddSbtPlugin(golemPlugin)\n",
         ] {
             let err = merge_plugins_sbt(current, new).unwrap_err();
