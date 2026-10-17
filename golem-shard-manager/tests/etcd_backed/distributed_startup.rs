@@ -1531,6 +1531,13 @@ fn spawn_serving_replica(
             Ok(details) => details,
             Err(err) => {
                 join_set.abort_all();
+                // A stop requested during the startup is the caller's doing, not a failure.
+                if matches!(
+                    err.downcast_ref::<ShardManagerError>(),
+                    Some(ShardManagerError::ShutdownRequested)
+                ) {
+                    return Err(err);
+                }
                 panic!("The replica failed to start: {err:#}");
             }
         };
@@ -2357,11 +2364,18 @@ async fn the_client_rides_out_an_ungraceful_failover_with_the_recommended_budget
 #[test]
 #[tracing::instrument(skip_all)]
 // A rolling update without a pause between pods can stop a leader that has just been elected.
-// The client must still find the replica that ends up leading.
+// The second leader is stopped while its startup is held by the initial health check (the stored
+// lease has expired and the executor never answers), so it is never serving when it goes. The
+// client must still find the replica that ends up leading.
 async fn the_client_rides_out_two_handovers_in_a_row(etcd: &Arc<DockerEtcd>) {
     wipe_state(etcd).await;
     await_election_idle(etcd).await;
-    let config = distributed_config(etcd);
+    let config = ShardManagerConfig {
+        // Short enough to keep the test quick, long enough to hold a startup open while the
+        // test cancels it.
+        initial_health_check_timeout: Duration::from_secs(2),
+        ..distributed_config(etcd)
+    };
 
     let first = CancellationToken::new();
     let (first_task, first_started) = spawn_serving_replica(config.clone(), first.clone());
@@ -2369,9 +2383,29 @@ async fn the_client_rides_out_two_handovers_in_a_row(etcd: &Arc<DockerEtcd>) {
         .await
         .unwrap()
         .unwrap();
+
+    // Stored only now, so that the first leader started without a check. Accepts and then says
+    // nothing, so a check against it runs out its timeout, and its lease was granted long ago,
+    // so every leader that starts from here on must run that check.
+    let silent_executor = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("Cannot bind the stand-in executor");
+    let silent_addr = silent_executor
+        .local_addr()
+        .expect("The stand-in executor should report its address");
+    wipe_state(etcd).await;
+    write_state_with_executor(
+        etcd,
+        ExecutorAddr {
+            ip: silent_addr.ip(),
+            port: silent_addr.port(),
+        },
+    )
+    .await;
+
     let before = campaigner_keys(etcd).await;
     let second = CancellationToken::new();
-    let (second_task, _second_started) = spawn_serving_replica(config.clone(), second.clone());
+    let (second_task, mut second_started) = spawn_serving_replica(config.clone(), second.clone());
     let second_address = await_new_campaigner(etcd, &before).await;
     let before = campaigner_keys(etcd).await;
     let (third_task, third_started) =
@@ -2395,7 +2429,22 @@ async fn the_client_rides_out_two_handovers_in_a_row(etcd: &Arc<DockerEtcd>) {
     .expect("the second replica should be elected after the first steps down");
     second.cancel();
     // Waited for, so that the call below cannot be answered by the second leader while it drains.
-    let _ = second_task.await;
+    let second_result = second_task
+        .await
+        .expect("The second replica's task should not panic");
+    let second_err = second_result
+        .expect_err("A replica stopped during its startup must report that, not finish starting");
+    assert!(
+        matches!(
+            second_err.downcast_ref::<ShardManagerError>(),
+            Some(ShardManagerError::ShutdownRequested)
+        ),
+        "The second replica ended with `{second_err:#}` rather than a shutdown during its startup."
+    );
+    assert!(
+        second_started.try_recv().is_err(),
+        "The second replica reported its port, so it was serving when it was stopped."
+    );
 
     let table = timeout(STARTUP_TIMEOUT, client.get_routing_table())
         .await
