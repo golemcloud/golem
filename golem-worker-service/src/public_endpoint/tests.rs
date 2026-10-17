@@ -373,6 +373,7 @@ async fn real_mcp_endpoint() -> (BoxEndpoint<'static>, tempfile::NamedTempFile) 
             .await
             .unwrap(),
         ),
+        &Default::default(),
     );
     (endpoint, db)
 }
