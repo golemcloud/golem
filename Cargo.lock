@@ -4505,7 +4505,6 @@ dependencies = [
  "prost-types",
  "rcgen",
  "rustls",
- "rustls-pemfile",
  "scc",
  "serde",
  "sqlx",

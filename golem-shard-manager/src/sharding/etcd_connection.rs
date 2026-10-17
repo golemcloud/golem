@@ -21,6 +21,8 @@
 use crate::config::{EtcdConfig, EtcdTlsConfig};
 use crate::sharding::error::ShardManagerError;
 use etcd_client::{Certificate, Client, ConnectOptions, Identity, TlsOptions};
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::path::Path;
 
 fn refused(message: String) -> ShardManagerError {
@@ -99,16 +101,12 @@ fn read_pem(setting: &str, path: &Path, expected: Pem) -> Result<Vec<u8>, ShardM
             path.display()
         ))
     })?;
-    let mut reader = bytes.as_slice();
     let (found, kind) = match expected {
         Pem::Certificate => (
-            rustls_pemfile::certs(&mut reader).any(|item| item.is_ok()),
+            CertificateDer::pem_slice_iter(&bytes).any(|item| item.is_ok()),
             "certificate",
         ),
-        Pem::PrivateKey => (
-            matches!(rustls_pemfile::private_key(&mut reader), Ok(Some(_))),
-            "private key",
-        ),
+        Pem::PrivateKey => (PrivateKeyDer::from_pem_slice(&bytes).is_ok(), "private key"),
     };
     if !found {
         return Err(refused(format!(

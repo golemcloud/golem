@@ -46,7 +46,6 @@ prometheus = { workspace = true }
 prost-types = { workspace = true }
 rustls = { workspace = true, features = [ "ring" ] }
 scc = { workspace = true }
-rustls-pemfile = { workspace = true }
 serde = { workspace = true }
 sqlx = { workspace = true }
 thiserror = { workspace = true }
