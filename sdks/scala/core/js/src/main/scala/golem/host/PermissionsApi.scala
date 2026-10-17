@@ -54,7 +54,9 @@ import scala.scalajs.js.annotation.JSImport
  *
  * Expected failures are returned as `Left(PermissionError)`. Host traps are not
  * converted: the card accessors [[Card.id]], [[Card.parents]] and
- * [[Card.expiresAt]] trap when the host does not know the handle.
+ * [[Card.expiresAt]] trap when the host does not know the handle, or when its
+ * card is revoked or expired. The other operations on such a card return
+ * `Left(PermissionError.CardRevoked)` or `Left(PermissionError.CardExpired)`.
  *
  * A card is affine. `revoke`, `install`, [[Card.release]] and sending the card
  * as an RPC argument or result move it; every later use throws

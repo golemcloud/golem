@@ -64,13 +64,16 @@ traps stay traps.
 | `permissions.walletVersion()` | Wallet version; changes whenever the set of installed cards changes. |
 | `permissions.deriveFromWallet(bounds, lifespan?)` | New card from a single wallet card. |
 | `permissions.deriveScope(parents, bounds)` | New invocation-local `ScopeCard`. Borrows the parents (persistent or scope cards). |
-| `card.id()`, `card.parents()`, `card.expiresAt()` | Borrow. Trap when the host no longer knows the card. A scope card's `expiresAt()` is the earliest expiry of its root cards. |
+| `card.id()`, `card.parents()`, `card.expiresAt()` | Borrow. Trap when the host no longer knows the card, or when its card is revoked or expired. A scope card's `expiresAt()` is the earliest expiry of its root cards. |
 | `card.inspect()` | Borrow. Returns the `CardView` (four grant lists). Needs `card:inspect`. |
 | `card.derive(bounds, lifespan?)` | Borrow. New narrower child card. Needs `card:derive`. |
 | `card.revoke()` | **Moves** the card. Revokes it and every card derived from it; returns the revoked count. |
 | `card.install(holder)` | **Moves** the card into another agent's wallet. |
 | `card.release()` | **Moves** the card. Drops this agent's handle without revoking it. |
 | `permissions.listModules()`, `permissions.validateGrant(grant)` | Kernel classes, verbs and grant validation. |
+
+`inspect`, `derive`, `deriveScope` and `install` on a card that is revoked or expired return a
+`card-revoked` or `card-expired` `PermissionError`, so `inspect` detects revocation.
 
 `revoke` and `install` move the card before the host call, because the host drops the handle even
 when the call fails. Any later use of a moved card throws; check with `card.isMoved()`.
