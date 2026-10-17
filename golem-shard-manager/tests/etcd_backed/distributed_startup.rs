@@ -905,24 +905,67 @@ async fn write_state_with_executor(etcd: &DockerEtcd, addr: ExecutorAddr) {
 #[tracing::instrument(skip_all)]
 // Winning and then failing leaves the deployment down twice over: this replica is gone but its
 // lease still names it the leader, and every replica shares the configuration that failed.
+//
+// The failure is a task of the caller's that dies once etcd names this replica the leader, while
+// the startup is held by the initial health check: that is a failure after the win, and the only
+// way out of the held startup is the supervision of the tasks.
 async fn a_startup_failure_after_winning_releases_the_leadership(etcd: &Arc<DockerEtcd>) {
     wipe_state(etcd).await;
     await_election_idle(etcd).await;
 
-    // Wildcard rather than 127.0.0.1, which is what `run()` binds: on macOS a loopback listener
-    // does not collide with a wildcard bind and the startup would simply succeed.
-    let occupied = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))
+    // Accepts and then says nothing, so the initial health check against it holds the startup for
+    // its whole timeout, and its lease was granted long ago, so the check cannot be skipped.
+    let silent_executor = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .await
-        .expect("Cannot occupy a port for the test");
-    let occupied_port = occupied
+        .expect("Cannot bind the stand-in executor");
+    let silent_addr = silent_executor
         .local_addr()
-        .expect("The occupied listener should report its port")
-        .port();
+        .expect("The stand-in executor should report its address");
+    write_state_with_executor(
+        etcd,
+        ExecutorAddr {
+            ip: silent_addr.ip(),
+            port: silent_addr.port(),
+        },
+    )
+    .await;
 
-    let mut config = distributed_config(etcd);
-    config.grpc.port = occupied_port;
+    let config = ShardManagerConfig {
+        initial_health_check_timeout: Duration::from_secs(5),
+        ..distributed_config(etcd)
+    };
 
+    let (leader_seen, leader_was_seen) = oneshot::channel();
     let mut join_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
+    join_set.spawn({
+        let etcd_url = etcd.client_url();
+        async move {
+            // The health check reaching the stand-in executor is what proves that the startup is
+            // past the election and held by it, so the failure below lands in a startup that is
+            // still running. Kept open so that the check keeps waiting.
+            let (_health_check, _) = timeout(STARTUP_TIMEOUT, silent_executor.accept())
+                .await
+                .map_err(|_| anyhow!("the new leader never reached its initial health check"))??;
+
+            let campaigners = etcd_client::Client::connect([etcd_url], None)
+                .await?
+                .kv_client()
+                .get(
+                    format!("{LEADER_ELECTION_NAME}/"),
+                    Some(etcd_client::GetOptions::new().with_prefix()),
+                )
+                .await?
+                .kvs()
+                .len();
+            anyhow::ensure!(
+                campaigners == 1,
+                "exactly this replica should be in the election, but {campaigners} are"
+            );
+            let _ = leader_seen.send(());
+            Err(anyhow!("simulated task failure after the win"))
+        }
+    });
+
     let result = timeout(
         STARTUP_TIMEOUT,
         golem_shard_manager::run(
@@ -935,18 +978,21 @@ async fn a_startup_failure_after_winning_releases_the_leadership(etcd: &Arc<Dock
         ),
     )
     .await
-    .expect("The replica should fail at its gRPC bind rather than hang");
+    .expect("The startup should end when a task fails, not wait out its health check");
     join_set.abort_all();
+
+    leader_was_seen
+        .await
+        .expect("etcd should have named the replica the leader before the startup failed");
 
     let err = result
         .err()
-        .expect("Binding a port that is already taken must fail startup");
+        .expect("A task that failed must fail the startup, not be swallowed");
     let message = format!("{err:#}");
     assert!(
-        message.contains("in use"),
-        "The startup should have failed at the gRPC bind, which is the failure this test arranges \
-         to happen after the campaign. Anything else means the replica never got that far, and \
-         what follows would prove nothing. Was: {message}"
+        message.contains("simulated task failure after the win"),
+        "The startup should have failed over the task that died. Anything else means it ended for \
+         another reason, and what follows would prove nothing. Was: {message}"
     );
 
     await_election_empty(
