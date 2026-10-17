@@ -1974,6 +1974,9 @@ jobs:
 
   docker-publish-router:
     runs-on: blacksmith
+    needs:
+      - docker-image-checks
+      - builtin-artifacts-release-tests
     if: github.event_name == 'release' && github.ref_type == 'tag'
     steps:
       - uses: actions/checkout@v5
