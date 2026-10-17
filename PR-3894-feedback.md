@@ -360,6 +360,15 @@ Findings 11-14 have separate linked comments.
     helper's generation as its policy revision;
     only that input was corrected and its exact revision assertion remains. The failed log is retained.
     The whole clock producer and remaining active consumers stay open.
+    The P2 input-poll cases remove compute/storage clock setup and the repeat-advance delay
+    loop, reusing the same test-owned flusher with only a shared-support visibility change. Memory
+    and repeated-memory-stop retain their existing normal-timer path without a new source/watch.
+    All original non-clock ensure/assert bodies remain, with full actual-mode prefixes added through
+    stop/repeated stop/reconstruction. Existing input/connect Start, terminal/result/key, effect,
+    refund, closed sampling and physical-cleanup checks stay strict. This helper has no elapsed8s
+    trigger assertion; its original limits remain. Build, scoped strict lint, formatting and source
+    audits pass. All P2 memory/compute/storage/repeated-stop cases and affected metering/support-move,
+    nonmatching/retry/tail regressions pass. The remaining consumers and full clock producer stay open.
   - [ ] Address the keyed filesystem metadata gate and remaining protocol ordering controls.
   - [ ] For any hook proposed to remain, document the otherwise untestable guarantee, minimal scope
     and why its scheduling changes do not invalidate the test. Existing main-owned hooks are not

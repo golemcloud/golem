@@ -373,6 +373,18 @@ physical-cleanup assertions remain, with complete actual-mode prefixes added. Th
 matrix and compute/retry/tail composition, full monthly library, strict all-target lint, formatting
 and browser verification pass. The whole clock producer and overall A1/F10/F11 remain open.
 
+The P2 input-poll cases reuse the same weak flusher, now in interruption test support. Only
+its compute/storage branches need it; memory and repeated-memory-stop already use ordinary timers
+and get no extra source/watch. Compute retains the negative prepaid check through real cadence
+before external exhaustion. Storage retains its exact original revision and post-wake proposal
+bound, with the virtual repeat-advance/ordering-delay loop removed. Existing target-inactive checks
+already cover cleanup, so only unused virtual receiver counts retire. Full stored prefixes now
+survive first stop, repeated stop and ordinary reconstruction in the actual mode. Every other
+original non-clock result, effect, poll Start, key, error, accounting and cleanup assertion remains.
+This helper has no eight-second elapsed-trigger bound; do not generalize that measurement origin
+to other matrices. All P2 memory/compute/storage/repeated-stop cases, affected metering consumers,
+nonmatching/retry/tail regressions, scoped strict lint, formatting and assertion/move audits pass.
+
 ### Root completion and live tail ownership
 
 `run_guest_call_settled` emits "Guest call root completed; settling tail work" immediately after
