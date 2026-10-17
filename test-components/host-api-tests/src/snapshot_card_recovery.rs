@@ -321,6 +321,19 @@ pub trait ScopeCardAgent {
 
     fn wallet_card_count(&self) -> u32;
 
+    /// Reads the wallet `reads` times with no other host call between the
+    /// reads, keeps the card count of each read in agent state and returns
+    /// them.
+    fn remember_wallet_card_counts(&self, reads: u32) -> Vec<u64>;
+
+    /// Reads the wallet version `reads` times with no other host call between
+    /// the reads, keeps the generation of each read in agent state and returns
+    /// them.
+    fn remember_wallet_generations(&self, reads: u32) -> Vec<u64>;
+
+    /// The observations kept by the last `remember_wallet_*` call.
+    fn remembered_wallet_observations(&self) -> Vec<u64>;
+
     fn authorize_repeatedly(&self, repetitions: u32) -> bool;
 
     fn inspect_repeatedly(&self, repetitions: u32) -> bool;
@@ -458,6 +471,7 @@ struct KeptScopeCard {
 pub struct ScopeCardAgentImpl {
     _name: String,
     kept_scope_card: RefCell<Option<KeptScopeCard>>,
+    wallet_observations: RefCell<Vec<u64>>,
 }
 
 #[agent_implementation]
@@ -466,6 +480,7 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         Self {
             _name: name,
             kept_scope_card: RefCell::new(None),
+            wallet_observations: RefCell::new(Vec::new()),
         }
     }
 
@@ -725,6 +740,26 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
 
     fn wallet_card_count(&self) -> u32 {
         permissions::wallet().len() as u32
+    }
+
+    fn remember_wallet_card_counts(&self, reads: u32) -> Vec<u64> {
+        let counts = (0..reads)
+            .map(|_| permissions::wallet().len() as u64)
+            .collect::<Vec<_>>();
+        *self.wallet_observations.borrow_mut() = counts.clone();
+        counts
+    }
+
+    fn remember_wallet_generations(&self, reads: u32) -> Vec<u64> {
+        let generations = (0..reads)
+            .map(|_| permissions::wallet_version().generation)
+            .collect::<Vec<_>>();
+        *self.wallet_observations.borrow_mut() = generations.clone();
+        generations
+    }
+
+    fn remembered_wallet_observations(&self) -> Vec<u64> {
+        self.wallet_observations.borrow().clone()
     }
 
     fn authorize_repeatedly(&self, repetitions: u32) -> bool {

@@ -45,9 +45,12 @@ use golem_common::model::entity::{
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::payload::{
-    HostRequest, HostRequestEntityInvocation, HostResponse, HostResponseEntityInvocation,
+    HostRequest, HostRequestEntityInvocation, HostRequestNoInput, HostResponse,
+    HostResponseEntityInvocation, HostResponsePermissionWallet,
 };
-use golem_common::model::oplog::{DurableFunctionType, OplogEntry, OplogIndex, OplogPayload};
+use golem_common::model::oplog::{
+    DurableFunctionType, DurableInvocationId, OplogEntry, OplogIndex, OplogPayload,
+};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::tool::{
@@ -316,6 +319,7 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
         .with_authority_wallet(wallet_cards.clone());
         stage_entity_boundary(&active, &scope).await?;
         let claim = if historical {
+            record_entity_self_wallet(&active, parent_start.next(), &wallet_cards).await?;
             finish_entity_boundary(&active, parent_start.next()).await?;
             active
                 .execution()
@@ -1428,6 +1432,48 @@ async fn stage_entity_boundary(
         })
         .await?;
     assert_eq!(index, scope.invocation_id().start_index());
+    Ok(())
+}
+
+async fn record_entity_self_wallet(
+    active: &ActiveAgent<TestWorkerCtx>,
+    entity_start_index: OplogIndex,
+    cards: &[StoredCard],
+) -> Result<(), WorkerExecutorError> {
+    let oplog = active.execution().oplog();
+    let start_index = oplog
+        .add(OplogEntry::Start {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            parent_start_index: Some(entity_start_index),
+            function_name: HostFunctionName::GolemPermissionsSelfWallet,
+            invocation_id: Some(DurableInvocationId::new(entity_start_index, 0)),
+            observational_owner: None,
+            request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
+                HostRequestNoInput {},
+            )))),
+            durable_function_type: DurableFunctionType::ReadLocal,
+            span_started: None,
+            denial: None,
+        })
+        .await?;
+    oplog
+        .add(OplogEntry::End {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            start_index,
+            response: Some(OplogPayload::Inline(Box::new(
+                HostResponse::PermissionWallet(HostResponsePermissionWallet {
+                    cards: cards
+                        .iter()
+                        .map(|card| golem_common::serialization::serialize(card).unwrap())
+                        .collect(),
+                    scope_card: None,
+                }),
+            ))),
+            forced_commit: false,
+            span_finished: None,
+            span_attributes: None,
+        })
+        .await?;
     Ok(())
 }
 
