@@ -128,8 +128,7 @@ func (HTTPTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// once the body terminal has been observed and the durable consume-body
 	// scope is finalized. A client must await it after EOF — exactly what the
 	// reference wasip3 client does (`StreamResult::Dropped => trailers.await`);
-	// returning without it lets the guest run ahead of the scope's End, which an
-	// enclosing atomic region then refuses to close over.
+	// returning without it lets the guest run ahead of durable scope completion.
 	bodyStream, trailers := httptypes.ResponseConsumeBody(resp, doneR)
 
 	response := &http.Response{

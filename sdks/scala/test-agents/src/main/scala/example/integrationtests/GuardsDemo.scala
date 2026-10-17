@@ -27,14 +27,14 @@ trait GuardsDemo extends BaseAgent {
 
   class Id(val value: String)
 
-  @description("Exercises block-scoped guards: withRetryPolicy, withIdempotenceMode, atomically.")
+  @description("Inspects retry policy visibility.")
   def guardsBlockDemo(): Future[String]
 
   @description(
-    "Exercises resource-style guards: useRetryPolicy, useIdempotenceMode, markAtomicOperation."
+    "Inspects named retry policies."
   )
   def guardsResourceDemo(): Future[String]
 
-  @description("Exercises oplog management: getOplogIndex, markBeginOperation, markEndOperation, oplogCommit.")
+  @description("Commits the oplog to replicas.")
   def oplogDemo(): Future[String]
 }

@@ -14,6 +14,7 @@
 
 use super::*;
 
+use crate::durable_host::durability::find_durable_call_trap_context;
 use golem_common::model::oplog::host_functions;
 use golem_common::model::oplog::{
     HostRequestNoInput, HostResponseMonotonicClockTimestamp, LogLevel,
@@ -31,7 +32,6 @@ fn durable_execution_state() -> DurableExecutionState {
     DurableExecutionState {
         is_live: true,
         snapshotting_mode: false,
-        assume_idempotence: true,
         max_in_function_retry_delay: Duration::from_secs(20),
     }
 }
@@ -163,20 +163,11 @@ fn live_unfinished_handle<P: DropPolicy>(
     start_idx: OplogIndex,
     sink: mpsc::UnboundedSender<DropEvent>,
 ) -> DurableCallSession<host_functions::MonotonicClockNow, P> {
-    live_unfinished_handle_with_atomic_region(start_idx, None, sink)
-}
-
-fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
-    start_idx: OplogIndex,
-    atomic_region: Option<OplogIndex>,
-    sink: mpsc::UnboundedSender<DropEvent>,
-) -> DurableCallSession<host_functions::MonotonicClockNow, P> {
     use crate::durable_host::durability::DurableExecutionState;
     use std::time::Duration;
     let durable_execution_state = DurableExecutionState {
         is_live: true,
         snapshotting_mode: false,
-        assume_idempotence: false,
         max_in_function_retry_delay: Duration::ZERO,
     };
     DurableCallSession {
@@ -187,15 +178,16 @@ fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
         request_upload: PendingUpload::already_durable(),
         replay: None,
         finished: false,
+        scope_replay_recovery: ScopeReplayRecovery::default().into(),
         cancellation_span_id: None,
         span_observer: None,
         parked_undelivered_replay: false,
+        host_internal_calls: false,
         execution_scope: CallExecutionScope {
             retry_from: start_idx,
             durable_scope: None,
             observational_owner: None,
             entity_parent_start_index: None,
-            atomic_lease: unregistered_atomic_lease(atomic_region, true),
             invocation_id: None,
         },
         retry: InFunctionRetryController::new(
@@ -228,7 +220,6 @@ fn synthetic_finished_handle_with_scope<P: DropPolicy>(
     let durable_execution_state = DurableExecutionState {
         is_live: true,
         snapshotting_mode: false,
-        assume_idempotence: false,
         max_in_function_retry_delay: Duration::ZERO,
     };
     let start_idx = scope.retry_from;
@@ -240,9 +231,11 @@ fn synthetic_finished_handle_with_scope<P: DropPolicy>(
         request_upload: PendingUpload::already_durable(),
         replay: None,
         finished: true,
+        scope_replay_recovery: ScopeReplayRecovery::default().into(),
         cancellation_span_id: None,
         span_observer: None,
         parked_undelivered_replay: false,
+        host_internal_calls: false,
         execution_scope: scope,
         retry: InFunctionRetryController::new(
             DurableFunctionType::ReadLocal,
@@ -306,11 +299,7 @@ async fn cleanup_after_terminal_keeps_live_permit_until_event_is_consumed() {
                 request_upload: PendingUpload::already_durable(),
                 span_finished: None,
                 span_observer: None,
-                atomic_lease: None,
-                trap_context: DurableCallTrapContext {
-                    retry_from: idx(4),
-                    in_atomic_region: false,
-                },
+                trap_context: DurableCallTrapContext { retry_from: idx(4) },
                 live_call_permit: Some(LiveCallPermit::new(counter.clone())),
             },
             NotCancellable::production_drop_sink(Some(tx.clone())),
@@ -322,7 +311,7 @@ async fn cleanup_after_terminal_keeps_live_permit_until_event_is_consumed() {
             let _ = gate_rx.await;
             Ok(())
         });
-        guard.cleanup_after_terminal(terminal, None, false);
+        guard.cleanup_after_terminal(terminal, None);
         assert_eq!(
             counter.load(Ordering::Acquire),
             1,
@@ -367,10 +356,7 @@ async fn live_delivery_token_with_teardown(
     CompletionDelivery {
         state: CompletionDeliveryState::Live(Box::new(LiveDelivery {
             marker: marker_record_over(oplog).await,
-            trap_context: DurableCallTrapContext {
-                retry_from: idx(1),
-                in_atomic_region: false,
-            },
+            trap_context: DurableCallTrapContext { retry_from: idx(1) },
             live_call_permit: Some(LiveCallPermit::new(permit_counter)),
             cleanup_sink: Some(cleanup_tx),
             pending_append: None,
@@ -535,9 +521,8 @@ async fn a_fenced_completion_marker_is_reported_rather_than_panicked() {
     }));
     let seed_oplog = Arc::new(InMemoryOplog::new());
     seed_oplog
-        .add(OplogEntry::NoOp {
+        .add(OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
-            entity_parent_start_index: None,
         })
         .await
         .unwrap();
@@ -579,9 +564,8 @@ async fn completion_delivery_markers_preserve_handoff_order() {
     let oplog = Arc::new(InMemoryOplog::new());
     let seed_oplog = Arc::new(InMemoryOplog::new());
     seed_oplog
-        .add(OplogEntry::NoOp {
+        .add(OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
-            entity_parent_start_index: None,
         })
         .await
         .unwrap();
@@ -680,6 +664,110 @@ async fn completion_delivery_armed_drop_records_marker_via_drain() {
 }
 
 #[test]
+async fn completion_delivery_terminal_failure_retains_call_attribution() {
+    let oplog = Arc::new(InMemoryOplog::new());
+    let counter = Arc::new(AtomicUsize::new(0));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let recorder = marker_record_over(oplog.clone()).await.recorder;
+    let context = DurableCallTrapContext {
+        retry_from: idx(47),
+    };
+    let mut delivery = CompletionDelivery::live(
+        idx(47),
+        recorder,
+        context,
+        tx,
+        LiveCallPermit::new(counter.clone()),
+        TeardownProbe::never(),
+    );
+    let terminal = tokio::spawn(async { Err(WorkerExecutorError::runtime("terminal refused")) });
+    let error: anyhow::Error = delivery.wait_terminal(terminal).await.unwrap_err().into();
+    assert_eq!(find_durable_call_trap_context(&error), Some(context));
+    assert!(matches!(
+        error.root_cause().downcast_ref::<WorkerExecutorError>(),
+        Some(WorkerExecutorError::Runtime { details }) if details == "terminal refused"
+    ));
+    drop(delivery);
+    assert_eq!(counter.load(Ordering::Acquire), 0);
+    assert!(rx.try_recv().is_err());
+    assert!(oplog.entries.lock().await.is_empty());
+}
+
+#[test]
+async fn completion_delivery_cancelled_terminal_wait_preserves_append_ownership() {
+    for (teardown, terminal_fails) in [(false, false), (true, false), (false, true)] {
+        let oplog = Arc::new(InMemoryOplog::new());
+        let counter = Arc::new(AtomicUsize::new(0));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let mut token = live_delivery_token_with_teardown(
+            oplog.clone(),
+            counter.clone(),
+            tx,
+            TeardownProbe::new(shutdown.clone(), Arc::new(|| false)),
+        )
+        .await;
+        let (release, gate) = tokio::sync::oneshot::channel();
+        let terminal_oplog = oplog.clone();
+        let terminal = tokio::spawn(async move {
+            gate.await.unwrap();
+            if terminal_fails {
+                return Err(WorkerExecutorError::runtime("terminal refused"));
+            }
+            terminal_oplog
+                .add(OplogEntry::End {
+                    timestamp: Timestamp::now_utc(),
+                    start_index: idx(1),
+                    response: None,
+                    forced_commit: false,
+                    span_finished: None,
+                    span_attributes: None,
+                })
+                .await?;
+            Ok(())
+        });
+        let mut finishing = Box::pin(token.wait_terminal(terminal));
+        assert!(futures::poll!(finishing.as_mut()).is_pending());
+        drop(finishing);
+        if teardown {
+            shutdown.cancel();
+        }
+        drop(token);
+        assert_eq!(counter.load(Ordering::Acquire), 1);
+        let DropEvent::AwaitCompletionMarker {
+            mut receipt,
+            live_call_permit,
+            ..
+        } = rx.try_recv().expect("settlement must retain the terminal")
+        else {
+            panic!("expected terminal settlement receipt");
+        };
+        let mut settlement = Box::pin(await_marker_receipt(receipt.as_mut().unwrap()));
+        assert!(futures::poll!(settlement.as_mut()).is_pending());
+        assert!(oplog.entries.lock().await.is_empty());
+        release.send(()).unwrap();
+        let result = settlement.await;
+        assert_eq!(result.is_err(), terminal_fails);
+        let entries = oplog.entries.lock().await;
+        if terminal_fails {
+            assert!(
+                entries.is_empty(),
+                "a failed End must not leave a discard marker"
+            );
+        } else if teardown {
+            assert!(matches!(entries.as_slice(), [OplogEntry::End { .. }]));
+        } else {
+            assert!(matches!(entries.as_slice(), [
+                OplogEntry::End { .. },
+                OplogEntry::CompletionDiscarded { start_index, .. }
+            ] if *start_index == idx(1)));
+        }
+        drop(live_call_permit);
+        assert_eq!(counter.load(Ordering::Acquire), 0);
+    }
+}
+
+#[test]
 async fn completion_delivery_armed_drop_during_teardown_leaves_end_markerless() {
     // A Store unload (simulated crash, interrupt, eviction) or an executor shutdown tears the
     // delivering future with the token still armed. The guest never observed the completion,
@@ -743,11 +831,7 @@ async fn terminal_guard_torn_during_teardown_keeps_cleanup_but_no_marker() {
                 request_upload: PendingUpload::already_durable(),
                 span_finished: None,
                 span_observer: None,
-                atomic_lease: None,
-                trap_context: DurableCallTrapContext {
-                    retry_from: idx(1),
-                    in_atomic_region: false,
-                },
+                trap_context: DurableCallTrapContext { retry_from: idx(1) },
                 live_call_permit: Some(LiveCallPermit::new(counter.clone())),
             },
             NotCancellable::production_drop_sink(Some(tx.clone())),
@@ -758,11 +842,7 @@ async fn terminal_guard_torn_during_teardown_keeps_cleanup_but_no_marker() {
             ),
         );
         let terminal = tokio::spawn(async { Ok(()) });
-        guard.cleanup_after_terminal(
-            terminal,
-            Some(marker_record_over(oplog.clone()).await),
-            true,
-        );
+        guard.cleanup_after_terminal(terminal, Some(marker_record_over(oplog.clone()).await));
         tearing_down.store(true, Ordering::Release);
     }
     let event = rx
@@ -897,7 +977,7 @@ async fn completion_delivery_replay_tokens_are_inert() {
     drop(CompletionDelivery::replay_discarded());
 }
 
-/// Builds an in-memory oplog `[NoOp, Start, End]` (a markerless completed call — the recorded
+/// Builds an in-memory oplog `[RecoverySucceeded, Start, End]` (a markerless completed call — the recorded
 /// run crashed after the `End` became durable but before delivery), a replay state over it with
 /// the call claimed and resolved (as `replay_access_deferred` guarantees), and the tail-gated
 /// token exactly as the deferred accessor replay path constructs one.
@@ -907,9 +987,8 @@ async fn tail_gated_token_over_crash_tail(
 ) -> (Arc<InMemoryOplog>, ReplayState, CompletionDelivery) {
     let oplog = Arc::new(InMemoryOplog::new());
     oplog
-        .add(OplogEntry::NoOp {
+        .add(OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
-            entity_parent_start_index: None,
         })
         .await
         .unwrap();
@@ -1088,17 +1167,19 @@ async fn marker_gated_preparation_keeps_tail_activity_until_delivery() {
 
     let (oplog, replay_state, mut token) = tail_gated_token_over_crash_tail(
         vec![
-            OplogEntry::BeginAtomicRegion {
+            OplogEntry::RemoveRetryPolicy {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
+                name: "test-policy".to_string(),
             },
             OplogEntry::CompletionDelivered {
                 timestamp: Timestamp::now_utc(),
                 start_index: idx(2),
             },
-            OplogEntry::NoOp {
+            OplogEntry::RemoveRetryPolicy {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
+                name: "test-policy".to_string(),
             },
         ],
         None,
@@ -1417,7 +1498,7 @@ async fn dropped_cancellable_call_records_cancelled_at_next_drain_point() {
     // snapshot; this test drives the drain's *recording step* directly
     // (`DroppedCall::append_cancelled_with_oplog`, shared by both production drains) and
     // asserts the durable outcome. Invoking a production drain itself, and the ctx-side
-    // effects (durable-scope close, atomic-region unregistration), require full-worker
+    // effects (durable-scope close), require full-worker
     // integration coverage.
     let oplog = Arc::new(InMemoryOplog::new());
     let start_idx = oplog
@@ -1573,10 +1654,8 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
             request_upload: PendingUpload::already_durable(),
             span_finished: None,
             span_observer: Some(span_observer.clone()),
-            atomic_lease: None,
             trap_context: DurableCallTrapContext {
                 retry_from: start_idx,
-                in_atomic_region: false,
             },
             live_call_permit: Some(LiveCallPermit::new(permit_counter.clone())),
         },
@@ -1739,7 +1818,7 @@ fn drop_cancellable_unfinished_enqueues_exactly_one_cancelled() {
     match rx.try_recv() {
         Ok(DropEvent::UnfinishedCancellable { call }) => {
             assert_eq!(call.start_idx(), idx(5));
-            assert_eq!(call.atomic_region(), None);
+            assert_eq!(call.trap_context().retry_from, idx(5));
         }
         other => panic!("expected one UnfinishedCancellable, got {other:?}"),
     }
@@ -1750,13 +1829,12 @@ fn drop_cancellable_unfinished_enqueues_exactly_one_cancelled() {
 fn drop_cancellable_unfinished_carries_call_owned_cancellation_state() {
     let (tx, mut rx) = mpsc::unbounded_channel();
     {
-        let _handle =
-            live_unfinished_handle_with_atomic_region::<Cancellable>(idx(5), Some(idx(2)), tx);
+        let _handle = live_unfinished_handle::<Cancellable>(idx(5), tx);
     }
     match rx.try_recv() {
         Ok(DropEvent::UnfinishedCancellable { call }) => {
             assert_eq!(call.start_idx(), idx(5));
-            assert_eq!(call.atomic_region(), Some(idx(2)));
+            assert_eq!(call.trap_context().retry_from, idx(5));
         }
         other => panic!("expected one UnfinishedCancellable, got {other:?}"),
     }
@@ -1864,10 +1942,8 @@ fn drop_after_finish_is_noop() {
 fn seam2_unfinished_cancellable_drops_emit_independent_call_snapshots() {
     let (tx, mut rx) = mpsc::unbounded_channel();
 
-    let handle_a =
-        live_unfinished_handle_with_atomic_region::<Cancellable>(idx(5), Some(idx(2)), tx.clone());
-    let handle_b =
-        live_unfinished_handle_with_atomic_region::<Cancellable>(idx(9), Some(idx(3)), tx);
+    let handle_a = live_unfinished_handle::<Cancellable>(idx(5), tx.clone());
+    let handle_b = live_unfinished_handle::<Cancellable>(idx(9), tx);
 
     drop(handle_a);
     drop(handle_b);
@@ -1875,14 +1951,14 @@ fn seam2_unfinished_cancellable_drops_emit_independent_call_snapshots() {
     match rx.try_recv() {
         Ok(DropEvent::UnfinishedCancellable { call }) => {
             assert_eq!(call.start_idx(), idx(5));
-            assert_eq!(call.atomic_region(), Some(idx(2)));
+            assert_eq!(call.trap_context().retry_from, idx(5));
         }
         other => panic!("expected first cancellable drop snapshot, got {other:?}"),
     }
     match rx.try_recv() {
         Ok(DropEvent::UnfinishedCancellable { call }) => {
             assert_eq!(call.start_idx(), idx(9));
-            assert_eq!(call.atomic_region(), Some(idx(3)));
+            assert_eq!(call.trap_context().retry_from, idx(9));
         }
         other => panic!("expected second cancellable drop snapshot, got {other:?}"),
     }
@@ -1909,11 +1985,6 @@ fn abandon_for_trap_suppresses_unfinished_drop() {
 struct RetryHostProbe {
     current_retry_point: OplogIndex,
     appended_retry_from: Vec<OplogIndex>,
-    appended_inside_atomic_region: Vec<bool>,
-    /// Atomic region begin indices the inner host reports as having recorded side effects.
-    regions_with_side_effects: Vec<OplogIndex>,
-    /// Ambient outermost-region side-effect state, used by the unscoped fallback path.
-    outermost_has_side_effects: bool,
 }
 
 impl RetryHostProbe {
@@ -1921,19 +1992,12 @@ impl RetryHostProbe {
         Self {
             current_retry_point,
             appended_retry_from: Vec::new(),
-            appended_inside_atomic_region: Vec::new(),
-            regions_with_side_effects: Vec::new(),
-            outermost_has_side_effects: false,
         }
     }
 }
 
 #[async_trait]
 impl InFunctionRetryHost for RetryHostProbe {
-    fn in_atomic_region(&self) -> bool {
-        false
-    }
-
     fn current_retry_point(&self) -> OplogIndex {
         self.current_retry_point
     }
@@ -1968,23 +2032,12 @@ impl InFunctionRetryHost for RetryHostProbe {
         durable_execution_state()
     }
 
-    fn atomic_region_has_side_effects_for(&self, begin_index: OplogIndex) -> bool {
-        self.regions_with_side_effects.contains(&begin_index)
-    }
-
-    fn retry_context_atomic_region_had_side_effects(&self) -> bool {
-        self.outermost_has_side_effects
-    }
-
     async fn append_retry_error_entry(
         &mut self,
         retry_from: OplogIndex,
-        inside_atomic_region: bool,
         _retry_policy_state: Option<golem_common::model::RetryPolicyState>,
     ) -> Result<(), crate::services::oplog::OplogError> {
         self.appended_retry_from.push(retry_from);
-        self.appended_inside_atomic_region
-            .push(inside_atomic_region);
         Ok(())
     }
 }
@@ -1997,32 +2050,12 @@ fn scoped_retry_host_uses_call_retry_point_not_inner_current() {
         durable_scope: Some(idx(40)),
         observational_owner: None,
         entity_parent_start_index: None,
-        atomic_lease: None,
         invocation_id: None,
     };
 
     let retry_host = ScopedRetryHost::new(&mut inner, &scope);
 
-    assert!(!retry_host.in_atomic_region());
     assert_eq!(retry_host.current_retry_point(), idx(42));
-}
-
-#[test]
-fn scoped_retry_host_uses_call_atomic_region_as_retry_point() {
-    let mut inner = RetryHostProbe::new(idx(99));
-    let scope = CallExecutionScope {
-        retry_from: idx(42),
-        durable_scope: Some(idx(40)),
-        observational_owner: None,
-        entity_parent_start_index: None,
-        atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
-        invocation_id: None,
-    };
-
-    let retry_host = ScopedRetryHost::new(&mut inner, &scope);
-
-    assert!(retry_host.in_atomic_region());
-    assert_eq!(retry_host.current_retry_point(), idx(7));
 }
 
 #[test]
@@ -2033,7 +2066,6 @@ async fn scoped_retry_host_trap_retry_uses_call_retry_point() {
         durable_scope: Some(idx(40)),
         observational_owner: None,
         entity_parent_start_index: None,
-        atomic_lease: None,
         invocation_id: None,
     };
     let mut retry_host = ScopedRetryHost::new(&mut inner, &scope);
@@ -2059,7 +2091,6 @@ async fn seam2_overlapping_semantic_traps_carry_independent_retry_points() {
         durable_scope: Some(idx(40)),
         observational_owner: None,
         entity_parent_start_index: None,
-        atomic_lease: None,
         invocation_id: None,
     };
     let scope_b = CallExecutionScope {
@@ -2067,7 +2098,6 @@ async fn seam2_overlapping_semantic_traps_carry_independent_retry_points() {
         durable_scope: Some(idx(70)),
         observational_owner: None,
         entity_parent_start_index: None,
-        atomic_lease: None,
         invocation_id: None,
     };
 
@@ -2102,84 +2132,27 @@ async fn seam2_overlapping_semantic_traps_carry_independent_retry_points() {
     assert_eq!(override_b.retry_from, idx(77));
 }
 
-#[test]
-async fn seam2_overlapping_atomic_region_traps_use_initiation_membership() {
-    let mut inner = RetryHostProbe::new(idx(99));
-    let scope_a = CallExecutionScope {
-        retry_from: idx(42),
-        durable_scope: Some(idx(40)),
-        observational_owner: None,
-        entity_parent_start_index: None,
-        atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
-        invocation_id: None,
-    };
-    let scope_b = CallExecutionScope {
-        retry_from: idx(77),
-        durable_scope: Some(idx(70)),
-        observational_owner: None,
-        entity_parent_start_index: None,
-        atomic_lease: unregistered_atomic_lease(Some(idx(8)), true),
-        invocation_id: None,
-    };
-
-    let error_a = {
-        let mut retry_host = ScopedRetryHost::new(&mut inner, &scope_a);
-        try_trigger_host_trap_retry(
-            &mut retry_host,
-            Error::msg("transient failure a"),
-            RetryProperties::new(),
-        )
-        .await
-        .expect_err("call A should trap for oplog-level retry")
-    };
-
-    let error_b = {
-        let mut retry_host = ScopedRetryHost::new(&mut inner, &scope_b);
-        try_trigger_host_trap_retry(
-            &mut retry_host,
-            Error::msg("transient failure b"),
-            RetryProperties::new(),
-        )
-        .await
-        .expect_err("call B should trap for oplog-level retry")
-    };
-
-    let override_a = crate::durable_host::durability::find_semantic_trap_retry_override(&error_a)
-        .expect("call A trap must carry a semantic retry override");
-    let override_b = crate::durable_host::durability::find_semantic_trap_retry_override(&error_b)
-        .expect("call B trap must carry a semantic retry override");
-
-    assert_eq!(override_a.retry_from, idx(7));
-    assert_eq!(override_b.retry_from, idx(8));
-}
-
 // ---- terminal-step failures ----
 
 /// Classifies a terminal-step failure the way the invocation loop does, with a deliberately
-/// *hostile* ambient fallback (a retry point and atomic-region membership belonging to no real
-/// call). A call-owned [`DurableCallTrapContext`] marker carried by the error must override both
-/// fallbacks; if the terminal path lost the marker, the classifier would silently adopt these
-/// ambient values instead.
+/// *hostile* ambient retry point belonging to no real call. A call-owned
+/// [`DurableCallTrapContext`] marker must override the ambient fallback.
 fn classify_with_hostile_ambient(error: &anyhow::Error) -> crate::model::TrapType {
     crate::model::TrapType::from_error::<crate::workerctx::default::Context>(
         error,
         idx(99),
-        true,
-        false,
         golem_common::model::agent::AgentMode::Durable,
     )
 }
 
 #[test]
 fn seam2_terminal_failure_carries_call_owned_trap_context() {
-    // Both terminal-step errors and explicit host traps retain the call's scope and atomic
-    // region membership, rather than an overlapping call's ambient state.
+    // Both terminal-step errors and explicit host traps retain the call's retry point.
     let scope = CallExecutionScope {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
         observational_owner: None,
         entity_parent_start_index: None,
-        atomic_lease: None,
         invocation_id: None,
     };
     let mut handle = synthetic_finished_handle_with_scope::<Cancellable>(scope);
@@ -2192,14 +2165,8 @@ fn seam2_terminal_failure_carries_call_owned_trap_context() {
 
     for error in [terminal_error, trap_error] {
         match classify_with_hostile_ambient(&error) {
-            crate::model::TrapType::Error {
-                retry_from,
-                in_atomic_region,
-                ..
-            } => {
-                // Call-owned (idx 42, non-atomic) wins over hostile ambient (idx 99, atomic).
+            crate::model::TrapType::Error { retry_from, .. } => {
                 assert_eq!(retry_from, idx(42));
-                assert!(!in_atomic_region);
             }
             other => panic!("expected TrapType::Error, got {other:?}"),
         }
@@ -2228,15 +2195,14 @@ fn seam2_suspend_trap_remains_interrupt_without_cancellation() {
 #[test]
 fn seam2_overlapping_terminal_failures_carry_independent_trap_contexts() {
     // Two durable calls overlap in flight and share the same ambient worker state. Each one's
-    // terminal-step failure must still be classified against its OWN retry point and
-    // atomic-region membership. Without the call-owned marker these would fall back to that
+    // terminal-step failure must still be classified against its OWN retry point.
+    // Without the call-owned marker these would fall back to that
     // shared ambient state, so an overlapping sibling could clobber the grouping.
     let scope_a = CallExecutionScope {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
         observational_owner: None,
         entity_parent_start_index: None,
-        atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
         invocation_id: None,
     };
     let scope_b = CallExecutionScope {
@@ -2244,7 +2210,6 @@ fn seam2_overlapping_terminal_failures_carry_independent_trap_contexts() {
         durable_scope: Some(idx(70)),
         observational_owner: None,
         entity_parent_start_index: None,
-        atomic_lease: None,
         invocation_id: None,
     };
     let handle_a = synthetic_finished_handle_with_scope::<Cancellable>(scope_a);
@@ -2257,27 +2222,14 @@ fn seam2_overlapping_terminal_failures_carry_independent_trap_contexts() {
 
     // Both classified against the SAME hostile ambient state, yet each keeps its own grouping.
     match classify_with_hostile_ambient(&error_a) {
-        crate::model::TrapType::Error {
-            retry_from,
-            in_atomic_region,
-            ..
-        } => {
-            // Call A was initiated inside an atomic region: the whole region retries from its
-            // begin index (idx 7) and membership is recorded.
-            assert_eq!(retry_from, idx(7));
-            assert!(in_atomic_region);
+        crate::model::TrapType::Error { retry_from, .. } => {
+            assert_eq!(retry_from, idx(42));
         }
         other => panic!("expected TrapType::Error for call A, got {other:?}"),
     }
     match classify_with_hostile_ambient(&error_b) {
-        crate::model::TrapType::Error {
-            retry_from,
-            in_atomic_region,
-            ..
-        } => {
-            // Call B was not in an atomic region: it retries from its own scope (idx 77).
+        crate::model::TrapType::Error { retry_from, .. } => {
             assert_eq!(retry_from, idx(77));
-            assert!(!in_atomic_region);
         }
         other => panic!("expected TrapType::Error for call B, got {other:?}"),
     }
@@ -2290,58 +2242,39 @@ fn seam2_dropped_call_drain_failure_uses_dropped_call_trap_context() {
     // *dropped* call's captured context, not the drainer's ambient state. `DroppedCall::trap_context`
     // carries that captured classification; the drain wraps failures with it via
     // `TerminalCallError`.
-    // An atomic dropped call: its own context (idx 3, atomic) must win over the hostile ambient.
-    let dropped_atomic = DroppedCall {
+    let dropped_a = DroppedCall {
         start_idx: idx(5),
         begin_index: idx(4),
         function_type: DurableFunctionType::ReadRemote,
         request_upload: PendingUpload::already_durable(),
         span_finished: None,
         span_observer: None,
-        atomic_lease: unregistered_atomic_lease(Some(idx(3)), true),
-        trap_context: DurableCallTrapContext {
-            retry_from: idx(3),
-            in_atomic_region: true,
-        },
+        trap_context: DurableCallTrapContext { retry_from: idx(4) },
         live_call_permit: None,
     };
-    // A non-atomic dropped call: its membership (false) must win over the hostile ambient's
-    // `in_atomic_region = true`, so the membership assertion is independent of the retry point.
-    let dropped_non_atomic = DroppedCall {
+    let dropped_b = DroppedCall {
         start_idx: idx(8),
         begin_index: idx(8),
         function_type: DurableFunctionType::ReadRemote,
         request_upload: PendingUpload::already_durable(),
         span_finished: None,
         span_observer: None,
-        atomic_lease: None,
-        trap_context: DurableCallTrapContext {
-            retry_from: idx(8),
-            in_atomic_region: false,
-        },
+        trap_context: DurableCallTrapContext { retry_from: idx(8) },
         live_call_permit: None,
     };
 
-    for (dropped, expected_retry, expected_atomic) in [
-        (dropped_atomic, idx(3), true),
-        (dropped_non_atomic, idx(8), false),
-    ] {
+    for (dropped, expected_retry) in [(dropped_a, idx(4)), (dropped_b, idx(8))] {
         let error: anyhow::Error = TerminalCallError::new(
             WorkerExecutorError::runtime("cancellation drain failed"),
             dropped.trap_context(),
         )
         .into();
 
-        // `classify_with_hostile_ambient` supplies idx(99)/atomic-membership-true as the
+        // `classify_with_hostile_ambient` supplies idx(99) as the
         // drainer's ambient state; the dropped call's own context must win.
         match classify_with_hostile_ambient(&error) {
-            crate::model::TrapType::Error {
-                retry_from,
-                in_atomic_region,
-                ..
-            } => {
+            crate::model::TrapType::Error { retry_from, .. } => {
                 assert_eq!(retry_from, expected_retry);
-                assert_eq!(in_atomic_region, expected_atomic);
             }
             other => panic!("expected TrapType::Error, got {other:?}"),
         }
@@ -2354,55 +2287,47 @@ fn seam2_dropped_call_drain_failure_uses_dropped_call_trap_context() {
 fn begun_execution_scope_uses_parent_scope_as_retry_from() {
     let begun = BegunCallExecutionScope {
         parent_start_index: Some(idx(10)),
-        atomic_region: Some(idx(2)),
         observational_owner: None,
         invocation_id: None,
         entity_parent_start_index: None,
     };
 
-    let lease = unregistered_atomic_lease(begun.atomic_region, true);
-    let scope = begun.finish(idx(11), lease);
+    let scope = begun.finish(idx(11));
 
     assert_eq!(scope.retry_from, idx(10));
     assert_eq!(scope.durable_scope, Some(idx(10)));
-    assert_eq!(scope.atomic_region(), Some(idx(2)));
 }
 
 #[test]
 fn begun_execution_scope_uses_call_start_as_retry_from_when_unscoped() {
     let begun = BegunCallExecutionScope {
         parent_start_index: None,
-        atomic_region: None,
         observational_owner: None,
         invocation_id: None,
         entity_parent_start_index: None,
     };
 
-    let scope = begun.finish(idx(12), None);
+    let scope = begun.finish(idx(12));
 
     assert_eq!(scope.retry_from, idx(12));
     assert_eq!(scope.durable_scope, None);
-    assert_eq!(scope.atomic_region(), None);
 }
 
 #[test]
 fn begun_observational_scope_uses_custom_owner_as_retry_from() {
     let begun = BegunCallExecutionScope {
         parent_start_index: Some(idx(10)),
-        atomic_region: Some(idx(2)),
         observational_owner: Some(idx(7)),
         invocation_id: None,
         entity_parent_start_index: None,
     };
 
-    let lease = unregistered_atomic_lease(begun.atomic_region, true);
-    let scope = begun.finish(idx(11), lease);
+    let scope = begun.finish(idx(11));
 
     assert_eq!(scope.retry_from, idx(7));
     assert_eq!(scope.trap_retry_point(), idx(7));
     assert_eq!(scope.durable_scope, Some(idx(10)));
     assert_eq!(scope.observational_owner, Some(idx(7)));
-    assert_eq!(scope.atomic_region(), Some(idx(2)));
 }
 
 #[test]
@@ -2412,7 +2337,6 @@ fn call_execution_scope_owns_call_retry_point() {
         durable_scope: Some(idx(40)),
         observational_owner: None,
         entity_parent_start_index: None,
-        atomic_lease: None,
         invocation_id: None,
     };
 
@@ -2425,13 +2349,12 @@ fn call_execution_scope_owns_call_retry_point() {
 fn can_reexecute_matches_internal_retry_eligibility() {
     use crate::durable_host::durability::{DurableExecutionState, InFunctionRetryController};
 
-    fn controller(ft: DurableFunctionType, assume_idempotence: bool) -> InFunctionRetryController {
+    fn controller(ft: DurableFunctionType) -> InFunctionRetryController {
         InFunctionRetryController::new(
             ft,
             DurableExecutionState {
                 is_live: true,
                 snapshotting_mode: false,
-                assume_idempotence,
                 max_in_function_retry_delay: Duration::ZERO,
             },
             "test:fn",
@@ -2439,44 +2362,10 @@ fn can_reexecute_matches_internal_retry_eligibility() {
     }
 
     // Reads and local/idempotent writes are safe to re-execute on an incomplete Start.
-    assert!(controller(DurableFunctionType::ReadLocal, false).can_reexecute_on_incomplete_replay());
-    assert!(
-        controller(DurableFunctionType::ReadRemote, false).can_reexecute_on_incomplete_replay()
-    );
-    assert!(
-        controller(DurableFunctionType::WriteLocal, false).can_reexecute_on_incomplete_replay()
-    );
-    assert!(
-        controller(DurableFunctionType::WriteRemote, true).can_reexecute_on_incomplete_replay()
-    );
-
-    // Non-idempotent / batched / transaction writes are not — neither the `None` (scope-opening)
-    // nor the `Some(begin_index)` (in-scope host call) variants. The `Some(..)` variants are the
-    // ones a migrated batched/transaction host call carries, so a lone committed host-call
-    // `Start` for them must hard-error on incomplete replay rather than re-execute and risk
-    // duplicating an external write (`DurableCallSession::replay` Incomplete arm).
-    assert!(
-        !controller(DurableFunctionType::WriteRemote, false).can_reexecute_on_incomplete_replay()
-    );
-    assert!(
-        !controller(DurableFunctionType::WriteRemoteBatched(None), true)
-            .can_reexecute_on_incomplete_replay()
-    );
-    assert!(
-        !controller(DurableFunctionType::WriteRemoteBatched(Some(idx(7))), true)
-            .can_reexecute_on_incomplete_replay()
-    );
-    assert!(
-        !controller(DurableFunctionType::WriteRemoteTransaction(None), true)
-            .can_reexecute_on_incomplete_replay()
-    );
-    assert!(
-        !controller(
-            DurableFunctionType::WriteRemoteTransaction(Some(idx(9))),
-            true
-        )
-        .can_reexecute_on_incomplete_replay()
-    );
+    assert!(controller(DurableFunctionType::ReadLocal).can_reexecute_on_incomplete_replay());
+    assert!(controller(DurableFunctionType::ReadRemote).can_reexecute_on_incomplete_replay());
+    assert!(controller(DurableFunctionType::WriteLocal).can_reexecute_on_incomplete_replay());
+    assert!(controller(DurableFunctionType::WriteRemote).can_reexecute_on_incomplete_replay());
 }
 
 // ---- replay resolution classification ----
@@ -2664,8 +2553,6 @@ async fn access_terminal_effect_survives_waiter_drop_and_requires_commit() {
         let DropEvent::UnfinishedCancellable { mut call } = rx.try_recv().unwrap() else {
             panic!("expected unfinished call");
         };
-        let lease = Arc::new(AtomicRegionLease::new(idx(2), true));
-        call.atomic_lease = Some(lease.clone());
         let counter = Arc::new(AtomicUsize::new(0));
         call.live_call_permit = Some(LiveCallPermit::new(counter.clone()));
         let mut guard = AccessTerminalGuard::<Cancellable>::new(
@@ -2756,13 +2643,11 @@ async fn access_terminal_effect_survives_waiter_drop_and_requires_commit() {
                 ))
                 .is_ok()
         );
-        guard.cleanup_after_terminal(terminal, Some(marker), true);
+        guard.cleanup_after_terminal(terminal, Some(marker));
         drop(worker);
         drop(guard);
         let DropEvent::CleanupAfterTerminal {
             terminal: Some(terminal),
-            atomic_lease,
-            successful_end,
             live_call_permit,
             ..
         } = rx.try_recv().unwrap()
@@ -2772,8 +2657,6 @@ async fn access_terminal_effect_survives_waiter_drop_and_requires_commit() {
         assert_eq!(producer.controller().metadata().buffered_bytes, 7);
         assert!(worker_weak.upgrade().is_some());
         assert_eq!(counter.load(Ordering::Acquire), 1);
-        assert!(successful_end);
-        lease.transfer(Some(idx(1)));
         let shutdown = tasks.stop_and_wait();
         tokio::pin!(shutdown);
         assert!(futures::poll!(shutdown.as_mut()).is_pending());
@@ -2818,17 +2701,6 @@ async fn access_terminal_effect_survives_waiter_drop_and_requires_commit() {
             assert!(worker_weak.upgrade().is_some());
             cleanup_tx.send(()).unwrap();
             sealed.await;
-        }
-        if result.is_ok() {
-            let mut regions = vec![
-                crate::durable_host::ActiveAtomicRegion::new(idx(1), idx(1)),
-                crate::durable_host::ActiveAtomicRegion::new(idx(2), idx(2)),
-            ];
-            finish_terminal_atomic_region(&mut regions, atomic_lease.as_deref(), successful_end)
-                .unwrap();
-            assert!(regions[0].has_side_effects);
-            assert!(!regions[1].has_side_effects);
-            assert_eq!(lease.owner(), None);
         }
         shutdown.await.unwrap();
         assert!(worker_weak.upgrade().is_none());

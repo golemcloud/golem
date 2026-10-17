@@ -511,7 +511,6 @@ dependencies = [
  "serde",
  "serde_json",
  "time",
- "wasi",
  "wasi-fetch",
  "wasi-logger",
  "wit-bindgen 0.59.0",
@@ -1236,15 +1235,6 @@ dependencies = [
  "serde_core",
  "sha1_smol",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "wasi"
-version = "0.14.7+wasi-0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "883478de20367e224c0090af9cf5f9fa85bed63a95c1abf3afc5c083ebc06e8c"
-dependencies = [
- "wasip2",
 ]
 
 [[package]]

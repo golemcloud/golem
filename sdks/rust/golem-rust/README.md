@@ -4,6 +4,30 @@ A library that help writing [Golem](https://golem.cloud) programs by providing h
 wrappers for Golem's runtime APIs, including functions for defining and performing operations
 transactionally.
 
+## Saga transactions
+
+`fallible_transaction` returns after one attempt and compensation. Use
+`infallible_transaction` to retry a fully compensated failure with the host's
+bounded saga retry policy. Both functions return `Result<Out, TransactionFailure<Err>>`.
+Return operation failures as `Result`, and propagate them with `?` in the body.
+
+Successful operations register compensations. A failed attempt runs them in
+reverse order. A compensation failure returns `FailedAndRolledBackPartially`
+immediately; the SDK does not repeat partly compensated side effects.
+`RetryExhausted` retains the last operation error. `RetryPolicyError` retains
+that error and the host's policy error, and never substitutes immediate retries.
+
+The SDK resolves policies with verb `saga`, the agent URN as the noun,
+`attempt` starting at 1 for the first failed attempt, and
+`error-kind` set to `operation-error`. No transaction name is available in this API.
+Reading the agent identity uses `get_self_metadata` and requires self-view
+permission. An identity lookup failure returns `RetryPolicyError`.
+No matching policy selects the configured default. The host rejects unbounded
+policies and changed effective policies rather than resetting the retry budget.
+It records decisions, jitter, and policy errors for replay. The SDK carries the
+opaque continuation between compensated failures and uses the durable clock and
+timer; elapsed time includes body execution, compensation, and waits.
+
 ## Outgoing HTTP
 
 Use `golem_rust::http` for WASI HTTP p3 requests in async agent methods. No separate
@@ -75,6 +99,7 @@ schedule and applied to arbitrary async user code:
 
 ```rust
 let raw = resolve_retry_policy("send", "email://welcome", &context)
+    .map_err(std::io::Error::other)?
     .expect("matching named policy");
 let schedule = RetrySchedule::try_from(&raw)?;
 
@@ -100,6 +125,22 @@ RetrySchedule::try_from(&raw.policy)?
 `RetrySchedule` is a user-space guest loop. It does not install a policy or create executor
 `RetryAttempt` entries, and its attempts are not one host-managed retry sequence. Host calls made
 by the loop retain their normal durable replay and suspension behavior.
+
+## Custom durable operations
+
+`golem_rust::durability::Durability` is for library code that turns an otherwise raw operation
+into a durable call. `new` encodes the request but does not begin execution or observe the call.
+Synchronous runners begin when called; async runners begin and observe on their first poll.
+Dropping an unpolled runner opens no custom invocation. Code between construction and execution
+is outside that operation.
+
+Async runners install their custom scope around polling and destruction, then restore the actual
+caller's scope. Concurrent futures can run sibling operations, including borrowed and non-`Send`
+bodies. Nested operations must finish or be dropped before the parent finishes. Await nested work
+inside the body; detached `spawn_local` work does not automatically acquire the custom scope.
+Body resources are destroyed before the response is recorded. Dropping an unfinished operation
+leaves it incomplete, so recovery can re-execute its whole body; make repeated external effects
+safe. A Rust panic on the default `wasm32-wasip2` target aborts rather than running drop cleanup.
 
 ## External Durable Streams
 
@@ -175,9 +216,8 @@ Transient transport, timeout, 429 and unavailable errors use bounded retries
 and durable timers, respecting Retry-After; protocol/conflict errors do not.
 An active bounded HTTP request remains resident; idle/retry timers can suspend.
 
-The SDK does not change Golem's idempotence mode. Explicitly disabling it retains
-fail-closed recovery for interrupted writes. Exactly-once external effects rely
-on the peer atomically persisting and retaining producer deduplication state.
+Exactly-once external effects rely on the peer atomically persisting and
+retaining producer deduplication state.
 Golem forks copy checkpoints, producer IDs, epochs and pending data: they do not
 call a Durable Streams fork API or create independent producers. Divergent
 branches can collide on the same tuple; a later acknowledged sequence is a typed

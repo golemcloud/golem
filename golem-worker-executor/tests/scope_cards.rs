@@ -29,8 +29,10 @@ use golem_common::model::card::{
 use golem_common::model::component::ComponentId;
 use golem_common::model::oplog::types::{SerializableP3SocketErrorCode, SerializableRpcError};
 use golem_common::model::oplog::{
-    HostRequestGolemRpcActivate, HostResponse, HostResponseGolemRpcActivate,
-    HostResponseP3SocketsConnect, OplogIndex, PublicOplogEntry, PublicQueuedCardEvent,
+    HostRequestGolemRpcActivate, HostResponse, HostResponseFileSystemStat,
+    HostResponseGolemRpcActivate, HostResponseP3FileSystemStat,
+    HostResponseP3FileSystemWriteAdmission, HostResponseP3SocketsConnect,
+    HostResponsePermissionCheck, OplogIndex, PublicOplogEntry, PublicQueuedCardEvent,
 };
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, PendingCardEventRef, PromiseId};
@@ -50,7 +52,7 @@ use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, registry_test_card, start_with_overrides,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -2382,6 +2384,119 @@ async fn p3_tcp_default_denial_is_durable_and_does_not_reach_the_backend(
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
+async fn p2_tcp_connect_denial_is_recorded_and_does_not_reach_the_backend_on_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("Networking")
+        .store()
+        .await?;
+    let caller = agent_id!("Networking", "p2-tcp-permission-denial");
+    configure_scope_card_root(&authority, &component, &caller)?;
+    let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let invocation_key = IdempotencyKey::fresh();
+
+    let denied = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &invocation_key,
+            "probe_p2",
+            data_value!("tcp-start-connect", "", port, Vec::<u8>::new()),
+        )
+        .await?
+        .into_typed::<Result<String, String>>()?;
+    assert!(
+        denied
+            .as_ref()
+            .is_err_and(|error| normalized_error_contains(error, "accessdenied")),
+        "a P2 TCP connect without a grant must return AccessDenied, got {denied:?}"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), listener.accept())
+            .await
+            .is_err(),
+        "a denied connect must not reach the TCP backend"
+    );
+
+    let oplog = executor
+        .get_oplog(&caller_worker, OplogIndex::INITIAL)
+        .await?;
+    let check_start = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params)
+                if params.function_name == "sockets::tcp::permissions::check-connect" =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("the denied connect must record its permission check");
+    let check_response = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(params) if params.start_index == check_start => {
+                params.response.clone()
+            }
+            _ => None,
+        })
+        .expect("the permission check recorded at {check_start} must be complete");
+    assert!(
+        HostResponsePermissionCheck::from_value(check_response.value())?
+            .result
+            .is_err(),
+        "the permission check must record the denial"
+    );
+
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let replayed = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &invocation_key,
+            "probe_p2",
+            data_value!("tcp-start-connect", "", port, Vec::<u8>::new()),
+        )
+        .await?
+        .into_typed::<Result<String, String>>()?;
+    assert_eq!(replayed, denied);
+    // Replay runs the guest again; a denial replayed as allowed would connect now.
+    let after_restart = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "probe_p2",
+            data_value!("resolve-addresses", "localhost", 0u16, Vec::<u8>::new()),
+        )
+        .await?
+        .into_typed::<Result<String, String>>()?;
+    assert!(
+        after_restart.is_err(),
+        "the new probe must be denied, got {after_restart:?}"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), listener.accept())
+            .await
+            .is_err(),
+        "replaying a denied connect must not reach the TCP backend"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
 async fn p3_tcp_replay_keeps_an_admitted_result_after_revocation_and_denies_new_work(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2928,6 +3043,35 @@ async fn filesystem_rename_preflights_both_paths_before_mutating_source(
     Ok(())
 }
 
+/// Probe operations that each make one protected descriptor import on the preopened root.
+const PROTECTED_DESCRIPTOR_OPERATIONS: [&str; 22] = [
+    "read",
+    "read-via-stream",
+    "write",
+    "write-via-stream",
+    "append-via-stream",
+    "set-size",
+    "set-times",
+    "sync-data",
+    "sync",
+    "read-directory",
+    "stat",
+    "stat-at",
+    "metadata-hash",
+    "metadata-hash-at",
+    "readlink-at",
+    "create-directory-at",
+    "set-times-at",
+    "symlink-at",
+    "remove-directory-at",
+    "unlink-file-at",
+    "rename-at",
+    "link-at",
+];
+
+const PROTECTED_OPEN_OPERATIONS: [&str; 4] =
+    ["open-read", "open-create", "open-write", "open-truncate"];
+
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
@@ -2949,32 +3093,8 @@ async fn every_protected_p2_and_p3_filesystem_import_enforces_permissions(
     configure_scope_card_root(&authority, &component, &agent)?;
     executor.start_agent(&component.id, agent.clone()).await?;
 
-    let descriptor_operations = [
-        "read",
-        "read-via-stream",
-        "write",
-        "write-via-stream",
-        "append-via-stream",
-        "set-size",
-        "set-times",
-        "sync-data",
-        "sync",
-        "read-directory",
-        "stat",
-        "stat-at",
-        "metadata-hash",
-        "metadata-hash-at",
-        "readlink-at",
-        "create-directory-at",
-        "set-times-at",
-        "symlink-at",
-        "remove-directory-at",
-        "unlink-file-at",
-        "rename-at",
-        "link-at",
-    ];
     for preview in ["probe_p2", "probe_p3"] {
-        for operation in descriptor_operations {
+        for operation in PROTECTED_DESCRIPTOR_OPERATIONS {
             if preview == "probe_p3" && matches!(operation, "read" | "write") {
                 continue;
             }
@@ -2992,7 +3112,7 @@ async fn every_protected_p2_and_p3_filesystem_import_enforces_permissions(
                 "{preview} {operation} must return a typed NotPermitted denial, got {denied:?}"
             );
         }
-        for operation in ["open-read", "open-create", "open-write", "open-truncate"] {
+        for operation in PROTECTED_OPEN_OPERATIONS {
             let denied = executor
                 .invoke_and_await_agent(
                     &component,
@@ -3044,6 +3164,207 @@ async fn every_protected_p2_and_p3_filesystem_import_enforces_permissions(
         );
     }
     Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn denied_filesystem_imports_are_recorded_and_replayed_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("FileSystem")
+        .add_rw_file(
+            "FileSystem",
+            "/mutable/entry.txt",
+            "initial-file-system/files/foo.txt",
+        )?
+        .update_agent_provision_config("FileSystem", |config| {
+            config.initial_permissions.lower_bound.positive.extend([
+                filesystem_permission("read", "/mutable"),
+                filesystem_permission("list", "/mutable"),
+            ]);
+        })
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "denials-replay-after-restart");
+    configure_scope_card_root(&authority, &component, &agent)?;
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+
+    let mut probes = Vec::new();
+    for preview in ["probe_p2", "probe_p3"] {
+        for operation in PROTECTED_DESCRIPTOR_OPERATIONS {
+            if preview == "probe_p3" && matches!(operation, "read" | "write") {
+                continue;
+            }
+            probes.push((
+                preview,
+                operation,
+                String::new(),
+                format!("{preview}-{operation}"),
+            ));
+        }
+        for operation in PROTECTED_OPEN_OPERATIONS {
+            probes.push((
+                preview,
+                operation,
+                format!("{preview}-{operation}"),
+                String::new(),
+            ));
+        }
+        probes.push((
+            preview,
+            "unlink-file-at-mutable",
+            "/mutable".to_string(),
+            "entry.txt".to_string(),
+        ));
+    }
+    for (preview, operation, path, other) in &probes {
+        let denied = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent,
+                preview,
+                data_value!(*operation, path.clone(), other.clone()),
+            )
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert!(
+            denied.as_ref().is_err_and(|error| is_not_permitted(error)),
+            "{preview} {operation} must return a typed NotPermitted denial, got {denied:?}"
+        );
+    }
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let mut denials = Vec::new();
+    for entry in &oplog {
+        let PublicOplogEntry::Start(start) = &entry.entry else {
+            continue;
+        };
+        let Some(denied) = recorded_filesystem_denial(&start.function_name) else {
+            continue;
+        };
+        let response = oplog
+            .iter()
+            .find_map(|end| match &end.entry {
+                PublicOplogEntry::End(params) if params.start_index == entry.oplog_index => {
+                    params.response.clone()
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "the {} call recorded at {} must be complete",
+                    start.function_name, entry.oplog_index
+                )
+            });
+        if denied(response.value())? {
+            denials.push(start.function_name.clone());
+        }
+    }
+    assert_eq!(
+        denials.len(),
+        probes.len(),
+        "every denied import must record exactly one denial, recorded: {denials:?}"
+    );
+
+    let root_before_restart = root_names(&executor, &worker_id).await?;
+
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    // The new invocation replays every recorded denial first.
+    let after_restart = tokio::time::timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent(
+            &component,
+            &agent,
+            "probe_p3",
+            data_value!("stat-at", "", "after-restart"),
+        ),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("the replay of the recorded denials did not finish"))??
+    .into_typed::<Result<(), String>>()?;
+    assert!(
+        after_restart
+            .as_ref()
+            .is_err_and(|error| is_not_permitted(error)),
+        "a new stat-at after the replay must be denied, got {after_restart:?}"
+    );
+    assert_eq!(
+        executor
+            .get_file_contents(&worker_id, "/mutable/entry.txt")
+            .await?
+            .as_ref(),
+        b"foo\n",
+        "the replay must not apply the denied unlink"
+    );
+    // A denial that replays as allowed would create the probe's file, directory, or link.
+    assert_eq!(
+        root_names(&executor, &worker_id).await?,
+        root_before_restart,
+        "the replay must not apply a denied mutation of the root directory"
+    );
+    Ok(())
+}
+
+type RecordedDenial = fn(&SchemaValue) -> anyhow::Result<bool>;
+
+/// Whether the response of a durable call that can record a filesystem permission decision
+/// holds a denial. Stat imports and P3 stream writes record a denial as their own `NotPermitted`
+/// result.
+fn recorded_filesystem_denial(function_name: &str) -> Option<RecordedDenial> {
+    match function_name {
+        "filesystem::permissions::check" => Some(|value| {
+            Ok(HostResponsePermissionCheck::from_value(value)?
+                .result
+                .is_err())
+        }),
+        "filesystem::types::descriptor::stat" | "filesystem::types::descriptor::stat_at" => {
+            Some(|value| {
+                Ok(is_not_permitted_error(
+                    HostResponseFileSystemStat::from_value(value)?.result,
+                ))
+            })
+        }
+        "filesystem::types::descriptor::stat-async" | "filesystem::types::descriptor::stat-at" => {
+            Some(|value| {
+                Ok(is_not_permitted_error(
+                    HostResponseP3FileSystemStat::from_value(value)?.result,
+                ))
+            })
+        }
+        "filesystem::types::descriptor::write-via-stream"
+        | "filesystem::types::descriptor::append-via-stream" => Some(|value| {
+            Ok(is_not_permitted_error(
+                HostResponseP3FileSystemWriteAdmission::from_value(value)?.result,
+            ))
+        }),
+        _ => None,
+    }
+}
+
+fn is_not_permitted_error<T, E: std::fmt::Debug>(result: Result<T, E>) -> bool {
+    result.is_err_and(|error| normalized_error_contains(&format!("{error:?}"), "notpermitted"))
+}
+
+async fn root_names(
+    executor: &TestWorkerExecutor,
+    worker_id: &AgentId,
+) -> anyhow::Result<BTreeSet<String>> {
+    Ok(executor
+        .get_file_system_node(worker_id, "/")
+        .await?
+        .into_iter()
+        .map(|node| node.name)
+        .collect())
 }
 
 #[test]
@@ -3413,21 +3734,6 @@ async fn every_protected_network_http_and_websocket_import_enforces_permissions(
     let http = agent_id!("RawWasiHttp", "every-protected-http-import");
     configure_scope_card_root(&authority, &component, &http)?;
     executor.start_agent(&component.id, http.clone()).await?;
-    let p2_http_denied = executor
-        .invoke_and_await_agent(
-            &component,
-            &http,
-            "probe_p2",
-            data_value!("outgoing-handler-handle", "127.0.0.1:9"),
-        )
-        .await?
-        .into_typed::<Result<(), String>>()?;
-    assert!(
-        p2_http_denied
-            .as_ref()
-            .is_err_and(|error| normalized_error_contains(error, "httprequestdenied")),
-        "P2 HTTP handle must return HttpRequestDenied, got {p2_http_denied:?}"
-    );
     let p3_http_denied = executor
         .invoke_and_await_agent(
             &component,

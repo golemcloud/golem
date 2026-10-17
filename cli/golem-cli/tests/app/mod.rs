@@ -57,6 +57,7 @@ mod server_config;
 #[cfg(unix)]
 mod server_restart;
 mod ssh;
+mod tls_endpoint;
 mod tool_metadata_conformance;
 mod tool_middleware;
 mod tool_middleware_conformance;
@@ -131,6 +132,7 @@ tag_suite!(scala_tool_middleware, deploy);
 tag_suite!(secrets, deploy);
 tag_suite!(self_identity, deploy);
 tag_suite!(ssh, deploy);
+tag_suite!(tls_endpoint, agents);
 tag_suite!(tool_metadata_conformance, deploy);
 tag_suite!(tool_middleware, deploy);
 tag_suite!(tool_middleware_conformance, deploy);
@@ -693,6 +695,7 @@ impl TestContext {
             .env_remove("GOLEM_BUILTIN_LOCAL_URL")
             .envs(&self.env)
             .current_dir(&working_dir)
+            .kill_on_drop(true)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -733,6 +736,7 @@ impl TestContext {
             .env_remove("GOLEM_BUILTIN_LOCAL_URL")
             .envs(&self.env)
             .current_dir(&working_dir)
+            .kill_on_drop(true)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -851,6 +855,7 @@ impl TestContext {
             .env_remove("GOLEM_BUILTIN_LOCAL_URL")
             .envs(&self.env)
             .current_dir(&working_dir)
+            .kill_on_drop(true)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -951,6 +956,7 @@ impl TestContext {
             .env_remove("GOLEM_BUILTIN_LOCAL_URL")
             .envs(&self.env)
             .current_dir(&working_dir)
+            .kill_on_drop(true)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -1022,6 +1028,7 @@ impl TestContext {
             .env_remove("GOLEM_BUILTIN_LOCAL_URL")
             .envs(&self.env)
             .current_dir(&working_dir)
+            .kill_on_drop(true)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

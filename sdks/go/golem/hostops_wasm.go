@@ -52,11 +52,7 @@ func (witHost) fork() (bool, UUID, error) {
 }
 
 func (witHost) getSelfMetadata() (apiHost.AgentMetadata, error) {
-	res := apiHost.GetSelfMetadata()
-	if res.IsErr() {
-		return apiHost.AgentMetadata{}, agentOperationErrorFromWit(res.Err())
-	}
-	return res.Ok(), nil
+	return selfMetadataResult(apiHost.GetSelfMetadata())
 }
 
 func (witHost) getAgentMetadata(id types.AgentId) (apiHost.AgentMetadata, bool) {

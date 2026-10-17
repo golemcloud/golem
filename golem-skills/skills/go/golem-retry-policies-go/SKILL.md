@@ -5,7 +5,7 @@ description: "Configuring semantic retry policies for a Go Golem agent. Use when
 
 # Configuring Semantic Retry Policies (Go)
 
-Golem retries retriable operations (RPC, HTTP, RDBMS, and whole-invocation traps)
+Golem retries retryable host operations (RPC, HTTP, RDBMS) and classified transient failures
 according to **named policy rules**. Each rule is a `retry.NamedPolicy`: a
 `retry.Policy` (the strategy) plus a `retry.Predicate` deciding when it applies and
 a priority. Per operation, the runtime resolves the highest-priority rule whose
@@ -160,6 +160,14 @@ retry.MatchNever()
 
 ### Available properties
 
+Do not predicate on `is-idempotent`; the host no longer supplies that property. The explicit
+`golem:api/host.trap` function raises a deterministic trap and is never retried, even by a catch-all policy. Host retry
+policies repair eligible individual calls, not completed effects or whole saga attempts.
+
+A trap is permanent. Return an error for a transient condition and use a retry schedule.
+Application-level errors need application-level handling; returning an error does not automatically
+activate a host retry policy.
+
 Exported `retry.PropName` constants (use `retry.Prop("name")` for any other):
 
 | Constant | Populated in |
@@ -241,8 +249,11 @@ if np, found := retry.ByName("http-transient"); found {
 
 // What policy the runtime would pick for a hypothetical operation; a property
 // value is a string, an integer type or a bool:
-pol, matched := retry.Resolve("GET", "https://api.example.com/x",
+pol, matched, err := retry.Resolve("GET", "https://api.example.com/x",
 	map[string]any{"status-code": 503})
+if err != nil {
+	return err // Invalid selector; do not treat it as no matching policy.
+}
 _ = pol
 _ = matched
 ```
@@ -333,6 +344,5 @@ clamped to [100ms, 1s], 15% jitter.
 | Skill | When to Load |
 |-------|--------------|
 | `golem-make-http-request-go` | The outgoing HTTP calls whose responses drive status-code retries |
-| `golem-atomic-block-go` | Idempotence mode and atomic regions interact with retry semantics |
 | `golem-call-another-agent-go` | RPC calls retried via `Function` / `TargetAgentType`-keyed rules |
 | `golem-add-transactions-go` | Saga transactions layered on durable execution and retries |

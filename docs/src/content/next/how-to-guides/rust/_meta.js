@@ -7,7 +7,6 @@ export default {
   "golem-add-secret-rust": "Adding Secrets to a Rust Agent",
   "golem-add-config-rust": "Adding Typed Configuration to an Agent (Rust)",
   "golem-annotate-agent-rust": "Annotating Agent Methods (Rust)",
-  "golem-atomic-block-rust": "Atomic Blocks and Durability Controls (Rust)",
   "golem-call-tool-rust": "Call a Golem tool from Rust",
   "golem-call-from-external-rust": "Calling Agents from External Rust Applications",
   "golem-agent-reflection-rust": "Calling Agents with Runtime Reflection (Rust)",

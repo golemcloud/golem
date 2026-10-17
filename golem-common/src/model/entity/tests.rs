@@ -227,7 +227,6 @@ fn entity_invocation_request_binary_roundtrip_preserves_activation() {
             plan: EntityInvocationPlan::new(vec![EntityInvocationPlanLayer::Tool { activation }])
                 .unwrap(),
         },
-        assume_idempotence: false,
         authority_wallet: Vec::new(),
     };
 
@@ -453,7 +452,6 @@ fn invocation_scope_protobuf_roundtrip_preserves_activation_fingerprint() {
         }),
         InvocationExecutionMode::ReplayingCompleted,
         IdempotencyKey::new("scope-protobuf-seed".to_string()),
-        false,
         true,
         IdempotencyKey::new("scope-stream-seed".to_string()),
     )
@@ -473,7 +471,6 @@ fn invocation_scope_protobuf_roundtrip_preserves_activation_fingerprint() {
         "scope-stream-seed"
     );
     assert_eq!(scope.mode(), InvocationExecutionMode::ReplayingCompleted);
-    assert!(!scope.assume_idempotence());
     assert!(scope.logical_key_positions());
 }
 
@@ -496,7 +493,6 @@ fn invocation_scope_protobuf_requires_idempotency_key() {
         }),
         InvocationExecutionMode::Live,
         IdempotencyKey::new("required-protobuf-seed".to_string()),
-        true,
         false,
         IdempotencyKey::new("required-stream-seed".to_string()),
     )
@@ -530,7 +526,6 @@ fn middleware_invocation_scope_roundtrips_through_binary_and_protobuf() {
         }),
         InvocationExecutionMode::ReplayingIncomplete,
         IdempotencyKey::new("middleware-roundtrip-seed".to_string()),
-        false,
         true,
         IdempotencyKey::new("middleware-stream-seed".to_string()),
     )
@@ -576,7 +571,6 @@ fn middleware_invocation_scope_roundtrips_through_binary_and_protobuf() {
             ])
             .unwrap(),
         },
-        assume_idempotence: false,
         authority_wallet: Vec::new(),
     };
 
@@ -704,7 +698,6 @@ fn mcp_activation_is_pinned_and_bound_to_bridge_revision_and_owner_environment()
             }),
             InvocationExecutionMode::ReplayingCompleted,
             IdempotencyKey::new("mcp-activation-scope-seed".to_string()),
-            false,
             true,
             IdempotencyKey::new("mcp-activation-stream-seed".to_string()),
         )
@@ -897,7 +890,6 @@ fn invocation_scope_rejects_parent_that_does_not_precede_invocation_start() {
             principal.clone(),
             InvocationExecutionMode::Live,
             IdempotencyKey::new("invalid-parent-scope-seed".to_string()),
-            false,
             true,
             IdempotencyKey::new("invalid-parent-stream-seed".to_string()),
         );
