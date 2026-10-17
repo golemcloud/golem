@@ -36,7 +36,7 @@ use std::sync::{Arc, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::{Instant, MissedTickBehavior, interval, sleep, sleep_until, timeout};
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Election name for the shard manager's leadership.
 pub const LEADER_ELECTION_NAME: &str = "/golem/shard-manager/leader";
@@ -867,16 +867,22 @@ impl LeaderElection {
     /// watch.
     ///
     /// A key of an earlier process of the same pod also carries this address, but nothing renews
-    /// its lease, so it is gone within one TTL. A key still present two TTLs after this replica
-    /// first saw it belongs to a live replica. The TTL is the one etcd granted, which can exceed
-    /// the configured one, and the earlier process's key was granted the same.
+    /// its lease, so it is gone within one TTL of that lease after its last renewal, which was
+    /// before this replica first saw the key. That TTL is the earlier process's own, not this
+    /// replica's: the operator may have shortened the configured one before the restart, so the
+    /// patience is the lifetime of the other key's lease, read from etcd when the key is first
+    /// seen, plus this replica's granted TTL as the margin for etcd's expiry scan and the delay of
+    /// the watch. A live duplicate renews its lease and is still there after that.
+    ///
+    /// A key whose lease lifetime could not be read, or whose lease is already gone, is never
+    /// refused: the first is missing information, and the second key is about to disappear with
+    /// its lease. The read is tried again on the next recheck.
     async fn watch_campaign(&self, own_lease: i64, granted_ttl: Duration) -> ShardManagerError {
         let Some(mut watch) = self.watch.clone() else {
             return std::future::pending().await;
         };
         let own = self.value.grpc_address.clone();
-        let patience = granted_ttl.saturating_mul(2);
-        let mut duplicate: Option<(Vec<u8>, Instant)> = None;
+        let mut duplicate: Option<SeenDuplicate> = None;
         // Wakes the loop with no change in the view, so that the patience is measured.
         let mut recheck = interval(granted_ttl / 4);
         recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -896,21 +902,27 @@ impl LeaderElection {
                     .and_then(|own| duplicate_of(&view, own_lease, own).map(|other| (own, other)));
                 match found {
                     Some((own, other)) => {
-                        let since = match &duplicate {
-                            Some((key, since)) if key == &other.key => *since,
+                        let seen = match &mut duplicate {
+                            Some(seen) if seen.key == other.key => seen,
                             _ => {
                                 warn!(
                                     address = %own,
                                     other = other.value.as_ref().map(|value| value.identity.as_str()),
-                                    patience = ?patience,
                                     "Another shard manager replica advertises this replica's gRPC address"
                                 );
-                                let now = Instant::now();
-                                duplicate = Some((other.key.clone(), now));
-                                now
+                                duplicate.insert(SeenDuplicate {
+                                    key: other.key.clone(),
+                                    since: Instant::now(),
+                                    lease_lifetime: None,
+                                })
                             }
                         };
-                        if since.elapsed() >= patience {
+                        if seen.lease_lifetime.is_none() {
+                            seen.lease_lifetime = self.lease_lifetime(other.lease).await;
+                        }
+                        if let Some(lifetime) = seen.lease_lifetime
+                            && seen.since.elapsed() >= lifetime.saturating_add(granted_ttl)
+                        {
                             return ShardManagerError::DuplicateAdvertisedAddress {
                                 address: own.to_string(),
                                 other: other
@@ -927,6 +939,30 @@ impl LeaderElection {
             tokio::select! {
                 _ = watch.changed() => {}
                 _ = recheck.tick() => {}
+            }
+        }
+    }
+
+    /// The lifetime etcd granted to `lease`, or `None` when it cannot be told: the read failed, or
+    /// the lease no longer exists.
+    async fn lease_lifetime(&self, lease: i64) -> Option<Duration> {
+        let mut lease_client = self.client.lease_client();
+        match self.bounded(lease_client.time_to_live(lease, None)).await {
+            Ok(response) if response.ttl() < 0 => {
+                debug!(
+                    lease,
+                    "The lease of a duplicate key is gone; its key is about to disappear"
+                );
+                None
+            }
+            Ok(response) => Some(Duration::from_secs(response.granted_ttl().max(0) as u64)),
+            Err(err) => {
+                warn!(
+                    lease,
+                    error = %err,
+                    "Cannot read the lifetime of a duplicate key's lease; trying again"
+                );
+                None
             }
         }
     }
@@ -1122,6 +1158,14 @@ pub(crate) fn newer_generation_behind(
         .filter_map(|campaigner| campaigner.value.as_ref()?.rollout_generation)
         .filter(|generation| *generation > own_generation)
         .max()
+}
+
+/// The key of another campaigner that advertises this replica's address, when it was first seen,
+/// and the lifetime of its lease once that has been read.
+struct SeenDuplicate {
+    key: Vec<u8>,
+    since: Instant,
+    lease_lifetime: Option<Duration>,
 }
 
 /// Another campaigner that advertises `own`. The own key is told apart by its lease.

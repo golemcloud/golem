@@ -2328,6 +2328,21 @@ async fn a_replica_that_advertises_another_live_replicas_address_is_refused(
 // A restarted process finds the key of its own previous process, which carries the same address
 // until its lease expires. That key is no duplicate: the replica must wait it out and lead.
 async fn an_earlier_process_key_with_the_same_address_is_waited_out(etcd: &Arc<DockerEtcd>) {
+    wait_out_an_earlier_process_key(etcd, LEASE_TTL).await;
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// The operator may have shortened the lease TTL before the restart, so the earlier process's key
+// can outlive the new replica's own patience several times over. Nothing renews it, so it still
+// goes away, and the replica must wait for that instead of taking the key for a live replica.
+async fn an_earlier_process_key_with_a_longer_lease_is_waited_out(etcd: &Arc<DockerEtcd>) {
+    wait_out_an_earlier_process_key(etcd, LEASE_TTL * 4).await;
+}
+
+/// Leaves a key with a replica's address under a lease of `earlier_ttl` that nothing renews, and
+/// expects a replica started over it to lead once the lease expires.
+async fn wait_out_an_earlier_process_key(etcd: &Arc<DockerEtcd>, earlier_ttl: Duration) {
     wipe_state(etcd).await;
     await_election_idle(etcd).await;
     let mut config = distributed_config(etcd);
@@ -2341,7 +2356,7 @@ async fn an_earlier_process_key_with_the_same_address_is_waited_out(etcd: &Arc<D
         .await
         .unwrap();
     let lease = client
-        .lease_grant(LEASE_TTL.as_secs() as i64, None)
+        .lease_grant(earlier_ttl.as_secs() as i64, None)
         .await
         .unwrap()
         .id();
