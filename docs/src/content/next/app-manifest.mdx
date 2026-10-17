@@ -646,7 +646,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     path: "httpApi.deployments.<environment-name>[*].agents",
     since: Release.R_1_5_0
   }}>
-    ***Optional map of HTTP API deployment options*** by **agent type name**.
+    ***Optional map of HTTP API deployment options*** by **agent type name**. An agent type can be listed in only one HTTP API deployment per environment, because the webhook URL of the agent type uses a single domain. One deployment can serve many agent types. To serve the same functionality on another domain, define a separate agent type for that domain that calls the original agent.
   </Field>
 
   <Field meta={{

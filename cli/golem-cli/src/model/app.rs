@@ -6055,15 +6055,23 @@ mod app_builder {
                     ));
                 }
 
-                let mut unique_agents = HashSet::new();
-                for api_deployment in api_deployments.values() {
+                let mut agent_domains = BTreeMap::<_, Vec<_>>::new();
+                for (domain, api_deployment) in api_deployments {
                     for agent in api_deployment.value.agents.keys() {
-                        if !unique_agents.insert(agent.clone()) {
-                            validation.add_warn(format!(
-                                "Agent deployed to multiple domains in environments: {}",
-                                agent.0.log_color_highlight(),
-                            ));
-                        }
+                        agent_domains.entry(agent).or_default().push(domain);
+                    }
+                }
+                for (agent, domains) in agent_domains {
+                    if domains.len() > 1 {
+                        validation.add_error(format!(
+                            "Agent type {} is deployed to multiple HTTP API domains in environment {}: {}. An agent type can only be deployed to one domain per environment, because its webhook URL uses a single domain. List the agent type under one domain only; one domain can serve many agent types. To serve the same functionality on another domain, define a separate agent type for that domain that calls this agent.",
+                            agent.0.log_color_highlight(),
+                            environment.0.log_color_highlight(),
+                            domains
+                                .iter()
+                                .map(|domain| domain.0.log_color_highlight().to_string())
+                                .join(", "),
+                        ));
                     }
                 }
             }
@@ -10002,6 +10010,69 @@ bridge:
             "{}",
             errors[0]
         );
+    }
+
+    #[test]
+    fn an_agent_type_cannot_be_deployed_to_multiple_http_api_domains_in_one_environment() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            httpApi:
+              deployments:
+                local:
+                  - domain: app.example.com
+                    agents:
+                      Echo: {}
+                      Other: {}
+                  - domain: sandbox.example.com
+                    agents:
+                      Echo: {}
+        "# };
+
+        let errors = load_app_errors(source);
+
+        assert_eq!(errors.len(), 1, "\n{}", errors.join("\n\n"));
+        assert!(
+            errors[0].contains("Echo")
+                && errors[0].contains("local")
+                && errors[0].contains("app.example.com")
+                && errors[0].contains("sandbox.example.com")
+                && errors[0].contains("one domain per environment"),
+            "{}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn an_agent_type_can_be_deployed_to_one_http_api_domain_in_each_environment() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+              staging:
+                server: local
+
+            httpApi:
+              deployments:
+                local:
+                  - domain: app.example.com
+                    agents:
+                      Echo: {}
+                staging:
+                  - domain: staging.example.com
+                    agents:
+                      Echo: {}
+        "# };
+
+        let errors = load_app_errors(source);
+
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
     }
 
     #[test]
