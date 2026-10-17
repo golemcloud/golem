@@ -126,8 +126,8 @@ function warningCode(warning: string | Error, rest: unknown[]): unknown {
 }
 
 // npm's registry agent defines a createConnection hook that the runtime cannot use, because
-// requests always go through wasi:http. The runtime reports this on the first request of every
-// invocation, which only adds noise to npm's output.
+// requests always go through wasi:http. The runtime reports this once per runtime instance, on the
+// first such request, which only adds noise to npm's output.
 export function installNpmTransportWarningFilter(target: Pick<NodeJS.Process, 'emitWarning'>) {
   const original = target.emitWarning;
   target.emitWarning = function (this: unknown, warning: string | Error, ...rest: unknown[]) {

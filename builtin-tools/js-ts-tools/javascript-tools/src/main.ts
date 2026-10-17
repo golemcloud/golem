@@ -131,6 +131,7 @@ async function runNpm(
       : '/toolchain/npm/node_modules/npm/bin/npm-cli.js',
     ...input.args,
   ];
+  const invocation = npmInvocation(input.cwd, input.registry);
   const restore = installNpmRecursiveRmPatch(
     NPM_VERSION,
     NPM_VERSION,
@@ -140,7 +141,6 @@ async function runNpm(
   );
   const restoreWarnings = installNpmTransportWarningFilter(process);
   const restorePrivateFiles = installPrivateReadOnlyFiles(NPM_ROOT, npmPrivateFiles);
-  const invocation = npmInvocation(input.cwd, input.registry);
   try {
     return await runCli(
       { argv, cwd: input.cwd, ...invocation, npmExit: true },

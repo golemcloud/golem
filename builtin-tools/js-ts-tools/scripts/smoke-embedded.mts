@@ -86,7 +86,12 @@ async function runNpm(workspace: string, args: string[]) {
       default: (facade: NodeJS.Process) => Promise<unknown>;
     };
     await loaded.default(process);
-    await exited;
+    await Promise.race([
+      exited,
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('npm did not request an exit')), 60_000).unref();
+      }),
+    ]);
   } finally {
     restore();
   }

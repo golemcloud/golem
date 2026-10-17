@@ -16908,7 +16908,8 @@ fs.writeFileSync('invalid.ts', 'const value: number = "wrong";\n');
     assert!(String::from_utf8(npm_invalid.stdout)?.contains("Unknown command"));
 
     // A registry request goes through npm's agent, whose ignored createConnection hook makes the
-    // runtime emit a transport warning that the npm tool keeps out of its output.
+    // runtime emit a transport warning that the npm tool keeps out of its output. The runtime warns
+    // once per instance, so the request runs in an owner that has made no registry request yet.
     let registry = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let registry_url = format!("http://127.0.0.1:{}/", registry.local_addr()?.port());
     let registry_server = tokio::spawn(async move {
@@ -16921,7 +16922,7 @@ fs.writeFileSync('invalid.ts', 'const value: number = "wrong";\n');
     let npm_ping = invoke_cli_tool(
         &executor,
         &caller_component,
-        behavior_agent,
+        "js-ts-npm-registry",
         "npm",
         "/workspace",
         vec!["ping", "--registry", &registry_url],
