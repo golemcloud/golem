@@ -1,12 +1,35 @@
 use super::*;
+use anyhow::Context as _;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_service_base::error::worker_executor::InterruptKind;
-use golem_worker_executor::services::{HasOplog, UsesAllDeps};
-use golem_worker_executor::worker::{MonthlyClockForTest, Worker};
+use golem_worker_executor::services::resource_limits::ResourceUsageFlusher;
+use golem_worker_executor::services::{HasOplog, HasOplogService, UsesAllDeps};
+use golem_worker_executor::worker::Worker;
+use golem_worker_executor::workerctx::default::Context as WorkerContext;
 use pretty_assertions::assert_eq;
 use test_r::test;
 use tokio::io::AsyncReadExt;
+
+#[derive(Debug)]
+struct ObservedUsageFlusher {
+    owner: std::sync::Weak<Worker<WorkerContext>>,
+    send: tokio::sync::mpsc::UnboundedSender<u64>,
+}
+
+impl ResourceUsageFlusher for ObservedUsageFlusher {
+    fn flush_usage(&self) {
+        if let Some(owner) = self.owner.upgrade()
+            && owner.monthly_window_active_for_test()
+        {
+            let _ = self.send.send(
+                owner
+                    .current_monthly_proposal_for_test()
+                    .diagnostic_window_id,
+            );
+        }
+    }
+}
 
 #[test]
 #[timeout("2m")]
@@ -142,11 +165,23 @@ async fn pending_compute(
         )
         .await?
     };
-    let (clock, mut polls) = MonthlyClockForTest::new();
-    worker.set_monthly_clock_for_test(clock.clone());
+    // Observe each actual active window from its first pre-wait flush. Earlier startup
+    // windows have different IDs and cannot supply this invocation's timer evidence.
+    let (flushed, mut flushes) = tokio::sync::mpsc::unbounded_channel();
+    let usage_source: Arc<dyn ResourceUsageFlusher> = Arc::new(ObservedUsageFlusher {
+        owner: Arc::downgrade(&worker),
+        send: flushed,
+    });
+    worker
+        .owner_runtime_resources()
+        .register_resource_usage_flusher(Arc::downgrade(&usage_source));
+    let mut capacity_updates = limits
+        .subscribe_capacity_updates_for_test(context.account_id)
+        .await?;
+    capacity_updates.borrow_and_update();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
-    let invocation = tokio::spawn({
+    let invocation = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
         let name = name.clone();
@@ -162,7 +197,7 @@ async fn pending_compute(
                 )
                 .await
         }
-    });
+    }));
     let (mut socket, _) =
         tokio::time::timeout(Duration::from_secs(30), listener.accept()).await??;
     let starts = tokio::time::timeout(Duration::from_secs(30), async {
@@ -197,6 +232,18 @@ async fn pending_compute(
         }
     })
     .await??;
+    let oplog = worker.all().oplog_service();
+    let read_stored = async || {
+        let last = oplog.get_last_index(&owned, mode).await;
+        oplog
+            .read_exact(&owned, mode, OplogIndex::INITIAL, last.as_u64())
+            .await
+    };
+    let prefix = read_stored().await;
+    let prefix_last = *prefix
+        .last_key_value()
+        .context("committed invocation prefix is empty")?
+        .0;
     let account = limits.initialize_account(context.account_id).await?;
     let prepaid = worker.current_monthly_proposal_for_test();
     assert!(
@@ -221,14 +268,29 @@ async fn pending_compute(
     let mut attempts =
         crate::monthly_acceptance::observe(worker.get_initial_worker_metadata().fingerprint);
     let mut raw = worker.raw_interrupt_for_test();
-    tokio::time::timeout(Duration::from_secs(10), polls.recv())
-        .await?
-        .unwrap();
-    clock.advance(Duration::from_secs(30));
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while polls.recv().await.unwrap().deadline != Duration::from_secs(60) {}
-    })
-    .await?;
+    assert!(worker.monthly_window_active_for_test());
+    assert_eq!(account.monthly_observer_count_for_test(), 2);
+    let mut next_flush = async || {
+        loop {
+            let window = flushes.recv().await.context("owner usage flusher closed")?;
+            if window == prepaid.diagnostic_window_id {
+                return Ok::<_, anyhow::Error>(());
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), next_flush())
+        .await
+        .context("initial monitor pre-wait flush")??;
+    // The unchanged outer test bound includes the real timer wait. This post-wake
+    // flush precedes the capacity read, so it alone does not prove the check completed.
+    next_flush().await?;
+    tokio::time::timeout(Duration::from_secs(10), next_flush())
+        .await
+        .context("monitor did not finish its check and begin the next wait")??;
+    assert!(!capacity_updates.has_changed()?);
+    drop(capacity_updates);
+    assert_eq!(account.monthly_observer_count_for_test(), 1);
+    worker.drain_lifecycle_for_test().await?;
     assert!(
         attempts.try_recv().is_err(),
         "a real monitor tick must preserve this Store's prepaid generation"
@@ -283,7 +345,7 @@ async fn pending_compute(
     worker.retained_cleanup_for_test().await?;
     refresh.await?;
     assert_eq!(account.monthly_observer_count_for_test(), 0);
-    assert_eq!(clock.active_sleeps(), 0);
+    assert!(!worker.monthly_window_active_for_test());
     let entries = worker
         .oplog()
         .read_exact(
@@ -291,6 +353,16 @@ async fn pending_compute(
             worker.oplog().current_oplog_index().await.as_u64(),
         )
         .await;
+    let stopped_raw = read_stored().await;
+    assert_eq!(
+        stopped_raw.range(..=prefix_last).collect::<Vec<_>>(),
+        prefix.iter().collect::<Vec<_>>()
+    );
+    assert!(
+        !stopped_raw
+            .values()
+            .any(|entry| matches!(entry, OplogEntry::Jump { .. }))
+    );
     let errors: Vec<_> = entries
         .values()
         .filter_map(|entry| match entry {
@@ -322,6 +394,12 @@ async fn pending_compute(
             .into_typed::<Result<String, String>>()?;
         assert_eq!(result, Err("ErrorCode::ConnectionBroken".to_string()));
         let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let recovered_raw = read_stored().await;
+        let stopped_last = *stopped_raw.last_key_value().unwrap().0;
+        assert_eq!(
+            recovered_raw.range(..=stopped_last).collect::<Vec<_>>(),
+            stopped_raw.iter().collect::<Vec<_>>()
+        );
         assert_eq!(
             count_agent_invocation_pair_since(&recovered, boundary),
             (1, 1)

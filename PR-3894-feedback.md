@@ -334,6 +334,14 @@ Findings 11-14 have separate linked comments.
     an exact source audit retains the WebSocket timers, existing timing checks, peer counts,
     results, histories, cleanup and the separate active-clock helpers. Their unchanged baseline,
     ordinary-timer cases, scoped strict lint and formatting pass. WebSocket replay remains deferred.
+    The prepaid-compute cases remove their virtual clock without substituting a policy update
+    for the negative tick. A test-owned existing weak usage flusher routes exact window observations
+    from initial pre-wait through post-wake and next pre-wait; lifecycle FIFO drainage follows the
+    completed check. An unchanged capacity watch excludes a new applied update. The original
+    prepaid/exhaustion/result/refund/history/cleanup assertions and native bounds remain, with
+    actual-mode complete stored-prefix checks added. No runtime code or timer interface changes.
+    Both native modes, the real-timer/tail composition batch, scoped strict lint and formatting pass.
+    The clock producer and this checkbox remain open.
   - [ ] Address the keyed filesystem metadata gate and remaining protocol ordering controls.
   - [ ] For any hook proposed to remain, document the otherwise untestable guarantee, minimal scope
     and why its scheduling changes do not invalidate the test. Existing main-owned hooks are not

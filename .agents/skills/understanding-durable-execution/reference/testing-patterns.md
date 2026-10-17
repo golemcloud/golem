@@ -330,6 +330,22 @@ The completed rejection diagnostic proves that the policy applied; joining the w
 allowing interruption deadlocks the test. Keep both full joins after physical cleanup. The other
 time-driving consumers and Worker clock support remain separate open work.
 
+The prepaid-compute cases observe the ordinary timer through a test-owned weak usage flusher,
+registered before invocation. It reports the exact active window ID, so startup flushes cannot
+masquerade as the parked invocation's check. Await that window's initial pre-wait flush, its real
+post-wake flush, then the next pre-wait flush and lifecycle FIFO drainage. The post-wake flush alone
+precedes the capacity read and is insufficient. Initial readiness and post-wake checking retain
+their original bounds; the unchanged whole-test bound includes waiting for real cadence.
+
+A temporary existing capacity watch starts before invocation and must remain unchanged. Its extra
+reader is explicit while alive and is dropped before the original monitor-only/final-zero checks.
+The native prepaid generation, no false stop, later authoritative compute exhaustion, typed result,
+fuel refund, disabled meters and physical cleanup stay strict. Actual-mode stored prefixes survive
+stop and recovery. Precise cadence remains on the actual paused-Tokio primitive tests. This adds no
+runtime field, event or timer interface. Both native modes and the small real-timer/tail composition
+batch pass, as do scoped strict lint and formatting. The whole clock producer and other active
+clock consumers remain open.
+
 ### Root completion and live tail ownership
 
 `run_guest_call_settled` emits "Guest call root completed; settling tail work" immediately after
