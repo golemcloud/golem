@@ -10,6 +10,7 @@ import { npmBundleSource, npmPrivateFiles } from '../../generated/npm-assets.js'
 import {
   DEFAULT_REGISTRY,
   installNpmRecursiveRmPatch,
+  installNpmTransportWarningFilter,
   NPM_VERSION,
   npmInvocation,
 } from './npm-runtime.js';
@@ -134,6 +135,7 @@ async function runNpm(
     { lstatSync, readdirSync, rmdirSync, unlinkSync },
     join,
   );
+  const restoreWarnings = installNpmTransportWarningFilter(process);
   const restorePrivateFiles = installPrivateReadOnlyFiles(NPM_ROOT, npmPrivateFiles);
   const invocation = npmInvocation(input.cwd, input.registry);
   try {
@@ -159,6 +161,7 @@ async function runNpm(
     );
   } finally {
     restorePrivateFiles();
+    restoreWarnings();
     restore();
   }
 }

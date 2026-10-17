@@ -112,3 +112,28 @@ export function installNpmRecursiveRmPatch(
     restored = true;
   };
 }
+
+const AGENT_TRANSPORT_WARNING = 'WASM_RQUICKJS_HTTP_AGENT_TRANSPORT';
+
+function warningCode(warning: string | Error, rest: unknown[]): unknown {
+  if (warning instanceof Error) return (warning as NodeJS.ErrnoException).code;
+  const [typeOrOptions, code] = rest;
+  if (typeOrOptions && typeof typeOrOptions === 'object') {
+    return (typeOrOptions as { code?: unknown }).code;
+  }
+  return code;
+}
+
+// npm's registry agent defines a createConnection hook that the runtime cannot use, because
+// requests always go through wasi:http. The runtime reports this on the first request of every
+// invocation, which only adds noise to npm's output.
+export function installNpmTransportWarningFilter(target: Pick<NodeJS.Process, 'emitWarning'>) {
+  const original = target.emitWarning;
+  target.emitWarning = function (this: unknown, warning: string | Error, ...rest: unknown[]) {
+    if (warningCode(warning, rest) === AGENT_TRANSPORT_WARNING) return;
+    return (original as (...args: unknown[]) => void).call(this, warning, ...rest);
+  } as typeof original;
+  return () => {
+    target.emitWarning = original;
+  };
+}

@@ -16890,6 +16890,34 @@ fs.writeFileSync('invalid.ts', 'const value: number = "wrong";\n');
     assert_eq!(npm_invalid.exit_code, 1);
     assert!(String::from_utf8(npm_invalid.stdout)?.contains("Unknown command"));
 
+    // A registry request goes through npm's agent, whose ignored createConnection hook makes the
+    // runtime emit a transport warning that the npm tool keeps out of its output.
+    let registry = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let registry_url = format!("http://127.0.0.1:{}/", registry.local_addr()?.port());
+    let registry_server = tokio::spawn(async move {
+        axum::serve(
+            registry,
+            Router::new().route("/-/ping", get(|| async { "{}" })),
+        )
+        .await
+    });
+    let npm_ping = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "npm",
+        "/workspace",
+        vec!["ping", "--registry", &registry_url],
+    )
+    .await?;
+    registry_server.abort();
+    let npm_ping_stderr = String::from_utf8(npm_ping.stderr)?;
+    assert_eq!(npm_ping.exit_code, 0, "npm ping stderr: {npm_ping_stderr}");
+    assert!(
+        !npm_ping_stderr.contains("WASM_RQUICKJS_HTTP_AGENT_TRANSPORT"),
+        "{npm_ping_stderr}"
+    );
+
     exercise_npm_lifecycle_completion(&executor, &caller_component).await?;
 
     let npx = invoke_cli_tool(
