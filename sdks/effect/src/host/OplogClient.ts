@@ -1,8 +1,6 @@
 /**
  * Host service bundling the agent's oplog accessors:
  *
- * - `golem:api/host@1.5.0` — `getOplogIndex` / `setOplogIndex` (read /
- *   time-travel the agent's own persistent oplog cursor).
  * - `golem:api/oplog@1.5.0` — `enrichOplogEntries` plus the
  *   `GetOplog` and `SearchOplog` resource constructors used to drive
  *   paged reads of an agent's oplog.
@@ -17,7 +15,6 @@
  * @internal — not re-exported from `src/index.ts`.
  */
 import { Context, Layer } from "effect"
-import * as ApiHost from "golem:api/host@1.5.0"
 import * as OplogHost from "golem:api/oplog@1.5.0"
 
 type RawOplogIndex = OplogHost.OplogIndex
@@ -42,10 +39,6 @@ export interface SearchOplogHandle {
 }
 
 export interface OplogClientShape {
-  /** Mirrors `golem:api/host.getOplogIndex`. */
-  readonly getOplogIndex: () => RawOplogIndex
-  /** Mirrors `golem:api/host.setOplogIndex`. */
-  readonly setOplogIndex: (idx: RawOplogIndex) => void
   /** Mirrors `golem:api/oplog.enrichOplogEntries`. */
   readonly enrichOplogEntries: (
     environmentId: RawEnvironmentId,
@@ -70,8 +63,6 @@ export class OplogClient extends Context.Service<OplogClient, OplogClientShape>(
 export const OplogLive: Layer.Layer<OplogClient> = Layer.succeed(
   OplogClient,
   OplogClient.of({
-    getOplogIndex: () => ApiHost.getOplogIndex(),
-    setOplogIndex: (idx) => ApiHost.setOplogIndex(idx),
     enrichOplogEntries: (environmentId, agentId, entries, componentRevision) =>
       OplogHost.enrichOplogEntries(
         environmentId,

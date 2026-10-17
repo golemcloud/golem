@@ -747,12 +747,9 @@ async fn append_session(oplog: &dyn Oplog, record: StreamSessionRecord) -> Oplog
         .expect("oplog write")
 }
 
-async fn append_noop(oplog: &dyn Oplog) -> OplogIndex {
+async fn append_memory_hint(oplog: &dyn Oplog) -> OplogIndex {
     oplog
-        .add(OplogEntry::NoOp {
-            timestamp: Timestamp::now_utc(),
-            entity_parent_start_index: None,
-        })
+        .add(OplogEntry::grow_memory(0))
         .await
         .expect("oplog write")
 }
@@ -997,7 +994,7 @@ async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chun
             .await;
         append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
         for _ in 0..2050 {
-            append_noop(oplog.as_ref()).await;
+            append_memory_hint(oplog.as_ref()).await;
         }
         oplog.commit(CommitLevel::Always).await.unwrap();
         let end = oplog.current_oplog_index().await;
@@ -1642,7 +1639,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let key = session_key(&id, &IdempotencyKey::new("result".into()));
     for _ in 0..2050 {
-        append_noop(oplog.as_ref()).await;
+        append_memory_hint(oplog.as_ref()).await;
     }
     let result = append_session(
         oplog.as_ref(),
@@ -2532,7 +2529,7 @@ async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
     );
     assert!(expired.expired);
 
-    append_noop(oplog.as_ref()).await;
+    append_memory_hint(oplog.as_ref()).await;
     let cut = StreamSessionRecord::ForkCut(StreamForkCutRecord {
         format_version: 1,
         request_hash: vec![1; 32],
@@ -2648,7 +2645,7 @@ async fn fork_cut_clears_public_bindings_after_partial_catch_up() {
         Some(DurableStreamPublicBinding::Live { session_key, .. }) if session_key == key
     ));
 
-    append_noop(oplog.as_ref()).await;
+    append_memory_hint(oplog.as_ref()).await;
     let cut = StreamSessionRecord::ForkCut(StreamForkCutRecord {
         format_version: 1,
         request_hash: vec![1; 32],
@@ -2742,7 +2739,7 @@ async fn self_revert_preserves_retained_public_binding_in_warm_and_cold_indexes(
     record.expiry_policy = StreamSessionExpiryPolicy::Sliding { ttl_seconds: 30 };
     record.expiry_deadline_millis = Some(40_000);
     append_session(oplog.as_ref(), prepared).await;
-    let discarded = append_noop(oplog.as_ref()).await;
+    let discarded = append_memory_hint(oplog.as_ref()).await;
     oplog.commit(CommitLevel::Always).await.unwrap();
 
     let expected = DurableStreamPublicBinding::Live {
@@ -3214,10 +3211,7 @@ async fn identity_resolution_distinguishes_absent_and_malformed_oplogs() {
             &mut oplog_service.lock_lifecycle(&malformed.agent_id).await,
             &malformed,
             AgentMode::Durable,
-            OplogEntry::NoOp {
-                timestamp: Timestamp::now_utc(),
-                entity_parent_start_index: None,
-            },
+            OplogEntry::grow_memory(0),
             metadata,
             stale_status(),
             suspended_status(),
@@ -3498,7 +3492,7 @@ async fn catchup_scans_multiple_chunks_and_recovers_evicted_completed_session() 
     )
     .await;
     for _ in 0..1050 {
-        append_noop(oplog.as_ref()).await;
+        append_memory_hint(oplog.as_ref()).await;
     }
     let mut bounded = DurableStreamSessionIndex::default();
     for n in 0..129 {
@@ -3653,13 +3647,7 @@ fn status_fold_tracks_local_lifecycle_without_retaining_caller_results() {
     status = update_status_with_new_entries(
         AgentMode::Durable,
         status,
-        BTreeMap::from([(
-            OplogIndex::INITIAL,
-            OplogEntry::NoOp {
-                timestamp: Timestamp::now_utc(),
-                entity_parent_start_index: None,
-            },
-        )]),
+        BTreeMap::from([(OplogIndex::INITIAL, OplogEntry::grow_memory(0))]),
         &RetryConfig::default(),
     )
     .unwrap()
@@ -4331,7 +4319,7 @@ async fn indexed_raw_authority_cold_and_warm_lookups_do_not_read_oplog_history()
     )
     .await;
     for _ in 0..2048 {
-        append_noop(oplog.as_ref()).await;
+        append_memory_hint(oplog.as_ref()).await;
     }
     oplog
         .commit(CommitLevel::Always)

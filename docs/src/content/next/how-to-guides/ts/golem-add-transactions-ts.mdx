@@ -59,7 +59,7 @@ const outcome = await fallibleSaga<{ reservation: string; charge: string }, stri
 
 ## Infallible Sagas
 
-`infallibleSaga` runs a sequence whose steps are expected to succeed. If a step returns `Result.err`, the already-run steps' compensations run in reverse order and the **entire saga is retried**. Here `saga.execute(step, input)` returns the step's success value directly (an `err` triggers rollback + retry rather than being returned):
+`infallibleSaga` compensates successful steps in reverse order after a failure, then asks the host policy whether another attempt is allowed. Resolve verb `saga`, noun the agent URN, with `attempt` and `error-kind`. `next-retry-delay` uses the existing host evaluator and opaque binary continuation; the SDK uses durable clocks and timers. No matching policy selects the agent default. Unbounded policies are rejected rather than silently capped. Count/time/never exhaustion and selector/evaluator errors produce `SagaRetryFailure`, retaining the original failure. New attempts append history without rewinding. Here `saga.execute(step, input)` returns the step's success value directly:
 
 ```typescript
 import { infallibleSaga } from '@golemcloud/golem-ts-sdk';
@@ -69,7 +69,7 @@ const result = await infallibleSaga(async (saga) => {
     const charge = await saga.execute(chargePayment, 49.99);
     return { reservation, charge };
 });
-// Resolves once the whole sequence succeeds.
+// Resolves on success; handle SagaRetryFailure on exhaustion, policy error or partial rollback.
 ```
 
 ## Using a Saga Inside an Agent Method
@@ -105,6 +105,8 @@ OrderAgent.implement({
 
 - Keep compensation logic idempotent — it may be called more than once
 - Compensation runs in reverse order of execution
-- Steps signal expected failures with `Result.err`; a `throw` inside a saga is an unexpected defect and traps without running compensations. Both saga runners create an atomic region, so the saga is retried according to the applicable retry policy; if the policy gives up, the agent becomes failed
+- Steps signal expected failures with `Result.err`. Caught exceptions also compensate in reverse order. A fallible saga rethrows the original exception only after complete rollback; partial rollback retains both failures.
+- Infallible sagas retry fully compensated failures under the host policy. Each attempt appends new durable calls; earlier calls and compensations remain recorded. An uncatchable guest trap cannot run compensation.
+- Reconstruction repairs an eligible incomplete call at its own `Start`, without repeating completed saga steps.
 - Use `fallibleSaga` when failure is an acceptable outcome the caller should observe
-- Use `infallibleSaga` when the operation must eventually succeed (failures roll back and retry)
+- Use `infallibleSaga` only when another attempt after compensation is appropriate; eventual success is not guaranteed

@@ -3,10 +3,7 @@
  * host API actually exercised by the SDK and its tests:
  *
  * - idempotency-key generator (used by `src/client.ts`)
- * - persistence-level / idempotence-mode / atomic-region accessors
- *   (used by `src/durability.ts`)
- * - oplog index, oplog commit (used by `src/durability.ts` /
- *   `src/oplog.ts`)
+ * - persistence-level accessors and oplog commit
  * - self / agent metadata + lifecycle controls (used by
  *   `src/agents.ts`)
  * - promise rendezvous (used by `src/agents.ts`)
@@ -110,59 +107,32 @@ export const generateIdempotencyKey = (): Uuid => {
 export const __nextIdempotencyKeyAsString = (): string => uuidToString(generateIdempotencyKey())
 
 // ---------------------------------------------------------------------------
-// Persistence level / idempotence mode
+// Persistence level
 // ---------------------------------------------------------------------------
 
 let _persistenceLevel: PersistenceLevel = { tag: "smart" }
-let _idempotenceMode = true
 
 export const getOplogPersistenceLevel = (): PersistenceLevel => _persistenceLevel
 export const setOplogPersistenceLevel = (next: PersistenceLevel): void => {
   _persistenceLevel = next
 }
-export const getIdempotenceMode = (): boolean => _idempotenceMode
-export const setIdempotenceMode = (next: boolean): void => {
-  _idempotenceMode = next
-}
 
 // ---------------------------------------------------------------------------
-// Oplog index / atomic regions / oplog commit
+// Promise indices and oplog commit
 // ---------------------------------------------------------------------------
 
 let _oplogIndex: OplogIndex = 0n
-const _atomicMarks: OplogIndex[] = []
 const _oplogCommits: number[] = []
 
-export const getOplogIndex = (): OplogIndex => {
+const nextPromiseIndex = (): OplogIndex => {
   _oplogIndex = _oplogIndex + 1n
   return _oplogIndex
-}
-
-export const setOplogIndex = (idx: OplogIndex): void => {
-  _oplogIndex = idx
 }
 
 export const oplogCommit = (replicas: number): void => {
   _oplogCommits.push(replicas)
 }
 
-export const markBeginOperation = (): OplogIndex => {
-  _oplogIndex = _oplogIndex + 1n
-  _atomicMarks.push(_oplogIndex)
-  return _oplogIndex
-}
-
-export const markEndOperation = (begin: OplogIndex): void => {
-  // Idempotent: removing a mark that's already gone is a no-op.
-  const idx = _atomicMarks.indexOf(begin)
-  if (idx >= 0) _atomicMarks.splice(idx, 1)
-}
-
-export const __getOplogIndex = (): OplogIndex => _oplogIndex
-export const __setOplogIndex = (next: OplogIndex): void => {
-  _oplogIndex = next
-}
-export const __getAtomicMarks = (): ReadonlyArray<OplogIndex> => [..._atomicMarks]
 export const __getOplogCommits = (): ReadonlyArray<number> => [..._oplogCommits]
 
 // ---------------------------------------------------------------------------
@@ -360,7 +330,7 @@ export const __setPromiseGetError = (error: unknown | undefined): void => {
 export const createPromise = (): PromiseId => {
   const id: PromiseId = {
     agentId: _selfMetadata.agentId,
-    oplogIdx: getOplogIndex(),
+    oplogIdx: nextPromiseIndex(),
   }
   _promises.set(promiseKey(id), { subscribers: [] })
   return id
@@ -407,9 +377,7 @@ export const getPromise = (id: PromiseId): GetPromiseResult => new GetPromiseRes
 export const __resetAll = (): void => {
   counter = 0n
   _persistenceLevel = { tag: "smart" }
-  _idempotenceMode = true
   _oplogIndex = 0n
-  _atomicMarks.length = 0
   _oplogCommits.length = 0
   _selfMetadata = {
     agentId: { componentId: defaultComponentId, agentId: "Test()" },

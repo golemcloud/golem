@@ -24,6 +24,7 @@ import (
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
 	underlying "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_underlying"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/witschema"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 	"io"
 )
@@ -116,7 +117,12 @@ func init() {
 			if rpcErr != nil {
 				return nil, toolCallErrorFromWit(name, path, *rpcErr)
 			}
-			return finish(res)
+			if res.IsNone() {
+				return finish(res)
+			}
+			return witschema.DecodeOwned(res.Some().Value, func() (any, error) {
+				return finish(res)
+			})
 		}
 		if dynamic {
 			return newInvocation(call, func(c toolCall) (golem.Option[golem.TypedValue], error) {
@@ -160,6 +166,9 @@ func init() {
 		stderr toolExports.Stderr,
 		principal common.Principal,
 	) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
+		// The input's cards are this component's: the ones no decode took or
+		// call sent go back to the host however the invocation ends.
+		defer engine.ReleaseCardsIn(input.Value.ValueNodes, link.ReleaseCard)
 		e, ok := toolDefs.get(toolName)
 		if !ok {
 			return witTypes.Err[toolCommon.InvocationResult](types.MakeToolErrorInvalidToolName(toolName))
@@ -202,6 +211,9 @@ func init() {
 		principal common.Principal,
 		wrapped *underlying.UnderlyingTool,
 	) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
+		// The input's cards are this component's: the ones no decode took or
+		// call sent go back to the host however the invocation ends.
+		defer engine.ReleaseCardsIn(input.Value.ValueNodes, link.ReleaseCard)
 		return defs.invokeMiddleware(middlewareName, &middlewareInvocation{
 			toolName:    toolName,
 			tool:        toolMetadata,

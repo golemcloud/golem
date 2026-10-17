@@ -95,6 +95,7 @@ type RdbmsHostErrorTag =
 /** Canonical set of `Error.tag` values used by every RDBMS WIT package. */
 export const RDBMS_ERROR_TAGS: ReadonlySet<RdbmsHostErrorTag> = new Set<RdbmsHostErrorTag>([
   "connection-failure",
+  "resource-lost",
   "query-parameter-failure",
   "query-execution-failure",
   "query-response-failure",
@@ -163,6 +164,7 @@ export const sqlErrorFor =
         case "query-response-failure":
           reason = new SqlSyntaxError({ cause, message: detail, operation })
           break
+        case "resource-lost":
         case "other":
           reason = new UnknownError({ cause, message: detail, operation })
           break

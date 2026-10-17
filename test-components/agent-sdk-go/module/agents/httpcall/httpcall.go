@@ -19,17 +19,16 @@ var Callback = Agent.Method[CallbackIn, string]("callback", golem.Description("G
 // RetryCallback calls a flaky endpoint under a status-code retry policy.
 var RetryCallback = Agent.Method[CallbackIn, string]("retry-callback", golem.Description("GET the flaky endpoint under a retry policy that retries on 500"))
 
-// AtomicTimedCallback reads the clock (wall + monotonic) inside the atomic
-// region right before the HTTP call — a user-level stand-in for the runtime's
-// sampled clock read that coincided with the pre-send hang.
-var AtomicTimedCallback = Agent.Method[CallbackIn, string]("atomic-timed-callback", golem.Description("time.Now() then GET, inside an atomic region"))
+// ScheduleCallback calls the flaky endpoint and retries it in the agent, with a
+// retry.Schedule that sleeps between the attempts, while it answers 500.
+var ScheduleCallback = Agent.Method[CallbackIn, string]("schedule-callback", golem.Description("GET the flaky endpoint, retrying in the agent with a schedule while it answers 500; return attempts:body"))
 
-// AtomicCallback makes the same call inside durability.Atomically — the minimal case
-// for "does an outbound HTTP call settle before an atomic region closes?".
-var AtomicCallback = Agent.Method[CallbackIn, string]("atomic-callback", golem.Description("GET the callback endpoint inside an atomic region"))
+// ScheduleAttempts reports how many attempts the schedule runs made, which a
+// replay rebuilds from the oplog.
+var ScheduleAttempts = Agent.Method[golem.Unit, uint32]("schedule-attempts", golem.Description("The attempts of every schedule-callback so far"))
 
 // TransactionCallback runs a fallible transaction whose two steps each GET the
-// callback endpoint; the steps of a transaction run inside an atomic region.
+// callback endpoint.
 var TransactionCallback = Agent.Method[CallbackIn, string]("transaction-callback", golem.Description("GET the callback endpoint from two transaction steps and join the bodies"))
 
 // ReadTruncated GETs /truncated, whose response ends before its Content-Length,

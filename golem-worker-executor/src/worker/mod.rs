@@ -33,6 +33,7 @@ pub mod invocation;
 mod invocation_loop;
 mod lifecycle;
 pub mod owner_lane;
+pub(crate) mod owner_wallet;
 pub mod read_only_cache;
 pub(crate) mod snapshot_selection;
 pub(crate) mod start_outcome;
@@ -52,9 +53,10 @@ use self::agent_config::{
 use crate::durable_host::durable_session::{DurableStreamConsumerJournal, StreamSession};
 use crate::durable_host::durable_stream::{
     AttachedStreamSegmentSource, CommittedProducerStreamEvent, ConsumerAttachmentStatus,
-    DbDirectStreamAttachmentConsumerProbe, DurableStreamCommit, DurableStreamStore,
-    ProducerRegistrationRequest, RoutedStreamAttachmentControl, SessionControlMetadata,
-    SessionError, StreamAttachmentConsumerProbe, StreamAttachmentControl, StreamStoreError,
+    DbDirectStreamAttachmentConsumerProbe, DurableStreamCommit, DurableStreamPublishedHorizon,
+    DurableStreamStore, ProducerRegistrationRequest, RoutedStreamAttachmentControl,
+    SessionControlMetadata, SessionError, StreamAttachmentConsumerProbe, StreamAttachmentControl,
+    StreamStoreError,
 };
 use crate::durable_host::schema_value_stream::contains_stream;
 use crate::durable_host::tool::operation::OwnerFailureWinner;
@@ -727,10 +729,7 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     /// request waits for it before it signals the Store, and an entity admission reopens only
     /// when it is still the last one.
     interrupt_establishment_tail: StdMutex<Arc<InterruptEstablishment>>,
-    /// Earliest oplog index requested for deletion by runtime recovery. The same lock is the
-    /// publication gate between accepting a cut and publishing a successful invocation.
-    pending_runtime_jump: Arc<Mutex<Option<OplogIndex>>>,
-    runtime_append_tasks: StdMutex<Arc<tasks::RuntimeAppendTasks>>,
+    runtime_append_tasks: Arc<StdMutex<Arc<tasks::RuntimeAppendTasks>>>,
     infrastructure_recovery_retry_config: RetryConfig,
     infrastructure_recovery_attempt: AtomicU32,
     oom_retry_config: RetryConfig,
@@ -2663,10 +2662,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             published_authority_generation.clone(),
             instance.clone(),
         ));
+        let card_event_boundary_lock = Arc::new(Mutex::new(()));
+        let runtime_append_tasks = Arc::new(StdMutex::new(Arc::default()));
         let owner_execution = Arc::new(OwnerExecution::new(
             owned_agent_id.clone(),
             oplog.clone(),
             state_actor.owner_commit_controller(),
+            card_event_boundary_lock.clone(),
+            runtime_append_tasks.clone(),
+            self.card_interest_index.clone(),
         ));
         let owner_runtime_resources = Arc::new(OwnerRuntimeResources::new(
             Arc::clone(&resource_entry),
@@ -2702,8 +2706,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             linear_memory_grant: StdMutex::new(None),
             interrupts: Arc::default(),
             interrupt_establishment_tail: StdMutex::new(InterruptEstablishment::ready()),
-            pending_runtime_jump: Arc::new(Mutex::new(None)),
-            runtime_append_tasks: StdMutex::new(Arc::default()),
+            runtime_append_tasks,
             infrastructure_recovery_retry_config: deps.config().retry.clone(),
             infrastructure_recovery_attempt: AtomicU32::new(0),
             execution_status,
@@ -2712,7 +2715,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             registered_concurrent_account,
             last_known_status: current_status,
             metrics_status,
-            card_event_boundary_lock: Arc::new(Mutex::new(())),
+            card_event_boundary_lock,
             stream_session_creation_lock: Arc::new(Mutex::new(())),
             published_authority_generation,
             oom_retry_config: deps.config().memory.oom_retry_config.clone(),
@@ -2826,6 +2829,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         activation: Arc<golem_common::model::entity::EntityActivation>,
         owner_component_metadata: Arc<golem_service_base::model::component::Component>,
         authority_wallet: Vec<StoredCard>,
+        entity_start_index: Option<OplogIndex>,
     ) -> Result<Ctx, WorkerExecutorError> {
         if !matches!(runtime, OwnerRuntime::Entity(_)) {
             return Err(WorkerExecutorError::runtime(
@@ -3002,6 +3006,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 filesystem_snapshots::ReplayBaseline::initial_files(),
                 agent_effective_surface,
                 Some(authority_wallet),
+                entity_start_index,
                 Some(owner_component_metadata),
             ),
             self.execution_status.clone(),
@@ -3945,7 +3950,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 OplogErrorKind::Recovery,
                 error,
                 retry_from,
-                false,
                 retry_policy_state,
             ))
             .await;
@@ -4080,47 +4084,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .await
     }
 
-    /// Accepts a destructive replay cut without depending on the requesting Store future to
-    /// remain polled. The owner loop performs teardown and commits the cut before constructing the
-    /// replacement Store. Competing requests collapse to the earliest deleted index.
-    pub async fn request_runtime_jump(self: &Arc<Self>, first_deleted: OplogIndex) {
-        {
-            let mut pending = self.pending_runtime_jump.lock().await;
-            // Publish the stream fence in the same non-yielding section that accepts the cut. Its
-            // detached drain is joined by startup, so requester cancellation cannot reopen it.
-            let _recovery = self.durable_stream_producer.begin_recovery();
-            *pending = Some(pending.map_or(first_deleted, |current| current.min(first_deleted)));
-        }
-
-        let worker = Arc::clone(self);
-        tokio::spawn(async move {
-            // A delayed wakeup from an already committed proposal must not interrupt the
-            // replacement generation.
-            let pending = worker.pending_runtime_jump.lock().await;
-            let establishment = if pending.is_some() {
-                worker
-                    .queue_interrupt(InterruptKind::Jump, false, UnloadReason::Restart, false)
-                    .await
-            } else {
-                None
-            };
-            drop(pending);
-            if let Some(establishment) = establishment {
-                worker
-                    .establish_queued_interrupt(InterruptKind::Jump, establishment)
-                    .await;
-            }
-        });
-    }
-
     pub fn runtime_append_tasks(&self) -> Arc<tasks::RuntimeAppendTasks> {
         self.runtime_append_tasks.lock().unwrap().clone()
-    }
-
-    pub async fn runtime_jump_publication_gate(
-        &self,
-    ) -> tokio::sync::MutexGuard<'_, Option<OplogIndex>> {
-        self.pending_runtime_jump.lock().await
     }
 
     async fn set_interrupting_internal(
@@ -6088,7 +6053,34 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
         snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
-    ) -> Result<(), OplogError> {
+    ) -> Result<(), WorkerExecutorError> {
+        let wallet = self.owner_execution.wallet().await?;
+        let boundary = Box::pin(wallet.lock_boundary());
+        self.persist_successful_update_with_boundary(
+            linear_memory,
+            target_revision,
+            new_component_size,
+            new_active_plugins,
+            snapshot_assisted_details,
+            wallet,
+            boundary,
+        )
+        .await
+    }
+
+    pub(crate) async fn persist_successful_update_with_boundary(
+        self: &Arc<Self>,
+        linear_memory: &LinearMemoryTracker,
+        target_revision: ComponentRevision,
+        new_component_size: u64,
+        new_active_plugins: HashSet<EnvironmentPluginGrantId>,
+        snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
+        wallet: Arc<owner_wallet::OwnerWallet>,
+        boundary: futures::future::BoxFuture<
+            'static,
+            Result<Arc<owner_wallet::CardEventBoundary>, WorkerExecutorError>,
+        >,
+    ) -> Result<(), WorkerExecutorError> {
         let done = {
             let mut growth = self.memory_growth.lock().unwrap();
             let entry = OplogEntry::successful_update(
@@ -6100,7 +6092,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             );
             *growth = Arc::new(PendingMemoryGrowth::default());
             self.state_actor
-                .queue_ordered_oplog_entry(self.clone(), entry)
+                .queue_ordered_oplog_entry(self.clone(), entry, wallet, boundary)
         };
         // A refusal is returned: an update the oplog does not record has not been applied.
         done.await.unwrap_or_else(|_| {
@@ -6109,6 +6101,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 self.owned_agent_id
             )
         })
+    }
+
+    pub(crate) fn recover_wallet_generation(self: &Arc<Self>) {
+        self.state_actor.recover_wallet_generation(self.clone());
     }
 
     pub(crate) fn request_memory_limit_interrupt(self: &Arc<Self>, memory: LinearMemoryTracker) {
@@ -7988,6 +7984,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let service = self.worker_service();
         let mode = data.initial_worker_metadata.agent_mode;
         let tasks = data.tasks.clone();
+        let published_horizon = Self::durable_stream_published_horizon_for(data);
         data.durable_stream_producer
             .get_or_load(commit.clone(), move || async move {
                 let producer = DurableStreamStore::load_indexed_with_commit(
@@ -8001,6 +7998,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await?;
                 producer.set_worker_tasks(tasks);
+                producer.set_published_horizon(published_horizon);
                 Ok(producer)
             })
             .await
@@ -8030,6 +8028,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         })
     }
 
+    /// The status task publishes a durable agent's status only after it folds a successful commit
+    /// that flushed every entry through the status index. An ephemeral agent's weaker commit levels
+    /// fold without reaching storage, and a detached status is not a fold of the oplog.
+    fn durable_stream_published_horizon_for(
+        data: &ResolvedWorkerData<Ctx>,
+    ) -> DurableStreamPublishedHorizon {
+        let durable = data.initial_worker_metadata.agent_mode == AgentMode::Durable;
+        let status = data.last_known_status.clone();
+        let detached = data.last_known_status_detached.clone();
+        Arc::new(move || {
+            (durable && !detached.load(Ordering::Acquire)).then(|| status.load().oplog_idx)
+        })
+    }
+
     fn durable_stream_commit(&self) -> DurableStreamCommit {
         Self::durable_stream_commit_for(self)
     }
@@ -8052,6 +8064,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let service = self.worker_service();
         let mode = data.initial_worker_metadata.agent_mode;
         let tasks = data.tasks.clone();
+        let published_horizon = Self::durable_stream_published_horizon_for(data);
         data.durable_stream_producer
             .get_or_load(commit.clone(), move || async move {
                 let producer = DurableStreamStore::load_indexed_with_commit(
@@ -8065,22 +8078,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await?;
                 producer.set_worker_tasks(tasks);
+                producer.set_published_horizon(published_horizon);
                 Ok(producer)
             })
             .await
     }
 
-    fn durable_stream_consumer_auth_ctx(&self) -> Result<AuthCtx, WorkerExecutorError> {
+    fn durable_stream_consumer_auth_ctx(&self) -> Result<Arc<AuthCtx>, WorkerExecutorError> {
         let surface = crate::durable_host::owner_effective_surface_from_component_metadata(
             self.current_component.load().as_ref(),
             &self.owned_agent_id,
             &self.owner_context,
         )?;
-        Ok(AuthCtx::agent_with_effective_surface(
+        Ok(Arc::new(AuthCtx::agent_with_effective_surface(
             self.initial_worker_metadata.created_by,
             self.initial_worker_metadata.created_by_email.clone(),
             surface,
-        ))
+        )))
     }
 
     fn has_durable_stream_history(&self) -> bool {
@@ -8995,64 +9009,76 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         source_card_id: CardId,
         card: StoredCard,
     ) -> Result<(), WorkerExecutorError> {
-        let instance_guard = self.lock_non_stopping_worker_owned().await;
+        loop {
+            let instance_guard = self.lock_non_stopping_worker_owned().await;
 
-        if instance_guard.ensure_not_deleting().is_err() {
-            return Err(WorkerExecutorError::invalid_request(
-                "Cannot deliver a permission card to a deleting worker",
-            ));
-        }
+            if instance_guard.ensure_not_deleting().is_err() {
+                return Err(WorkerExecutorError::invalid_request(
+                    "Cannot deliver a permission card to a deleting worker",
+                ));
+            }
 
-        let status = self.state_actor.status().await;
-        if let Some(received) = status.received_card_transfers.get(&transfer_id) {
-            return match received {
-                golem_common::model::ReceivedCardTransferState::Received {
-                    source_card_id: recorded_source_card_id,
-                    card: recorded_card,
-                } if *recorded_source_card_id == source_card_id && recorded_card == &card => Ok(()),
-                golem_common::model::ReceivedCardTransferState::Received { .. }
-                | golem_common::model::ReceivedCardTransferState::Conflict => Err(
-                    WorkerExecutorError::invalid_request(PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT),
-                ),
+            // Ordered updates can own the boundary while a preceding lifecycle notification needs
+            // the instance lock. Never retain the instance lock while waiting for that boundary.
+            let Ok(boundary_guard) = self.card_event_boundary_lock.clone().try_lock_owned() else {
+                drop(instance_guard);
+                let boundary_guard = self.card_event_boundary_lock.clone().lock_owned().await;
+                drop(boundary_guard);
+                continue;
             };
+
+            let status = self.state_actor.status().await;
+            if let Some(received) = status.received_card_transfers.get(&transfer_id) {
+                return match received {
+                    golem_common::model::ReceivedCardTransferState::Received {
+                        source_card_id: recorded_source_card_id,
+                        card: recorded_card,
+                    } if *recorded_source_card_id == source_card_id && recorded_card == &card => {
+                        Ok(())
+                    }
+                    golem_common::model::ReceivedCardTransferState::Received { .. }
+                    | golem_common::model::ReceivedCardTransferState::Conflict => {
+                        Err(WorkerExecutorError::invalid_request(
+                            PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
+                        ))
+                    }
+                };
+            }
+
+            let parsed_agent_id = self.parsed_agent_id.as_ref().ok_or_else(|| {
+                WorkerExecutorError::invalid_request(
+                    "permission cards can only be delivered to agents",
+                )
+            })?;
+            let component = self.current_component.load();
+            let target_context =
+                agent_monomorphization_context(&component, &self.owned_agent_id, parsed_agent_id);
+            if !card_matches_agent_recipient(&card, &target_context) {
+                return Err(WorkerExecutorError::invalid_request(
+                    PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH,
+                ));
+            }
+
+            // A refused entry is not delivered: the sender learns the shard moved instead of treating
+            // a transfer this oplog never recorded as received.
+            self.state_actor
+                .append_and_commit_attached(
+                    OplogEntry::card_event_queued(
+                        None,
+                        Box::new(QueuedCardEvent::transfer_received(
+                            transfer_id,
+                            source_card_id,
+                            card,
+                        )),
+                    ),
+                    self.clone(),
+                    instance_guard,
+                    Some(boundary_guard),
+                )
+                .await?;
+
+            return Ok(());
         }
-
-        let parsed_agent_id = self.parsed_agent_id.as_ref().ok_or_else(|| {
-            WorkerExecutorError::invalid_request("permission cards can only be delivered to agents")
-        })?;
-        let component = self.current_component.load();
-        let target_context =
-            agent_monomorphization_context(&component, &self.owned_agent_id, parsed_agent_id);
-        if !card_matches_agent_recipient(&card, &target_context) {
-            return Err(WorkerExecutorError::invalid_request(
-                PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH,
-            ));
-        }
-
-        let boundary_guard = self.card_event_boundary_lock.clone().lock_owned().await;
-        // A refused entry is not delivered: the sender learns the shard moved instead of treating
-        // a transfer this oplog never recorded as received.
-        self.state_actor
-            .append_and_commit_attached(
-                OplogEntry::card_event_queued(
-                    None,
-                    Box::new(QueuedCardEvent::transfer_received(
-                        transfer_id,
-                        source_card_id,
-                        card,
-                    )),
-                ),
-                self.clone(),
-                instance_guard,
-                Some(boundary_guard),
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    pub(crate) fn card_event_boundary_lock(&self) -> Arc<Mutex<()>> {
-        self.card_event_boundary_lock.clone()
     }
 
     pub(crate) fn published_authority_generation(&self) -> Arc<AtomicU64> {
@@ -10310,8 +10336,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 error.to_string(),
                             ),
                             retry_from: OplogIndex::INITIAL,
-                            in_atomic_region: false,
-                            atomic_region_had_side_effects: false,
                             semantic_trap_retry_override: None,
                         },
                         stderr: String::new(),
@@ -10824,26 +10848,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Writes a *clean* status checkpoint *during* a long-running invocation, taken from the current
     /// committed in-memory status (the caller must only invoke this right after a durable commit, so
     /// `last_known_status` reflects the committed oplog tip).
-    ///
-    /// In addition to the [`Self::checkpoint_status`] guards, this respects the per-invocation
-    /// `get_oplog_index` marker watermark: if the guest captured an oplog index `M` via
-    /// `get_oplog_index`, a later `set_oplog_index(M)` deletes `(M.next()..tip]` but preserves `M`,
-    /// so a checkpoint must not advance past `M` or it would be discarded after such a jump. When a
-    /// marker is present and the committed tip is already beyond it, we skip the checkpoint (a cheap
-    /// no-op) rather than write one that a later jump would invalidate.
-    pub(crate) async fn checkpoint_status_mid_invocation(
-        &self,
-        min_exposed_marker: Option<OplogIndex>,
-    ) {
+    pub(crate) async fn checkpoint_status_mid_invocation(&self) {
         if self.last_known_status_detached.load(Ordering::Acquire) {
             return;
         }
         let status = self.last_known_status.load_full();
-        if let Some(marker) = min_exposed_marker
-            && status.oplog_idx > marker
-        {
-            return;
-        }
         self.status_checkpointer
             .maybe_checkpoint(
                 &status,
@@ -11522,8 +11531,7 @@ impl StartFilesystem {
         })
     }
 
-    /// The replay inputs of the plan. The suffix-rollback check reads them before the filesystem
-    /// is built.
+    /// The replay inputs of the plan.
     fn replay(&self) -> &filesystem_snapshots::ReplayBaseline {
         &self.plan.replay
     }
@@ -11911,15 +11919,7 @@ impl RunningWorker {
         // Transport-owned bodies and custom begin coordinators can outlive their Stores. Seal
         // their old admission handle permanently before fixing the committed replay horizon.
         parent.runtime_append_tasks().seal_and_wait().await;
-        *parent.runtime_append_tasks.lock().unwrap() = Arc::default();
-
-        if parent.durable_stream_producer.is_recovering() {
-            parent
-                .durable_stream_producer
-                .begin_recovery()
-                .await
-                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
-        }
+        let wallet_installation_guard = parent.card_event_boundary_lock.clone().lock_owned().await;
 
         // Drain buffered work from the previous runtime before constructing its replacement.
         parent
@@ -11959,6 +11959,7 @@ impl RunningWorker {
                     ))
                     .await
                     .map_err(WorkerExecutorError::from)?;
+                drop(wallet_installation_guard);
                 return Box::pin(Self::create_instance(
                     parent,
                     concurrent_agent_permit,
@@ -11974,6 +11975,7 @@ impl RunningWorker {
                     start_outcome::RawStartError::StaleSource(&found),
                 );
                 Self::perform_start_action(&parent, action).await?;
+                drop(wallet_installation_guard);
                 return Box::pin(Self::create_instance(
                     parent,
                     concurrent_agent_permit,
@@ -12069,6 +12071,7 @@ impl RunningWorker {
                             start_outcome::RawStartError::ModeChange(&details),
                         );
                         Self::perform_start_action(&parent, action).await?;
+                        drop(wallet_installation_guard);
                         return Box::pin(Self::create_instance(
                             parent,
                             concurrent_agent_permit,
@@ -12112,6 +12115,7 @@ impl RunningWorker {
                                 }
                                 error => error,
                             })?;
+                        drop(wallet_installation_guard);
                         return Box::pin(Self::create_instance(
                             parent,
                             concurrent_agent_permit,
@@ -12166,6 +12170,7 @@ impl RunningWorker {
                     start_outcome::RawStartError::Disabled,
                 );
                 Self::perform_start_action(&parent, action).await?;
+                drop(wallet_installation_guard);
                 return Box::pin(Self::create_instance(
                     parent,
                     concurrent_agent_permit,
@@ -12196,51 +12201,6 @@ impl RunningWorker {
         let skipped_regions = start_filesystem
             .replay()
             .skipped_regions(&worker_metadata.last_known_status.skipped_regions);
-
-        if parent.agent_mode() == AgentMode::Durable {
-            let mut pending_runtime_jump = parent.pending_runtime_jump.lock().await;
-            let region = crate::durable_host::replay_state::suffix_rollback_region(
-                &worker_metadata.last_known_status.atomic_rollback,
-                &skipped_regions,
-                worker_metadata.last_known_status.oplog_idx,
-                *pending_runtime_jump,
-            )?;
-            if let Some(region) = region {
-                if !parent.durable_stream_producer.is_recovering() {
-                    parent
-                        .durable_stream_producer
-                        .begin_recovery()
-                        .await
-                        .map_err(|error| {
-                            error.into_worker_executor_error(WorkerExecutorError::runtime)
-                        })?;
-                    // The first horizon was only a prediction. Commit every accepted stream
-                    // mutation, then reload metadata and plan the cut at the resulting fixed tip.
-                    parent
-                        .commit_oplog_and_update_state(CommitLevel::Always)
-                        .await
-                        .map_err(WorkerExecutorError::from)?;
-                    drop(pending_runtime_jump);
-                    return Box::pin(Self::create_instance(
-                        parent,
-                        concurrent_agent_permit,
-                        filesystem_snapshot_slot,
-                    ))
-                    .await;
-                }
-                parent
-                    .add_and_commit_oplog(OplogEntry::jump(None, region))
-                    .await
-                    .map_err(WorkerExecutorError::from)?;
-                *pending_runtime_jump = None;
-                return Err(WorkerExecutorError::Interrupted {
-                    kind: InterruptKind::Jump,
-                }
-                .into());
-            }
-            *pending_runtime_jump = None;
-            parent.durable_stream_producer.finish_recovery();
-        }
 
         let filesystems = parent.active_agents().agent_filesystems();
         let initial_files = parent
@@ -12415,6 +12375,41 @@ impl RunningWorker {
                 );
             }
         };
+        let install_wallet = async {
+            parent
+                .commit_oplog_and_update_state(CommitLevel::Always)
+                .await?;
+            let horizon = parent.oplog.current_oplog_index().await;
+            let snapshot_index = replay.snapshot.map(|(index, _)| index);
+            let baseline = owner_wallet::WalletBaseline::new(
+                parent.owned_agent_id.clone(),
+                parent.owner_context.clone(),
+                parent.component_service(),
+                &component_metadata_for_replay,
+                parent.oplog.as_ref(),
+                snapshot_index,
+                worker_metadata.config.clone(),
+            )
+            .await?;
+            parent
+                .owner_execution
+                .install_replay_generation_locked(
+                    skipped_regions.clone(),
+                    snapshot_index,
+                    baseline,
+                    horizon,
+                    parent.tasks.clone(),
+                    &wallet_installation_guard,
+                )
+                .await
+        }
+        .await;
+        if let Err(error) = install_wallet {
+            return Err(
+                cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await,
+            );
+        }
+        drop(wallet_installation_guard);
         let mut context = match Ctx::create(
             worker_metadata.created_by,
             OwnedAgentId::new(worker_metadata.environment_id, &worker_metadata.agent_id),
@@ -12451,6 +12446,7 @@ impl RunningWorker {
                 worker_metadata.config,
                 replay,
                 agent_effective_surface,
+                None,
                 None,
                 None,
             ),
@@ -13070,10 +13066,7 @@ impl InvocationResult {
                     })
                 }
                 OplogEntry::Error {
-                    error,
-                    retry_from,
-                    inside_atomic_region,
-                    ..
+                    error, retry_from, ..
                 } => {
                     let stderr =
                         recover_stderr_logs(services, owned_agent_id, agent_mode, oplog_idx).await;
@@ -13081,11 +13074,6 @@ impl InvocationResult {
                         trap_type: TrapType::Error {
                             error,
                             retry_from,
-                            // Membership is not persisted; only the side-effect flag is. This
-                            // reconstructed trap is used for error reporting, not for re-deciding
-                            // recovery, so the membership bit is irrelevant here.
-                            in_atomic_region: inside_atomic_region,
-                            atomic_region_had_side_effects: inside_atomic_region,
                             semantic_trap_retry_override: None,
                         },
                         stderr,
@@ -14379,8 +14367,6 @@ mod tests {
                     trap_type: TrapType::Error {
                         error: AgentError::TransientError("in-function retry".to_string()),
                         retry_from: OplogIndex::from_u64(17),
-                        in_atomic_region: false,
-                        atomic_region_had_side_effects: false,
                         semantic_trap_retry_override: None,
                     },
                     stderr: String::new(),
@@ -14402,8 +14388,6 @@ mod tests {
                     trap_type: TrapType::Error {
                         error: AgentError::TransientError("in-function retry".to_string()),
                         retry_from: OplogIndex::from_u64(17),
-                        in_atomic_region: false,
-                        atomic_region_had_side_effects: false,
                         semantic_trap_retry_override: None,
                     },
                     stderr: String::new(),
@@ -14436,8 +14420,6 @@ mod tests {
                     trap_type: TrapType::Error {
                         error: AgentError::TransientError("prior retry".to_string()),
                         retry_from: OplogIndex::from_u64(17),
-                        in_atomic_region: false,
-                        atomic_region_had_side_effects: false,
                         semantic_trap_retry_override: None,
                     },
                     stderr: String::new(),
@@ -14459,8 +14441,6 @@ mod tests {
                     trap_type: TrapType::Error {
                         error: AgentError::PermissionDenied("permission denied".to_string()),
                         retry_from: OplogIndex::from_u64(17),
-                        in_atomic_region: false,
-                        atomic_region_had_side_effects: false,
                         semantic_trap_retry_override: None,
                     },
                     stderr: String::new(),

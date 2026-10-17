@@ -10,6 +10,9 @@ license-file = "../../LICENSE"
 autotests = false
 build = "build.rs"
 
+[lints]
+workspace = true
+
 [features]
 default = []
 server-commands = []
@@ -155,6 +158,7 @@ reqwest = { workspace = true }
 sqlx = { workspace = true }
 syn = { workspace = true, features = ["full", "parsing"] }
 test-r = { workspace = true }
+tokio-rustls = { workspace = true }
 wat = { workspace = true }
 
 [build-dependencies]

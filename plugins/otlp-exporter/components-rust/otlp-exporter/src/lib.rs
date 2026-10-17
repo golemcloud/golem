@@ -125,7 +125,7 @@ impl OplogProcessorGuest for OtlpExporterComponent {
 
         let scope = InstrumentationScope {
             name: "golem-otlp-exporter".to_string(),
-            version: "1.5.3".to_string(),
+            version: "1.5.8".to_string(),
         };
 
         let traces = if has_traces {

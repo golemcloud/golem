@@ -1,7 +1,7 @@
 # Bash built-in tool
 
 This standalone Golem application builds the `bash` component, which the registry provisions as
-the grantable `bash@0.2.1` system tool. It exports one command, `run`, for finite shell execution. A
+the grantable `bash@0.2.2` system tool. It exports one command, `run`, for finite shell execution. A
 call accepts a starting directory and a script, runs the script in a fresh shell, then returns
 captured stdout, captured stderr, the exit code and the directory the script ended in.
 
@@ -52,7 +52,7 @@ tools:
     release:
       account: builtin-tool-owner@golem.cloud
       name: bash
-      version: "0.2.1"
+      version: "0.2.2"
 agents:
   MyAgent:
     tools:
@@ -453,6 +453,15 @@ channels interleaved, so under `2>&1` a sibling's stdout always comes before its
 too. The SDK's optional-argument encoding correction is a separate integration gate; tests use
 supported sibling argument shapes. See [acceptance evidence](ACCEPTANCE.md).
 
+When a bound command returns the named `golem.tool.ProcessExitStatus` record with exactly one
+`exit_code: u8` field, its successful typed result is the shell exit status. The stdout attachment remains the command's output,
+even when empty. A nonzero status does not add a diagnostic to stderr; `$?`, `&&` and `||` use
+that status, including for commands without stdout. A missing or malformed status fails with status 1 and a result
+diagnostic, while preserving the attachment bytes. Other result schemas do not set the exit
+status, even if they contain an `exit_code` field. Without declared stdout, ordinary results retain their JSON rendering (strings render as text),
+including integer results. This source behavior requires a new published Bash artifact before
+it takes effect in provisioned tools.
+
 ## Limits
 
 Bash has no fixed limit for these; the tool must, because running out of memory or stack traps
@@ -483,7 +492,8 @@ pipe. What a call returns is bounded lower, by what Golem can carry (see Output)
   million elements and a brace expansion of a million words fit comfortably.
 - **Time.** A call runs for at most its `timeout` argument (600 s by default, at most 3600 s;
   see [Contract](#contract)). The limit reaches a loop of commands that never wait
-  (`while :; do x=1; done`): the shell lets the call's timers run every 64 commands. It cannot
+  (`while :; do x=1; done`), also one that starts a pipeline in each round: each shell and each
+  pipeline stage lets the call's timers run after every 64 of its own commands. It cannot
   stop one command that computes for long without waiting (a `sort` of a large file, a regular
   expression that backtracks), which ends first. `timeout DURATION COMMAND` limits one command, as
   GNU's does, with its options, signals and statuses (124 on timeout, 137 on KILL). A `sh -c` or
@@ -575,12 +585,12 @@ container it runs the same Cargo build as `golem.yaml`'s release preset, with th
 `Cargo.toml` pins. It then names the component `golem:bash` as golem-cli does, checks it with
 `wasm-tools validate --features all` and writes `builtin-tools/bash.wasm`. That file is not
 committed: built-in artifacts are published as immutable releases of `golemcloud/golem-builtins`
-with `cargo make publish-builtin-artifact` (`BUILTIN_COMPONENT=bash`) and pinned by SHA-256 in
-`builtin-artifacts.lock.json`; `cargo make fetch-builtin-artifacts` downloads the pinned bytes to
-the same path. A rebuild of unchanged sources gives the published bytes, so a
+as part of tagged Golem releases and pinned by SHA-256 in the generated
+`builtin-artifacts.release.json`. Development uses `cargo make ensure-builtin-artifacts` to
+rebuild changed inputs locally. A rebuild of unchanged sources gives the published bytes, so a
 rebuilt `bash.wasm` differs only where a change reached it. The Golem SDK is a path dependency:
-after a change to it, or to this workspace, publish a new artifact version and update the lock
-entry in the same change.
+changes to it or to this workspace require a local rebuild, not a publication or lock update.
+See [the release procedure](../../BUILTIN_ARTIFACTS.md) for publication.
 
 A native build cannot be reproducible, for two reasons. Cargo mixes the host platform into the
 hashes that name every crate (through the proc macros and build scripts it depends on). It also
@@ -598,15 +608,17 @@ version, and a change to the exported tool metadata a new tool version
 as well.
 
 The independent workspace commits its own `Cargo.lock`. Forks are pinned by git revision in the
-workspace `[patch.crates-io]`; no local dependency overrides are required.
+workspace `[patch.crates-io]`; no local dependency overrides are required. Each pinned revision of
+a `golemcloud` fork carries a release tag in that fork (`golem-v1`, `golem-v2`, …). The tag names
+the revision, and the revision stays the pin.
 
-| Dependency | Repository | Revision |
-|---|---|---|
-| Brush | `golemcloud/brush` | `9549479d688721d6ae10a0b5fdc413d617fe5f03` |
-| Coreutils | `golemcloud/coreutils` | `3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620` |
-| sed | `golemcloud/sed` | `794cb2bc9b00ba17432fda74f1bc74d0965e46dc` |
-| jaq-json, jaq-core, jaq-std | `golemcloud/jaq` | `c26f142e19128acda39f0c6668b38a581193b388` |
-| diffutils (upstream, past the wasip2 build fix) | `uutils/diffutils` | `3f7a9a6ff3ee584d1cedbe013ebdebb437ad33b8` |
+| Dependency | Repository | Tag | Revision |
+|---|---|---|---|
+| Brush | `golemcloud/brush` | `golem-v2` | `518bd2f0ad68e3f2ea25beee4eb17e62ce694c1a` |
+| Coreutils | `golemcloud/coreutils` | `golem-v1` | `3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620` |
+| sed | `golemcloud/sed` | `golem-v1` | `794cb2bc9b00ba17432fda74f1bc74d0965e46dc` |
+| jaq-json, jaq-core, jaq-std | `golemcloud/jaq` | `golem-v1` | `c26f142e19128acda39f0c6668b38a581193b388` |
+| diffutils (upstream, past the wasip2 build fix) | `uutils/diffutils` | none | `3f7a9a6ff3ee584d1cedbe013ebdebb437ad33b8` |
 
 Golem SDK and schema paths are repository-relative. Source attribution is retained in `NOTICE`
 and `LICENSE`.
@@ -618,8 +630,8 @@ cargo clippy --manifest-path builtin-tools/bash/Cargo.toml --locked --workspace 
 CARGO_TARGET_WASM32_WASIP2_RUNNER="wasmtime run -Sp3 -Shttp -Wcomponent-model-async=y --dir /tmp::/tmp" \
   cargo test --manifest-path builtin-tools/bash/Cargo.toml --locked --target wasm32-wasip2 -p bash-shell -p whttp --lib
 cargo make test-builtin-bash-pipelines
-cargo make fetch-builtin-artifacts
-cargo build -p golem -p golem-cli
+cargo make build-golem
+cargo make build-golem-cli
 cargo test -p golem-cli --test integration -- app::builtin_bash --report-time
 ```
 

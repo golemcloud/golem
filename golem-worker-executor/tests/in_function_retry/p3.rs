@@ -195,7 +195,7 @@ async fn keyvalue_set_retries_inline_when_idempotent(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    // set should succeed after 2 in-function retries (assume_idempotence defaults to true)
+    // set should succeed after 2 in-function retries.
     executor
         .invoke_and_await_agent(
             &component,
@@ -1593,70 +1593,7 @@ async fn http_awaiting_response_retry_resends_full_body_after_output_stream_retr
 
 #[test]
 #[tracing::instrument]
-async fn http_post_fails_permanently_when_idempotence_disabled(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-
-    let overrides = TestExecutorOverrides {
-        configure: Some(Arc::new(|config| {
-            config.retry = RetryConfig {
-                max_attempts: 5,
-                min_delay: Duration::from_millis(1),
-                max_delay: Duration::from_millis(5),
-                multiplier: 1.0,
-                max_jitter_factor: None,
-            };
-            config.max_in_function_retry_delay = Duration::from_secs(1);
-        })),
-        ..Default::default()
-    };
-
-    let executor = start_with_overrides(deps, &context, overrides).await?;
-
-    // 1 connection will be dropped; POST with assume_idempotence=false should NOT retry inline
-    let (port, _connection_counter) = start_failing_http_server_any_method(1).await;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, http_tests)
-        .store()
-        .await?;
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), port.to_string());
-
-    let agent_id = agent_id!("HttpClient4");
-    let _worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
-        .await?;
-
-    // post_non_idempotent sets assume_idempotence=false and uses POST.
-    // POST is not idempotent, so inline retry should NOT happen.
-    // Trap+replay also cannot recover because the non-idempotent remote write
-    // was not completed — replay detects this and fails permanently with
-    // "Non-idempotent remote write operation was not completed, cannot retry".
-    let result = executor
-        .invoke_and_await_agent(&component, &agent_id, "post_non_idempotent", data_value!())
-        .await;
-
-    assert!(
-        result.is_err(),
-        "Expected the invocation to fail permanently, but it succeeded: {result:?}"
-    );
-    let err_msg = format!("{}", result.unwrap_err());
-    assert!(
-        err_msg.contains("cannot retry"),
-        "Expected error about non-idempotent write not being retryable, got: {err_msg}"
-    );
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn http_get_retried_inline_even_when_idempotence_disabled(
+async fn http_get_retried_inline(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
@@ -1695,8 +1632,7 @@ async fn http_get_retried_inline_even_when_idempotence_disabled(
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
-    // get_idempotent sets assume_idempotence=false and uses GET.
-    // GET is inherently idempotent, so inline retry SHOULD still happen.
+    // GET is inherently idempotent, so inline retry should happen.
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "get_idempotent", data_value!())
         .await?;

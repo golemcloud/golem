@@ -89,7 +89,6 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-wait-for-external-input-rust` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
 | `golem-add-webhook-rust` | Creating and awaiting webhooks for integrating with webhook-driven external APIs |
 | `golem-multi-instance-agent-rust` | Creating multiple agent instances with the same constructor parameters using phantom agents |
-| `golem-atomic-block-rust` | Atomic blocks and idempotency |
 | `golem-add-transactions-rust` | Saga-pattern transactions with compensation |
 | `golem-add-http-endpoint-rust` | Exposing an agent over HTTP with mount paths and endpoint annotations |
 | `golem-http-params-rust` | Mapping path, query, header, and body parameters for HTTP endpoints |
@@ -107,7 +106,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-initial-files` | Adding initial files to agent filesystems via golem.yaml |
 | `golem-file-io-rust` | Reading and writing files from agent code |
 | `golem-add-llm-rust` | Adding LLM and AI capabilities using golem-ai libraries |
-| `golem-make-http-request-rust` | Making outgoing HTTP requests from agent code using wstd |
+| `golem-make-http-request-rust` | Making outgoing HTTP requests from agent code using `golem_rust::http` (WASI HTTP p3) |
 | `golem-logging-rust` | Adding logging to a Rust Golem agent using the `log` crate |
 | `golem-enable-otlp-rust` | Enabling the OpenTelemetry (OTLP) plugin for a Rust agent — exporting traces, logs, and metrics to an OTLP collector, adding custom spans with the invocation context API |
 | `golem-view-agent-logs` | Viewing agent logs and output via streaming |
@@ -149,11 +148,11 @@ Golem **automatically retries** retryable host-operation failures using durable 
 
 Retryable failures in the following operations are handled transparently:
 
-- **HTTP requests** to external services (via `wstd::http`, `golem-wasi-http`, `wasi:http`, etc.)
+- **HTTP requests** to external services (via `golem_rust::http` or low-level WASI HTTP p3 bindings in `golem_rust::wasip3`)
 - **RPC calls** between agents
 - **Database / storage calls** — `golem:rdbms/postgres`, `golem:rdbms/mysql`, `golem:rdbms/ignite2`, `wasi:blobstore`, `wasi:keyvalue`
 
-A panic outside an atomic region fails the agent without retry. Inside an atomic region, a panic traps and the region is retried according to the applicable retry policy; if the policy gives up, the agent becomes failed.
+A Rust WASM panic aborts without compensation and permanently fails the invocation. Recovery replays completed outcomes and repairs only an eligible incomplete call at its own `Start`. Use sagas for domain compensation; new attempts append calls without rewinding history. After complete rollback, infallible sagas use the bounded host policy and durable backoff. Handle the Result for compensation failure, exhaustion and policy errors; each failure retains the original error.
 
 Only customize when the *strategy* needs to change (different backoff, give-up conditions, per-status-code policies). For that, see the `golem-retry-policies-rust` skill.
 
@@ -195,12 +194,11 @@ golem-temp/                       # Build artifacts (gitignored)
 
 From your component (or shared workspace) `Cargo.toml`:
 - `golem-rust` (with `export_golem_agentic` feature) — agent framework, durability, transactions
-- `wstd` — WASI standard library (HTTP client via `wstd::http`, async I/O, etc.)
+- `golem_rust::http` — WASI HTTP p3 client included in `golem-rust`; no additional HTTP dependency is needed. Build a `Request<Vec<u8>>` with the reexported standard `http` types, call `send(request).await`, then consume the response with `response_bytes`, `response_text`, or `response_json`. Use `golem_rust::wasip3` for low-level p3 bindings.
 - `log` — logging (uses `wasi-logger` backend, logs visible via `golem agent stream`)
 - `serde` / `serde_json` — serialization
-- Optional: `golem-wasi-http` — advanced HTTP client alternative
 
-To enable AI features, add the relevant golem-ai provider crate as a dependency (e.g., `golem-ai-llm-openai`). 
+To enable AI features, add the relevant golem-ai provider crate as a dependency (e.g., `golem-ai-llm-openai`).
 
 ## Key Constraints
 
@@ -268,7 +266,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-config-ts` | Adding typed configuration to a TypeScript agent |
 | `golem-add-secret-ts` | Adding secrets (`s.secret`, `Secret<T>`) to TypeScript agents |
 | `golem-call-another-agent-ts` | Calling another agent and awaiting the result over RPC through a definition client |
-| `golem-agent-reflection` | Choosing client approaches and identity lookup behavior |
+| `golem-agent-reflection` | Choosing reflection levels and identity lookup behavior |
 | `golem-agent-reflection-ts` | Discovering and calling agents through runtime reflection |
 | `golem-call-from-external-ts` | Calling agents from external Node.js apps using generated bridge SDKs |
 | `golem-fire-and-forget-ts` | Triggering an agent invocation without waiting for the result (`.trigger`) |
@@ -278,7 +276,6 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-wait-for-external-input-ts` | Waiting for external input using Golem promises (human-in-the-loop) |
 | `golem-add-webhook-ts` | Creating and awaiting webhooks for webhook-driven external APIs |
 | `golem-multi-instance-agent-ts` | Creating multiple agent instances with phantom agents |
-| `golem-atomic-block-ts` | Atomic blocks and idempotency |
 | `golem-add-transactions-ts` | Saga-pattern transactions with compensation |
 | `golem-add-http-endpoint-ts` | Exposing an agent over HTTP with mount paths and endpoints |
 | `golem-http-params-ts` | Mapping path, query, header, and body parameters for HTTP endpoints |
@@ -344,7 +341,7 @@ The SDK is schema-driven: method inputs and return values are described with [St
 
 Golem **automatically retries** retryable host-operation failures using durable execution and the applicable retry policy. **Do not add manual retry loops, `while` retry patterns, or backoff utilities around host operations** — let Golem apply the retry policy. The default retry policy applies when no user-defined policy matches.
 
-Retryable failures in outgoing HTTP requests (`fetch`), RPC calls between agents, and database / storage calls (`golem:rdbms/*`, keyvalue, blobstore) are handled transparently. An uncaught thrown error or rejected promise outside an atomic region fails the agent without retry. Inside `atomically(...)`, a thrown error traps and the region is retried according to the applicable retry policy; if the policy gives up, the agent becomes failed.
+Retryable failures in outgoing HTTP requests (`fetch`), RPC calls between agents, and database / storage calls (`golem:rdbms/*`, keyvalue, blobstore) are handled transparently. An uncaught thrown error or rejected promise is a deterministic guest trap and fails the invocation without retry. Sagas compensate caught failures in reverse order; partial rollback retains both failures. Recovery repairs eligible incomplete calls at their original `Start`. New saga attempts append history without rewinding; after complete rollback, infallible sagas use the bounded host policy and durable backoff. Exhaustion and policy errors retain the original failure.
 
 Only customize when the *strategy* needs to change — see `golem-retry-policies-ts`.
 
@@ -519,8 +516,6 @@ Policy is `'disabled'` (default) | `'default'` | `{ everyNInvocations: n }` | `{
 
 Host helpers, importable from `@golemcloud/golem-ts-sdk`:
 
-- `atomically(fn)` — run a region that commits on success and rolls back + retries on a thrown error.
-- `checkpoint()` — `cp.runOrRevert(() => Result.ok/err(...))` returns the ok value or reverts (uncatchable) the invocation.
 - `durable(spec, request, body)` — run a non-deterministic side effect once, persist its typed result, and replay (not re-run) it on recovery. Uses `FunctionType` for the commit/replay policy.
 - Sagas — `compensable(run, compensate)` steps composed with `fallibleSaga(...)` / `infallibleSaga(...)` for transactional compensation.
 - Promises (human-in-the-loop) — `createPromise()`, `await awaitPromise(id)`, `completePromise(id, bytes)`.

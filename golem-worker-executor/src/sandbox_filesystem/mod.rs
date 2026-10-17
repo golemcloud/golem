@@ -38,7 +38,7 @@ pub(crate) use host_directory::{HostDirectories, HostDirectory, HostPath};
 pub(crate) use tree_copy::TreeExclusions;
 
 #[cfg(target_os = "linux")]
-mod xfs;
+pub(crate) mod xfs;
 
 static FILESYSTEM_LEASES: OnceLock<std::sync::Mutex<HashMap<PathBuf, Weak<AsyncMutex<()>>>>> =
     OnceLock::new();
@@ -156,6 +156,7 @@ impl FilesystemStorageError {
 
     /// Gives the same error about `path`, for an operation that reached the path under another
     /// name, such as a path below `/proc/self/fd/`.
+    #[cfg(any(test, target_os = "linux"))]
     fn about(mut self, path: &Path) -> Self {
         self.inner.path = path.to_path_buf();
         self
@@ -374,6 +375,9 @@ enum FilesystemVolumeMode {
         root: Arc<File>,
         #[cfg(target_os = "linux")]
         identity: FilesystemIdentity,
+        /// The quota helper of a managed XFS volume.
+        #[cfg(target_os = "linux")]
+        project_quotas: Option<Arc<golem_xfs_quotad::XfsQuotadClient>>,
     },
 }
 
@@ -400,7 +404,26 @@ impl FilesystemVolume {
                 root,
                 #[cfg(target_os = "linux")]
                 identity,
+                #[cfg(target_os = "linux")]
+                project_quotas: None,
             },
+        }
+    }
+
+    /// The volume with the quota helper `quotas`, which serves its project quotas.
+    #[cfg(target_os = "linux")]
+    fn with_project_quotas(mut self, quotas: Arc<golem_xfs_quotad::XfsQuotadClient>) -> Self {
+        if let FilesystemVolumeMode::CopyOnWrite { project_quotas, .. } = &mut self.mode {
+            *project_quotas = Some(quotas);
+        }
+        self
+    }
+
+    #[cfg(target_os = "linux")]
+    fn project_quotas(&self) -> Option<&golem_xfs_quotad::XfsQuotadClient> {
+        match &self.mode {
+            FilesystemVolumeMode::CopyOnWrite { project_quotas, .. } => project_quotas.as_deref(),
+            FilesystemVolumeMode::UnmanagedDevelopment => None,
         }
     }
 
@@ -523,18 +546,19 @@ enum NativeNameModeSource {
 
 #[derive(Clone, Default)]
 struct NativeNameModeProbe {
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     count: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl NativeNameModeProbe {
+    #[cfg(target_os = "linux")]
     fn record(&self) {
         #[cfg(test)]
         self.count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     fn count(&self) -> usize {
         self.count.load(std::sync::atomic::Ordering::Relaxed)
     }
@@ -835,6 +859,10 @@ enum FileCopyMode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum QuotaAuthority {
     Unsupported,
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(dead_code, reason = "project quotas are installed only on Linux")
+    )]
     Project {
         project_id: NonZeroU32,
         filesystem_block_bytes: NonZeroU64,
@@ -988,7 +1016,10 @@ impl SandboxFilesystemProvisioning {
             FilesystemStorageMode::Directory { root } => {
                 development(Some(Arc::from(&**root)), cleanup_retry)
             }
-            FilesystemStorageMode::ManagedXfs { root } => configured_managed(root, &cleanup_retry)?,
+            FilesystemStorageMode::ManagedXfs {
+                root,
+                xfs_quotad_socket,
+            } => configured_managed(root, xfs_quotad_socket, &cleanup_retry)?,
             FilesystemStorageMode::ReflinkXfs { root } => configured_reflink(root, cleanup_retry)?,
             FilesystemStorageMode::Apfs { root } => configured_apfs(root, cleanup_retry)?,
         };
@@ -1073,9 +1104,11 @@ fn development(
 #[cfg(target_os = "linux")]
 fn configured_managed(
     root: &Path,
+    xfs_quotad_socket: &Path,
     cleanup_retry: &RetryConfig,
 ) -> Result<(FilesystemVolume, SandboxFilesystemProvisioningMode), FilesystemStorageError> {
-    let managed = xfs::ManagedProvisioning::new(xfs::XfsRoot::open(root)?, cleanup_retry)?;
+    let managed =
+        xfs::ManagedProvisioning::new(xfs::XfsRoot::open(root)?, xfs_quotad_socket, cleanup_retry)?;
     let volume = managed.volume().clone();
     Ok((
         volume,
@@ -1098,6 +1131,7 @@ fn configured_reflink(
 #[cfg(not(target_os = "linux"))]
 fn configured_managed(
     root: &Path,
+    _xfs_quotad_socket: &Path,
     _cleanup_retry: &RetryConfig,
 ) -> Result<(FilesystemVolume, SandboxFilesystemProvisioningMode), FilesystemStorageError> {
     Err(FilesystemStorageError::verification(
@@ -1199,7 +1233,7 @@ impl SandboxFilesystem {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     fn name_mode_probe_count(&self) -> usize {
         self.name_mode_probe.count()
     }
@@ -1370,6 +1404,7 @@ pub(crate) fn observe_space_blocking(
             root,
             #[cfg(target_os = "linux")]
             identity,
+            ..
         } => {
             #[cfg(target_os = "linux")]
             {
@@ -1802,6 +1837,7 @@ async fn verify_fresh_directory(path: &Path) -> Result<(), FilesystemStorageErro
     verify_empty_directory(path).await
 }
 
+#[cfg(target_os = "linux")]
 async fn verify_fresh_open_directory(path: &Path) -> Result<(), FilesystemStorageError> {
     let metadata = tokio::fs::metadata(path)
         .await
@@ -2088,7 +2124,10 @@ mod tests {
             [
                 FilesystemStorageMode::Temporary,
                 FilesystemStorageMode::Directory { root: root.clone() },
-                FilesystemStorageMode::ManagedXfs { root: root.clone() },
+                FilesystemStorageMode::ManagedXfs {
+                    root: root.clone(),
+                    xfs_quotad_socket: root.clone(),
+                },
                 FilesystemStorageMode::ReflinkXfs { root: root.clone() },
                 FilesystemStorageMode::Apfs { root },
             ]
@@ -2219,6 +2258,8 @@ mod tests {
                 root: Arc::new(file.reopen().unwrap()),
                 #[cfg(target_os = "linux")]
                 identity: FilesystemIdentity { device: 1 },
+                #[cfg(target_os = "linux")]
+                project_quotas: None,
             },
         }
     }

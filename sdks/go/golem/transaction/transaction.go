@@ -15,35 +15,25 @@
 package transaction
 
 import (
-	"fmt"
+	"time"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
-	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
-	apiHost "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
 )
 
 // A transaction runs a sequence of compensable [Operation]s so that if a later
 // step fails, the steps that already succeeded are rolled back by running their
-// compensations in reverse order. It builds on the durability primitives (atomic
-// region + oplog) — no persistence beyond what the runtime already provides.
+// compensations in reverse order. It uses the runtime's ordinary durability.
 //
 // Two flavors:
 //
 //   - [Fallible] rolls back on a step error and RETURNS a
 //     [Failure] (best-effort; reports complete vs partial rollback).
-//   - [Infallible] rolls back, rewinds the oplog to the start, and the
-//     runtime REPLAYS the whole transaction until it succeeds.
+//   - [Infallible] rolls back and retries within the host's semantic retry policy.
 //
 // Both share the [Operation]/[Tx.Step] building blocks. The E type parameter is the
 // common error type across a transaction's steps (often string). Model expected
-// step failures as the error arm of the step's [golem.Result]; a panic (an infra
-// failure) leaves the atomic region open so the runtime replays it.
-//
-// Concurrency: a transaction opens a worker-global atomic region (there is no
-// per-task scope). Because the agent runs single-threaded with cooperative
-// task-switching only at await points, keep the whole transaction on one logical
-// flow — do not run concurrent goroutines that perform durable side effects while
-// a transaction is open, or their operations fall inside its region.
+// step failures as the error arm of the step's [golem.Result]. Catchable panics
+// also trigger compensation. Each transaction owns its own compensation list.
 
 // Operation is a compensable step: an action paired with the rollback to undo it.
 // compensate receives both the original input and the output execute produced, and
@@ -72,7 +62,7 @@ type Tx[E any] struct {
 }
 
 // compensate runs the recorded compensations in reverse order and returns the
-// first failure seen (None if all succeeded). Pure — no host interaction.
+// first failure seen (None if all succeeded).
 func (tx *Tx[E]) compensate() golem.Option[E] {
 	for i := len(tx.compensations) - 1; i >= 0; i-- {
 		if r := tx.compensations[i](); r.IsErr() {
@@ -98,78 +88,106 @@ func (tx *Tx[E]) Step[In, Out any](op Operation[In, Out, E], input In) golem.Res
 	return r
 }
 
-// Failure is the error arm of a [Fallible]: the step failure
+// Failure is the error arm of [Fallible] and [Infallible]: the step failure
 // that aborted it, plus whether the rollback itself fully succeeded.
 type Failure[E any] struct {
-	// Error is the step failure that aborted the transaction.
+	// Panic preserves the original recovered value when the body panicked.
+	Panic any
+	// CompensationPanic preserves a panic from rollback, which stops rollback.
+	CompensationPanic any
+	// PolicyError is set when the host rejects the retry policy or state.
+	PolicyError *PolicyError
+	// Exhausted reports that the host policy allowed no further retry.
+	Exhausted bool
+	// Error is the step failure that aborted the transaction, or zero for a panic.
 	Error E
 	// CompensationFailure is Some when a compensation itself failed during
-	// rollback (a partial rollback); None means every compensation succeeded (a
-	// complete rollback).
+	// rollback. Check RolledBackFully to include compensation panics.
 	CompensationFailure golem.Option[E]
 }
 
 // RolledBackFully reports whether every compensation succeeded (a complete
 // rollback). When false, some effects may remain and need manual attention.
 func (f Failure[E]) RolledBackFully() bool {
-	return f.CompensationFailure.IsNone()
+	return f.CompensationFailure.IsNone() && f.CompensationPanic == nil
 }
+
+// PolicyError is a catchable rejection from the host retry evaluator.
+type PolicyError struct{ Message string }
+
+func (e *PolicyError) Error() string { return e.Message }
 
 // Fallible runs f as a transaction. If f returns golem.Ok, the transaction
 // commits and its value is returned. If f returns an error, the recorded
 // compensations run in reverse (best-effort) and a [Failure] is
-// returned — there is no retry. A panic in f (an infra failure) traps the
-// component at once, with the atomic region left open, so the runtime replays
-// it; nothing above Fallible can recover the panic and go on inside the region.
+// returned — there is no retry. A panic compensates then re-panics with the
+// original value after complete rollback. Partial rollback returns Failure.
 func Fallible[Out, E any](f func(*Tx[E]) golem.Result[Out, E]) golem.Result[Out, Failure[E]] {
-	begin := apiHost.MarkBeginOperation()
-	var out golem.Result[Out, Failure[E]]
-	link.TrapOnPanic("transaction", func() { out = runFallible(&Tx[E]{}, f) })
-	apiHost.MarkEndOperation(begin)
-	return out
+	return runFallible(&Tx[E]{}, f)
 }
 
-// runFallible is the host-free core of [Fallible]: run the body, roll
-// back on error, assemble the result. Split out so it is natively testable.
+// runFallible runs the body, rolls back on failure, and assembles the result.
 func runFallible[Out, E any](tx *Tx[E], f func(*Tx[E]) golem.Result[Out, E]) golem.Result[Out, Failure[E]] {
-	r := f(tx)
-	if r.IsErr() {
-		return golem.Err[Out, Failure[E]](Failure[E]{
-			Error:               r.Err(),
-			CompensationFailure: tx.compensate(),
-		})
+	r, p := attempt(tx, f)
+	if p != nil || r.IsErr() {
+		failure := rollback(tx, r, p)
+		if p != nil && failure.RolledBackFully() {
+			panic(p)
+		}
+		return golem.Err[Out, Failure[E]](failure)
 	}
 	return golem.Ok[Out, Failure[E]](r.Ok())
 }
 
-// Infallible runs f as a transaction that retries until it succeeds. If
-// f returns golem.Ok, its value is returned. If f returns an error, the recorded
-// compensations run in reverse, the oplog is rewound to the transaction start, and
-// the runtime replays the whole transaction. Use it only when the steps are
-// expected to eventually succeed — a deterministic failure would retry forever.
-// A panic in f traps the component at once, as in [Fallible].
-func Infallible[Out, E any](f func(*Tx[E]) golem.Result[Out, E]) Out {
-	begin := apiHost.MarkBeginOperation()
-	txBegin := apiHost.GetOplogIndex()
-
-	tx := &Tx[E]{}
-	var r golem.Result[Out, E]
-	link.TrapOnPanic("transaction", func() {
-		r = f(tx)
-		if r.IsErr() {
-			if compFail := tx.compensate(); compFail.IsSome() {
-				// A compensation failed while rolling back for a retry — the
-				// transaction cannot be made consistent, so fail loudly,
-				// surfacing which compensation failed.
-				panic(fmt.Errorf("golem: compensation failed during an infallible transaction rollback: %v", compFail.Unwrap()))
-			}
-			// Rewind to the start; this interrupts the invocation and the
-			// runtime replays the transaction, so it does not return.
-			apiHost.SetOplogIndex(txBegin)
-			panic(fmt.Errorf("golem: unreachable after oplog rewind"))
+// Infallible retries fully compensated errors and catchable panics according to
+// the host's semantic saga policy. Exhaustion, policy errors and partial rollback
+// return Failure without rerunning the body. Attempts append durable history.
+func Infallible[Out, E any](f func(*Tx[E]) golem.Result[Out, E]) golem.Result[Out, Failure[E]] {
+	start := sagaNow()
+	var state []byte
+	for n := int64(1); ; n++ {
+		tx := &Tx[E]{}
+		r, p := attempt(tx, f)
+		if p == nil && r.IsOk() {
+			return golem.Ok[Out, Failure[E]](r.Ok())
 		}
-	})
+		failure := rollback(tx, r, p)
+		if !failure.RolledBackFully() {
+			return golem.Err[Out, Failure[E]](failure)
+		}
+		kind := "operation-error"
+		if p != nil {
+			kind = "exception"
+		}
+		elapsed := uint64(0)
+		if now := sagaNow(); now > start {
+			elapsed = now - start
+		}
+		next, delay, retry, err := sagaNext(state, elapsed, n, kind)
+		state = next
+		if err != nil || !retry {
+			failure.PolicyError = err
+			failure.Exhausted = err == nil
+			return golem.Err[Out, Failure[E]](failure)
+		}
+		sagaSleep(delay)
+	}
+}
 
-	apiHost.MarkEndOperation(begin)
-	return r.Ok()
+var sagaSleep = time.Sleep
+
+func attempt[Out, E any](tx *Tx[E], f func(*Tx[E]) golem.Result[Out, E]) (r golem.Result[Out, E], p any) {
+	defer func() { p = recover() }()
+	r = f(tx)
+	return
+}
+
+func rollback[Out, E any](tx *Tx[E], r golem.Result[Out, E], p any) (failure Failure[E]) {
+	failure.Panic = p
+	if p == nil {
+		failure.Error = r.Err()
+	}
+	defer func() { failure.CompensationPanic = recover() }()
+	failure.CompensationFailure = tx.compensate()
+	return
 }

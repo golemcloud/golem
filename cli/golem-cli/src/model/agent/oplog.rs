@@ -19,10 +19,11 @@ use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use golem_common::model::Timestamp;
 use golem_common::model::oplog::{
-    MultipartPartData, PluginInstallationDescription, PublicAgentInvocation,
+    MultipartPartData, OmittedOplogEntry, PluginInstallationDescription, PublicAgentInvocation,
     PublicAgentInvocationResult, PublicEntityCallMode, PublicEntityInvocation,
     PublicEntityInvocationOperation, PublicExternalToolResult, PublicOplogEntry,
-    PublicOplogEntryAttribution, PublicSnapshotData, PublicUpdateDescription,
+    PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicSnapshotData,
+    PublicUpdateDescription,
 };
 use golem_common::schema::TypedSchemaValue;
 use serde::{Deserialize, Serialize};
@@ -47,7 +48,58 @@ use std::collections::HashMap;
 pub struct AgentOplogEntryView {
     pub index: u64,
     pub attribution: PublicOplogEntryAttribution,
-    pub entry: PublicOplogEntry,
+    pub entry: AgentOplogEntryContent,
+}
+
+/// The entry of an `agent.oplog` document: the full oplog entry, or the description of an entry
+/// that the oplog page omitted because it is too large, when `--omit-payloads` is set or the
+/// full entry could not be read.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+#[allow(clippy::large_enum_variant)]
+pub enum AgentOplogEntryContent {
+    Full(PublicOplogEntry),
+    Omitted(OmittedOplogEntryContent),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all_fields = "camelCase")]
+pub enum OmittedOplogEntryContent {
+    Omitted {
+        entry_type: String,
+        timestamp: Timestamp,
+        size: u64,
+    },
+}
+
+impl From<PublicOplogEntry> for AgentOplogEntryContent {
+    fn from(entry: PublicOplogEntry) -> Self {
+        Self::Full(entry)
+    }
+}
+
+impl From<OmittedOplogEntry> for AgentOplogEntryView {
+    fn from(omitted: OmittedOplogEntry) -> Self {
+        Self {
+            index: omitted.oplog_index.as_u64(),
+            attribution: omitted.attribution,
+            entry: AgentOplogEntryContent::Omitted(OmittedOplogEntryContent::Omitted {
+                entry_type: omitted.entry_type,
+                timestamp: omitted.timestamp,
+                size: omitted.size,
+            }),
+        }
+    }
+}
+
+impl From<PublicOplogEntryWithIndex> for AgentOplogEntryView {
+    fn from(entry: PublicOplogEntryWithIndex) -> Self {
+        Self {
+            index: entry.oplog_index.as_u64(),
+            attribution: entry.attribution,
+            entry: AgentOplogEntryContent::Full(entry.entry),
+        }
+    }
 }
 
 impl StructuredOutput for AgentOplogEntryView {
@@ -63,7 +115,20 @@ impl TextOutput for AgentOplogEntryView {
         for line in render_oplog_attribution_lines(&self.attribution) {
             logln(line);
         }
-        self.entry.log()
+        match &self.entry {
+            AgentOplogEntryContent::Full(entry) => entry.log(),
+            AgentOplogEntryContent::Omitted(OmittedOplogEntryContent::Omitted {
+                entry_type,
+                timestamp,
+                size,
+            }) => {
+                let pad = "          ";
+                logln(format_message_highlight("OMITTED ENTRY"));
+                logln(format!("{pad}at:                {}", format_id(timestamp)));
+                logln(format!("{pad}entry type:        {}", format_id(entry_type)));
+                logln(format!("{pad}size:              {size} bytes"));
+            }
+        }
     }
 }
 
@@ -339,13 +404,6 @@ impl TextOutput for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
             }
-            PublicOplogEntry::NoOp(params) => {
-                logln(format_message_highlight("NOP"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-            }
             PublicOplogEntry::Jump(params) => {
                 logln(format_message_highlight("JUMP"));
                 logln(format!(
@@ -375,25 +433,6 @@ impl TextOutput for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
             }
-            PublicOplogEntry::BeginAtomicRegion(params) => {
-                logln(format_message_highlight("BEGIN ATOMIC REGION"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-            }
-            PublicOplogEntry::EndAtomicRegion(params) => {
-                logln(format_message_highlight("END ATOMIC REGION"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}begin index:       {}",
-                    format_id(&params.begin_index)
-                ));
-            }
-
             PublicOplogEntry::PendingAgentInvocation(params) => {
                 log_agent_invocation(
                     AgentInvocationRenderKind::Pending,
@@ -775,6 +814,38 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}payload:           {}",
                     typed_schema_value_to_string(&params.payload)
                 ));
+            }
+            PublicOplogEntry::ToolAttachmentControl(params) => {
+                logln(format_message_highlight("TOOL ATTACHMENT CONTROL"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}attachment:        {}",
+                    typed_schema_value_to_string(&params.attachment)
+                ));
+                logln(format!(
+                    "{pad}transition:        {}",
+                    typed_schema_value_to_string(&params.transition)
+                ));
+            }
+            PublicOplogEntry::ToolAttachmentRead(params) => {
+                logln(format_message_highlight("TOOL ATTACHMENT READ"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}observation:       {}",
+                    typed_schema_value_to_string(&params.observation)
+                ));
+                if let Some(payload) = &params.payload {
+                    logln(format!(
+                        "{pad}payload:           {}",
+                        BASE64_STANDARD.encode(payload)
+                    ));
+                }
             }
             PublicOplogEntry::StreamRegistered(params) => {
                 logln(format_message_highlight("STREAM REGISTERED"));

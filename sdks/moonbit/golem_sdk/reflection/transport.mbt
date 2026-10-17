@@ -1,6 +1,7 @@
 ///|
 priv struct Transport {
   raw : @agentHost.WasmRpc
+  mut default_scope_card : @permissions.ScopeCard?
 }
 
 ///|
@@ -26,7 +27,7 @@ fn Transport::create_with_config(
     @agentHost.WasmRpc::create(
       type_name, constructor_input, phantom_id, agent_config,
     ) {
-    Ok(raw) => { raw, }
+    Ok(raw) => { raw, default_scope_card: None, }
     Err(error) => raise rpc_error(error)
   }
 }
@@ -46,9 +47,18 @@ async fn Transport::invoke_value(
   self : Transport,
   method_name : String,
   input : @model.SchemaValue,
+  scope_card : @permissions.ScopeCard?,
 ) -> Invocation[@model.SchemaValue?] {
+  // Check the scope card first: a dropped scope card aborts before the input
+  // encoding moves any argument card. The encoding can suspend, so the raw
+  // handle is resolved again after it.
+  ignore(@scope_card.resolve(scope_card, self.default_scope_card))
   let wire = encode_awaited_input(input)
-  let pending = self.raw.async_invoke_and_await(method_name, wire, None)
+  let pending = self.raw.async_invoke_and_await(
+    method_name,
+    wire,
+    @scope_card.resolve(scope_card, self.default_scope_card),
+  )
   defer pending.future.drop()
   let result = {
     errdefer pending.future.cancel()
@@ -78,11 +88,11 @@ async fn encode_awaited_input(
 ) -> @types.SchemaValueTree {
   let wire = @model.schema_value_to_wit_async(input) catch {
     @async-core.Cancelled::Cancelled as error => {
-      input.release_resources(@model_host.resource_drops())
+      input.rollback_input_resources(@model_host.resource_drops())
       raise error
     }
     error => {
-      input.release_resources(@model_host.resource_drops())
+      input.rollback_input_resources(@model_host.resource_drops())
       raise Schema("failed to encode invocation input: \{repr(error)}")
     }
   }

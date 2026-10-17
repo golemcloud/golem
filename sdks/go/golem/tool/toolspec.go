@@ -347,7 +347,9 @@ func (s *GlobalsSpec) CountFlag(p *uint32) *CountFlagArg {
 
 // Stdin binds an io.Reader field to the command's standard input. It is
 // required unless marked Optional; a caller leaving a required one nil is
-// refused before anything is sent.
+// refused before anything is sent. When the tool stops reading before the
+// reader ends, a reader that is also an io.Closer is closed; a Read that
+// blocks on any other reader keeps its goroutine until it returns.
 func (s *CommandSpec) Stdin(p *io.Reader) *StdinArg {
 	path, _, err := s.state.target.resolve(p)
 	if err != nil {

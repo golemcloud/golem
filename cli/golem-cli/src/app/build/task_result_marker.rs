@@ -355,6 +355,7 @@ impl TaskResultMarkerHashSource for GetServerIfsFileHash<'_> {
 pub struct GenerateBridgeSdkMarkerHash<'a> {
     pub output_dir: &'a Path,
     pub source: &'a BridgeSdkTargetSource,
+    pub tool_definition: Option<&'a golem_common::schema::tool::Tool>,
     pub target_name: &'a str,
     pub kind: &'static str,
     pub language: &'a GuestLanguage,
@@ -366,6 +367,7 @@ pub struct GenerateBridgeSdkMarkerHash<'a> {
 #[serde(rename_all = "camelCase")]
 struct GenerateBridgeSdkMarkerHashSource<'a> {
     source: &'a BridgeSdkTargetSource,
+    tool_definition: Option<&'a golem_common::schema::tool::Tool>,
     target_name: &'a str,
     kind: &'static str,
     language: &'a GuestLanguage,
@@ -391,6 +393,7 @@ impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
         Ok(HashFromString(serde_json::to_string(
             &GenerateBridgeSdkMarkerHashSource {
                 source: self.source,
+                tool_definition: self.tool_definition,
                 target_name: self.target_name,
                 kind: self.kind,
                 language: self.language,
@@ -695,6 +698,7 @@ mod tests {
         let external_source = GenerateBridgeSdkMarkerHash {
             output_dir: Path::new("bridge/alpha"),
             source: &source,
+            tool_definition: None,
             target_name: agent_type_name.as_str(),
             kind: "agent",
             language: &language,
@@ -706,6 +710,7 @@ mod tests {
         let guest_source = GenerateBridgeSdkMarkerHash {
             output_dir: Path::new("bridge/alpha"),
             source: &source,
+            tool_definition: None,
             target_name: agent_type_name.as_str(),
             kind: "agent",
             language: &language,
@@ -739,6 +744,7 @@ mod tests {
             GenerateBridgeSdkMarkerHash {
                 output_dir: Path::new("bridge/alpha"),
                 source: &source,
+                tool_definition: None,
                 target_name: "AlphaAgent",
                 kind: "agent",
                 language: &language,
@@ -788,6 +794,7 @@ mod tests {
             GenerateBridgeSdkMarkerHash {
                 output_dir: Path::new("bridge/left"),
                 source: &left_source,
+                tool_definition: None,
                 target_name: "b",
                 kind: "agent",
                 language: &language,
@@ -801,6 +808,7 @@ mod tests {
             GenerateBridgeSdkMarkerHash {
                 output_dir: Path::new("bridge/right"),
                 source: &right_source,
+                tool_definition: None,
                 target_name: "a-b",
                 kind: "agent",
                 language: &language,
@@ -963,6 +971,7 @@ mod tests {
                 GenerateBridgeSdkMarkerHash {
                     output_dir: &output_dir,
                     source,
+                    tool_definition: None,
                     target_name: "search",
                     kind: "tool",
                     language: &language,
@@ -996,6 +1005,7 @@ mod tests {
         let marker = GenerateBridgeSdkMarkerHash {
             output_dir: Path::new("bridge/search"),
             source,
+            tool_definition: None,
             target_name: "search",
             kind: "tool",
             language: &language,

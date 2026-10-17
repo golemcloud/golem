@@ -14,12 +14,89 @@
 
 use super::*;
 
+pub(super) fn accept_access_terminal_effect<Resp, R, A>(
+    response: &Resp,
+    oplog: &Arc<dyn Oplog>,
+    end: OplogEntry,
+    accept: A,
+) -> Option<(R, crate::services::oplog::OplogAddReceipt)>
+where
+    A: FnOnce(&Resp, Box<dyn FnOnce(R) + '_>),
+{
+    let mut accepted = None;
+    accept(
+        response,
+        Box::new(|reservation| {
+            accepted = Some((reservation, oplog.enqueue_add(end)));
+        }),
+    );
+    accepted
+}
+
+type TerminalEffectHandoff<R> = (
+    oneshot::Sender<(R, crate::services::oplog::OplogAddReceipt)>,
+    tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
+);
+
+pub(in crate::durable_host) fn prepare_access_terminal_effect<R, C, F, E, EF>(
+    tasks: &crate::worker::tasks::WorkerTasks,
+    recording: tokio_util::task::task_tracker::TaskTrackerToken,
+    commit: C,
+    publish: F,
+    failed: E,
+) -> Result<TerminalEffectHandoff<R>, WorkerExecutorError>
+where
+    R: Send + 'static,
+    C: Future<Output = Result<(), WorkerExecutorError>> + Send + 'static,
+    F: FnOnce(R, OplogIndex) + Send + 'static,
+    E: FnOnce(WorkerExecutorError) -> EF + Send + 'static,
+    EF: Future<Output = ()> + Send + 'static,
+{
+    let (accept, accepted) = oneshot::channel::<(R, crate::services::oplog::OplogAddReceipt)>();
+    let (complete, completed) = oneshot::channel();
+    tasks
+        .spawn_metadata(async move {
+            let _recording = recording;
+            let Ok((reservation, append)) = accepted.await else {
+                return;
+            };
+            let persisted = async {
+                let index = append.await?;
+                commit.await?;
+                Ok::<_, WorkerExecutorError>(index)
+            }
+            .await;
+            match persisted {
+                Ok(index) => {
+                    publish(reservation, index);
+                    let _ = complete.send(Ok(()));
+                }
+                Err(error) => {
+                    // Fence synchronously before releasing the reservation. Election may wait for
+                    // cancellation cleanup to join this receipt, so resolve it before polling cleanup.
+                    let cleanup = failed(error.clone());
+                    drop(reservation);
+                    let _ = complete.send(Err(error));
+                    cleanup.await;
+                }
+            }
+        })
+        .map_err(WorkerExecutorError::runtime)?;
+    let receipt = tokio::spawn(async move {
+        completed.await.map_err(|error| {
+            WorkerExecutorError::runtime(format!(
+                "durable effect coordinator stopped without a receipt: {error}"
+            ))
+        })?
+    });
+    Ok((accept, receipt))
+}
+
 enum AccessTerminalGuardState {
     BeforeTerminal {
         call: DroppedCall,
     },
     CleanupAfterTerminal {
-        atomic_lease: Option<Arc<AtomicRegionLease>>,
         function_type: DurableFunctionType,
         durable_begin_index: OplogIndex,
         terminal: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
@@ -64,21 +141,6 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
         }
     }
 
-    /// Releases the armed call's atomic-region lease (idempotent, store-free). A no-op once the
-    /// guard is disarmed.
-    pub(super) fn release_atomic_lease(&self) {
-        let lease = match &self.state {
-            AccessTerminalGuardState::BeforeTerminal { call } => call.atomic_lease.as_ref(),
-            AccessTerminalGuardState::CleanupAfterTerminal { atomic_lease, .. } => {
-                atomic_lease.as_ref()
-            }
-            AccessTerminalGuardState::Disarmed => None,
-        };
-        if let Some(lease) = lease {
-            lease.release();
-        }
-    }
-
     pub(super) fn call(&self) -> Option<&DroppedCall> {
         match &self.state {
             AccessTerminalGuardState::BeforeTerminal { call } => Some(call),
@@ -99,7 +161,6 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
             _ => panic!("cleanup_after_terminal called before the terminal is armed"),
         };
         self.state = AccessTerminalGuardState::CleanupAfterTerminal {
-            atomic_lease: call.atomic_lease.clone(),
             function_type: call.function_type().clone(),
             durable_begin_index: call.begin_index(),
             terminal: Some(terminal),
@@ -112,8 +173,8 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
     }
 
     /// Disarms only the `CompletionDiscarded` marker while keeping the terminal cleanup armed.
-    /// Called on internal-error returns *after* the `End` was persisted (atomic-region close
-    /// failure, durable-scope close failure): the caller observes the error and the worker traps,
+    /// Called on internal-error returns *after* the `End` was persisted (durable-scope close
+    /// failure): the caller observes the error and the worker traps,
     /// so the completion was not silently discarded by the guest and no marker may be recorded —
     /// but the pending terminal join / permit release must still reach the drain.
     pub(super) fn suppress_discard_marker(&mut self) {
@@ -178,7 +239,6 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
         match std::mem::replace(&mut self.state, AccessTerminalGuardState::Disarmed) {
             AccessTerminalGuardState::BeforeTerminal { mut call } => {
                 if self.teardown.is_executor_shutting_down() {
-                    call.release_atomic_lease();
                     tracing::debug!(
                         start_idx = %call.start_idx(),
                         "durable call terminal abandoned during executor shutdown"
@@ -186,7 +246,6 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
                 } else if self.teardown.is_runtime_tearing_down() {
                     // Runtime abandonment is structural: release resident ownership without
                     // applying the guest-drop policy or recording a semantic terminal.
-                    call.release_atomic_lease();
                     call.span_finished = None;
                 } else {
                     if let Some(span) = &mut call.span_finished {
@@ -196,7 +255,6 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
                 }
             }
             AccessTerminalGuardState::CleanupAfterTerminal {
-                atomic_lease,
                 function_type,
                 durable_begin_index,
                 terminal,
@@ -227,7 +285,6 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
                 };
                 if let Some(sink) = &self.cleanup_sink {
                     let _ = sink.send(DropEvent::CleanupAfterTerminal {
-                        atomic_lease,
                         function_type,
                         durable_begin_index,
                         terminal,

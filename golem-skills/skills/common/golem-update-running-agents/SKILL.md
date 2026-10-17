@@ -194,3 +194,5 @@ Other failures, such as a change of the agent mode, a conflict of the initial fi
 6. If `load-snapshot` returns `Err`, the update fails and the agent reverts to the old version.
 
 To implement manual updates, the component must export the `save-snapshot` and `load-snapshot` WIT interfaces. Each SDK provides helpers for this — see the language-specific `golem-custom-snapshot-*` skills for implementation details.
+
+Go agents cannot take a manual update yet: the Go runtime reads its environment through a durable host call when it starts, before the snapshot loads, and the executor rejects the pending update. Use automatic updates for Go agents; snapshot-based recovery works.

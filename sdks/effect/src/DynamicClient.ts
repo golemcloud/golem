@@ -9,6 +9,7 @@ import { AgentIdentityError } from "./internal/agentIdentityError.js"
 import { rawPhantomId } from "./internal/agentIdentityState.js"
 import { dynamicMethod } from "./internal/dynamicMethod.js"
 import { wrapHostThrow } from "./internal/rpc.js"
+import type { GuestScopeCard } from "./internal/scopeCard.js"
 
 export { AgentIdentityError } from "./internal/agentIdentityError.js"
 
@@ -18,11 +19,29 @@ export interface DynamicInvocation {
   readonly value?: CoreTypes.SchemaValueTree
 }
 
-/** @since 1.6.0 @category models */
+/**
+ * Per-call options of an awaited dynamic or reflected call. `scopeCard` is borrowed for the
+ * call; see `GetOptions.scopeCard` for its validity rules.
+ *
+ * @since 1.6.0
+ * @category models
+ */
+export interface InvokeOptions {
+  readonly scopeCard?: GuestScopeCard | undefined
+}
+
+/**
+ * Schema-value RPC for one method. `invoke` never changes the caller-supplied tree: when the call
+ * fails before the host receives it, the caller still owns the resources in it.
+ *
+ * @since 1.6.0
+ * @category models
+ */
 export interface DynamicMethod {
   readonly name: string
   readonly invoke: (
     input: CoreTypes.SchemaValueTree,
+    options?: InvokeOptions,
   ) => Effect.Effect<DynamicInvocation, RemoteCallError>
   readonly trigger: (
     input: CoreTypes.SchemaValueTree,

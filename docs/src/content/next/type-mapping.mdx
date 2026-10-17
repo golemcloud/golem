@@ -191,7 +191,7 @@ These JSON examples are not CLI input syntax. The [CLI invocation page](/next/in
         | Interface registered with `golem.DefineVariant` | `{ "card": { "number": "4242" } }`, `{ "cash": null }` | Single-key JSON object; a case whose type is an empty struct has no payload and uses `null` |
         | Integer type registered with `golem.DefineEnum` | `"active"` | JSON string |
         | Bool-field struct registered with `golem.DefineFlags` | `["read", "write"]` | JSON array of the set flag names |
-        | `golem.Tuple2[T1, T2]` … `golem.Tuple8[...]` | `["hello", 1234]` | Fixed-order JSON array |
+        | `golem.Tuple1[T]` … `golem.Tuple8[...]` | `["hello", 1234]` | Fixed-order JSON array |
         | `golem.Result[Ok, Err]` | `{ "ok": 42 }`, `{ "err": "message" }` | Single-key JSON object |
         | `golem.Unit` | — | Method input or output with no parameters or no result |
 

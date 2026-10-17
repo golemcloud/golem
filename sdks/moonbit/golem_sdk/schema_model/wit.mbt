@@ -676,7 +676,7 @@ fn ValueEncoder::emit_node(
     PermissionCard(handle) =>
       // Move the owned `permission-card` resource out exactly once after the
       // full value tree has passed the affine-handle preflight.
-      match handle.take() {
+      match @card.take(handle) {
         Some(raw) => @types.PermissionCardHandle(raw)
         None =>
           raise EncodeError(
@@ -700,9 +700,40 @@ pub fn schema_value_to_wit(
   value : SchemaValue,
 ) -> @types.SchemaValueTree raise SchemaModelError {
   preflight_value(value)
+  // Only the asynchronous encode can wrap a native stream. Reject one before
+  // the encode moves any capability out of the value.
+  reject_native_streams(value)
   let enc = ValueEncoder::new()
   let root = enc.emit(value)
   { value_nodes: enc.value_nodes, root, }
+}
+
+///|
+fn reject_native_streams(value : SchemaValue) -> Unit raise SchemaModelError {
+  match value {
+    Stream(handle) =>
+      if handle.cell is Some(Native(_)) {
+        raise EncodeError(
+          "native schema value stream was not prepared for transfer",
+        )
+      }
+    Record(xs) | Tuple(xs) | List(xs) | FixedList(xs) =>
+      for x in xs {
+        reject_native_streams(x)
+      }
+    Variant(_, x) | Option(x) | ResultOk(x) | ResultErr(x) =>
+      match x {
+        Some(x) => reject_native_streams(x)
+        None => ()
+      }
+    Map(xs) =>
+      for x in xs {
+        reject_native_streams(x.key)
+        reject_native_streams(x.value)
+      }
+    Union(_, x) => reject_native_streams(x)
+    _ => ()
+  }
 }
 
 ///|
@@ -870,7 +901,7 @@ fn preflight_walk(
         )
       }
     PermissionCard(handle) => {
-      let raw = match handle.with_handle(r => r) {
+      let raw = match @card.borrow(handle) {
         Some(raw) => raw
         None =>
           raise EncodeError(
@@ -1093,8 +1124,16 @@ fn ValuePreflight::visit_node(
       self.claim_handle(idx, raw, self.seen_quota_tokens, "quota-token")
     @types.StreamValue(raw) =>
       self.claim_handle(idx, raw, self.seen_streams, "schema-value-stream")
-    @types.PermissionCardHandle(raw) =>
+    @types.PermissionCardHandle(raw) => {
+      // Lift only a handle that no card holds, so that a tree built by user
+      // code cannot alias a card.
+      if @card.is_held(raw) {
+        raise DecodeError(
+          "permission-card handle at index \{idx} is already held by another card",
+        )
+      }
       self.claim_handle(idx, raw, self.seen_permission_cards, "permission-card")
+    }
     _ => ()
   }
 }
@@ -1181,7 +1220,7 @@ fn drop_unique_resources(
       @types.PermissionCardHandle(raw) =>
         if !dropped_permission_cards.contains(raw) {
           dropped_permission_cards.push(raw)
-          raw.drop()
+          @card.drop_unless_held(raw)
         }
       _ => ()
     }
@@ -1367,7 +1406,8 @@ fn ValueDecoder::from_node(
       }
       self.lifted_permission_cards[idx] = true
       self.lifted_permission_card_raws.push(raw)
-      PermissionCard(GuestPermissionCardHandle::new(raw))
+      // The preflight rejected handles that a card holds.
+      PermissionCard(@card.adopt(raw))
     }
   }
 }

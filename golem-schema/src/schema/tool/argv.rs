@@ -68,6 +68,8 @@ enum Token<'a> {
     Subcommand(usize),
     Positional,
     Tail,
+    /// The first tail item of a command whose `--` separator is optional.
+    TailStart,
 }
 
 struct ParseCursor {
@@ -105,6 +107,7 @@ impl ParseCursor {
                 verbatim: spec.verbatim,
             });
         }
+        let implicit_tail = !self.tail_started && implicit_tail(tool, node_index);
         if self.options_enabled {
             let surfaces = effective_named(tool, node_index);
             if let Some(long) = token.strip_prefix("--") {
@@ -134,8 +137,15 @@ impl ParseCursor {
             }
             // Declared short forms own their spelling, including digits and punctuation.
             // Numeric-looking tokens become positionals only when no declaration matches.
-            if let Some(short) = token.strip_prefix('-').and_then(|rest| rest.chars().next())
-                && find_short(&surfaces, short).is_some()
+            // Where the tail can start without its separator, a cluster belongs to the command
+            // only if each of its characters does; any other cluster starts the tail.
+            if let Some(cluster) = token.strip_prefix('-')
+                && let Some(short) = cluster.chars().next()
+                && if implicit_tail {
+                    declared_short_cluster(tool, node_index, &surfaces, cluster)
+                } else {
+                    find_short(&surfaces, short).is_some()
+                }
             {
                 return Ok(Token::ShortOptions);
             }
@@ -149,6 +159,9 @@ impl ParseCursor {
             }
             if token == "--" {
                 return Ok(Token::EndOptions);
+            }
+            if implicit_tail {
+                return Ok(Token::TailStart);
             }
             if token.starts_with("--") && token.len() > 2 {
                 let name = token[2..].split('=').next().unwrap();
@@ -181,6 +194,13 @@ impl ParseCursor {
 ///
 /// `args` excludes the tool name. Options, subcommands, aliases, positionals, defaults,
 /// help, and constraints follow the same rules for native CLI and guest callers.
+///
+/// A command whose only positional surface is a verbatim tail after `--`, and that has no
+/// subcommands, does not need the separator. Its declared options and flags and the generated
+/// help are read until the first other token, which starts the tail; an unknown option starts
+/// it too. From there every token goes to the tail unchanged. An explicit `--` still starts the
+/// tail, which is how a token that is also one of the command's options reaches the tail.
+///
 /// Environment-variable metadata never reads process environment values, and this function
 /// gives it no variables: see [`parse_with_variables`].
 ///
@@ -297,6 +317,12 @@ pub fn parse_with_variables(
                 positionals.push(token.clone());
             }
             Token::Tail => {
+                cursor.body_started = true;
+                tail.push(token.clone());
+            }
+            Token::TailStart => {
+                cursor.options_enabled = false;
+                cursor.tail_started = true;
                 cursor.body_started = true;
                 tail.push(token.clone());
             }
@@ -781,6 +807,47 @@ fn looks_negative_number(token: &str) -> bool {
     token[1..].starts_with(|c: char| c.is_ascii_digit() || c == '.')
 }
 
+/// Whether the command's tail can start without its separator.
+///
+/// That is so when a verbatim tail after `--` is the command's only positional surface and the
+/// command has no subcommands: then no token before the tail can be anything but a declared
+/// option, flag or help request, so the first other token starts the tail.
+fn implicit_tail(tool: &Tool, node: usize) -> bool {
+    let command = &tool.commands.nodes[node];
+    command.subcommands.is_empty()
+        && command.body.as_ref().is_some_and(|body| {
+            body.positionals.fixed.is_empty()
+                && body
+                    .positionals
+                    .tail
+                    .as_ref()
+                    .is_some_and(|tail| tail.verbatim && tail.separator.as_deref() == Some("--"))
+        })
+}
+
+/// Whether each character of a short-option cluster is the command's, read as the parser reads
+/// it: declared flags, up to a declared option that takes the rest as its value or a help
+/// request.
+fn declared_short_cluster(
+    tool: &Tool,
+    node: usize,
+    surfaces: &[((usize, usize), Surface<'_>)],
+    cluster: &str,
+) -> bool {
+    let help = help_available(tool, node);
+    for short in cluster.chars() {
+        if help && short == 'h' {
+            return true;
+        }
+        match find_short(surfaces, short) {
+            Some(Surface::Flag(_)) => {}
+            Some(_) => return true,
+            None => return false,
+        }
+    }
+    !cluster.is_empty()
+}
+
 fn help_available(tool: &Tool, node: usize) -> bool {
     if tool.commands.nodes[node]
         .body
@@ -822,7 +889,11 @@ fn render_help(tool: &Tool, node: usize, path: &[String]) -> String {
         }
         if let Some(tail) = &body.positionals.tail {
             if let Some(separator) = &tail.separator {
-                out.push_str(&format!(" {separator}"));
+                if implicit_tail(tool, node) {
+                    out.push_str(&format!(" [{separator}]"));
+                } else {
+                    out.push_str(&format!(" {separator}"));
+                }
             }
             out.push(' ');
             out.push_str(&tail_label(tail));
@@ -851,16 +922,25 @@ fn render_help(tool: &Tool, node: usize, path: &[String]) -> String {
             .positionals
             .fixed
             .iter()
-            .map(|p| (positional_label(p), &p.doc, &p.type_))
+            .map(|p| (positional_label(p), &p.doc, &p.type_, ""))
             .collect();
         if let Some(tail) = &body.positionals.tail {
-            arguments.push((tail_label(tail), &tail.doc, &tail.item_type));
+            let start = if implicit_tail(tool, node) {
+                " [starts at the first argument that is not an option of this command, or after --]"
+            } else {
+                ""
+            };
+            arguments.push((tail_label(tail), &tail.doc, &tail.item_type, start));
         }
         if !arguments.is_empty() {
             out.push_str("\nArguments:\n");
         }
-        for (label, doc, type_) in arguments {
-            let text = format!("{}{}", doc.summary, possible_values(&tool.schema, type_));
+        for (label, doc, type_, start) in arguments {
+            let text = format!(
+                "{}{}{start}",
+                doc.summary,
+                possible_values(&tool.schema, type_)
+            );
             let line = format!("  {label:16} {}", text.trim_start());
             out.push_str(line.trim_end());
             out.push('\n');

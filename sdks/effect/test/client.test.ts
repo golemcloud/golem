@@ -129,10 +129,6 @@ const makeRuntime = (
   const durability = Layer.succeed(
     DurabilityModeClient,
     DurabilityModeClient.of({
-      getIdempotenceMode: () => true,
-      setIdempotenceMode: () => undefined,
-      markBeginOperation: () => 0n,
-      markEndOperation: () => undefined,
       oplogCommit: () => undefined,
       generateIdempotencyKey: () => ({ highBits: 1n, lowBits: 2n }),
     }),

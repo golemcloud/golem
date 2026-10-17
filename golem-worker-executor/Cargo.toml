@@ -76,7 +76,6 @@ http-body = { workspace = true }
 http-body-util = { workspace = true }
 humansize = { workspace = true }
 humantime-serde = { workspace = true }
-hyper = { workspace = true }
 include_dir = { workspace = true }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
@@ -134,6 +133,7 @@ rustix = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 linux-raw-sys = { workspace = true }
+golem-xfs-quotad = { workspace = true }
 
 [[bench]]
 name = "invocation_lowering"

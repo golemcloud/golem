@@ -94,7 +94,8 @@ func encodeArgs[A any](t *testing.T, ce *commandEntry, fill func(*A)) types.Type
 	args := reflect.New(ce.argsType).Elem()
 	args.Set(l.defaults)
 	fill(args.Addr().Interface().(*A))
-	return l.encode(ce.node.entry.d, args)
+	input, _ := l.encode(ce.node.entry.d, args)
+	return input
 }
 
 // TestDeclaredErrorsAreInTheCommandContract — the failures are published with
@@ -228,21 +229,14 @@ func TestRaisingAnUndeclaredErrorIsAnInvalidResult(t *testing.T) {
 	}
 }
 
-// TestAnOrdinaryPanicBecomesAToolError — a crashing handler must not take the
-// component down; the agent dispatcher recovers the same way.
-func TestAnOrdinaryPanicBecomesAToolError(t *testing.T) {
+func TestAnOrdinaryPanicEscapesTheToolDispatcher(t *testing.T) {
 	_, r, d := buildToolFor(t, func(r *toolRegistry, d *definitions) { declareLookup(r, d) })
-
-	got := invokeLookup(t, d, r, "boom")
-	if got.Tag() != witTypes.ResultErr {
-		t.Fatal("a panicking handler produced a successful invocation")
-	}
-	if tag := got.Err().Tag(); tag != types.ToolErrorInvalidResult {
-		t.Fatalf("error tag %d, want invalid-result", tag)
-	}
-	if msg := got.Err().InvalidResult(); !strings.Contains(msg, "something went wrong") {
-		t.Errorf("message lost the panic: %q", msg)
-	}
+	defer func() {
+		if got := recover(); got != "something went wrong" {
+			t.Errorf("panic = %v", got)
+		}
+	}()
+	invokeLookup(t, d, r, "boom")
 }
 
 func TestSuccessStillWorksAlongsideDeclaredErrors(t *testing.T) {
