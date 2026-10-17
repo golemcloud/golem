@@ -448,6 +448,10 @@ pub struct GrpcApiConfig {
     /// the leader's advertised host and `port`; unused in local mode.
     #[serde(default)]
     pub advertised_host: Option<String>,
+    /// The port other processes reach this replica's gRPC port at, when it differs from `port`
+    /// (port mapping, NAT). Defaults to the bound port.
+    #[serde(default)]
+    pub advertised_port: Option<u16>,
 }
 
 impl SafeDisplay for GrpcApiConfig {
@@ -456,6 +460,7 @@ impl SafeDisplay for GrpcApiConfig {
 
         let _ = writeln!(&mut result, "port: {}", self.port);
         let _ = writeln!(&mut result, "advertised_host: {:?}", self.advertised_host);
+        let _ = writeln!(&mut result, "advertised_port: {:?}", self.advertised_port);
 
         let _ = writeln!(&mut result, "tls:");
         let _ = writeln!(&mut result, "{}", self.tls.to_safe_string_indented());
@@ -470,6 +475,7 @@ impl Default for GrpcApiConfig {
             port: 9092,
             tls: GrpcServerTlsConfig::disabled(),
             advertised_host: None,
+            advertised_port: None,
         }
     }
 }

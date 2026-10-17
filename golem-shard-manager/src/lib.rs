@@ -286,6 +286,7 @@ mod lease_timing_tests {
 mod advertised_host_tests {
     use super::{advertised_address, validate_advertised_host};
     use crate::config::{EtcdConfig, GrpcApiConfig, PersistenceConfig, ShardManagerConfig};
+    use golem_service_base::clients::shard_manager_leader::LeaderAddress;
     use test_r::test;
 
     fn distributed(host: Option<&str>) -> ShardManagerConfig {
@@ -347,6 +348,37 @@ mod advertised_host_tests {
         let address = advertised_address(&distributed(Some("[fd00::7]")), 9002).unwrap();
         assert_eq!(address.host, "fd00::7");
         assert_eq!(address.port, 9002);
+    }
+
+    #[test]
+    fn advertised_address_strips_brackets_and_uses_the_advertised_port() {
+        let mut config = distributed(Some("[::1]"));
+        config.grpc.advertised_port = Some(19092);
+        let address = advertised_address(&config, 9092).unwrap();
+        assert_eq!(
+            address,
+            LeaderAddress {
+                host: "::1".to_string(),
+                port: 19092
+            }
+        );
+    }
+
+    #[test]
+    fn advertised_address_defaults_to_the_bound_port() {
+        assert_eq!(
+            advertised_address(&distributed(Some("10.0.0.7")), 9092)
+                .unwrap()
+                .port,
+            9092
+        );
+    }
+
+    #[test]
+    fn an_advertised_port_of_zero_is_refused() {
+        let mut config = distributed(Some("10.0.0.7"));
+        config.grpc.advertised_port = Some(0);
+        assert!(validate_advertised_host(&config).is_err());
     }
 
     #[test]
@@ -491,6 +523,8 @@ async fn start_distributed_mode(
         .with_shutdown(shutdown.clone())
         .with_grpc_address(own.clone());
     let (watch, watcher) = election.watch();
+    // The campaign reads the same view, to find a replica that advertises this one's address.
+    let election = election.with_watch(watch.clone());
     join_set.spawn(watcher.run().in_current_span());
     // From here a call to this replica is answered from the watched view of the election, which
     // costs no etcd read per call.
@@ -581,6 +615,11 @@ fn validate_advertised_host(config: &ShardManagerConfig) -> anyhow::Result<Optio
         "grpc.advertised_host is {host}, which names no single host. Set it to the address other \
          processes reach this replica at, such as its pod IP."
     );
+    anyhow::ensure!(
+        config.grpc.advertised_port != Some(0),
+        "grpc.advertised_port is 0, which no client can connect to. Leave it unset to advertise \
+         the bound port."
+    );
     let local_only = match ip {
         Some(ip) => ip.is_loopback(),
         None => host.eq_ignore_ascii_case("localhost"),
@@ -588,7 +627,8 @@ fn validate_advertised_host(config: &ShardManagerConfig) -> anyhow::Result<Optio
     Ok(local_only.then(|| host.to_string()))
 }
 
-/// Where this replica serves gRPC to other processes: the advertised host and the bound port.
+/// Where this replica serves gRPC to other processes: the advertised host, and the advertised port
+/// or else the bound one.
 fn advertised_address(
     config: &ShardManagerConfig,
     grpc_port: u16,
@@ -597,7 +637,7 @@ fn advertised_address(
         advertised_host(config).context("grpc.advertised_host must be set in distributed mode")?;
     Ok(LeaderAddress {
         host: host.to_string(),
-        port: grpc_port,
+        port: config.grpc.advertised_port.unwrap_or(grpc_port),
     })
 }
 

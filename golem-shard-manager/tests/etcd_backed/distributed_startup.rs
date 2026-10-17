@@ -2059,3 +2059,94 @@ async fn a_leader_cut_off_from_etcd_stops_serving_within_one_lease_ttl(etcd: &Ar
     assert!(cut_at.elapsed() <= LEASE_TTL + Duration::from_millis(500));
     leader.abort();
 }
+
+#[test]
+#[tracing::instrument(skip_all)]
+// Two replicas that advertise one address would each name the other as the leader, and clients
+// would never find the real one: the second must refuse to go on, and say why.
+async fn a_replica_that_advertises_another_live_replicas_address_is_refused(
+    etcd: &Arc<DockerEtcd>,
+) {
+    wipe_state(etcd).await;
+    let config = distributed_config(etcd);
+    let (leader, leader_ports) = spawn_replica(config.clone(), CancellationToken::new());
+    let leader_details = timeout(STARTUP_TIMEOUT, leader_ports)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let mut duplicate = config.clone();
+    duplicate.grpc.advertised_port = Some(leader_details.grpc_port);
+    let mut join_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
+    let started = timeout(
+        LEASE_TTL * 4,
+        golem_shard_manager::run(
+            &duplicate,
+            Deployment::Standalone {
+                shutdown: CancellationToken::new(),
+            },
+            prometheus::Registry::new(),
+            &mut join_set,
+        ),
+    )
+    .await
+    .expect("the duplicate replica must stop within two lease TTLs and some slack");
+    join_set.abort_all();
+    let message = match started {
+        Ok(_) => panic!("a replica that duplicates a live replica's address must not start"),
+        Err(err) => format!("{err:#}"),
+    };
+    assert!(
+        message.contains("advertises the same gRPC address"),
+        "{message}"
+    );
+    leader.abort();
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A restarted process finds the key of its own previous process, which carries the same address
+// until its lease expires. That key is no duplicate: the replica must wait it out and lead.
+async fn an_earlier_process_key_with_the_same_address_is_waited_out(etcd: &Arc<DockerEtcd>) {
+    wipe_state(etcd).await;
+    await_election_idle(etcd).await;
+    let mut config = distributed_config(etcd);
+    let reserved_port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    config.grpc.advertised_port = Some(reserved_port);
+
+    let mut client = etcd_client::Client::connect([etcd.client_url()], None)
+        .await
+        .unwrap();
+    let lease = client
+        .lease_grant(LEASE_TTL.as_secs() as i64, None)
+        .await
+        .unwrap()
+        .id();
+    let stale = ElectionValue {
+        identity: "earlier-process".to_string(),
+        grpc_address: Some(LeaderAddress {
+            host: "127.0.0.1".to_string(),
+            port: reserved_port,
+        }),
+        ready: true,
+        rollout_generation: None,
+    };
+    client
+        .put(
+            format!("{LEADER_ELECTION_NAME}/{lease:x}"),
+            stale.encode(),
+            Some(etcd_client::PutOptions::new().with_lease(lease)),
+        )
+        .await
+        .unwrap();
+
+    let (replica, ports) = spawn_replica(config, CancellationToken::new());
+    timeout(STARTUP_TIMEOUT, ports)
+        .await
+        .expect("the replica leads once the earlier key's lease expires")
+        .expect("the replica's startup reports its ports");
+    replica.abort();
+}

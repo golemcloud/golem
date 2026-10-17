@@ -17,7 +17,7 @@
 
 use crate::config::EtcdConfig;
 use crate::metrics;
-use crate::sharding::election_watch::{ElectionWatch, ElectionWatcher};
+use crate::sharding::election_watch::{CampaignView, Campaigner, ElectionWatch, ElectionWatcher};
 use crate::sharding::error::ShardManagerError;
 use crate::sharding::etcd_connection::connect_for_election;
 use crate::sharding::etcd_retry::retry_retriable_until;
@@ -530,6 +530,9 @@ pub struct LeaderElection {
     /// The lease of the attempt in flight, or 0. Set after the grant and cleared when the attempt
     /// finishes, so a caller that drops the campaign can still revoke what it left behind.
     pending_lease: AtomicI64,
+    /// The watched view of the election, when the replica has one: the campaign checks it for a
+    /// replica that advertises the same address.
+    watch: Option<ElectionWatch>,
 }
 
 impl LeaderElection {
@@ -554,6 +557,7 @@ impl LeaderElection {
             confirm_hook: None,
             confirm_attempts: AtomicU32::new(0),
             pending_lease: AtomicI64::new(0),
+            watch: None,
         })
     }
 
@@ -569,6 +573,13 @@ impl LeaderElection {
     /// ready, the standbys can send clients to it.
     pub fn with_grpc_address(mut self, address: LeaderAddress) -> Self {
         self.value.grpc_address = Some(address);
+        self
+    }
+
+    /// Checks the campaign against the watched view while this replica waits: see
+    /// [`Self::watch_campaign`].
+    pub fn with_watch(mut self, watch: ElectionWatch) -> Self {
+        self.watch = Some(watch);
         self
     }
 
@@ -708,6 +719,7 @@ impl LeaderElection {
                 return Err(ShardManagerError::LeaseLostWhileCampaigning(lost));
             }
             won = campaign => won?,
+            refused = self.watch_campaign(lease_id) => return Err(refused),
             _ = self.shutdown.cancelled() => return Err(ShardManagerError::ShutdownRequested),
             never = self.announce_standby() => match never {},
         };
@@ -830,6 +842,61 @@ impl LeaderElection {
                 ),
                 Ok(None) => info!("Still standing by; no leader is currently recorded"),
                 Err(err) => warn!(error = %err, "Still standing by; cannot read the leader"),
+            }
+        }
+    }
+
+    /// Ends a waiting campaign when the watched view shows that it must not go on: another live
+    /// campaigner advertises this replica's address. Never returns without a watch.
+    ///
+    /// A key of an earlier process of the same pod also carries this address, but nothing renews
+    /// its lease, so it is gone within one TTL. A key still present two TTLs after this replica
+    /// first saw it belongs to a live replica.
+    async fn watch_campaign(&self, own_lease: i64) -> ShardManagerError {
+        let (Some(mut watch), Some(own)) = (self.watch.clone(), self.value.grpc_address.clone())
+        else {
+            return std::future::pending().await;
+        };
+        let patience = self.lease_ttl.saturating_mul(2);
+        let mut duplicate: Option<(Vec<u8>, Instant)> = None;
+        // Wakes the loop with no change in the view, so that the patience is measured.
+        let mut recheck = interval(self.lease_ttl / 4);
+        recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        loop {
+            if let Some(view) = watch.view() {
+                match duplicate_of(&view, own_lease, &own) {
+                    Some(other) => {
+                        let since = match &duplicate {
+                            Some((key, since)) if key == &other.key => *since,
+                            _ => {
+                                warn!(
+                                    address = %own,
+                                    other = other.value.as_ref().map(|value| value.identity.as_str()),
+                                    patience = ?patience,
+                                    "Another shard manager replica advertises this replica's gRPC address"
+                                );
+                                let now = Instant::now();
+                                duplicate = Some((other.key.clone(), now));
+                                now
+                            }
+                        };
+                        if since.elapsed() >= patience {
+                            return ShardManagerError::DuplicateAdvertisedAddress {
+                                address: own.to_string(),
+                                other: other
+                                    .value
+                                    .as_ref()
+                                    .map(|value| value.identity.clone())
+                                    .unwrap_or_default(),
+                            };
+                        }
+                    }
+                    None => duplicate = None,
+                }
+            }
+            tokio::select! {
+                _ = watch.changed() => {}
+                _ = recheck.tick() => {}
             }
         }
     }
@@ -1004,6 +1071,22 @@ impl LeaderLocator {
     }
 }
 
+/// Another campaigner that advertises `own`. The own key is told apart by its lease.
+pub(crate) fn duplicate_of<'a>(
+    view: &'a CampaignView,
+    own_lease: i64,
+    own: &LeaderAddress,
+) -> Option<&'a Campaigner> {
+    view.campaigners.iter().find(|campaigner| {
+        campaigner.lease != own_lease
+            && campaigner
+                .value
+                .as_ref()
+                .and_then(|value| value.grpc_address.as_ref())
+                == Some(own)
+    })
+}
+
 /// This replica's identity in its election value, diagnostic only. The pid and start time answer
 /// the failover-time question "is that key the old pod, or my own from before the restart?".
 fn identity() -> String {
@@ -1028,6 +1111,54 @@ mod tests {
     use super::*;
 
     const TTL: Duration = Duration::from_secs(10);
+
+    fn campaigner(lease: i64, revision: i64, port: u16) -> Campaigner {
+        Campaigner {
+            key: format!("e/{lease:x}").into_bytes(),
+            lease,
+            create_revision: revision,
+            value: Some(ElectionValue {
+                identity: format!("sm-{lease}"),
+                grpc_address: Some(LeaderAddress {
+                    host: "10.0.0.1".to_string(),
+                    port,
+                }),
+                ready: false,
+                rollout_generation: None,
+            }),
+        }
+    }
+
+    fn own() -> LeaderAddress {
+        LeaderAddress {
+            host: "10.0.0.1".to_string(),
+            port: 9001,
+        }
+    }
+
+    #[test]
+    fn another_campaigner_with_this_address_is_a_duplicate() {
+        let view = CampaignView {
+            campaigners: vec![campaigner(1, 10, 9001), campaigner(2, 20, 9001)],
+        };
+        assert_eq!(duplicate_of(&view, 2, &own()).map(|c| c.lease), Some(1));
+    }
+
+    #[test]
+    fn this_replicas_own_key_is_not_a_duplicate() {
+        let view = CampaignView {
+            campaigners: vec![campaigner(2, 20, 9001)],
+        };
+        assert_eq!(duplicate_of(&view, 2, &own()), None);
+    }
+
+    #[test]
+    fn a_view_without_the_own_key_yet_still_finds_a_duplicate_of_another() {
+        let view = CampaignView {
+            campaigners: vec![campaigner(1, 10, 9001)],
+        };
+        assert_eq!(duplicate_of(&view, 2, &own()).map(|c| c.lease), Some(1));
+    }
 
     /// How much later than its send a response is read. Long enough that dating the deadline by
     /// the read instead of the send is unambiguous, short enough to cost nothing.
