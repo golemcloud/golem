@@ -50,6 +50,12 @@ require GOLEM_ROUTER_DNS_REFRESH_RATE "${duration}" "a number of seconds such as
 require GOLEM_ROUTER_TRUSTED_HOPS '[0-9]+' "a number"
 require GOLEM_ROUTER_MAX_CONNECTIONS '[0-9]+' "a number"
 
+# A host name with a trailing dot names the same host, so the management virtual host takes both
+# spellings, with and without a port. The router still sends the original authority upstream.
+management=${GOLEM_ROUTER_MANAGEMENT_HOST%.}
+[ -n "${management}" ] || fail "GOLEM_ROUTER_MANAGEMENT_HOST has the value '.', which is not a host name"
+management_domains="\"${management}\", \"${management}:*\", \"${management}.\", \"${management}.:*\""
+
 # Listen on IPv6 and IPv4 where the kernel supports IPv6.
 if [ -f /proc/net/if_inet6 ]; then
   listen='address: "::", ipv4_compat: true'
@@ -174,7 +180,7 @@ static_resources:
             request_headers_to_remove: [x-envoy-external-address]
             virtual_hosts:
             - name: management
-              domains: ["${GOLEM_ROUTER_MANAGEMENT_HOST}", "${GOLEM_ROUTER_MANAGEMENT_HOST}:*"]
+              domains: [${management_domains}]
               routes:
               # The metrics of the services stay inside the deployment.
               - match: {path_separated_prefix: /metrics}
