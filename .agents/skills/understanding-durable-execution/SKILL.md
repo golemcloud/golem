@@ -1210,7 +1210,8 @@ Other tasks whose handles nothing aborts are joined through
 durable call and tool terminal encoding, and the detached stream session index tasks. Only the
 shutdown of the runtime cancels such a task, for example during the final status flush sweep, so
 a cancelled join parks the caller until the runtime drops it instead of failing it as a storage
-error. A panicked join still fails, and a fail-fast read still panics on a corrupt entry.
+error. A panicked join still fails, and a fail-fast read of the primary oplog still panics on a corrupt
+entry; an archive read returns `UnreadableOplog` instead.
 
 `worker/filesystem_snapshots.rs::UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS` is the code of a manual update
 that cannot take its snapshot on an executor without filesystem snapshots, because the files of the

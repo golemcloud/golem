@@ -8872,7 +8872,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Commits the buffered entries and folds them into the published status.
     ///
     /// A commit the oplog refused is returned as the refusal: `OplogError::Fenced`, for which the
-    /// agent is marked retired for a lost shard, or `OplogError::ArchiveWrite`. It has to be reported rather than folded into "nothing changed": below the
+    /// agent is marked retired for a lost shard, `OplogError::ArchiveWrite`, or
+    /// `OplogError::Unreadable` when the status after the commit does not read. It has to be
+    /// reported rather than folded into "nothing changed": below the
     /// commit threshold an add only buffers, so this commit is where a takeover is found, and a
     /// caller about to run a side effect, publish a result or acknowledge a request must not do
     /// it for entries that never reached the storage. The status actor has already started the
