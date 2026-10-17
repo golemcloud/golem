@@ -362,7 +362,7 @@ impl EntityInvocationDurability {
                     incomplete_repair_authorized_by_scope: true,
                     ..AccessClaimOptions::default()
                 },
-                async move |_| Ok(request),
+                request,
                 span_started.clone(),
             )
             .await?;
@@ -1459,7 +1459,7 @@ where
             incomplete_repair_authorized_by_scope: true,
             ..AccessClaimOptions::default()
         },
-        async move |_| Ok(request),
+        request,
         span_started,
     )
     .await?;

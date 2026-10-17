@@ -319,7 +319,7 @@ where
         accessor.getter(),
         DurableFunctionType::WriteLocal,
         AccessClaimOptions::default(),
-        async move |_| Ok(host_request),
+        host_request,
     )
     .await?;
     let (result, delivery) = write_started(
@@ -760,7 +760,7 @@ pub(super) async fn wait<U: Send + 'static, Ctx: WorkerCtx>(
             accessor.getter(),
             DurableFunctionType::ReadLocal,
             AccessClaimOptions::default(),
-            async move |_| Ok(request),
+            request,
         )
         .await?;
     if !call.is_live() {
@@ -817,7 +817,7 @@ where
         accessor.getter(),
         DurableFunctionType::WriteLocal,
         AccessClaimOptions::default(),
-        async move |_| Ok(request),
+        request,
     )
     .await?;
     let (result, delivery) = terminal_started(

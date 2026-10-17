@@ -2424,7 +2424,7 @@ async fn outgoing_http_post_cancel_before_replay_start_admission(
         .invoke_and_await_agent(
             &component,
             &agent_id,
-            "post_and_cancel_before_response",
+            "post_and_cancel_before_response_then_checkpoint",
             data_value!(),
         )
         .await?
@@ -2445,15 +2445,25 @@ async fn outgoing_http_post_cancel_before_replay_start_admission(
     let invocation = executor.invoke_and_await_agent(
         &component,
         &agent_id,
-        "post_and_cancel_before_response",
+        "post_and_cancel_before_response_then_checkpoint",
         data_value!(),
     );
     let coordinate = async {
         // The replayed timer can finish before the send reaches its admission gate.
-        // Hold cancellation until both calls reach their gates, then keep send admission
-        // blocked through invocation completion so only guest cancellation can settle it.
+        // Hold cancellation until both calls reach their gates. The send claim is owned by the
+        // host and settles the invocation only after it claims the recorded `Start`, so send
+        // admission opens once the guest has dropped the send: the guest makes its checkpoint
+        // wait only after the drop.
         tokio::join!(send_admission.entered(), cancel_timer.entered());
+        let mut checkpoint = executor.gate_next_replay_access_admission(
+            &worker_id,
+            "monotonic-clock::wait-for",
+            Stage::BeforeScope,
+        );
         cancel_timer.release();
+        checkpoint.entered().await;
+        send_admission.release();
+        checkpoint.release();
     };
     let (result2, ()) = timeout(Duration::from_secs(30), async {
         tokio::join!(invocation, coordinate)

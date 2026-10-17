@@ -88,19 +88,18 @@ where
     Parent: HostPayloadPair,
     Child: HostPayloadPair,
 {
-    pub(crate) async fn start<T, D, Ctx, F>(
+    pub(crate) async fn start<T, D, Ctx>(
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         demands: mpsc::Receiver<Demand>,
         claim_options: AccessClaimOptions,
         delivery_mode: DemandDeliveryMode,
-        build_request: F,
+        request: Parent::Req,
     ) -> Result<Self, WorkerExecutorError>
     where
         T: 'static,
-        D: HasData + ?Sized,
+        D: HasData + ?Sized + 'static,
         Ctx: WorkerCtx,
-        F: AsyncFnOnce(super::AccessStartContext) -> Result<Parent::Req, WorkerExecutorError>,
     {
         let observational_owner = claim_options.observational_owner;
         let children_repair_incomplete = matches!(
@@ -118,7 +117,7 @@ where
                 incomplete_repair_authorized_by_scope: children_repair_incomplete,
                 ..claim_options
             },
-            build_request,
+            request,
         )
         .await?;
         if parent.is_live() && parent.is_persisted() {
@@ -193,7 +192,7 @@ where
                 scope_replay_recovery: self.parent.child_replay_recovery(),
                 ..Default::default()
             },
-            async move |_| Ok(request),
+            request,
         )
         .await?;
 

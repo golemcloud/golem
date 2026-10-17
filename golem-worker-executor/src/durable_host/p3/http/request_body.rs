@@ -1464,7 +1464,7 @@ where
                 invocation_id,
                 ..Default::default()
             },
-            async |_| Ok(HostRequestNoInput {}),
+            HostRequestNoInput {},
         )
         .await
         {
