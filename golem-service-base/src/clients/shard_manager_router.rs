@@ -33,7 +33,7 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic::{Code, Status};
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
-use tracing::info;
+use tracing::{debug, info};
 
 /// How long the client waits to connect to a leader that a replica named. Shorter than the
 /// configured `connect_timeout`: a named leader that does not answer quickly is usually gone, and
@@ -106,6 +106,12 @@ fn leader_tls(tls: &GrpcClientTlsConfig, configured_host: &str) -> GrpcClientTls
     }
 }
 
+/// A leader that has been logged at info level, and whether its loss has been as well.
+struct ReportedLeader {
+    address: LeaderAddress,
+    forgotten: bool,
+}
+
 /// The outcome of one pass of [`LeaderRouter::call`].
 enum Routed<R> {
     Done(Result<R, Status>),
@@ -150,6 +156,9 @@ pub(crate) struct LeaderRouter {
     leaders: MultiTargetGrpcClient<Client>,
     /// The leader that the last answer named, until a call to it fails.
     leader: Arc<Mutex<Option<LeaderAddress>>>,
+    /// The leader last reported at info level, so that a failover, which forgets and learns the
+    /// same leader again on every pass, logs one line per change instead of one per pass.
+    reported: Arc<Mutex<Option<ReportedLeader>>>,
     tls: bool,
     /// The budget for waiting out a leader that the replicas name but nobody can reach.
     retries_on_unavailable: RetryConfig,
@@ -172,6 +181,7 @@ impl LeaderRouter {
             )
             .with_redirect(is_not_leader),
             leader: Arc::new(Mutex::new(None)),
+            reported: Arc::new(Mutex::new(None)),
             tls: config.client_config.tls_enabled(),
             retries_on_unavailable: config.client_config.retries_on_unavailable.clone(),
         }
@@ -345,8 +355,13 @@ impl LeaderRouter {
 
     fn remember_leader(&self, leader: LeaderAddress) {
         let mut known = self.leader.lock().unwrap_or_else(PoisonError::into_inner);
-        if known.as_ref() != Some(&leader) {
+        let mut reported = self.reported.lock().unwrap_or_else(PoisonError::into_inner);
+        if reported.as_ref().map(|r| &r.address) != Some(&leader) {
             info!(leader = %leader, "Calling a newly named shard manager leader");
+            *reported = Some(ReportedLeader {
+                address: leader.clone(),
+                forgotten: false,
+            });
         }
         *known = Some(leader);
     }
@@ -355,12 +370,30 @@ impl LeaderRouter {
     fn forget_leader(&self, leader: &LeaderAddress, cause: &Status) {
         let mut known = self.leader.lock().unwrap_or_else(PoisonError::into_inner);
         if known.as_ref() == Some(leader) {
-            info!(
-                leader = %leader,
-                code = ?cause.code(),
-                error = cause.message(),
-                "No longer calling this shard manager leader"
-            );
+            let mut reported = self.reported.lock().unwrap_or_else(PoisonError::into_inner);
+            // A failover forgets the same leader on every pass; only the first loss is news.
+            let first_loss = match reported.as_mut() {
+                Some(r) if &r.address == leader && !r.forgotten => {
+                    r.forgotten = true;
+                    true
+                }
+                _ => false,
+            };
+            if first_loss {
+                info!(
+                    leader = %leader,
+                    code = ?cause.code(),
+                    error = cause.message(),
+                    "No longer calling this shard manager leader"
+                );
+            } else {
+                debug!(
+                    leader = %leader,
+                    code = ?cause.code(),
+                    error = cause.message(),
+                    "No longer calling this shard manager leader"
+                );
+            }
             *known = None;
         }
     }
