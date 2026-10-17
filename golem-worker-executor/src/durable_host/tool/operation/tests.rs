@@ -1,6 +1,7 @@
 use super::super::attachment::{AttachmentMemory, ToolAttachmentModeMetadata, attachment_pair};
 use super::super::{
-    FutureToolInvokeGet, ToolExecution, ToolExecutionState, capable_result_await_cohort,
+    FutureToolInvokeGet, ToolExecution, ToolExecutionState, ToolInvokeCompletion,
+    capable_result_await_cohort,
 };
 use super::*;
 use crate::preview2::golem::tool::host::ByteStreamFailure;
@@ -2047,9 +2048,12 @@ fn completed_future_observation_is_repeatable_without_an_active_cohort() {
     let (_operations, operation, _invocation_id) =
         accepted_operation(&lane, EntityCallMode::Asynchronous, 2);
     let execution = tool_execution(operation, parent(), 2);
-    execution.complete(Ok(Err(
-        golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled,
-    )));
+    execution.complete(Ok(ToolInvokeCompletion {
+        response: Err(
+            golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled,
+        ),
+        body_executed: true,
+    }));
 
     for _ in 0..2 {
         assert!(matches!(
@@ -2058,10 +2062,14 @@ fn completed_future_observation_is_repeatable_without_an_active_cohort() {
         ));
         assert!(matches!(
             execution.result_snapshot(),
-            Some(Ok(Err(
-                golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled
-            )))
+            Some(Ok(ToolInvokeCompletion {
+                response: Err(
+                    golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled
+                ),
+                body_executed: true,
+            }))
         ));
+        assert!(execution.body_executed().unwrap());
     }
     assert!(capable_result_await_cohort(&[execution.get_plan()], &parent()).is_none());
 }
@@ -2083,9 +2091,14 @@ fn mixed_completed_and_current_futures_only_cohort_the_active_parent() {
     let current_parent = OwnerInvocationId::Agent(OplogIndex::from_u64(10));
     let old = tool_execution(old_operation, old_parent, 2);
     let current = tool_execution(current_operation, current_parent.clone(), 3);
-    old.complete(Ok(Err(
-        golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled,
-    )));
+    old.complete(Ok(ToolInvokeCompletion {
+        response: Err(
+            golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled,
+        ),
+        body_executed: false,
+    }));
+    assert!(!old.body_executed().unwrap());
+    assert!(current.body_executed().is_err());
 
     let cohort =
         capable_result_await_cohort(&[old.get_plan(), current.get_plan()], &current_parent)

@@ -168,6 +168,22 @@ export function createToolProcessBackend(host, runtimeProcess) {
           },
           maxBuffer,
         );
+        if (
+          collected.bodyExecuted === false &&
+          collected.result.tag === "err"
+        ) {
+          const error = collected.result.val;
+          const code = {
+            denied: "EACCES",
+            "not-found": "ENOENT",
+            "resource-exhausted": "ENOMEM",
+          }[error.tag];
+          if (code) {
+            result.error ??= processError(code, command, error.tag);
+            result.pid = 0;
+            result.status = null;
+          }
+        }
         for (const channel of ["stdout", "stderr"]) {
           if (collected[channel]?.overflow) {
             result.error ??= processError(
@@ -182,18 +198,6 @@ export function createToolProcessBackend(host, runtimeProcess) {
               command,
               `${channel} stream failed`,
             );
-            result.status = null;
-          }
-        }
-        if (collected.result.tag === "err") {
-          const error = collected.result.val;
-          const code = {
-            denied: "EACCES",
-            "not-found": "ENOENT",
-            "resource-exhausted": "ENOMEM",
-          }[error.tag];
-          if (code) {
-            result.error ??= processError(code, command, error.tag);
             result.status = null;
           }
         }

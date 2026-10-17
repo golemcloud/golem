@@ -434,11 +434,33 @@ Use the optimized/Wizer build and the existing filesystem harness, with
 policy tests through `cargo make test-javascript-tool-process-backend`.
 
 The [observations](observations-2026-10-18-cli.json) distinguish the passing
-functional gates from remaining work. The prototype is not wired into SDK
-templates yet. Shells, deadlines, non-pipe stdio and asynchronous Node integration
-remain incomplete. Spawn-failure mapping must use the recorded skipped/executed
-body classification; an error tag alone does not prove no body ran. Timings from
-this policy-heavy fixture are not controlled performance measurements.
+functional gates from remaining work. SDK template integration, shells, deadlines,
+non-pipe stdio and asynchronous Node integration remain separate gates. Timings
+from this policy-heavy fixture are not controlled performance measurements.
+
+### Recorded execution classification
+
+Collection retains the selected durable terminal's skipped/executed classification.
+The process adapter uses it to distinguish refused execution from a command that
+ran and failed. The same tool error can occur in both cases, so the error name
+cannot make this decision.
+
+Use `completion-check-init.js` in place of `sdks/javascript/runtime-init.js` to
+test the classification through the production host API. This guest facade first
+invokes a nonexistent command path and requires a skipped result. It then forwards
+the original filesystem request and requires an executed result. The ordinary
+process adapter, tool dispatcher, owner filesystem and result collection remain in
+use. Registration performs no host calls, including during Wizer initialization.
+
+Rebuild the wrapper against current WIT with the feature compiler, then Wizer
+preinitialize it and run the same filesystem harness. The facade checks both the
+main runtime and fresh jobs. The harness reconstructs the owner after executor
+teardown and checks its effects and exact entity terminal counts.
+
+The [completion observations](observations-2026-10-18-completion.json) record the
+passing native test, focused unit tests and artifact identity. They do not prove
+memory-pressure refusal or mid-call cancellation recovery for a complete Node
+adapter. Those remain separate acceptance gates.
 
 ### Unconfigured backend cost
 

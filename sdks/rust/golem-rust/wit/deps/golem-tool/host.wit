@@ -149,6 +149,10 @@ interface host {
 
   record collected-invocation {
     %result: result<invocation-result, tool-rpc-error>,
+    /// True when the invocation's recorded terminal says its body executed.
+    /// A tool error alone does not distinguish refused admission from a
+    /// failure after execution. Middleware counts as part of the invocation.
+    body-executed: bool,
     stdout: option<collected-output>,
     stderr: option<collected-output>,
   }

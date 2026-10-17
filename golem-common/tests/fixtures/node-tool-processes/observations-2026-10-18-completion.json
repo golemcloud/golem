@@ -1,0 +1,69 @@
+{
+  "date": "2026-10-18",
+  "purpose": "Preserve recorded skipped/executed classification through host collection and the process adapter",
+  "status": "focused functional gates passed; full Node tool integration remains incomplete",
+  "nativeExecutor": {
+    "binary": "target/dev-ci/deps/integration-d7453dd34cf5128b",
+    "sha256": "3bea7baa7d38a08017a148180a464b80292fc833385e88449bca8cb9fd52bf80",
+    "test": "tool_streaming::node_tool_processes::node_sync_native_import_waits_for_filesystem_tool",
+    "log": "/private/tmp/node-tool-processes-completion-native-v1.log",
+    "result": "pass",
+    "testSeconds": 13.317,
+    "harnessSeconds": 15.43,
+    "outerEntityInvocations": 25,
+    "nestedFilesystemInvocations": 12,
+    "separateRejectedCommandCalls": 12,
+    "checks": [
+      "The rejected command reports bodyExecuted false",
+      "The filesystem command reports bodyExecuted true",
+      "Both checks run in the main runtime and fresh JavaScript jobs",
+      "CLI help and the per-call disable switch do not dispatch the filesystem effect",
+      "Fresh sidecars retain no previous invocation globals or environment mutation",
+      "The owner immediately reads each filesystem effect",
+      "Executor teardown and reconstruction preserve these results",
+      "Every entity invocation has exactly one End"
+    ]
+  },
+  "unitTests": {
+    "nativeLog": "/private/tmp/node-tool-processes-body-execution-native-unit-v2.log",
+    "nativePassed": 20,
+    "javascriptLog": "/private/tmp/node-tool-processes-body-execution-js-v1.log",
+    "javascriptPassed": 12,
+    "checks": [
+      "Decode execution classification from the durable terminal, independently of the error tag",
+      "Repeated cached observations retain executed and skipped outcomes",
+      "Executed failures retain the command exit status and partial output",
+      "Proven skipped failures preserve the spawn error code despite rejected stream terminals",
+      "Canonical CLI projection and owned result-handle cleanup",
+      "Finite input digest validation and historical admission",
+      "Bounded output prefix and memory accounting"
+    ]
+  },
+  "component": {
+    "path": "/private/tmp/node-tool-processes-probe.pQOFN4/cli-completion-wizer-v1.wasm",
+    "sha256": "8d7a527521fbe22ab7e1f779a572d5ee360deda5466c4980bb230339c23a0572",
+    "features": ["p3", "encoding"],
+    "profile": "release",
+    "wizer": "passed",
+    "wrqjsSource": "1c93af93; generated before the later async exec convenience changes",
+    "sourceHashes": {
+      "wit/deps/golem-tool/host.wit": "b1026708fbef0d66929496757c60c73cf86194a9af4449df35d27cb98d6da730",
+      "golem-worker-executor/src/durable_host/tool/mod.rs": "93f18bf764ca663236766bb826f5c34acedca01134b2b621d4bcca43cb898a05",
+      "golem-worker-executor/src/durable_host/tool/operation/tests.rs": "26a36ab4232aef2b88694a02bad9fc3b6614261282954d0aeacee3c2bb4c2487",
+      "sdks/javascript/tool-process-backend.js": "36a53823630e5e18d80cc63fc2548fa03d59febeb5703b83a61b811067cb30bb",
+      "golem-common/tests/fixtures/node-tool-processes/completion-check-init.js": "0207d8ef24877fbd4bb2de8be94fae137ef7c0bfc6eda2b99ebaa5e311e8025d"
+    }
+  },
+  "declarations": {
+    "typescript": "regenerated",
+    "effect": "regenerated; generation drift and stale-contract checks passed"
+  },
+  "notEstablished": [
+    "End-to-end process refusal under changed memory pressure",
+    "Mid-call crash and cancellation windows for the complete adapter",
+    "SDK template builds and cross-SDK runtime acceptance",
+    "Shell, deadline, non-pipe stdio and asynchronous tool-process support",
+    "Tool-level performance and output-collection costs"
+  ],
+  "measurementCaveat": "This is a policy and reconstruction test, not a controlled performance benchmark. Native compilation ran concurrently."
+}

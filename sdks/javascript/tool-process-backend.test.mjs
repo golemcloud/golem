@@ -53,6 +53,7 @@ function fixture(overrides = {}) {
           collect() {
             calls.push(["collect"]);
             return {
+              bodyExecuted: true,
               result: { tag: "ok", val: {} },
               stdout: { bytes: [0, 255] },
               stderr: { bytes: [128] },
@@ -207,6 +208,7 @@ test("a denied spawn is not a started command with a nonzero exit status", () =>
   f.host.ToolRpc.prototype.asyncInvokeAndAwait = () => ({
     collect() {
       return {
+        bodyExecuted: false,
         result: {
           tag: "err",
           val: { tag: "denied", val: "permission denied" },
@@ -217,6 +219,7 @@ test("a denied spawn is not a started command with a nonzero exit status", () =>
   f.prepared.renderResult = () => ({ exitCode: 3, stdout: [], stderr: [100] });
   const result = f.backend.spawnSync("tsc", [], {});
   assert.equal(result.error.code, "EACCES");
+  assert.equal(result.pid, 0);
   assert.equal(result.status, null);
   assert.equal(result.stderr.toString(), "d");
 });
@@ -226,6 +229,7 @@ test("host output overflow retains the prefix and reports ENOBUFS", () => {
   f.host.ToolRpc.prototype.asyncInvokeAndAwait = () => ({
     collect() {
       return {
+        bodyExecuted: true,
         result: { tag: "ok", val: {} },
         stdout: { bytes: [0, 255], overflow: true },
       };
@@ -235,6 +239,42 @@ test("host output overflow retains the prefix and reports ENOBUFS", () => {
   assert.equal(result.error.code, "ENOBUFS");
   assert.equal(result.status, null);
   assert.deepEqual([...result.stdout], [0, 255]);
+});
+
+test("the recorded execution fact, not the error tag, distinguishes spawn refusal", () => {
+  for (const [tag, code] of [
+    ["resource-exhausted", "ENOMEM"],
+    ["denied", "EACCES"],
+  ]) {
+    for (const bodyExecuted of [false, true]) {
+      const f = fixture();
+      f.host.ToolRpc.prototype.asyncInvokeAndAwait = () => ({
+        collect() {
+          return {
+            bodyExecuted,
+            result: { tag: "err", val: { tag, val: "failed" } },
+            stdout: {
+              bytes: bodyExecuted ? [111] : [],
+              failure: bodyExecuted
+                ? undefined
+                : { tag: "failed", val: "refused" },
+            },
+          };
+        },
+      });
+      f.prepared.renderResult = () => ({
+        exitCode: 1,
+        stdout: [],
+        stderr: [100],
+      });
+      const result = f.backend.spawnSync("tsc", [], {});
+      assert.equal(result.status, bodyExecuted ? 1 : null);
+      assert.equal(result.pid, bodyExecuted ? 1 : 0);
+      assert.equal(result.error?.code, bodyExecuted ? undefined : code);
+      assert.equal(result.stdout.toString(), bodyExecuted ? "o" : "");
+      assert.equal(result.stderr.toString(), "d");
+    }
+  }
 });
 
 test("finite input preserves a view slice and the requested string encoding", () => {
