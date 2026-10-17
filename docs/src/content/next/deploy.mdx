@@ -193,7 +193,7 @@ Every path into an agent has the same payload limit of 32 MiB: the gRPC message 
 
 A request that declares a larger `Content-Length` gets 413 before the service reads its body. A request without `Content-Length` gets 413 when its body passes the limit.
 
-The invocation session rejects a message or frame above its limit with close code 1009, and does not read the payload of a frame whose header declares a larger size. On the agent event stream (`connect`), a message or frame above the limit ends the connection without a close code.
+The invocation session and the agent event stream (`connect`) answer a message or frame above their limit with close code 1009. They do not read the payload of a frame whose header declares a larger size.
 
 The HTTP/2 header list limit is above the 60 KiB that Envoy accepts by default, so a gateway in front of Golem decides first. The HTTP/2 settings apply to every HTTP port of the service: for the worker service, `port`, `custom_request_port` and `mcp_port`.
 

@@ -257,9 +257,7 @@ impl WorkerService {
     }
 
     fn mcp_endpoint(&self) -> BoxEndpoint<'static> {
-        make_mcp_endpoint(&self.services)
-            .with(RequestBodyLimit::new(self.config.body_limits.mcp))
-            .boxed()
+        make_mcp_endpoint(&self.services, self.config.body_limits.mcp)
     }
 
     async fn start_api_gateway_server(
