@@ -147,7 +147,10 @@ impl Dialect for TsDialect {
         graph: &SchemaGraph,
         inner: &SchemaType,
     ) -> Result<SchemaValue, ParseError> {
-        let is_nested = matches!(inner, SchemaType::Option { .. });
+        let inner_resolved = graph
+            .resolve_ref(inner)
+            .map_err(|err| perr(lexer.position(), &err.to_string()))?;
+        let is_nested = matches!(inner_resolved, SchemaType::Option { .. });
         match lexer.peek()? {
             Token::Null | Token::Undefined => {
                 lexer.next_token()?;
