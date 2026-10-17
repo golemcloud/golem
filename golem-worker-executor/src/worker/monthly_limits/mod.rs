@@ -94,8 +94,6 @@ pub(super) struct MonthlyWindowTarget {
     resident_generation: u64,
     active: Mutex<bool>,
     failure: Mutex<Option<MonthlyMonitorFailure>>,
-    #[cfg(feature = "test-utils")]
-    exited: CancellationToken,
 }
 
 impl MonthlyWindowTarget {
@@ -365,8 +363,6 @@ impl ExecutionWindow {
                 resident_generation,
                 active: Mutex::new(true),
                 failure: Mutex::new(None),
-                #[cfg(feature = "test-utils")]
-                exited: CancellationToken::new(),
             });
             *worker.monthly_window.lock().unwrap() = Some(target.clone());
             let cancelled = CancellationToken::new();
@@ -380,8 +376,6 @@ impl ExecutionWindow {
             #[cfg(feature = "test-utils")]
             let clock = worker.monthly_clock.lock().unwrap().clone();
             let task = tokio::spawn(async move {
-                #[cfg(feature = "test-utils")]
-                let _exited = target_task.exited.clone().drop_guard();
                 let result = std::panic::AssertUnwindSafe(async {
                     loop {
                         let Some(worker) = weak_worker.upgrade() else {
@@ -740,18 +734,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     #[cfg(feature = "test-utils")]
     pub fn unload_succeeded_for_test(&self) -> bool {
         self.test_support.lock().unwrap().unload_succeeded
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub async fn stop_lifecycle_actor_for_test(&self) {
-        let target = self
-            .monthly_window
-            .lock()
-            .unwrap()
-            .clone()
-            .expect("active monthly window");
-        self.state_actor.stop_lifecycle_for_test().await;
-        target.exited.cancelled().await;
     }
 
     #[cfg(feature = "test-utils")]

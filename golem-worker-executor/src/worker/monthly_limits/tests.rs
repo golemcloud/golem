@@ -42,8 +42,6 @@ fn target(
         resident_generation: generation,
         active: Mutex::new(true),
         failure: Mutex::new(None),
-        #[cfg(feature = "test-utils")]
-        exited: CancellationToken::new(),
     })
 }
 

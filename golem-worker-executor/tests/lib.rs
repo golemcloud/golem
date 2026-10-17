@@ -35,6 +35,7 @@ pub mod concurrent_delivery_order;
 pub mod concurrent_runtime_events;
 pub mod durability;
 pub mod effect_permissions;
+mod entity_fence_waits;
 pub mod external_durable_stream;
 pub mod filesystem_inspection;
 pub mod filesystem_snapshots;
@@ -176,6 +177,7 @@ impl Tracing {
                     native_waits::layer(),
                     invocation_waits::layer(),
                     scheduler_waits::layer(),
+                    entity_fence_waits::layer(),
                 ],
             );
         });

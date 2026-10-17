@@ -5908,6 +5908,7 @@ impl TestOplog {
             OplogEntry::PreCommitRemoteTransaction { .. } => "PreCommitRemoteTransaction",
             OplogEntry::CommittedRemoteTransaction { .. } => "CommittedRemoteTransaction",
             OplogEntry::RolledBackRemoteTransaction { .. } => "RolledBackRemoteTransaction",
+            OplogEntry::GrowMemory { .. } => "GrowMemory",
             OplogEntry::Start { .. } => "Start",
             OplogEntry::End { .. } => "End",
             OplogEntry::Cancelled { .. } => "Cancelled",

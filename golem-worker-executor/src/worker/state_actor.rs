@@ -355,12 +355,6 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         self.lifecycle_jobs.closed().await;
     }
 
-    #[cfg(feature = "test-utils")]
-    pub(super) async fn stop_lifecycle_for_test(&self) {
-        let _ = self.lifecycle_jobs.send(LifecycleJob::Stop);
-        self.lifecycle_jobs.closed().await;
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         deps: All<Ctx>,

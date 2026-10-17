@@ -380,7 +380,19 @@ The monitor has no test-only panic selector or panic token on its target. Native
 a panicking adapter through the existing weak owner-usage-flusher interface and wake the normal
 capacity watch with a policy revision. A test-side unwind witness establishes the fault before idle
 release. Cleanup, startup refusal and the original error remain asserted without changing the
-monitor's await graph. Actor-loss and time controls remain separate unfinished support.
+monitor's await graph. Monthly-time and idle controls remain unfinished support.
+
+The actor-loss change removes both test-only actor-stop methods and the monthly target's exit
+token and task guard. Native tests fail a real positive GrowMemory append through the existing oplog
+fixture. Counter.allocate_memory supplies actual guest allocation at a later idle boundary; the TCP
+case uses the checkpoint from its running invocation. Test-only capture matches the existing
+before-fence event by target, owner, failure kind and message. It proves the stop path was entered,
+not physical drainage. The tests still require the exact lost-actor error, successful physical
+deletion, retained failed health, startup refusal and unchanged generation and acquisition counts.
+Initial idle precedes guest execution, so its manual-stop-only actor cell retires with that producer.
+Real monitor failure and startup refusal remain covered there. The actual append-fault baseline
+passes. Separate post-removal library/native, strict lint, production and browser checks pass locally.
+No new production event or Worker control is added. Remaining A1/F10/F11 work stays open.
 
 The settlement-loss selector is removed. It previously completed settlement
 successfully, then dropped the reply through Worker and window flags. The ordinary ObserverLost
@@ -392,7 +404,7 @@ this test's known clock fault occurs before settlement.
 The native fake reply-drop cells retire with their producer; the native health helper retains its
 other exact cleanup and startup assertions. This is not native settlement-task panic coverage.
 Post-removal library, combined native, strict lint, production and browser checks pass locally.
-Idle, actor, replay and monthly-time controls remain open.
+Idle, replay and monthly-time controls remain open. Actor-loss removal has separate validation above.
 
 A temporary Registry policy outage is an execution failure, not a disposal failure. The monitor
 requests the same cooperative stop and retains this error separately from cleanup health. After

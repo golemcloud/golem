@@ -3,11 +3,13 @@ use anyhow::Context as _;
 use golem_common::model::Timestamp;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
+use golem_common::model::oplog::OplogEntry;
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::resource_limits::ResourceUsageFlusher;
 use golem_worker_executor::services::{HasEvents, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
 use golem_worker_executor::worker::instance::OwnerRuntimeResources;
+use golem_worker_executor_test_utils::AgentInitializationEnqueueGateHandle;
 use pretty_assertions::assert_eq;
 use std::sync::Mutex;
 use test_r::test;
@@ -53,6 +55,24 @@ async fn fail_owner_usage_flusher(
         .await
         .context("usage flusher did not unwind")??;
     Ok((source, refresh))
+}
+
+async fn fail_growing_actor(
+    mut growth: AgentInitializationEnqueueGateHandle,
+    owner: &OwnedAgentId,
+) -> anyhow::Result<()> {
+    tokio::time::timeout(Duration::from_secs(10), growth.entered())
+        .await
+        .context("actual lifecycle memory-growth append did not reach the provider")?;
+    assert!(matches!(growth.entry(), OplogEntry::GrowMemory { delta, .. } if delta > 0));
+    let mut fence = crate::entity_fence_waits::lifecycle_fence(owner);
+    // The existing FailOplogAdd1OnGrowMemory fixture fails this actual append after release.
+    // The ordinary lifecycle job panics, and the normal monitor selects its own failure stop.
+    drop(growth);
+    tokio::time::timeout(Duration::from_secs(10), fence.entered())
+        .await
+        .context("monitor failure did not reach ordinary lifecycle fencing")??;
+    Ok(())
 }
 
 #[test]
@@ -407,177 +427,191 @@ async fn quota_monitor_cleanup_health_survives_initial_and_later_idle(
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    for later in [false, true] {
-        for failure in ["monitor", "actor"] {
-            let context = TestContext::new(last_unique_id);
-            let metering = ResourceUsageMeteringConfig {
-                compute: false,
-                memory: true,
-                filesystem: false,
-            };
-            let shutdown = CancellationToken::new();
-            let registry = Arc::new(MutableResourceLimitsRegistry::new(available_quota_policy()));
-            let limits = ResourceLimitsGrpc::new(
-                registry.clone(),
-                Duration::from_secs(3600),
-                Duration::ZERO,
-                metering,
-                shutdown.clone(),
-            );
-            let executor = start_with_resource_limits_and_configure(
-                deps,
-                &context,
-                limits.clone(),
-                Arc::new(move |config| config.resource_usage_metering = metering),
-            )
+    // Initial idle precedes guest work, so no real growth job can fail there. Keep its
+    // actual monitor-fault coverage; actor append failure belongs to a later guest window.
+    for (later, failure) in [(false, "monitor"), (true, "monitor"), (true, "actor")] {
+        let context = TestContext::new(last_unique_id);
+        let metering = ResourceUsageMeteringConfig {
+            compute: false,
+            memory: true,
+            filesystem: false,
+        };
+        let shutdown = CancellationToken::new();
+        let registry = Arc::new(MutableResourceLimitsRegistry::new(available_quota_policy()));
+        let limits = ResourceLimitsGrpc::new(
+            registry.clone(),
+            Duration::from_secs(3600),
+            Duration::ZERO,
+            metering,
+            shutdown.clone(),
+        );
+        let executor = start_with_resource_limits_and_configure(
+            deps,
+            &context,
+            limits.clone(),
+            Arc::new(move |config| config.resource_usage_metering = metering),
+        )
+        .await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, agent_counters)
+            .store()
             .await?;
-            let component = executor
-                .component_dep(&context.default_environment_id, agent_counters)
-                .store()
-                .await?;
-            let name = agent_id!("Counter", format!("health-{later}-{failure}"));
-            let id = AgentId {
-                component_id: component.id,
-                agent_id: name.to_string(),
-            };
-            let owned = OwnedAgentId::new(context.default_environment_id, &id);
-            let seed_id = executor
-                .start_agent(&component.id, agent_id!("Counter", "health-seed"))
-                .await?;
-            let seed = executor
-                .production_active_agent(&OwnedAgentId::new(
-                    context.default_environment_id,
-                    &seed_id,
-                ))
-                .await
-                .unwrap()
-                .primary();
-            let worker = Worker::get_or_create_suspended(
-                seed.all(),
-                &owned,
-                None,
-                vec![],
-                None,
-                None,
-                &InvocationContextStack::fresh(),
-                Principal::anonymous(),
-            )
+        let case = if failure == "actor" {
+            format!("health-{later}-{failure}-FailOplogAdd1OnGrowMemory")
+        } else {
+            format!("health-{later}-{failure}")
+        };
+        let name = agent_id!("Counter", case);
+        let id = AgentId {
+            component_id: component.id,
+            agent_id: name.to_string(),
+        };
+        let owned = OwnedAgentId::new(context.default_environment_id, &id);
+        let seed_id = executor
+            .start_agent(&component.id, agent_id!("Counter", "health-seed"))
             .await?;
-            if later {
-                Worker::start_if_needed(worker.clone()).await?;
-                wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
-                tokio::time::timeout(Duration::from_secs(10), async {
-                    while worker.eviction_class().await.is_none() {
-                        tokio::task::yield_now().await;
-                    }
-                })
-                .await?;
-            }
-            let (entered, release_idle) = worker.pause_idle_close_for_test();
-            let mut invoke = None;
-            if later {
-                invoke = Some(tokio::spawn({
-                    let executor = executor.clone();
-                    let name = name.clone();
-                    let component = component.clone();
-                    async move {
-                        executor
-                            .invoke_and_await_agent(&component, &name, "increment", data_value!())
-                            .await
-                    }
-                }));
-            } else {
-                Worker::start_if_needed(worker.clone()).await?;
-            }
-            entered.await?;
-            let generation = worker.resident_generation_for_test();
-            let acquisitions = worker.permit_acquisitions_for_test();
-            let attempt = worker.startup_attempt_for_test();
-            if !later {
-                assert!(matches!(attempt, Ok(Some(_))));
-            }
-            let mut events = worker.events().subscribe();
-            assert!(worker.concurrent_agent_permit_is_held().await);
-            let mut failure_source = None;
-            let expected = match failure {
-                "monitor" => {
-                    failure_source = Some(
-                        fail_owner_usage_flusher(
-                            worker.owner_runtime_resources(),
-                            &limits,
-                            &registry,
-                            context.account_id,
-                        )
-                        .await?,
-                    );
-                    "Monthly monitor panicked: injected monthly monitor panic"
-                }
-                "actor" => {
-                    worker.stop_lifecycle_actor_for_test().await;
-                    assert!(
-                        worker
-                            .submit_monthly_capacity_for_test()
-                            .unwrap_err()
-                            .to_string()
-                            .contains("Monthly monitor lost the lifecycle actor")
-                    );
-                    "Monthly monitor lost the lifecycle actor"
-                }
-                _ => unreachable!(),
-            };
-            release_idle.send(false).unwrap();
-            let error = tokio::time::timeout(Duration::from_secs(10), async {
-                loop {
-                    if let Some(error) = worker.cleanup_failure_for_test().await {
-                        break error;
-                    }
+        let seed = executor
+            .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+            .await
+            .unwrap()
+            .primary();
+        let worker = Worker::get_or_create_suspended(
+            seed.all(),
+            &owned,
+            None,
+            vec![],
+            None,
+            None,
+            &InvocationContextStack::fresh(),
+            Principal::anonymous(),
+        )
+        .await?;
+        let mut actor_growth = if failure == "actor" {
+            Some(executor.gate_next_memory_growth_append(&id).await)
+        } else {
+            None
+        };
+        if later {
+            Worker::start_if_needed(worker.clone()).await?;
+            wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while worker.eviction_class().await.is_none() {
                     tokio::task::yield_now().await;
                 }
             })
             .await?;
-            assert!(
-                error.to_string().contains(expected),
-                "{later}/{failure}: {error}"
-            );
-            assert!(
-                worker
-                    .retained_cleanup_for_test()
-                    .await
-                    .unwrap_err()
-                    .to_string()
-                    .contains(expected)
-            );
-            assert!(
-                worker.unload_succeeded_for_test(),
-                "physical deletion must succeed independently of retained health"
-            );
-            assert!(!worker.concurrent_agent_permit_is_held().await);
-            assert!(worker.eviction_class().await.is_none());
-            assert_eq!(worker.resident_generation_for_test(), generation);
-            let retry = Worker::start_if_needed(worker.clone()).await.unwrap_err();
-            assert!(retry.to_string().contains(expected), "{retry}");
-            assert_eq!(worker.resident_generation_for_test(), generation);
-            assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
-            if !later {
-                let loaded = events
-                    .wait_for(|event| match event {
-                        Event::WorkerLoaded {
-                            agent_id, result, ..
-                        } if agent_id == &id => Some(result.clone()),
-                        _ => None,
-                    })
-                    .await?;
-                assert!(loaded.unwrap_err().to_string().contains(expected));
-            }
-            if let Some(invoke) = invoke {
-                invoke.await??;
-            }
-            if let Some((source, refresh)) = failure_source {
-                refresh.await?;
-                drop(source);
-            }
-            shutdown.cancel();
         }
+        let (entered, release_idle) = worker.pause_idle_close_for_test();
+        let mut invoke = None;
+        if later {
+            invoke = Some(tokio::spawn({
+                let executor = executor.clone();
+                let name = name.clone();
+                let component = component.clone();
+                async move {
+                    let (method, input) = if failure == "actor" {
+                        // Retain real guest allocation so the lifecycle actor has an actual
+                        // positive growth append, rather than inventing a host-side hint.
+                        ("allocate_memory", data_value!(4 * 1024 * 1024u32))
+                    } else {
+                        ("increment", data_value!())
+                    };
+                    executor
+                        .invoke_and_await_agent(&component, &name, method, input)
+                        .await
+                }
+            }));
+        } else {
+            Worker::start_if_needed(worker.clone()).await?;
+        }
+        entered.await?;
+        let generation = worker.resident_generation_for_test();
+        let acquisitions = worker.permit_acquisitions_for_test();
+        let attempt = worker.startup_attempt_for_test();
+        if !later {
+            assert!(matches!(attempt, Ok(Some(_))));
+        }
+        let mut events = worker.events().subscribe();
+        assert!(worker.concurrent_agent_permit_is_held().await);
+        let mut failure_source = None;
+        let expected = match failure {
+            "monitor" => {
+                failure_source = Some(
+                    fail_owner_usage_flusher(
+                        worker.owner_runtime_resources(),
+                        &limits,
+                        &registry,
+                        context.account_id,
+                    )
+                    .await?,
+                );
+                "Monthly monitor panicked: injected monthly monitor panic"
+            }
+            "actor" => {
+                fail_growing_actor(actor_growth.take().unwrap(), &owned).await?;
+                assert!(
+                    worker
+                        .submit_monthly_capacity_for_test()
+                        .unwrap_err()
+                        .to_string()
+                        .contains("Monthly monitor lost the lifecycle actor")
+                );
+                "Monthly monitor lost the lifecycle actor"
+            }
+            _ => unreachable!(),
+        };
+        release_idle.send(false).unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Some(error) = worker.cleanup_failure_for_test().await {
+                    break error;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        assert!(
+            error.to_string().contains(expected),
+            "{later}/{failure}: {error}"
+        );
+        assert!(
+            worker
+                .retained_cleanup_for_test()
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains(expected)
+        );
+        assert!(
+            worker.unload_succeeded_for_test(),
+            "physical deletion must succeed independently of retained health"
+        );
+        assert!(!worker.concurrent_agent_permit_is_held().await);
+        assert!(worker.eviction_class().await.is_none());
+        assert_eq!(worker.resident_generation_for_test(), generation);
+        let retry = Worker::start_if_needed(worker.clone()).await.unwrap_err();
+        assert!(retry.to_string().contains(expected), "{retry}");
+        assert_eq!(worker.resident_generation_for_test(), generation);
+        assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
+        if !later {
+            let loaded = events
+                .wait_for(|event| match event {
+                    Event::WorkerLoaded {
+                        agent_id, result, ..
+                    } if agent_id == &id => Some(result.clone()),
+                    _ => None,
+                })
+                .await?;
+            assert!(loaded.unwrap_err().to_string().contains(expected));
+        }
+        if let Some(invoke) = invoke {
+            invoke.await??;
+        }
+        if let Some((source, refresh)) = failure_source {
+            refresh.await?;
+            drop(source);
+        }
+        shutdown.cancel();
     }
     Ok(())
 }
@@ -845,10 +879,24 @@ async fn quota_monitor_failure_stops_pending_silent_tcp_without_reconstruction(
             .component_dep(&context.default_environment_id, host_api_tests)
             .store()
             .await?;
-        let name = agent_id!("Networking", format!("monitor-failure-{actor}"));
+        let case = if actor {
+            "monitor-failure-actor-FailOplogAdd1OnGrowMemory".to_string()
+        } else {
+            "monitor-failure-monitor".to_string()
+        };
+        let name = agent_id!("Networking", case);
+        let expected_id =
+            AgentId::from_agent_id(component.id, &name).map_err(anyhow::Error::msg)?;
+        let mut actor_growth = if actor {
+            Some(executor.gate_next_memory_growth_append(&expected_id).await)
+        } else {
+            None
+        };
         let id = executor.start_agent(&component.id, name.clone()).await?;
+        assert_eq!(id, expected_id);
+        let owned = OwnedAgentId::new(context.default_environment_id, &id);
         let worker = executor
-            .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &id))
+            .production_active_agent(&owned)
             .await
             .unwrap()
             .primary();
@@ -867,7 +915,7 @@ async fn quota_monitor_failure_stops_pending_silent_tcp_without_reconstruction(
         let acquisitions = worker.permit_acquisitions_for_test();
         let mut failure_source = None;
         let expected = if actor {
-            worker.stop_lifecycle_actor_for_test().await;
+            fail_growing_actor(actor_growth.take().unwrap(), &owned).await?;
             "Monthly monitor lost the lifecycle actor"
         } else {
             failure_source = Some(

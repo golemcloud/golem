@@ -200,7 +200,7 @@ Findings 11-14 have separate linked comments.
   - [x] Remove the complete monthly-acceptance pause gate.
   - [x] Remove the monitor panic token, selector arm and Worker panic setter. Native tests fault
     the actual weak usage-flusher dependency; all health assertions remain byte-identical. The
-    shared actor-exit observation and other fault/time controls remain open.
+    actor-loss family is addressed separately below; time controls remain open.
   - [x] Remove WebSocket reader-order gates and their complete Worker module. An own-agent guest
     promise and real native-frame/lock observations preserve all original native assertions. Promise
     ownership, reader locks, timeout start and recovery behavior remain unchanged.
@@ -227,7 +227,17 @@ Findings 11-14 have separate linked comments.
     cells retire with their producer. This is a body proof, not native settlement-panic evidence;
     the native health suite retains its other exact cleanup, startup and generation assertions.
     Post-removal library, combined native, strict lint, production and browser checks pass locally.
-  - [ ] Address remaining actor-loss controls and monthly time controls.
+  - [x] Remove the actor-loss control family. The real append-fault baseline passes
+    without calling either runtime stopper. Later-idle tests run Counter.allocate_memory, then fail
+    its held positive GrowMemory append through the existing oplog fixture. Pending TCP uses its
+    actual growth checkpoint. Test-side capture of the existing exact owner/failure fence event
+    replaces the monitor-exit token. The local change removes both stop methods, the target's
+    exit token, its constructor wiring and its task guard. The pre-guest initial-idle actor cell
+    retires with the manual stopper; initial-idle real monitor failure and startup refusal remain.
+    Other exact error, cleanup, generation and permit assertions remain. Separate post-removal
+    library/native, strict lint, production and browser checks pass locally. No production capture,
+    new trace event or synthetic growth hint is added. A1/F10/F11 stay open for the remaining work.
+  - [ ] Address monthly time controls.
   - [ ] Address the keyed filesystem metadata gate and remaining protocol ordering controls.
   - [ ] For any hook proposed to remain, document the otherwise untestable guarantee, minimal scope
     and why its scheduling changes do not invalidate the test. Existing main-owned hooks are not

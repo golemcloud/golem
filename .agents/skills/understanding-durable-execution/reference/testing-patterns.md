@@ -321,6 +321,17 @@ stays alive through cleanup. Apply an ordinary policy revision to wake capacity 
 join the full refresh only after withheld idle/physical cleanup completes. Preserve initial/later
 idle, pending native I/O, exact retained error, generation and permit-acquisition assertions.
 
+Actor-loss tests use the existing oplog append-failure fixture, not an orderly shutdown API or a
+Worker stopper. Hold a real post-Started GrowMemory append, require its positive delta, then release
+it into the provider's ordinary error path. Counter.allocate_memory supplies guest work at later
+idle; the pending-TCP case uses its running invocation. The lifecycle job's fail-stop panic drops
+the actor receiver, which the normal monitor observes. Test-side capture of the existing before-
+fence event matches its exact target, OwnedAgentId, lifecycle kind and message. It unindexes before
+delivery, keeps only active interests and does not claim that entity or filesystem cleanup completed.
+The original exact health, cleanup, startup-refusal and generation assertions decide success.
+Initial idle has no guest Started or growth job. Its manual-stop-only actor cell retires with the
+stopper. The real initial-idle monitor fault still checks startup failure and retained cleanup health.
+
 ### Success finalization and the invocation boundary
 
 The ordinary terminal check remains before success finalization. Its colocated test leaves a stop
