@@ -738,3 +738,48 @@ async fn a_user_who_may_only_read_does_not_start(_tracing: &Tracing, _crypto: &C
         "The refusal should be etcd's permission check, but was: {message}"
     );
 }
+
+#[test]
+// An etcd restart closes every connection; the leader's keepalive must reconnect over TLS with the
+// certificates it holds and keep the lease, or the deployment loses its leader on each etcd
+// restart.
+async fn a_tls_leader_keeps_its_leadership_across_an_etcd_restart(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
+    let pki = TestPki::new();
+    let etcd =
+        DockerEtcd::new_with_options(pki.mtls_etcd_options().with_host_port(free_port())).await;
+    let (leader, leader_details) = spawn_replica(tls_config(&etcd.client_url(), pki.mtls()));
+    let elected = started(leader_details).await;
+
+    etcd.restart().await;
+    // Longer than one lease TTL: the lease survives only if the keepalive renewed it after the
+    // restart.
+    tokio::time::sleep(LEASE_TTL + Duration::from_secs(2)).await;
+
+    assert!(
+        !leader.is_finished(),
+        "The leader must still run after the etcd restart"
+    );
+    assert!(
+        !elected
+            .leadership
+            .as_ref()
+            .expect("A distributed leader has a leadership handle")
+            .has_stepped_down()
+    );
+    let mut inspect = inspection_client_tls(&etcd.client_url(), &pki).await;
+    let leader_keys = inspect
+        .get(
+            "/golem/shard-manager/leader",
+            Some(etcd_client::GetOptions::new().with_prefix()),
+        )
+        .await
+        .expect("Cannot read the election keys");
+    assert_eq!(
+        leader_keys.kvs().len(),
+        1,
+        "The leader's election key must survive the restart"
+    );
+}
