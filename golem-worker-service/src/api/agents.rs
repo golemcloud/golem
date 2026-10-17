@@ -1,6 +1,5 @@
 use crate::api::common::ApiEndpointError;
 use crate::api::invocation_session::serve_public_invocation_session;
-use crate::config::WebSocketTransportLimits;
 use crate::invocation_session_token::InvocationSessionTokenKeyring;
 use crate::metrics::{ActiveHttpApiStream, HttpApiStreamKind};
 use crate::service::auth::AuthService;
@@ -78,7 +77,6 @@ impl<'a> ApiExtractor<'a> for RequiredWebSocketSubprotocol {
 
 pub struct AgentsApi {
     worker_service: Arc<WorkerService>,
-    invocation_session_websocket_limits: WebSocketTransportLimits,
     auth_service: Arc<dyn AuthService>,
     invocation_session_token_keyring: Arc<InvocationSessionTokenKeyring>,
     invocation_session_config: crate::config::InvocationSessionConfig,
@@ -88,14 +86,12 @@ pub struct AgentsApi {
 impl AgentsApi {
     pub fn new(
         worker_service: Arc<WorkerService>,
-        invocation_session_websocket_limits: WebSocketTransportLimits,
         auth_service: Arc<dyn AuthService>,
         invocation_session_token_keyring: Arc<InvocationSessionTokenKeyring>,
         invocation_session_config: crate::config::InvocationSessionConfig,
     ) -> Self {
         Self {
             worker_service,
-            invocation_session_websocket_limits,
             auth_service,
             invocation_session_token_keyring,
             invocation_session_config,
@@ -230,7 +226,7 @@ impl AgentsApi {
 
         Ok(websocket
             .protocols([INVOCATION_SESSION_SUBPROTOCOL])
-            .config(self.invocation_session_websocket_limits.websocket_config())
+            .config(self.invocation_session_config.websocket.websocket_config())
             .on_upgrade(Box::new(move |socket| {
                 Box::pin(async move {
                     let _active = ActiveHttpApiStream::open(HttpApiStreamKind::InvocationSession);

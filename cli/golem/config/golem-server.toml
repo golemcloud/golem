@@ -718,6 +718,11 @@ mcp = 33554432
 component_cache_max_capacity = 1024
 current_component_cache_ttl = "1m"
 
+[worker_service.connect_websocket]
+max_frame_size = 33554432
+max_message_size = 33554432
+max_write_buffer_size = 67108864
+
 [worker_service.durable_streams]
 long_poll_timeout = "30s"
 max_append_body_bytes = 1048576
@@ -771,6 +776,11 @@ retry_delay = "100ms"
 [worker_service.invocation_session]
 keep_alive_interval = "30s"
 max_pong_timeout = "0s"
+
+[worker_service.invocation_session.websocket]
+max_frame_size = 33554432
+max_message_size = 33554432
+max_write_buffer_size = 67108864
 
 [worker_service.invocation_session_tokens]
 issuer = "local-worker-service"
@@ -843,16 +853,6 @@ type = "Disabled"
 
 [worker_service.webhook_callback_handler]
 hmac_key = "K34Co4pRMDl7dB3cYB+1/N0J3tMzJWI4FyPNOsmGHkE="
-
-[worker_service.websocket_limits.connect]
-max_frame_size = 33554432
-max_message_size = 33554432
-max_write_buffer_size = 67108864
-
-[worker_service.websocket_limits.invocation_session]
-max_frame_size = 33554432
-max_message_size = 33554432
-max_write_buffer_size = 67108864
 
 [worker_service.worker_executor]
 connect_timeout = "10s"
@@ -1698,6 +1698,11 @@ type = "Disabled"
 # component_cache_max_capacity = 1024
 # current_component_cache_ttl = "1m"
 #
+# [worker_service.connect_websocket]
+# max_frame_size = 33554432
+# max_message_size = 33554432
+# max_write_buffer_size = 67108864
+#
 # [worker_service.durable_streams]
 # long_poll_timeout = "30s"
 # max_append_body_bytes = 1048576
@@ -1756,6 +1761,11 @@ type = "Disabled"
 # [worker_service.invocation_session]
 # keep_alive_interval = "30s"
 # max_pong_timeout = "0s"
+#
+# [worker_service.invocation_session.websocket]
+# max_frame_size = 33554432
+# max_message_size = 33554432
+# max_write_buffer_size = 67108864
 #
 # [worker_service.invocation_session_tokens]
 # issuer = "local-worker-service"
@@ -1828,16 +1838,6 @@ type = "Disabled"
 #
 # [worker_service.webhook_callback_handler]
 # hmac_key = "K34Co4pRMDl7dB3cYB+1/N0J3tMzJWI4FyPNOsmGHkE="
-#
-# [worker_service.websocket_limits.connect]
-# max_frame_size = 33554432
-# max_message_size = 33554432
-# max_write_buffer_size = 67108864
-#
-# [worker_service.websocket_limits.invocation_session]
-# max_frame_size = 33554432
-# max_message_size = 33554432
-# max_write_buffer_size = 67108864
 #
 # [worker_service.worker_executor]
 # connect_timeout = "10s"

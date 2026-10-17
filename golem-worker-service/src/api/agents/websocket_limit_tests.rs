@@ -74,12 +74,14 @@ async fn spawn_agents_api(
     );
     let api = AgentsApi::new(
         harness.worker_service.clone(),
-        limits,
         Arc::new(SystemAuthService),
         Arc::new(
             InvocationSessionTokenKeyring::new(&InvocationSessionTokenConfig::default()).unwrap(),
         ),
-        InvocationSessionConfig::default(),
+        InvocationSessionConfig {
+            websocket: limits,
+            ..Default::default()
+        },
     );
     let service = OpenApiService::new(api, "test", "1.0");
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

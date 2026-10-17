@@ -33,11 +33,10 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                 services.component_service.clone(),
                 services.worker_service.clone(),
                 services.auth_service.clone(),
-                services.websocket_limits.connect.clone(),
+                services.connect_websocket.clone(),
             ),
             AgentsApi::new(
                 services.worker_service.clone(),
-                services.websocket_limits.invocation_session.clone(),
                 services.auth_service.clone(),
                 services.invocation_session_token_keyring.clone(),
                 services.invocation_session_config.clone(),

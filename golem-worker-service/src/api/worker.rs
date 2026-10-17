@@ -57,7 +57,7 @@ pub struct WorkerApi {
     component_service: Arc<dyn ComponentService>,
     worker_service: Arc<WorkerService>,
     auth_service: Arc<dyn AuthService>,
-    connect_websocket_limits: WebSocketTransportLimits,
+    connect_websocket: WebSocketTransportLimits,
 }
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Worker)]
@@ -66,13 +66,13 @@ impl WorkerApi {
         component_service: Arc<dyn ComponentService>,
         worker_service: Arc<WorkerService>,
         auth_service: Arc<dyn AuthService>,
-        connect_websocket_limits: WebSocketTransportLimits,
+        connect_websocket: WebSocketTransportLimits,
     ) -> Self {
         Self {
             component_service,
             worker_service,
             auth_service,
-            connect_websocket_limits,
+            connect_websocket,
         }
     }
 
@@ -1119,7 +1119,7 @@ impl WorkerApi {
         let origin = worker_stream.origin();
 
         let upgraded: BoxWebSocketUpgraded = websocket
-            .config(self.connect_websocket_limits.websocket_config())
+            .config(self.connect_websocket.websocket_config())
             .on_upgrade(Box::new(move |socket_stream| {
                 Box::pin(async move {
                     let _active = ActiveHttpApiStream::open(HttpApiStreamKind::Connect);
