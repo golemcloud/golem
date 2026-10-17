@@ -26,7 +26,10 @@ use crate::config::HealthCheckK8sConfig;
 use crate::config::{EtcdConfig, HealthCheckMode, PersistenceConfig};
 use crate::quota::{DbQuotaRepo, EtcdQuotaRepo, GrpcResourceDefinitionFetcher, QuotaService};
 use crate::registry_event_subscriber::ShardManagerRegistryInvalidationHandler;
-use crate::sharding::etcd_connection::{EtcdConnectSettings, connect_requests_with};
+use crate::sharding::error::is_certificate_failure;
+use crate::sharding::etcd_connection::{
+    EtcdConnectSettings, connect_requests_with, watch_refused_certificates,
+};
 use crate::sharding::etcd_retry::{is_retriable_read, retry_retriable};
 use crate::sharding::healthcheck::GrpcHealthCheck;
 use crate::sharding::worker_executor::WorkerExecutorServiceDefault;
@@ -357,6 +360,17 @@ pub(crate) fn ensure_shard_count_matches(
 }
 
 /// Blocks until elected, returning the etcd client and the fence every state write is guarded on.
+/// Before the campaign, a refused certificate ends the startup with the reason: the files were just
+/// read, so a retry would present the same ones and could only wait.
+fn stop_on_refused_certificate(err: ShardManagerError) -> ShardManagerError {
+    match err {
+        ShardManagerError::EtcdError(err) if is_certificate_failure(&err) => {
+            ShardManagerError::TlsHandshakeFailed(err)
+        }
+        other => other,
+    }
+}
+
 /// Counts a retriable etcd failure before the campaign as a failed campaign attempt: the metric
 /// that shows a replica which cannot reach etcd.
 fn count_retriable_failure(err: &ShardManagerError) {
@@ -410,6 +424,7 @@ async fn start_distributed_mode(
         || async {
             connect_requests_with(etcd, &settings)
                 .await
+                .map_err(stop_on_refused_certificate)
                 .inspect_err(count_retriable_failure)
         },
         &shutdown,
@@ -430,6 +445,7 @@ async fn start_distributed_mode(
         || async {
             EtcdRoutingTablePersistence::stored_number_of_shards(&kv)
                 .await
+                .map_err(stop_on_refused_certificate)
                 .inspect_err(count_retriable_failure)
         },
         &shutdown,
@@ -441,11 +457,19 @@ async fn start_distributed_mode(
         ensure_shard_count_matches(stored, number_of_shards)?;
     }
 
+    if etcd.tls.is_some() {
+        join_set.spawn(
+            watch_refused_certificates(settings.clone(), kv.clone(), etcd.retry_max_delay)
+                .in_current_span(),
+        );
+    }
+
     let election = retry_retriable(
         "connecting the election client to etcd",
         || async {
             LeaderElection::connect_with(etcd, &settings, LEADER_ELECTION_NAME)
                 .await
+                .map_err(stop_on_refused_certificate)
                 .inspect_err(count_retriable_failure)
         },
         &shutdown,

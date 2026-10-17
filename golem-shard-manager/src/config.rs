@@ -276,6 +276,8 @@ pub struct EtcdConfig {
     pub read_retry_timeout: Duration,
     #[serde(with = "humantime_serde", default = "default_etcd_retry_min_delay")]
     pub retry_min_delay: Duration,
+    /// The longest wait between two retries of an etcd failure. With `tls` set, also how often a
+    /// running replica checks whether etcd refuses its certificates.
     #[serde(with = "humantime_serde", default = "default_etcd_retry_max_delay")]
     pub retry_max_delay: Duration,
     /// How long etcd holds this replica's leadership lease without a renewal; renewed at TTL/3.

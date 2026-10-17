@@ -77,13 +77,27 @@ struct TestPki {
 
 impl TestPki {
     fn new() -> Self {
+        Self::with_server_certificate(false)
+    }
+
+    /// A PKI whose etcd server certificate expired in 2002.
+    fn with_expired_server_certificate() -> Self {
+        Self::with_server_certificate(true)
+    }
+
+    fn with_server_certificate(expired: bool) -> Self {
         let ca = test_ca("golem test CA");
-        let (server_pem, server_key_pem) =
-            signed_by(&ca, "localhost", ExtendedKeyUsagePurpose::ServerAuth);
+        let (server_pem, server_key_pem) = signed_by(
+            &ca,
+            "localhost",
+            ExtendedKeyUsagePurpose::ServerAuth,
+            expired,
+        );
         let (client_pem, client_key_pem) = signed_by(
             &ca,
             "golem-shard-manager",
             ExtendedKeyUsagePurpose::ClientAuth,
+            false,
         );
         let dir = tempfile::tempdir().expect("Cannot create a directory for the test certificates");
         for (name, pem) in [
@@ -135,6 +149,12 @@ impl TestPki {
     fn etcd_options(&self) -> DockerEtcdOptions {
         DockerEtcdOptions::new().with_tls(self.server_pem.clone(), self.server_key_pem.clone())
     }
+
+    /// [`Self::etcd_options`], and etcd requires a client certificate signed by the test CA.
+    fn mtls_etcd_options(&self) -> DockerEtcdOptions {
+        self.etcd_options()
+            .with_client_cert_auth(self.ca_pem.clone())
+    }
 }
 
 fn test_ca(name: &str) -> CertifiedIssuer<'static, KeyPair> {
@@ -145,14 +165,19 @@ fn test_ca(name: &str) -> CertifiedIssuer<'static, KeyPair> {
     CertifiedIssuer::self_signed(params, KeyPair::generate().unwrap()).unwrap()
 }
 
-/// A certificate for `name` and its private key, both PEM.
+/// A certificate for `name` and its private key, both PEM; `expired` makes one that expired in 2002.
 fn signed_by(
     ca: &CertifiedIssuer<'static, KeyPair>,
     name: &str,
     usage: ExtendedKeyUsagePurpose,
+    expired: bool,
 ) -> (String, String) {
     let mut params = CertificateParams::new(vec![name.to_string()]).unwrap();
     params.distinguished_name.push(DnType::CommonName, name);
+    if expired {
+        params.not_before = rcgen::date_time_ymd(2001, 1, 1);
+        params.not_after = rcgen::date_time_ymd(2002, 1, 1);
+    }
     params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     params.extended_key_usages = vec![usage];
     let key = KeyPair::generate().unwrap();
@@ -163,7 +188,7 @@ fn signed_by(
 
 /// TLS on the client port, and etcd requires a client certificate signed by the test CA.
 async fn mtls_etcd(pki: &TestPki) -> DockerEtcd {
-    DockerEtcd::new_with_options(pki.etcd_options().with_client_cert_auth(pki.ca_pem.clone())).await
+    DockerEtcd::new_with_options(pki.mtls_etcd_options()).await
 }
 
 /// TLS on the client port without client certificates, and authentication enabled: user `USER`
@@ -610,4 +635,79 @@ async fn a_replica_with_a_user_waits_for_an_etcd_that_starts_later(
 
     let replica = started(details).await;
     assert!(replica.leadership.is_some());
+}
+
+#[test]
+// A fault on etcd's side, but before the campaign the replica has just read its files, so it stops
+// with the reason instead of waiting.
+async fn an_expired_etcd_server_certificate_stops_the_startup(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
+    let pki = TestPki::with_expired_server_certificate();
+    let etcd = mtls_etcd(&pki).await;
+    let message = refused(tls_config(&etcd.client_url(), pki.mtls())).await;
+    assert!(
+        message.contains("TLS handshake with etcd failed"),
+        "The refusal should be the handshake, but was: {message}"
+    );
+    assert!(
+        message.contains("invalid peer certificate: certificate expired"),
+        "The refusal should name the expired certificate, but was: {message}"
+    );
+}
+
+#[test]
+// While a replica runs, a refused certificate is retried, because etcd's certificate can be fixed
+// on etcd's side. Renewed files take effect only on a restart, so once the files have changed, the
+// replica stops, and a new start reads them.
+async fn a_running_replica_stops_on_a_refused_certificate_only_when_its_files_changed(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
+    let old_pki = TestPki::new();
+    let port = free_port();
+    let old_etcd =
+        DockerEtcd::new_with_options(old_pki.mtls_etcd_options().with_host_port(port)).await;
+    let mut config = tls_config(&old_etcd.client_url(), old_pki.mtls());
+    if let PersistenceConfig::Etcd(etcd) = &mut config.persistence {
+        // The certificate check runs every `retry_max_delay`.
+        etcd.retry_max_delay = Duration::from_secs(1);
+    }
+    let (_leader, leader_details) = spawn_replica(config.clone());
+    started(leader_details).await;
+    let (_standby, mut standby_details) = spawn_replica(config.clone());
+    tokio::time::sleep(STANDBY_SETTLE).await;
+
+    // etcd comes back on the same address with a certificate from another CA, which also signs
+    // the client certificates it accepts.
+    old_etcd.stop().await;
+    let new_pki = TestPki::new();
+    let _new_etcd =
+        DockerEtcd::new_with_options(new_pki.mtls_etcd_options().with_host_port(port)).await;
+
+    assert!(
+        timeout(Duration::from_secs(4), &mut standby_details)
+            .await
+            .is_err(),
+        "With unchanged files, the standby must keep retrying"
+    );
+
+    for name in ["ca.pem", "client.pem", "client-key.pem"] {
+        std::fs::copy(new_pki.path(name), old_pki.path(name)).unwrap();
+    }
+    let stopped = timeout(STARTUP_TIMEOUT, standby_details)
+        .await
+        .expect("With changed files, the standby must stop")
+        .expect("The standby task ended without a result")
+        .map(|_| ())
+        .expect_err("The standby must not become a leader with the old certificates");
+    let message = format!("{stopped:#}");
+    assert!(
+        message.contains("the TLS files have changed since then"),
+        "The standby should stop because its files changed, but stopped with: {message}"
+    );
+
+    let (_restarted, restarted_details) = spawn_replica(config);
+    started(restarted_details).await;
 }

@@ -19,14 +19,16 @@
 //! that channel. The election RPCs block by design, so they need a channel with no timeout.
 
 use crate::config::{EtcdConfig, EtcdTlsConfig};
-use crate::sharding::error::ShardManagerError;
-use etcd_client::{Certificate, Client, ConnectOptions, Identity, TlsOptions};
+use crate::sharding::error::{ShardManagerError, is_certificate_failure};
+use crate::sharding::persistence::STATE_KEY;
+use etcd_client::{Certificate, Client, ConnectOptions, GetOptions, Identity, TlsOptions};
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::sign::CertifiedKey;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
-use tracing::{info, warn};
+use std::time::Duration;
+use tracing::{error, info, warn};
 use x509_parser::time::ASN1Time;
 
 fn invalid_config(message: String) -> ShardManagerError {
@@ -392,6 +394,42 @@ impl EtcdConnectSettings {
         self.tls_files
             .iter()
             .any(|file| std::fs::read(&file.path).map_or(true, |content| content != file.content))
+    }
+}
+
+/// Watches, while the replica runs, for etcd refusing a certificate. Such a refusal is retried like
+/// a network fault, because etcd's own certificate can be fixed on etcd's side; but renewed files
+/// take effect only on a restart. So when etcd refuses and the TLS files have changed since startup,
+/// this returns an error, which stops the replica; otherwise it logs the refusal and goes on.
+pub(crate) async fn watch_refused_certificates(
+    settings: EtcdConnectSettings,
+    client: Client,
+    interval: Duration,
+) -> anyhow::Result<()> {
+    let mut kv = client.kv_client();
+    loop {
+        tokio::time::sleep(interval).await;
+        match kv
+            .get(STATE_KEY, Some(GetOptions::new().with_count_only()))
+            .await
+        {
+            Err(err) if is_certificate_failure(&err) => {
+                if settings.tls_files_changed() {
+                    return Err(
+                        anyhow::Error::new(ShardManagerError::TlsHandshakeFailed(err)).context(
+                            "etcd refuses the TLS certificates read at startup, and the TLS files \
+                             have changed since then: stopping, so that a restart reads them",
+                        ),
+                    );
+                }
+                error!(
+                    error = %err,
+                    "etcd refuses the TLS certificates, and the TLS files have not changed; \
+                     retrying"
+                );
+            }
+            _ => {}
+        }
     }
 }
 
