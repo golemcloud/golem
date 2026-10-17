@@ -35,11 +35,12 @@ use crate::model::oplog::payload::external_durable_stream::{
     DurableStreamTransport, DurableStreamWriterOptions,
 };
 use crate::model::oplog::payload::types::{
-    FileSystemError, ObjectMetadata, PermissionCardRevokeError, SecretRevealAudit,
-    SecretRevealError, SerializableDateTime, SerializableFileTimes, SerializableP3FileSystemError,
-    SerializableP3IpSocketAddress, SerializableP3SocketErrorCode, SerializableP3UdpDatagram,
-    SerializableSocketError, SerializableToolDiscoverySnapshot, SerializableWebsocketError,
-    SerializableWebsocketMessage, SerializableWebsocketReconstructionPolicy,
+    FileSystemError, ObjectMetadata, PermissionCardDeriveError, PermissionCardRevokeError,
+    SecretRevealAudit, SecretRevealError, SerializableDateTime, SerializableFileTimes,
+    SerializableP3FileSystemError, SerializableP3IpSocketAddress, SerializableP3SocketErrorCode,
+    SerializableP3UdpDatagram, SerializablePermissionCardLiveness, SerializableSocketError,
+    SerializableToolDiscoverySnapshot, SerializableWebsocketError, SerializableWebsocketMessage,
+    SerializableWebsocketReconstructionPolicy,
 };
 use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
@@ -268,6 +269,9 @@ oplog_payload! {
             provenance: Vec<u8>,
         },
         PermissionCardRevoke {
+            card_id: Uuid,
+        },
+        PermissionCardLiveness {
             card_id: Uuid,
         },
         PermissionCardTransfer {
@@ -626,12 +630,17 @@ oplog_payload! {
             credit_after_at_ms: i64,
         },
         PermissionCardDerived {
-            card: Vec<u8>,
+            result: Result<Vec<u8>, PermissionCardDeriveError>,
+        },
+        PermissionCardLiveness {
+            liveness: SerializablePermissionCardLiveness,
         },
         PermissionCardsRevoked {
             result: Result<Vec<Uuid>, PermissionCardRevokeError>,
         },
-        PermissionCardTransferComplete {},
+        PermissionCardTransferComplete {
+            result: Result<(), PermissionCardDeriveError>,
+        },
         GolemRetryPolicies {
             policies: Vec<NamedRetryPolicy>
         },
@@ -988,6 +997,7 @@ pub mod host_functions {
         (FilesystemOutputStreamCheckWrite => "filesystem::output_stream", "check_write", NoInput, StreamCheckWrite),
         (GolemPermissionsDerivePersist => "golem::permissions::derive", "persist-derived-card", PermissionCardDerive, PermissionCardDerived),
         (GolemPermissionsRevokePersist => "golem::permissions::revoke", "persist-revoked-cards", PermissionCardRevoke, PermissionCardsRevoked),
+        (GolemPermissionsCardLiveness => "golem::permissions::types", "card-liveness", PermissionCardLiveness, PermissionCardLiveness),
         (GolemPermissionsInstallChildPersist => "golem::permissions::wallet", "persist-installed-child-card", PermissionCardDerive, PermissionCardDerived),
         (GolemPermissionsInstallTransfer => "golem::permissions::wallet", "install-card-transfer", PermissionCardTransfer, PermissionCardTransferComplete),
         (GolemToolGetAllTools => "golem::tool::host", "get_all_tools", NoInput, GolemToolTools),

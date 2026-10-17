@@ -72,9 +72,10 @@ const delegate = Effect.gen(function* () {
   and time units only (`PnDTnHnMnS`); the host rejects years, months, and weeks. `fromDuration`
   rejects zero and negative durations.
 - `id`, `parents`, `expiresAt`, `inspect`, `derive`, and `deriveScope` borrow the card. The `id`,
-  `parents`, and `expiresAt` accessors trap in the host if the handle is unknown. A handle the
-  agent already holds may keep reporting its cached view after its card is revoked, so do not use
-  these accessors to detect revocation.
+  `parents`, and `expiresAt` accessors trap in the host if the handle is unknown or its card is
+  revoked or expired. `inspect`, `derive`, `deriveScope`, and `install` on such a handle fail with
+  a `PermissionError` of kind `"card-revoked"` or `"card-expired"`; use `inspect` to detect
+  revocation.
 - `revoke(card)` returns the number of revoked cards in the subtree. `install(card, holder)` puts
   the card in another agent's wallet. Both move the card before the host call, even when the call
   fails. `release(card)` drops a card that you do not keep.
