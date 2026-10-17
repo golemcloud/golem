@@ -52,6 +52,8 @@ use uuid::Uuid;
 #[derive(Clone, Default)]
 struct FakeLeader {
     calls: Arc<AtomicUsize>,
+    /// Delays the next `get_routing_table` by this much, once.
+    delay_next: Arc<Mutex<Option<Duration>>>,
 }
 
 #[tonic::async_trait]
@@ -61,6 +63,10 @@ impl ShardManagerService for FakeLeader {
         _: Request<GetRoutingTableRequest>,
     ) -> Result<Response<GetRoutingTableResponse>, Status> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        let delay = self.delay_next.lock().unwrap().take();
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
+        }
         Ok(Response::new(GetRoutingTableResponse {
             result: Some(get_routing_table_response::Result::Success(
                 GrpcRoutingTable {
@@ -129,6 +135,9 @@ enum Mode {
     Leader,
     /// Names this leader, or none.
     Standby(Option<LeaderAddress>),
+    /// Answers every call with this code and no detail, as a process that is not a working
+    /// shard manager does.
+    Fails(tonic::Code),
 }
 
 /// One replica: serves as the leader or answers as a standby. The mode can change at run time.
@@ -138,6 +147,10 @@ struct FakeReplica {
     leader: ShardManagerServiceServer<FakeLeader>,
     calls: Arc<AtomicUsize>,
     refusals: Arc<AtomicUsize>,
+    /// Modes for the next calls, one per call, before `mode` applies again: a test steps the
+    /// replica through a sequence by call count instead of by time.
+    script: Arc<Mutex<std::collections::VecDeque<Mode>>>,
+    delay_next: Arc<Mutex<Option<Duration>>>,
 }
 
 impl NamedService for FakeReplica {
@@ -159,7 +172,12 @@ impl Service<http::Request<Body>> for FakeReplica {
     }
 
     fn call(&mut self, request: http::Request<Body>) -> Self::Future {
-        let mode = self.mode.lock().unwrap().clone();
+        let mode = self
+            .script
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(|| self.mode.lock().unwrap().clone());
         let mut leader = self.leader.clone();
         let refusals = self.refusals.clone();
         Box::pin(async move {
@@ -172,6 +190,10 @@ impl Service<http::Request<Body>> for FakeReplica {
                         None => Status::unavailable("no shard manager leader is ready yet; retry"),
                     };
                     Ok(status.into_http())
+                }
+                Mode::Fails(code) => {
+                    refusals.fetch_add(1, Ordering::SeqCst);
+                    Ok(Status::new(code, "not a shard manager").into_http())
                 }
             }
         })
@@ -197,6 +219,15 @@ impl Running {
         *self.replica.mode.lock().unwrap() = mode;
     }
 
+    /// The next calls take these modes, one per call.
+    fn script(&self, modes: impl IntoIterator<Item = Mode>) {
+        self.replica.script.lock().unwrap().extend(modes);
+    }
+
+    fn delay_next_call(&self, delay: Duration) {
+        *self.replica.delay_next.lock().unwrap() = Some(delay);
+    }
+
     fn calls(&self) -> usize {
         self.replica.calls.load(Ordering::SeqCst)
     }
@@ -214,7 +245,11 @@ impl Running {
 async fn run_replica(mode: Mode) -> Running {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let fake = FakeLeader::default();
+    let delay = Arc::new(Mutex::new(None));
+    let fake = FakeLeader {
+        calls: Arc::new(AtomicUsize::new(0)),
+        delay_next: delay.clone(),
+    };
     let replica = FakeReplica {
         mode: Arc::new(Mutex::new(mode)),
         calls: fake.calls.clone(),
@@ -222,6 +257,8 @@ async fn run_replica(mode: Mode) -> Running {
             .accept_compressed(CompressionEncoding::Gzip)
             .send_compressed(CompressionEncoding::Gzip),
         refusals: Arc::new(AtomicUsize::new(0)),
+        script: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+        delay_next: delay,
     };
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let service = replica.clone();
@@ -242,6 +279,24 @@ async fn run_replica(mode: Mode) -> Running {
         stop,
         server,
     }
+}
+
+/// A loopback port that refuses connections and that no other process can take while the socket
+/// lives: bound, never listening. A port found by binding a listener and dropping it can be taken
+/// by another process before the test uses it.
+fn refusing_port() -> (socket2::Socket, u16) {
+    let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)
+        .expect("a TCP socket");
+    socket
+        .bind(&SocketAddr::from(([127, 0, 0, 1], 0)).into())
+        .expect("a loopback port");
+    let port = socket
+        .local_addr()
+        .expect("a bound address")
+        .as_socket()
+        .expect("an IP address")
+        .port();
+    (socket, port)
 }
 
 fn client_for(configured: &Running) -> GrpcShardManager {
@@ -417,38 +472,139 @@ fn client_with_retries(
     })
 }
 
-#[test]
-// After an ungraceful kill, the replicas name the dead leader until its etcd lease expires. A call
-// that may be repeated must ride that window out with the client's retry budget, as it rode out a
-// closed port before, instead of failing at the first refused connection.
-async fn a_retried_call_rides_out_a_dead_leader_that_is_still_named() {
-    let dead_port = {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.local_addr().unwrap().port()
-    };
-    let leader = run_replica(Mode::Leader).await;
-    let standby = run_replica(Mode::Standby(Some(LeaderAddress {
+fn client_with_request_timeout(
+    configured: &Running,
+    request_timeout: Duration,
+) -> GrpcShardManager {
+    GrpcShardManager::new(&GrpcShardManagerConfig {
         host: "127.0.0.1".to_string(),
-        port: dead_port,
-    })))
-    .await;
+        port: configured.addr.port(),
+        client_config: GrpcClientConfig {
+            connect_timeout: Duration::from_secs(10),
+            request_timeout: Some(request_timeout),
+            retries_on_unavailable: RetryConfig {
+                max_attempts: 2,
+                min_delay: Duration::from_millis(10),
+                max_delay: Duration::from_millis(50),
+                multiplier: 2.0,
+                max_jitter_factor: None,
+            },
+            ..GrpcClientConfig::default()
+        },
+        retries: RetryConfig::default(),
+    })
+}
+
+#[test]
+// A request that runs out of its own time says nothing about the leader: the next call must go
+// straight to it, not back through a standby.
+async fn a_request_timeout_on_the_leader_keeps_the_leader() {
+    let leader = run_replica(Mode::Leader).await;
+    let standby = run_replica(Mode::Standby(Some(leader.address()))).await;
+    let client = client_with_request_timeout(&standby, Duration::from_millis(200));
+    client
+        .get_routing_table()
+        .await
+        .expect("the standby names the leader");
+
+    leader.delay_next_call(Duration::from_secs(1));
+    client
+        .get_routing_table()
+        .await
+        .expect_err("the slow call runs out of its time");
+    client
+        .get_routing_table()
+        .await
+        .expect("the leader answers again");
+
+    assert_eq!(
+        standby.refusals(),
+        1,
+        "only the first call needs the standby; a timeout is no reason to leave the leader"
+    );
+    assert_eq!(leader.calls(), 3);
+    leader.stop().await;
+    standby.stop().await;
+}
+
+#[test]
+// A leader that refused one call may serve the next: a later pass of the same call tries it again
+// instead of waiting until the replicas name another leader.
+async fn a_named_leader_that_failed_is_tried_again_after_a_backoff() {
+    let leader = run_replica(Mode::Leader).await;
+    leader.script([Mode::Fails(tonic::Code::Unavailable)]);
+    let standby = run_replica(Mode::Standby(Some(leader.address()))).await;
     let client = client_with_retries(
         &standby,
         RetryConfig {
             max_attempts: 5,
-            min_delay: Duration::from_millis(100),
-            max_delay: Duration::from_millis(400),
+            min_delay: Duration::from_millis(10),
+            max_delay: Duration::from_millis(50),
             multiplier: 2.0,
             max_jitter_factor: None,
         },
     );
 
-    let named = standby.replica.mode.clone();
-    let live = leader.address();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        *named.lock().unwrap() = Mode::Standby(Some(live));
-    });
+    client
+        .get_routing_table()
+        .await
+        .expect("a later pass reaches the leader that refused once");
+    assert_eq!(leader.calls(), 1);
+    leader.stop().await;
+    standby.stop().await;
+}
+
+#[test]
+// A pod IP that a new pod reuses for another service answers `Unimplemented`: the client must
+// stop calling it and ask the configured address again.
+async fn a_known_leader_address_that_now_serves_something_else_is_forgotten() {
+    let first = run_replica(Mode::Leader).await;
+    let second = run_replica(Mode::Leader).await;
+    let standby = run_replica(Mode::Standby(Some(first.address()))).await;
+    let client = client_for(&standby);
+    client
+        .get_routing_table()
+        .await
+        .expect("reaches the first leader");
+
+    first.set(Mode::Fails(tonic::Code::Unimplemented));
+    standby.set(Mode::Standby(Some(second.address())));
+    client
+        .get_routing_table()
+        .await
+        .expect("the configured address names the second leader");
+
+    assert_eq!(second.calls(), 1);
+    first.stop().await;
+    second.stop().await;
+    standby.stop().await;
+}
+
+#[test]
+// After an ungraceful kill, the replicas name the dead leader until its etcd lease expires. A call
+// that may be repeated must ride that window out with the client's retry budget, as it rode out a
+// closed port before, instead of failing at the first refused connection.
+async fn a_retried_call_rides_out_a_dead_leader_that_is_still_named() {
+    let (_reserved, dead_port) = refusing_port();
+    let dead = LeaderAddress {
+        host: "127.0.0.1".to_string(),
+        port: dead_port,
+    };
+    let leader = run_replica(Mode::Leader).await;
+    let standby = run_replica(Mode::Standby(Some(leader.address()))).await;
+    // The first two answers still name the dead leader, as a standby does until the dead
+    // leader's lease expires; then the standby names the new one.
+    standby.script([Mode::Standby(Some(dead.clone())), Mode::Standby(Some(dead))]);
+    let client = client_with_retries(
+        &standby,
+        RetryConfig {
+            max_attempts: 5,
+            min_delay: Duration::from_millis(10),
+            max_delay: Duration::from_millis(50),
+            multiplier: 2.0,
+            max_jitter_factor: None,
+        },
+    );
 
     client
         .get_routing_table()

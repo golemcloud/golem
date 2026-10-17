@@ -18,7 +18,9 @@
 
 use crate::clients::shard_manager::GrpcShardManagerConfig;
 use crate::clients::shard_manager_leader::{LeaderAddress, is_not_leader, leader_of};
-use crate::grpc::client::{GrpcClient, GrpcClientConfig, MultiTargetGrpcClient};
+use crate::grpc::client::{
+    GrpcClient, GrpcClientConfig, MultiTargetGrpcClient, requires_reconnect,
+};
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 use golem_common::model::RetryConfig;
 use golem_common::retries::RetryState;
@@ -30,6 +32,7 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic::{Code, Status};
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
+use tracing::info;
 
 /// How long the client waits to connect to a leader that a replica named. Shorter than the
 /// configured `connect_timeout`: a named leader that does not answer quickly is usually gone, and
@@ -79,16 +82,24 @@ fn leader_client_config(config: &GrpcClientConfig) -> GrpcClientConfig {
 /// The outcome of one pass of [`LeaderRouter::call`].
 enum Routed<R> {
     Done(Result<R, Status>),
-    /// The leader that a replica named could not be reached; a later pass may reach its successor.
-    LeaderUnreachable(Status),
+    /// No leader could be reached in this pass. `failed` is the named leader that this pass tried
+    /// and that failed; the next pass skips it, and the pass after that tries it again.
+    LeaderUnreachable {
+        status: Status,
+        failed: Option<LeaderAddress>,
+    },
 }
 
-/// A failure of the connection or of the peer's process, not an answer from the shard manager.
-fn is_transport_failure(status: &Status) -> bool {
-    matches!(
-        status.code(),
-        Code::Unavailable | Code::Unknown | Code::Cancelled | Code::DeadlineExceeded
-    )
+/// Whether the known leader cannot serve this client any more: its connection failed, it answered
+/// `UNAVAILABLE`, or the process at its address is not a shard manager that accepts this client (a
+/// pod IP reused by another service). A request that ran out of its own time, a `DeadlineExceeded`
+/// or an application `Unknown` is an answer from a working leader, which stays the one to call.
+fn leader_failed(status: &Status) -> bool {
+    requires_reconnect(status)
+        || matches!(
+            status.code(),
+            Code::Unimplemented | Code::PermissionDenied | Code::Unauthenticated
+        )
 }
 
 /// Whether a call may be sent again after a failure that the peer may have seen.
@@ -162,16 +173,21 @@ impl LeaderRouter {
             + Send
             + Sync,
     {
-        let mut unreachable = None;
+        let mut failed_last_pass = None;
         let mut retries = RetryState::new(&self.retries_on_unavailable);
         loop {
             retries.start_attempt();
+            // A named leader that failed is skipped for one pass only. Its failure may have been
+            // brief, and skipping it for the rest of the call would fail a call that it could
+            // still serve.
+            let skip = failed_last_pass.take();
             match self
-                .route_once(description, attempts, &f, &mut unreachable)
+                .route_once(description, attempts, &f, skip.as_ref())
                 .await
             {
                 Routed::Done(result) => return result,
-                Routed::LeaderUnreachable(status) => {
+                Routed::LeaderUnreachable { status, failed } => {
+                    failed_last_pass = failed;
                     if attempts.replayable() && retries.failed_attempt().await {
                         continue;
                     }
@@ -181,39 +197,38 @@ impl LeaderRouter {
         }
     }
 
-    /// One pass of [`Self::call`]. `unreachable` is the named leader that this call could not
-    /// reach; while the replicas still name it, the pass ends without trying it again.
+    /// One pass of [`Self::call`]. `skip` is the named leader that the previous pass could not
+    /// reach; while the replicas still name it, this pass ends without trying it again.
     async fn route_once<F, R>(
         &self,
         description: &'static str,
         attempts: Attempts,
         f: &F,
-        unreachable: &mut Option<LeaderAddress>,
+        skip: Option<&LeaderAddress>,
     ) -> Routed<R>
     where
         F: ClientCall<R>,
     {
+        let mut failed_here = None;
         if let Some(leader) = self.known_leader() {
             match self.send_to_leader(description, &leader, attempts, f).await {
                 Ok(result) => return Routed::Done(Ok(result)),
                 Err(status) => {
                     if let Some(next) = leader_of(&status) {
-                        self.forget_leader(&leader);
-                        return self
-                            .follow(description, next, attempts, f, unreachable)
-                            .await;
+                        self.forget_leader(&leader, &status);
+                        return self.follow(description, next, attempts, f).await;
                     }
                     // The shard manager answers most refusals inside a successful response, but
                     // some with a status such as `InvalidArgument`: those come from a working
                     // leader, which stays the one to call.
-                    if !is_transport_failure(&status) {
+                    if !leader_failed(&status) {
                         return Routed::Done(Err(status));
                     }
-                    self.forget_leader(&leader);
+                    self.forget_leader(&leader, &status);
                     if !attempts.replayable() {
                         return Routed::Done(Err(status));
                     }
-                    *unreachable = Some(leader);
+                    failed_here = Some(leader);
                 }
             }
         }
@@ -224,11 +239,13 @@ impl LeaderRouter {
         };
         match leader_of(&status) {
             // Named until that leader's lease expires; wait, then ask again.
-            Some(next) if unreachable.as_ref() == Some(&next) => Routed::LeaderUnreachable(status),
-            Some(next) => {
-                self.follow(description, next, attempts, f, unreachable)
-                    .await
+            Some(next) if skip == Some(&next) || failed_here.as_ref() == Some(&next) => {
+                Routed::LeaderUnreachable {
+                    status,
+                    failed: failed_here,
+                }
             }
+            Some(next) => self.follow(description, next, attempts, f).await,
             // The configured address has already spent its own retries.
             None => Routed::Done(Err(status)),
         }
@@ -240,7 +257,6 @@ impl LeaderRouter {
         leader: LeaderAddress,
         attempts: Attempts,
         f: &F,
-        unreachable: &mut Option<LeaderAddress>,
     ) -> Routed<R>
     where
         F: ClientCall<R>,
@@ -250,13 +266,15 @@ impl LeaderRouter {
         self.remember_leader(leader.clone());
         match self.send_to_leader(description, &leader, attempts, f).await {
             Ok(result) => Routed::Done(Ok(result)),
-            Err(status) if leader_of(&status).is_some() || is_transport_failure(&status) => {
-                self.forget_leader(&leader);
+            Err(status) if leader_of(&status).is_some() || leader_failed(&status) => {
+                self.forget_leader(&leader, &status);
                 if !attempts.replayable() {
                     return Routed::Done(Err(status));
                 }
-                *unreachable = Some(leader);
-                Routed::LeaderUnreachable(status)
+                Routed::LeaderUnreachable {
+                    status,
+                    failed: Some(leader),
+                }
             }
             Err(status) => Routed::Done(Err(status)),
         }
@@ -299,13 +317,23 @@ impl LeaderRouter {
     }
 
     fn remember_leader(&self, leader: LeaderAddress) {
-        *self.leader.lock().unwrap_or_else(PoisonError::into_inner) = Some(leader);
+        let mut known = self.leader.lock().unwrap_or_else(PoisonError::into_inner);
+        if known.as_ref() != Some(&leader) {
+            info!(leader = %leader, "Calling a newly named shard manager leader");
+        }
+        *known = Some(leader);
     }
 
     /// Only while it is still the one that failed: a concurrent call may have learned a newer one.
-    fn forget_leader(&self, leader: &LeaderAddress) {
+    fn forget_leader(&self, leader: &LeaderAddress, cause: &Status) {
         let mut known = self.leader.lock().unwrap_or_else(PoisonError::into_inner);
         if known.as_ref() == Some(leader) {
+            info!(
+                leader = %leader,
+                code = ?cause.code(),
+                error = cause.message(),
+                "No longer calling this shard manager leader"
+            );
             *known = None;
         }
     }

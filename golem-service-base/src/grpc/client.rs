@@ -1118,7 +1118,7 @@ impl<'a> CallAttempts<'a> {
     /// target.
     fn redirected(&self, e: &Status) {
         self.span
-            .in_scope(|| debug!("gRPC call redirected: {}", e.message()));
+            .in_scope(|| debug!(answer = e.message(), "gRPC call redirected"));
     }
 
     /// Records a failure there is no point retrying.
