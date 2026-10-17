@@ -72,7 +72,7 @@ async fn configured_admin_token_replaces_well_known_token(_tracing: &Tracing) {
             (path, bytes, modified)
         })
         .collect::<Vec<_>>();
-    assert_eq!(cached_metadata.len(), 6);
+    assert_eq!(cached_metadata.len(), 7);
     assert_eq!(
         current_token_status(&ctx, LOCAL_WELL_KNOWN_TOKEN).await,
         StatusCode::OK

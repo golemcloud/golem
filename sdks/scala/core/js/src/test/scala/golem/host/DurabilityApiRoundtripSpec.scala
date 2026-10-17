@@ -71,58 +71,6 @@ object DurabilityApiRoundtripSpec extends ZIOSpecDefault {
       )
     },
 
-    test("WriteRemoteBatched with None round-trip") {
-      val ft        = DurableFunctionType.WriteRemoteBatched(None)
-      val jsVal     = DurableFunctionType.toJs(ft)
-      val tag       = jsTag(jsVal)
-      val roundTrip = DurableFunctionType.fromJs(jsVal)
-      assertTrue(
-        tag == "write-remote-batched",
-        roundTrip == ft
-      )
-    },
-
-    test("WriteRemoteBatched with Some round-trip") {
-      val ft        = DurableFunctionType.WriteRemoteBatched(Some(BigInt(42)))
-      val jsVal     = DurableFunctionType.toJs(ft)
-      val parsed    = DurableFunctionType.fromJs(jsVal)
-      val isBatched = parsed match {
-        case _: DurableFunctionType.WriteRemoteBatched => true
-        case _                                         => false
-      }
-      val begin = parsed.asInstanceOf[DurableFunctionType.WriteRemoteBatched].begin
-      assertTrue(
-        isBatched,
-        begin == Some(BigInt(42))
-      )
-    },
-
-    test("WriteRemoteTransaction with None round-trip") {
-      val ft        = DurableFunctionType.WriteRemoteTransaction(None)
-      val jsVal     = DurableFunctionType.toJs(ft)
-      val tag       = jsTag(jsVal)
-      val roundTrip = DurableFunctionType.fromJs(jsVal)
-      assertTrue(
-        tag == "write-remote-transaction",
-        roundTrip == ft
-      )
-    },
-
-    test("WriteRemoteTransaction with Some round-trip") {
-      val ft     = DurableFunctionType.WriteRemoteTransaction(Some(BigInt(100)))
-      val jsVal  = DurableFunctionType.toJs(ft)
-      val parsed = DurableFunctionType.fromJs(jsVal)
-      val isTxn  = parsed match {
-        case _: DurableFunctionType.WriteRemoteTransaction => true
-        case _                                             => false
-      }
-      val begin = parsed.asInstanceOf[DurableFunctionType.WriteRemoteTransaction].begin
-      assertTrue(
-        isTxn,
-        begin == Some(BigInt(100))
-      )
-    },
-
     test("unknown DurableFunctionType tag throws") {
       val raw = js.Dynamic.literal(tag = "unknown")
       assertTrue(scala.util.Try(DurableFunctionType.fromJs(raw.asInstanceOf[JsWrappedFunctionType])).isFailure)

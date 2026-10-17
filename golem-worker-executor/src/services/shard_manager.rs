@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::metrics::sharding::{
+    ShardLeaseRenewalOutcome, record_shard_lease_metrics_started, record_shard_lease_renewal,
+};
 use crate::services::shard::ShardService;
 use crate::services::shutdown::{self, Shutdown};
 use async_trait::async_trait;
@@ -566,6 +569,7 @@ impl GrpcShardManagerService {
         // same token). A grant with no expiry parks the loop on its shutdown arm
         // and issues no RPCs at all.
         let cadence = renewal_interval_for(Some(registration.lease.expires_at), Instant::now());
+        record_shard_lease_metrics_started();
         self.record_granted(cadence);
         self.start_renewal_loop(cadence);
 
@@ -583,6 +587,7 @@ impl GrpcShardManagerService {
         let held = match self.shard_service.current_assignment() {
             Ok(assignment) => assignment.held_epochs(),
             Err(error) => {
+                record_shard_lease_renewal(ShardLeaseRenewalOutcome::NotRegistered);
                 warn!(%error, "Skipping shard lease renewal, no shard assignment yet");
                 return (self.next_retry_delay(), false);
             }
@@ -596,6 +601,7 @@ impl GrpcShardManagerService {
             {
                 Ok(renewed) => renewed,
                 Err(_elapsed) => {
+                    record_shard_lease_renewal(ShardLeaseRenewalOutcome::Timeout);
                     warn!(
                         deadline_ms = deadline.as_millis(),
                         "Shard lease renewal did not answer in time; backing off"
@@ -604,8 +610,12 @@ impl GrpcShardManagerService {
                 }
             };
         match renewed {
-            Ok(lease) => self.adopt_lease(lease.shard_epochs, lease.expires_at, lease.revision),
+            Ok(lease) => {
+                record_shard_lease_renewal(ShardLeaseRenewalOutcome::Granted);
+                self.adopt_lease(lease.shard_epochs, lease.expires_at, lease.revision)
+            }
             Err(ShardLeaseError::LeaseNotFound(details)) => {
+                record_shard_lease_renewal(ShardLeaseRenewalOutcome::LeaseNotFound);
                 // The manager no longer knows this executor. Drop every shard
                 // (an empty set fences every agent) and come back as a new
                 // instance at the same address, which is the restarted-executor
@@ -678,6 +688,7 @@ impl GrpcShardManagerService {
                 // Transport class: nothing local changes, so the stored expiry
                 // runs down on its own and the self-fence starts refusing
                 // admission the moment it passes.
+                record_shard_lease_renewal(ShardLeaseRenewalOutcome::Failed);
                 warn!(%error, "Shard lease renewal failed, retrying");
                 (self.next_retry_delay(), false)
             }

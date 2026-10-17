@@ -60,7 +60,7 @@ impl PreparedConsumerObservation {
                                 owner.producer_fingerprint,
                             );
                             drop(owner.index_for(keys).await?);
-                            owner.commit(&context).await?;
+                            owner.commit_through(&context, index).await?;
                             owner.notify_session_records_changed(Some(&context));
                             Ok::<_, StreamStoreError>(())
                         })
@@ -98,7 +98,7 @@ impl DurableStreamStore {
         }
         let OplogEntry::StreamSession {
             record: original, ..
-        } = oplog.read(original_index).await
+        } = oplog.read(original_index).await?
         else {
             return Err(StreamStoreError::CorruptHistory(
                 "consumer re-observation does not reference a consumer record".into(),
@@ -126,12 +126,16 @@ impl DurableStreamStore {
                 "invalid consumer observation".into(),
             ));
         }
-        Self::validate_consumer_reobservation(
-            self.oplog.as_ref(),
-            self.oplog.current_oplog_index().await.next(),
-            &record,
-        )
-        .await?;
+        // The oplog index only bounds a re-observation. Asking for it queues behind the oplog's
+        // pending commits, which would hold every guest read behind the previous read's commit.
+        if record.reobserves().is_some() {
+            Self::validate_consumer_reobservation(
+                self.oplog.as_ref(),
+                self.oplog.current_oplog_index().await.next(),
+                &record,
+            )
+            .await?;
+        }
         let memory = golem_common::serialization::serialize(&record)
             .map_err(StreamStoreError::Oplog)?
             .len();
@@ -265,7 +269,6 @@ impl DurableStreamStore {
             .scope(service.lookup_durable_stream_control_metadata(&owner, *mode, *fingerprint, key))
             .await
             .map(Some)
-            .map_err(SessionError::from)
     }
 
     /// Refreshes a disposable control projection from this owner's complete local journal.
@@ -286,7 +289,7 @@ impl DurableStreamStore {
             for (index, entry) in self
                 .oplog
                 .read_exact(metadata.covered_through().next(), count)
-                .await
+                .await?
             {
                 if self
                     .fork_lineage

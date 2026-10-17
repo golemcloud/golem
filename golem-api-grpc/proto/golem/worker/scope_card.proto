@@ -3,6 +3,7 @@ syntax = "proto3";
 package golem.worker;
 
 import "golem/common/uuid.proto";
+import "google/protobuf/timestamp.proto";
 
 message EncodedScopeCard {
   uint32 encoding_version = 1;
@@ -12,4 +13,5 @@ message EncodedScopeCard {
   bytes lower_negative = 5;
   bytes upper_positive = 6;
   bytes upper_negative = 7;
+  optional google.protobuf.Timestamp expires_at = 8;
 }

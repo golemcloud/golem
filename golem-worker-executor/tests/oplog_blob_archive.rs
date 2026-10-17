@@ -199,7 +199,10 @@ async fn append_worker(
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
 ) {
-    let archive = service.open(owned_agent_id, agent_mode, None).await;
+    let archive = service
+        .open(owned_agent_id, agent_mode, None)
+        .await
+        .unwrap();
     archive
         .append(&[(
             OplogIndex::INITIAL,
@@ -489,7 +492,8 @@ async fn blob_chunk_listed_by_an_append_with_a_lost_reply_stays_readable(
 
     let former_owner = through_relay
         .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(5)))
-        .await;
+        .await
+        .unwrap();
     let appending = tokio::spawn({
         let entries = entries.clone();
         async move { former_owner.append(&entries).await }
@@ -500,7 +504,8 @@ async fn blob_chunk_listed_by_an_append_with_a_lost_reply_stays_readable(
         .expect("the manifest append never reached Redis");
     let new_owner = direct
         .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(6)))
-        .await;
+        .await
+        .unwrap();
     relay.resume.notify_one();
     let appended = tokio::time::timeout(Duration::from_secs(30), appending)
         .await
@@ -701,7 +706,7 @@ impl<B: BlobStorageBackend> BlobStorageBackend for ReadCounting<B> {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<Option<u64>> {
         self.inner
             .delete_dir_at(target_label, op_label, namespace, path)
             .await
@@ -782,12 +787,13 @@ async fn an_unlisted_blob_object_is_never_read_on_s3() {
     );
 
     let exists = service
-        .try_exists(&owned_agent_id, AgentMode::Durable)
+        .exists(&owned_agent_id, AgentMode::Durable)
         .await
         .unwrap();
     let archive = service
         .open(&owned_agent_id, AgentMode::Durable, None)
-        .await;
+        .await
+        .unwrap();
     let length = archive.length().await.unwrap();
     let read = archive.read_source(OplogIndex::INITIAL, 2).await.unwrap();
     let reads_before_a_chunk = storage.reads.load(Ordering::SeqCst);
@@ -803,6 +809,7 @@ async fn an_unlisted_blob_object_is_never_read_on_s3() {
     let appended = service
         .open(&owned_agent_id, AgentMode::Durable, None)
         .await
+        .unwrap()
         .read_source(OplogIndex::INITIAL, 2)
         .await
         .unwrap();
@@ -838,6 +845,7 @@ async fn durable_entries(
             count,
         )
         .await
+        .unwrap()
         .into_values()
         .map(|entry| match entry {
             OplogEntry::Log { message, .. } => message,
@@ -883,12 +891,14 @@ async fn each_level_of_the_compressed_oplog_keeps_its_own_chunks(
     first
         .open(&owned_agent_id, AgentMode::Durable, None)
         .await
+        .unwrap()
         .append(&[(OplogIndex::INITIAL, log("first"))])
         .await
         .unwrap();
     second
         .open(&owned_agent_id, AgentMode::Durable, None)
         .await
+        .unwrap()
         .append(&[
             (OplogIndex::INITIAL, log("second")),
             (OplogIndex::from_u64(2), log("other")),
@@ -907,7 +917,10 @@ async fn each_level_of_the_compressed_oplog_keeps_its_own_chunks(
     let after_delete = (
         durable_entries(&first, &owned_agent_id, 1).await,
         durable_entries(&second, &owned_agent_id, 2).await,
-        second.exists(&owned_agent_id, AgentMode::Durable).await,
+        second
+            .exists(&owned_agent_id, AgentMode::Durable)
+            .await
+            .unwrap(),
     );
 
     assert_eq!(

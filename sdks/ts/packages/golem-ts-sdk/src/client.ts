@@ -40,6 +40,7 @@ import { SchemaCodec, SchemaValueWriter, SchemaValueReader } from './schema/code
 import type { SchemaValueTree } from 'golem:core/types@2.0.0';
 import { SchemaRef } from './schema/ref';
 import type { MarkerKindOf } from './schema/markers';
+import type { ScopeCard } from './host/permissions';
 import { StandardSchemaV1 } from './schema/standardSchema';
 import type {
   FullAgentClientShape,
@@ -122,6 +123,24 @@ type EphemeralRemoteMethodFor<M> =
 /** Options for an awaited remote call. */
 export interface RemoteCallOptions {
   signal?: AbortSignal;
+  /**
+   * A scope card for this call. It replaces the client's default scope card;
+   * `null` sends no scope card. The call borrows the card: the callee holds its
+   * authority until the invocation ends, and the caller keeps the card. A scope
+   * card is valid only during the invocation that derived it.
+   */
+  scopeCard?: ScopeCard | null;
+}
+
+/** Options for a remote client. */
+export interface RemoteClientOptions {
+  /**
+   * The default scope card for every awaited call of the client. Each call
+   * borrows the card; `trigger` and `schedule` never send a scope card. A scope
+   * card is valid only during the invocation that derived it, so a client with
+   * a default scope card is too: later awaited calls fail with `denied`.
+   */
+  scopeCard?: ScopeCard;
 }
 
 /** A typed remote client: one async method per declared method on the def. */
@@ -170,17 +189,23 @@ export interface RemoteClientFactory<
   Config extends ConfigSpec = {},
 > {
   /** Address the durable agent with this constructor identity. */
-  get(id: InferRecord<CallerInput<Id>>, config?: ConfigOverrides<Config>): RemoteClient<Methods>;
+  get(
+    id: InferRecord<CallerInput<Id>>,
+    config?: ConfigOverrides<Config>,
+    options?: RemoteClientOptions,
+  ): RemoteClient<Methods>;
   /** Address a known phantom instance. */
   getPhantom(
     id: InferRecord<CallerInput<Id>>,
     phantomId: Uuid,
     config?: ConfigOverrides<Config>,
+    options?: RemoteClientOptions,
   ): RemoteClient<Methods>;
   /** Create a client with a newly generated phantom id. */
   newPhantom(
     id: InferRecord<CallerInput<Id>>,
     config?: ConfigOverrides<Config>,
+    options?: RemoteClientOptions,
   ): PhantomClientDetails<Methods>;
 }
 
@@ -195,11 +220,13 @@ export interface EphemeralRemoteClientFactory<
     id: InferRecord<CallerInput<Id>>,
     phantomId: Uuid,
     config?: ConfigOverrides<Config>,
+    options?: RemoteClientOptions,
   ): RemoteClient<Methods, 'ephemeral'>;
   /** Create a logical client whose final identity is returned by each invocation. */
   newPhantom(
     id: InferRecord<CallerInput<Id>>,
     config?: ConfigOverrides<Config>,
+    options?: RemoteClientOptions,
   ): RemoteClient<Methods, 'ephemeral'>;
 }
 
@@ -427,8 +454,10 @@ function createRemoteClient<Methods extends MethodsRecord, Mode extends 'durable
   methodCodecs: CompiledRemoteMethod[],
   mode: Mode,
   remote: ReturnType<typeof resolveRemoteAgentFallibly>,
+  clientOptions: RemoteClientOptions = {},
 ): RemoteClient<Methods, Mode> {
   const wire = wireRemoteAgent(remote);
+  const defaultScopeCard = clientOptions.scopeCard;
   const decodeOutput = (method: CompiledRemoteMethod, value: unknown): unknown => {
     if (method.output.tag === 'unit') {
       if (value !== undefined) {
@@ -496,12 +525,16 @@ function createRemoteClient<Methods extends MethodsRecord, Mode extends 'durable
         );
       }
     };
-    const invoke = async (input: Record<string, unknown> = {}, signal?: AbortSignal) => {
+    const invoke = async (input: Record<string, unknown> = {}, options?: RemoteCallOptions) => {
+      const signal = options?.signal;
+      const scopeCard =
+        options?.scopeCard === null ? undefined : (options?.scopeCard ?? defaultScopeCard);
       if (direct) {
         const invocation = await wire!.invokeAndAwaitWithMetadata(
           method.name,
           encodeWire(input),
           signal,
+          scopeCard,
         );
         const value = decodeWire(invocation.value);
         return mode === 'ephemeral' ? { metadata: invocation.metadata, value } : value;
@@ -510,15 +543,15 @@ function createRemoteClient<Methods extends MethodsRecord, Mode extends 'durable
         method.name,
         encodeRecord(method.inputCodecs, input),
         signal,
+        scopeCard,
       );
       const value = decodeOutput(method, invocation.value);
       return mode === 'ephemeral' ? { metadata: invocation.metadata, value } : value;
     };
     const methodFn =
       method.inputCodecs.length === 0
-        ? (options?: RemoteCallOptions) => invoke({}, options?.signal)
-        : (input: Record<string, unknown>, options?: RemoteCallOptions) =>
-            invoke(input, options?.signal);
+        ? (options?: RemoteCallOptions) => invoke({}, options)
+        : (input: Record<string, unknown>, options?: RemoteCallOptions) => invoke(input, options);
     client[method.name] = Object.assign(methodFn, {
       trigger: (input: Record<string, unknown> = {}) => {
         const metadata = direct
@@ -548,11 +581,12 @@ function buildAgentIdBinding<Methods extends MethodsRecord>(
   [bindAgentClient](
     agentId: ParsedAgentId,
     config?: readonly AgentConfigEntry[],
+    options?: RemoteClientOptions,
   ): RemoteClient<Methods>;
 } {
   const methodCodecs = compileRemoteMethods(def.methods);
   return {
-    [bindAgentClient](agentId, config) {
+    [bindAgentClient](agentId, config, options) {
       return bindExistingAgent(
         undefined,
         undefined,
@@ -561,6 +595,7 @@ function buildAgentIdBinding<Methods extends MethodsRecord>(
         agentId,
         'durable',
         config ?? [],
+        options,
       );
     },
   };
@@ -574,6 +609,7 @@ function bindExistingAgent<Methods extends MethodsRecord, Mode extends 'durable'
   agentId: ParsedAgentId,
   mode: Mode,
   config: readonly AgentConfigEntry[],
+  options?: RemoteClientOptions,
 ): RemoteClient<Methods, Mode> {
   const parts = agentId.parts();
   if (declaredName !== undefined && declaredName !== parts.typeName) {
@@ -614,7 +650,7 @@ function bindExistingAgent<Methods extends MethodsRecord, Mode extends 'durable'
     config,
     mode,
   );
-  return createRemoteClient<Methods, Mode>(methodCodecs, mode, remote);
+  return createRemoteClient<Methods, Mode>(methodCodecs, mode, remote, options);
 }
 
 /** @internal Build the identity and typed-client surface attached to a definition. */
@@ -639,6 +675,7 @@ export function buildAgentClientSurface<
   [bindAgentClient](
     agentId: ParsedAgentId,
     config?: ConfigOverrides<Config>,
+    options?: RemoteClientOptions,
   ): RemoteClient<Methods, Mode>;
 } {
   // Compile the def's id + method codecs once (cached in this closure).
@@ -660,6 +697,7 @@ export function buildAgentClientSurface<
     id: InferRecord<CallerInput<Id>>,
     phantomId?: Uuid,
     config?: ConfigOverrides<Config>,
+    options?: RemoteClientOptions,
   ): RemoteClient<Methods, Mode> => {
     const agentConfig = config
       ? encodeConfigOverrides(configDecls, config as Record<string, unknown>)
@@ -671,19 +709,20 @@ export function buildAgentClientSurface<
       agentConfig,
       def.mode,
     );
-    return createRemoteClient<Methods, Mode>(methodCodecs, def.mode, remote);
+    return createRemoteClient<Methods, Mode>(methodCodecs, def.mode, remote, options);
   };
 
   const newPhantom = (
     id: InferRecord<CallerInput<Id>>,
     config?: ConfigOverrides<Config>,
+    options?: RemoteClientOptions,
   ): PhantomClientDetails<Methods> | RemoteClient<Methods, 'ephemeral'> => {
     if (def.mode === 'ephemeral') {
-      return createClient(id, undefined, config) as RemoteClient<Methods, 'ephemeral'>;
+      return createClient(id, undefined, config, options) as RemoteClient<Methods, 'ephemeral'>;
     }
     const phantomId = Uuid.generate();
     return {
-      client: createClient(id, phantomId, config) as RemoteClient<Methods>,
+      client: createClient(id, phantomId, config, options) as RemoteClient<Methods>,
       agentId: createAgentId(id, phantomId),
       phantomId,
     };
@@ -692,15 +731,16 @@ export function buildAgentClientSurface<
   let client;
   if (def.mode === 'ephemeral') {
     client = {
-      getPhantom: (id, phantomId, config) =>
-        createClient(id, phantomId, config) as RemoteClient<Methods, 'ephemeral'>,
+      getPhantom: (id, phantomId, config, options) =>
+        createClient(id, phantomId, config, options) as RemoteClient<Methods, 'ephemeral'>,
       newPhantom,
     } as EphemeralRemoteClientFactory<Id, Methods, Config>;
   } else {
     client = {
-      get: (id, config) => createClient(id, undefined, config) as RemoteClient<Methods>,
-      getPhantom: (id, phantomId, config) =>
-        createClient(id, phantomId, config) as RemoteClient<Methods>,
+      get: (id, config, options) =>
+        createClient(id, undefined, config, options) as RemoteClient<Methods>,
+      getPhantom: (id, phantomId, config, options) =>
+        createClient(id, phantomId, config, options) as RemoteClient<Methods>,
       newPhantom,
     } as RemoteClientFactory<Id, Methods, Config>;
   }
@@ -712,7 +752,7 @@ export function buildAgentClientSurface<
     agentId: createAgentId as Mode extends 'ephemeral'
       ? (id: InferRecord<CallerInput<Id>>, phantomId: Uuid) => ParsedAgentId
       : (id: InferRecord<CallerInput<Id>>, phantomId?: Uuid) => ParsedAgentId,
-    [bindAgentClient](agentId, config) {
+    [bindAgentClient](agentId, config, options) {
       const entries = config
         ? encodeConfigOverrides(configDecls, config as Record<string, unknown>)
         : [];
@@ -724,6 +764,7 @@ export function buildAgentClientSurface<
         agentId,
         def.mode,
         entries,
+        options,
       );
     },
   };

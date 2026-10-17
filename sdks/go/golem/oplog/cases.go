@@ -38,9 +38,6 @@ const (
 	Error = oplogwit.PublicOplogEntryError
 	// A previously failed startup or replay completed successfully.
 	RecoverySucceeded = oplogwit.PublicOplogEntryRecoverySucceeded
-	// Marker entry added when get-oplog-index is called from the agent, to make the jumping behavior
-	// more predictable.
-	NoOp = oplogwit.PublicOplogEntryNoOp
 	// The agent needs to recover up to the given target oplog index and continue running from
 	// the source oplog index from there
 	// `jump` is an oplog region representing that from the end of that region we want to go back to the start and
@@ -51,13 +48,6 @@ const (
 	Interrupted = oplogwit.PublicOplogEntryInterrupted
 	// Indicates that the agent has been exited using WASI's exit function.
 	Exited = oplogwit.PublicOplogEntryExited
-	// Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
-	// recovery except if there is a corresponding `EndAtomicRegion` entry.
-	BeginAtomicRegion = oplogwit.PublicOplogEntryBeginAtomicRegion
-	// Ends an atomic region. All oplog entries between the corresponding `BeginAtomicRegion` and this
-	// entry are to be considered during recovery, and the begin/end markers can be removed during oplog
-	// compaction.
-	EndAtomicRegion = oplogwit.PublicOplogEntryEndAtomicRegion
 	// An invocation request arrived while the agent was busy
 	PendingAgentInvocation = oplogwit.PublicOplogEntryPendingAgentInvocation
 	// An update request arrived and will be applied as soon the agent restarts
@@ -117,6 +107,10 @@ const (
 	// A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
 	// attached to the durable host call identified by its start entry's index
 	HostStreamFrame = oplogwit.PublicOplogEntryHostStreamFrame
+	// A consumed attachment read with inline observation metadata.
+	ToolAttachmentRead = oplogwit.PublicOplogEntryToolAttachmentRead
+	// An effective attachment control transition without a byte payload.
+	ToolAttachmentControl = oplogwit.PublicOplogEntryToolAttachmentControl
 	// Registers a durable stream before exposing its handle
 	StreamRegistered = oplogwit.PublicOplogEntryStreamRegistered
 	// Records committed durable stream values or a packed-u8 batch

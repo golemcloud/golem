@@ -54,7 +54,7 @@ pub fn MoonbitStreamingClient::stream(
     )
   } catch{
     error => {
-      @schema.release_wire_fields(__golem_values)
+      @schema.rollback_wire_fields(__golem_values)
       stdin.drop_sync()
       return Err(@tool.tool_protocol_error(repr(error)))
     }
@@ -223,7 +223,7 @@ pub fn CanonicalGrepClient::canonical_grep(
     )
   } catch{
     error => {
-      @schema.release_wire_fields(__golem_values)
+      @schema.rollback_wire_fields(__golem_values)
       stdin.drop_sync()
       return Err(@tool.tool_protocol_error(repr(error)))
     }
@@ -360,7 +360,7 @@ pub async fn CanonicalGrepClient::replace(
     )
   } catch{
     error => {
-      @schema.release_wire_fields(__golem_values)
+      @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
@@ -567,7 +567,7 @@ pub async fn CanonicalGitClient::commit(
     )
   } catch{
     error => {
-      @schema.release_wire_fields(__golem_values)
+      @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
@@ -788,7 +788,7 @@ pub async fn CanonicalGitRemoteClient::add(
     )
   } catch{
     error => {
-      @schema.release_wire_fields(__golem_values)
+      @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
@@ -902,7 +902,7 @@ pub async fn CanonicalGitRemoteClient::remove(
     )
   } catch{
     error => {
-      @schema.release_wire_fields(__golem_values)
+      @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
@@ -1071,7 +1071,7 @@ pub async fn CanonicalGitRemoteClient::set_url(
     )
   } catch{
     error => {
-      @schema.release_wire_fields(__golem_values)
+      @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
@@ -1202,7 +1202,7 @@ pub async fn CanonicalGitStashClient::stash(
     )
   } catch{
     error => {
-      @schema.release_wire_fields(__golem_values)
+      @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
@@ -1312,7 +1312,7 @@ pub async fn CanonicalGitStashClient::pop(
     )
   } catch{
     error => {
-      @schema.release_wire_fields(__golem_values)
+      @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
@@ -1422,7 +1422,7 @@ pub async fn CanonicalGitStashClient::apply(
     )
   } catch{
     error => {
-      @schema.release_wire_fields(__golem_values)
+      @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
@@ -1612,7 +1612,7 @@ pub async fn CanonicalGitClient::log(
     )
   } catch{
     error => {
-      @schema.release_wire_fields(__golem_values)
+      @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
@@ -1719,7 +1719,7 @@ pub async fn CanonicalBigBoundClient::canonical_big_bound(
     )
   } catch{
     error => {
-      @schema.release_wire_fields(__golem_values)
+      @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
@@ -1817,7 +1817,7 @@ pub async fn MoonbitReflectionTestClient::echo(
     )
   } catch{
     error => {
-      @schema.release_wire_fields(__golem_values)
+      @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
@@ -1873,7 +1873,7 @@ pub async fn MoonbitReflectionTestClient::optional(
     )
   } catch{
     error => {
-      @schema.release_wire_fields(__golem_values)
+      @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }
@@ -1972,7 +1972,7 @@ pub async fn MoonbitReflectionTestClient::canonical_values(
     )
   } catch{
     error => {
-      @schema.release_wire_fields(__golem_values)
+      @schema.rollback_wire_fields(__golem_values)
       return Err(@tool.tool_protocol_error(repr(error)))
     }
   }

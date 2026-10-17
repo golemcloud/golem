@@ -5,8 +5,11 @@ package caller
 
 import (
 	"fmt"
+	"io"
+	"time"
 
 	matrixcore "golem.local/bridge/matrix-core-tool-guest-client"
+	stdinprobe "golem.local/bridge/stdin-probe-tool-guest-client"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
 )
@@ -30,10 +33,40 @@ type Observation struct {
 
 var MatrixCoreObservation = Caller.Method[golem.Unit, Observation]("matrix_core_observation")
 
+// StdinReleased calls a command that returns without reading its stdin, with
+// a pipe nobody writes as that stdin, and reports whether the call closed the
+// pipe once the tool stopped consuming it.
+var StdinReleased = Caller.Method[golem.Unit, bool]("stdin_released")
+
+// watchedPipe is a stdin source that reports its Close.
+type watchedPipe struct {
+	*io.PipeReader
+	closed chan struct{}
+}
+
+func (p watchedPipe) Close() error {
+	close(p.closed)
+	return p.PipeReader.Close()
+}
+
 type state struct{}
 
 func init() {
 	impl := Caller.Implement(func(ID) *state { return &state{} })
+	impl.Handle(StdinReleased, func(_ *golem.Context[state], _ golem.Unit) bool {
+		r, w := io.Pipe()
+		defer w.Close()
+		src := watchedPipe{PipeReader: r, closed: make(chan struct{})}
+		if _, err := stdinprobe.Ignore.Call(func(a *stdinprobe.IgnoreArgs) { a.Stdin = src }); err != nil {
+			panic(fmt.Sprintf("stdin-probe ignore: %v", err))
+		}
+		select {
+		case <-src.closed:
+			return true
+		case <-time.After(10 * time.Second):
+			return false
+		}
+	})
 	impl.Handle(MatrixCoreObservation, func(_ *golem.Context[state], _ golem.Unit) Observation {
 		success, err := matrixcore.ArtifactInspect.Call(func(a *matrixcore.ArtifactInspectArgs) {
 			a.Request = matrixcore.ArtifactInspectInRequest{

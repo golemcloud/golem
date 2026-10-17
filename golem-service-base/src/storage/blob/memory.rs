@@ -439,7 +439,7 @@ impl BlobStorageBackend for InMemoryBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
-    ) -> Result<bool, Error> {
+    ) -> Result<Option<u64>, Error> {
         let dir = path.text()?;
 
         // A directory that only holds blobs has no key of its own, so the keys below it tell
@@ -448,12 +448,19 @@ impl BlobStorageBackend for InMemoryBlobStorage {
         let keys = Self::entries_in_dir(&data, &namespace, &dir)
             .map(|(key, _)| key.clone())
             .collect::<Vec<_>>();
-        let deleted = !keys.is_empty();
-        for key in keys {
-            data.remove(&key);
+        if keys.is_empty() {
+            return Ok(None);
         }
+        let bytes = keys
+            .iter()
+            .filter_map(|key| data.remove(key))
+            .map(|entry| match entry {
+                Entry::File { metadata, .. } => metadata.size,
+                Entry::Directory { .. } => 0,
+            })
+            .sum();
 
-        Ok(deleted)
+        Ok(Some(bytes))
     }
 
     async fn exists_at(

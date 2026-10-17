@@ -47,7 +47,7 @@ import {
   GuestSchemaValueStreamHandle,
   type GuestSchemaValueStream,
 } from './schemaValueStreamHandle';
-import { GuestPermissionCardHandle } from './permissionCardHandle';
+import { GuestPermissionCardHandle, isPermissionCardObject } from './permissionCardHandle';
 import { Uuid } from '../../uuid';
 
 export type {
@@ -835,6 +835,7 @@ export function deepEqual(
   if (a instanceof GuestPermissionCardHandle || b instanceof GuestPermissionCardHandle) {
     return false;
   }
+  if (isPermissionCardObject(a) || isPermissionCardObject(b)) return false;
 
   if (typeof a === 'bigint' || typeof b === 'bigint') return a === b;
 

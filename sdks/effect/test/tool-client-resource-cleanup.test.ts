@@ -9,7 +9,7 @@ import { SchemaValueStream } from "golem:core/types@2.0.0"
 const cases = [
   { tag: "secret-value", schema: ToolSchema.Secret(Schema.String) },
   { tag: "quota-token-handle", schema: ToolSchema.QuotaToken() },
-  { tag: "permission-card-handle", schema: ToolSchema.PermissionCard({ polymorphic: false }) },
+  { tag: "permission-card-handle", schema: ToolSchema.PermissionCard },
 ] as const
 
 describe("tool client rejected payload ownership", () => {
@@ -58,6 +58,7 @@ describe("tool client rejected payload ownership", () => {
               }),
               stdout: (async function* () {})(),
               cancel: Effect.void,
+              detach: Effect.void,
             }),
         },
       },
@@ -101,6 +102,7 @@ describe("tool client rejected payload ownership", () => {
                 result: Effect.succeed({ result: payload }),
                 stdout: (async function* () {})(),
                 cancel: Effect.void,
+                detach: Effect.void,
               }),
           },
         },
@@ -115,67 +117,141 @@ describe("tool client rejected payload ownership", () => {
     },
   )
 
-  it.each(["success", "interrupt"])(
-    "retains a result stream until output consumption completes: %s",
-    async (mode) => {
-      const dispose = vi.fn()
-      const next = vi.fn()
-      const close = vi.fn(async () => ({ done: true as const, value: undefined }))
-      const raw = await SchemaValueStream.wrap({
-        [Symbol.asyncIterator]: () => ({ next, return: close }),
-      })
-      Object.assign(raw, { [Symbol.dispose]: dispose })
-      await Effect.runPromise(
-        Effect.gen(function* () {
-          const arrived = yield* Deferred.make<void>()
-          const consumed = yield* Deferred.make<void>()
-          const schema = ToolSchema.AgentStream(Schema.Number)
-          const payload: Common.TypedSchemaValue = {
-            graph: (yield* compile(schema)).schemaGraph,
-            value: { root: 0, valueNodes: [{ tag: "stream-value", val: raw }] },
-          }
-          const call = client(
-            toolDefinition("probe").body((body) => body.returns(schema).stderr()),
-            {
-              transport: {
-                start: () =>
-                  Effect.succeed({
-                    result: Effect.succeed({ result: payload }).pipe(
-                      Effect.tap(() => Deferred.succeed(arrived, undefined)),
-                    ),
-                    stderr: (async function* () {})(),
-                    cancel: Effect.void,
-                  }),
-              },
+  it.each([
+    "success",
+    "interrupt",
+    "custom-success",
+    "custom-interrupt",
+    "custom-output-failure",
+    "unknown-success",
+    "unknown-interrupt",
+    "unknown-output-failure",
+  ])("retains result capabilities until output consumption completes: %s", async (mode) => {
+    const dispose = vi.fn()
+    const disposes = Array.from({ length: 3 }, () => vi.fn())
+    const next = vi.fn()
+    const close = vi.fn(async () => ({ done: true as const, value: undefined }))
+    const raw = await SchemaValueStream.wrap({
+      [Symbol.asyncIterator]: () => ({ next, return: close }),
+    })
+    Object.assign(raw, { [Symbol.dispose]: dispose })
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const arrived = yield* Deferred.make<void>()
+        const consumed = yield* Deferred.make<void>()
+        const schema = Schema.Struct({
+          secret: ToolSchema.Secret(Schema.String),
+          quota: ToolSchema.QuotaToken(),
+          permission: ToolSchema.PermissionCard,
+          stream: ToolSchema.AgentStream(Schema.Number),
+        })
+        const payload: Common.TypedSchemaValue = {
+          graph: (yield* compile(schema)).schemaGraph,
+          value: {
+            root: 4,
+            valueNodes: [
+              { tag: "secret-value", val: { [Symbol.dispose]: disposes[0] } as never },
+              { tag: "quota-token-handle", val: { [Symbol.dispose]: disposes[1] } as never },
+              { tag: "permission-card-handle", val: { [Symbol.dispose]: disposes[2] } as never },
+              { tag: "stream-value", val: raw },
+              { tag: "record-value", val: [0, 1, 2, 3] },
+            ],
+          },
+        }
+        const call = client(
+          toolDefinition("probe").body((body) =>
+            body.returns(schema).error("failure", schema).stderr(),
+          ),
+          {
+            transport: {
+              start: () =>
+                Effect.succeed({
+                  result: Effect.suspend(
+                    (): Effect.Effect<{ result: Common.TypedSchemaValue }, unknown> =>
+                      mode.startsWith("custom") || mode.startsWith("unknown")
+                        ? Effect.fail({
+                            tag: "custom-error",
+                            val: {
+                              name: mode.startsWith("unknown") ? "future" : "failure",
+                              payload,
+                            },
+                          })
+                        : Effect.succeed({ result: payload }),
+                  ).pipe(Effect.onExit(() => Deferred.succeed(arrived, undefined))),
+                  stderr: (async function* () {})(),
+                  cancel: Effect.void,
+                  detach: Effect.void,
+                }),
             },
-          )
-          const fiber = yield* Effect.forkChild(
-            call(
-              {},
-              {
-                stderr: () => Deferred.await(consumed),
-              },
-            ),
-          )
-          yield* Deferred.await(arrived)
-          yield* Effect.yieldNow
+          },
+        )
+        const fiber = yield* Effect.forkChild(
+          call(
+            {},
+            {
+              stderr: () =>
+                Deferred.await(consumed).pipe(
+                  Effect.andThen(
+                    mode.endsWith("output-failure") ? Effect.fail("output failed") : Effect.void,
+                  ),
+                ),
+            },
+          ),
+        )
+        yield* Deferred.await(arrived)
+        yield* Effect.yieldNow
+        expect(dispose).not.toHaveBeenCalled()
+        expect(close).not.toHaveBeenCalled()
+        if (mode.endsWith("interrupt")) {
+          yield* Fiber.interrupt(fiber)
+          expect(dispose).toHaveBeenCalledOnce()
+          expect(close).toHaveBeenCalledOnce()
+          disposes.forEach((dispose) => expect(dispose).toHaveBeenCalledOnce())
+        } else {
+          yield* Deferred.succeed(consumed, undefined)
+          const exit = yield* Effect.exit(Fiber.join(fiber))
+          expect(
+            mode.startsWith("custom") || mode.startsWith("unknown")
+              ? Exit.isFailure(exit)
+              : Exit.isSuccess(exit),
+          ).toBe(true)
+          if (mode.startsWith("custom") && Exit.isFailure(exit))
+            expect(exit.cause.reasons).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({
+                  error: expect.objectContaining({
+                    _tag: "ToolFailure",
+                    name: "failure",
+                    value: expect.objectContaining({
+                      stream: expect.anything(),
+                      secret: expect.anything(),
+                      quota: expect.anything(),
+                      permission: expect.anything(),
+                    }),
+                  }),
+                }),
+              ]),
+            )
+          if (mode.startsWith("unknown") && Exit.isFailure(exit))
+            expect(exit.cause.reasons).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({
+                  error: new ToolClientError("declared-error", {
+                    tag: "unknown-error",
+                    name: "future",
+                    payload,
+                  }),
+                }),
+              ]),
+            )
           expect(dispose).not.toHaveBeenCalled()
           expect(close).not.toHaveBeenCalled()
-          if (mode === "interrupt") {
-            yield* Fiber.interrupt(fiber)
-            expect(dispose).toHaveBeenCalledOnce()
-            expect(close).toHaveBeenCalledOnce()
-          } else {
-            yield* Deferred.succeed(consumed, undefined)
-            expect(yield* Fiber.join(fiber)).toBeDefined()
-            expect(dispose).not.toHaveBeenCalled()
-            expect(close).not.toHaveBeenCalled()
-          }
-          expect(next).not.toHaveBeenCalled()
-        }),
-      )
-    },
-  )
+          disposes.forEach((dispose) => expect(dispose).not.toHaveBeenCalled())
+        }
+        expect(next).not.toHaveBeenCalled()
+      }),
+    )
+  })
 
   it.each(cases)(
     "releases a rejected $tag sibling in results and declared errors",
@@ -206,6 +282,7 @@ describe("tool client rejected payload ownership", () => {
                   ? Effect.fail({ tag: "custom-error", val: { name: "rejected", payload } })
                   : Effect.succeed({ result: payload }),
                 cancel: Effect.void,
+                detach: Effect.void,
               }),
           },
         })
@@ -256,6 +333,7 @@ describe("tool client rejected payload ownership", () => {
                       ...(mode === "attachments" ? { stdout: (async function* () {})() } : {}),
                     }),
               cancel: Effect.void,
+              detach: Effect.void,
             }),
         },
       })
@@ -282,7 +360,11 @@ describe("tool client rejected payload ownership", () => {
       {
         transport: {
           start: () =>
-            Effect.succeed({ result: Effect.succeed({ result: payload }), cancel: Effect.void }),
+            Effect.succeed({
+              result: Effect.succeed({ result: payload }),
+              cancel: Effect.void,
+              detach: Effect.void,
+            }),
         },
       },
     )
@@ -319,6 +401,7 @@ describe("tool client rejected payload ownership", () => {
                       val: { name: mode === "unknown" ? "future" : "rejected", payload },
                     }),
               cancel: Effect.void,
+              detach: Effect.void,
             }),
         },
       })
@@ -348,7 +431,11 @@ describe("tool client rejected payload ownership", () => {
         {
           transport: {
             start: () =>
-              Effect.succeed({ result: Effect.succeed({ result: payload }), cancel: Effect.void }),
+              Effect.succeed({
+                result: Effect.succeed({ result: payload }),
+                cancel: Effect.void,
+                detach: Effect.void,
+              }),
           },
         },
       )
@@ -386,6 +473,7 @@ describe("tool client rejected payload ownership", () => {
                 Effect.succeed({
                   result: Effect.succeed({ result: payload }),
                   cancel: Effect.void,
+                  detach: Effect.void,
                 }),
             },
           },

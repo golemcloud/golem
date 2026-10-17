@@ -42,7 +42,7 @@ pub struct LsResult {
     pub next_cursor: Option<LsCursor>,
 }
 
-#[tool_definition(version = "0.1.1", requires_filesystem = true)]
+#[tool_definition(version = "0.1.2", requires_filesystem = true)]
 pub trait Ls {
     /// Lists a directory in deterministic depth-first order without following symbolic links.
     /// The selected directory is depth zero; the default maximum depth lists its immediate
@@ -115,7 +115,7 @@ pub async fn list(
             frames: vec![DirectoryFrame { after: None }],
         },
     };
-    let mut walker = TreeWalker::new(path.clone(), query.max_depth, tree);
+    let mut walker = TreeWalker::new(&root, path.clone(), query.max_depth, tree);
     let mut entries = Vec::new();
     let mut diagnostics = Vec::new();
     let mut output_bytes = 0usize;
@@ -146,17 +146,36 @@ pub async fn list(
                 {
                     continue;
                 }
-                let entry = LsEntry {
-                    path: full_path,
-                    kind: public_kind(kind),
-                };
-                let size = entry.path.len() + 32;
-                if output_bytes + size > MAX_CONTENT_OUTPUT_BYTES {
+                let entry_bytes = full_path.len() + 32;
+                if output_bytes + entry_bytes > MAX_CONTENT_OUTPUT_BYTES {
                     walker.cursor = checkpoint;
                     break;
                 }
-                output_bytes += size;
-                entries.push(entry);
+                let kind = match kind {
+                    ChildKind::File => match walker.selected_file_size().await {
+                        Ok(size) => EntryKind::File(size),
+                        Err(error) => {
+                            if !push_walker_diagnostic(
+                                &mut diagnostics,
+                                &mut output_bytes,
+                                &error,
+                                DiagnosticKind::Io,
+                            ) {
+                                walker.cursor = checkpoint;
+                                break;
+                            }
+                            continue;
+                        }
+                    },
+                    ChildKind::Directory => EntryKind::Directory,
+                    ChildKind::Symlink => EntryKind::Symlink,
+                    ChildKind::Other => EntryKind::Other,
+                };
+                output_bytes += entry_bytes;
+                entries.push(LsEntry {
+                    path: full_path,
+                    kind,
+                });
             }
             Ok(None) => break,
             Err(error) => {
@@ -208,13 +227,4 @@ fn estimated_ls_cursor_bytes(cursor: &LsCursor) -> usize {
         + cursor.query.glob.as_ref().map_or(0, String::len)
         + estimated_tree_cursor_bytes(&cursor.tree)
         + 32
-}
-
-fn public_kind(kind: NodeKind) -> EntryKind {
-    match kind {
-        NodeKind::File(size) => EntryKind::File(size),
-        NodeKind::Directory => EntryKind::Directory,
-        NodeKind::Symlink => EntryKind::Symlink,
-        NodeKind::Other => EntryKind::Other,
-    }
 }

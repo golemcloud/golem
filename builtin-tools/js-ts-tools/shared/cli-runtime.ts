@@ -26,16 +26,17 @@ function outputBridge(stream: WritableStream<Uint8Array>) {
   ) => {
     const done = callbackFromWriteArgs(encodingOrCallback, callback);
     const encoding = typeof encodingOrCallback === 'string' ? encodingOrCallback : undefined;
-    const bytes =
-      typeof chunk === 'string' ? Buffer.from(chunk, encoding) : Uint8Array.from(chunk);
+    const bytes = typeof chunk === 'string' ? Buffer.from(chunk, encoding) : Uint8Array.from(chunk);
     const operation = pending.then(() => writer.write(bytes));
     pending = operation.then(
       () => done?.(null),
       (error) => {
         done?.(asError(error));
         throw error;
-      }
+      },
     );
+    // A CLI can keep running before its final drain attaches a rejection handler.
+    void pending.catch(() => {});
     return true;
   };
 
@@ -59,6 +60,7 @@ export async function runCli(
     directories?: string[];
     stopOnExit?: boolean;
     waitForRuntimeIdle?: boolean;
+    npmExit?: boolean;
   },
   streams: {
     stdout: WritableStream<Uint8Array>;
@@ -82,6 +84,8 @@ export async function runCli(
     ) as Record<string, string | undefined>,
   };
   const capturedExit = new CapturedExit();
+  let exitRequested = false;
+  let executeFailed = false;
 
   try {
     try {
@@ -94,6 +98,10 @@ export async function runCli(
       process.chdir(cwd);
       process.exit = ((code?: string | number | null) => {
         if (code !== undefined && code !== null) process.exitCode = Number(code);
+        if (options.npmExit && !exitRequested) {
+          exitRequested = true;
+          process.emit('exit', Number(process.exitCode ?? 0));
+        }
         if (options.stopOnExit) throw capturedExit;
         return undefined as never;
       }) as typeof process.exit;
@@ -117,7 +125,9 @@ export async function runCli(
       await execute(facade);
       if (options.waitForRuntimeIdle) {
         const awaitRuntimeIdle = (
-          process as NodeJS.Process & { _awaitRuntimeIdle?: () => Promise<void> }
+          process as NodeJS.Process & {
+            _awaitRuntimeIdle?: () => Promise<void>;
+          }
         )._awaitRuntimeIdle;
         if (typeof awaitRuntimeIdle !== 'function') {
           throw new Error('the JavaScript runtime does not provide an idle boundary');
@@ -126,14 +136,36 @@ export async function runCli(
       }
     } catch (error) {
       if (error !== capturedExit) {
+        executeFailed = true;
         process.exitCode = Number(process.exitCode || 1);
         process.stderr.write(
           `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
         );
       }
     }
-    await Promise.all([stdout.drain(), stderr.drain()]);
-    return Number(process.exitCode ?? 0);
+    // Write callbacks can enqueue more output on either stream, including npm's
+    // final exit callback. Settle both queues before restoring the process state.
+    let failure: PromiseRejectedResult | undefined;
+    for (;;) {
+      const out = stdout.drain();
+      const err = stderr.drain();
+      const results = await Promise.allSettled([out, err]);
+      for (const result of results) {
+        if (result.status === 'rejected') failure ??= result;
+      }
+      if (out === stdout.drain() && err === stderr.drain()) break;
+    }
+    if (failure) throw failure.reason;
+    if (options.npmExit && !exitRequested && !executeFailed) {
+      throw new Error('npm CLI returned without an exit request');
+    }
+    let status = Number(process.exitCode ?? 0);
+    if (!Number.isFinite(status) || !Number.isInteger(status)) {
+      process.stderr.write('Process exit status must be a finite integer\n');
+      status = 1;
+      await stderr.drain();
+    }
+    return ((status % 256) + 256) % 256;
   } finally {
     stdout.release();
     stderr.release();

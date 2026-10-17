@@ -57,7 +57,7 @@ By now, you are having a security scheme registered with `golem` which enables a
 
 Once the security scheme is registered, enable authentication using the `auth` option on your agent's mount or on individual endpoints:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 import { z } from 'zod';
@@ -171,6 +171,45 @@ pub fn SecureAgent::who_am_i(self: Self, principal: Principal) -> String {
   principal.subject
 }
 ```
+</Tabs.Tab>
+<Tabs.Tab>
+```go
+package secure
+
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+type ID struct{ Name string }
+
+type Profile struct {
+	Email golem.Option[string]
+	Name  golem.Option[string]
+}
+
+type GetProfileIn struct {
+	Principal golem.Principal // filled by the host from the authentication context
+}
+
+var Agent = golem.DefineAgent[ID](golem.Spec{
+	Name: "SecureAgent",
+	HTTP: &golem.Mount{Path: "/secure/{name}", Auth: true}, // all endpoints require authentication
+})
+
+var GetProfile = Agent.Method[GetProfileIn, Profile]("getProfile", golem.HTTP(golem.GET("/profile")))
+```
+
+In the implementation package:
+
+```go
+agent.Handle(secure.GetProfile, func(_ *golem.Context[state], in secure.GetProfileIn) secure.Profile {
+	p, ok := in.Principal.(golem.OidcPrincipal)
+	if !ok {
+		panic("expected an OIDC principal")
+	}
+	return secure.Profile{Email: p.Email, Name: p.Name}
+})
+```
+
+`golem.EndpointAuth(true)` requires authentication on a single endpoint instead.
 </Tabs.Tab>
 </Tabs>
 

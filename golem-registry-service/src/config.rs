@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::services::domain_registration::DomainRegistrationConfig;
-use anyhow::Context;
 use golem_common::config::DbConfig;
 use golem_common::config::{ConfigLoader, DbSqliteConfig};
 use golem_common::model::Empty;
@@ -36,7 +35,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use uuid::uuid;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BuiltinArtifactSource {
     pub url: String,
     #[serde(default)]
@@ -47,81 +46,98 @@ pub struct BuiltinArtifactSource {
 #[serde(default)]
 pub struct BuiltinArtifactsConfig {
     pub cache_dir: Option<PathBuf>,
-    /// Per-artifact source overrides. Production defaults come from the embedded release lock.
+    /// Per-artifact source overrides. Defaults use the release manifest or local inventory.
     pub source_overrides: BTreeMap<String, BuiltinArtifactSource>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ResolvedBuiltinArtifact {
+    Url(BuiltinArtifactSource),
+    #[cfg(feature = "embed-builtin-artifacts")]
+    Embedded(&'static [u8]),
+}
+
 impl BuiltinArtifactsConfig {
-    pub fn resolved_artifacts(&self) -> anyhow::Result<BTreeMap<String, BuiltinArtifactSource>> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Lock {
-            schema_version: u32,
-            repository: String,
-            artifacts: BTreeMap<String, LockEntry>,
+    pub(crate) fn resolved_artifacts(
+        &self,
+    ) -> anyhow::Result<BTreeMap<String, ResolvedBuiltinArtifact>> {
+        #[cfg(feature = "embed-builtin-artifacts")]
+        {
+            let defaults: &[(&str, &'static [u8])] =
+                &include!(concat!(env!("OUT_DIR"), "/builtin-artifacts.rs"));
+            let mut artifacts: BTreeMap<_, _> = defaults
+                .iter()
+                .copied()
+                .map(|(id, bytes)| (id.to_string(), ResolvedBuiltinArtifact::Embedded(bytes)))
+                .collect();
+            artifacts.extend(
+                self.source_overrides
+                    .iter()
+                    .map(|(id, source)| (id.clone(), ResolvedBuiltinArtifact::Url(source.clone()))),
+            );
+            Ok(artifacts)
         }
+        #[cfg(not(feature = "embed-builtin-artifacts"))]
+        self.resolved_artifacts_from_manifest(include_str!(concat!(
+            env!("OUT_DIR"),
+            "/builtin-artifacts.release.json"
+        )))
+    }
 
-        #[derive(Deserialize)]
-        struct LockEntry {
-            component: String,
-            version: String,
-            sha256: String,
+    #[cfg(any(not(feature = "embed-builtin-artifacts"), test))]
+    fn resolved_artifacts_from_manifest(
+        &self,
+        manifest: &str,
+    ) -> anyhow::Result<BTreeMap<String, ResolvedBuiltinArtifact>> {
+        if manifest.is_empty() {
+            let inventory = crate::builtin_manifest::inventory()?;
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .expect("registry crate has a source checkout parent");
+            let mut artifacts = inventory
+                .into_iter()
+                .map(|(id, entry)| {
+                    let path = root.join(entry.path);
+                    let url = url::Url::from_file_path(&path).map_err(|_| {
+                        anyhow::anyhow!("invalid built-in artifact path '{}'", path.display())
+                    })?;
+                    Ok((
+                        id,
+                        ResolvedBuiltinArtifact::Url(BuiltinArtifactSource {
+                            url: url.into(),
+                            sha256: None,
+                        }),
+                    ))
+                })
+                .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+            artifacts.extend(
+                self.source_overrides
+                    .iter()
+                    .map(|(id, source)| (id.clone(), ResolvedBuiltinArtifact::Url(source.clone()))),
+            );
+            return Ok(artifacts);
         }
-
-        let lock: Lock = serde_json::from_str(include_str!("../../builtin-artifacts.lock.json"))
-            .context("failed to parse builtin-artifacts.lock.json")?;
-        anyhow::ensure!(
-            lock.schema_version == 1,
-            "unsupported built-in artifact lock schema version {}",
-            lock.schema_version
-        );
-        anyhow::ensure!(
-            lock.repository == "golemcloud/golem-builtins",
-            "unsupported built-in artifact repository '{}'",
-            lock.repository
-        );
-
-        let mut artifacts = lock
-            .artifacts
+        let mut artifacts: BTreeMap<_, _> = crate::builtin_manifest::parse_manifest(manifest)?
             .into_iter()
             .map(|(artifact_id, entry)| {
-                anyhow::ensure!(
-                    valid_artifact_id(&artifact_id),
-                    "invalid built-in artifact ID '{artifact_id}'"
-                );
-                anyhow::ensure!(
-                    valid_component_name(&entry.component),
-                    "invalid built-in artifact component '{}'",
-                    entry.component
-                );
-                semver::Version::parse(&entry.version).with_context(|| {
-                    format!(
-                        "invalid version '{}' for built-in artifact '{artifact_id}'",
-                        entry.version
-                    )
-                })?;
-                anyhow::ensure!(
-                    entry.sha256.len() == 64
-                        && entry
-                            .sha256
-                            .bytes()
-                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
-                    "invalid SHA-256 for built-in artifact '{artifact_id}'"
-                );
                 let url = format!(
-                    "https://github.com/{}/releases/download/{}-v{}/{}.wasm",
-                    lock.repository, entry.component, entry.version, entry.component
+                    "https://github.com/golemcloud/golem-builtins/releases/download/{}-v{}/{}.wasm",
+                    entry.component, entry.version, entry.component
                 );
-                Ok((
+                (
                     artifact_id,
-                    BuiltinArtifactSource {
+                    ResolvedBuiltinArtifact::Url(BuiltinArtifactSource {
                         url,
                         sha256: Some(entry.sha256),
-                    },
-                ))
+                    }),
+                )
             })
-            .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
-        artifacts.extend(self.source_overrides.clone());
+            .collect();
+        artifacts.extend(
+            self.source_overrides
+                .iter()
+                .map(|(id, source)| (id.clone(), ResolvedBuiltinArtifact::Url(source.clone()))),
+        );
         Ok(artifacts)
     }
 
@@ -142,18 +158,6 @@ impl BuiltinArtifactsConfig {
             }
         }
     }
-}
-
-fn valid_artifact_id(value: &str) -> bool {
-    let mut bytes = value.bytes();
-    matches!(bytes.next(), Some(b'a'..=b'z'))
-        && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
-}
-
-fn valid_component_name(value: &str) -> bool {
-    let mut bytes = value.bytes();
-    matches!(bytes.next(), Some(b'a'..=b'z'))
-        && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -472,7 +476,7 @@ impl Default for RegistryServiceConfig {
             runtime_metrics_sampling_interval: Duration::from_secs(5),
             grpc: GrpcApiConfig::default(),
             db: DbConfig::Sqlite(DbSqliteConfig {
-                database: "golem_registry_service.db".to_string(),
+                database: "../data/golem_registry_service.db".to_string(),
                 foreign_keys: true,
                 ..Default::default()
             }),
@@ -882,8 +886,8 @@ mod tests {
     use test_r::test;
 
     use crate::config::{
-        BuiltinArtifactsConfig, ComponentFileUploadConfig, RegistryServiceConfig,
-        make_config_loader,
+        BuiltinArtifactSource, BuiltinArtifactsConfig, ComponentFileUploadConfig,
+        RegistryServiceConfig, ResolvedBuiltinArtifact, make_config_loader,
     };
 
     #[test]
@@ -952,12 +956,44 @@ mod tests {
     }
 
     #[test]
-    pub fn builtin_artifact_defaults_are_pinned() {
+    pub fn builtin_artifact_defaults_follow_embedded_manifest() {
         let config = BuiltinArtifactsConfig::default();
         assert!(config.source_overrides.is_empty());
         let artifacts = config.resolved_artifacts().unwrap();
-        assert_eq!(artifacts.len(), 7);
+        assert_eq!(artifacts.len(), 8);
+        assert!(artifacts.contains_key("python"));
         for (artifact_id, source) in artifacts {
+            #[cfg(feature = "embed-builtin-artifacts")]
+            assert!(
+                matches!(source, ResolvedBuiltinArtifact::Embedded(_)),
+                "local-install defaults must not depend on external files or downloads: {artifact_id}"
+            );
+            #[cfg(not(feature = "embed-builtin-artifacts"))]
+            let ResolvedBuiltinArtifact::Url(source) = source;
+            #[cfg(feature = "embed-builtin-artifacts")]
+            let source = match source {
+                ResolvedBuiltinArtifact::Url(source) => source,
+                ResolvedBuiltinArtifact::Embedded(bytes) => {
+                    assert!(!bytes.is_empty());
+                    continue;
+                }
+            };
+            if include_str!(concat!(env!("OUT_DIR"), "/builtin-artifacts.release.json")).is_empty()
+            {
+                let path = url::Url::parse(&source.url)
+                    .unwrap()
+                    .to_file_path()
+                    .unwrap();
+                assert!(
+                    path.starts_with(
+                        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                            .parent()
+                            .unwrap()
+                    )
+                );
+                assert!(source.sha256.is_none());
+                continue;
+            }
             assert!(
                 source
                     .url
@@ -988,12 +1024,90 @@ mod tests {
         };
 
         let artifacts = config.resolved_artifacts().unwrap();
-        assert_eq!(artifacts.len(), 7);
-        assert_eq!(artifacts["javascript_tools"].url, override_source.url);
-        assert_eq!(artifacts["javascript_tools"].sha256, None);
-        assert!(artifacts["git_tool"].sha256.is_some());
-        assert!(artifacts["typescript_tools"].sha256.is_some());
-        assert!(artifacts["web_fetch"].sha256.is_some());
+        assert_eq!(artifacts.len(), 8);
+        assert_eq!(
+            artifacts["javascript_tools"],
+            ResolvedBuiltinArtifact::Url(override_source)
+        );
+        let defaults = BuiltinArtifactsConfig::default()
+            .resolved_artifacts()
+            .unwrap();
+        for id in ["git_tool", "typescript_tools", "web_fetch"] {
+            assert_eq!(artifacts[id], defaults[id]);
+        }
+    }
+
+    #[test]
+    fn builtin_artifact_release_manifest_is_strict() {
+        let config = BuiltinArtifactsConfig::default();
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/builtin-artifacts.release.json")).unwrap();
+        manifest["artifacts"]["python"]["sha256"] = serde_json::json!("ab".repeat(32));
+        let sources = config
+            .resolved_artifacts_from_manifest(&manifest.to_string())
+            .unwrap();
+        assert_eq!(sources["python"], ResolvedBuiltinArtifact::Url(BuiltinArtifactSource {
+            url: "https://github.com/golemcloud/golem-builtins/releases/download/python-v1.2.3/python.wasm".into(),
+            sha256: Some("ab".repeat(32)),
+        }));
+        for (pointer, invalid) in [
+            ("/schemaVersion", serde_json::json!(2)),
+            ("/repository", serde_json::json!("other/repo")),
+            (
+                "/artifacts/python/component",
+                serde_json::json!("../python"),
+            ),
+            ("/artifacts/python/component", serde_json::json!("bash")),
+            ("/artifacts/python/version", serde_json::json!("latest")),
+            (
+                "/artifacts/python/sha256",
+                serde_json::json!("AB".repeat(32)),
+            ),
+        ] {
+            let mut invalid_manifest = manifest.clone();
+            *invalid_manifest.pointer_mut(pointer).unwrap() = invalid;
+            assert!(
+                config
+                    .resolved_artifacts_from_manifest(&invalid_manifest.to_string())
+                    .is_err()
+            );
+        }
+        let mut incomplete = manifest.clone();
+        incomplete["artifacts"]
+            .as_object_mut()
+            .unwrap()
+            .remove("bash");
+        assert!(
+            config
+                .resolved_artifacts_from_manifest(&incomplete.to_string())
+                .is_err()
+        );
+        let mut extra = manifest.clone();
+        extra["artifacts"]["unknown"] = manifest["artifacts"]["python"].clone();
+        assert!(
+            config
+                .resolved_artifacts_from_manifest(&extra.to_string())
+                .is_err()
+        );
+        assert!(config.resolved_artifacts_from_manifest("not json").is_err());
+        let mut overrides = config;
+        overrides.source_overrides.insert(
+            "python".to_string(),
+            crate::config::BuiltinArtifactSource {
+                url: "file:///replacement.wasm".to_string(),
+                sha256: None,
+            },
+        );
+        let sources = overrides
+            .resolved_artifacts_from_manifest(&manifest.to_string())
+            .unwrap();
+        assert_eq!(
+            sources["python"],
+            ResolvedBuiltinArtifact::Url(BuiltinArtifactSource {
+                url: "file:///replacement.wasm".into(),
+                sha256: None,
+            })
+        );
     }
 
     #[test]

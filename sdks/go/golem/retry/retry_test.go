@@ -25,6 +25,17 @@ import (
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
+func TestResolveResultDistinguishesHostErrorFromNoMatch(t *testing.T) {
+	_, matched, err := resolveResult(witTypes.Err[witTypes.Option[apiRetry.RetryPolicy], string]("invalid predicate"))
+	if matched || err == nil || err.Error() != "invalid predicate" {
+		t.Fatalf("host error lost: matched=%v err=%v", matched, err)
+	}
+	_, matched, err = resolveResult(witTypes.Ok[witTypes.Option[apiRetry.RetryPolicy], string](witTypes.None[apiRetry.RetryPolicy]()))
+	if matched || err != nil {
+		t.Fatalf("no match: matched=%v err=%v", matched, err)
+	}
+}
+
 // TestPolicyLoweringStructure — a nested policy lowers to the expected flattened
 // node array with root at index 0 and correct child indices (mirrors the Rust
 // reference test): CountBox(0) -> FilteredOn(1) -> ClampDelay(2) -> Exponential(3).

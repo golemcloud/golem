@@ -1,11 +1,11 @@
 ---
 name: golem-retry-policies-go
-description: "Configuring semantic retry policies for a Go Golem agent. Use when the user asks about retry policies, retry strategies, exponential backoff, transient error recovery, retry predicates, the retry subpackage, Named/Set/With, Policy or Predicate builders, jitter, MaxRetries, Clamp, AndThen, or customizing how failures are retried in a Go Golem project."
+description: "Configuring semantic retry policies for a Go Golem agent. Use when the user asks about retry policies, retry strategies, exponential backoff, transient error recovery, retry predicates, the retry subpackage, Named/Set/With, Policy or Predicate builders, jitter, MaxRetries, Clamp, AndThen, retrying the agent's own code with retry.Schedule, or customizing how failures are retried in a Go Golem project."
 ---
 
 # Configuring Semantic Retry Policies (Go)
 
-Golem retries retriable operations (RPC, HTTP, RDBMS, and whole-invocation traps)
+Golem retries retryable host operations (RPC, HTTP, RDBMS) and classified transient failures
 according to **named policy rules**. Each rule is a `retry.NamedPolicy`: a
 `retry.Policy` (the strategy) plus a `retry.Predicate` deciding when it applies and
 a priority. Per operation, the runtime resolves the highest-priority rule whose
@@ -25,6 +25,7 @@ Rules come from three tiers, and the Go `retry` subpackage
 2. **Build strategies in code** from a base policy plus fluent combinators.
 3. **Apply** them: `retry.Set` for code-owned rules (often in the constructor), `retry.With` for per-call overrides.
 4. **Query** active rules with `retry.ByName` / `retry.Policies` / `retry.PolicyNames`.
+5. **Retry your own code** with `Policy.Schedule()` and `Schedule.Retry`.
 
 ## 1. Define Retry Policies in the Application Manifest
 
@@ -159,6 +160,14 @@ retry.MatchNever()
 
 ### Available properties
 
+Do not predicate on `is-idempotent`; the host no longer supplies that property. The explicit
+`golem:api/host.trap` function raises a deterministic trap and is never retried, even by a catch-all policy. Host retry
+policies repair eligible individual calls, not completed effects or whole saga attempts.
+
+A trap is permanent. Return an error for a transient condition and use a retry schedule.
+Application-level errors need application-level handling; returning an error does not automatically
+activate a host retry policy.
+
 Exported `retry.PropName` constants (use `retry.Prop("name")` for any other):
 
 | Constant | Populated in |
@@ -240,8 +249,11 @@ if np, found := retry.ByName("http-transient"); found {
 
 // What policy the runtime would pick for a hypothetical operation; a property
 // value is a string, an integer type or a bool:
-pol, matched := retry.Resolve("GET", "https://api.example.com/x",
+pol, matched, err := retry.Resolve("GET", "https://api.example.com/x",
 	map[string]any{"status-code": 503})
+if err != nil {
+	return err // Invalid selector; do not treat it as no matching policy.
+}
 _ = pol
 _ = matched
 ```
@@ -267,7 +279,47 @@ golem retry-policy update http-transient --priority 15
 golem retry-policy delete http-transient
 ```
 
-## 5. Default Retry Policy
+## 5. Retry Your Own Code: `Schedule`
+
+A host policy retries host operations (an HTTP request, an RPC call). To retry a
+piece of your own code — an operation that fails with your own error, or a
+response the host treats as a success — run a policy in the agent with
+`Policy.Schedule()`:
+
+```go
+sched, err := retry.Exponential(100*time.Millisecond, 2).
+	OnlyWhen(retry.StatusCode.OneOf(502, 503)).
+	MaxRetries(4).
+	Schedule()
+if err != nil {
+	return err // the checks of Set, plus size bounds
+}
+sched = sched.WithProperties(func(err error) map[retry.PropName]any {
+	var se *StatusError
+	if errors.As(err, &se) {
+		return map[retry.PropName]any{retry.StatusCode: se.Status}
+	}
+	return nil
+})
+
+body, err := sched.RetryValue(func() (string, error) { return fetchQuote(id) })
+// or, with no result: err = sched.Retry(func() error { return charge(order) })
+```
+
+- `Retry` runs the operation at least once, then again until it returns nil or
+  the policy gives up, and returns the operation's **last error unchanged**.
+- It installs no named policy and the host keeps no retry state: the loop is
+  ordinary agent code. Its sleeps (`time.Sleep`) and the operation's host calls
+  are durable, so a replay neither sleeps nor calls again.
+- `WithProperties` projects each failure to the properties the `OnlyWhen`
+  predicates read; it runs after every failure. A predicate that needs a missing
+  property gives up rather than falling back to another branch of the policy.
+- A policy from the host works too: `np, _ := retry.ByName("http-transient");
+  sched, err := np.Strategy().Schedule()`.
+- Each `Retry` starts the policy from the beginning; a `Schedule` is a value you
+  can keep as package data.
+
+## 6. Default Retry Policy
 
 When no user-defined policy matches, Golem uses the built-in `default`: priority
 `0`, predicate `true`, up to 3 retries, exponential backoff (factor 3.0), delays
@@ -284,12 +336,13 @@ clamped to [100ms, 1s], 15% jitter.
 - A property-keyed policy is silently skipped in a context that lacks that property.
 - `retry.With` is scoped to the current call — the previous rule is restored on
   return; it is worker-global, so mind concurrent awaits.
+- A host policy retries host operations only. Retry your own code with
+  `Policy.Schedule()` and `Schedule.Retry` / `Schedule.RetryValue`.
 
 ### Related Skills
 
 | Skill | When to Load |
 |-------|--------------|
 | `golem-make-http-request-go` | The outgoing HTTP calls whose responses drive status-code retries |
-| `golem-atomic-block-go` | Idempotence mode and atomic regions interact with retry semantics |
 | `golem-call-another-agent-go` | RPC calls retried via `Function` / `TargetAgentType`-keyed rules |
 | `golem-add-transactions-go` | Saga transactions layered on durable execution and retries |

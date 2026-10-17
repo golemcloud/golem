@@ -207,14 +207,17 @@ impl crate::services::oplog::Oplog for ShutdownDrainProbe {
         &self,
         _: golem_common::model::OplogIndex,
         _: u64,
-    ) -> std::collections::BTreeMap<
-        golem_common::model::OplogIndex,
-        golem_common::model::oplog::OplogEntry,
+    ) -> Result<
+        std::collections::BTreeMap<
+            golem_common::model::OplogIndex,
+            golem_common::model::oplog::OplogEntry,
+        >,
+        crate::services::oplog::UnreadableOplog,
     > {
         unimplemented!()
     }
 
-    async fn length(&self) -> u64 {
+    async fn length(&self) -> Result<u64, crate::services::oplog::UnreadableOplog> {
         unimplemented!()
     }
 

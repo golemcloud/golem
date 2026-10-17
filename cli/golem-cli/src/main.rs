@@ -75,6 +75,10 @@ mod hooks {
 }
 
 fn main() -> ExitCode {
+    // This binary links rustls with both the `ring` and the `aws-lc-rs` provider, so rustls cannot
+    // choose a process default. TLS clients that do not name a provider use this one.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let command_parse_result = GolemCliCommand::try_parse_from_lenient(std::env::args_os(), true);
     main_wrapper(|| CommandHandler::handle(command_parse_result, Arc::new(NoHooks {})))
 }

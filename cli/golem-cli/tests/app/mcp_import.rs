@@ -11,6 +11,198 @@ use std::sync::{Arc, Mutex};
 use test_r::{test, timeout};
 
 #[test]
+#[timeout("5 minutes")]
+async fn mcp_import_selectors_target_the_matching_deployment() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let listings = Arc::new(Mutex::new(Vec::<String>::new()));
+    let handler = axum::routing::post({
+        let listings = listings.clone();
+        move |uri: Uri, axum::Json(body): axum::Json<Value>| {
+            let listings = listings.clone();
+            async move {
+                assert_eq!(body["method"], "tools/list");
+                listings.lock().unwrap().push(uri.path().to_string());
+                axum::Json(
+                    json!({"jsonrpc":"2.0", "id":body["id"], "result":{"tools":[{
+                        "name":"lookup", "inputSchema":{"type":"object","properties":{},"additionalProperties":false}
+                    }]}}),
+                )
+            }
+        }
+    });
+    let mut upstream = tokio::task::JoinSet::new();
+    upstream.spawn(async move {
+        axum::serve(listener, axum::Router::new().fallback(handler))
+            .await
+            .unwrap();
+    });
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+    let first = format!(
+        "- name: first\n        url: http://127.0.0.1:{port}/first?token=named-selector-secret\n        prefix: first"
+    );
+    let second_url = format!(
+        "http://127.0.0.1:{port}/selector-path-secret/second?token=unnamed-selector-secret"
+    );
+    let second = format!("- url: {second_url}\n        prefix: second");
+    let write_manifest = |imports: &str| {
+        fs::write_str(ctx.cwd_path_join("golem.yaml"), format!(
+            "manifestVersion: {}\napp: import-selectors\nenvironments:\n  local:\n    server: local\n    tools:\n      defaults: []\nmcp:\n  imports:\n    local:\n      {imports}\n",
+            versions::sdk::MANIFEST
+        )).unwrap();
+    };
+    write_manifest(&format!("{first}\n      {second}"));
+    assert!(ctx.cli([flag::YES, cmd::DEPLOY]).await.success_or_dump());
+    let tools = ctx
+        .cli(["--format", "json", "api", "mcp-import", "tools", "first"])
+        .await;
+    assert!(tools.success_or_dump());
+    let initial = &tools.stdout_json::<Value>()[0];
+    assert_eq!(initial["import"], "first");
+    assert!(initial.get("importIndex").is_none());
+    assert_eq!(
+        initial["tools"][0]["definition"]["commands"]["nodes"][0]["name"],
+        "first-lookup"
+    );
+    let revision = initial["deploymentRevision"].as_u64().unwrap().to_string();
+
+    // Only the local list changes; the deployed index of first is still zero.
+    write_manifest(&format!("{second}\n      {first}"));
+    listings.lock().unwrap().clear();
+    let refresh = ctx.cli(["api", "mcp-import", "refresh", "first"]).await;
+    assert!(refresh.success_or_dump());
+    assert!(refresh.stdout_contains("first-lookup"));
+    assert_eq!(*listings.lock().unwrap(), ["/first"]);
+    let unresolved = "- url: '{{ GOL_875_MISSING_REVIEW_URL }}'";
+    for imports in [
+        format!("{unresolved}\n      {second}\n      {first}"),
+        format!("{first}\n      {second}\n      {unresolved}"),
+    ] {
+        write_manifest(&imports);
+        for format in ["text", "json", "yaml"] {
+            let unnamed = ctx
+                .cli([
+                    "-vvv",
+                    "--format",
+                    format,
+                    "api",
+                    "mcp-import",
+                    "tools",
+                    &second_url,
+                ])
+                .await;
+            assert!(unnamed.success_or_dump());
+            assert!(unnamed.stdout_contains("second-lookup"));
+            assert!(!unnamed.stdout_contains("unnamed-selector-secret"));
+            assert!(!unnamed.stderr_contains("unnamed-selector-secret"));
+            assert!(!unnamed.stdout_contains("selector-path-secret"));
+            if format == "json" {
+                assert_eq!(unnamed.stdout_json::<Value>()[0]["import"], Value::Null);
+            }
+        }
+        let named = ctx
+            .cli([
+                "-vvv",
+                "--format",
+                "json",
+                "api",
+                "mcp-import",
+                "tools",
+                &format!("http://127.0.0.1:{port}/first?token=named-selector-secret"),
+            ])
+            .await;
+        assert!(named.success_or_dump());
+        assert_eq!(named.stdout_json::<Value>()[0]["import"], "first");
+        assert!(!named.stdout_contains("named-selector-secret"));
+        assert!(!named.stderr_contains("named-selector-secret"));
+    }
+    write_manifest(&format!("{second}\n      {first}"));
+    assert!(!ctx.cli(["api", "mcp-import", "tools", "0"]).await.success());
+
+    // Inserting a distinct configuration with the same URL makes only URL selection ambiguous.
+    let alias = first
+        .replace("name: first", "name: alias")
+        .replace("prefix: first", "prefix: alias");
+    write_manifest(&format!("{alias}\n      {second}\n      {first}"));
+    let ambiguous = ctx
+        .cli([
+            "api",
+            "mcp-import",
+            "tools",
+            &format!("http://127.0.0.1:{port}/first?token=named-selector-secret"),
+        ])
+        .await;
+    assert!(!ambiguous.success());
+    assert!(says(&ambiguous, "add distinct names"));
+    assert!(
+        ctx.cli(["api", "mcp-import", "tools", "first"])
+            .await
+            .success_or_dump()
+    );
+
+    write_manifest(&format!("{second}\n      {first}"));
+    assert!(ctx.cli([flag::YES, cmd::DEPLOY]).await.success_or_dump());
+    for args in [
+        vec!["--format", "json", "api", "mcp-import", "tools", "first"],
+        vec![
+            "--format",
+            "json",
+            "api",
+            "mcp-import",
+            "tools",
+            "first",
+            "--revision",
+            &revision,
+        ],
+    ] {
+        let output = ctx.cli(args).await;
+        assert!(output.success_or_dump());
+        let value = &output.stdout_json::<Value>()[0];
+        assert_eq!(
+            value["tools"][0]["definition"]["commands"]["nodes"][0]["name"],
+            "first-lookup"
+        );
+    }
+
+    write_manifest(&format!(
+        "{second}\n      {}",
+        first.replace("prefix: first", "prefix: changed")
+    ));
+    let changed = ctx.cli(["api", "mcp-import", "tools", "first"]).await;
+    assert!(!changed.success());
+    assert!(says(&changed, "does not match deployment revision"));
+
+    let copy = first.replace("name: first", "name: copy");
+    write_manifest(&format!("{first}\n      {copy}"));
+    assert!(ctx.cli([flag::YES, cmd::DEPLOY]).await.success_or_dump());
+    listings.lock().unwrap().clear();
+    let identical = ctx.cli(["api", "mcp-import", "refresh", "first"]).await;
+    assert!(!identical.success());
+    assert!(says(&identical, "identical MCP import configurations"));
+    assert!(listings.lock().unwrap().is_empty());
+}
+
+#[test]
+async fn mcp_import_parse_errors_do_not_log_url_secrets() {
+    let ctx = TestContext::new();
+    let output = ctx
+        .cli([
+            "-vvv",
+            "api",
+            "mcp-import",
+            "tools",
+            "https://example.test/mcp?token=selector-secret-sentinel",
+            "--revision",
+            "invalid",
+        ])
+        .await;
+    assert!(!output.success());
+    assert!(!output.stdout_contains("selector-secret-sentinel"));
+    assert!(!output.stderr_contains("selector-secret-sentinel"));
+}
+
+#[test]
 #[timeout("20 minutes")]
 async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_offline() {
     let contract: Value = serde_json::from_str(
@@ -1058,7 +1250,8 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
         mcp:
           imports:
             local:
-              - url: http://127.0.0.1:{port}/bearer
+              - name: bearer
+                url: http://127.0.0.1:{port}/bearer
                 auth:
                   bearer: test-mcp-token
                 prefix: bearer
@@ -1286,7 +1479,7 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
         .filter(|path| path.as_str() == "/bearer")
         .count();
     refreshed_schema.store(true, Ordering::SeqCst);
-    let refreshed = ctx.cli(["api", "mcp-import", "refresh", "0"]).await;
+    let refreshed = ctx.cli(["api", "mcp-import", "refresh", "bearer"]).await;
     assert!(refreshed.success_or_dump());
     assert!(refreshed.stdout_contains("bearer-fresh"));
     assert_eq!(
@@ -1383,7 +1576,7 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
 
     let fresh_source_before_unavailable = generated_source_text(&fresh_client);
     upstream.shutdown().await;
-    let unavailable_refresh = ctx.cli(["api", "mcp-import", "refresh", "0"]).await;
+    let unavailable_refresh = ctx.cli(["api", "mcp-import", "refresh", "bearer"]).await;
     assert!(!unavailable_refresh.success());
     assert!(
         unavailable_refresh.stderr_contains("MCP_IMPORT_UPSTREAM_UNAVAILABLE")

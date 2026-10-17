@@ -1,6 +1,7 @@
 /** Immutable runtime schema views used by reflection. @since 1.6.0 */
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import type { SchemaGraph, SchemaType } from "./internal/schema-model/model.js"
+import { withCapabilityAdoptionTransaction } from "./internal/schema-model/capabilityTransaction.js"
 import {
   schemaGraphFromWit,
   schemaValueFromWit,
@@ -15,6 +16,7 @@ import {
   type JsonValue,
   type RenderIssue,
 } from "./internal/reflection/schemaRender.js"
+import { jsonFieldDefaults } from "./internal/reflection/jsonFieldDefaults.js"
 import {
   schemaValueConforms,
   schemaValueTreeConforms,
@@ -46,17 +48,19 @@ export class SchemaRef {
   }
   /** Pack canonical JSON and validate it against the complete schema. @since 1.6.0 @category conversions */
   packJson(value: JsonValue): CoreTypes.SchemaValueTree {
-    const model = packJson(this.graph, this.root, value)
+    const model = packJson(this.graph, this.root, value, [], jsonFieldDefaults(this))
     if (!schemaValueConforms(this.graph, this.root, model))
       throw new SchemaRenderError([], "schema value does not conform to the expected schema")
     return schemaValueToWit(model)
   }
   /** Unpack a native schema value into canonical JSON. @since 1.6.0 @category conversions */
   unpackJson(value: CoreTypes.SchemaValueTree): JsonValue {
-    const model = schemaValueFromWit(value)
-    if (!schemaValueConforms(this.graph, this.root, model))
-      throw new SchemaRenderError([], "schema value does not conform to the expected schema")
-    return unpackJson(this.graph, this.root, model)
+    return withCapabilityAdoptionTransaction((transaction) => {
+      const model = schemaValueFromWit(value, transaction)
+      if (!schemaValueConforms(this.graph, this.root, model))
+        throw new SchemaRenderError([], "schema value does not conform to the expected schema")
+      return unpackJson(this.graph, this.root, model)
+    })
   }
   /** Explicitly validate canonical JSON. @since 1.6.0 @category validation */
   validateJson(value: JsonValue): ValidationResult<CoreTypes.SchemaValueTree> {
@@ -88,7 +92,10 @@ export class SchemaRef {
   }
   /** Render this root as JSON Schema. @since 1.6.0 @category conversions */
   toJsonSchema(options: { readonly includeDraftMarker?: boolean } = {}): JsonValue {
-    const rendered = jsonSchema(this.graph, this.root, false) as Record<string, JsonValue>
+    const rendered = jsonSchema(this.graph, this.root, false, jsonFieldDefaults(this)) as Record<
+      string,
+      JsonValue
+    >
     return options.includeDraftMarker === false
       ? rendered
       : { $schema: "https://json-schema.org/draft/2020-12/schema", ...rendered }

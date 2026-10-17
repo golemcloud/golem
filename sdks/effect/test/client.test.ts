@@ -129,10 +129,6 @@ const makeRuntime = (
   const durability = Layer.succeed(
     DurabilityModeClient,
     DurabilityModeClient.of({
-      getIdempotenceMode: () => true,
-      setIdempotenceMode: () => undefined,
-      markBeginOperation: () => 0n,
-      markEndOperation: () => undefined,
       oplogCommit: () => undefined,
       generateIdempotencyKey: () => ({ highBits: 1n, lowBits: 2n }),
     }),
@@ -748,7 +744,13 @@ describe("Client 1.6 config and ephemeral receipts", () => {
       const PrincipalTarget = defineAgent({
         name: "PrincipalTarget",
         id: { name: Schema.String, principal: PrincipalSchema },
-        methods: { value: method({ input: {}, success: Schema.String }) },
+        methods: {
+          value: method({ input: { principal: PrincipalSchema }, success: Schema.String }),
+          mixed: method({
+            input: { before: Schema.String, principal: PrincipalSchema, after: Schema.Number },
+            success: Schema.String,
+          }),
+        },
       })
       const runtime = makeRuntime({ response: yield* encode(Schema.String, "ok") })
       const host = Layer.succeed(AgentHostClient, {
@@ -761,6 +763,24 @@ describe("Client 1.6 config and ephemeral receipts", () => {
         ).toHaveLength(1)
         const full = yield* Client.bind(identity, PrincipalTarget)
         expect(yield* full.value({})).toBe("ok")
+        const input = { before: "first", after: 7 }
+        expect(yield* full.mixed(input)).toBe("ok")
+        yield* full.mixed.trigger(input)
+        yield* full.mixed.schedule({ seconds: 1n, nanoseconds: 0 }, input)
+        yield* full.value.trigger({})
+        yield* full.value.schedule({ seconds: 1n, nanoseconds: 0 }, {})
+        const codec = yield* compileMethodSpec("mixed", PrincipalTarget.methods.mixed)
+        expect(codec.inputSchema.val.map((field) => [field.name, field.source.tag])).toEqual([
+          ["before", "user-supplied"],
+          ["principal", "auto-injected"],
+          ["after", "user-supplied"],
+        ])
+        for (const call of runtime.calls) {
+          expect(yield* codec.inputCodec.decode(call.input).pipe(Effect.option)).toEqual(
+            call.method === "mixed" ? Option.some(input) : Option.none(),
+          )
+          if (call.method === "value") expect(call.input.valueNodes).toHaveLength(1)
+        }
         const factory = yield* PrincipalTarget.client.get({ name: "main" })
         expect(yield* factory.value({})).toBe("ok")
       }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(runtime.layer, host)))

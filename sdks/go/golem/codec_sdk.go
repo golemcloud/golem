@@ -24,7 +24,8 @@ import (
 )
 
 // sdkComposites recognise the SDK's own struct types that are not plain
-// records: secrets, agent streams, quota tokens and permission cards.
+// records: secrets, agent streams, quota tokens, permission cards and the
+// process exit status.
 var sdkComposites = []func(e *engine.Engine, c *engine.Codec, zero any) bool{
 	func(e *engine.Engine, c *engine.Codec, zero any) bool {
 		switch z := zero.(type) {
@@ -34,8 +35,27 @@ var sdkComposites = []func(e *engine.Engine, c *engine.Codec, zero any) bool{
 			compileStream(c, e.Compile(z.streamElem()))
 		case quotaish:
 			compileQuotaToken(c)
-		case cardish:
-			compilePermissionCard(c, z.polymorphic())
+		// The card types match exactly: a struct that embeds a card has its
+		// methods but is a record of its own fields.
+		case PermissionCard:
+			compilePermissionCard(c, false)
+		case PolymorphicPermissionCard:
+			compilePermissionCard(c, true)
+		case ScopeCard:
+			markScopeCardInvalid(c)
+		case WalletCard:
+			markNotSendable(c, errWalletCardNotSendable)
+		// Card identifiers, holders and lifespans are host-side request
+		// values with unexported fields: as a record they would travel as
+		// record {} and arrive as a zero value.
+		case CardID:
+			markNotSendable(c, errCardIDNotSendable)
+		case Holder:
+			markNotSendable(c, errHolderNotSendable)
+		case Lifespan:
+			markNotSendable(c, errLifespanNotSendable)
+		case ProcessExitStatus:
+			compileProcessExitStatus(c, e.Compile(reflect.TypeFor[uint8]()))
 		default:
 			return false
 		}

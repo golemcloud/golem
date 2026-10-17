@@ -10,6 +10,7 @@ pub fn SchemaRef::to_json_schema(
     Object(value) => value
     _ => {}
   }
+  self.render_root_defaults(fields)
   if include_draft_marker {
     fields["$schema"] = Json::string(
       "https://json-schema.org/draft/2020-12/schema",
@@ -23,6 +24,40 @@ pub fn SchemaRef::to_json_schema(
     fields["$defs"] = Json::object(defs)
   }
   Json::object(fields)
+}
+
+///|
+/// Mark the root fields that canonical JSON input may omit: drop them from
+/// `required` and give each property a `default` when the declared value has
+/// a canonical JSON form.
+fn SchemaRef::render_root_defaults(
+  self : SchemaRef,
+  rendered : Map[String, Json],
+) -> Unit {
+  guard !self.root_defaults.is_empty() && self.root.body is Record(fields) else {
+    return
+  }
+  match rendered.get("required") {
+    Some(Array(names)) =>
+      rendered["required"] = Json::array(
+        names.filter(name => {
+          !(name is String(field) && self.root_defaults.contains(field))
+        }),
+      )
+    _ => ()
+  }
+  guard rendered.get("properties") is Some(Object(properties)) else { return }
+  for field in fields {
+    guard self.root_defaults.get(field.name) is Some(default) &&
+      properties.get(field.name) is Some(Object(property)) else {
+      continue
+    }
+    try self.unpack(self.resolve(field.body), default) catch {
+      _ => ()
+    } noraise {
+      json => property["default"] = json
+    }
+  }
 }
 
 ///|

@@ -13,6 +13,10 @@
 // limitations under the License.
 
 use crate::base_model::TransactionId;
+use crate::base_model::durable_stream::{
+    StreamBindingRecord, StreamConsumerObservation, StreamRegistrationInvocation,
+};
+use crate::base_model::oplog::attachment::{ToolAttachmentId, ToolAttachmentTerminal};
 pub use crate::base_model::tool::{
     SerializableCustomToolError, SerializableToolError, SerializableToolInvocationResult,
     SerializableToolRpcError,
@@ -39,7 +43,6 @@ use desert_rust::{
     DeserializationContext, SerializationContext,
 };
 use golem_schema::schema::wit::wire::ValueNodeIndex as NodeIndex;
-use http::{HeaderName, HeaderValue, Version};
 use mac_address::MacAddress;
 use serde::{Deserialize, Serialize};
 use sqlx::ValueRef;
@@ -61,12 +64,9 @@ use wasmtime_wasi::p3::bindings::filesystem as p3_filesystem;
 use wasmtime_wasi::p3::bindings::sockets::{
     ip_name_lookup as p3_ip_name_lookup, types as p3_socket_types,
 };
-use wasmtime_wasi_http::FieldMap;
 use wasmtime_wasi_http::p2::bindings::http::types::{
     DnsErrorPayload, FieldSizePayload, Method, TlsAlertReceivedPayload,
 };
-use wasmtime_wasi_http::p2::body::HostIncomingBody;
-use wasmtime_wasi_http::p2::types::HostIncomingResponse;
 
 #[derive(
     Debug,
@@ -1054,67 +1054,6 @@ impl crate::schema::conversion::FromSchema for SerializableSocketErrorCode {
     }
 }
 
-#[derive(Debug, Clone, BinaryCodec)]
-pub enum SerializableHttpVersion {
-    Http09,
-    /// `HTTP/1.0`
-    Http10,
-    /// `HTTP/1.1`
-    Http11,
-    /// `HTTP/2.0`
-    Http2,
-    /// `HTTP/3.0`
-    Http3,
-}
-
-impl TryFrom<Version> for SerializableHttpVersion {
-    type Error = String;
-
-    fn try_from(value: Version) -> Result<Self, Self::Error> {
-        if value == Version::HTTP_09 {
-            Ok(SerializableHttpVersion::Http09)
-        } else if value == Version::HTTP_10 {
-            Ok(SerializableHttpVersion::Http10)
-        } else if value == Version::HTTP_11 {
-            Ok(SerializableHttpVersion::Http11)
-        } else if value == Version::HTTP_2 {
-            Ok(SerializableHttpVersion::Http2)
-        } else if value == Version::HTTP_3 {
-            Ok(SerializableHttpVersion::Http3)
-        } else {
-            Err(format!("Unknown HTTP version: {value:?}"))
-        }
-    }
-}
-
-impl From<SerializableHttpVersion> for Version {
-    fn from(value: SerializableHttpVersion) -> Self {
-        match value {
-            SerializableHttpVersion::Http09 => Version::HTTP_09,
-            SerializableHttpVersion::Http10 => Version::HTTP_10,
-            SerializableHttpVersion::Http11 => Version::HTTP_11,
-            SerializableHttpVersion::Http2 => Version::HTTP_2,
-            SerializableHttpVersion::Http3 => Version::HTTP_3,
-        }
-    }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    BinaryCodec,
-    golem_schema_derive::IntoSchema,
-    golem_schema_derive::FromSchema,
-)]
-#[desert(evolution())]
-pub enum SerializableHttpResponse {
-    Pending,
-    HeadersReceived(SerializableResponseHeaders),
-    HttpError(SerializableHttpErrorCode),
-    InternalError(Option<String>),
-}
-
 #[derive(
     Debug,
     Clone,
@@ -1127,50 +1066,6 @@ pub enum SerializableHttpResponse {
 pub struct SerializableResponseHeaders {
     pub status: u16,
     pub headers: HashMap<String, Vec<Vec<u8>>>,
-}
-
-impl TryFrom<&HostIncomingResponse> for SerializableResponseHeaders {
-    type Error = anyhow::Error;
-
-    fn try_from(response: &HostIncomingResponse) -> Result<Self, Self::Error> {
-        let mut headers: HashMap<String, Vec<Vec<u8>>> = HashMap::new();
-        for (key, value) in response.headers.iter() {
-            headers
-                .entry(key.as_str().to_string())
-                .or_default()
-                .push(value.as_bytes().to_vec());
-        }
-
-        Ok(Self {
-            status: response.status,
-            headers,
-        })
-    }
-}
-
-impl TryFrom<SerializableResponseHeaders> for HostIncomingResponse {
-    type Error = anyhow::Error;
-
-    fn try_from(value: SerializableResponseHeaders) -> Result<Self, Self::Error> {
-        let mut header_map = http::HeaderMap::new();
-        for (key, values) in value.headers {
-            let name = HeaderName::from_str(&key)?;
-            for value in values {
-                header_map.append(name.clone(), HeaderValue::try_from(value)?);
-            }
-        }
-        let headers = FieldMap::new_immutable(header_map);
-
-        Ok(Self {
-            status: value.status,
-            headers,
-            body: Some(HostIncomingBody::failing(
-                "Body stream was interrupted due to a restart".to_string(),
-            )), // NOTE: high enough timeout so it does not matter, but not as high to overflow instants
-            // Synthetic response: not produced via the connection pool.
-            pooled_connection: None,
-        })
-    }
 }
 
 #[derive(
@@ -2361,6 +2256,68 @@ pub struct SerializableToolStructuredResult {
 pub struct SerializableToolOperationTerminal {
     pub body_execution: SerializableEntityBodyExecution,
     pub result: Result<SerializableToolStructuredResult, SerializableToolRpcError>,
+    pub admission_refusal: Option<SerializableToolAdmissionRefusal>,
+}
+
+/// The admission decision that interrupted an executing tool body. This is independent of
+/// the body's result: a host adapter may deliver the refusal as a catchable error.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableToolAdmissionRefusal {
+    BeforeStart {
+        initiating_function: String,
+        /// Encoded claim descriptor, including its invocation ID and ownership. Replay
+        /// compares the decoded descriptor rather than serialized byte ordering.
+        claim: Vec<u8>,
+    },
+    AtRecordedOplogEntry {
+        index: u64,
+    },
+    BeforePositional {
+        request: SerializableToolPositionalRequest,
+    },
+    BeforeInputRead {
+        session: StreamRegistrationInvocation,
+        binding: Box<StreamBindingRecord>,
+        consumer_read_ordinal: u64,
+        observation: StreamConsumerObservation,
+    },
+    BeforeAttachmentDisposal {
+        attachment: ToolAttachmentId,
+        terminal: ToolAttachmentTerminal,
+    },
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+pub enum SerializableToolPositionalRequest {
+    SetRetryPolicy,
+    RemoveRetryPolicy,
+}
+
+impl SerializableToolPositionalRequest {
+    pub fn expected_description(self) -> &'static str {
+        match self {
+            Self::SetRetryPolicy => "SetRetryPolicy",
+            Self::RemoveRetryPolicy => "RemoveRetryPolicy",
+        }
+    }
 }
 
 #[derive(
@@ -2593,6 +2550,24 @@ pub enum SerializableRdbmsError {
     QueryExecutionFailure(String),
     QueryResponseFailure(String),
     Other(String),
+    ResourceLost(String),
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableRdbmsTransactionTerminal {
+    Commit(Result<(), SerializableRdbmsError>),
+    Rollback(Result<(), SerializableRdbmsError>),
+    Drop(Result<(), SerializableRdbmsError>),
+    BeginFailed(Result<(), SerializableRdbmsError>),
 }
 
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]

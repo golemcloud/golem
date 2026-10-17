@@ -88,8 +88,8 @@ impl DurableStreamStore {
             ));
         }
         if cut_index < horizon
-            && matches!(oplog.read(cut_index).await, OplogEntry::Revert { .. })
-            && let OplogEntry::StreamSession { record, .. } = oplog.read(cut_index.next()).await
+            && matches!(oplog.read(cut_index).await?, OplogEntry::Revert { .. })
+            && let OplogEntry::StreamSession { record, .. } = oplog.read(cut_index.next()).await?
             && matches!(oplog.download_payload(record).await.map_err(StreamStoreError::Oplog)?,
                 StreamSessionRecord::ForkCut(cut) if cut.revert.is_some())
         {
@@ -185,7 +185,7 @@ impl DurableStreamStore {
         let mut covered = from;
         while covered < horizon {
             let count = (horizon.as_u64() - covered.as_u64()).min(1024);
-            let entries = oplog.read_exact(covered.next(), count).await;
+            let entries = oplog.read_exact(covered.next(), count).await?;
             if entries.len() as u64 != count {
                 return Err(StreamStoreError::CorruptHistory(
                     "missing oplog entries while reading stream epochs".into(),
@@ -802,6 +802,7 @@ mod tests {
             for (_, entry) in history
                 .read_exact(OplogIndex::INITIAL, horizon.as_u64())
                 .await
+                .unwrap()
             {
                 copied.add(entry).await.unwrap();
             }
@@ -963,6 +964,7 @@ mod tests {
         for (_, entry) in oplog
             .read_exact(OplogIndex::INITIAL, cut_index.as_u64())
             .await
+            .unwrap()
         {
             copied.add(entry).await.unwrap();
         }
@@ -1259,7 +1261,7 @@ mod tests {
         let identity = identity();
         let owner = OwnedAgentId::new(identity.environment_id, &identity.agent_id);
         let oplog = TestOplog::default();
-        let first_cut = oplog.add(OplogEntry::no_op(None)).await.unwrap();
+        let first_cut = oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
         let entry =
             |record| DurableStreamOplogRecord::Session(None, Box::new(record)).into_inline_entry();
         let attached = |epoch| {
@@ -1331,7 +1333,7 @@ mod tests {
         let identity = identity();
         let owner = OwnedAgentId::new(identity.environment_id, &identity.agent_id);
         let oplog = TestOplog::default();
-        let cut_index = oplog.add(OplogEntry::no_op(None)).await.unwrap();
+        let cut_index = oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
         let mut cut = DurableStreamStore::prepare_fork_cut(
             &oplog,
             (&owner, identity.fingerprint),
@@ -1366,7 +1368,7 @@ mod tests {
         let identity = identity();
         let owner = OwnedAgentId::new(identity.environment_id, &identity.agent_id);
         let oplog = Arc::new(TestOplog::default());
-        oplog.add(OplogEntry::no_op(None)).await.unwrap();
+        oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
         let descriptor = prepared(&identity.invocation);
         let requests: Vec<_> = (0..2)
             .map(|path| {
@@ -1419,7 +1421,8 @@ mod tests {
                 .await
                 .unwrap();
             let horizon = oplog.current_oplog_index().await;
-            let OplogEntry::StreamSession { record, .. } = oplog.read(horizon).await else {
+            let OplogEntry::StreamSession { record, .. } = oplog.read(horizon).await.unwrap()
+            else {
                 panic!("missing Attached")
             };
             let StreamSessionRecord::Attached(attached) =
@@ -1483,7 +1486,7 @@ mod tests {
         let fingerprint = AgentFingerprint(Uuid::from_u128(422));
         let oplog = TestOplog::default();
         for _ in 0..3 {
-            oplog.add(OplogEntry::no_op(None)).await.unwrap();
+            oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
         }
         let horizon = oplog
             .add(OplogEntry::revert(OplogRegion::from_range(2..=3)))
@@ -2358,9 +2361,13 @@ mod tests {
                             .unwrap(),
                         summary: None,
                     },
-                    _ => OplogEntry::NoOp {
+                    _ => OplogEntry::Log {
                         timestamp,
-                        entity_parent_start_index: None,
+                        parent_start_index: None,
+                        level: golem_common::model::oplog::LogLevel::Info,
+                        context: "fixture".to_string(),
+                        message: String::new(),
+                        trace_context: None,
                     },
                 };
                 oplog.add(entry).await.unwrap();

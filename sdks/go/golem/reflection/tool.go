@@ -15,6 +15,7 @@
 package reflection
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -172,11 +173,13 @@ func (c Command) Subcommand(name string) (Command, bool) {
 func (c Command) Callable() bool { return c.node().Body.IsSome() }
 
 // canonicalField is one field of a command's canonical input record: the
-// type node the metadata names, and how the record wraps it.
+// type node the metadata names, how the record wraps it, and the value an
+// omitted argument takes when it declares one.
 type canonicalField struct {
-	name string
-	node int32
-	wrap canonicalWrap
+	name     string
+	node     int32
+	wrap     canonicalWrap
+	fallback core.SchemaValue
 }
 
 type canonicalWrap uint8
@@ -194,6 +197,10 @@ const (
 // positionals, tail, options and flags. A field is wrapped in an option when it
 // is neither required nor defaulted, and collects into a list for a tail or a
 // repeatable option.
+//
+// A scalar option or fixed positional that declares a default falls back to
+// it, a bool flag to its shape's default and a count flag to zero. A tail or a
+// repeatable option has no fallback, even when it declares a default.
 func (c Command) canonicalFields() ([]canonicalField, error) {
 	if !c.Callable() {
 		return nil, fmt.Errorf("golem: command %q has no body", c.Name())
@@ -208,26 +215,37 @@ func (c Command) canonicalFields() ([]canonicalField, error) {
 		}
 		return wrapNone
 	}
+	var problems []error
+	declared := func(name string, d witTypes.Option[types.SchemaValueTree]) core.SchemaValue {
+		if d.IsNone() {
+			return nil
+		}
+		v, err := witschema.ValueToCore(d.Some())
+		if err != nil {
+			problems = append(problems, fmt.Errorf("golem: argument %q default: %w", name, err))
+		}
+		return v
+	}
 	var out []canonicalField
 	option := func(o toolCommon.OptionSpec) {
 		switch o.Shape.Tag() {
 		case toolCommon.OptionShapeRepeatableList:
-			out = append(out, canonicalField{o.Long, o.Shape.RepeatableList().ItemType, wrapList})
+			out = append(out, canonicalField{o.Long, o.Shape.RepeatableList().ItemType, wrapList, nil})
 		case toolCommon.OptionShapeRepeatableMap:
-			out = append(out, canonicalField{o.Long, o.Shape.RepeatableMap().MapType, wrapNone})
+			out = append(out, canonicalField{o.Long, o.Shape.RepeatableMap().MapType, wrapNone, nil})
 		case toolCommon.OptionShapeOptionalScalar:
 			n := o.Shape.OptionalScalar()
-			out = append(out, canonicalField{o.Long, n, optional(o.Required, o.Default.IsSome(), n)})
+			out = append(out, canonicalField{o.Long, n, optional(o.Required, o.Default.IsSome(), n), declared(o.Long, o.Default)})
 		default:
 			n := o.Shape.Scalar()
-			out = append(out, canonicalField{o.Long, n, optional(o.Required, o.Default.IsSome(), n)})
+			out = append(out, canonicalField{o.Long, n, optional(o.Required, o.Default.IsSome(), n), declared(o.Long, o.Default)})
 		}
 	}
 	flag := func(f toolCommon.FlagSpec) {
 		if f.Shape.Tag() == toolCommon.FlagShapeCountFlag {
-			out = append(out, canonicalField{f.Long, -1, wrapCount})
+			out = append(out, canonicalField{f.Long, -1, wrapCount, core.U32Value{Value: 0}})
 		} else {
-			out = append(out, canonicalField{f.Long, -1, wrapBool})
+			out = append(out, canonicalField{f.Long, -1, wrapBool, core.BoolValue{Value: f.Shape.BoolFlag().Default}})
 		}
 	}
 	for _, idx := range c.chain {
@@ -241,11 +259,11 @@ func (c Command) canonicalFields() ([]canonicalField, error) {
 	}
 	body := c.node().Body.Some()
 	for _, p := range body.Positionals.Fixed {
-		out = append(out, canonicalField{p.Name, p.Type, optional(p.Required, p.Default.IsSome(), p.Type)})
+		out = append(out, canonicalField{p.Name, p.Type, optional(p.Required, p.Default.IsSome(), p.Type), declared(p.Name, p.Default)})
 	}
 	if body.Positionals.Tail.IsSome() {
 		t := body.Positionals.Tail.Some()
-		out = append(out, canonicalField{t.Name, t.ItemType, wrapList})
+		out = append(out, canonicalField{t.Name, t.ItemType, wrapList, nil})
 	}
 	for _, o := range body.Options {
 		option(o)
@@ -253,13 +271,20 @@ func (c Command) canonicalFields() ([]canonicalField, error) {
 	for _, f := range body.Flags {
 		flag(f)
 	}
+	if len(problems) > 0 {
+		return nil, errors.Join(problems...)
+	}
 	return out, nil
 }
 
 // Input returns the command's canonical input record: inherited globals,
 // positionals, the tail, options and flags. Pack canonical JSON with its
-// PackJSON, and render it with ToJSONSchema. Only a [Command.Callable] command
-// has one; Input panics on a node that only dispatches to subcommands.
+// PackJSON, and render it with ToJSONSchema. In canonical JSON an argument that
+// has a default may be left out: PackJSON fills in the default, and the JSON
+// Schema does not require the argument and states its default. The record's
+// fields, and the values it validates, are the ones the wire carries. Only a
+// [Command.Callable] command has one; Input panics on a node that only
+// dispatches to subcommands.
 func (c Command) Input() core.Ref {
 	ref, err := c.input()
 	if err != nil {
@@ -274,7 +299,11 @@ func (c Command) input() (core.Ref, error) {
 		return core.Ref{}, err
 	}
 	record := make([]core.NamedField, 0, len(fields))
+	defaults := map[string]core.SchemaValue{}
 	for _, f := range fields {
+		if f.fallback != nil {
+			defaults[f.name] = f.fallback
+		}
 		var t core.SchemaType
 		switch f.wrap {
 		case wrapBool:
@@ -295,7 +324,8 @@ func (c Command) input() (core.Ref, error) {
 		}
 		record = append(record, core.NamedField{Name: f.name, Body: t})
 	}
-	return core.NewRefAt(c.conv.Graph, core.SchemaType{Body: core.RecordType{Fields: record}}), nil
+	return core.NewRefAt(c.conv.Graph, core.SchemaType{Body: core.RecordType{Fields: record}}).
+		WithFieldDefaults(defaults), nil
 }
 
 // inputGraph is the tool's wire schema extended with the command's canonical

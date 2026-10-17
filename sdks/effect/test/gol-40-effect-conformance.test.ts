@@ -62,23 +62,21 @@ describe("GOL-40 Effect conformance fixture", () => {
         .pipe(Effect.provideService(ToolClient, noHost)),
     )
     const generated = GeneratedArtifactClient.create()
-    const generatedCall = await Effect.runPromise(
-      generated
-        .execute(input, stdin())
-        .pipe(
-          Effect.provideService(ToolTransport, transport),
-          Effect.provideService(ToolClient, noHost),
-          Effect.scoped,
-        ),
-    )
     const [generatedResult, generatedStdout, generatedStderr] = await Effect.runPromise(
-      Effect.all(
-        [
-          generatedCall.result,
-          Stream.runCollect(generatedCall.stdout!),
-          Stream.runCollect(generatedCall.stderr!),
-        ],
-        { concurrency: "unbounded" },
+      generated.execute(input, stdin()).pipe(
+        Effect.flatMap((started) =>
+          Effect.all(
+            [
+              started.result,
+              Stream.runCollect(started.stdout!),
+              Stream.runCollect(started.stderr!),
+            ],
+            { concurrency: "unbounded" },
+          ),
+        ),
+        Effect.provideService(ToolTransport, transport),
+        Effect.provideService(ToolClient, noHost),
+        Effect.scoped,
       ),
     )
     const statusInput = {

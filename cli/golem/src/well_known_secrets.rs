@@ -113,7 +113,9 @@ pub fn check_exposure(config: &GolemServerConfig) -> anyhow::Result<()> {
             "Refusing to listen on addresses that are not loopback addresses:\n{}\nbecause \
              these settings still have their well-known default values, which are \
              public:\n{settings}\nSet them to secret values, or bind every listener to a \
-             loopback address such as 127.0.0.1",
+             loopback address such as 127.0.0.1. A token has at least 16 characters, each an \
+             ASCII letter, a digit, `-` or `_`. A key is base64, for example the output of \
+             `openssl rand -base64 32`, and the two webhook keys must be equal",
             exposed.join("\n")
         );
     }

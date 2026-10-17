@@ -15,8 +15,8 @@
 use super::component::ComponentService;
 use super::golem_config::GolemConfig;
 use super::{HasComponentService, HasConfig, HasOplogService};
-use crate::durable_host::durable_stream::SessionControlMetadata;
 use crate::durable_host::durable_stream::metadata::{ProducerMetadataKey, ProducerMetadataRow};
+use crate::durable_host::durable_stream::{SessionControlMetadata, SessionError};
 use crate::metrics::workers::{
     record_agent_identity_resolution, record_derived_cache_publication_failed,
     record_stale_running_worker, record_status_cache_publication, record_worker_call,
@@ -156,7 +156,6 @@ fn status_core(status: &AgentStatusRecord) -> AgentStatusRecord {
         status: status.status,
         last_error_kind: status.last_error_kind,
         skipped_regions: DeletedRegions::new(),
-        atomic_rollback: status.atomic_rollback.clone(),
         overridden_retry_config: status.overridden_retry_config.clone(),
         pending_invocations: status.pending_invocations.clone(),
         pending_card_events: status.pending_card_events.clone(),
@@ -386,6 +385,16 @@ impl StaleReason {
     }
 }
 
+/// Logs that recovery leaves the agent as it is, because its oplog does not read. The member stays
+/// in the recovery index, and the oplog stays as it is, so an operator can inspect it.
+fn skip_unreadable_agent(owned_agent_id: &OwnedAgentId, error: &WorkerExecutorError) {
+    error!(
+        agent_id = %owned_agent_id,
+        error = %error,
+        "Skipping agent during recovery: its oplog is unreadable"
+    );
+}
+
 /// Tells why the member of the incarnation `fingerprint` is stale, when `identity` is the stored
 /// identity of its agent: no identity, or an identity with another fingerprint. `None` means that
 /// the member is the stored incarnation.
@@ -493,7 +502,7 @@ pub trait WorkerService: Send + Sync {
         fingerprint: AgentFingerprint,
         status: &AgentStatusRecord,
         key: &IdempotencyKey,
-    ) -> Result<Option<DurableStreamSessionStatus>, String>;
+    ) -> Result<Option<DurableStreamSessionStatus>, SessionError>;
 
     async fn lookup_durable_stream_public_binding(
         &self,
@@ -501,7 +510,7 @@ pub trait WorkerService: Send + Sync {
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
         public_session_id: &str,
-    ) -> Result<Option<DurableStreamPublicBinding>, String>;
+    ) -> Result<Option<DurableStreamPublicBinding>, SessionError>;
 
     /// Reads per-session metadata through a captured persisted horizon, independently of status
     /// publication. Payloads remain in the oplog and are addressed by index.
@@ -511,7 +520,7 @@ pub trait WorkerService: Send + Sync {
         _agent_mode: AgentMode,
         _fingerprint: AgentFingerprint,
         _key: &StreamSessionKey,
-    ) -> Result<SessionControlMetadata, String> {
+    ) -> Result<SessionControlMetadata, SessionError> {
         Err("durable stream control metadata is unavailable".into())
     }
 
@@ -521,7 +530,7 @@ pub trait WorkerService: Send + Sync {
         _agent_mode: AgentMode,
         _fingerprint: AgentFingerprint,
         _keys: Vec<ProducerMetadataKey>,
-    ) -> Result<(OplogIndex, Vec<Option<ProducerMetadataRow>>), String> {
+    ) -> Result<(OplogIndex, Vec<Option<ProducerMetadataRow>>), SessionError> {
         Err("durable stream producer metadata is unavailable".into())
     }
 
@@ -532,7 +541,7 @@ pub trait WorkerService: Send + Sync {
         _key: &StreamSessionKey,
         _reader: golem_common::model::durable_stream::LocalStreamReaderId,
         _page: u64,
-    ) -> Result<Vec<OplogIndex>, String> {
+    ) -> Result<Vec<OplogIndex>, SessionError> {
         Err("durable stream consumer index is unavailable".into())
     }
 
@@ -543,7 +552,7 @@ pub trait WorkerService: Send + Sync {
         _fingerprint: AgentFingerprint,
         _key: &StreamSessionKey,
         _attempt: golem_common::model::durable_stream::AttemptId,
-    ) -> Result<Option<OplogIndex>, String> {
+    ) -> Result<Option<OplogIndex>, SessionError> {
         Err("durable stream resume index is unavailable".into())
     }
 
@@ -552,7 +561,7 @@ pub trait WorkerService: Send + Sync {
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
         _fingerprint: AgentFingerprint,
-    ) -> Result<DurableStreamRecoveryMetadata, String> {
+    ) -> Result<DurableStreamRecoveryMetadata, SessionError> {
         Err("durable stream recovery index is unavailable".into())
     }
 
@@ -562,7 +571,7 @@ pub trait WorkerService: Send + Sync {
         _agent_mode: AgentMode,
         _fingerprint: AgentFingerprint,
         _status: &AgentStatusRecord,
-    ) -> Result<(), String> {
+    ) -> Result<(), WorkerExecutorError> {
         Ok(())
     }
 
@@ -609,7 +618,7 @@ pub trait WorkerService: Send + Sync {
         fingerprint: AgentFingerprint,
         previous_status: Option<&AgentStatusRecord>,
         status_value: AgentStatusRecord,
-    ) -> Result<AgentStatusRecord, String>;
+    ) -> Result<AgentStatusRecord, WorkerExecutorError>;
 
     /// Reads the worker's *clean* status checkpoint, if any.
     ///
@@ -642,7 +651,7 @@ pub trait WorkerService: Send + Sync {
         fingerprint: AgentFingerprint,
         previous_checkpoint: Option<&AgentStatusRecord>,
         checkpoint: AgentStatusRecord,
-    ) -> Result<AgentStatusRecord, String>;
+    ) -> Result<AgentStatusRecord, WorkerExecutorError>;
 
     /// Updates the `RunningWorkers` recovery index for the worker according to `status_value`.
     ///
@@ -694,9 +703,10 @@ pub trait WorkerService: Send + Sync {
         fingerprint: AgentFingerprint,
         previous_status: Option<&AgentStatusRecord>,
         status_value: AgentStatusRecord,
-    ) -> Result<(), String> {
+    ) -> Result<(), WorkerExecutorError> {
         self.set_assignment_tracking(owned_agent_id, fingerprint, &status_value)
-            .await?;
+            .await
+            .map_err(WorkerExecutorError::runtime)?;
         self.write_cached_status(owned_agent_id, fingerprint, previous_status, status_value)
             .await
             .map(|_| ())
@@ -865,7 +875,17 @@ impl DefaultWorkerService {
             //   transient cause is already absorbed by the storage retry budget, and one that
             //   outlives it leaves this executor unable to do its job, so replacing it beats
             //   carrying on with an unknown number of agents stranded.
-            let identity = self.resolve_agent_identity(owned_agent_id).await?;
+            //
+            // An oplog that does not read is the exception: no retry reads it, so failing the scan
+            // would strand every other agent of the shards behind it. That agent is left as it is.
+            let identity = match self.resolve_agent_identity(owned_agent_id).await {
+                Ok(identity) => identity,
+                Err(error @ WorkerExecutorError::OplogFailed { .. }) => {
+                    skip_unreadable_agent(owned_agent_id, &error);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             if let Some(reason) = stale_reason(identity.as_ref(), running_worker.fingerprint) {
                 self.drop_stale_member(key, &running_worker, reason, on_stale)
                     .await?;
@@ -905,6 +925,9 @@ impl DefaultWorkerService {
                             "failed to load metadata for existing {owned_agent_id} during recovery"
                         )));
                     }
+                }
+                Err(error @ WorkerExecutorError::OplogFailed { .. }) => {
+                    skip_unreadable_agent(owned_agent_id, &error);
                 }
                 Err(err) => {
                     return Err(WorkerExecutorError::runtime(format!(
@@ -1403,7 +1426,7 @@ impl DefaultWorkerService {
         let entry = self
             .oplog_service
             .read_source(owned_agent_id, agent_mode, OplogIndex::INITIAL, 1)
-            .await
+            .await?
             .remove(&OplogIndex::INITIAL);
         match entry {
             None => Ok(None),
@@ -1461,7 +1484,7 @@ impl WorkerService for DefaultWorkerService {
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
         keys: Vec<ProducerMetadataKey>,
-    ) -> Result<(OplogIndex, Vec<Option<ProducerMetadataRow>>), String> {
+    ) -> Result<(OplogIndex, Vec<Option<ProducerMetadataRow>>), SessionError> {
         self.stream_session_index
             .lookup_producer_metadata(owned_agent_id, agent_mode, fingerprint, keys)
             .await
@@ -1472,7 +1495,7 @@ impl WorkerService for DefaultWorkerService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
-    ) -> Result<DurableStreamRecoveryMetadata, String> {
+    ) -> Result<DurableStreamRecoveryMetadata, SessionError> {
         self.stream_session_index
             .lookup_recovery_metadata(owned_agent_id, agent_mode, fingerprint)
             .await
@@ -1485,7 +1508,7 @@ impl WorkerService for DefaultWorkerService {
         fingerprint: AgentFingerprint,
         key: &StreamSessionKey,
         attempt: golem_common::model::durable_stream::AttemptId,
-    ) -> Result<Option<OplogIndex>, String> {
+    ) -> Result<Option<OplogIndex>, SessionError> {
         self.stream_session_index
             .lookup_resume_offset(owned_agent_id, agent_mode, fingerprint, key, attempt)
             .await
@@ -1497,7 +1520,7 @@ impl WorkerService for DefaultWorkerService {
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
         key: &StreamSessionKey,
-    ) -> Result<SessionControlMetadata, String> {
+    ) -> Result<SessionControlMetadata, SessionError> {
         self.stream_session_index
             .lookup_control_metadata(owned_agent_id, agent_mode, fingerprint, key)
             .await
@@ -1510,7 +1533,7 @@ impl WorkerService for DefaultWorkerService {
         key: &StreamSessionKey,
         reader: golem_common::model::durable_stream::LocalStreamReaderId,
         page: u64,
-    ) -> Result<Vec<OplogIndex>, String> {
+    ) -> Result<Vec<OplogIndex>, SessionError> {
         self.stream_session_index
             .read_consumer_page(owned_agent_id, fingerprint, key, reader, page)
             .await
@@ -1702,8 +1725,7 @@ impl WorkerService for DefaultWorkerService {
                             None,
                             last_known_status.clone(),
                         )
-                        .await
-                        .map_err(WorkerExecutorError::runtime)?;
+                        .await?;
 
                         Some(last_known_status)
                     }
@@ -1795,7 +1817,7 @@ impl WorkerService for DefaultWorkerService {
         self.stream_session_index
             .clear(owned_agent_id, fingerprint)
             .await
-            .map_err(WorkerExecutorError::runtime)?;
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         self.key_value_storage
             .with("worker", "remove_rejected_periodic_snapshot")
             .del(
@@ -1925,7 +1947,7 @@ impl WorkerService for DefaultWorkerService {
         fingerprint: AgentFingerprint,
         status: &AgentStatusRecord,
         key: &IdempotencyKey,
-    ) -> Result<Option<DurableStreamSessionStatus>, String> {
+    ) -> Result<Option<DurableStreamSessionStatus>, SessionError> {
         if let Some(value) = status.durable_stream_sessions.get(key) {
             return Ok(Some(value.clone()));
         }
@@ -1949,7 +1971,7 @@ impl WorkerService for DefaultWorkerService {
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
         public_session_id: &str,
-    ) -> Result<Option<DurableStreamPublicBinding>, String> {
+    ) -> Result<Option<DurableStreamPublicBinding>, SessionError> {
         self.stream_session_index
             .lookup_public_binding(owned_agent_id, agent_mode, fingerprint, public_session_id)
             .await
@@ -1961,7 +1983,7 @@ impl WorkerService for DefaultWorkerService {
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
         status: &AgentStatusRecord,
-    ) -> Result<(), String> {
+    ) -> Result<(), WorkerExecutorError> {
         if agent_mode == AgentMode::Ephemeral {
             return Ok(());
         }
@@ -1980,7 +2002,7 @@ impl WorkerService for DefaultWorkerService {
                         namespace.clone(),
                         INVOCATION_RESULT_INDEX_METADATA_FIELD,
                     )
-                    .await?
+                    .await.map_err(WorkerExecutorError::runtime)?
                     .map(|value| value.to_vec());
                 let persisted = observed_metadata
                     .as_deref()
@@ -2004,7 +2026,7 @@ impl WorkerService for DefaultWorkerService {
                             .key_value_storage
                             .with_entity("worker", "snapshot_invocation_result_index", "metadata")
                             .get_all_raw(namespace.clone())
-                            .await?;
+                            .await.map_err(WorkerExecutorError::runtime)?;
                         let snapshot_metadata = snapshot
                             .iter()
                             .find(|(field, _)| field == INVOCATION_RESULT_INDEX_METADATA_FIELD)
@@ -2034,7 +2056,7 @@ impl WorkerService for DefaultWorkerService {
                                     current_idempotency_key: None,
                                     cancelled_idempotency_key: None,
                                 };
-                                let encoded = serialize(&metadata)?;
+                                let encoded = serialize(&metadata).map_err(WorkerExecutorError::runtime)?;
                                 let deletions: Vec<&str> = snapshot
                                     .iter()
                                     .map(|(field, _)| field.as_str())
@@ -2065,7 +2087,7 @@ impl WorkerService for DefaultWorkerService {
                                         record_derived_cache_publication_failed(
                                             "invocation_result_index",
                                         );
-                                    })?;
+                                    }).map_err(WorkerExecutorError::runtime)?;
                                 if !installed {
                                     continue 'reload;
                                 }
@@ -2093,12 +2115,12 @@ impl WorkerService for DefaultWorkerService {
                             metadata.covered_through.next(),
                             count,
                         )
-                        .await;
+                        .await?;
                     if entries.is_empty() {
-                        return Err(format!(
+                        return Err(WorkerExecutorError::runtime(format!(
                             "failed to advance invocation result index for {owned_agent_id}: oplog range starting at {} was empty",
                             metadata.covered_through.next()
-                        ));
+                        )));
                     }
 
                     let mut mappings = HashMap::new();
@@ -2121,12 +2143,12 @@ impl WorkerService for DefaultWorkerService {
                             serialize(&PersistedInvocationResult {
                                 revert_generation: advanced.revert_generation,
                                 oplog_index,
-                            })?,
+                            }).map_err(WorkerExecutorError::runtime)?,
                         ));
                     }
                     fields.push((
                         INVOCATION_RESULT_INDEX_METADATA_FIELD.to_string(),
-                        serialize(&advanced)?,
+                        serialize(&advanced).map_err(WorkerExecutorError::runtime)?,
                     ));
                     let pairs: Vec<(&str, &[u8])> = fields
                         .iter()
@@ -2150,7 +2172,7 @@ impl WorkerService for DefaultWorkerService {
                         .await
                         .inspect_err(|_err| {
                             record_derived_cache_publication_failed("invocation_result_index");
-                        })?;
+                        }).map_err(WorkerExecutorError::runtime)?;
                     if !updated {
                         continue 'reload;
                     }
@@ -2283,7 +2305,7 @@ impl WorkerService for DefaultWorkerService {
         fingerprint: AgentFingerprint,
         previous_status: Option<&AgentStatusRecord>,
         status_value: AgentStatusRecord,
-    ) -> Result<AgentStatusRecord, String> {
+    ) -> Result<AgentStatusRecord, WorkerExecutorError> {
         record_worker_call("write_status");
 
         debug!("Writing cached agent status for {owned_agent_id} to {status_value:?}");
@@ -2296,7 +2318,8 @@ impl WorkerService for DefaultWorkerService {
                     fingerprint,
                     status_value.oplog_idx,
                 )
-                .await?;
+                .await
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         }
 
         self.catch_up_invocation_result_index(
@@ -2313,6 +2336,7 @@ impl WorkerService for DefaultWorkerService {
             status_value,
         )
         .await
+        .map_err(WorkerExecutorError::runtime)
     }
 
     async fn read_status_checkpoint(
@@ -2342,7 +2366,7 @@ impl WorkerService for DefaultWorkerService {
         fingerprint: AgentFingerprint,
         previous_checkpoint: Option<&AgentStatusRecord>,
         checkpoint: AgentStatusRecord,
-    ) -> Result<AgentStatusRecord, String> {
+    ) -> Result<AgentStatusRecord, WorkerExecutorError> {
         record_worker_call("write_status_checkpoint");
 
         debug!(
@@ -2358,7 +2382,8 @@ impl WorkerService for DefaultWorkerService {
                     fingerprint,
                     checkpoint.oplog_idx,
                 )
-                .await?;
+                .await
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         }
         self.write_split_status(
             owned_agent_id,
@@ -2367,6 +2392,7 @@ impl WorkerService for DefaultWorkerService {
             checkpoint,
         )
         .await
+        .map_err(WorkerExecutorError::runtime)
     }
 
     async fn set_assignment_tracking(
@@ -2485,6 +2511,7 @@ mod tests {
     use super::*;
     use crate::model::ExecutionStatus;
     use crate::services::oplog::Oplog;
+    use crate::services::oplog::UnreadableOplog;
     use crate::services::shard::ShardServiceDefault;
     use crate::storage::keyvalue::KeyValueStorageError;
     use crate::storage::keyvalue::fault_injecting::{
@@ -2591,7 +2618,7 @@ mod tests {
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
             _shard_epoch: Option<ShardEpoch>,
-        ) -> Arc<dyn crate::services::oplog::Oplog> {
+        ) -> Result<Arc<dyn crate::services::oplog::Oplog>, WorkerExecutorError> {
             unreachable!()
         }
 
@@ -2605,7 +2632,7 @@ mod tests {
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
             _shard_epoch: Option<ShardEpoch>,
-        ) -> Arc<dyn crate::services::oplog::Oplog> {
+        ) -> Result<Arc<dyn crate::services::oplog::Oplog>, WorkerExecutorError> {
             unreachable!()
         }
 
@@ -2619,7 +2646,7 @@ mod tests {
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
             _shard_epoch: Option<ShardEpoch>,
-        ) -> Arc<dyn crate::services::oplog::Oplog> {
+        ) -> Result<Arc<dyn crate::services::oplog::Oplog>, WorkerExecutorError> {
             unreachable!()
         }
 
@@ -2627,12 +2654,13 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
-        ) -> OplogIndex {
-            self.entries
+        ) -> Result<OplogIndex, UnreadableOplog> {
+            Ok(self
+                .entries
                 .keys()
                 .next_back()
                 .copied()
-                .unwrap_or(OplogIndex::NONE)
+                .unwrap_or(OplogIndex::NONE))
         }
 
         async fn assert_owning_epoch(
@@ -2661,21 +2689,26 @@ mod tests {
             _agent_mode: AgentMode,
             idx: OplogIndex,
             n: u64,
-        ) -> BTreeMap<OplogIndex, OplogEntry> {
+        ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
             self.reads.lock().unwrap().push((idx, n));
             if self.pause_next_read.swap(false, Ordering::AcqRel) {
                 self.read_started.notify_one();
                 self.resume_read.notified().await;
             }
             let end = idx.as_u64().saturating_add(n.saturating_sub(1));
-            self.entries
+            Ok(self
+                .entries
                 .range(idx..=OplogIndex::from_u64(end))
                 .map(|(index, entry)| (*index, entry.clone()))
-                .collect()
+                .collect())
         }
 
-        async fn exists(&self, _owned_agent_id: &OwnedAgentId, _agent_mode: AgentMode) -> bool {
-            true
+        async fn exists(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+        ) -> Result<bool, UnreadableOplog> {
+            Ok(true)
         }
 
         async fn scan_for_component(
@@ -2709,7 +2742,7 @@ mod tests {
         }
     }
 
-    struct IndexTestComponentService;
+    pub(super) struct IndexTestComponentService;
 
     fn non_agent_component(component_id: ComponentId, environment_id: EnvironmentId) -> Component {
         Component {
@@ -2814,7 +2847,7 @@ mod tests {
     }
 
     fn invocation_entries(keys: &[IdempotencyKey]) -> BTreeMap<OplogIndex, OplogEntry> {
-        let mut entries = BTreeMap::from([(OplogIndex::INITIAL, OplogEntry::no_op(None))]);
+        let mut entries = BTreeMap::from([(OplogIndex::INITIAL, OplogEntry::recovery_succeeded())]);
         for (offset, key) in keys.iter().enumerate() {
             invocation_pair(&mut entries, 2 + offset as u64 * 2, key);
         }
@@ -3322,20 +3355,6 @@ mod tests {
             component_revision: ComponentRevision::new(3).unwrap(),
             ..AgentStatusRecord::default()
         };
-        status
-            .atomic_rollback
-            .regions
-            .insert(OplogIndex::from_u64(31), None);
-        status
-            .atomic_rollback
-            .regions
-            .insert(OplogIndex::from_u64(32), Some(OplogIndex::from_u64(39)));
-        status
-            .atomic_rollback
-            .open_cut_scopes
-            .insert(OplogIndex::from_u64(33), ());
-        status.atomic_rollback.last_work = OplogIndex::from_u64(42);
-        status.atomic_rollback.retired_through = OplogIndex::from_u64(29);
         status
             .invocation_results
             .insert(idempotency_key("k1"), OplogIndex::from_u64(10));
@@ -4537,6 +4556,11 @@ mod tests {
     #[derive(Debug, Default)]
     struct FakeOplogService {
         existing: Vec<OwnedAgentId>,
+        /// Agents whose oplog does not read.
+        unreadable: Vec<OwnedAgentId>,
+        /// Agents whose oplog reads once, and then does not read.
+        unreadable_after_first_read: Vec<OwnedAgentId>,
+        reads: AtomicUsize,
         initial_entries: HashMap<(OwnedAgentId, AgentMode), OplogEntry>,
         fail_delete_once: AtomicBool,
         hide_identity_after_delete_attempt: bool,
@@ -4574,7 +4598,7 @@ mod tests {
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
             _shard_epoch: Option<ShardEpoch>,
-        ) -> Arc<dyn Oplog + 'static> {
+        ) -> Result<Arc<dyn Oplog + 'static>, WorkerExecutorError> {
             unreachable!()
         }
 
@@ -4588,7 +4612,7 @@ mod tests {
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
             _shard_epoch: Option<ShardEpoch>,
-        ) -> Arc<dyn Oplog + 'static> {
+        ) -> Result<Arc<dyn Oplog + 'static>, WorkerExecutorError> {
             unreachable!()
         }
 
@@ -4602,7 +4626,7 @@ mod tests {
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
             _shard_epoch: Option<ShardEpoch>,
-        ) -> Arc<dyn Oplog + 'static> {
+        ) -> Result<Arc<dyn Oplog + 'static>, WorkerExecutorError> {
             unreachable!()
         }
 
@@ -4610,7 +4634,7 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
-        ) -> OplogIndex {
+        ) -> Result<OplogIndex, UnreadableOplog> {
             unreachable!()
         }
 
@@ -4646,8 +4670,8 @@ mod tests {
             _agent_mode: AgentMode,
             _idx: OplogIndex,
             _n: u64,
-        ) -> BTreeMap<OplogIndex, OplogEntry> {
-            BTreeMap::new()
+        ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+            Ok(BTreeMap::new())
         }
 
         async fn read_source(
@@ -4656,21 +4680,46 @@ mod tests {
             agent_mode: AgentMode,
             _idx: OplogIndex,
             _n: u64,
-        ) -> BTreeMap<OplogIndex, OplogEntry> {
+        ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+            if self.unreadable_after_first_read.contains(owned_agent_id)
+                && self.reads.fetch_add(1, Ordering::Relaxed) > 0
+            {
+                return Err(UnreadableOplog {
+                    agent_id: owned_agent_id.agent_id(),
+                    error: crate::services::oplog::OplogReadError::corruption(
+                        crate::services::oplog::OplogReadSource::Archive(1),
+                        "failed to decode compressed oplog chunk ending at 2",
+                    ),
+                });
+            }
+            if self.unreadable.contains(owned_agent_id) {
+                return Err(UnreadableOplog {
+                    agent_id: owned_agent_id.agent_id(),
+                    error: crate::services::oplog::OplogReadError::corruption(
+                        crate::services::oplog::OplogReadSource::Archive(1),
+                        "failed to decode compressed oplog chunk ending at 2",
+                    ),
+                });
+            }
             if self.hide_identity_after_delete_attempt
                 && self.delete_attempts.load(Ordering::Relaxed) > 0
             {
-                return BTreeMap::new();
+                return Ok(BTreeMap::new());
             }
-            self.initial_entries
+            Ok(self
+                .initial_entries
                 .get(&(owned_agent_id.clone(), agent_mode))
                 .cloned()
                 .map(|entry| BTreeMap::from([(OplogIndex::INITIAL, entry)]))
-                .unwrap_or_default()
+                .unwrap_or_default())
         }
 
-        async fn exists(&self, owned_agent_id: &OwnedAgentId, _agent_mode: AgentMode) -> bool {
-            self.existing.contains(owned_agent_id)
+        async fn exists(
+            &self,
+            owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+        ) -> Result<bool, UnreadableOplog> {
+            Ok(self.existing.contains(owned_agent_id))
         }
 
         async fn scan_for_component(
@@ -5135,6 +5184,95 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(remaining, vec![current]);
+    }
+
+    /// An agent whose oplog does not read is left as it is, in the index and in storage, and the
+    /// scan goes on to the other members: no retry of the scan would read that oplog.
+    #[test]
+    async fn recovery_scan_leaves_an_agent_whose_oplog_does_not_read_and_goes_on() {
+        let storage = Arc::new(InMemoryKeyValueStorage::new());
+        let shard_key = DefaultWorkerService::running_in_shard_key(&ShardId::new(0));
+        let unreadable = RunningWorker {
+            owned_agent_id: test_owned_agent_id("unreadable-archive"),
+            fingerprint: AgentFingerprint(Uuid::new_v4()),
+        };
+        let deleted = RunningWorker {
+            owned_agent_id: test_owned_agent_id("deleted-by-a-racing-delete"),
+            fingerprint: AgentFingerprint(Uuid::new_v4()),
+        };
+        for member in [&unreadable, &deleted] {
+            storage
+                .with_entity("worker", "add", "agent_id")
+                .add_to_set(KeyValueStorageNamespace::RunningWorkers, &shard_key, member)
+                .await
+                .unwrap();
+        }
+        let service = test_worker_service(
+            storage.clone(),
+            Arc::new(FakeOplogService {
+                unreadable: vec![unreadable.owned_agent_id.clone()],
+                ..FakeOplogService::default()
+            }),
+        );
+
+        let requested = StaleRequests::default();
+        let workers = service
+            .enum_workers_at_key(&shard_key, &requested.on_stale())
+            .await
+            .unwrap();
+        assert!(workers.is_empty());
+        assert_eq!(
+            requested.take(),
+            vec![(deleted.owned_agent_id, deleted.fingerprint)]
+        );
+        let remaining: Vec<RunningWorker> = storage
+            .with_entity("worker", "enum", "agent_id")
+            .members_of_set(KeyValueStorageNamespace::RunningWorkers, &shard_key)
+            .await
+            .unwrap();
+        assert_eq!(remaining, vec![unreadable]);
+    }
+
+    #[test]
+    async fn recovery_scan_leaves_an_agent_whose_metadata_read_finds_the_oplog_failed() {
+        let storage = Arc::new(InMemoryKeyValueStorage::new());
+        let shard_key = DefaultWorkerService::running_in_shard_key(&ShardId::new(0));
+        let agent = test_owned_agent_id("unreadable-after-identity");
+        let fingerprint = AgentFingerprint(Uuid::new_v4());
+        let member = RunningWorker {
+            owned_agent_id: agent.clone(),
+            fingerprint,
+        };
+        storage
+            .with_entity("worker", "add", "agent_id")
+            .add_to_set(
+                KeyValueStorageNamespace::RunningWorkers,
+                &shard_key,
+                &member,
+            )
+            .await
+            .unwrap();
+        let service = test_worker_service(
+            storage.clone(),
+            Arc::new(FakeOplogService {
+                initial_entries: HashMap::from([(
+                    (agent.clone(), AgentMode::Durable),
+                    test_create_entry(&agent, AgentMode::Durable, fingerprint),
+                )]),
+                unreadable_after_first_read: vec![agent.clone()],
+                ..FakeOplogService::default()
+            }),
+        );
+
+        let requested = StaleRequests::default();
+        let workers = service
+            .enum_workers_at_key(&shard_key, &requested.on_stale())
+            .await
+            .unwrap();
+
+        assert!(workers.is_empty());
+        assert_eq!(requested.take(), Vec::new());
+        assert_eq!(running_members(&storage, &shard_key).await, vec![member]);
     }
 
     /// The distinction that matters more than the skip: an entry we could not *read* is not an

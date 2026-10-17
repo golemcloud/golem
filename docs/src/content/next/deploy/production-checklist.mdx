@@ -58,7 +58,7 @@ This item applies to the fixed cluster.
 
 - [ ] Set the memory budget of the executor: `memory.system_memory_override` of the worker executor sets the memory that it uses for agent admission and eviction. It is not a hard limit.
 - [ ] Agent files are in temporary directories by default. An agent whose files changed recovers them by replaying its oplog. To keep agent files in snapshots, see [Filesystem snapshots](/next/operate/filesystem_snapshots).
-- [ ] At every start without the cache of Golem's built-in plugins and tools, the registry service downloads them from GitHub, and the start fails if it cannot. Allow outgoing HTTPS connections to GitHub, and keep the cache on persistent storage: `/var/lib/golem` for the all-in-one server, `GOLEM__BUILTIN_ARTIFACTS__CACHE_DIR` for the registry service of a fixed cluster. See [Built-in plugins and tools](/next/deploy/server#built-in-plugins-and-tools).
+- [ ] At every start without the cache of Golem's built-in plugins and tools, the registry service downloads them from GitHub, and the start fails if it cannot. Allow outgoing HTTPS connections to GitHub, and keep the cache on persistent storage: `/var/lib/golem` for the all-in-one server, `/app/builtin-artifacts` for the registry service of a fixed cluster. See [Built-in plugins and tools](/next/deploy/server#built-in-plugins-and-tools).
 - [ ] Pin the version of the binary or the images, and upgrade every service to the same version.
 - [ ] Collect the logs and the [metrics](/next/operate/metrics).
 

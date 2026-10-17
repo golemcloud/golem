@@ -25,11 +25,13 @@
 //! because a fixed list's decoder needs statements and because a named function
 //! can be shared by every place the same Go type occurs.
 
+use crate::bridge_gen::go::decl::declares;
 use crate::bridge_gen::go::go::{
     go_string, lower_first, to_field_ident, to_param_ident, unique_idents,
     unique_idents_with_reserved,
 };
 use crate::bridge_gen::go::go_writer::GoWriter;
+use crate::bridge_gen::go::type_ref;
 use crate::bridge_gen::go::{AgentNames, GoBridgeGenerator, content, method_uses_streams};
 use crate::bridge_gen::type_naming::user_supplied_fields;
 use crate::sdk_overrides::{GO_BRIDGE_MODULE, GO_CORE_MODULE, sdk_overrides};
@@ -117,7 +119,11 @@ impl<'g> Codecs<'g> {
                 Dir::Decode => format!("bridge.DecodeQuantity[{unit}]"),
             });
         }
-        if let Some(name) = g.named(typ) {
+        // A named type that is not a declaration of its own is an alias of its
+        // structure, and is converted by it.
+        if let Some(name) = g.named(typ)
+            && declares(g.resolve(typ))
+        {
             return Ok(format!("{}{name}", dir.prefix()));
         }
         let leaf = |name: &str| {
@@ -153,9 +159,6 @@ impl<'g> Codecs<'g> {
             | SchemaType::Secret { .. } => anyhow::bail!(
                 "an external client cannot pass a secret, a quota token or a permission card: they are host capabilities only an agent can hold"
             ),
-            SchemaType::Tuple { elements, .. } if elements.len() == 1 => {
-                self.func(dir, &elements[0])
-            }
             _ => self.helper(dir, resolved),
         }
     }
@@ -186,6 +189,19 @@ impl<'g> Codecs<'g> {
                     Dir::Encode => format!("return bridge.EncodeMultimodal(v, {item})"),
                     Dir::Decode => format!("return bridge.DecodeMultimodal(sv, {item})"),
                 }
+            }
+            (Dir::Encode, SchemaType::Option { inner, .. })
+                if type_ref::on_inline_cycle(inner, &|t| self.generator.resolve(t)) =>
+            {
+                format!("return bridge.EncodePointer(v, {})", self.func(dir, inner)?)
+            }
+            (Dir::Decode, SchemaType::Option { inner, .. })
+                if type_ref::on_inline_cycle(inner, &|t| self.generator.resolve(t)) =>
+            {
+                format!(
+                    "return bridge.DecodePointer(sv, {})",
+                    self.func(dir, inner)?
+                )
             }
             (Dir::Encode, SchemaType::Option { inner, .. }) => {
                 format!("return bridge.EncodeOption(v, {})", self.func(dir, inner)?)
@@ -752,7 +768,7 @@ impl GoBridgeGenerator {
         }
 
         for (typ, name) in self.named_types() {
-            if self.spelled_by_sdk(typ) {
+            if self.spelled_by_sdk(typ) || !declares(self.resolve(typ)) {
                 continue;
             }
             codecs.write_named(&name, self.resolve(typ))?;

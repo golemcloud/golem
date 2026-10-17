@@ -5,7 +5,11 @@ pub(all) suberror ReflectError {
   Discovery(String)
   Identity(String)
   Schema(String)
-  Json(String)
+  /// Canonical JSON was rejected. `path` locates the rejected value from the
+  /// packed root through record field names, variant case names, `ok`/`err`
+  /// result tags, and decimal list, tuple, flags, and map-entry indexes; a
+  /// map entry adds `0` for its key or `1` for its value.
+  Json(String, path~ : Array[String])
   Remote(AgentRpcError)
 } derive(Debug, Eq)
 

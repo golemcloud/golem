@@ -18,12 +18,15 @@ use crate::command::tool::{
     ToolReleaseSubcommand, ToolSubcommand,
 };
 use crate::command_handler::Handlers;
+use crate::command_handler::agent::insecure_connector;
 use crate::command_handler::agent::invocation_session::CliSessionRequestProvider;
 use crate::command_handler::log::render_command_output_document_masked;
 use crate::context::Context;
 use crate::error::PipedExitCode;
 use crate::error::service::MapServiceError;
-use crate::log::{LogColorize, log_action};
+use crate::log::{
+    LogColorize, end_for_closed_output, eprint_line, is_closed_pipe, log_action, print_text,
+};
 use crate::model::agent::RawAgentId;
 use crate::model::environment::{
     EnvironmentResolveMode, EnvironmentToolGrantCreateView, EnvironmentToolGrantDeleteView,
@@ -386,7 +389,7 @@ impl ToolCommandHandler {
                 .map_err(anyhow::Error::msg)?
             {
                 arguments::ParsedToolArguments::Help(help) => {
-                    print!("{help}");
+                    print_text(help);
                     return Ok(());
                 }
                 arguments::ParsedToolArguments::Invoke {
@@ -449,19 +452,24 @@ impl ToolCommandHandler {
                 Some(path) => Box::pin(tokio::fs::File::create(&path).await.map_err(|error| {
                     anyhow!("Failed to create tool stdout '{}': {error}", path.display())
                 })?),
-                None if args.stdout => Box::pin(tokio::io::stdout()),
+                None if args.stdout => Box::pin(EndsOnClosedPipe(tokio::io::stdout())),
                 None => Box::pin(tokio::io::sink()),
             };
             let mut stderr_writer: Pin<Box<dyn AsyncWrite + Send>> = match args.stderr_output {
                 Some(path) => Box::pin(tokio::fs::File::create(&path).await.map_err(|error| {
                     anyhow!("Failed to create tool stderr '{}': {error}", path.display())
                 })?),
-                None if args.stderr => Box::pin(tokio::io::stderr()),
+                None if args.stderr => Box::pin(EndsOnClosedPipe(tokio::io::stderr())),
                 None => Box::pin(tokio::io::sink()),
+            };
+            let connector = if self.ctx.allow_insecure() {
+                Some(insecure_connector()?)
+            } else {
+                None
             };
             let session = InvocationSession::open(
                 Arc::new(CliSessionRequestProvider::new(self.ctx.clone())),
-                None,
+                connector,
                 initial,
                 false,
                 Arc::new(()),
@@ -499,15 +507,12 @@ impl ToolCommandHandler {
                 } else {
                     self.ctx.format()
                 };
-                eprintln!(
-                    "{}",
-                    render_command_output_document_masked(
-                        format,
-                        self.ctx.should_colorize(),
-                        self.ctx.masking_config(),
-                        view,
-                    )?
-                );
+                eprint_line(render_command_output_document_masked(
+                    format,
+                    self.ctx.should_colorize(),
+                    self.ctx.masking_config(),
+                    view,
+                )?);
                 return finish_tool_report(failed);
             }
             if report_destination == LiveReportDestination::Suppress {
@@ -934,6 +939,47 @@ fn process_stdin_reader() -> Pin<Box<dyn AsyncRead + Send>> {
     Box::pin(tokio_util::io::StreamReader::new(
         tokio_stream::wrappers::ReceiverStream::new(receiver),
     ))
+}
+
+/// A standard stream of the process that ends the process when the reader has gone.
+struct EndsOnClosedPipe<W>(W);
+
+impl<W: AsyncWrite + Unpin> AsyncWrite for EndsOnClosedPipe<W> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let polled = Pin::new(&mut self.0).poll_write(cx, buf);
+        end_if_closed_pipe(&polled);
+        polled
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let polled = Pin::new(&mut self.0).poll_flush(cx);
+        end_if_closed_pipe(&polled);
+        polled
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let polled = Pin::new(&mut self.0).poll_shutdown(cx);
+        end_if_closed_pipe(&polled);
+        polled
+    }
+}
+
+fn end_if_closed_pipe<T>(polled: &std::task::Poll<std::io::Result<T>>) {
+    if let std::task::Poll::Ready(Err(error)) = polled
+        && is_closed_pipe(error)
+    {
+        end_for_closed_output();
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

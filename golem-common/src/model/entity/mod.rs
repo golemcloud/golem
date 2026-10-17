@@ -858,7 +858,6 @@ pub struct EntityInvocationRequest {
     pub operation: EntityInvocationDescriptor,
     pub principal: Principal,
     pub plan: EntityInvocationPlanReference,
-    pub assume_idempotence: bool,
     pub authority_wallet: Vec<StoredCard>,
 }
 
@@ -884,7 +883,6 @@ pub struct EntityInvocationScope {
     calling_principal: CallingAgentPrincipal,
     mode: InvocationExecutionMode,
     idempotency_key: IdempotencyKey,
-    assume_idempotence: bool,
     logical_key_positions: bool,
     stream_session_idempotency_key: IdempotencyKey,
     /// Wallet snapshot pinned in the immutable entity invocation `Start`.
@@ -908,7 +906,6 @@ impl EntityInvocationScope {
         calling_principal: CallingAgentPrincipal,
         mode: InvocationExecutionMode,
         idempotency_key: IdempotencyKey,
-        assume_idempotence: bool,
         logical_key_positions: bool,
         stream_session_idempotency_key: IdempotencyKey,
     ) -> Result<Self, String> {
@@ -949,7 +946,6 @@ impl EntityInvocationScope {
             calling_principal,
             mode,
             idempotency_key,
-            assume_idempotence,
             logical_key_positions,
             stream_session_idempotency_key,
             authority_wallet: Vec::new(),
@@ -1004,10 +1000,6 @@ impl EntityInvocationScope {
         &self.idempotency_key
     }
 
-    pub fn assume_idempotence(&self) -> bool {
-        self.assume_idempotence
-    }
-
     pub fn logical_key_positions(&self) -> bool {
         self.logical_key_positions
     }
@@ -1035,7 +1027,6 @@ struct EntityInvocationScopeWire {
     calling_principal: CallingAgentPrincipal,
     mode: InvocationExecutionMode,
     idempotency_key: IdempotencyKey,
-    assume_idempotence: bool,
     logical_key_positions: bool,
     stream_session_idempotency_key: IdempotencyKey,
 }
@@ -1053,7 +1044,6 @@ impl<'de> Deserialize<'de> for EntityInvocationScope {
             wire.calling_principal,
             wire.mode,
             wire.idempotency_key,
-            wire.assume_idempotence,
             wire.logical_key_positions,
             wire.stream_session_idempotency_key,
         )
@@ -1483,7 +1473,6 @@ impl From<EntityInvocationScope> for golem_api_grpc::proto::golem::worker::Entit
             mode: golem_api_grpc::proto::golem::worker::InvocationExecutionMode::from(value.mode)
                 as i32,
             idempotency_key: Some(value.idempotency_key.into()),
-            assume_idempotence: value.assume_idempotence,
             logical_key_positions: value.logical_key_positions,
             stream_session_idempotency_key: Some(value.stream_session_idempotency_key.into()),
         }
@@ -1523,7 +1512,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::EntityInvocationScope>
                 .idempotency_key
                 .ok_or("Missing EntityInvocationScope.idempotency_key")?
                 .into(),
-            value.assume_idempotence,
             value.logical_key_positions,
             value
                 .stream_session_idempotency_key

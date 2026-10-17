@@ -30,7 +30,7 @@ golem agent simulate-crash <AGENT_ID>
 ### When to Use
 
 - **Testing durability**: Verify that agent state survives crashes and is correctly restored
-- **Validating transactions**: Ensure saga-pattern compensations or atomic blocks behave correctly after a crash
+- **Validating sagas**: Ensure completed steps replay, incomplete calls recover at their own `Start`, and compensation-and-loop attempts keep their history after a crash
 - **Debugging recovery issues**: Reproduce crash-recovery scenarios to diagnose problems with state restoration
 
 ### Examples

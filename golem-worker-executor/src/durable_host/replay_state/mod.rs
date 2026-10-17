@@ -24,7 +24,6 @@ use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     AtomicOplogIndex, DurableFunctionType, DurableInvocationId, EntityAttribution, HostResponse,
     HostResponseGolemApiFork, LogLevel, OplogEntry, OplogIndex, OplogScopeProjection,
-    ScopeScanState,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
@@ -47,6 +46,10 @@ const CHUNK_SIZE: u64 = 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReplayEvent {
+    Projected {
+        event: Box<ReplayEvent>,
+        receipt: crate::worker::owner_wallet::WalletReplayReceipt,
+    },
     ReplayFinished,
     UpdateReplayed {
         new_revision: ComponentRevision,
@@ -55,6 +58,7 @@ pub enum ReplayEvent {
         new_phantom_id: Uuid,
     },
     InvocationWalletPinned {
+        oplog_index: OplogIndex,
         wallet_pin: InvocationWalletPin,
     },
     CardInstalled {
@@ -100,6 +104,27 @@ pub enum ReplayEvent {
     },
 }
 
+impl ReplayEvent {
+    pub(crate) fn kind(&self) -> &Self {
+        match self {
+            Self::Projected { event, .. } => event.kind(),
+            event => event,
+        }
+    }
+
+    pub(crate) fn into_projection(
+        self,
+    ) -> (
+        Self,
+        Option<crate::worker::owner_wallet::WalletReplayReceipt>,
+    ) {
+        match self {
+            Self::Projected { event, receipt } => (*event, Some(receipt)),
+            event => (event, None),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AgentInvocationStartedEntry {
     pub oplog_index: OplogIndex,
@@ -119,31 +144,27 @@ pub struct ClaimedConcurrentStart {
     pub timestamp: Timestamp,
 }
 
-pub(crate) enum ScopeStartClaimOutcome {
-    Claimed {
-        begin_index: OplogIndex,
-        handle: ReplayCallHandle,
-    },
-    Missing,
-    MissingSettling {
-        replay_target: OplogIndex,
-    },
-}
-
 /// Internal claim result. `Missing` is a completed semantic search with no matching `Start`;
 /// payload loading and decoding failures remain errors and must not enter missing-claim recovery.
 enum StartClaimAttempt {
     Claimed(ReplayCallHandle, Box<OplogEntry>),
     Blocked(BlockedOn),
     Missing,
-    MissingSettling { replay_target: OplogIndex },
+}
+
+/// The decision on a `Start` claim that found no match, taken after the cursor moved past the
+/// records of other owners ([`CursorTx::decide_missing_start`]).
+enum MissingStart {
+    /// The cursor reached the replay target: the call has no recorded `Start` and continues live.
+    ReplayEnded,
+    /// The cursor stopped at an entry that its owner can still consume.
+    Blocked(BlockedOn),
 }
 
 /// Why a claim cannot be decided in its current cursor transaction, and therefore what it waits
 /// for before it runs again.
 enum BlockedOn {
-    /// The cursor must move first: a reserved `CompletionDelivered` marker bounds the claim, or
-    /// the guest must consume a retained atomic Begin before a host subtask continues live.
+    /// The cursor must move first: a reserved `CompletionDelivered` marker bounds the claim.
     CursorProgress,
     /// No matching `Start` was found, but the entry at the cursor head belongs to an entity body
     /// that is still active. The body, or the supervisor that drains its recorded terminal, can
@@ -171,13 +192,9 @@ mod abandoned;
 mod claims;
 mod cursor;
 mod resolution;
-mod rollback;
 
 use abandoned::AbandonedStarts;
 pub(crate) use claims::{CustomStartClaimOutcome, ReplayStartClaimOutcome, StartClaim};
-#[cfg(test)]
-use rollback::atomic_rollback_region;
-pub use rollback::suffix_rollback_region;
 
 #[derive(Debug, Clone)]
 pub struct ReplayState {
@@ -214,7 +231,245 @@ enum ReplayTransitionPhase {
 }
 
 type CompletionMarkers = HashMap<OplogIndex, CompletionMarker>;
+type TransactionMarkers = HashMap<OplogIndex, std::collections::BTreeMap<OplogIndex, OplogEntry>>;
 type StreamObservationPositions = HashMap<OplogIndex, Option<OplogIndex>>;
+
+/// Storage coordinates only; neither a Start claim nor permission to publish an effect.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct HistoricalAttachmentWrite {
+    pub(crate) start: OplogIndex,
+    pub(crate) end: golem_common::model::oplog::attachment::AcceptedAttachmentWriteEnd,
+    pub(crate) original_typed_read: Option<OplogIndex>,
+}
+
+pub(crate) struct AttachmentRangeValidation {
+    index: OplogIndex,
+    observation: golem_common::model::oplog::attachment::ToolAttachmentReadObservation,
+    digest: [u8; 32],
+}
+
+#[derive(Debug, Clone)]
+struct AttachmentStartOwnership {
+    parent: Option<OplogIndex>,
+    observational_owner: Option<OplogIndex>,
+    custom_root: bool,
+}
+
+#[derive(Debug, Default, Clone)]
+struct ToolAttachmentReconstruction {
+    starts: std::collections::BTreeMap<OplogIndex, AttachmentStartOwnership>,
+    custom_subtree_members: HashSet<OplogIndex>,
+    accepted: HashMap<OplogIndex, OplogIndex>,
+    accepted_by_operation: HashMap<
+        (
+            golem_common::model::oplog::attachment::ToolAttachmentId,
+            u64,
+        ),
+        Option<OplogIndex>,
+    >,
+    completed: HashSet<OplogIndex>,
+    boundaries: HashSet<OplogIndex>,
+    requests: HashMap<
+        OplogIndex,
+        golem_common::model::oplog::payload::tool_attachment::ToolAttachmentWriteRequest,
+    >,
+    terminal_requests:
+        HashMap<OplogIndex, golem_common::model::oplog::attachment::ToolAttachmentId>,
+    history: golem_common::model::oplog::attachment::ToolAttachmentHistory,
+    source_observations: HashMap<OplogIndex, Vec<OplogIndex>>,
+    resident: HashMap<
+        golem_common::model::oplog::attachment::ToolAttachmentId,
+        super::tool::attachment::WeakAttachmentController,
+    >,
+    crossed_controls: HashSet<OplogIndex>,
+    controls_by_attachment:
+        HashMap<golem_common::model::oplog::attachment::ToolAttachmentId, Vec<OplogIndex>>,
+    pending_writes: HashMap<
+        golem_common::model::oplog::attachment::ToolAttachmentId,
+        std::collections::BTreeSet<OplogIndex>,
+    >,
+    logical_observations: HashMap<
+        (
+            golem_common::model::oplog::attachment::ToolAttachmentId,
+            IdempotencyKey,
+            u64,
+        ),
+        (OplogIndex, Option<OplogIndex>),
+    >,
+}
+
+impl ToolAttachmentReconstruction {
+    fn retain(&mut self, visible: impl Fn(OplogIndex) -> bool) {
+        self.crossed_controls.retain(|index| visible(*index));
+        self.boundaries.retain(|index| visible(*index));
+        self.starts.retain(|index, _| visible(*index));
+        self.accepted
+            .retain(|start, end| visible(*start) && visible(*end));
+        self.completed
+            .retain(|start| self.accepted.contains_key(start));
+        for (end, write) in &mut self.history.writes {
+            write.retained &=
+                visible(*end) && visible(write.start) && visible(write.attachment.creation_start);
+        }
+        for (index, control) in &mut self.history.controls {
+            control.retained &= visible(*index)
+                && control.producer_start.is_none_or(&visible)
+                && control.entity_parent_start.is_none_or(&visible)
+                && visible(control.attachment.creation_start);
+        }
+        self.index_logical_observations();
+    }
+
+    fn truncate(&mut self, target: OplogIndex) {
+        self.retain(|index| index <= target);
+        self.requests.retain(|index, _| *index <= target);
+        self.terminal_requests.retain(|index, _| *index <= target);
+        self.history.writes.retain(|index, _| *index <= target);
+        self.history
+            .observations
+            .retain(|index, _| *index <= target);
+        self.history.controls.retain(|index, _| *index <= target);
+        self.index_logical_observations();
+    }
+
+    fn index_logical_observations(&mut self) {
+        use golem_common::model::oplog::attachment::ToolAttachmentReadOutcome;
+
+        self.logical_observations.clear();
+        self.source_observations.clear();
+        self.controls_by_attachment.clear();
+        self.pending_writes.clear();
+        self.accepted_by_operation.clear();
+        self.custom_subtree_members.clear();
+        // Custom bodies own reconstruction of their observational effects. Their old
+        // descendants are replay-inert even when the custom root reexecutes live.
+        for (index, ownership) in &self.starts {
+            if ownership.custom_root
+                || ownership
+                    .parent
+                    .is_some_and(|parent| self.custom_subtree_members.contains(&parent))
+                || ownership
+                    .observational_owner
+                    .is_some_and(|owner| self.custom_subtree_members.contains(&owner))
+            {
+                self.custom_subtree_members.insert(*index);
+            }
+        }
+        for (index, control) in &self.history.controls {
+            if control.retained
+                && !control
+                    .producer_start
+                    .is_some_and(|start| self.custom_subtree_members.contains(&start))
+                && !control
+                    .entity_parent_start
+                    .is_some_and(|start| self.custom_subtree_members.contains(&start))
+            {
+                self.controls_by_attachment
+                    .entry(control.attachment)
+                    .or_default()
+                    .push(*index);
+            }
+        }
+        for (start, end) in &self.accepted {
+            if self.custom_subtree_members.contains(start) {
+                continue;
+            }
+            let request = &self.requests[start];
+            self.accepted_by_operation
+                .entry((request.attachment, request.operation_ordinal))
+                .and_modify(|entry| *entry = None)
+                .or_insert(Some(*start));
+            if !self.completed.contains(start) {
+                let attachment = self.history.writes[end].attachment;
+                self.pending_writes
+                    .entry(attachment)
+                    .or_default()
+                    .insert(*end);
+            }
+        }
+        for (index, read) in &self.history.observations {
+            if self.history.source_was_removed(read) {
+                continue;
+            }
+            let key = (
+                read.attachment,
+                read.logical_invocation.clone(),
+                read.ordinal,
+            );
+            if read.reobserves.is_none() {
+                self.logical_observations
+                    .insert(key.clone(), (*index, None));
+                if let ToolAttachmentReadOutcome::TypedChunk(end)
+                | ToolAttachmentReadOutcome::RawBytes { end, .. } = read.outcome
+                {
+                    self.source_observations
+                        .entry(end.0)
+                        .or_default()
+                        .push(*index);
+                }
+            }
+            if self.boundaries.contains(index)
+                && let Some((_, boundary)) = self.logical_observations.get_mut(&key)
+            {
+                *boundary = Some(*index);
+            }
+        }
+    }
+
+    fn refresh_controller(
+        &self,
+        attachment: golem_common::model::oplog::attachment::ToolAttachmentId,
+    ) -> Result<(), WorkerExecutorError> {
+        let Some(controller) = self
+            .resident
+            .get(&attachment)
+            .and_then(|weak| weak.upgrade())
+        else {
+            return Ok(());
+        };
+        for index in self
+            .controls_by_attachment
+            .get(&attachment)
+            .into_iter()
+            .flatten()
+        {
+            if !self.crossed_controls.contains(index) {
+                continue;
+            }
+            let pending = self
+                .pending_writes
+                .get(&attachment)
+                .is_some_and(|writes| writes.range(..*index).next().is_some());
+            controller
+                .restore_control(&self.history.controls[index].transition, *index, pending)
+                .map_err(|error| {
+                    WorkerExecutorError::runtime(format!(
+                        "cannot restore attachment control at {index}: {error}"
+                    ))
+                })?;
+        }
+        Ok(())
+    }
+
+    fn pending_under(&self, root: OplogIndex) -> bool {
+        self.accepted.keys().any(|start| {
+            if self.completed.contains(start) || self.custom_subtree_members.contains(start) {
+                return false;
+            }
+            let mut current = Some(*start);
+            while let Some(index) = current {
+                if index == root {
+                    return true;
+                }
+                current = self
+                    .starts
+                    .get(&index)
+                    .and_then(|ownership| ownership.parent);
+            }
+            false
+        })
+    }
+}
 
 /// The shared replay cursor: the position reached in the oplog, the target it replays up to, and
 /// every piece of state mutated while advancing it.
@@ -233,6 +488,7 @@ type StreamObservationPositions = HashMap<OplogIndex, Option<OplogIndex>>;
 struct ReplayCursor {
     owned_agent_id: OwnedAgentId,
     oplog: Arc<dyn Oplog>,
+    wallet: Option<Arc<crate::worker::owner_wallet::OwnerWallet>>,
     owner_tool_operations: Arc<crate::durable_host::tool::operation::OwnerToolOperations>,
     /// Serializes every cursor-advance transaction. A transaction that consumes a
     /// `CompletionDelivered` marker transfers this guard to the matching replay delivery token;
@@ -276,7 +532,8 @@ struct ReplayCursor {
     /// Guest-delivery outcomes for successful durable calls, keyed by the call's `Start` index.
     /// `CompletionDiscarded` prevents replay from delivering the response; `CompletionDelivered`
     /// delays delivery until the cursor reaches the marker's physical position. The marker always
-    /// lies after its `End`, so replay scans the visible oplog prefix before resolving any `End`.
+    /// lies after its `End`, so replay scans the visible replayed range (from the execution
+    /// snapshot, if any; see [`cursor::recovery_metadata_floor`]) before resolving any `End`.
     /// Target growth rescans exactly the newly visible range, and live marker recording extends
     /// the same map.
     ///
@@ -284,6 +541,14 @@ struct ReplayCursor {
     /// recorder is an owned tokio task that must not queue on the cursor lock, and all accesses
     /// are short synchronous map operations that never hold the lock across an `await`.
     completion_markers: std::sync::Mutex<CompletionMarkers>,
+    /// Transaction protocol markers are resolved by scope owner, never by cursor position.
+    transaction_markers: std::sync::Mutex<TransactionMarkers>,
+    /// Retained accepted output writes and their ancestor links, independent of Start claims
+    /// and acknowledgment disposition. Contains no argument or output bytes.
+    tool_attachment_reconstruction: std::sync::Mutex<ToolAttachmentReconstruction>,
+    /// Raw validation cannot use a consumer's offered-buffer slot: a consumer may
+    /// hold that slot while waiting for the producer acknowledgment being validated.
+    attachment_validation_slot: tokio::sync::Semaphore,
     /// Hashes of log entries persisted since the last read non-hint oplog entry, with their
     /// number of occurrences. A counted multiset (not a set) because large or repetitive
     /// stdout/stderr output regularly produces identical consecutive log entries, each of which
@@ -456,10 +721,13 @@ struct CursorState {
     /// such an entry it is auto-consumed like an awaited terminal instead of being handed to a
     /// positional reader; its resolver awaiter was registered at claim time.
     claimed_starts: HashSet<OplogIndex>,
-    /// Completed custom durable invocations replay as one logical subtree: once a root `Start`
-    /// is claimed, descendant `Start`s are replay-inert implementation details of that recorded
-    /// operation and are drained with their terminals while resolving the root. The map stores
-    /// every known member index for each root so nested descendants can be recognized by parent.
+    /// Replay-inert subtrees. Completed custom durable invocations replay as one logical subtree:
+    /// once a root `Start` is claimed, descendant `Start`s are replay-inert implementation details
+    /// of that recorded operation and are drained with their terminals while resolving the root.
+    /// The host-internal calls of a call that the guest cancelled before it delivered anything are
+    /// drained the same way: replay parks the call at its recorded cancellation and never makes
+    /// them again. The map stores every known member index for each root so nested descendants
+    /// can be recognized by parent.
     custom_subtrees: HashMap<OplogIndex, HashSet<OplogIndex>>,
     /// Durable-call `Start`s the cursor committed past before their owner claimed them, keyed by
     /// the `Start`'s index and kept in oplog order, together with the `End`/`Cancelled` that
@@ -474,7 +742,7 @@ struct CursorState {
     /// therefore commits past it and retains it here, where the owner's later claim finds it in
     /// oplog order ([`CursorTx::claim_retained_start`]). Entries leave this map when claimed, when
     /// the invocation-boundary reader folds them into the abandoned-record tolerance, or when a
-    /// target shrink / rollback deletes their region.
+    /// target shrink or external history cut deletes their region.
     retained_starts: std::collections::BTreeMap<OplogIndex, RetainedStart>,
 }
 

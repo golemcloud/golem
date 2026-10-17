@@ -374,6 +374,7 @@ object RdbmsCompileSpec extends ZIOSpecDefault {
         DbError.QueryParameterFailure("param"),
         DbError.QueryExecutionFailure("exec"),
         DbError.QueryResponseFailure("resp"),
+        DbError.ResourceLost("lost"),
         DbError.Other("other")
       )
       errors.foreach {
@@ -381,6 +382,7 @@ object RdbmsCompileSpec extends ZIOSpecDefault {
         case DbError.QueryParameterFailure(m) => Predef.assert(m == "param")
         case DbError.QueryExecutionFailure(m) => Predef.assert(m == "exec")
         case DbError.QueryResponseFailure(m)  => Predef.assert(m == "resp")
+        case DbError.ResourceLost(m)          => Predef.assert(m == "lost")
         case DbError.Other(m)                 => Predef.assert(m == "other")
       }
       assertCompletes

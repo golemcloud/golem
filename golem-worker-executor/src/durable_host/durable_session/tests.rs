@@ -34,6 +34,7 @@ use golem_schema::schema::{
 };
 use test_r::test;
 use uuid::Uuid;
+use wasmtime::component::TerminalConsumption;
 
 fn receive_guard_counts() -> (ReceiveGuard, Arc<std::sync::atomic::AtomicUsize>) {
     let live_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -235,9 +236,10 @@ async fn recorded_input_observation() -> (
     });
     for _ in 0..2 {
         oplog
-            .add(OplogEntry::NoOp {
+            .add(OplogEntry::RemoveRetryPolicy {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
+                name: "test-policy".to_string(),
             })
             .await
             .unwrap();
@@ -252,9 +254,10 @@ async fn recorded_input_observation() -> (
         .await
         .unwrap();
     oplog
-        .add(OplogEntry::NoOp {
+        .add(OplogEntry::RemoveRetryPolicy {
             timestamp: Timestamp::now_utc(),
             entity_parent_start_index: None,
+            name: "test-policy".to_string(),
         })
         .await
         .unwrap();
@@ -267,6 +270,8 @@ async fn recorded_input_observation() -> (
         golem_common::model::regions::DeletedRegions::default(),
         None,
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        oplog.current_oplog_index().await,
+        None,
     )
     .await
     .unwrap();
@@ -301,7 +306,6 @@ async fn recorded_input_observation() -> (
             cleanup_sink,
             trap_context: DurableCallTrapContext {
                 retry_from: OplogIndex::INITIAL,
-                in_atomic_region: false,
             },
             live_call_permit: LiveCallPermit::new(Arc::new(std::sync::atomic::AtomicUsize::new(0))),
         },
@@ -310,6 +314,7 @@ async fn recorded_input_observation() -> (
 }
 
 #[test]
+#[test_r::timeout("10s")]
 async fn cancelled_stream_read_reports_divergence_before_and_after_preparation() {
     for prepared in [false, true] {
         let (task, receiver) = recorded_input_observation().await;
@@ -1003,9 +1008,8 @@ async fn session_payload_reader_rejects_malformed_records_and_wrong_locators() {
             .contains("malformed")
     );
     let wrong = oplog
-        .add(OplogEntry::NoOp {
+        .add(OplogEntry::RecoverySucceeded {
             timestamp: golem_common::model::Timestamp::now_utc(),
-            entity_parent_start_index: None,
         })
         .await
         .unwrap();
@@ -1681,7 +1685,7 @@ async fn guest_owned_u8_output_uses_the_packed_durable_path() {
         .await
         .unwrap()
         .value;
-    let entries_before_output = oplog.length().await;
+    let entries_before_output = oplog.length().await.unwrap();
     let streams = StreamSession::new(
         producer.clone(),
         oplog.clone(),
@@ -1712,7 +1716,7 @@ async fn guest_owned_u8_output_uses_the_packed_durable_path() {
     publisher.publish_end().await.unwrap();
     drain_task.await.unwrap().unwrap();
     assert_eq!(
-        oplog.length().await,
+        oplog.length().await.unwrap(),
         entries_before_output + 2,
         "consecutive guest u8 values must share one durable item batch"
     );
@@ -1844,6 +1848,7 @@ async fn guest_byte_drain_after_partial_fork_replays_prefix_and_resumes_suffix()
             cut_index.as_u64() - OplogIndex::INITIAL.as_u64() + 1,
         )
         .await
+        .unwrap()
     {
         fork_oplog.add(entry).await.unwrap();
     }
@@ -2644,7 +2649,7 @@ async fn routed_attached_reads_retry_only_unavailable_without_changing_the_curso
     let source = RoutedAttachedStreamSegmentSource::new(
         rpc.clone(),
         mapping.clone(),
-        AuthCtx::System,
+        Arc::new(AuthCtx::System),
         producer,
     );
     let after = Some(StreamOffset::new(OplogIndex::from_u64(41), 3));
@@ -3425,7 +3430,7 @@ async fn foreign_cancellation_recovery_applies_persisted_intent_without_delete_r
         .await
         .unwrap();
         let streams = StreamSession::new(producer, oplog, session_reference, [])
-            .with_auth_ctx(AuthCtx::System)
+            .with_auth_ctx(Arc::new(AuthCtx::System))
             .with_rpc(Arc::new(AttachedProducerRpc {
                 producer: remote_producer,
                 cancellation_owner: None,
@@ -3470,7 +3475,8 @@ async fn foreign_cancellation_recovery_applies_persisted_intent_without_delete_r
             .unwrap();
         let after = remote_oplog.current_oplog_index().await;
         assert_eq!(after, before.next());
-        let OplogEntry::StreamCancel { record, .. } = remote_oplog.read(after).await else {
+        let OplogEntry::StreamCancel { record, .. } = remote_oplog.read(after).await.unwrap()
+        else {
             panic!("remote cancellation was not committed");
         };
         let record = remote_oplog.download_payload(record).await.unwrap();
@@ -3611,7 +3617,7 @@ async fn a_fenced_oplog_refuses_a_foreign_mapping_and_releases_the_session() {
         pending_read: Mutex::default(),
         read_requests: Mutex::default(),
     }))
-    .with_auth_ctx(AuthCtx::System);
+    .with_auth_ctx(Arc::new(AuthCtx::System));
 
     let committed_before = oplog.committed_length();
     // Both halves of what a real fenced oplog does: the latch every reader consults, and the
@@ -3741,7 +3747,7 @@ async fn retirement_from_foreign_rpc(prepare: bool) {
         pending_read: Mutex::default(),
         read_requests: Mutex::default(),
     }))
-    .with_auth_ctx(AuthCtx::System);
+    .with_auth_ctx(Arc::new(AuthCtx::System));
     if prepare {
         let error = tokio::time::timeout(
             Duration::from_secs(5),
@@ -4123,7 +4129,7 @@ async fn local_cancellation_intent_recovers_without_retry_and_preserves_terminal
             after.as_u64(),
             before.as_u64() + u64::from(!already_ended) + 1
         );
-        let OplogEntry::StreamSession { record, .. } = oplog.read(after).await else {
+        let OplogEntry::StreamSession { record, .. } = oplog.read(after).await.unwrap() else {
             panic!("missing cancellation applied receipt");
         };
         let StreamSessionRecord::ConsumerCancelApplied(receipt) =
@@ -4140,7 +4146,8 @@ async fn local_cancellation_intent_recovers_without_retry_and_preserves_terminal
                 .has_cancellation_intents()
         );
         if !already_ended {
-            let OplogEntry::StreamCancel { record, .. } = oplog.read(before.next()).await else {
+            let OplogEntry::StreamCancel { record, .. } = oplog.read(before.next()).await.unwrap()
+            else {
                 panic!("missing recovered cancellation terminal");
             };
             let record = oplog.download_payload(record).await.unwrap();
@@ -4157,6 +4164,72 @@ async fn local_cancellation_intent_recovers_without_retry_and_preserves_terminal
             .unwrap();
         assert_eq!(oplog.current_oplog_index().await, after);
     }
+}
+
+/// Closes an input after one item with a cancel of `role` and `reason`, or with a clean end, and
+/// reads it to its end through a producer that observes producer cancels. Returns what the
+/// observer holds after the end was read.
+async fn producer_cancel_observed_at_the_end_of_input(
+    cancel: Option<(StreamCancelRole, StreamCancelReason)>,
+) -> Option<StreamCancelReason> {
+    let (producer, streams, reader, handle) = backpressured_session_input().await;
+    drop(reader);
+    match cancel {
+        Some((role, reason)) => producer
+            .cancel_open(None, handle.stream_id, role, reason, None)
+            .await
+            .unwrap(),
+        None => {
+            producer
+                .end(None, handle.stream_id, 1, StreamEndResult::Ok)
+                .await
+                .unwrap();
+        }
+    }
+    let observed = Arc::new(OnceLock::new());
+    let mut consumer = DurableInputProducer::new(
+        streams
+            .endpoint(handle, 0, SessionStreamRole::Input)
+            .await
+            .unwrap(),
+    )
+    .with_producer_cancel_observer(observed.clone());
+    assert!(matches!(
+        consumer.receive_value(None).await.unwrap(),
+        Some(DurableInputEvent::Item(SchemaValue::U8(1)))
+    ));
+    assert_eq!(observed.get(), None);
+    // A producer cancel still ends the input for every reader.
+    assert!(matches!(
+        consumer.receive_value(None).await.unwrap(),
+        Some(DurableInputEvent::End)
+    ));
+    observed.get().copied()
+}
+
+#[test]
+#[test_r::timeout("15s")]
+async fn a_producer_cancel_ends_the_input_and_reports_its_reason() {
+    assert_eq!(
+        producer_cancel_observed_at_the_end_of_input(Some((
+            StreamCancelRole::InputProducer,
+            StreamCancelReason::Cancelled,
+        )))
+        .await,
+        Some(StreamCancelReason::Cancelled)
+    );
+    assert_eq!(
+        producer_cancel_observed_at_the_end_of_input(Some((
+            StreamCancelRole::InputProducer,
+            StreamCancelReason::SourceUnavailable,
+        )))
+        .await,
+        Some(StreamCancelReason::SourceUnavailable)
+    );
+    assert_eq!(
+        producer_cancel_observed_at_the_end_of_input(None).await,
+        None
+    );
 }
 
 #[test]
@@ -5916,6 +5989,8 @@ async fn guest_byte_journal_covers_only_observed_bytes_after_reconstruction() {
         golem_common::model::regions::DeletedRegions::default(),
         None,
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        oplog.current_oplog_index().await,
+        None,
     )
     .await
     .unwrap();
@@ -5932,7 +6007,6 @@ async fn guest_byte_journal_covers_only_observed_bytes_after_reconstruction() {
         cleanup_sink: cleanup_sink.clone(),
         trap_context: DurableCallTrapContext {
             retry_from: OplogIndex::INITIAL,
-            in_atomic_region: false,
         },
         live_call_permit: LiveCallPermit::new(live_calls.clone()),
     }
@@ -6013,7 +6087,6 @@ async fn guest_byte_journal_covers_only_observed_bytes_after_reconstruction() {
         cleanup_sink,
         trap_context: DurableCallTrapContext {
             retry_from: OplogIndex::INITIAL,
-            in_atomic_region: false,
         },
         live_call_permit: LiveCallPermit::new(live_calls),
     }
@@ -6303,6 +6376,7 @@ async fn check_dropped_input_cancellation(unread_resource: bool) {
     for (_, entry) in oplog
         .read_exact(OplogIndex::INITIAL, current.as_u64())
         .await
+        .unwrap()
     {
         match entry {
             OplogEntry::StreamSession { record, .. } => {
@@ -6570,6 +6644,7 @@ async fn guest_authored_input_cancellation_targets_the_current_attachment_epoch(
     for (_, entry) in oplog
         .read_exact(OplogIndex::INITIAL, current.as_u64())
         .await
+        .unwrap()
     {
         if let OplogEntry::StreamSession { record, .. } = entry
             && let StreamSessionRecord::ConsumerCancelIntent(record) =
@@ -6731,7 +6806,7 @@ async fn reverted_caller_reestablishes_foreign_reader_without_repeating_invocati
         consumer.invocation.callee_fingerprint = consumer.fingerprint;
         let owner = OwnedAgentId::new(consumer.environment_id, &consumer.agent_id);
         let oplog = Arc::new(TestOplog::default());
-        oplog.add(OplogEntry::no_op(None)).await.unwrap();
+        oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
         let local = DurableStreamStore::load(
             oplog.clone(),
             consumer.environment_id,
@@ -6881,7 +6956,7 @@ async fn reverted_caller_reestablishes_foreign_reader_without_repeating_invocati
         .with_consumer_invocation(consumer.invocation.clone())
         .with_consumer_journal(Arc::new(TestConsumerJournal(oplog)))
         .with_rpc(rpc.clone())
-        .with_auth_ctx(AuthCtx::System);
+        .with_auth_ctx(Arc::new(AuthCtx::System));
         streams.recover_session_mappings().await.unwrap();
         assert_eq!(streams.attachment_epoch, 8);
         let reader_id = streams
@@ -6985,7 +7060,7 @@ async fn detached_continuation_activates_prepared_and_new_foreign_inputs() {
             read_requests: Mutex::default(),
         });
         let oplog = Arc::new(TestOplog::default());
-        oplog.add(OplogEntry::no_op(None)).await.unwrap();
+        oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
         let local = DurableStreamStore::load(
             oplog.clone(),
             consumer.environment_id,
@@ -7034,7 +7109,7 @@ async fn detached_continuation_activates_prepared_and_new_foreign_inputs() {
         )
         .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())))
         .with_rpc(rpc.clone())
-        .with_auth_ctx(AuthCtx::System)
+        .with_auth_ctx(Arc::new(AuthCtx::System))
         .with_attachment(1, attempt_id);
         streams
             .prepare_foreign_mapping(
@@ -7054,7 +7129,7 @@ async fn detached_continuation_activates_prepared_and_new_foreign_inputs() {
             target.callee.agent_id = "forked-callee".into();
             target.callee_fingerprint = AgentFingerprint::new();
         } else {
-            oplog.add(OplogEntry::no_op(None)).await.unwrap();
+            oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
         }
         let owner = OwnedAgentId::new(target.callee_environment_id, &target.callee);
         let cut = DurableStreamStore::prepare_fork_cut(
@@ -7102,7 +7177,7 @@ async fn detached_continuation_activates_prepared_and_new_foreign_inputs() {
         )
         .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())))
         .with_rpc(rpc.clone())
-        .with_auth_ctx(AuthCtx::System);
+        .with_auth_ctx(Arc::new(AuthCtx::System));
         let pinned = streams.clone().with_attachment(1, attempt_id);
         assert!(pinned.ensure_current_attachment().await.is_err());
         let topologies = streams
@@ -7186,7 +7261,7 @@ async fn detached_continuation_activates_prepared_and_new_foreign_inputs() {
         )
         .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())))
         .with_rpc(rpc.clone())
-        .with_auth_ctx(AuthCtx::System);
+        .with_auth_ctx(Arc::new(AuthCtx::System));
         recovered.recover_session_mappings().await.unwrap();
         let mut nested = recovered
             .stream_reader(
@@ -8376,6 +8451,7 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
     for (index, entry) in oplog
         .read_exact(OplogIndex::INITIAL, current.as_u64())
         .await
+        .unwrap()
     {
         match entry {
             OplogEntry::StreamSession { record, .. } => {
@@ -8547,6 +8623,7 @@ async fn nested_consumer_mappings_preserve_the_parent_input_or_output_role() {
     for (index, entry) in oplog
         .read_exact(OplogIndex::INITIAL, current.as_u64())
         .await
+        .unwrap()
     {
         let OplogEntry::StreamSession { record, .. } = entry else {
             continue;
@@ -8700,7 +8777,7 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
         pending_read: Mutex::default(),
         read_requests: Mutex::default(),
     }))
-    .with_auth_ctx(AuthCtx::System);
+    .with_auth_ctx(Arc::new(AuthCtx::System));
     let attachment = StreamAttachmentKey {
         attachment_id: AttachmentId::primary(
             consumer.environment_id,
@@ -10207,7 +10284,7 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
         pending_read: Mutex::default(),
         read_requests: Mutex::default(),
     }))
-    .with_auth_ctx(AuthCtx::System);
+    .with_auth_ctx(Arc::new(AuthCtx::System));
     streams
         .append_record(
             None,
@@ -11140,7 +11217,7 @@ async fn local_reader_forwarding_reuses_only_retained_destinations_after_fork_an
                     1 => intent_index,
                     _ => oplog.current_oplog_index().await,
                 };
-                oplog.add(OplogEntry::no_op(None)).await.unwrap();
+                oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
                 oplog.commit(CommitLevel::Always).await.unwrap();
                 let source_owner = OwnedAgentId::new(owner.environment_id, &owner.agent_id);
                 let mut target_owner = source_owner.clone();
@@ -11181,6 +11258,7 @@ async fn local_reader_forwarding_reuses_only_retained_destinations_after_fork_an
                     for (_, entry) in oplog
                         .read_exact(OplogIndex::INITIAL, cut_index.as_u64())
                         .await
+                        .unwrap()
                     {
                         copied.add(entry).await.unwrap();
                     }
@@ -11497,7 +11575,7 @@ async fn forwarded_output_intents_survive_result_and_nested_publication_cuts() {
                     after_value,
                     after_item,
                 ][retained_stage];
-                oplog.add(OplogEntry::no_op(None)).await.unwrap();
+                oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
                 oplog.commit(CommitLevel::Always).await.unwrap();
                 let source_owner = OwnedAgentId::new(owner.environment_id, &owner.agent_id);
                 let mut target_owner = source_owner.clone();
@@ -11538,6 +11616,7 @@ async fn forwarded_output_intents_survive_result_and_nested_publication_cuts() {
                     for (_, entry) in oplog
                         .read_exact(OplogIndex::INITIAL, cut_index.as_u64())
                         .await
+                        .unwrap()
                     {
                         copied.add(entry).await.unwrap();
                     }
@@ -11766,7 +11845,7 @@ async fn nested_forwarding_respects_recovery_and_concurrent_terminal_fences() {
         let destination = StreamSession::new(producer.clone(), oplog.clone(), reference, [])
             .with_consumer_invocation(owner.invocation.clone())
             .with_consumer_journal(journal)
-            .with_auth_ctx(AuthCtx::System)
+            .with_auth_ctx(Arc::new(AuthCtx::System))
             .with_rpc(Arc::new(AttachedProducerRpc {
                 producer: source.clone(),
                 cancellation_owner: (mode == "terminal_failure").then(|| producer.clone()),
@@ -11976,7 +12055,7 @@ async fn nested_forwarding_respects_recovery_and_concurrent_terminal_fences() {
             )
             .with_consumer_invocation(owner.invocation.clone())
             .with_consumer_journal(Arc::new(TestConsumerJournal(oplog)))
-            .with_auth_ctx(AuthCtx::System)
+            .with_auth_ctx(Arc::new(AuthCtx::System))
             .with_rpc(destination.rpc.clone().unwrap());
             destination.recover_session_mappings().await.unwrap();
             assert_eq!(

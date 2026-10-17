@@ -83,7 +83,7 @@ The registry service creates the `default` plan from `initial_plans.default` at 
 
 ## Built-in plugins and tools
 
-At every start, the registry service provisions Golem's built-in plugins and tools from its cache, and downloads from the [golem-builtins releases](https://github.com/golemcloud/golem-builtins/releases) on GitHub each one that the cache does not have or that does not match its checksum. If a download fails, the registry service does not start. In the image, the cache is `/app/builtin-artifacts`, inside the container, so every new registry container downloads them again, which takes about a minute and needs outgoing HTTPS connections to GitHub. To keep the cache, set `GOLEM__BUILTIN_ARTIFACTS__CACHE_DIR` to a directory on a persistent volume.
+At every start, the registry service provisions Golem's built-in plugins and tools from its cache, and downloads from the [golem-builtins releases](https://github.com/golemcloud/golem-builtins/releases) on GitHub each one that the cache does not have or that does not match its checksum. If a download fails, the registry service does not start. In the image, the cache is `/app/builtin-artifacts`, inside the container, so every new registry container downloads them again, which takes about a minute and needs outgoing HTTPS connections to GitHub. To keep the cache, mount a persistent volume at `/app/builtin-artifacts`. The volume must be writable by uid 65534, the user of the image; see [User and Permissions](/next/deploy#user-and-permissions).
 
 ## Shard manager
 

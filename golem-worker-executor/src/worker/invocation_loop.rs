@@ -43,7 +43,7 @@ use crate::worker::invocation::{
 };
 use crate::worker::status_checkpointer;
 use crate::worker::{
-    CreateWorkerInstanceError, FinalWorkerState, HydratedInvocation,
+    CreateWorkerInstanceError, FinalWorkerState, HydratedInvocation, InvocationFailureDecision,
     PendingLiveInvocationDisposition, PendingWorkerInterrupt, QueuedWorkerInvocation,
     RetryDecision, RunningAgent, RunningAgentRuntime, RunningWorker, UnloadReason, UnloadRequest,
     Worker, WorkerCommand, WorkerRunningAgent, WorkerTrace,
@@ -2071,9 +2071,10 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     recovery_failure = Some(error);
                     break;
                 }
-                CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(decision) => {
+                CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(decision, failure) => {
                     final_decision = Some(decision);
                     cleanup_ephemeral_worker = true;
+                    recovery_failure = failure;
                     break;
                 }
                 CommandOutcome::Continue | CommandOutcome::WaitForWakeup => {}
@@ -2477,6 +2478,12 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             match resume_replay_result {
                 Ok(None) => CommandOutcome::Continue,
                 Ok(Some(decision)) => CommandOutcome::BreakInnerLoop(decision),
+                Err(WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::Jump,
+                }) => {
+                    store.data().set_suspended();
+                    CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
+                }
                 Err(err) => {
                     warn!("Failed to resume replay: {err}");
                     store.data().set_suspended();
@@ -3157,6 +3164,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         return failed_agent_invocation_outcome(
                             self.parent.agent_mode(),
                             RetryDecision::Immediate,
+                            None,
                         );
                     }
                 }
@@ -3168,11 +3176,17 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 )
             }
             Err(WorkerExecutorError::Interrupted { kind }) => {
-                let decision = self
+                let decision = match self
                     .store
                     .data_mut()
                     .on_invocation_failure(&full_function_name, &TrapType::Interrupt(kind))
-                    .await;
+                    .await
+                {
+                    InvocationFailureDecision::Retry(decision) => decision,
+                    InvocationFailureDecision::Infrastructure(error) => {
+                        return self.invocation_failure_recovery(&error);
+                    }
+                };
                 // A lost shard writes nothing more: a terminal streaming-session failure would end
                 // an invocation the shard's new owner resumes.
                 if matches!(kind, InterruptKind::ShardLost) {
@@ -3193,7 +3207,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         .changed()
                         .notify_waiters();
                 }
-                failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
+                failed_agent_invocation_outcome(self.parent.agent_mode(), decision, None)
             }
             // Intercepted before the arm below, which would flatten it into an
             // `AgentError::InternalError` and append an `Error` entry to the very oplog that
@@ -3208,19 +3222,30 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await;
                 CommandOutcome::BreakInnerLoop(RetryDecision::None)
             }
+            // The oplog refused the end of the invocation: the agent recovers, or stops with the
+            // error, instead of recording an `Error` entry in the oplog that refused it.
+            Err(
+                error @ (WorkerExecutorError::RecoveryRequired { .. }
+                | WorkerExecutorError::OplogFailed { .. }),
+            ) => {
+                self.parent.record_recovery_failure(&error).await;
+                self.invocation_failure_recovery(&error)
+            }
             Err(error) => {
                 // A refused commit is the `OplogFenced` arm above; this is the hook's own failure.
                 let trap_type = TrapType::Error {
                     error: AgentError::InternalError(error.to_string()),
                     retry_from: OplogIndex::INITIAL,
-                    in_atomic_region: false,
-                    atomic_region_had_side_effects: false,
                     semantic_trap_retry_override: None,
                 };
-                self.store
+                if let InvocationFailureDecision::Infrastructure(error) = self
+                    .store
                     .data_mut()
                     .on_invocation_failure(&full_function_name, &trap_type)
-                    .await;
+                    .await
+                {
+                    return self.invocation_failure_recovery(&error);
+                }
                 if self.uses_streams
                     && let Err(error) = self
                         .parent
@@ -3235,9 +3260,21 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         .changed()
                         .notify_waiters();
                 }
-                failed_agent_invocation_outcome(self.parent.agent_mode(), RetryDecision::None)
+                failed_agent_invocation_outcome(
+                    self.parent.agent_mode(),
+                    RetryDecision::None,
+                    Some(&error),
+                )
             }
         }
+    }
+
+    /// What the loop does when the oplog storage did not answer while the failure of an invocation
+    /// was recorded: the agent recovers after a delay, and the invocation stays pending.
+    fn invocation_failure_recovery(&self, error: &WorkerExecutorError) -> CommandOutcome {
+        infrastructure_failure_outcome(self.parent.retired_for_lost_shard(), error, || {
+            self.parent.next_infrastructure_recovery_delay()
+        })
     }
 
     /// The logic handling an agent invocation that did not succeed.
@@ -3252,6 +3289,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .durable_ctx()
             .begin_stream_runtime_teardown();
         let details = format!("{result:?}");
+        let oplog_failure = result.as_ref().err().cloned();
         let owner_failure = self
             .store
             .data()
@@ -3262,19 +3300,17 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             owner_failure = ?owner_failure,
             "Classifying failed invocation after tool owner arbitration"
         );
-        if let Some(error) = selected_infrastructure_recovery_error(
+        if let Some(error) = crate::durable_host::selected_recovery_error(
             owner_failure.as_ref(),
             self.parent.agent_mode(),
             &result,
         ) {
             self.parent.record_recovery_failure(error).await;
-            if self.parent.retired_for_lost_shard() {
-                return CommandOutcome::BreakInnerLoop(RetryDecision::None);
-            }
-            return CommandOutcome::BreakInnerLoopForRecovery {
-                decision: RetryDecision::Delayed(self.parent.next_infrastructure_recovery_delay()),
-                error: error.clone(),
-            };
+            return infrastructure_failure_outcome(
+                self.parent.retired_for_lost_shard(),
+                error,
+                || self.parent.next_infrastructure_recovery_delay(),
+            );
         }
         let trap_type = match owner_failure {
             Some(OwnerFailureWinner::Trap(trap)) => Some(trap),
@@ -3283,8 +3319,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 Some(TrapType::from_worker_executor_error::<Ctx>(
                     error,
                     OplogIndex::INITIAL,
-                    false,
-                    false,
                     self.parent.agent_mode(),
                 ))
             }
@@ -3293,8 +3327,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 Err(error) => Some(TrapType::from_worker_executor_error::<Ctx>(
                     error,
                     OplogIndex::INITIAL,
-                    false,
-                    false,
                     self.parent.agent_mode(),
                 )),
             },
@@ -3304,12 +3336,17 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Some(TrapType::Interrupt(InterruptKind::ShardLost))
         );
         let decision = match trap_type {
-            Some(trap_type) => {
-                self.store
-                    .data_mut()
-                    .on_invocation_failure(full_function_name, &trap_type)
-                    .await
-            }
+            Some(trap_type) => match self
+                .store
+                .data_mut()
+                .on_invocation_failure(full_function_name, &trap_type)
+                .await
+            {
+                InvocationFailureDecision::Retry(decision) => decision,
+                InvocationFailureDecision::Infrastructure(error) => {
+                    return self.invocation_failure_recovery(&error);
+                }
+            },
             None => RetryDecision::None,
         };
         // A lost shard writes nothing more: a terminal streaming-session failure would end an
@@ -3334,7 +3371,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .notify_waiters();
         }
 
-        failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
+        failed_agent_invocation_outcome(self.parent.agent_mode(), decision, oplog_failure.as_ref())
     }
 
     /// Try to perform the save-snapshot step of a manual update on the worker
@@ -3875,8 +3912,10 @@ enum CommandOutcome {
         decision: RetryDecision,
         error: WorkerExecutorError,
     },
-    /// Break from the inner loop and archive the stopped ephemeral worker's oplog.
-    BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision),
+    /// Break from the inner loop and archive the stopped ephemeral worker's oplog. The error, when
+    /// there is one, is the failure that stopped the agent, which its waiters get instead of the
+    /// ordinary end of an ephemeral agent.
+    BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision, Option<WorkerExecutorError>),
     /// Continue processing in the inner loop
     Continue,
     /// Stop draining for now and wait for the next command or idle timer wakeup
@@ -3898,34 +3937,50 @@ fn successful_agent_invocation_outcome(
     kind: AgentInvocationKind,
 ) -> CommandOutcome {
     if should_cleanup_terminal_ephemeral_invocation(agent_mode, is_agent_component, kind) {
-        CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None)
+        CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None, None)
     } else {
         CommandOutcome::Continue
     }
 }
 
+/// What the loop does after an invocation that did not succeed. A terminal ephemeral failure
+/// archives the oplog; when the oplog of the agent failed (`oplog_failure`), the waiters get that
+/// error with its cause.
 fn failed_agent_invocation_outcome(
     agent_mode: AgentMode,
     decision: RetryDecision,
+    oplog_failure: Option<&WorkerExecutorError>,
 ) -> CommandOutcome {
     if agent_mode == AgentMode::Ephemeral && decision == RetryDecision::None {
-        CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(decision)
+        CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(
+            decision,
+            oplog_failure
+                .filter(|error| matches!(error, WorkerExecutorError::OplogFailed { .. }))
+                .cloned(),
+        )
     } else {
         CommandOutcome::BreakInnerLoop(decision)
     }
 }
 
-fn selected_infrastructure_recovery_error<'a>(
-    owner_failure: Option<&OwnerFailureWinner>,
-    agent_mode: AgentMode,
-    result: &'a Result<InvokeResult, WorkerExecutorError>,
-) -> Option<&'a WorkerExecutorError> {
-    if owner_failure.is_some() || agent_mode != AgentMode::Durable {
-        return None;
-    }
-    match result {
-        Err(error @ WorkerExecutorError::RecoveryRequired { .. }) => Some(error),
-        _ => None,
+/// What the loop does after an infrastructure failure of an invocation. A lost shard stops the
+/// agent: its waiters are sent to the new owner. An oplog that failed for good stops the agent too,
+/// because a reconstruction would fail again, and the stop gives the waiters that error, with its
+/// cause. Any other failure reconstructs the agent after `delay`.
+fn infrastructure_failure_outcome(
+    retired_for_lost_shard: bool,
+    error: &WorkerExecutorError,
+    delay: impl FnOnce() -> Duration,
+) -> CommandOutcome {
+    if retired_for_lost_shard {
+        CommandOutcome::BreakInnerLoop(RetryDecision::None)
+    } else if matches!(error, WorkerExecutorError::OplogFailed { .. }) {
+        CommandOutcome::BreakOuterLoop(Some(error.clone()))
+    } else {
+        CommandOutcome::BreakInnerLoopForRecovery {
+            decision: RetryDecision::Delayed(delay()),
+            error: error.clone(),
+        }
     }
 }
 
@@ -4065,17 +4120,23 @@ async fn measured_check<Ctx: WorkerCtx>(
 }
 
 /// What the loop does after a periodic snapshot record did not reach the oplog. A payload that
-/// was not made skips the snapshot. A refused write means the shard has a new owner, so the loop
-/// stops; any other failed write retries.
+/// was not made skips the snapshot. A refused write means the shard has a new owner: the loop
+/// stops without an error. A failed archive write is latched, so every later write fails the same
+/// way, and an oplog that does not read for good cannot go on either: the loop stops and carries
+/// the error to the stop, which gives it to the waiting callers. Any other failed write, and an
+/// oplog whose storage did not answer, retries.
 fn periodic_failure_outcome(failure: &PeriodicFailure) -> CommandOutcome {
     match failure {
         PeriodicFailure::Entry(_) => CommandOutcome::Continue,
         PeriodicFailure::Write(OplogError::Fenced(_)) => {
             CommandOutcome::BreakInnerLoop(RetryDecision::None)
         }
-        PeriodicFailure::Write(OplogError::Payload(_) | OplogError::Maintenance(_)) => {
-            CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
-        }
+        PeriodicFailure::Write(error) => match error.agent_failure() {
+            Some(failure @ WorkerExecutorError::OplogFailed { .. }) => {
+                CommandOutcome::BreakOuterLoop(Some(failure))
+            }
+            Some(_) | None => CommandOutcome::BreakInnerLoop(RetryDecision::Immediate),
+        },
     }
 }
 
@@ -4246,13 +4307,13 @@ impl<Ctx: WorkerCtx> UpdateSnapshotHost for UpdateHost<'_, '_, Ctx> {
 mod tests {
     use super::{
         CommandOutcome, ConcurrentAgentPermitState, InvocationLoop, OwnerFailureWinner,
-        PeriodicFailure, PeriodicSnapshotAction, ResidentAgentOwnership, ResidentWakeup,
+        PeriodicFailure, PeriodicSnapshotAction, ResidentAgentOwnership, ResidentWakeup, TrapType,
         apply_delayed_retry_commands_after_unload, catch_invocation_loop_panic,
         close_usage_before_delete, coalesce_delayed_retry_prefix, coalesce_filesystem_limit_update,
-        failed_agent_invocation_outcome, finish_filesystem_limit_unload, measured_capture,
-        periodic_failure_outcome, periodic_snapshot_failure_outcome, publish_unload_outcome,
-        run_invocation_loop_task, selected_infrastructure_recovery_error, snapshot_action_at,
-        snapshot_baseline_timestamp, spawn_module_owned_unload,
+        failed_agent_invocation_outcome, finish_filesystem_limit_unload,
+        infrastructure_failure_outcome, measured_capture, periodic_failure_outcome,
+        periodic_snapshot_failure_outcome, publish_unload_outcome, run_invocation_loop_task,
+        snapshot_action_at, snapshot_baseline_timestamp, spawn_module_owned_unload,
         successful_agent_invocation_outcome, unload_resident_agent_ownership,
         wait_for_resident_wakeup, with_end,
     };
@@ -4317,6 +4378,16 @@ mod tests {
             expected_epoch: golem_common::model::ShardEpoch(2),
             actual_epoch: Some(golem_common::model::ShardEpoch(3)),
         };
+        let archive_write = crate::services::oplog::OplogError::ArchiveWrite(
+            crate::services::oplog::ArchiveWriteFailure {
+                agent_id: golem_common::model::AgentId {
+                    component_id: golem_common::model::component::ComponentId::new(),
+                    agent_id: "archive-write".to_string(),
+                },
+                level: 0,
+                details: "failed".to_string(),
+            },
+        );
         assert_eq!(
             [
                 PeriodicFailure::Entry("no payload".to_string()),
@@ -4324,6 +4395,7 @@ mod tests {
                 PeriodicFailure::Write(crate::services::oplog::OplogError::Payload(
                     "failed".to_string()
                 )),
+                PeriodicFailure::Write(archive_write.clone()),
             ]
             .each_ref()
             .map(periodic_failure_outcome),
@@ -4331,6 +4403,7 @@ mod tests {
                 CommandOutcome::Continue,
                 CommandOutcome::BreakInnerLoop(RetryDecision::None),
                 CommandOutcome::BreakInnerLoop(RetryDecision::Immediate),
+                CommandOutcome::BreakOuterLoop(Some(WorkerExecutorError::from(archive_write))),
             ]
         );
     }
@@ -5309,30 +5382,136 @@ mod tests {
         assert_eq!(drops.load(Ordering::Acquire), 2);
     }
 
+    /// A periodic snapshot record that did not reach the oplog because its storage did not answer
+    /// retries; an oplog that does not read for good stops the loop with its error.
     #[test]
-    fn infrastructure_recovery_branch_selects_only_durable_unowned_failure() {
+    fn a_periodic_record_over_an_unavailable_oplog_retries() {
+        use crate::services::oplog::{
+            OplogError, OplogReadError, OplogReadSource, UnreadableOplog,
+        };
+        let agent_id = golem_common::model::AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: "periodic".to_string(),
+        };
+        let unreadable = |error| {
+            PeriodicFailure::Write(OplogError::Unreadable(UnreadableOplog::new(
+                &agent_id, error,
+            )))
+        };
+        assert_eq!(
+            periodic_failure_outcome(&unreadable(OplogReadError::source_unavailable(
+                OplogReadSource::Archive(1),
+                "outage",
+            ))),
+            CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
+        );
+        let corruption = UnreadableOplog::new(
+            &agent_id,
+            OplogReadError::corruption(OplogReadSource::Archive(1), "bad chunk"),
+        );
+        assert_eq!(
+            periodic_failure_outcome(&PeriodicFailure::Write(OplogError::Unreadable(
+                corruption.clone()
+            ))),
+            CommandOutcome::BreakOuterLoop(Some(WorkerExecutorError::from(corruption)))
+        );
+    }
+
+    /// An oplog that failed for good stops the agent and carries the error to the stop, which
+    /// gives it to the waiting callers. A lost shard stops without it, and a failure that a later
+    /// attempt can pass reconstructs the agent after the delay.
+    #[test]
+    fn an_unreadable_oplog_stops_the_agent_on_a_shard_it_still_owns() {
+        let unreadable = WorkerExecutorError::oplog_failed(
+            golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId::new(),
+                agent_id: "unreadable".to_string(),
+            },
+            "corrupt oplog data from archive layer 1",
+        );
+        let recovery = WorkerExecutorError::recovery_required("payload backend unavailable");
+        let delay = || Duration::from_secs(3);
+        assert_eq!(
+            infrastructure_failure_outcome(false, &unreadable, delay),
+            CommandOutcome::BreakOuterLoop(Some(unreadable.clone()))
+        );
+        assert_eq!(
+            infrastructure_failure_outcome(true, &recovery, delay),
+            CommandOutcome::BreakInnerLoop(RetryDecision::None)
+        );
+        assert_eq!(
+            infrastructure_failure_outcome(false, &recovery, delay),
+            CommandOutcome::BreakInnerLoopForRecovery {
+                decision: RetryDecision::Delayed(Duration::from_secs(3)),
+                error: recovery.clone(),
+            }
+        );
+    }
+
+    #[test]
+    fn infrastructure_recovery_branch_preserves_owner_and_ephemeral_priority() {
         let result = Err(WorkerExecutorError::recovery_required(
             "payload backend unavailable",
         ));
         assert!(
-            selected_infrastructure_recovery_error(None, AgentMode::Durable, &result).is_some()
+            crate::durable_host::selected_recovery_error(None, AgentMode::Durable, &result)
+                .is_some()
         );
         assert!(
-            selected_infrastructure_recovery_error(None, AgentMode::Ephemeral, &result).is_none()
+            crate::durable_host::selected_recovery_error(None, AgentMode::Ephemeral, &result)
+                .is_none()
         );
 
         let shard_loss = OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost);
         assert!(
-            selected_infrastructure_recovery_error(Some(&shard_loss), AgentMode::Durable, &result)
-                .is_none()
+            crate::durable_host::selected_recovery_error(
+                Some(&shard_loss),
+                AgentMode::Durable,
+                &result
+            )
+            .is_none()
         );
         let quota_throttle =
             OwnerFailureWinner::Lifecycle(InterruptKind::Suspend(Timestamp::now_utc()));
         assert!(
-            selected_infrastructure_recovery_error(
+            crate::durable_host::selected_recovery_error(
                 Some(&quota_throttle),
                 AgentMode::Durable,
                 &result,
+            )
+            .is_none()
+        );
+        for winner in [
+            OwnerFailureWinner::Trap(TrapType::Exit),
+            OwnerFailureWinner::Infrastructure(WorkerExecutorError::runtime("earlier failure")),
+        ] {
+            assert!(
+                crate::durable_host::selected_recovery_error(
+                    Some(&winner),
+                    AgentMode::Durable,
+                    &result
+                )
+                .is_none()
+            );
+        }
+        let recovery = WorkerExecutorError::recovery_required("elected recovery failure");
+        let winner = OwnerFailureWinner::Infrastructure(recovery.clone());
+        let interrupted = Err(WorkerExecutorError::Interrupted {
+            kind: InterruptKind::Jump,
+        });
+        assert_eq!(
+            crate::durable_host::selected_recovery_error(
+                Some(&winner),
+                AgentMode::Durable,
+                &interrupted
+            ),
+            Some(&recovery)
+        );
+        assert!(
+            crate::durable_host::selected_recovery_error(
+                Some(&winner),
+                AgentMode::Ephemeral,
+                &interrupted
             )
             .is_none()
         );
@@ -5342,7 +5521,8 @@ mod tests {
     fn infrastructure_recovery_branch_rejects_ordinary_infrastructure_error() {
         let result = Err(WorkerExecutorError::runtime("host task failed"));
         assert!(
-            selected_infrastructure_recovery_error(None, AgentMode::Durable, &result).is_none()
+            crate::durable_host::selected_recovery_error(None, AgentMode::Durable, &result)
+                .is_none()
         );
     }
 
@@ -5430,8 +5610,6 @@ mod tests {
             timed_out: false,
             error: AgentError::InternalError("boom".to_string()),
             retry_from: OplogIndex::INITIAL,
-            in_atomic_region: false,
-            atomic_region_had_side_effects: false,
             semantic_trap_retry_override: None,
         });
 
@@ -5459,7 +5637,7 @@ mod tests {
                 true,
                 AgentInvocationKind::AgentMethod
             ),
-            CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None)
+            CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None, None)
         );
     }
 
@@ -5490,15 +5668,56 @@ mod tests {
     #[test]
     fn terminal_ephemeral_failure_requests_archive_drain() {
         assert_eq!(
-            failed_agent_invocation_outcome(AgentMode::Ephemeral, RetryDecision::None),
-            CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None)
+            failed_agent_invocation_outcome(AgentMode::Ephemeral, RetryDecision::None, None),
+            CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None, None)
+        );
+    }
+
+    /// A terminal ephemeral failure caused by the oplog of the agent gives its waiters that
+    /// error, with the archive layer and the storage cause, instead of the ordinary end of an
+    /// ephemeral agent. Any other failure keeps the ordinary end.
+    #[test]
+    fn a_terminal_ephemeral_oplog_failure_reaches_the_waiters() {
+        let oplog_failure = WorkerExecutorError::oplog_failed(
+            golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId::new(),
+                agent_id: "ephemeral".to_string(),
+            },
+            "failed to write oplog data to archive layer 0: injected",
+        );
+        assert_eq!(
+            failed_agent_invocation_outcome(
+                AgentMode::Ephemeral,
+                RetryDecision::None,
+                Some(&oplog_failure)
+            ),
+            CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(
+                RetryDecision::None,
+                Some(oplog_failure.clone())
+            )
+        );
+        assert_eq!(
+            failed_agent_invocation_outcome(
+                AgentMode::Ephemeral,
+                RetryDecision::None,
+                Some(&WorkerExecutorError::runtime("guest failure"))
+            ),
+            CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None, None)
+        );
+        assert_eq!(
+            failed_agent_invocation_outcome(
+                AgentMode::Durable,
+                RetryDecision::None,
+                Some(&oplog_failure)
+            ),
+            CommandOutcome::BreakInnerLoop(RetryDecision::None)
         );
     }
 
     #[test]
     fn retryable_ephemeral_failure_does_not_request_archive_drain() {
         assert_eq!(
-            failed_agent_invocation_outcome(AgentMode::Ephemeral, RetryDecision::Immediate),
+            failed_agent_invocation_outcome(AgentMode::Ephemeral, RetryDecision::Immediate, None),
             CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
         );
     }
@@ -5506,7 +5725,7 @@ mod tests {
     #[test]
     fn terminal_durable_failure_does_not_request_archive_drain() {
         assert_eq!(
-            failed_agent_invocation_outcome(AgentMode::Durable, RetryDecision::None),
+            failed_agent_invocation_outcome(AgentMode::Durable, RetryDecision::None, None),
             CommandOutcome::BreakInnerLoop(RetryDecision::None)
         );
     }
@@ -5531,7 +5750,7 @@ mod tests {
                 true,
                 AgentInvocationKind::AgentMethod
             ),
-            CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None)
+            CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None, None)
         );
     }
 }

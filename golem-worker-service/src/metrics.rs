@@ -174,8 +174,64 @@ pub fn record_openapi_generation(outcome: &'static str, duration: Duration) {
         .observe(duration.as_secs_f64());
 }
 
+static HTTP_API_ACTIVE_STREAMS: LazyLock<IntGaugeVec> = LazyLock::new(|| {
+    register_int_gauge_vec!(
+        "http_api_active_streams",
+        "Number of open long-lived HTTP API streams by kind",
+        &["kind"]
+    )
+    .unwrap()
+});
+
+#[derive(Clone, Copy)]
+pub enum HttpApiStreamKind {
+    Connect,
+    InvocationSession,
+    DurableStreamSse,
+}
+
+impl HttpApiStreamKind {
+    const ALL: [Self; 3] = [
+        Self::Connect,
+        Self::InvocationSession,
+        Self::DurableStreamSse,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Connect => "connect",
+            Self::InvocationSession => "invocation_session",
+            Self::DurableStreamSse => "durable_stream_sse",
+        }
+    }
+}
+
+/// Counts one open HTTP API stream in `http_api_active_streams` until it is dropped, so a
+/// stream that ends by cancellation or failure leaves the gauge as well.
+pub struct ActiveHttpApiStream(HttpApiStreamKind);
+
+impl ActiveHttpApiStream {
+    pub fn open(kind: HttpApiStreamKind) -> Self {
+        HTTP_API_ACTIVE_STREAMS
+            .with_label_values(&[kind.label()])
+            .inc();
+        Self(kind)
+    }
+}
+
+impl Drop for ActiveHttpApiStream {
+    fn drop(&mut self) {
+        HTTP_API_ACTIVE_STREAMS
+            .with_label_values(&[self.0.label()])
+            .dec();
+    }
+}
+
 pub fn register_all() -> Registry {
     VERSION_INFO.with_label_values(&[golem_version()]).inc();
+    for kind in HttpApiStreamKind::ALL {
+        HTTP_API_ACTIVE_STREAMS.with_label_values(&[kind.label()]);
+    }
 
     default_registry().clone()
 }

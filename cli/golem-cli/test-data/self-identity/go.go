@@ -50,7 +50,6 @@ func define[Id named](name string, snapshot golem.SnapshotPolicy) {
 	def := golem.DefineAgent[Id](golem.Spec{Name: name, Snapshot: snapshot})
 	observe := def.Method[golem.Unit, string]("observe")
 	status := def.Method[golem.Unit, string]("status")
-	checkpoint := def.Method[golem.Unit, string]("checkpoint")
 	forkNamed := def.Method[ForkNamedIn, golem.Unit]("forkNamed")
 	forkSelf := def.Method[golem.Unit, string]("forkSelf")
 
@@ -63,7 +62,7 @@ func define[Id named](name string, snapshot golem.SnapshotPolicy) {
 		if strings.Contains(self, `"parent"`) {
 			golem.MustGetSelfMetadata()
 		} else {
-			durability.OplogIndex()
+			durability.GenerateIdempotencyKey()
 		}
 		ctx.State.Trace = append(ctx.State.Trace, self)
 		return self
@@ -83,9 +82,6 @@ func define[Id named](name string, snapshot golem.SnapshotPolicy) {
 			"addressed":        addressed.AgentID.AgentID,
 		})
 		return string(out)
-	})
-	impl.Handle(checkpoint, func(*golem.Context[state], golem.Unit) string {
-		return strconv.FormatUint(durability.OplogIndex(), 10)
 	})
 	impl.Handle(forkNamed, func(ctx *golem.Context[state], in ForkNamedIn) golem.Unit {
 		cutoff := golem.Must(strconv.ParseUint(in.Cutoff, 10, 64))
