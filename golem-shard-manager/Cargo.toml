@@ -64,7 +64,6 @@ uuid = { workspace = true }
 figment = { workspace = true }
 golem-test-framework = { workspace = true }
 rcgen = { workspace = true, features = ["pem"] }
-testcontainers = { workspace = true }
 test-r = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-test = { workspace = true }

@@ -4516,7 +4516,6 @@ dependencies = [
  "sqlx",
  "tempfile",
  "test-r",
- "testcontainers",
  "thiserror 2.0.20",
  "tokio",
  "tokio-stream",

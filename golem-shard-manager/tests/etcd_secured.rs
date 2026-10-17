@@ -17,27 +17,34 @@
 //!
 //! Each test starts its own etcd container, so the shared etcd of `etcd_backed` is never changed.
 
-use etcd_client::{Permission, TlsOptions};
+use crate::Tracing;
+use etcd_client::{ConnectOptions, Permission, TlsOptions};
 use golem_shard_manager::config::{
     EtcdConfig, EtcdPassword, EtcdTlsConfig, GrpcApiConfig, PersistenceConfig, ShardManagerConfig,
 };
 use golem_shard_manager::{Deployment, RunDetails, STATE_KEY};
+use golem_test_framework::components::etcd::docker_etcd::{DockerEtcd, DockerEtcdOptions};
 use rcgen::{
     BasicConstraints, CertificateParams, CertifiedIssuer, DnType, ExtendedKeyUsagePurpose, IsCa,
     Issuer, KeyPair, KeyUsagePurpose,
 };
 use std::path::PathBuf;
 use std::time::Duration;
-use test_r::test;
-use testcontainers::core::{IntoContainerPort, WaitFor};
-use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, GenericImage, ImageExt};
+use test_r::{inherit_test_dep, test, test_dep};
 use tokio::sync::oneshot;
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-const LEASE_TTL: Duration = Duration::from_secs(2);
+inherit_test_dep!(Tracing);
+
+/// Long enough that a hand-over which waits for a lease to expire, instead of a revoke, misses
+/// [`HANDOVER_BOUND`] by seconds, even on a slow runner.
+const LEASE_TTL: Duration = Duration::from_secs(10);
+/// A revoke hands over within this time; waiting out a lease takes most of [`LEASE_TTL`].
+const HANDOVER_BOUND: Duration = Duration::from_secs(5);
+/// Time for a second replica to start and queue its campaign behind the leader.
+const STANDBY_SETTLE: Duration = Duration::from_secs(2);
 const REQUEST_TIMEOUT: Duration = Duration::from_millis(500);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 /// A replica whose etcd connection cannot work must say so within this time, not wait forever.
@@ -45,9 +52,14 @@ const REFUSAL_TIMEOUT: Duration = Duration::from_secs(15);
 const USER: &str = "golem";
 const PASSWORD: &str = "s3cret-etcd-password";
 
+#[derive(Debug)]
+pub struct CryptoProvider;
+
 /// The shard manager binary installs the ring provider in `main`; a test process must do it itself.
-fn install_crypto_provider() {
+#[test_dep(scope = PerWorker)]
+fn crypto_provider() -> CryptoProvider {
     let _ = rustls::crypto::ring::default_provider().install_default();
+    CryptoProvider
 }
 
 /// A test CA, an etcd server certificate and a client certificate signed by it, and a second CA
@@ -102,6 +114,23 @@ impl TestPki {
             server_name: None,
         }
     }
+
+    /// TLS that checks etcd's certificate against the test CA, with no client certificate.
+    fn server_tls(&self) -> TlsOptions {
+        TlsOptions::new().ca_certificate(etcd_client::Certificate::from_pem(&self.ca_pem))
+    }
+
+    /// [`Self::server_tls`] with the test client certificate.
+    fn client_tls(&self) -> TlsOptions {
+        self.server_tls().identity(etcd_client::Identity::from_pem(
+            std::fs::read(self.path("client.pem")).unwrap(),
+            std::fs::read(self.path("client-key.pem")).unwrap(),
+        ))
+    }
+
+    fn etcd_options(&self) -> DockerEtcdOptions {
+        DockerEtcdOptions::new().with_tls(self.server_pem.clone(), self.server_key_pem.clone())
+    }
 }
 
 fn test_ca(name: &str) -> CertifiedIssuer<'static, KeyPair> {
@@ -128,109 +157,39 @@ fn signed_by(
     (cert.pem(), key.serialize_pem())
 }
 
-/// One etcd server in its own container, with TLS and either client certificates or
-/// authentication.
-struct SecuredEtcd {
-    _container: ContainerAsync<GenericImage>,
-    url: String,
+/// TLS on the client port, and etcd requires a client certificate signed by the test CA.
+async fn mtls_etcd(pki: &TestPki) -> DockerEtcd {
+    DockerEtcd::new_with_options(pki.etcd_options().with_client_cert_auth(pki.ca_pem.clone())).await
 }
 
-impl SecuredEtcd {
-    /// TLS on the client port, and etcd requires a client certificate signed by the test CA.
-    async fn with_mtls(pki: &TestPki) -> Self {
-        let mut flags = base_flags("https");
-        flags.extend(
-            [
-                "--cert-file=/certs/server.pem",
-                "--key-file=/certs/server-key.pem",
-                "--trusted-ca-file=/certs/ca.pem",
-                "--client-cert-auth",
-            ]
-            .map(String::from),
-        );
-        let image = GenericImage::new("gcr.io/etcd-development/etcd", "v3.5.17")
-            .with_exposed_port(2379.tcp())
-            .with_wait_for(WaitFor::message_on_stderr("ready to serve client requests"))
-            .with_copy_to("/certs/server.pem", pki.server_pem.clone().into_bytes())
-            .with_copy_to(
-                "/certs/server-key.pem",
-                pki.server_key_pem.clone().into_bytes(),
-            )
-            .with_copy_to("/certs/ca.pem", pki.ca_pem.clone().into_bytes())
-            .with_cmd(flags);
-        let container = image.start().await.expect("Cannot start the TLS etcd");
-        let port = container.get_host_port_ipv4(2379).await.unwrap();
-        Self {
-            _container: container,
-            url: format!("https://localhost:{port}"),
-        }
-    }
-
-    /// TLS on the client port without client certificates, and authentication enabled: user
-    /// `USER` may read and write `/golem/` only.
-    async fn with_auth(pki: &TestPki, extra_flags: &[&str]) -> Self {
-        let mut flags = base_flags("https");
-        flags.extend(
-            [
-                "--cert-file=/certs/server.pem",
-                "--key-file=/certs/server-key.pem",
-            ]
-            .map(String::from),
-        );
-        flags.extend(extra_flags.iter().map(|flag| flag.to_string()));
-        let image = GenericImage::new("gcr.io/etcd-development/etcd", "v3.5.17")
-            .with_exposed_port(2379.tcp())
-            .with_wait_for(WaitFor::message_on_stderr("ready to serve client requests"))
-            .with_copy_to("/certs/server.pem", pki.server_pem.clone().into_bytes())
-            .with_copy_to(
-                "/certs/server-key.pem",
-                pki.server_key_pem.clone().into_bytes(),
-            )
-            .with_cmd(flags);
-        let container = image.start().await.expect("Cannot start the auth etcd");
-        let port = container.get_host_port_ipv4(2379).await.unwrap();
-        let url = format!("https://localhost:{port}");
-
-        let client = connect_with_retry(&url, pki).await;
-        let mut auth = client.auth_client();
-        auth.role_add(USER).await.unwrap();
-        auth.role_grant_permission(USER, Permission::read_write("/golem/").with_prefix())
-            .await
-            .unwrap();
-        auth.user_add(USER, PASSWORD, None).await.unwrap();
-        auth.user_grant_role(USER, USER).await.unwrap();
-        auth.user_add("root", "root-password", None).await.unwrap();
-        auth.user_grant_role("root", "root").await.unwrap();
-        auth.auth_enable().await.unwrap();
-
-        Self {
-            _container: container,
-            url,
-        }
-    }
+/// TLS on the client port without client certificates, and authentication enabled: user `USER`
+/// may read and write `/golem/` only.
+async fn auth_etcd(pki: &TestPki, options: DockerEtcdOptions) -> DockerEtcd {
+    let etcd = DockerEtcd::new_with_options(options).await;
+    let client = connect_with_retry(
+        &etcd.client_url(),
+        ConnectOptions::new().with_tls(pki.server_tls()),
+    )
+    .await;
+    let mut auth = client.auth_client();
+    auth.role_add(USER).await.unwrap();
+    auth.role_grant_permission(USER, Permission::read_write("/golem/").with_prefix())
+        .await
+        .unwrap();
+    auth.user_add(USER, PASSWORD, None).await.unwrap();
+    auth.user_grant_role(USER, USER).await.unwrap();
+    auth.user_add("root", "root-password", None).await.unwrap();
+    auth.user_grant_role("root", "root").await.unwrap();
+    auth.auth_enable().await.unwrap();
+    etcd
 }
 
-fn base_flags(scheme: &str) -> Vec<String> {
-    [
-        "/usr/local/bin/etcd".to_string(),
-        "--name=golem-test-etcd".to_string(),
-        "--data-dir=/etcd-data".to_string(),
-        format!("--listen-client-urls={scheme}://0.0.0.0:2379"),
-        format!("--advertise-client-urls={scheme}://127.0.0.1:2379"),
-        "--listen-peer-urls=http://0.0.0.0:2380".to_string(),
-        "--initial-advertise-peer-urls=http://0.0.0.0:2380".to_string(),
-        "--initial-cluster=golem-test-etcd=http://0.0.0.0:2380".to_string(),
-        "--initial-cluster-state=new".to_string(),
-    ]
-    .to_vec()
-}
-
-/// The port forward can come up slightly after etcd logs that it is ready.
-async fn connect_with_retry(url: &str, pki: &TestPki) -> etcd_client::Client {
+/// An etcd client for the test's own reads and setup; it waits until etcd answers, because the
+/// port forward can come up slightly after etcd logs that it is ready.
+async fn connect_with_retry(url: &str, options: ConnectOptions) -> etcd_client::Client {
     timeout(STARTUP_TIMEOUT, async {
         loop {
-            let options = etcd_client::ConnectOptions::new().with_tls(server_tls(pki));
-            if let Ok(client) = etcd_client::Client::connect([url], Some(options)).await
+            if let Ok(client) = etcd_client::Client::connect([url], Some(options.clone())).await
                 && client.clone().status().await.is_ok()
             {
                 return client;
@@ -240,6 +199,22 @@ async fn connect_with_retry(url: &str, pki: &TestPki) -> etcd_client::Client {
     })
     .await
     .expect("etcd did not answer")
+}
+
+/// A root client of an etcd from [`auth_etcd`].
+async fn inspection_client_auth(url: &str, pki: &TestPki) -> etcd_client::Client {
+    connect_with_retry(
+        url,
+        ConnectOptions::new()
+            .with_tls(pki.server_tls())
+            .with_user("root", "root-password"),
+    )
+    .await
+}
+
+/// A client of an etcd from [`mtls_etcd`].
+async fn inspection_client_tls(url: &str, pki: &TestPki) -> etcd_client::Client {
+    connect_with_retry(url, ConnectOptions::new().with_tls(pki.client_tls())).await
 }
 
 fn config(etcd: EtcdConfig) -> ShardManagerConfig {
@@ -265,11 +240,6 @@ fn tls_config(url: &str, tls: EtcdTlsConfig) -> ShardManagerConfig {
         tls: Some(tls),
         ..EtcdConfig::default()
     })
-}
-
-/// TLS that checks etcd's certificate against the test CA, with no client certificate.
-fn server_tls(pki: &TestPki) -> TlsOptions {
-    TlsOptions::new().ca_certificate(etcd_client::Certificate::from_pem(&pki.ca_pem))
 }
 
 fn auth_config(url: &str, password: &str, pki: &TestPki) -> ShardManagerConfig {
@@ -368,7 +338,7 @@ async fn elect_write_and_hand_over(config: ShardManagerConfig, mut inspect: etcd
     state_is_written(&mut inspect).await;
 
     let (_standby, standby_details) = spawn_replica(config);
-    tokio::time::sleep(LEASE_TTL).await;
+    tokio::time::sleep(STANDBY_SETTLE).await;
     leader
         .leadership
         .as_ref()
@@ -377,7 +347,7 @@ async fn elect_write_and_hand_over(config: ShardManagerConfig, mut inspect: etcd
         .await
         .expect("A graceful step-down must work on a secured etcd");
 
-    let standby = timeout(LEASE_TTL, standby_details)
+    let standby = timeout(HANDOVER_BOUND, standby_details)
         .await
         .expect("A revoke hands over well inside one lease TTL")
         .expect("The standby task ended without a result")
@@ -385,53 +355,26 @@ async fn elect_write_and_hand_over(config: ShardManagerConfig, mut inspect: etcd
     assert!(standby.leadership.is_some());
 }
 
-async fn inspection_client_tls(url: &str, pki: &TestPki) -> etcd_client::Client {
-    let tls = TlsOptions::new()
-        .ca_certificate(etcd_client::Certificate::from_pem(&pki.ca_pem))
-        .identity(etcd_client::Identity::from_pem(
-            std::fs::read(pki.path("client.pem")).unwrap(),
-            std::fs::read(pki.path("client-key.pem")).unwrap(),
-        ));
-    timeout(STARTUP_TIMEOUT, async {
-        loop {
-            let options = etcd_client::ConnectOptions::new().with_tls(tls.clone());
-            if let Ok(client) = etcd_client::Client::connect([url], Some(options)).await
-                && client.clone().status().await.is_ok()
-            {
-                return client;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await
-    .expect("The TLS etcd did not answer")
-}
-
-async fn inspection_client_auth(url: &str, pki: &TestPki) -> etcd_client::Client {
-    let options = etcd_client::ConnectOptions::new()
-        .with_tls(server_tls(pki))
-        .with_user("root", "root-password");
-    etcd_client::Client::connect([url], Some(options))
-        .await
-        .expect("Cannot connect as root")
+#[test]
+async fn a_replica_elects_writes_and_hands_over_over_mtls(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
+    let pki = TestPki::new();
+    let etcd = mtls_etcd(&pki).await;
+    let inspect = inspection_client_tls(&etcd.client_url(), &pki).await;
+    elect_write_and_hand_over(tls_config(&etcd.client_url(), pki.mtls()), inspect).await;
 }
 
 #[test]
-async fn a_replica_elects_writes_and_hands_over_over_mtls() {
-    install_crypto_provider();
+async fn a_server_name_checks_the_certificate_of_an_ip_endpoint(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
     let pki = TestPki::new();
-    let etcd = SecuredEtcd::with_mtls(&pki).await;
-    let inspect = inspection_client_tls(&etcd.url, &pki).await;
-    elect_write_and_hand_over(tls_config(&etcd.url, pki.mtls()), inspect).await;
-}
-
-#[test]
-async fn a_server_name_checks_the_certificate_of_an_ip_endpoint() {
-    install_crypto_provider();
-    let pki = TestPki::new();
-    let etcd = SecuredEtcd::with_mtls(&pki).await;
-    let inspect = inspection_client_tls(&etcd.url, &pki).await;
-    let ip_url = etcd.url.replace("localhost", "127.0.0.1");
+    let etcd = mtls_etcd(&pki).await;
+    let inspect = inspection_client_tls(&etcd.client_url(), &pki).await;
+    let ip_url = etcd.client_url().replace("localhost", "127.0.0.1");
     let config = tls_config(
         &ip_url,
         EtcdTlsConfig {
@@ -445,12 +388,14 @@ async fn a_server_name_checks_the_certificate_of_an_ip_endpoint() {
 #[test]
 // The server certificate does not name 127.0.0.1, so without `server_name` the check fails: this
 // is what makes the test above prove that `server_name` is used.
-async fn an_ip_endpoint_without_a_server_name_does_not_start() {
-    install_crypto_provider();
+async fn an_ip_endpoint_without_a_server_name_does_not_start(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
     let pki = TestPki::new();
-    let etcd = SecuredEtcd::with_mtls(&pki).await;
-    let _ready = inspection_client_tls(&etcd.url, &pki).await;
-    let ip_url = etcd.url.replace("localhost", "127.0.0.1");
+    let etcd = mtls_etcd(&pki).await;
+    let _ready = inspection_client_tls(&etcd.client_url(), &pki).await;
+    let ip_url = etcd.client_url().replace("localhost", "127.0.0.1");
     let message = refused(tls_config(&ip_url, pki.mtls())).await;
     assert!(
         message.contains("NotValidForName"),
@@ -459,13 +404,15 @@ async fn an_ip_endpoint_without_a_server_name_does_not_start() {
 }
 
 #[test]
-async fn a_replica_without_a_client_certificate_does_not_start() {
-    install_crypto_provider();
+async fn a_replica_without_a_client_certificate_does_not_start(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
     let pki = TestPki::new();
-    let etcd = SecuredEtcd::with_mtls(&pki).await;
-    let _ready = inspection_client_tls(&etcd.url, &pki).await;
+    let etcd = mtls_etcd(&pki).await;
+    let _ready = inspection_client_tls(&etcd.client_url(), &pki).await;
     let message = refused(tls_config(
-        &etcd.url,
+        &etcd.client_url(),
         EtcdTlsConfig {
             client_cert_file: None,
             client_key_file: None,
@@ -480,13 +427,15 @@ async fn a_replica_without_a_client_certificate_does_not_start() {
 }
 
 #[test]
-async fn a_replica_that_trusts_another_ca_does_not_start() {
-    install_crypto_provider();
+async fn a_replica_that_trusts_another_ca_does_not_start(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
     let pki = TestPki::new();
-    let etcd = SecuredEtcd::with_mtls(&pki).await;
-    let _ready = inspection_client_tls(&etcd.url, &pki).await;
+    let etcd = mtls_etcd(&pki).await;
+    let _ready = inspection_client_tls(&etcd.client_url(), &pki).await;
     let message = refused(tls_config(
-        &etcd.url,
+        &etcd.client_url(),
         EtcdTlsConfig {
             ca_cert_file: pki.path("other-ca.pem"),
             ..pki.mtls()
@@ -500,12 +449,14 @@ async fn a_replica_that_trusts_another_ca_does_not_start() {
 }
 
 #[test]
-async fn a_replica_elects_writes_and_hands_over_with_etcd_auth() {
-    install_crypto_provider();
+async fn a_replica_elects_writes_and_hands_over_with_etcd_auth(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
     let pki = TestPki::new();
-    let etcd = SecuredEtcd::with_auth(&pki, &[]).await;
-    let inspect = inspection_client_auth(&etcd.url, &pki).await;
-    let mut config = auth_config(&etcd.url, PASSWORD, &pki);
+    let etcd = auth_etcd(&pki, pki.etcd_options()).await;
+    let inspect = inspection_client_auth(&etcd.client_url(), &pki).await;
+    let mut config = auth_config(&etcd.client_url(), PASSWORD, &pki);
     if let PersistenceConfig::Etcd(etcd) = &mut config.persistence {
         // The leader compacts after each pass; a retention of one revision makes the first pass
         // compact, as the user whose role covers `/golem/` only.
@@ -536,11 +487,13 @@ async fn history_is_compacted(mut client: etcd_client::Client) {
 }
 
 #[test]
-async fn a_replica_with_a_wrong_password_does_not_start() {
-    install_crypto_provider();
+async fn a_replica_with_a_wrong_password_does_not_start(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
     let pki = TestPki::new();
-    let etcd = SecuredEtcd::with_auth(&pki, &[]).await;
-    let message = refused(auth_config(&etcd.url, "not-the-password", &pki)).await;
+    let etcd = auth_etcd(&pki, pki.etcd_options()).await;
+    let message = refused(auth_config(&etcd.client_url(), "not-the-password", &pki)).await;
     assert!(
         message.contains("etcdserver: authentication failed, invalid user ID or password"),
         "The refusal should be etcd's authentication failure, but was: {message}"
@@ -550,11 +503,13 @@ async fn a_replica_with_a_wrong_password_does_not_start() {
 #[test]
 // etcd drops a token that is not used for `--auth-token-ttl`. A leader idle for longer than that
 // must still be able to step down, which needs a valid token for the revoke of its lease.
-async fn an_idle_leader_still_holds_a_valid_etcd_token() {
-    install_crypto_provider();
+async fn an_idle_leader_still_holds_a_valid_etcd_token(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
     let pki = TestPki::new();
-    let etcd = SecuredEtcd::with_auth(&pki, &["--auth-token-ttl=2"]).await;
-    let (_leader, leader_details) = spawn_replica(auth_config(&etcd.url, PASSWORD, &pki));
+    let etcd = auth_etcd(&pki, pki.etcd_options().with_flag("--auth-token-ttl=2")).await;
+    let (_leader, leader_details) = spawn_replica(auth_config(&etcd.client_url(), PASSWORD, &pki));
     let leader = started(leader_details).await;
 
     tokio::time::sleep(Duration::from_secs(4)).await;
@@ -572,16 +527,13 @@ async fn an_idle_leader_still_holds_a_valid_etcd_token() {
 // A standby's campaign waits inside etcd with the token it was sent with, and etcd checks that token
 // again when the key ahead of it goes away. A standby that waited longer than `--auth-token-ttl` must
 // still take over at once when the leader steps down, not one lease TTL later.
-async fn a_standby_that_waited_longer_than_the_token_ttl_takes_over() {
-    install_crypto_provider();
+async fn a_standby_that_waited_longer_than_the_token_ttl_takes_over(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
     let pki = TestPki::new();
-    let etcd = SecuredEtcd::with_auth(&pki, &["--auth-token-ttl=2"]).await;
-    let mut config = auth_config(&etcd.url, PASSWORD, &pki);
-    if let PersistenceConfig::Etcd(etcd) = &mut config.persistence {
-        // Long enough that a campaign key left behind by a failed attempt shows as a late
-        // hand-over, instead of expiring within the wait below.
-        etcd.leader_lease_ttl = Duration::from_secs(6);
-    }
+    let etcd = auth_etcd(&pki, pki.etcd_options().with_flag("--auth-token-ttl=2")).await;
+    let config = auth_config(&etcd.client_url(), PASSWORD, &pki);
     let (_leader, leader_details) = spawn_replica(config.clone());
     let leader = started(leader_details).await;
 
@@ -596,7 +548,7 @@ async fn a_standby_that_waited_longer_than_the_token_ttl_takes_over() {
         .await
         .expect("The step-down needs a token that is still valid");
 
-    let standby = timeout(Duration::from_secs(2), standby_details)
+    let standby = timeout(HANDOVER_BOUND, standby_details)
         .await
         .expect("The standby should take over well inside one lease TTL")
         .expect("The standby task ended without a result")
