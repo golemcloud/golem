@@ -765,7 +765,8 @@ impl TemplateHandler {
                 Some(manifest_path) => generate_component_template_in_manifest(
                     component_template,
                     application_name,
-                    &application_path.join(component_dir),
+                    application_path,
+                    component_dir,
                     component_name,
                     manifest_path,
                 )?,
@@ -1294,52 +1295,66 @@ impl TemplateHandler {
 }
 
 /// Generates the component template of an existing component that an included manifest
-/// declares. The component entry goes into that manifest, not into the root manifest, and
-/// its `dir` is relative to the directory of that manifest, as the manifest defines it.
+/// declares. The files of the template stay relative to the application root, but the
+/// component entry goes into that manifest, not into the root manifest, and its `dir` is
+/// relative to the directory of that manifest, as the manifest defines it.
 fn generate_component_template_in_manifest(
     component_template: &AppTemplateComponent,
     application_name: &ApplicationName,
+    application_dir: &Path,
     component_dir: &Path,
     component_name: &ComponentName,
     manifest_path: &Path,
 ) -> anyhow::Result<InMemoryFs> {
     let manifest_dir = fs::parent_or_err(manifest_path)?;
-    let normalized_component_dir = fs::normalize_path_lexically(component_dir);
-    let Ok(dir) = normalized_component_dir.strip_prefix(manifest_dir) else {
+    let normalized_component_dir =
+        fs::normalize_path_lexically(&application_dir.join(component_dir));
+    let Ok(dir_in_manifest) = normalized_component_dir.strip_prefix(manifest_dir) else {
         bail!(
             "Cannot apply the component template to component {}: its directory {} is not inside the directory of its manifest {}",
             component_name.as_str().log_color_highlight(),
-            component_dir
+            normalized_component_dir
                 .display()
                 .to_string()
                 .log_color_error_highlight(),
             manifest_path.display().to_string().log_color_highlight()
         );
     };
-    let dir = if dir.as_os_str().is_empty() {
+    let dir_in_manifest = if dir_in_manifest.as_os_str().is_empty() {
         PathBuf::from(".")
     } else {
-        dir.to_path_buf()
+        dir_in_manifest.to_path_buf()
     };
 
-    let generated =
-        component_template.generate(application_name, manifest_dir, component_name, &dir)?;
-    let generated_manifest = manifest_dir.join("golem.yaml");
+    let generated = component_template.generate(
+        application_name,
+        application_dir,
+        component_name,
+        component_dir,
+    )?;
+    let generated_in_manifest_dir = component_template.generate(
+        application_name,
+        manifest_dir,
+        component_name,
+        &dir_in_manifest,
+    )?;
+    let root_manifest = application_dir.join("golem.yaml");
+    let manifest_dir_manifest = manifest_dir.join("golem.yaml");
 
-    Ok(InMemoryFs::from_files(
-        generated
-            .files()
-            .iter()
-            .map(|(path, contents)| {
-                let path = if *path == generated_manifest {
-                    manifest_path.to_path_buf()
-                } else {
-                    path.clone()
-                };
-                (path, contents.clone())
-            })
-            .collect(),
-    ))
+    let mut files = generated
+        .files()
+        .iter()
+        .filter(|(path, _)| **path != root_manifest)
+        .map(|(path, contents)| (path.clone(), contents.clone()))
+        .collect::<BTreeMap<_, _>>();
+    if let Some(manifest) = generated_in_manifest_dir
+        .files()
+        .get(&manifest_dir_manifest)
+    {
+        files.insert(manifest_path.to_path_buf(), manifest.clone());
+    }
+
+    Ok(InMemoryFs::from_files(files))
 }
 
 fn is_non_empty_dir(path: &Path) -> anyhow::Result<bool> {

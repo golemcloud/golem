@@ -722,6 +722,81 @@ async fn app_new_adds_template_to_component_of_included_manifest(_tracing: &Trac
 }
 
 #[test]
+async fn app_new_adds_template_to_scala_component_of_included_manifest(_tracing: &Tracing) {
+    let app_name = "test-app-scala-included";
+
+    let mut ctx = TestContext::new();
+    std::fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "scala"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    // Move the component into `sub/`, declared by an included manifest without a `dir`. The
+    // component sbt file stays at the application root, points to `sub` and has a custom
+    // dependency.
+    let component_sbt_name = "test_app_scala_included_scala_main.sbt";
+    let component_sbt = ctx.cwd_path_join(component_sbt_name);
+    let custom_dependency =
+        "libraryDependencies += \"org.example\" % \"custom-library\" % \"1.0\",";
+    let sbt = fs::read_to_string(&component_sbt).unwrap();
+    assert!(sbt.contains(".in(file(\"\"))"), "{sbt}");
+    fs::write_str(
+        &component_sbt,
+        sbt.replace(".in(file(\"\"))", ".in(file(\"sub\"))")
+            .replace(
+                "    name := ",
+                &format!("    {custom_dependency}\n    name := "),
+            ),
+    )
+    .unwrap();
+    std::fs::create_dir_all(ctx.cwd_path_join("sub")).unwrap();
+    std::fs::rename(ctx.cwd_path_join("src"), ctx.cwd_path_join("sub/src")).unwrap();
+    let component_entry = format!("  {app_name}:scala-main:\n    templates: scala\n");
+    fs::write_str(
+        ctx.cwd_path_join("sub/golem.yaml"),
+        format!("manifestVersion: 1.6.0\ncomponents:\n{component_entry}"),
+    )
+    .unwrap();
+    let manifest_path = ctx.cwd_path_join("golem.yaml");
+    let root_component_entry =
+        format!("components:\n  {app_name}:scala-main:\n    dir: \"\"\n    templates: scala\n");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    assert!(manifest.contains(&root_component_entry));
+    fs::write_str(
+        &manifest_path,
+        manifest.replace(&root_component_entry, "includes:\n  - sub/golem.yaml\n"),
+    )
+    .unwrap();
+
+    for _ in 0..2 {
+        let outputs = ctx
+            .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "scala/json"])
+            .await;
+        assert!(outputs.success_or_dump());
+    }
+
+    assert!(!ctx.cwd_path_join("sub").join(component_sbt_name).exists());
+    let sbt = fs::read_to_string(&component_sbt).unwrap();
+    assert!(sbt.contains(custom_dependency), "{sbt}");
+    assert!(sbt.contains(".in(file(\"sub\"))"), "{sbt}");
+    assert!(ctx.cwd_path_join("sub/src/main/scala").is_dir());
+    assert!(!ctx.cwd_path_join("src").exists());
+    assert!(
+        !fs::read_to_string(&manifest_path)
+            .unwrap()
+            .contains(&format!("{app_name}:scala-main"))
+    );
+    assert!(
+        fs::read_to_string(ctx.cwd_path_join("sub/golem.yaml"))
+            .unwrap()
+            .contains(&format!("{app_name}:scala-main"))
+    );
+}
+
+#[test]
 async fn app_new_keeps_customized_scala_build_files_when_upgrading_layout(_tracing: &Tracing) {
     let app_name = "test-app-scala-merge";
 
