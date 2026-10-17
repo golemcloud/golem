@@ -27,6 +27,10 @@ type = "LocalFileSystem"
 [blob_storage.config]
 root = "../data/blob_storage"
 
+[body_limits]
+api = 33554432
+mcp = 33554432
+
 [component_service]
 component_cache_max_capacity = 1024
 current_component_cache_ttl = "1m"
@@ -74,6 +78,12 @@ port = 9094
 type = "Disabled"
 
 [grpc.tls.config]
+
+[http_server]
+http2_adaptive_window = false
+http2_initial_connection_window_size = 1048576
+http2_initial_stream_window_size = 1048576
+http2_max_header_list_size = 65536
 
 [http_session]
 cleanup_timeout = "2s"
@@ -210,6 +220,16 @@ without_time = false
 
 [webhook_callback_handler]
 hmac_key = "K34Co4pRMDl7dB3cYB+1/N0J3tMzJWI4FyPNOsmGHkE="
+
+[websocket_limits.connect]
+max_frame_size = 33619968
+max_message_size = 33619968
+max_write_buffer_size = 67108864
+
+[websocket_limits.invocation_session]
+max_frame_size = 33619968
+max_message_size = 33619968
+max_write_buffer_size = 67108864
 
 [worker_executor]
 connect_timeout = "10s"

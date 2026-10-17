@@ -49,6 +49,8 @@ http = { workspace = true }
 http-body = { workspace = true }
 http-body-util = { workspace = true }
 humantime-serde = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
 include_dir = { workspace = true }
 indexmap.workspace = true
 lazy_static = { workspace = true }

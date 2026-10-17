@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::common::ApiEndpointError;
+use crate::config::WebSocketTransportLimits;
 use crate::metrics::{ActiveHttpApiStream, HttpApiStreamKind};
 use crate::model;
 use crate::service::auth::AuthService;
@@ -56,6 +57,7 @@ pub struct WorkerApi {
     component_service: Arc<dyn ComponentService>,
     worker_service: Arc<WorkerService>,
     auth_service: Arc<dyn AuthService>,
+    connect_websocket_limits: WebSocketTransportLimits,
 }
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Worker)]
@@ -64,11 +66,13 @@ impl WorkerApi {
         component_service: Arc<dyn ComponentService>,
         worker_service: Arc<WorkerService>,
         auth_service: Arc<dyn AuthService>,
+        connect_websocket_limits: WebSocketTransportLimits,
     ) -> Self {
         Self {
             component_service,
             worker_service,
             auth_service,
+            connect_websocket_limits,
         }
     }
 
@@ -1114,22 +1118,24 @@ impl WorkerApi {
         // The stream captured this when it was built, inside the request span.
         let origin = worker_stream.origin();
 
-        let upgraded: BoxWebSocketUpgraded = websocket.on_upgrade(Box::new(move |socket_stream| {
-            Box::pin(async move {
-                let _active = ActiveHttpApiStream::open(HttpApiStreamKind::Connect);
-                let (sink, stream) = socket_stream.split();
-                let _ = proxy_worker_connection(
-                    agent_id,
-                    origin,
-                    worker_stream,
-                    sink,
-                    stream,
-                    WORKER_CONNECT_PING_INTERVAL,
-                    WORKER_CONNECT_PING_TIMEOUT,
-                )
-                .await;
-            })
-        }));
+        let upgraded: BoxWebSocketUpgraded = websocket
+            .config(self.connect_websocket_limits.websocket_config())
+            .on_upgrade(Box::new(move |socket_stream| {
+                Box::pin(async move {
+                    let _active = ActiveHttpApiStream::open(HttpApiStreamKind::Connect);
+                    let (sink, stream) = socket_stream.split();
+                    let _ = proxy_worker_connection(
+                        agent_id,
+                        origin,
+                        worker_stream,
+                        sink,
+                        stream,
+                        WORKER_CONNECT_PING_INTERVAL,
+                        WORKER_CONNECT_PING_TIMEOUT,
+                    )
+                    .await;
+                })
+            }));
 
         Ok(upgraded)
     }
