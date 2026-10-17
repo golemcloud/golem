@@ -473,12 +473,12 @@ async fn unless_a_task_fails<T>(
             joined = join_set.join_next(), if !join_set.is_empty() => match joined {
                 Some(Err(err)) => {
                     return Err(anyhow::Error::new(err)
-                        .context("a shard manager task panicked during startup"));
+                        .context("a task panicked during the shard manager's startup"));
                 }
                 Some(Ok(Err(err))) => {
-                    return Err(err.context("a shard manager task failed during startup"));
+                    return Err(err.context("a task failed during the shard manager's startup"));
                 }
-                Some(Ok(Ok(()))) => warn!("A shard manager task finished during startup"),
+                Some(Ok(Ok(()))) => warn!("A task finished during the shard manager's startup"),
                 None => {}
             },
             done = &mut step => return done,
