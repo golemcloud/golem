@@ -1135,6 +1135,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 request,
                 durable_function_type,
                 span_started,
+                denial,
             } => {
                 let request_value = if let Some(request_payload) = request {
                     let host_request: HostRequest = oplog_service
@@ -1174,6 +1175,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     request: request_value,
                     durable_function_type: durable_function_type.into(),
                     span_started: span_started.map(|span| public_span_started(*span)),
+                    denial,
                 }))
             }
             OplogEntry::End {

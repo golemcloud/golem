@@ -20,14 +20,14 @@ use golem_common::model::oplog::host_functions::{
     P3KeyvalueCacheSet, P3KeyvalueCacheVacancyDrop, P3KeyvalueCacheVacancyFill,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestKVCacheKey, HostRequestKVCacheKeyAndTtl,
+    DeniablePair, DurableFunctionType, HostRequestKVCacheKey, HostRequestKVCacheKeyAndTtl,
     HostRequestKVCacheKeyValueAndTtl, HostResponseKVDelete, HostResponseKVGet, HostResponseKVUnit,
 };
 use wasmtime::component::{Accessor, HasSelf, Resource};
 
 use crate::durable_host::authorization::targets::kv_target;
 use crate::durable_host::concurrent::{
-    CallReplayOutcome, Cancellable, DurableCallSession,
+    AccessClaimOptions, CallReplayOutcome, Cancellable, DurableCallSession,
     authorize_live_permissions_at_serialized_access, reserve_invocation_id_before_await,
 };
 use crate::durable_host::keyvalue::error::ErrorEntry;
@@ -49,14 +49,14 @@ pub struct CacheFutureGetResultEntry {
     handle: Option<DurableCallSession<P3KeyvalueCacheGet, Cancellable>>,
     environment_id: EnvironmentId,
     key: Key,
-    denial: Option<String>,
+    denied: Option<HostResponseKVGet>,
 }
 
 pub struct CacheFutureExistsResultEntry {
     handle: Option<DurableCallSession<P3KeyvalueCacheExists, Cancellable>>,
     environment_id: EnvironmentId,
     key: Key,
-    denial: Option<String>,
+    denied: Option<HostResponseKVDelete>,
 }
 
 pub struct CacheFutureResultEntry {
@@ -68,7 +68,7 @@ pub struct CacheFutureGetOrSetResultEntry {
     environment_id: EnvironmentId,
     key: Key,
     permit: Option<LiveAuthorizationPermit>,
-    denial: Option<String>,
+    denied: Option<HostResponseKVGet>,
 }
 
 pub struct CacheVacancyEntry {
@@ -84,13 +84,13 @@ enum CacheFutureResultOperation {
         environment_id: EnvironmentId,
         key: Key,
         value: Vec<u8>,
-        denial: Option<String>,
+        denied: Option<HostResponseKVUnit>,
     },
     Delete {
         handle: Option<DurableCallSession<P3KeyvalueCacheDelete, Cancellable>>,
         environment_id: EnvironmentId,
         key: Key,
-        denial: Option<String>,
+        denied: Option<HostResponseKVUnit>,
     },
 }
 
@@ -156,7 +156,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureGetResultWithStore<U>
         accessor: &Accessor<U, Self>,
         self_: Resource<FutureGetResult>,
     ) -> anyhow::Result<Result<Option<Resource<IncomingValue>>, Resource<Error>>> {
-        let (mut handle, environment_id, key, denial, key_value_service) =
+        let (mut handle, environment_id, key, denied, key_value_service) =
             accessor.with(|mut access| {
                 let ctx = access.get();
                 let entry = ctx.table().get_mut(&self_)?;
@@ -164,27 +164,23 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureGetResultWithStore<U>
                     entry.handle.take().ok_or_else(|| missing_handle("get"))?,
                     entry.environment_id,
                     entry.key.clone(),
-                    entry.denial.take(),
+                    entry.denied.take(),
                     ctx.state.key_value_service.clone(),
                 ))
             })?;
 
         let response = 'resp: {
-            if !handle.is_live() {
+            if handle.is_live() {
+                if let Some(response) = denied {
+                    break 'resp handle
+                        .complete_access(accessor, accessor.getter(), response)
+                        .await?;
+                }
+            } else {
                 match handle.replay_access(accessor, accessor.getter()).await? {
                     CallReplayOutcome::Replayed(response) => break 'resp response,
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
-            }
-
-            if let Some(error) = denial {
-                break 'resp handle
-                    .complete_access(
-                        accessor,
-                        accessor.getter(),
-                        HostResponseKVGet { result: Err(error) },
-                    )
-                    .await?;
             }
 
             let result = key_value_service
@@ -230,7 +226,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureExistsResultWithStore<U>
         accessor: &Accessor<U, Self>,
         self_: Resource<FutureExistsResult>,
     ) -> anyhow::Result<Result<bool, Resource<Error>>> {
-        let (mut handle, environment_id, key, denial, key_value_service) =
+        let (mut handle, environment_id, key, denied, key_value_service) =
             accessor.with(|mut access| {
                 let ctx = access.get();
                 let entry = ctx.table().get_mut(&self_)?;
@@ -241,27 +237,23 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureExistsResultWithStore<U>
                         .ok_or_else(|| missing_handle("exists"))?,
                     entry.environment_id,
                     entry.key.clone(),
-                    entry.denial.take(),
+                    entry.denied.take(),
                     ctx.state.key_value_service.clone(),
                 ))
             })?;
 
         let response = 'resp: {
-            if !handle.is_live() {
+            if handle.is_live() {
+                if let Some(response) = denied {
+                    break 'resp handle
+                        .complete_access(accessor, accessor.getter(), response)
+                        .await?;
+                }
+            } else {
                 match handle.replay_access(accessor, accessor.getter()).await? {
                     CallReplayOutcome::Replayed(response) => break 'resp response,
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
-            }
-
-            if let Some(error) = denial {
-                break 'resp handle
-                    .complete_access(
-                        accessor,
-                        accessor.getter(),
-                        HostResponseKVDelete { result: Err(error) },
-                    )
-                    .await?;
             }
 
             let result = key_value_service
@@ -327,13 +319,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureResultWithStore<U>
                 environment_id: EnvironmentId,
                 key: Key,
                 value: Vec<u8>,
-                denial: Option<String>,
+                denied: Option<HostResponseKVUnit>,
             },
             Delete {
                 handle: DurableCallSession<P3KeyvalueCacheDelete, Cancellable>,
                 environment_id: EnvironmentId,
                 key: Key,
-                denial: Option<String>,
+                denied: Option<HostResponseKVUnit>,
             },
         }
 
@@ -346,24 +338,24 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureResultWithStore<U>
                     environment_id,
                     key,
                     value,
-                    denial,
+                    denied,
                 } => Action::Set {
                     handle: handle.take().ok_or_else(|| missing_handle("set"))?,
                     environment_id: *environment_id,
                     key: key.clone(),
                     value: value.clone(),
-                    denial: denial.take(),
+                    denied: denied.take(),
                 },
                 CacheFutureResultOperation::Delete {
                     handle,
                     environment_id,
                     key,
-                    denial,
+                    denied,
                 } => Action::Delete {
                     handle: handle.take().ok_or_else(|| missing_handle("delete"))?,
                     environment_id: *environment_id,
                     key: key.clone(),
-                    denial: denial.take(),
+                    denied: denied.take(),
                 },
             };
             Ok::<_, anyhow::Error>((action, ctx.state.key_value_service.clone()))
@@ -375,23 +367,19 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureResultWithStore<U>
                 environment_id,
                 key,
                 value,
-                denial,
+                denied,
             } => 'resp: {
-                if !handle.is_live() {
+                if handle.is_live() {
+                    if let Some(response) = denied {
+                        break 'resp handle
+                            .complete_access(accessor, accessor.getter(), response)
+                            .await?;
+                    }
+                } else {
                     match handle.replay_access(accessor, accessor.getter()).await? {
                         CallReplayOutcome::Replayed(response) => break 'resp response,
                         CallReplayOutcome::Incomplete(live) => handle = live,
                     }
-                }
-
-                if let Some(error) = denial {
-                    break 'resp handle
-                        .complete_access(
-                            accessor,
-                            accessor.getter(),
-                            HostResponseKVUnit { result: Err(error) },
-                        )
-                        .await?;
                 }
 
                 let result = key_value_service
@@ -406,23 +394,19 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureResultWithStore<U>
                 mut handle,
                 environment_id,
                 key,
-                denial,
+                denied,
             } => 'resp: {
-                if !handle.is_live() {
+                if handle.is_live() {
+                    if let Some(response) = denied {
+                        break 'resp handle
+                            .complete_access(accessor, accessor.getter(), response)
+                            .await?;
+                    }
+                } else {
                     match handle.replay_access(accessor, accessor.getter()).await? {
                         CallReplayOutcome::Replayed(response) => break 'resp response,
                         CallReplayOutcome::Incomplete(live) => handle = live,
                     }
-                }
-
-                if let Some(error) = denial {
-                    break 'resp handle
-                        .complete_access(
-                            accessor,
-                            accessor.getter(),
-                            HostResponseKVUnit { result: Err(error) },
-                        )
-                        .await?;
                 }
 
                 let result = key_value_service
@@ -468,7 +452,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureGetOrSetResultWithStore<U>
         accessor: &Accessor<U, Self>,
         self_: Resource<FutureGetOrSetResult>,
     ) -> anyhow::Result<Result<GetOrSetEntry, Resource<Error>>> {
-        let (mut handle, environment_id, key, permit, denial, key_value_service) =
+        let (mut handle, environment_id, key, permit, denied, key_value_service) =
             accessor.with(|mut access| {
                 let ctx = access.get();
                 let entry = ctx.table().get_mut(&self_)?;
@@ -480,27 +464,23 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureGetOrSetResultWithStore<U>
                     entry.environment_id,
                     entry.key.clone(),
                     entry.permit,
-                    entry.denial.take(),
+                    entry.denied.take(),
                     ctx.state.key_value_service.clone(),
                 ))
             })?;
 
         let response = 'resp: {
-            if !handle.is_live() {
+            if handle.is_live() {
+                if let Some(response) = denied {
+                    break 'resp handle
+                        .complete_access(accessor, accessor.getter(), response)
+                        .await?;
+                }
+            } else {
                 match handle.replay_access(accessor, accessor.getter()).await? {
                     CallReplayOutcome::Replayed(response) => break 'resp response,
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
-            }
-
-            if let Some(error) = denial {
-                break 'resp handle
-                    .complete_access(
-                        accessor,
-                        accessor.getter(),
-                        HostResponseKVGet { result: Err(error) },
-                    )
-                    .await?;
             }
 
             let result = key_value_service
@@ -653,19 +633,28 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         } else {
             None
         };
-        let handle = DurableCallSession::<P3KeyvalueCacheGet, Cancellable>::start_access(
-            accessor,
-            accessor.getter(),
-            HostRequestKVCacheKey { key: k.clone() },
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
+        let request = HostRequestKVCacheKey { key: k.clone() };
+        let denied = denial
+            .as_deref()
+            .map(|denial| P3KeyvalueCacheGet::denied(&request, denial));
+        let handle =
+            DurableCallSession::<P3KeyvalueCacheGet, Cancellable>::start_access_with_options(
+                accessor,
+                accessor.getter(),
+                DurableFunctionType::ReadRemote,
+                AccessClaimOptions {
+                    denial,
+                    ..Default::default()
+                },
+                request,
+            )
+            .await?;
         accessor.with(|mut access| {
             Ok(access.get().table().push(CacheFutureGetResultEntry {
                 handle: Some(handle),
                 environment_id,
                 key: k,
-                denial,
+                denied,
             })?)
         })
     }
@@ -685,19 +674,28 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         } else {
             None
         };
-        let handle = DurableCallSession::<P3KeyvalueCacheExists, Cancellable>::start_access(
-            accessor,
-            accessor.getter(),
-            HostRequestKVCacheKey { key: k.clone() },
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
+        let request = HostRequestKVCacheKey { key: k.clone() };
+        let denied = denial
+            .as_deref()
+            .map(|denial| P3KeyvalueCacheExists::denied(&request, denial));
+        let handle =
+            DurableCallSession::<P3KeyvalueCacheExists, Cancellable>::start_access_with_options(
+                accessor,
+                accessor.getter(),
+                DurableFunctionType::ReadRemote,
+                AccessClaimOptions {
+                    denial,
+                    ..Default::default()
+                },
+                request,
+            )
+            .await?;
         accessor.with(|mut access| {
             Ok(access.get().table().push(CacheFutureExistsResultEntry {
                 handle: Some(handle),
                 environment_id,
                 key: k,
-                denial,
+                denied,
             })?)
         })
     }
@@ -719,24 +717,29 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         } else {
             None
         };
-        let value = if is_live && denial.is_none() {
-            accessor.with(|mut access| {
-                Ok::<_, anyhow::Error>(access.get().table().get(&v)?.body.read().unwrap().clone())
-            })?
-        } else {
-            Vec::new()
+        let value = accessor.with(|mut access| {
+            Ok::<_, anyhow::Error>(access.get().table().get(&v)?.body.read().unwrap().clone())
+        })?;
+        let request = HostRequestKVCacheKeyValueAndTtl {
+            key: k.clone(),
+            length: value.len(),
+            ttl_ms,
         };
-        let handle = DurableCallSession::<P3KeyvalueCacheSet, Cancellable>::start_access(
-            accessor,
-            accessor.getter(),
-            HostRequestKVCacheKeyValueAndTtl {
-                key: k.clone(),
-                length: value.len(),
-                ttl_ms,
-            },
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let denied = denial
+            .as_deref()
+            .map(|denial| P3KeyvalueCacheSet::denied(&request, denial));
+        let handle =
+            DurableCallSession::<P3KeyvalueCacheSet, Cancellable>::start_access_with_options(
+                accessor,
+                accessor.getter(),
+                DurableFunctionType::WriteRemote,
+                AccessClaimOptions {
+                    denial,
+                    ..Default::default()
+                },
+                request,
+            )
+            .await?;
         accessor.with(|mut access| {
             Ok(access.get().table().push(CacheFutureResultEntry {
                 operation: CacheFutureResultOperation::Set {
@@ -744,7 +747,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
                     environment_id,
                     key: k,
                     value,
-                    denial,
+                    denied,
                 },
             })?)
         })
@@ -784,20 +787,29 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         } else {
             (None, None)
         };
-        let handle = DurableCallSession::<P3KeyvalueCacheGetOrSet, Cancellable>::start_access(
-            accessor,
-            accessor.getter(),
-            HostRequestKVCacheKey { key: k.clone() },
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
+        let request = HostRequestKVCacheKey { key: k.clone() };
+        let denied = denial
+            .as_deref()
+            .map(|denial| P3KeyvalueCacheGetOrSet::denied(&request, denial));
+        let handle =
+            DurableCallSession::<P3KeyvalueCacheGetOrSet, Cancellable>::start_access_with_options(
+                accessor,
+                accessor.getter(),
+                DurableFunctionType::ReadRemote,
+                AccessClaimOptions {
+                    denial,
+                    ..Default::default()
+                },
+                request,
+            )
+            .await?;
         accessor.with(|mut access| {
             Ok(access.get().table().push(CacheFutureGetOrSetResultEntry {
                 handle: Some(handle),
                 environment_id,
                 key: k,
                 permit,
-                denial,
+                denied,
             })?)
         })
     }
@@ -817,20 +829,29 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         } else {
             None
         };
-        let handle = DurableCallSession::<P3KeyvalueCacheDelete, Cancellable>::start_access(
-            accessor,
-            accessor.getter(),
-            HostRequestKVCacheKey { key: k.clone() },
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let request = HostRequestKVCacheKey { key: k.clone() };
+        let denied = denial
+            .as_deref()
+            .map(|denial| P3KeyvalueCacheDelete::denied(&request, denial));
+        let handle =
+            DurableCallSession::<P3KeyvalueCacheDelete, Cancellable>::start_access_with_options(
+                accessor,
+                accessor.getter(),
+                DurableFunctionType::WriteRemote,
+                AccessClaimOptions {
+                    denial,
+                    ..Default::default()
+                },
+                request,
+            )
+            .await?;
         accessor.with(|mut access| {
             Ok(access.get().table().push(CacheFutureResultEntry {
                 operation: CacheFutureResultOperation::Delete {
                     handle: Some(handle),
                     environment_id,
                     key: k,
-                    denial,
+                    denied,
                 },
             })?)
         })

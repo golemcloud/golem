@@ -53,7 +53,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let result = 'resp: {
-            let (mut handle, environment_id, bucket, denied) = match begun.resolve(self).await? {
+            let (mut handle, environment_id, bucket) = match begun.resolve(self).await? {
                 ResolvedCall::Live(begun) => {
                     let environment_id = self.owned_agent_id.environment_id();
                     let bucket = self
@@ -75,11 +75,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         bucket: bucket.clone(),
                         key: key.clone(),
                     };
+                    if let Some(denial) = denied {
+                        break 'resp begun.start_live_denied(self, request, denial).await?;
+                    }
                     (
                         begun.start_live(self, request).await?,
                         environment_id,
                         bucket,
-                        denied,
                     )
                 }
                 ResolvedCall::Replay(mut handle) => {
@@ -94,15 +96,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         .get::<BucketEntry>(&bucket)?
                         .name
                         .clone();
-                    (handle, environment_id, bucket, None)
+                    (handle, environment_id, bucket)
                 }
             };
-
-            if let Some(error) = denied {
-                break 'resp handle
-                    .complete(self, HostResponseKVGet { result: Err(error) })
-                    .await?;
-            }
 
             let result = loop {
                 let result = self
@@ -151,7 +147,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let result = 'resp: {
-            let (mut handle, environment_id, bucket, denied, outgoing_value, length) =
+            let (mut handle, environment_id, bucket, outgoing_value, length) =
                 match begun.resolve(self).await? {
                     ResolvedCall::Live(begun) => {
                         let environment_id = self.owned_agent_id.environment_id();
@@ -171,28 +167,27 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                                 .map(denial),
                             Err(error) => Some(denial(error)),
                         };
-                        let outgoing_value = if denied.is_none() {
-                            self.as_wasi_view()
-                                .table()
-                                .get::<OutgoingValueEntry>(&outgoing_value)?
-                                .body
-                                .read()
-                                .unwrap()
-                                .clone()
-                        } else {
-                            Vec::new()
-                        };
+                        let outgoing_value = self
+                            .as_wasi_view()
+                            .table()
+                            .get::<OutgoingValueEntry>(&outgoing_value)?
+                            .body
+                            .read()
+                            .unwrap()
+                            .clone();
                         let length = outgoing_value.len() as u64;
                         let request = HostRequestKVBucketKeyAndSize {
                             bucket: bucket.clone(),
                             key: key.clone(),
                             length: outgoing_value.len(),
                         };
+                        if let Some(denial) = denied {
+                            break 'resp begun.start_live_denied(self, request, denial).await?;
+                        }
                         (
                             begun.start_live(self, request).await?,
                             environment_id,
                             bucket,
-                            denied,
                             outgoing_value,
                             length,
                         )
@@ -209,7 +204,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                             .get::<BucketEntry>(&bucket)?
                             .name
                             .clone();
-                        let denied = None;
                         let outgoing_value = self
                             .as_wasi_view()
                             .table()
@@ -219,22 +213,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                             .unwrap()
                             .clone();
                         let length = outgoing_value.len() as u64;
-                        (
-                            handle,
-                            environment_id,
-                            bucket,
-                            denied,
-                            outgoing_value,
-                            length,
-                        )
+                        (handle, environment_id, bucket, outgoing_value, length)
                     }
                 };
-
-            if let Some(error) = denied {
-                break 'resp handle
-                    .complete(self, HostResponseKVUnit { result: Err(error) })
-                    .await?;
-            }
 
             let result = loop {
                 let result = self
@@ -296,7 +277,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let result = 'resp: {
-            let (mut handle, environment_id, bucket, denied) = match begun.resolve(self).await? {
+            let (mut handle, environment_id, bucket) = match begun.resolve(self).await? {
                 ResolvedCall::Live(begun) => {
                     let environment_id = self.owned_agent_id.environment_id();
                     let bucket = self
@@ -318,11 +299,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         bucket: bucket.clone(),
                         key: key.clone(),
                     };
+                    if let Some(denial) = denied {
+                        break 'resp begun.start_live_denied(self, request, denial).await?;
+                    }
                     (
                         begun.start_live(self, request).await?,
                         environment_id,
                         bucket,
-                        denied,
                     )
                 }
                 ResolvedCall::Replay(mut handle) => {
@@ -337,15 +320,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         .get::<BucketEntry>(&bucket)?
                         .name
                         .clone();
-                    (handle, environment_id, bucket, None)
+                    (handle, environment_id, bucket)
                 }
             };
-
-            if let Some(error) = denied {
-                break 'resp handle
-                    .complete(self, HostResponseKVUnit { result: Err(error) })
-                    .await?;
-            }
 
             let result = loop {
                 let result = self
@@ -396,7 +373,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let result = 'resp: {
-            let (mut handle, environment_id, bucket, denied) = match begun.resolve(self).await? {
+            let (mut handle, environment_id, bucket) = match begun.resolve(self).await? {
                 ResolvedCall::Live(begun) => {
                     let environment_id = self.owned_agent_id.environment_id();
                     let bucket = self
@@ -418,11 +395,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         bucket: bucket.clone(),
                         key: key.clone(),
                     };
+                    if let Some(denial) = denied {
+                        break 'resp begun.start_live_denied(self, request, denial).await?;
+                    }
                     (
                         begun.start_live(self, request).await?,
                         environment_id,
                         bucket,
-                        denied,
                     )
                 }
                 ResolvedCall::Replay(mut handle) => {
@@ -437,15 +416,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         .get::<BucketEntry>(&bucket)?
                         .name
                         .clone();
-                    (handle, environment_id, bucket, None)
+                    (handle, environment_id, bucket)
                 }
             };
-
-            if let Some(error) = denied {
-                break 'resp handle
-                    .complete(self, HostResponseKVDelete { result: Err(error) })
-                    .await?;
-            }
 
             let result = loop {
                 let result = self

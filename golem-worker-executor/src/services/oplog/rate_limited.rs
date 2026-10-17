@@ -1023,6 +1023,7 @@ mod tests {
                 request: Some(request_payload),
                 durable_function_type: DurableFunctionType::ReadRemote,
                 span_started: None,
+                denial: None,
             }
         };
 

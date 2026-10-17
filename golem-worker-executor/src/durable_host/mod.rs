@@ -3455,6 +3455,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 request: None,
                 durable_function_type: DurableFunctionType::WriteRemote,
                 span_started: None,
+                denial: None,
             };
             let begin_index = self
                 .public_state

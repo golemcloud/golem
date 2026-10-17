@@ -765,6 +765,16 @@ or discard another task's history. A typed-loss End belongs to the original Star
 resend returns `http-response-incomplete`, RDBMS `resource-lost`, and TCP `connection-broken`.
 UDP `ReadRemote` instead re-executes receive after rebind.
 
+**A denied call records its denial.** When the host denies a live call before it runs, the call
+writes its `Start` with `denial` and an `End` that holds the pair's denied response
+(`BegunCall::start_live_denied`, `DurableCallSession::invoke_deniable_access`, or
+`AccessClaimOptions::denial`). The operation never runs. A pair declares its denied response with
+`denied = ...` in `host_payload_pairs!` (`DeniablePair::denied`); the response depends only on the
+recorded request and the denial, so live execution and recovery produce the same value. Replay of
+a denied `Start` without a terminal does not return `Incomplete`: the session appends the denied
+`End` and returns `Replayed`. A crash between the two entries therefore cannot run the denied
+operation. Call sites keep their replay branch free of authorization.
+
 **P3 HTTP recovery is call-local.** `client::send` records `WriteRemote` for all methods
 (`p3/http/send.rs`). Every method uses `Cancellable`: a guest drop records `Cancelled` and
 replay never resends that cancelled call. Only crash-like loss leaves an incomplete send.
@@ -1607,16 +1617,21 @@ guest paths, and its response is `Ok(())` or `Err(reason)`. A recorded denial re
 denial as their `not-permitted` result; their immutable initial-file fast path records a separate
 check. P3 `write-via-stream` and `append-via-stream` record the decision in their admission call
 (`admit_stream_write`). The live check (`live_permission_decision`,
-`p3_live_permission_decision`) runs only while the Store is live: when an incomplete check `Start`
-is repaired during replay, the repair completes it as allowed, because live authorization cannot
-run then. A new check in the replay tail has no recorded `Start`, so the call switches to live and
-checks the policy. P3 imports that await before their check reserve their invocation id first
+`p3_live_permission_decision`) runs only while the Store is live, before the call writes its
+`Start`. A denied check records the denial in its `Start` (`start_live_denied`, or
+`AccessClaimOptions::denial` in `run_deniable_filesystem_access`), so recovery of an incomplete
+denied `Start` completes it with the same denied response and the protected effect does not run.
+An incomplete `Start` without a denial was allowed, so its repair completes it as allowed without a
+new check. A new check in the replay tail has no recorded `Start`, so the call switches to live and
+checks the policy; a P3 call that becomes live after its Store replayed at the call checks after
+its `Start`. P3 imports that await before their check reserve their invocation id first
 (`reserve_invocation_id_before_await`). Test:
 `tests/scope_cards.rs::denied_filesystem_imports_are_recorded_and_replayed_after_restart`.
 
 P2 TCP `start-connect` records its decision in the same way, in a
 `sockets::tcp::permissions::check-connect` call (the request holds the remote address). A recorded
-denial returns `access-denied`, and its replay does not connect. Test:
+denial returns `access-denied`, and its replay does not connect. A denial is recorded in the check
+`Start`, so the recovery of an incomplete denied check does not connect either. Test:
 `tests/scope_cards.rs::p2_tcp_connect_denial_is_recorded_and_does_not_reach_the_backend_on_replay`.
 
 Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic

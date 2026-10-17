@@ -30,7 +30,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::card::RdbmsVerb;
-use golem_common::model::oplog::HostPayloadPair;
+use golem_common::model::oplog::{DeniablePair, HostPayloadPair};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemRdbmsRequest, HostRequestNoInput,
     HostResponseGolemRdbmsColumns, HostResponseGolemRdbmsRequest, HostResponseGolemRdbmsResult,
@@ -77,9 +77,9 @@ fn rdbms_retry_properties<Ctx: WorkerCtx>(
 // Trait to map RdbmsType to the correct HostPayloadPair types for durability
 pub trait RdbmsDurabilityPairs {
     const ENGINE: RdbmsEngine;
-    type ConnBeginTransaction: HostPayloadPair<Req = HostRequestNoInput, Resp = HostResponseGolemRdbmsRowCount>;
-    type ConnExecute: HostPayloadPair<Req = HostRequestGolemRdbmsRequest, Resp = HostResponseGolemRdbmsRowCount>;
-    type ConnQuery: HostPayloadPair<Req = HostRequestGolemRdbmsRequest, Resp = HostResponseGolemRdbmsResult>;
+    type ConnBeginTransaction: DeniablePair<Req = HostRequestNoInput, Resp = HostResponseGolemRdbmsRowCount>;
+    type ConnExecute: DeniablePair<Req = HostRequestGolemRdbmsRequest, Resp = HostResponseGolemRdbmsRowCount>;
+    type ConnQuery: DeniablePair<Req = HostRequestGolemRdbmsRequest, Resp = HostResponseGolemRdbmsResult>;
     type ConnQueryStream: HostPayloadPair<Req = HostRequestNoInput, Resp = HostResponseGolemRdbmsRequest>;
     type TxnExecute: HostPayloadPair<Req = HostRequestGolemRdbmsRequest, Resp = HostResponseGolemRdbmsRowCount>;
     type TxnQuery: HostPayloadPair<Req = HostRequestGolemRdbmsRequest, Resp = HostResponseGolemRdbmsResult>;
@@ -109,7 +109,7 @@ async fn authorize_sql<Ctx, T>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     pool_key: &RdbmsPoolKey,
     statement: &str,
-) -> anyhow::Result<Result<LiveAuthorizationPermit, RdbmsError>>
+) -> anyhow::Result<Result<LiveAuthorizationPermit, String>>
 where
     Ctx: WorkerCtx,
     T: RdbmsType + RdbmsDurabilityPairs + 'static,
@@ -124,23 +124,21 @@ where
     ) {
         Ok(targets) => targets,
         Err(error) => {
-            return Ok(Err(RdbmsError::QueryExecutionFailure(format!(
+            return Ok(Err(format!(
                 "{RDBMS_PERMISSION_DENIED}: cannot safely determine SQL targets: {error}"
-            ))));
+            )));
         }
     };
     Ok(ctx
         .authorize_live_permissions(&targets)
         .await?
-        .map_err(|error| {
-            RdbmsError::QueryExecutionFailure(format!("{RDBMS_PERMISSION_DENIED}: {error}"))
-        }))
+        .map_err(|error| format!("{RDBMS_PERMISSION_DENIED}: {error}")))
 }
 
 async fn authorize_transaction<Ctx, T>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     pool_key: &RdbmsPoolKey,
-) -> anyhow::Result<Result<LiveAuthorizationPermit, RdbmsError>>
+) -> anyhow::Result<Result<LiveAuthorizationPermit, String>>
 where
     Ctx: WorkerCtx,
     T: RdbmsType + RdbmsDurabilityPairs + 'static,
@@ -167,17 +165,15 @@ where
     let targets = match targets {
         Ok(targets) => targets,
         Err(error) => {
-            return Ok(Err(RdbmsError::QueryExecutionFailure(format!(
+            return Ok(Err(format!(
                 "{RDBMS_PERMISSION_DENIED}: cannot construct database wildcard: {error}"
-            ))));
+            )));
         }
     };
     Ok(ctx
         .authorize_live_permissions(&targets)
         .await?
-        .map_err(|error| {
-            RdbmsError::QueryExecutionFailure(format!("{RDBMS_PERMISSION_DENIED}: {error}"))
-        }))
+        .map_err(|error| format!("{RDBMS_PERMISSION_DENIED}: {error}")))
 }
 
 /// A transaction request prepared up front (before its side effect): the pool key, the open
@@ -233,7 +229,7 @@ where
         DurableFunctionType::ReadLocal,
     )
     .await?;
-    let (mut handle, mut pool_key, authorization) = match begun.resolve(ctx).await? {
+    let (admission, pool_key, _authorization_permit) = match begun.resolve(ctx).await? {
         ResolvedCall::Live(begun) => {
             let pool_key = ctx
                 .as_wasi_view()
@@ -241,42 +237,39 @@ where
                 .get::<RdbmsConnection<T>>(entry)?
                 .pool_key
                 .clone();
-            let authorization = authorize_transaction::<Ctx, T>(ctx, &pool_key).await?;
-            let handle = begun.start_live(ctx, HostRequestNoInput {}).await?;
-            (handle, Some(pool_key), Some(authorization))
-        }
-        ResolvedCall::Replay(handle) => (
-            handle,
-            None,
-            None::<Result<LiveAuthorizationPermit, RdbmsError>>,
-        ),
-    };
-
-    let admission = if !handle.is_live() {
-        match handle.replay(ctx).await? {
-            CallReplayOutcome::Replayed(response) => response,
-            CallReplayOutcome::Incomplete(live) => {
-                handle = live;
-                handle
-                    .complete(ctx, HostResponseGolemRdbmsRowCount { result: Ok(0) })
-                    .await?
+            match authorize_transaction::<Ctx, T>(ctx, &pool_key).await? {
+                Ok(permit) => {
+                    let admission = begun
+                        .start_live(ctx, HostRequestNoInput {})
+                        .await?
+                        .complete(ctx, HostResponseGolemRdbmsRowCount { result: Ok(0) })
+                        .await?;
+                    (admission, Some(pool_key), Some(permit))
+                }
+                Err(denial) => (
+                    begun
+                        .start_live_denied(ctx, HostRequestNoInput {}, denial)
+                        .await?,
+                    Some(pool_key),
+                    None,
+                ),
             }
         }
-    } else {
-        let result = match authorization.as_ref() {
-            Some(Ok(_)) => Ok(0),
-            Some(Err(error)) => Err(error.clone().into()),
-            None => Ok(0),
-        };
-        handle
-            .complete(ctx, HostResponseGolemRdbmsRowCount { result })
-            .await?
+        ResolvedCall::Replay(handle) => {
+            let admission = match handle.replay(ctx).await? {
+                CallReplayOutcome::Replayed(response) => response,
+                CallReplayOutcome::Incomplete(live) => {
+                    live.complete(ctx, HostResponseGolemRdbmsRowCount { result: Ok(0) })
+                        .await?
+                }
+            };
+            (admission, None, None)
+        }
     };
     if let Err(error) = admission.result {
         return Ok(Err(RdbmsError::from(error).into()));
     }
-    let _authorization_permit = authorization.and_then(Result::ok);
-    let pool_key = match pool_key.take() {
+    let pool_key = match pool_key {
         Some(pool_key) => pool_key,
         None => ctx
             .as_wasi_view()
@@ -345,47 +338,46 @@ where
         Err(error) => Err(RdbmsError::other_response_failure(error)),
     };
 
-    let request = HostRequestGolemRdbmsRequest {
-        request: prepared.as_ref().ok().map(|(pool_key, db_params)| {
-            RdbmsRequest::<T>::new(pool_key.clone(), statement.clone(), db_params.clone(), None)
-                .into()
-        }),
-    };
-
-    let authorization = if ctx.state.is_live() {
-        match prepared.as_ref() {
-            Ok((pool_key, _)) => Some(authorize_sql::<Ctx, T>(ctx, pool_key, &statement).await?),
-            Err(_) => None,
-        }
-    } else {
-        None
-    };
-
-    let mut handle = DurableCallSession::<T::ConnExecute, NotCancellable>::start(
+    let begun = DurableCallSession::<T::ConnExecute, NotCancellable>::begin(
         ctx,
-        request,
         DurableFunctionType::WriteRemote,
     )
     .await?;
 
     let result = 'result: {
-        if !handle.is_live() {
-            match handle.replay(ctx).await? {
-                CallReplayOutcome::Replayed(replayed) => break 'result replayed,
-                CallReplayOutcome::Incomplete(live) => handle = live,
+        let (mut handle, _authorization_permit) = match begun.resolve(ctx).await? {
+            ResolvedCall::Live(begun) => {
+                let request = HostRequestGolemRdbmsRequest {
+                    request: prepared.as_ref().ok().map(|(pool_key, db_params)| {
+                        RdbmsRequest::<T>::new(
+                            pool_key.clone(),
+                            statement.clone(),
+                            db_params.clone(),
+                            None,
+                        )
+                        .into()
+                    }),
+                };
+                let permit = match prepared.as_ref() {
+                    Ok((pool_key, _)) => {
+                        match authorize_sql::<Ctx, T>(ctx, pool_key, &statement).await? {
+                            Ok(permit) => Some(permit),
+                            Err(denial) => {
+                                break 'result begun
+                                    .start_live_denied(ctx, request, denial)
+                                    .await?;
+                            }
+                        }
+                    }
+                    Err(_) => None,
+                };
+                (begun.start_live(ctx, request).await?, permit)
             }
-        }
-
-        if let Some(Err(error)) = authorization {
-            break 'result handle
-                .complete(
-                    ctx,
-                    HostResponseGolemRdbmsRowCount {
-                        result: Err(error.into()),
-                    },
-                )
-                .await?;
-        }
+            ResolvedCall::Replay(handle) => match handle.replay(ctx).await? {
+                CallReplayOutcome::Replayed(replayed) => break 'result replayed,
+                CallReplayOutcome::Incomplete(live) => (live, None),
+            },
+        };
 
         let result = match &prepared {
             Ok((pool_key, db_params)) => {
@@ -471,47 +463,46 @@ where
         Err(error) => Err(RdbmsError::other_response_failure(error)),
     };
 
-    let request = HostRequestGolemRdbmsRequest {
-        request: prepared.as_ref().ok().map(|(pool_key, db_params)| {
-            RdbmsRequest::<T>::new(pool_key.clone(), statement.clone(), db_params.clone(), None)
-                .into()
-        }),
-    };
-
-    let authorization = if ctx.state.is_live() {
-        match prepared.as_ref() {
-            Ok((pool_key, _)) => Some(authorize_sql::<Ctx, T>(ctx, pool_key, &statement).await?),
-            Err(_) => None,
-        }
-    } else {
-        None
-    };
-
-    let mut handle = DurableCallSession::<T::ConnQuery, NotCancellable>::start(
+    let begun = DurableCallSession::<T::ConnQuery, NotCancellable>::begin(
         ctx,
-        request,
         DurableFunctionType::WriteRemote,
     )
     .await?;
 
     let result = 'result: {
-        if !handle.is_live() {
-            match handle.replay(ctx).await? {
-                CallReplayOutcome::Replayed(replayed) => break 'result replayed,
-                CallReplayOutcome::Incomplete(live) => handle = live,
+        let (mut handle, _authorization_permit) = match begun.resolve(ctx).await? {
+            ResolvedCall::Live(begun) => {
+                let request = HostRequestGolemRdbmsRequest {
+                    request: prepared.as_ref().ok().map(|(pool_key, db_params)| {
+                        RdbmsRequest::<T>::new(
+                            pool_key.clone(),
+                            statement.clone(),
+                            db_params.clone(),
+                            None,
+                        )
+                        .into()
+                    }),
+                };
+                let permit = match prepared.as_ref() {
+                    Ok((pool_key, _)) => {
+                        match authorize_sql::<Ctx, T>(ctx, pool_key, &statement).await? {
+                            Ok(permit) => Some(permit),
+                            Err(denial) => {
+                                break 'result begun
+                                    .start_live_denied(ctx, request, denial)
+                                    .await?;
+                            }
+                        }
+                    }
+                    Err(_) => None,
+                };
+                (begun.start_live(ctx, request).await?, permit)
             }
-        }
-
-        if let Some(Err(error)) = authorization {
-            break 'result handle
-                .complete(
-                    ctx,
-                    HostResponseGolemRdbmsResult {
-                        result: Err(error.into()),
-                    },
-                )
-                .await?;
-        }
+            ResolvedCall::Replay(handle) => match handle.replay(ctx).await? {
+                CallReplayOutcome::Replayed(replayed) => break 'result replayed,
+                CallReplayOutcome::Incomplete(live) => (live, None),
+            },
+        };
 
         let result = match &prepared {
             Ok((pool_key, db_params)) => {
@@ -638,7 +629,7 @@ where
                 .complete(
                     ctx,
                     HostResponseGolemRdbmsRequest {
-                        request: Err(error.into()),
+                        request: Err(RdbmsError::QueryExecutionFailure(error).into()),
                     },
                 )
                 .await?;
@@ -1027,7 +1018,7 @@ where
                 .complete(
                     ctx,
                     HostResponseGolemRdbmsResult {
-                        result: Err(error.into()),
+                        result: Err(RdbmsError::QueryExecutionFailure(error).into()),
                     },
                 )
                 .await?;
@@ -1133,7 +1124,7 @@ where
                 .complete(
                     ctx,
                     HostResponseGolemRdbmsRowCount {
-                        result: Err(error.into()),
+                        result: Err(RdbmsError::QueryExecutionFailure(error).into()),
                     },
                 )
                 .await?;
@@ -1208,7 +1199,7 @@ where
                 .complete(
                     ctx,
                     HostResponseGolemRdbmsRequest {
-                        request: Err(error.into()),
+                        request: Err(RdbmsError::QueryExecutionFailure(error).into()),
                     },
                 )
                 .await?;

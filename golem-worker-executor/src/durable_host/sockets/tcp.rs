@@ -15,6 +15,7 @@
 use wasmtime::component::Resource;
 
 use crate::durable_host::authorization::targets::tcp_target;
+use crate::durable_host::concurrent::ResolvedCall;
 use crate::durable_host::{DurabilityHost, DurableCallSession, DurableWorkerCtx, NotCancellable};
 use crate::workerctx::WorkerCtx;
 use golem_common::SafeDisplay;
@@ -247,36 +248,54 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 
 /// Checks the permission of a connect in a durable call, so that replay returns the recorded
-/// decision instead of checking again. An address that has no permission target is denied. The
-/// repair of an incomplete check during replay cannot authorize, so it completes as allowed.
+/// decision instead of checking again. An address that has no permission target is denied. A
+/// denied check records the denial in its `Start`, so the recovery of an incomplete denied check
+/// denies the connect too; an incomplete check without a denial was allowed.
 async fn authorize_connect<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     remote_address: &IpSocketAddress,
 ) -> Result<(), SocketError> {
-    let response = DurableCallSession::<SocketsTcpConnectPermissionCheck, NotCancellable>::invoke(
+    let begun = DurableCallSession::<SocketsTcpConnectPermissionCheck, NotCancellable>::begin(
         ctx,
-        HostRequestSocketsTcpConnectPermissionCheck {
-            address: std::net::SocketAddr::from(*remote_address).to_string(),
-        },
         DurableFunctionType::ReadLocal,
-        async |ctx| -> wasmtime::Result<_> {
-            let result = if !ctx.is_live() {
-                Ok(())
-            } else {
-                match ip_socket_target(remote_address) {
-                    Some(target) => ctx
-                        .authorize_live_permission(&target)
-                        .await?
-                        .map(|_| ())
-                        .map_err(|error| error.to_safe_string()),
-                    None => Err("the address has no permission target".to_string()),
-                }
-            };
-            Ok(HostResponsePermissionCheck { result })
-        },
     )
     .await
     .map_err(SocketError::trap)?;
+    let request = HostRequestSocketsTcpConnectPermissionCheck {
+        address: std::net::SocketAddr::from(*remote_address).to_string(),
+    };
+    let response = 'resp: {
+        let handle = match begun.resolve(ctx).await.map_err(SocketError::trap)? {
+            ResolvedCall::Live(begun) => {
+                let denial = match ip_socket_target(remote_address) {
+                    Some(target) => ctx
+                        .authorize_live_permission(&target)
+                        .await
+                        .map_err(SocketError::trap)?
+                        .err()
+                        .map(|error| error.to_safe_string()),
+                    None => Some("the address has no permission target".to_string()),
+                };
+                if let Some(denial) = denial {
+                    break 'resp begun
+                        .start_live_denied(ctx, request, denial)
+                        .await
+                        .map_err(|error| SocketError::trap(wasmtime::Error::from_anyhow(error)))?;
+                }
+                begun
+                    .start_live(ctx, request)
+                    .await
+                    .map_err(SocketError::trap)?
+            }
+            ResolvedCall::Replay(handle) => handle,
+        };
+        handle
+            .run(ctx, async |_| -> wasmtime::Result<_> {
+                Ok(HostResponsePermissionCheck { result: Ok(()) })
+            })
+            .await
+            .map_err(SocketError::trap)?
+    };
     response.result.map_err(|_| ErrorCode::AccessDenied.into())
 }
 
