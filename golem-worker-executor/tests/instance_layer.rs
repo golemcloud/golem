@@ -761,7 +761,10 @@ async fn cross_store_wallet_change(
     }
     let oplog = active.execution().oplog();
     let tip = oplog.current_oplog_index().await;
-    let entries = oplog.read_exact(OplogIndex::INITIAL, u64::from(tip)).await;
+    let entries = oplog
+        .read_exact(OplogIndex::INITIAL, u64::from(tip))
+        .await
+        .unwrap();
     if matches!(change, WalletChange::Transfer) {
         assert!(
             entries.values().any(|entry| matches!(entry,
@@ -2088,7 +2091,8 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
             parent_start.next(),
             u64::from(live_tip) - u64::from(parent_start),
         )
-        .await;
+        .await
+        .unwrap();
     let config_start = live_entries
         .iter()
         .find_map(|(index, entry)| match entry {
@@ -2350,7 +2354,8 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
             parent_start.next(),
             u64::from(live_tip) - u64::from(parent_start),
         )
-        .await;
+        .await
+        .unwrap();
     let reveal_start = entries
         .iter()
         .find_map(|(index, entry)| match entry {
@@ -2750,7 +2755,8 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
     assert!(after > before);
     let appended = owner_oplog
         .read_exact(before.next(), u64::from(after) - u64::from(before))
-        .await;
+        .await
+        .unwrap();
     assert!(
         appended
             .values()
@@ -2874,7 +2880,8 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
                         before_sleep.next(),
                         u64::from(latest) - u64::from(before_sleep),
                     )
-                    .await;
+                    .await
+                    .unwrap();
                 if entries
                     .values()
                     .any(|entry| matches!(entry, OplogEntry::Start { .. }))
@@ -4328,7 +4335,8 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
             before_denial.next(),
             u64::from(after_denial) - u64::from(before_denial),
         )
-        .await;
+        .await
+        .unwrap();
     let config_start = denial_entries
         .iter()
         .find_map(|(index, entry)| match entry {
@@ -4517,7 +4525,8 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
             before_reveal_denial.next(),
             u64::from(after_reveal_denial) - u64::from(before_reveal_denial),
         )
-        .await;
+        .await
+        .unwrap();
     let reveal_start = reveal_entries
         .iter()
         .find_map(|(index, entry)| match entry {

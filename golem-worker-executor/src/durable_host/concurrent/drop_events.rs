@@ -183,7 +183,7 @@ impl HttpSpanCleanupRecorder {
         ) = self
             .replay
             .visible_terminal_entry(self.send_start_index)
-            .await
+            .await?
             && finished.span_id == span_id
         {
             return Ok(HttpSpanCleanupProgress::Complete);
@@ -237,7 +237,7 @@ impl HttpSpanCleanupRecorder {
                     .await
                     .map_err(WorkerExecutorError::runtime)?;
                 let expected: HostResponse = HostResponseGolemApiUnit { result: Ok(()) }.into();
-                let end = self.oplog.read(end_idx).await;
+                let end = self.oplog.read(end_idx).await?;
                 if response != expected
                     || !matches!(&end, OplogEntry::End { span_finished: Some(finished), .. } if finished.span_id == span_id)
                 {
@@ -1199,7 +1199,7 @@ pub(super) mod tests {
                 ));
             }
             let before = oplog
-                .read_exact(OplogIndex::INITIAL, oplog.length().await)
+                .read_exact(OplogIndex::INITIAL, oplog.length().await.unwrap())
                 .await;
             let (recorder, mut events) = cleanup_recorder(oplog.clone(), false, true).await;
             let replay = recorder.replay.clone();
@@ -1229,7 +1229,7 @@ pub(super) mod tests {
             ));
             assert_eq!(
                 oplog
-                    .read_exact(OplogIndex::INITIAL, oplog.length().await)
+                    .read_exact(OplogIndex::INITIAL, oplog.length().await.unwrap())
                     .await,
                 before
             );
@@ -1253,7 +1253,7 @@ pub(super) mod tests {
             assert!(recorder.record(closed.clone()).is_none());
             reached_rx.recv().await.unwrap();
             assert_eq!(
-                oplog.length().await,
+                oplog.length().await.unwrap(),
                 1,
                 "pair must not be partially visible"
             );
@@ -1287,13 +1287,13 @@ pub(super) mod tests {
             ));
             assert!(receiver.try_recv().is_err());
             assert_eq!(later, OplogIndex::from_u64(4));
-            let start = oplog.read(OplogIndex::from_u64(2)).await;
+            let start = oplog.read(OplogIndex::from_u64(2)).await.unwrap();
             assert!(matches!(start, OplogEntry::Start {
                 timestamp, parent_start_index: Some(parent), observational_owner: Some(owner),
                 function_name, durable_function_type: DurableFunctionType::ReadLocal, ..
             } if timestamp == closed.finished_at && parent == OplogIndex::from_u64(8)
                 && owner == OplogIndex::from_u64(11) && function_name == P3HttpSpanCleanup::HOST_FUNCTION_NAME));
-            let end = oplog.read(OplogIndex::from_u64(3)).await;
+            let end = oplog.read(OplogIndex::from_u64(3)).await.unwrap();
             assert!(
                 matches!(end, OplogEntry::End { start_index, span_finished: Some(span), .. }
                 if start_index == OplogIndex::from_u64(2) && span == closed)
@@ -1372,7 +1372,7 @@ pub(super) mod tests {
                 HttpSpanCleanupProgress::Complete
             ));
             assert_eq!(
-                oplog.length().await,
+                oplog.length().await.unwrap(),
                 4,
                 "replay must not append another cleanup"
             );
@@ -1453,7 +1453,7 @@ pub(super) mod tests {
             cleanup.progress.await.unwrap(),
             HttpSpanCleanupProgress::Complete
         ));
-        assert_eq!(oplog.length().await, 5);
+        assert_eq!(oplog.length().await.unwrap(), 5);
     }
 
     #[test]
@@ -1497,7 +1497,11 @@ pub(super) mod tests {
         };
         assert_eq!(existing, Some((index, recorded.finished_at)));
         assert!(replay_ended);
-        assert_eq!(oplog.length().await, 2, "no append before live transition");
+        assert_eq!(
+            oplog.length().await.unwrap(),
+            2,
+            "no append before live transition"
+        );
         let memory = crate::services::linear_memory::LinearMemoryTracker::new(
             2,
             2,
@@ -1523,12 +1527,12 @@ pub(super) mod tests {
                 .unwrap(),
             HttpSpanCleanupProgress::Complete
         ));
-        let end = oplog.read(OplogIndex::from_u64(3)).await;
+        let end = oplog.read(OplogIndex::from_u64(3)).await.unwrap();
         assert!(
             matches!(end, OplogEntry::End { start_index, span_finished: Some(span), .. }
             if start_index == index && span == recorded)
         );
-        assert_eq!(oplog.length().await, 3);
+        assert_eq!(oplog.length().await.unwrap(), 3);
         drop(driver);
     }
 
@@ -1546,7 +1550,7 @@ pub(super) mod tests {
                 cleanup.progress.clone().await.unwrap(),
                 HttpSpanCleanupProgress::Complete
             ));
-            assert_eq!(oplog.length().await, 1);
+            assert_eq!(oplog.length().await.unwrap(), 1);
         }
     }
 }

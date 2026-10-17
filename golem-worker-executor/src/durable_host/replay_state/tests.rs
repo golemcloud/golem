@@ -1,4 +1,5 @@
 use super::*;
+use crate::services::oplog::UnreadableOplog;
 use crate::services::oplog::{CommitLevel, OplogAddReceipt, OrderedOplogStart, PendingUpload};
 use async_trait::async_trait;
 use golem_common::model::card::{
@@ -140,7 +141,7 @@ impl Oplog for InMemoryOplog {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         let entries = self.entries.lock().unwrap();
         let start: u64 = oplog_index.into();
         let mut result = BTreeMap::new();
@@ -154,11 +155,11 @@ impl Oplog for InMemoryOplog {
             result.insert(OplogIndex::from_u64(i), entry.clone());
             self.reads.lock().unwrap().push(OplogIndex::from_u64(i));
         }
-        result
+        Ok(result)
     }
 
-    async fn length(&self) -> u64 {
-        self.entries.lock().unwrap().len() as u64
+    async fn length(&self) -> Result<u64, UnreadableOplog> {
+        Ok(self.entries.lock().unwrap().len() as u64)
     }
 
     async fn upload_raw_payload(&self, _data: Vec<u8>) -> Result<RawOplogPayload, String> {
@@ -1196,7 +1197,7 @@ async fn primary_publication_requires_completed_reconstruction_validation() {
             let memory = memory.clone();
             move |state| async move {
                 state
-                    .with_tx(async |tx| Ok(tx.finish_primary_settling(target, &memory).await))
+                    .with_tx(async |tx| Ok(tx.finish_primary_settling(target, &memory).await?))
                     .await
             }
         })
@@ -1584,7 +1585,9 @@ async fn old_settler_cannot_publish_a_grown_target() {
             move |state| async move {
                 state
                     .with_tx(async |tx| {
-                        Ok(tx.finish_primary_settling(old_target, &stale_memory).await)
+                        Ok(tx
+                            .finish_primary_settling(old_target, &stale_memory)
+                            .await?)
                     })
                     .await
             }
@@ -1603,7 +1606,7 @@ async fn old_settler_cannot_publish_a_grown_target() {
                     .with_tx(async |tx| {
                         Ok(tx
                             .finish_primary_settling(second_target, &current_memory)
-                            .await)
+                            .await?)
                     })
                     .await
             }
@@ -7991,7 +7994,9 @@ async fn visible_terminal_scan_crosses_multiple_chunks() {
     let rs = replay_state_over(entries).await;
 
     assert!(
-        rs.has_visible_terminal(OplogIndex::from_u64(2)).await,
+        rs.has_visible_terminal(OplogIndex::from_u64(2))
+            .await
+            .unwrap(),
         "entity execution mode classification must scan through the complete replay prefix"
     );
 }
@@ -8010,7 +8015,8 @@ async fn visible_scope_descendant_distinguishes_owned_work_from_siblings() {
     assert!(
         !only_sibling
             .has_visible_scope_descendant(OplogIndex::from_u64(2))
-            .await,
+            .await
+            .unwrap(),
         "a later sibling must not be mistaken for historical entity-body work"
     );
 
@@ -8026,7 +8032,8 @@ async fn visible_scope_descendant_distinguishes_owned_work_from_siblings() {
     assert!(
         owned_child
             .has_visible_scope_descendant(OplogIndex::from_u64(2))
-            .await,
+            .await
+            .unwrap(),
         "a nested Start proves the historical entity body began execution"
     );
 }

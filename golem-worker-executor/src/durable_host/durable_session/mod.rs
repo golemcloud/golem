@@ -1301,7 +1301,7 @@ impl StreamSession {
                                 "durable initial attachment has no pending invocation".to_string()
                             })?
                         )
-                        .await,
+                        .await?,
                     OplogEntry::PendingAgentInvocation { idempotency_key, .. }
                         if idempotency_key == self.session_key.idempotency_key
                 ))
@@ -5389,7 +5389,7 @@ impl StreamSession {
         let horizon = self.oplog.current_oplog_index().await;
         while covered < horizon {
             let count = (horizon.as_u64() - covered.as_u64()).min(1024);
-            for (index, entry) in self.oplog.read_exact(covered.next(), count).await {
+            for (index, entry) in self.oplog.read_exact(covered.next(), count).await? {
                 if self
                     .producer
                     .fork_lineage

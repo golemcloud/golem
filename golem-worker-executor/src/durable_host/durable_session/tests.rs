@@ -1685,7 +1685,7 @@ async fn guest_owned_u8_output_uses_the_packed_durable_path() {
         .await
         .unwrap()
         .value;
-    let entries_before_output = oplog.length().await;
+    let entries_before_output = oplog.length().await.unwrap();
     let streams = StreamSession::new(
         producer.clone(),
         oplog.clone(),
@@ -1716,7 +1716,7 @@ async fn guest_owned_u8_output_uses_the_packed_durable_path() {
     publisher.publish_end().await.unwrap();
     drain_task.await.unwrap().unwrap();
     assert_eq!(
-        oplog.length().await,
+        oplog.length().await.unwrap(),
         entries_before_output + 2,
         "consecutive guest u8 values must share one durable item batch"
     );
@@ -1848,6 +1848,7 @@ async fn guest_byte_drain_after_partial_fork_replays_prefix_and_resumes_suffix()
             cut_index.as_u64() - OplogIndex::INITIAL.as_u64() + 1,
         )
         .await
+        .unwrap()
     {
         fork_oplog.add(entry).await.unwrap();
     }
@@ -3474,7 +3475,8 @@ async fn foreign_cancellation_recovery_applies_persisted_intent_without_delete_r
             .unwrap();
         let after = remote_oplog.current_oplog_index().await;
         assert_eq!(after, before.next());
-        let OplogEntry::StreamCancel { record, .. } = remote_oplog.read(after).await else {
+        let OplogEntry::StreamCancel { record, .. } = remote_oplog.read(after).await.unwrap()
+        else {
             panic!("remote cancellation was not committed");
         };
         let record = remote_oplog.download_payload(record).await.unwrap();
@@ -4127,7 +4129,7 @@ async fn local_cancellation_intent_recovers_without_retry_and_preserves_terminal
             after.as_u64(),
             before.as_u64() + u64::from(!already_ended) + 1
         );
-        let OplogEntry::StreamSession { record, .. } = oplog.read(after).await else {
+        let OplogEntry::StreamSession { record, .. } = oplog.read(after).await.unwrap() else {
             panic!("missing cancellation applied receipt");
         };
         let StreamSessionRecord::ConsumerCancelApplied(receipt) =
@@ -4144,7 +4146,8 @@ async fn local_cancellation_intent_recovers_without_retry_and_preserves_terminal
                 .has_cancellation_intents()
         );
         if !already_ended {
-            let OplogEntry::StreamCancel { record, .. } = oplog.read(before.next()).await else {
+            let OplogEntry::StreamCancel { record, .. } = oplog.read(before.next()).await.unwrap()
+            else {
                 panic!("missing recovered cancellation terminal");
             };
             let record = oplog.download_payload(record).await.unwrap();
@@ -6373,6 +6376,7 @@ async fn check_dropped_input_cancellation(unread_resource: bool) {
     for (_, entry) in oplog
         .read_exact(OplogIndex::INITIAL, current.as_u64())
         .await
+        .unwrap()
     {
         match entry {
             OplogEntry::StreamSession { record, .. } => {
@@ -6640,6 +6644,7 @@ async fn guest_authored_input_cancellation_targets_the_current_attachment_epoch(
     for (_, entry) in oplog
         .read_exact(OplogIndex::INITIAL, current.as_u64())
         .await
+        .unwrap()
     {
         if let OplogEntry::StreamSession { record, .. } = entry
             && let StreamSessionRecord::ConsumerCancelIntent(record) =
@@ -8446,6 +8451,7 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
     for (index, entry) in oplog
         .read_exact(OplogIndex::INITIAL, current.as_u64())
         .await
+        .unwrap()
     {
         match entry {
             OplogEntry::StreamSession { record, .. } => {
@@ -8617,6 +8623,7 @@ async fn nested_consumer_mappings_preserve_the_parent_input_or_output_role() {
     for (index, entry) in oplog
         .read_exact(OplogIndex::INITIAL, current.as_u64())
         .await
+        .unwrap()
     {
         let OplogEntry::StreamSession { record, .. } = entry else {
             continue;
@@ -11251,6 +11258,7 @@ async fn local_reader_forwarding_reuses_only_retained_destinations_after_fork_an
                     for (_, entry) in oplog
                         .read_exact(OplogIndex::INITIAL, cut_index.as_u64())
                         .await
+                        .unwrap()
                     {
                         copied.add(entry).await.unwrap();
                     }
@@ -11608,6 +11616,7 @@ async fn forwarded_output_intents_survive_result_and_nested_publication_cuts() {
                     for (_, entry) in oplog
                         .read_exact(OplogIndex::INITIAL, cut_index.as_u64())
                         .await
+                        .unwrap()
                     {
                         copied.add(entry).await.unwrap();
                     }

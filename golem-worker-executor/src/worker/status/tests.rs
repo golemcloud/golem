@@ -15,6 +15,7 @@
 use crate::model::ExecutionStatus;
 use crate::services::component::ComponentService;
 use crate::services::golem_config::GolemConfig;
+use crate::services::oplog::UnreadableOplog;
 use crate::services::oplog::{Oplog, OplogService};
 use crate::services::{HasComponentService, HasConfig, HasOplogService};
 use crate::worker::snapshot_selection::names_in_use;
@@ -988,6 +989,78 @@ async fn empty() {
     let test_case = TestCase::builder(0).build();
 
     run_test_case(test_case).await;
+}
+
+#[test]
+async fn the_status_reader_reads_nothing_past_its_horizon() {
+    let test_case = TestCase::builder(0)
+        .add(OplogEntry::recovery_succeeded(), |status| status)
+        .build();
+    let reader = super::StatusOplogReader::new(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        None,
+        OplogIndex::from_u64(1),
+    );
+    assert!(
+        reader
+            .read_exact(OplogIndex::from_u64(2), 1)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+async fn last_error_gives_the_error_and_the_stderr_of_the_failed_invocation() {
+    let idempotency_key = IdempotencyKey::fresh();
+    let retry_from = OplogIndex::from_u64(2);
+    let test_case = TestCase::builder(0)
+        .agent_invocation_started("a", vec![], idempotency_key)
+        .add(
+            OplogEntry::log(
+                None,
+                golem_common::model::oplog::LogLevel::Stderr,
+                String::new(),
+                "boom\n".to_string(),
+                None,
+            ),
+            |status| status,
+        )
+        .add(
+            OplogEntry::error(
+                None,
+                OplogErrorKind::Invocation,
+                AgentError::TransientError("failed".to_string()),
+                retry_from,
+                None,
+            ),
+            |mut status| {
+                status.status = AgentStatus::Failed;
+                status
+            },
+        )
+        .build();
+    let status = test_case.entries.last().unwrap().expected_status.clone();
+
+    let last_error = crate::durable_host::last_error(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        &status,
+    )
+    .await
+    .expect("a failed agent has a last error");
+
+    assert_eq!(
+        (last_error.error, last_error.stderr, last_error.retry_from),
+        (
+            AgentError::TransientError("failed".to_string()),
+            "boom\n".to_string(),
+            retry_from
+        )
+    );
 }
 
 #[test]
@@ -3468,6 +3541,8 @@ async fn non_existing_oplog() {
         entries: vec![],
         read_starts: Arc::new(std::sync::Mutex::new(Vec::new())),
         raw_payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+        unreadable_from: None,
+        unavailable_from: None,
     };
 
     let result = calculate_last_known_status(&test_case, &owned_agent_id, AgentMode::Durable, None)
@@ -3813,6 +3888,100 @@ async fn checkpoint_repair_falls_back_to_full_recompute_when_checkpoint_unusable
         read_starts.contains(&1),
         "expected a full recompute from idx 1, got {read_starts:?}"
     );
+}
+
+/// A rebuild of the status reads the oplog. When a later archive chunk does not read, the rebuild
+/// gives the unreadable oplog, the commit is refused with it, and the agent fails with
+/// `OplogFailed`, instead of a panic that stops the executor.
+#[test]
+async fn a_rebuild_over_an_unreadable_oplog_refuses_the_commit() {
+    use crate::services::oplog::{OplogError, OplogRefusal};
+    use crate::worker::state_actor::reconstructed_status;
+
+    let mut test_case = rebuild_fixture();
+    let last = test_case.entries.len() as u64;
+    test_case.unreadable_from = Some(last);
+    let reader = StatusOplogReader::new(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        None,
+        OplogIndex::from_u64(last),
+    );
+
+    let rebuilt = calculate_status_with_reader(&test_case, &reader, None, || async { None }).await;
+    let Err(super::StatusError::Unreadable(unreadable)) = &rebuilt else {
+        panic!("the rebuild must give the unreadable oplog: {rebuilt:?}");
+    };
+    assert_eq!(unreadable.agent_id, test_case.owned_agent_id.agent_id);
+    let unreadable = unreadable.clone();
+
+    let refusal = reconstructed_status(rebuilt).expect_err("the commit must be refused");
+    assert_eq!(refusal, OplogRefusal::Unreadable(unreadable.clone()));
+    assert_eq!(
+        WorkerExecutorError::from(OplogError::from(refusal)),
+        WorkerExecutorError::from(unreadable)
+    );
+}
+
+/// A rebuild after the failure of an invocation reads an archive whose storage does not answer.
+/// The refusal is a recovery, not a terminal failure, so the invocation stays pending. When the
+/// storage answers again, the same rebuild gives the status.
+#[test]
+async fn a_rebuild_over_an_unavailable_archive_is_a_recovery_that_passes_later() {
+    use crate::durable_host::{TerminalEntryRefusal, terminal_entry_refusal};
+    use crate::services::oplog::{OplogError, OplogRefusal};
+    use crate::worker::state_actor::reconstructed_status;
+
+    let mut test_case = rebuild_fixture();
+    let last = test_case.entries.len() as u64;
+    test_case.unavailable_from = Some(last);
+    let reader = StatusOplogReader::new(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        None,
+        OplogIndex::from_u64(last),
+    );
+
+    let rebuilt = calculate_status_with_reader(&test_case, &reader, None, || async { None }).await;
+    let refusal = reconstructed_status(rebuilt).expect_err("the commit must be refused");
+    let OplogRefusal::Unreadable(unreadable) = &refusal else {
+        panic!("the refusal must be the unreadable oplog: {refusal:?}");
+    };
+    assert!(unreadable.is_transient(), "{unreadable:?}");
+    let refusal = terminal_entry_refusal(&OplogError::from(refusal));
+    assert!(
+        matches!(
+            &refusal,
+            TerminalEntryRefusal::RecoveryRequired(WorkerExecutorError::RecoveryRequired { details, .. })
+                if details.contains("injected archive outage")
+        ),
+        "{refusal:?}"
+    );
+
+    test_case.unavailable_from = None;
+    let reader = StatusOplogReader::new(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        None,
+        OplogIndex::from_u64(last),
+    );
+    let rebuilt = calculate_status_with_reader(&test_case, &reader, None, || async { None }).await;
+    reconstructed_status(rebuilt).expect("the rebuild must pass when the storage answers again");
+}
+
+fn rebuild_fixture() -> TestCase {
+    TestCase::builder(0)
+        .grow_memory(17)
+        .agent_invocation_finished(
+            AgentInvocationResult::AgentInitialization,
+            IdempotencyKey::fresh(),
+            ComponentRevision::INITIAL,
+        )
+        .grow_memory(5)
+        .build()
 }
 
 #[test]
@@ -4605,6 +4774,8 @@ impl TestCaseBuilder {
                 .collect(),
             read_starts: Arc::new(std::sync::Mutex::new(Vec::new())),
             raw_payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+            unreadable_from: None,
+            unavailable_from: None,
         }
     }
 }
@@ -4634,6 +4805,10 @@ struct TestCase {
     /// a recompute folded from. Shared across `self.clone()`s handed out by `oplog_service()`.
     read_starts: Arc<std::sync::Mutex<Vec<u64>>>,
     raw_payloads: Arc<std::sync::Mutex<RawPayloads>>,
+    /// The first index that does not read, as an archive chunk that does not decode.
+    unreadable_from: Option<u64>,
+    /// The first index whose archive storage does not answer, as in an outage.
+    unavailable_from: Option<u64>,
 }
 
 impl TestCase {
@@ -4699,7 +4874,7 @@ impl OplogService for TestCase {
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         _shard_epoch: Option<golem_common::model::ShardEpoch>,
-    ) -> Arc<dyn Oplog + 'static> {
+    ) -> Result<Arc<dyn Oplog + 'static>, WorkerExecutorError> {
         unreachable!()
     }
 
@@ -4713,7 +4888,7 @@ impl OplogService for TestCase {
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         _shard_epoch: Option<golem_common::model::ShardEpoch>,
-    ) -> Arc<dyn Oplog + 'static> {
+    ) -> Result<Arc<dyn Oplog + 'static>, WorkerExecutorError> {
         unreachable!()
     }
 
@@ -4727,7 +4902,7 @@ impl OplogService for TestCase {
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         _shard_epoch: Option<golem_common::model::ShardEpoch>,
-    ) -> Arc<dyn Oplog + 'static> {
+    ) -> Result<Arc<dyn Oplog + 'static>, WorkerExecutorError> {
         unreachable!()
     }
 
@@ -4735,8 +4910,8 @@ impl OplogService for TestCase {
         &self,
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
-    ) -> OplogIndex {
-        OplogIndex::from_u64(self.entries.len() as u64)
+    ) -> Result<OplogIndex, UnreadableOplog> {
+        Ok(OplogIndex::from_u64(self.entries.len() as u64))
     }
 
     async fn assert_owning_epoch(
@@ -4764,16 +4939,38 @@ impl OplogService for TestCase {
         _agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         let mut result = BTreeMap::new();
         let idx_u64: u64 = idx.into();
         self.read_starts.lock().unwrap().push(idx_u64);
         if n == 0 {
-            return result;
+            return Ok(result);
         }
         let end = idx_u64
             .checked_add(n - 1)
             .unwrap_or_else(|| panic!("Invalid oplog range starting at {idx} with {n} entries"));
+        if let Some(unavailable) = self.unavailable_from
+            && unavailable <= end
+        {
+            return Err(UnreadableOplog {
+                agent_id: self.owned_agent_id.agent_id.clone(),
+                error: crate::services::oplog::OplogReadError::source_unavailable(
+                    crate::services::oplog::OplogReadSource::Archive(1),
+                    "injected archive outage",
+                ),
+            });
+        }
+        if let Some(unreadable) = self.unreadable_from
+            && unreadable <= end
+        {
+            return Err(UnreadableOplog {
+                agent_id: self.owned_agent_id.agent_id.clone(),
+                error: crate::services::oplog::OplogReadError::Gap {
+                    start: OplogIndex::from_u64(unreadable.max(idx_u64)),
+                    end: OplogIndex::from_u64(end),
+                },
+            });
+        }
         for i in idx_u64..=end {
             let entry = i
                 .checked_sub(1)
@@ -4786,10 +4983,14 @@ impl OplogService for TestCase {
                 });
             result.insert(OplogIndex::from_u64(i), entry.oplog_entry.clone());
         }
-        result
+        Ok(result)
     }
 
-    async fn exists(&self, _owned_agent_id: &OwnedAgentId, _agent_mode: AgentMode) -> bool {
+    async fn exists(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+    ) -> Result<bool, UnreadableOplog> {
         unreachable!()
     }
 

@@ -3328,7 +3328,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     where
         Pair::Req: TryFrom<HostRequest, Error = String>,
     {
-        let entry = ctx.state.oplog.read(self.start_idx).await;
+        let entry = ctx.state.oplog.read(self.start_idx).await?;
         let OplogEntry::Start {
             request: Some(request),
             ..
@@ -3362,7 +3362,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         &self,
         ctx: &DurableWorkerCtx<Ctx>,
     ) -> Result<Option<golem_common::model::oplog::SpanStarted>, WorkerExecutorError> {
-        match ctx.state.oplog.read(self.start_idx).await {
+        match ctx.state.oplog.read(self.start_idx).await? {
             OplogEntry::Start { span_started, .. } => Ok(span_started.map(|span| *span)),
             entry => Err(WorkerExecutorError::unexpected_oplog_entry(
                 format!("Start at {}", self.start_idx),
@@ -3382,7 +3382,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ctx: WorkerCtx,
     {
         let oplog = store.with(|mut access| get_ctx(access.data_mut()).state.oplog.clone());
-        match oplog.read(self.start_idx).await {
+        match oplog.read(self.start_idx).await? {
             OplogEntry::Start { span_started, .. } => Ok(span_started.map(|span| *span)),
             entry => Err(WorkerExecutorError::unexpected_oplog_entry(
                 format!("Start at {}", self.start_idx),

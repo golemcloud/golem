@@ -2713,12 +2713,12 @@ impl InFunctionRetryController {
 pub async fn count_oplog_errors_for(
     oplog: &Arc<dyn crate::services::oplog::Oplog>,
     retry_point: OplogIndex,
-) -> u32 {
-    let len = oplog.length().await;
+) -> Result<u32, crate::services::oplog::UnreadableOplog> {
+    let len = oplog.length().await?;
     if len == 0 {
-        return 0;
+        return Ok(0);
     }
-    let entries = oplog.read_exact(OplogIndex::INITIAL, len).await;
+    let entries = oplog.read_exact(OplogIndex::INITIAL, len).await?;
     let mut count: u32 = 0;
     for entry in entries.values() {
         if let OplogEntry::Error { retry_from, .. } = entry
@@ -2727,7 +2727,7 @@ pub async fn count_oplog_errors_for(
             count += 1;
         }
     }
-    count
+    Ok(count)
 }
 
 /// Implementation of [`InFunctionRetryHost`] for spawned background tasks (async RPC, HTTP).

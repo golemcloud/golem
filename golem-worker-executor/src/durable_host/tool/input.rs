@@ -324,7 +324,7 @@ impl<Ctx: WorkerCtx> PrepareAttachmentObservation<Ctx> {
                 )
                 .await?;
             if let Some((index, _)) = boundary {
-                let entry = self.oplog.read(index).await;
+                let entry = self.oplog.read(index).await?;
                 if read.observation != self.observation
                     || entry.entity_parent_start_index() != self.parent
                 {

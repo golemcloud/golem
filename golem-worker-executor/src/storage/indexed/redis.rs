@@ -222,7 +222,7 @@ return 1
     ) -> IndexedStorageError {
         expected
             .and_then(|expected| Self::parse_fenced(&error, key, expected))
-            .unwrap_or_else(|| Self::classify_read_error(error))
+            .unwrap_or_else(|| Self::classify_idempotent_error(error))
     }
 
     async fn append_fenced(
@@ -419,7 +419,9 @@ return 1
         }
     }
 
-    fn classify_read_error(error: RedisError) -> IndexedStorageError {
+    /// Classifies the error of a command that reads, or that gives the same result when it is sent
+    /// again, so a lost connection or a timeout is safe to retry.
+    fn classify_idempotent_error(error: RedisError) -> IndexedStorageError {
         if matches!(
             error.kind(),
             ErrorKind::IO | ErrorKind::Timeout | ErrorKind::Canceled
@@ -492,7 +494,7 @@ impl IndexedStorage for RedisIndexedStorage {
             .with(svc_name, api_name)
             .exists(Self::composite_key(namespace, key))
             .await
-            .map_err(|e| IndexedStorageError::Other(e.to_string()))
+            .map_err(Self::classify_idempotent_error)
     }
 
     async fn scan_stable(
@@ -520,7 +522,7 @@ impl IndexedStorage for RedisIndexedStorage {
                 count,
             )
             .await
-            .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
+            .map_err(Self::classify_idempotent_error)?;
         let keys = keys
             .into_iter()
             .map(|key| Self::parse_composite_meta_key(namespace.clone(), &key))
@@ -717,7 +719,7 @@ impl IndexedStorage for RedisIndexedStorage {
             .with(svc_name, api_name)
             .xlen(Self::composite_key(namespace, key))
             .await
-            .map_err(|e| IndexedStorageError::Other(e.to_string()))
+            .map_err(Self::classify_idempotent_error)
     }
 
     async fn delete(
@@ -731,7 +733,7 @@ impl IndexedStorage for RedisIndexedStorage {
             .with(svc_name, api_name)
             .del(Self::composite_key(namespace, key))
             .await
-            .map_err(|e| IndexedStorageError::Other(e.to_string()))
+            .map_err(Self::classify_idempotent_error)
     }
 
     async fn read(
@@ -749,7 +751,7 @@ impl IndexedStorage for RedisIndexedStorage {
             .with(svc_name, api_name)
             .xrange(Self::composite_key(namespace, key), start_id, end_id, None)
             .await
-            .map_err(Self::classify_read_error)?;
+            .map_err(Self::classify_idempotent_error)?;
 
         let result = self.process_stream(svc_name, entity_name, items)?;
         Ok(result)
@@ -768,7 +770,7 @@ impl IndexedStorage for RedisIndexedStorage {
             .with(svc_name, api_name)
             .xrange(Self::composite_key(namespace, key), "-", "+", Some(1))
             .await
-            .map_err(Self::classify_read_error)?;
+            .map_err(Self::classify_idempotent_error)?;
 
         let result = self.process_stream(svc_name, entity_name, items)?;
         Ok(result.into_iter().next())
@@ -787,7 +789,7 @@ impl IndexedStorage for RedisIndexedStorage {
             .with(svc_name, api_name)
             .xrevrange(Self::composite_key(namespace, key), "+", "-", Some(1))
             .await
-            .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
+            .map_err(Self::classify_idempotent_error)?;
 
         let result = self.process_stream(svc_name, entity_name, items)?;
         Ok(result.into_iter().next())
@@ -822,7 +824,7 @@ impl IndexedStorage for RedisIndexedStorage {
             .with(svc_name, api_name)
             .xrange(Self::composite_key(namespace, key), id, "+", Some(1))
             .await
-            .map_err(Self::classify_read_error)?;
+            .map_err(Self::classify_idempotent_error)?;
 
         let result = self.process_stream(svc_name, entity_name, items)?;
         Ok(result.into_iter().next())
@@ -850,14 +852,14 @@ impl IndexedStorage for RedisIndexedStorage {
                     .with(svc_name, api_name)
                     .xtrim_and_delete_if_empty(composite_key, last_dropped_id + 1)
                     .await
-                    .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
+                    .map_err(Self::classify_idempotent_error)?;
             } else {
                 let _: u64 = self
                     .redis
                     .with(svc_name, api_name)
                     .xtrim(composite_key, (XCapKind::MinID, last_dropped_id + 1))
                     .await
-                    .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
+                    .map_err(Self::classify_idempotent_error)?;
             }
             return Ok(());
         };
@@ -1000,11 +1002,11 @@ mod tests {
     }
 
     #[test]
-    fn xrange_connection_errors_are_transient() {
+    fn idempotent_command_connection_errors_are_transient() {
         for kind in [ErrorKind::IO, ErrorKind::Timeout, ErrorKind::Canceled] {
             let error = RedisError::new(kind, "read can be retried");
             assert!(matches!(
-                RedisIndexedStorage::classify_read_error(error),
+                RedisIndexedStorage::classify_idempotent_error(error),
                 IndexedStorageError::Transient(_)
             ));
         }

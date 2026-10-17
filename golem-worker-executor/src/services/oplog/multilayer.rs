@@ -21,7 +21,7 @@ use crate::services::oplog::ephemeral::EphemeralOplog;
 use crate::services::oplog::multilayer::BackgroundTransferMessage::{
     TransferFromLower, TransferFromPrimary,
 };
-use crate::services::oplog::reader::{OplogRead, OplogReadError, OplogReadSource, fail_stop};
+use crate::services::oplog::reader::{OplogRead, OplogReadError, OplogReadSource, UnreadableOplog};
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
     OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogFence,
@@ -29,7 +29,7 @@ use crate::services::oplog::{
     ReservedRawStartBuilder, StagePublication, decode_scan_cursor, downcast_oplog,
     first_scan_cursor,
 };
-use crate::storage::indexed::IndexedStorageMetaNamespace;
+use crate::storage::indexed::{IndexedStorageError, IndexedStorageMetaNamespace};
 use async_trait::async_trait;
 use futures::FutureExt;
 use golem_common::model::ShardEpoch;
@@ -48,7 +48,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use nonempty_collections::NEVec;
 use std::cmp::min;
 use std::collections::{BTreeMap, HashMap};
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
@@ -57,7 +57,90 @@ use tokio::sync::oneshot::Sender;
 use tracing::{Instrument, Level, debug, info, warn};
 
 pub(crate) type TransferFiber = Arc<Mutex<TransferFiberState>>;
-pub type OplogArchiveResult<T> = Result<T, String>;
+
+/// A failed index or existence read of the archive `level` of the agent.
+fn unreadable_archive(
+    owned_agent_id: &OwnedAgentId,
+    level: usize,
+    error: OplogArchiveError,
+) -> UnreadableOplog {
+    UnreadableOplog::new(
+        &owned_agent_id.agent_id,
+        OplogReadError::of_archive(OplogReadSource::Archive(level), error),
+    )
+}
+
+/// A failed call to an archive layer, and whether a later call can pass.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OplogArchiveError {
+    /// The storage did not answer, after its retries. A later call can pass.
+    Unavailable(String),
+    /// Any other failure. A later call gives the same answer.
+    Failed(String),
+}
+
+impl OplogArchiveError {
+    /// The failure of an indexed storage call, described by `details`. A transient or
+    /// indeterminate error is `Unavailable`; every other error is `Failed`.
+    pub fn of_indexed(error: &IndexedStorageError, details: impl Into<String>) -> Self {
+        match error {
+            IndexedStorageError::Transient(_) | IndexedStorageError::Indeterminate(_) => {
+                Self::Unavailable(details.into())
+            }
+            IndexedStorageError::Conflict(_)
+            | IndexedStorageError::InvalidResume(_)
+            | IndexedStorageError::Other(_)
+            | IndexedStorageError::Fenced { .. } => Self::Failed(details.into()),
+        }
+    }
+
+    /// The failure of a blob storage call, described by `details`, as
+    /// [`golem_service_base::storage::blob::BlobFailure`] classifies it. A transient error, and a
+    /// storage that refuses the call until an operator fixes it, is `Unavailable`: the oplog data
+    /// itself is not at fault, so a later call can pass. A permanent error is `Failed`.
+    pub fn of_blob(error: &anyhow::Error, details: impl Into<String>) -> Self {
+        use golem_service_base::storage::blob::BlobFailure;
+        match BlobFailure::of(error) {
+            BlobFailure::Transient | BlobFailure::Refused(_) => Self::Unavailable(details.into()),
+            BlobFailure::Permanent => Self::Failed(details.into()),
+        }
+    }
+
+    /// The same failure, with its description given by `describe`.
+    pub fn map_details(self, describe: impl FnOnce(String) -> String) -> Self {
+        match self {
+            Self::Unavailable(details) => Self::Unavailable(describe(details)),
+            Self::Failed(details) => Self::Failed(describe(details)),
+        }
+    }
+
+    pub fn is_transient(&self) -> bool {
+        matches!(self, Self::Unavailable(_))
+    }
+}
+
+impl Display for OplogArchiveError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unavailable(details) | Self::Failed(details) => f.write_str(details),
+        }
+    }
+}
+
+impl std::error::Error for OplogArchiveError {}
+
+/// A read that did not give its entries, keeping whether a later read can pass.
+impl From<OplogReadError> for OplogArchiveError {
+    fn from(error: OplogReadError) -> Self {
+        if error.is_transient() {
+            Self::Unavailable(error.to_string())
+        } else {
+            Self::Failed(error.to_string())
+        }
+    }
+}
+
+pub type OplogArchiveResult<T> = Result<T, OplogArchiveError>;
 type TransferFibers = Arc<Mutex<HashMap<AgentId, Weak<Mutex<TransferFiberState>>>>>;
 type ArchiveFailures = Arc<Mutex<HashMap<(OwnedAgentId, ArchiveSource), ArchiveFailureState>>>;
 
@@ -109,7 +192,7 @@ pub trait OplogArchiveService: Debug + Send + Sync {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn OplogArchive + Send + Sync>;
+    ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>>;
 
     /// Opens a new, known-empty archive without probing persistent storage. The epoch as for
     /// [`Self::open`].
@@ -118,7 +201,7 @@ pub trait OplogArchiveService: Debug + Send + Sync {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn OplogArchive + Send + Sync>;
+    ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>>;
 
     /// Deletes the oplog archive for a worker completely, together with any writer generation
     /// recorded for it.
@@ -135,18 +218,14 @@ pub trait OplogArchiveService: Debug + Send + Sync {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry>;
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError>;
 
     /// Checks if an oplog archive exists for a worker
-    async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool;
-
-    async fn try_exists(
+    async fn exists(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogArchiveResult<bool> {
-        Ok(self.exists(owned_agent_id, agent_mode).await)
-    }
+    ) -> OplogArchiveResult<bool>;
 
     /// Scans the oplog archive for all workers belonging to the given component, in a paginated way.
     ///
@@ -168,15 +247,7 @@ pub trait OplogArchiveService: Debug + Send + Sync {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogIndex;
-
-    async fn try_get_last_index(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-    ) -> OplogArchiveResult<OplogIndex> {
-        Ok(self.get_last_index(owned_agent_id, agent_mode).await)
-    }
+    ) -> OplogArchiveResult<OplogIndex>;
 
     /// The meta-namespace whose keys list every agent this archive holds entries for, or `None`
     /// when the storage cannot list them, as for blob-backed archives.
@@ -193,7 +264,7 @@ pub trait OplogArchive: Debug {
         &self,
         idx: OplogIndex,
         n: u64,
-    ) -> OplogArchiveResult<BTreeMap<OplogIndex, OplogEntry>>;
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError>;
 
     /// Append a new chunk of entries to the oplog.
     /// Returns the number of compressed bytes written to storage, `OplogError::Fenced` when a newer
@@ -266,7 +337,7 @@ impl OplogArchive for InstrumentedOplogArchive {
         &self,
         idx: OplogIndex,
         n: u64,
-    ) -> OplogArchiveResult<BTreeMap<OplogIndex, OplogEntry>> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
         self.inner.read_source(idx, n).await
     }
 
@@ -450,9 +521,9 @@ impl MultiLayerOplogService {
             let mut exists_in_lower = false;
             for lower_layer in &self.lower.iter().as_slice()[from..] {
                 if lower_layer
-                    .try_exists(&id, agent_mode)
+                    .exists(&id, agent_mode)
                     .await
-                    .map_err(WorkerExecutorError::runtime)?
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
                 {
                     exists_in_lower = true;
                     break;
@@ -638,6 +709,17 @@ impl CreateOplogConstructor {
             shard_epoch,
         }
     }
+
+    /// The last index stored for the agent in any layer. A layer whose index does not read fails
+    /// the open.
+    async fn stored_last_index(
+        &self,
+        agent_mode: AgentMode,
+    ) -> Result<OplogIndex, UnreadableOplog> {
+        self.service
+            .get_last_index(&self.owned_agent_id, agent_mode)
+            .await
+    }
 }
 
 #[async_trait]
@@ -650,7 +732,14 @@ impl OplogConstructor for CreateOplogConstructor {
         self,
         lifecycle: &mut OplogLifecycleGuard,
         close: Box<dyn FnOnce() + Send + Sync>,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+        // A failed open caches nothing, so its slot is released at once.
+        let failed = |close: Box<dyn FnOnce() + Send + Sync>,
+                      error: WorkerExecutorError|
+         -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+            close();
+            Err(error)
+        };
         let agent_mode = self.agent_mode;
         let account_id = self.initial_worker_metadata.created_by;
         let fingerprint = self.initial_worker_metadata.fingerprint;
@@ -659,11 +748,10 @@ impl OplogConstructor for CreateOplogConstructor {
             AgentMode::Durable => {
                 let last_oplog_index = match self.last_oplog_index {
                     Some(idx) => idx,
-                    None => {
-                        self.service
-                            .get_last_index(&self.owned_agent_id, agent_mode)
-                            .await
-                    }
+                    None => match self.stored_last_index(agent_mode).await {
+                        Ok(idx) => idx,
+                        Err(error) => return failed(close, error.into()),
+                    },
                 };
                 let primary = if let Some(initial_entry) = self.initial_entry {
                     if self.fresh {
@@ -707,6 +795,10 @@ impl OplogConstructor for CreateOplogConstructor {
                         )
                         .await
                 };
+                let primary = match primary {
+                    Ok(primary) => primary,
+                    Err(error) => return failed(close, error),
+                };
                 MultiLayerOplog::new(
                     self.owned_agent_id,
                     agent_mode,
@@ -717,6 +809,7 @@ impl OplogConstructor for CreateOplogConstructor {
                     self.shard_epoch,
                 )
                 .await
+                .map_err(WorkerExecutorError::from)
             }
             AgentMode::Ephemeral => {
                 let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -733,15 +826,16 @@ impl OplogConstructor for CreateOplogConstructor {
                     self.shard_epoch,
                 )
                 .await;
+                let lower = match lower {
+                    Ok(lower) => lower,
+                    Err(error) => return failed(close, error.into()),
+                };
 
                 // Read after the layers record the epoch, as the primary oplog reads its last index
                 // after its claim: an index a caller read before can be behind by whatever an
                 // older owner's writer appended in between, and this handle's first append would
                 // collide with it.
-                let stored_last_index = || {
-                    self.service
-                        .get_last_index(&self.owned_agent_id, agent_mode)
-                };
+                let stored_last_index = || self.stored_last_index(agent_mode);
                 let last_oplog_index = match self.last_oplog_index {
                     None => stored_last_index().await,
                     Some(idx)
@@ -749,9 +843,15 @@ impl OplogConstructor for CreateOplogConstructor {
                             && self.shard_epoch.is_some()
                             && lower.iter().all(|layer| layer.fence().is_none()) =>
                     {
-                        OplogIndex::from_u64(idx.as_u64().max(stored_last_index().await.as_u64()))
+                        stored_last_index()
+                            .await
+                            .map(|stored| OplogIndex::from_u64(idx.as_u64().max(stored.as_u64())))
                     }
-                    Some(idx) => idx,
+                    Some(idx) => Ok(idx),
+                };
+                let last_oplog_index = match last_oplog_index {
+                    Ok(idx) => idx,
+                    Err(error) => return failed(close, error.into()),
                 };
 
                 if let Some(initial_entry) = self.initial_entry {
@@ -763,8 +863,15 @@ impl OplogConstructor for CreateOplogConstructor {
                         .await
                     {
                         Ok(_) | Err(OplogError::Fenced(_)) => {}
+                        // Nothing of the oplog is persisted, so the create can be tried again.
                         Err(error) => {
-                            panic!("Failed to persist the initial ephemeral oplog entry: {error}")
+                            return failed(
+                                close,
+                                WorkerExecutorError::runtime(format!(
+                                    "failed to persist the initial ephemeral oplog entry of {}: {error}",
+                                    self.owned_agent_id
+                                )),
+                            );
                         }
                     }
                 }
@@ -782,7 +889,7 @@ impl OplogConstructor for CreateOplogConstructor {
                 );
                 MultiLayerOplogService::start_transfer(&transfer_fiber, start_tx, transfer).await;
 
-                Arc::new(
+                Ok(Arc::new(
                     EphemeralOplog::new(
                         self.owned_agent_id,
                         agent_mode,
@@ -797,7 +904,7 @@ impl OplogConstructor for CreateOplogConstructor {
                         close,
                     )
                     .await,
-                )
+                ))
             }
         }
     }
@@ -878,7 +985,7 @@ impl OplogService for MultiLayerOplogService {
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         self.oplogs
             .get_or_open(
                 lifecycle,
@@ -910,7 +1017,7 @@ impl OplogService for MultiLayerOplogService {
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         self.oplogs
             .get_or_open(
                 lifecycle,
@@ -942,7 +1049,7 @@ impl OplogService for MultiLayerOplogService {
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         self.oplogs
             .get_or_open(
                 lifecycle,
@@ -968,35 +1075,41 @@ impl OplogService for MultiLayerOplogService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogIndex {
+    ) -> Result<OplogIndex, UnreadableOplog> {
         let mut result = self
             .primary
             .get_last_index(owned_agent_id, agent_mode)
-            .await;
+            .await?;
         if result == OplogIndex::NONE {
-            for layer in &self.lower {
-                let idx = layer.get_last_index(owned_agent_id, agent_mode).await;
+            for (level, layer) in self.lower.iter().enumerate() {
+                let idx = layer
+                    .get_last_index(owned_agent_id, agent_mode)
+                    .await
+                    .map_err(|error| unreadable_archive(owned_agent_id, level, error))?;
                 if idx != OplogIndex::NONE {
                     result = idx;
                     break;
                 }
             }
         }
-        result
+        Ok(result)
     }
 
     async fn try_get_last_index(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogArchiveResult<OplogIndex> {
+    ) -> Result<OplogIndex, String> {
         let mut result = self
             .primary
             .try_get_last_index(owned_agent_id, agent_mode)
             .await?;
         if result == OplogIndex::NONE {
             for layer in &self.lower {
-                let idx = layer.try_get_last_index(owned_agent_id, agent_mode).await?;
+                let idx = layer
+                    .get_last_index(owned_agent_id, agent_mode)
+                    .await
+                    .map_err(|error| error.to_string())?;
                 if idx != OplogIndex::NONE {
                     result = idx;
                     break;
@@ -1039,7 +1152,7 @@ impl OplogService for MultiLayerOplogService {
             if let Err(error) = layer.delete(owned_agent_id, agent_mode).await {
                 crate::metrics::oplog::record_archive_maintenance_failure("delete");
                 warn!(agent_id = %owned_agent_id, level, error = %error, "Failed to delete archived oplog storage; deletion remains fenced for retry");
-                return Err(OplogError::Maintenance(error));
+                return Err(OplogError::Maintenance(error.to_string()));
             }
         }
         self.archive_failures
@@ -1055,29 +1168,33 @@ impl OplogService for MultiLayerOplogService {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
-        let mut read = fail_stop(OplogRead::new(idx, n));
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        let unreadable = |error| UnreadableOplog::new(&owned_agent_id.agent_id, error);
+        let mut read = OplogRead::new(idx, n).map_err(unreadable)?;
 
         if let Some((start, count)) = read.next_range() {
             let entries = self
                 .primary
                 .read_source(owned_agent_id, agent_mode, start, count)
-                .await;
-            fail_stop(read.add_source(OplogReadSource::Primary, entries));
+                .await?;
+            read.add_source(OplogReadSource::Primary, entries)
+                .map_err(unreadable)?;
         }
 
         for (level, layer) in self.lower.iter().enumerate() {
             if let Some((start, count)) = read.next_range() {
                 let entries = layer
                     .read_source(owned_agent_id, agent_mode, start, count)
-                    .await;
-                fail_stop(read.add_source(OplogReadSource::Archive(level), entries));
+                    .await
+                    .map_err(unreadable)?;
+                read.add_source(OplogReadSource::Archive(level), entries)
+                    .map_err(unreadable)?;
             } else {
                 break;
             }
         }
 
-        fail_stop(read.finish())
+        read.finish().map_err(unreadable)
     }
 
     async fn read_source(
@@ -1086,44 +1203,56 @@ impl OplogService for MultiLayerOplogService {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         let mut result = self
             .primary
             .read_source(owned_agent_id, agent_mode, idx, n)
-            .await;
+            .await?;
         for layer in &self.lower {
             if result.len() >= n as usize {
                 break;
             }
-            for (index, entry) in layer.read_source(owned_agent_id, agent_mode, idx, n).await {
+            let entries = layer
+                .read_source(owned_agent_id, agent_mode, idx, n)
+                .await
+                .map_err(|error| UnreadableOplog::new(&owned_agent_id.agent_id, error))?;
+            for (index, entry) in entries {
                 result.entry(index).or_insert(entry);
             }
         }
-        result
+        Ok(result)
     }
 
-    async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
-        if self.primary.exists(owned_agent_id, agent_mode).await {
-            return true;
+    async fn exists(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<bool, UnreadableOplog> {
+        if self.primary.exists(owned_agent_id, agent_mode).await? {
+            return Ok(true);
         }
 
-        for layer in &self.lower {
+        for (level, layer) in self.lower.iter().enumerate() {
             if agent_mode == AgentMode::Ephemeral {
                 crate::metrics::ephemeral::record_lower_oplog_existence_read();
             }
-            if layer.exists(owned_agent_id, agent_mode).await {
-                return true;
+            if layer
+                .exists(owned_agent_id, agent_mode)
+                .await
+                .map_err(|error| unreadable_archive(owned_agent_id, level, error))?
+            {
+                return Ok(true);
             }
         }
 
-        false
+        Ok(false)
     }
 
     async fn try_exists(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogArchiveResult<bool> {
+    ) -> Result<bool, String> {
         if self.primary.try_exists(owned_agent_id, agent_mode).await? {
             return Ok(true);
         }
@@ -1131,7 +1260,11 @@ impl OplogService for MultiLayerOplogService {
             if agent_mode == AgentMode::Ephemeral {
                 crate::metrics::ephemeral::record_lower_oplog_existence_read();
             }
-            if layer.try_exists(owned_agent_id, agent_mode).await? {
+            if layer
+                .exists(owned_agent_id, agent_mode)
+                .await
+                .map_err(|error| error.to_string())?
+            {
                 return Ok(true);
             }
         }
@@ -1252,7 +1385,7 @@ impl MultiLayerOplog {
         multi_layer_oplog_service: MultiLayerOplogService,
         close: Box<dyn FnOnce() + Send + Sync>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, UnreadableOplog> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         // Every layer is opened, recording `shard_epoch` on it, before the archive watermark is
@@ -1265,8 +1398,15 @@ impl MultiLayerOplog {
         let shard_epoch = shard_epoch.filter(|_| primary.fence().is_none());
         let mut lower: Vec<Arc<dyn OplogArchive + Send + Sync>> = Vec::new();
         for (i, layer) in multi_layer_oplog_service.lower.iter().enumerate() {
+            // A layer that does not open fails the open of the oplog, and nothing is cached.
+            let raw = match layer.open(&owned_agent_id, agent_mode, shard_epoch).await {
+                Ok(raw) => raw,
+                Err(error) => {
+                    close();
+                    return Err(unreadable_archive(&owned_agent_id, i, error));
+                }
+            };
             if i != (multi_layer_oplog_service.lower.len().get() - 1) {
-                let raw = layer.open(&owned_agent_id, agent_mode, shard_epoch).await;
                 let instrumented = Arc::new(InstrumentedOplogArchive::new(
                     raw,
                     account_id,
@@ -1284,7 +1424,6 @@ impl MultiLayerOplog {
                     .await,
                 ));
             } else {
-                let raw = layer.open(&owned_agent_id, agent_mode, shard_epoch).await;
                 lower.push(Arc::new(InstrumentedOplogArchive::new(
                     raw,
                     account_id,
@@ -1348,7 +1487,7 @@ impl MultiLayerOplog {
             .set_background_transfer(start_tx, transfer_fiber)
             .await;
 
-        result
+        Ok(result)
     }
 
     async fn set_background_transfer(&self, start: Sender<()>, fiber: tokio::task::JoinHandle<()>) {
@@ -1496,21 +1635,21 @@ impl MultiLayerOplog {
         }
     }
 
-    pub async fn try_archive(this: &Arc<dyn Oplog>) -> OplogArchiveResult<Option<bool>> {
+    pub async fn try_archive(this: &Arc<dyn Oplog>) -> Result<Option<bool>, String> {
         let Some(this) = downcast_oplog::<MultiLayerOplog>(this) else {
             return Ok(None);
         };
         Self::archive(this, false).await.map(Some)
     }
 
-    pub async fn try_archive_blocking(this: &Arc<dyn Oplog>) -> OplogArchiveResult<Option<bool>> {
+    pub async fn try_archive_blocking(this: &Arc<dyn Oplog>) -> Result<Option<bool>, String> {
         let Some(this) = downcast_oplog::<MultiLayerOplog>(this) else {
             return Ok(None);
         };
         Self::archive(this, true).await.map(Some)
     }
 
-    async fn archive(this: Arc<Self>, blocking: bool) -> OplogArchiveResult<bool> {
+    async fn archive(this: Arc<Self>, blocking: bool) -> Result<bool, String> {
         // A newer owner holds the oplog: its own archiving decides what moves, and nothing here
         // could be written anyway.
         if this.fence().is_some() {
@@ -1560,7 +1699,12 @@ impl MultiLayerOplog {
         } else {
             let mut first_non_empty = None;
             for n in 0..this.lower.len().get().saturating_sub(1) {
-                if this.lower[n].length().await? > 0 {
+                if this.lower[n]
+                    .length()
+                    .await
+                    .map_err(|error| error.to_string())?
+                    > 0
+                {
                     first_non_empty = Some(n);
                     break;
                 }
@@ -1568,8 +1712,10 @@ impl MultiLayerOplog {
 
             if let Some(first_non_empty) = first_non_empty {
                 // transferring the whole non-empty lower layer to the next layer
-                let last_transferred_idx =
-                    this.lower[first_non_empty].current_oplog_index().await?;
+                let last_transferred_idx = this.lower[first_non_empty]
+                    .current_oplog_index()
+                    .await
+                    .map_err(|error| error.to_string())?;
                 if !this.multi_layer_oplog_service.begin_archive_attempt(
                     &this.owned_agent_id,
                     ArchiveSource::Lower(first_non_empty),
@@ -1791,50 +1937,56 @@ impl Oplog for MultiLayerOplog {
         self.primary.wait_for_replicas(replicas, timeout).await
     }
 
-    async fn read_exact(&self, idx: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
-        let mut read = fail_stop(OplogRead::new(idx, n));
+    async fn read_exact(
+        &self,
+        idx: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        let unreadable = |error| UnreadableOplog::new(&self.owned_agent_id.agent_id, error);
+        let mut read = OplogRead::new(idx, n).map_err(unreadable)?;
 
         if let Some((start, count)) = read.next_range() {
-            let entries = self.primary.read_source(start, count).await;
-            fail_stop(read.add_source(OplogReadSource::Primary, entries));
+            let entries = self.primary.read_source(start, count).await?;
+            read.add_source(OplogReadSource::Primary, entries)
+                .map_err(unreadable)?;
         }
 
         for (level, layer) in self.lower.iter().enumerate() {
             if let Some((start, count)) = read.next_range() {
-                let entries = layer.read_source(start, count).await.unwrap_or_else(|error| {
-                    panic!("Oplog read failed: failed to read oplog data from archive layer {level}: {error}")
-                });
-                fail_stop(read.add_source(OplogReadSource::Archive(level), entries));
+                let entries = layer.read_source(start, count).await.map_err(unreadable)?;
+                read.add_source(OplogReadSource::Archive(level), entries)
+                    .map_err(unreadable)?;
             } else {
                 break;
             }
         }
 
-        fail_stop(read.finish())
+        read.finish().map_err(unreadable)
     }
 
     async fn try_read_source(
         &self,
         idx: OplogIndex,
         n: u64,
-    ) -> OplogArchiveResult<BTreeMap<OplogIndex, OplogEntry>> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, String> {
         self.primary.try_read_source(idx, n).await
     }
 
-    async fn length(&self) -> u64 {
-        let mut total_length = self.primary.length().await;
+    async fn length(&self) -> Result<u64, UnreadableOplog> {
+        let mut total_length = self.primary.length().await?;
         for (level, layer) in self.lower.iter().enumerate() {
-            total_length += layer.length().await.unwrap_or_else(|error| {
-                panic!("Failed to read oplog archive layer {level} length: {error}")
-            });
+            total_length += layer
+                .length()
+                .await
+                .map_err(|error| unreadable_archive(&self.owned_agent_id, level, error))?;
         }
-        total_length
+        Ok(total_length)
     }
 
     async fn try_length(&self) -> Result<u64, String> {
         let mut total_length = self.primary.try_length().await?;
         for layer in &self.lower {
-            total_length += layer.length().await?;
+            total_length += layer.length().await.map_err(|error| error.to_string())?;
         }
         Ok(total_length)
     }
@@ -1921,9 +2073,9 @@ pub enum BackgroundTransferMessage {
 
 #[async_trait]
 trait BackgroundTransfer {
-    async fn read_source(&self) -> OplogArchiveResult<Vec<(OplogIndex, OplogEntry)>>;
+    async fn read_source(&self) -> Result<Vec<(OplogIndex, OplogEntry)>, String>;
     async fn append_target(&self, entries: &[(OplogIndex, OplogEntry)]) -> Result<(), OplogError>;
-    async fn verify_target(&self, entries: &[(OplogIndex, OplogEntry)]) -> OplogArchiveResult<()>;
+    async fn verify_target(&self, entries: &[(OplogIndex, OplogEntry)]) -> Result<(), String>;
     async fn drop_source_prefix(&self, last_dropped_id: OplogIndex) -> Result<(), OplogError>;
 
     /// Copies, verifies, then trims, keeping the source until the copy is verified. A failed step
@@ -2016,7 +2168,7 @@ impl OplogArchive for WrappedOplogArchive {
         &self,
         idx: OplogIndex,
         n: u64,
-    ) -> OplogArchiveResult<BTreeMap<OplogIndex, OplogEntry>> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
         self.archive.read_source(idx, n).await
     }
 
@@ -2069,7 +2221,7 @@ impl OplogArchive for WrappedOplogArchive {
             .archive
             .length()
             .await
-            .map_err(OplogError::Maintenance)?;
+            .map_err(|error| OplogError::Maintenance(error.to_string()))?;
         let old_entry_count = self.entry_count.load(Ordering::Acquire);
         let new_entry_count = min(new_length, old_entry_count);
         self.entry_count.store(new_entry_count, Ordering::Release);
@@ -2111,7 +2263,7 @@ impl BackgroundTransferFromPrimary {
 
 #[async_trait]
 impl BackgroundTransfer for BackgroundTransferFromPrimary {
-    async fn read_source(&self) -> OplogArchiveResult<Vec<(OplogIndex, OplogEntry)>> {
+    async fn read_source(&self) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
         let entries = self
             .primary
             .try_read_source(OplogIndex::INITIAL, self.last_transferred_idx.as_u64())
@@ -2124,8 +2276,12 @@ impl BackgroundTransfer for BackgroundTransferFromPrimary {
         self.lower.first().append(entries).await.map(|_| ())
     }
 
-    async fn verify_target(&self, entries: &[(OplogIndex, OplogEntry)]) -> OplogArchiveResult<()> {
-        self.lower.first().verify_persisted(entries).await
+    async fn verify_target(&self, entries: &[(OplogIndex, OplogEntry)]) -> Result<(), String> {
+        self.lower
+            .first()
+            .verify_persisted(entries)
+            .await
+            .map_err(|error| error.to_string())
     }
 
     /// The primary latches a refused trim itself and reports it typed on the next write through
@@ -2174,11 +2330,12 @@ pub(crate) async fn transfer_between_lower_layers(
 
 #[async_trait]
 impl BackgroundTransfer for BackgroundTransferBetweenLowers {
-    async fn read_source(&self) -> OplogArchiveResult<Vec<(OplogIndex, OplogEntry)>> {
+    async fn read_source(&self) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
         let entries = self
             .source_layer
             .read_source(OplogIndex::INITIAL, self.last_transferred_idx.as_u64())
-            .await?;
+            .await
+            .map_err(|error| error.to_string())?;
         validate_transfer_source(
             entries,
             self.last_transferred_idx,
@@ -2191,8 +2348,11 @@ impl BackgroundTransfer for BackgroundTransferBetweenLowers {
         self.target_layer.append(entries).await.map(|_| ())
     }
 
-    async fn verify_target(&self, entries: &[(OplogIndex, OplogEntry)]) -> OplogArchiveResult<()> {
-        self.target_layer.verify_persisted(entries).await
+    async fn verify_target(&self, entries: &[(OplogIndex, OplogEntry)]) -> Result<(), String> {
+        self.target_layer
+            .verify_persisted(entries)
+            .await
+            .map_err(|error| error.to_string())
     }
 
     async fn drop_source_prefix(&self, last_dropped_id: OplogIndex) -> Result<(), OplogError> {
@@ -2343,7 +2503,8 @@ mod transfer_lifecycle_tests {
                 default_execution_status(AgentMode::Durable),
                 None,
             )
-            .await;
+            .await
+            .unwrap();
         let service = MultiLayerOplogService::new(primary_service, nev![archive], 100, 100);
         let oplog = MultiLayerOplog::new(
             owned_agent_id,
@@ -2354,7 +2515,8 @@ mod transfer_lifecycle_tests {
             Box::new(|| {}),
             None,
         )
-        .await;
+        .await
+        .unwrap();
         (oplog, service, agent_id)
     }
 
@@ -2479,7 +2641,8 @@ mod transfer_lifecycle_tests {
                 default_execution_status(AgentMode::Durable),
                 None,
             )
-            .await;
+            .await
+            .unwrap();
         let entries = (1..=archived + 10)
             .map(|index| {
                 OplogEntry::Error {
@@ -2498,7 +2661,10 @@ mod transfer_lifecycle_tests {
             writer.add(entry.clone()).await.unwrap();
         }
         writer.commit(CommitLevel::Always).await.unwrap();
-        let deep_archive = deepest.open(&owned, AgentMode::Durable, None).await;
+        let deep_archive = deepest
+            .open(&owned, AgentMode::Durable, None)
+            .await
+            .unwrap();
         if archived > 0 {
             let prefix = entries[..archived as usize]
                 .iter()
@@ -2519,7 +2685,8 @@ mod transfer_lifecycle_tests {
                 default_execution_status(AgentMode::Durable),
                 None,
             )
-            .await;
+            .await
+            .unwrap();
         assert_eq!(
             observer.current_oplog_index().await,
             OplogIndex::from_u64(captured)
@@ -2528,7 +2695,7 @@ mod transfer_lifecycle_tests {
             writer.add(entry.clone()).await.unwrap();
         }
         writer.commit(CommitLevel::Always).await.unwrap();
-        assert_eq!(observer.length().await, 10);
+        assert_eq!(observer.length().await.unwrap(), 10);
 
         let service = MultiLayerOplogService::new(observer_service, nev![first, deepest], 100, 100);
         let observer = MultiLayerOplog::new(
@@ -2540,7 +2707,8 @@ mod transfer_lifecycle_tests {
             Box::new(|| {}),
             None,
         )
-        .await;
+        .await
+        .unwrap();
         let layered = downcast_oplog::<MultiLayerOplog>(&observer).unwrap();
         assert_eq!(
             layered.last_transfer_point.get(),
@@ -2552,7 +2720,10 @@ mod transfer_lifecycle_tests {
         );
         for (index, entry) in entries[..captured as usize].iter().enumerate() {
             assert_eq!(
-                &observer.read(OplogIndex::from_u64(index as u64 + 1)).await,
+                &observer
+                    .read(OplogIndex::from_u64(index as u64 + 1))
+                    .await
+                    .unwrap(),
                 entry
             );
         }
@@ -2560,7 +2731,7 @@ mod transfer_lifecycle_tests {
             writer.current_oplog_index().await,
             OplogIndex::from_u64(archived + 10)
         );
-        assert_eq!(writer.length().await, 10);
+        assert_eq!(writer.length().await.unwrap(), 10);
         assert_eq!(
             deep_archive.get_last_index().await.unwrap(),
             OplogIndex::from_u64(archived)
