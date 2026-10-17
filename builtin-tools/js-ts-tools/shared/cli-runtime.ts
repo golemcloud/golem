@@ -79,9 +79,9 @@ export async function runCli(
     exitCode: process.exitCode,
     stdoutWrite: process.stdout.write,
     stderrWrite: process.stderr.write,
-    env: Object.fromEntries(
-      Object.keys(environment).map((key) => [key, process.env[key]]),
-    ) as Record<string, string | undefined>,
+    // npm exports its configuration to the environment for lifecycle scripts, so restore the
+    // complete environment rather than only the variables set here.
+    env: { ...process.env },
   };
   const capturedExit = new CapturedExit();
   let exitRequested = false;
@@ -174,10 +174,10 @@ export async function runCli(
     process.exit = original.exit;
     process.argv = original.argv;
     process.exitCode = original.exitCode;
-    for (const [key, value] of Object.entries(original.env)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
+    for (const key of Object.keys(process.env)) {
+      if (!Object.hasOwn(original.env, key)) delete process.env[key];
     }
+    Object.assign(process.env, original.env);
     process.chdir(original.cwd);
   }
 }

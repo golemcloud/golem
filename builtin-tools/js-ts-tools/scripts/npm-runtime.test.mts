@@ -16,7 +16,11 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { installNpmRecursiveRmPatch } from '../golem-temp/runtime-tests/javascript-tools/src/npm-runtime.js';
+import {
+  installNpmRecursiveRmPatch,
+  installNpmTransportWarningFilter,
+  npmInvocation,
+} from '../golem-temp/runtime-tests/javascript-tools/src/npm-runtime.js';
 
 async function recursiveRemoveDoesNotFollowDirectorySymlinks() {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'golem-npm-rm-')));
@@ -59,5 +63,38 @@ async function recursiveRemoveDoesNotFollowDirectorySymlinks() {
   }
 }
 
+function filtersOnlyTheAgentTransportWarning() {
+  const emitted: unknown[][] = [];
+  const target = {
+    emitWarning(warning: string | Error, ...rest: unknown[]) {
+      emitted.push([warning, ...rest]);
+    },
+  };
+  const original = target.emitWarning;
+  const restore = installNpmTransportWarningFilter(target);
+
+  target.emitWarning('ignored hook', { code: 'WASM_RQUICKJS_HTTP_AGENT_TRANSPORT' });
+  target.emitWarning('ignored hook', 'Warning', 'WASM_RQUICKJS_HTTP_AGENT_TRANSPORT');
+  target.emitWarning(
+    Object.assign(new Error('ignored hook'), { code: 'WASM_RQUICKJS_HTTP_AGENT_TRANSPORT' }),
+  );
+  target.emitWarning('kept', { code: 'OTHER' });
+  target.emitWarning('kept without code');
+  assert.deepEqual(emitted, [['kept', { code: 'OTHER' }], ['kept without code']]);
+
+  restore();
+  assert.equal(target.emitWarning, original);
+}
+
+function derivesPathsFromTheRootDirectory() {
+  const { environment, directories } = npmInvocation('/', 'https://registry.npmjs.org/');
+  assert.equal(environment.HOME, '/.golem-home');
+  assert.equal(environment.NPM_CONFIG_CACHE, '/.golem-npm-cache');
+  assert.ok(environment.PATH.startsWith('/node_modules/.bin:'), environment.PATH);
+  assert.deepEqual(directories, ['/.golem-home', '/.golem-npm-cache', '/.golem-npm-prefix']);
+}
+
 await recursiveRemoveDoesNotFollowDirectorySymlinks();
+derivesPathsFromTheRootDirectory();
+filtersOnlyTheAgentTransportWarning();
 console.log('npm runtime checks passed');
