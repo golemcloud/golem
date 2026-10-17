@@ -475,7 +475,7 @@ impl RetainedClaims<'_> {
         }
         if claim.is_custom_invocation()
             || (claim.makes_host_internal_calls()
-                && cancelled_before_delivery(self.cursor, self.st, handle.start_idx()).await)
+                && cancelled_before_delivery(self.cursor, self.st, handle.start_idx()).await?)
         {
             self.register_replay_inert_subtree_root(handle.start_idx());
         }
@@ -2435,7 +2435,7 @@ impl CursorTx<'_> {
         }
         if claim.is_custom_invocation()
             || (claim.makes_host_internal_calls()
-                && cancelled_before_delivery(self.cursor, &self.st, handle.start_idx()).await)
+                && cancelled_before_delivery(self.cursor, &self.st, handle.start_idx()).await?)
         {
             self.register_replay_inert_subtree_root(handle.start_idx());
         }
@@ -5032,7 +5032,7 @@ async fn cancelled_before_delivery(
     cursor: &ReplayCursor,
     state: &CursorState,
     start_index: OplogIndex,
-) -> bool {
+) -> Result<bool, UnreadableOplog> {
     let replay_target = cursor.replay_target();
     let mut next = start_index.next();
     while next <= replay_target {
@@ -5040,18 +5040,21 @@ async fn cancelled_before_delivery(
         let entries = cursor
             .oplog
             .read_exact(next, CHUNK_SIZE.min(available))
-            .await;
+            .await?;
         let last_read = *entries.last_key_value().unwrap().0;
         if let Some((_, terminal)) = entries.into_iter().find(|(index, entry)| {
             *index <= replay_target
                 && !state.skipped_regions.is_in_deleted_region(*index)
                 && terminal_start_index(entry) == Some(start_index)
         }) {
-            return matches!(terminal, OplogEntry::Cancelled { partial: None, .. });
+            return Ok(matches!(
+                terminal,
+                OplogEntry::Cancelled { partial: None, .. }
+            ));
         }
         next = last_read.next();
     }
-    false
+    Ok(false)
 }
 
 fn custom_subtree_entry_is_drainable(state: &CursorState, entry: &OplogEntry) -> bool {
