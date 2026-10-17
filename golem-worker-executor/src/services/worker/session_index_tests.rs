@@ -4642,3 +4642,191 @@ async fn a_stream_index_rebuild_over_an_undecodable_later_chunk_keeps_the_unread
         "{producer:?}"
     );
 }
+
+/// A multilayer oplog service over one in-memory indexed storage, with one compressed archive
+/// layer, and a worker service over it that finds every component.
+async fn archived_services() -> (
+    Arc<InMemoryIndexedStorage>,
+    Arc<dyn OplogService>,
+    Arc<DefaultWorkerService>,
+) {
+    let indexed = Arc::new(InMemoryIndexedStorage::new());
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            indexed.clone(),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let archive: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+        indexed.clone(),
+        1,
+        RetryConfig::default(),
+    ));
+    let oplog: Arc<dyn OplogService> =
+        Arc::new(MultiLayerOplogService::new(primary, nev![archive], 10, 10));
+    let service = Arc::new(DefaultWorkerService::new(
+        Arc::new(InMemoryKeyValueStorage::new()),
+        Arc::new(ShardServiceDefault::new()),
+        oplog.clone(),
+        Arc::new(super::tests::IndexTestComponentService),
+        Arc::new(GolemConfig::default()),
+    ));
+    (indexed, oplog, service)
+}
+
+/// Stores `entries` of the agent as an archived chunk ending at `last_idx` whose data does not
+/// decode.
+async fn store_undecodable_chunk(
+    storage: &InMemoryIndexedStorage,
+    id: &OwnedAgentId,
+    last_idx: u64,
+    entries: Vec<OplogEntry>,
+) {
+    let count = entries.len() as u64;
+    let encoded = golem_common::serialization::serialize(&entries).unwrap();
+    store_archived_chunk(
+        storage,
+        id,
+        last_idx,
+        &crate::services::oplog::CompressedOplogChunk {
+            count,
+            compressed_data: zstd::encode_all(&encoded[..encoded.len() / 2], 0).unwrap(),
+        },
+    )
+    .await;
+}
+
+/// Stores an agent whose `Create` reads from the archive, but whose later archived chunk, ending
+/// at index 3, does not decode.
+async fn store_agent_with_undecodable_later_chunk(
+    storage: &InMemoryIndexedStorage,
+    id: &OwnedAgentId,
+) {
+    let create = create_entry(id, AgentMode::Durable, AccountId::new(), test_fingerprint());
+    store_archived_chunk(
+        storage,
+        id,
+        1,
+        &crate::services::oplog::CompressedOplogChunk::compress(vec![create]).unwrap(),
+    )
+    .await;
+    store_undecodable_chunk(
+        storage,
+        id,
+        3,
+        vec![
+            OplogEntry::recovery_succeeded(),
+            OplogEntry::recovery_succeeded(),
+        ],
+    )
+    .await;
+}
+
+/// A cached status write whose index catch-up meets an oplog that does not read for good fails
+/// with `OplogFailed`, which callers skip or fail the agent with, not with a runtime error that
+/// fails every agent of the shard assignment. This holds for the invocation-result index and for
+/// the stream session index.
+#[test]
+async fn a_cached_status_write_over_an_undecodable_chunk_keeps_the_oplog_failure() {
+    let (indexed, _oplog, service) = archived_services().await;
+    let id = owned_agent("status-cache-undecodable", ComponentId::new());
+    store_agent_with_undecodable_later_chunk(&indexed, &id).await;
+
+    for has_durable_stream_history in [false, true] {
+        let status = AgentStatusRecord {
+            oplog_idx: OplogIndex::from_u64(3),
+            agent_mode: AgentMode::Durable,
+            has_durable_stream_history,
+            ..Default::default()
+        };
+        let error = service
+            .write_cached_status(&id, test_fingerprint(), None, status)
+            .await
+            .expect_err("the catch-up over an undecodable chunk must fail");
+        assert!(
+            matches!(&error, WorkerExecutorError::OplogFailed { agent_id, details }
+                if agent_id == &id.agent_id && details.contains("archive layer 1")),
+            "stream history {has_durable_stream_history}: {error:?}"
+        );
+    }
+}
+
+/// An agent whose `Create` does not read is left out of the listing, and an agent whose status
+/// does not fold is listed as failed in a precise listing. Every other agent of the component is
+/// listed.
+#[test]
+async fn a_listing_skips_or_fails_only_the_agents_whose_oplog_does_not_read() {
+    use crate::services::worker_enumeration::{
+        DefaultWorkerEnumerationService, WorkerEnumerationService,
+    };
+    use golem_common::model::AgentStatus;
+
+    let (indexed, oplog, service) = archived_services().await;
+    let environment_id = EnvironmentId::new();
+    let component_id = ComponentId::new();
+    let agent = |name: &str| {
+        OwnedAgentId::new(
+            environment_id,
+            &AgentId {
+                component_id,
+                agent_id: name.to_string(),
+            },
+        )
+    };
+    let healthy = agent("healthy");
+    let unreadable_create = agent("unreadable-create");
+    let unreadable_status = agent("unreadable-status");
+    create_oplog(oplog.as_ref(), &healthy).await;
+    store_undecodable_chunk(
+        &indexed,
+        &unreadable_create,
+        1,
+        vec![create_entry(
+            &unreadable_create,
+            AgentMode::Durable,
+            AccountId::new(),
+            test_fingerprint(),
+        )],
+    )
+    .await;
+    store_agent_with_undecodable_later_chunk(&indexed, &unreadable_status).await;
+    let enumeration = DefaultWorkerEnumerationService::new(
+        service,
+        oplog,
+        Arc::new(super::tests::IndexTestComponentService),
+        Arc::new(GolemConfig::default()),
+    );
+
+    for precise in [false, true] {
+        let mut listed = Vec::new();
+        let mut cursor = Some(golem_common::model::ScanCursor::default());
+        while let Some(current) = cursor {
+            let (next, page) = enumeration
+                .get(&environment_id, &component_id, None, current, 100, precise)
+                .await
+                .expect("one agent's unreadable oplog must not fail the listing");
+            listed.extend(page);
+            cursor = next;
+        }
+        let mut names = listed
+            .iter()
+            .map(|metadata| metadata.agent_id.agent_id.clone())
+            .collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(names, ["healthy", "unreadable-status"], "precise {precise}");
+        let status = listed
+            .iter()
+            .find(|metadata| metadata.agent_id == unreadable_status.agent_id)
+            .unwrap()
+            .last_known_status
+            .status;
+        if precise {
+            assert_eq!(status, AgentStatus::Failed);
+        }
+    }
+}

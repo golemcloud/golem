@@ -2742,7 +2742,7 @@ mod tests {
         }
     }
 
-    struct IndexTestComponentService;
+    pub(super) struct IndexTestComponentService;
 
     fn non_agent_component(component_id: ComponentId, environment_id: EnvironmentId) -> Component {
         Component {
