@@ -364,6 +364,22 @@ pub struct Elected {
     pub leadership: LeadershipHandle,
 }
 
+/// How fast a retriable etcd failure is retried: from `min`, doubling, up to `max`.
+#[derive(Clone, Copy, Debug)]
+pub struct RetryDelays {
+    pub min: Duration,
+    pub max: Duration,
+}
+
+impl RetryDelays {
+    pub fn from_config(config: &EtcdConfig) -> Self {
+        Self {
+            min: config.retry_min_delay,
+            max: config.retry_max_delay,
+        }
+    }
+}
+
 /// Releases the leadership on request. Cloned out of [`Elected`] before its other fields move,
 /// so a shutdown can hand over while the keepalive task still renews.
 #[derive(Clone)]
@@ -380,8 +396,7 @@ pub struct LeadershipHandle {
     leader_key: LeaderKey,
     value: ElectionValue,
     ready_budget: Duration,
-    retry_min_delay: Duration,
-    retry_max_delay: Duration,
+    retry: RetryDelays,
 }
 
 impl LeadershipHandle {
@@ -418,8 +433,8 @@ impl LeadershipHandle {
                 }
             },
             deadline,
-            self.retry_min_delay,
-            self.retry_max_delay,
+            self.retry.min,
+            self.retry.max,
         )
         .await
     }
@@ -462,8 +477,7 @@ pub struct LeaderElection {
     election_name: String,
     lease_ttl: Duration,
     request_timeout: Duration,
-    retry_min_delay: Duration,
-    retry_max_delay: Duration,
+    retry: RetryDelays,
     standby_log_interval: Duration,
     value: ElectionValue,
     shutdown: CancellationToken,
@@ -486,8 +500,7 @@ impl LeaderElection {
             election_name: election_name.into(),
             lease_ttl: config.leader_lease_ttl,
             request_timeout: config.request_timeout,
-            retry_min_delay: config.retry_min_delay,
-            retry_max_delay: config.retry_max_delay,
+            retry: RetryDelays::from_config(config),
             standby_log_interval: STANDBY_LOG_INTERVAL,
             value: ElectionValue {
                 identity: identity(),
@@ -550,7 +563,7 @@ impl LeaderElection {
     }
 
     async fn campaign_loop(&self) -> Result<Elected, ShardManagerError> {
-        let mut backoff = self.retry_min_delay;
+        let mut backoff = self.retry.min;
 
         loop {
             if self.shutdown.is_cancelled() {
@@ -568,7 +581,7 @@ impl LeaderElection {
                             return Err(ShardManagerError::ShutdownRequested);
                         }
                     }
-                    backoff = std::cmp::min(backoff.saturating_mul(2), self.retry_max_delay);
+                    backoff = std::cmp::min(backoff.saturating_mul(2), self.retry.max);
                 }
                 Err(err) => return Err(err),
             }
@@ -700,8 +713,7 @@ impl LeaderElection {
                 leader_key: leader.clone(),
                 value: self.value.clone(),
                 ready_budget: granted_ttl,
-                retry_min_delay: self.retry_min_delay,
-                retry_max_delay: self.retry_max_delay,
+                retry: self.retry,
             },
         })
     }
@@ -737,8 +749,8 @@ impl LeaderElection {
                 }
             },
             deadline,
-            self.retry_min_delay,
-            self.retry_max_delay,
+            self.retry.min,
+            self.retry.max,
         )
         .await?;
 
