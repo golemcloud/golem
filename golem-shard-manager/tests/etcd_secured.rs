@@ -468,8 +468,8 @@ async fn a_replica_without_a_client_certificate_does_not_start() {
     ))
     .await;
     assert!(
-        message.to_lowercase().contains("certificate") || message.contains("tls"),
-        "The refusal should point at the certificate, but was: {message}"
+        message.contains("received fatal alert: CertificateRequired"),
+        "The refusal should be etcd's demand for a client certificate, but was: {message}"
     );
 }
 
@@ -488,8 +488,8 @@ async fn a_replica_that_trusts_another_ca_does_not_start() {
     ))
     .await;
     assert!(
-        message.to_lowercase().contains("certificate"),
-        "The refusal should point at the certificate, but was: {message}"
+        message.contains("invalid peer certificate: UnknownIssuer"),
+        "The refusal should be the unknown issuer of etcd's certificate, but was: {message}"
     );
 }
 
@@ -509,9 +509,8 @@ async fn a_replica_with_a_wrong_password_does_not_start() {
     let etcd = SecuredEtcd::with_auth(&pki, &[]).await;
     let message = refused(auth_config(&etcd.url, "not-the-password", &pki)).await;
     assert!(
-        message.to_lowercase().contains("authentication failed")
-            || message.to_lowercase().contains("auth"),
-        "The refusal should name the authentication, but was: {message}"
+        message.contains("etcdserver: authentication failed, invalid user ID or password"),
+        "The refusal should be etcd's authentication failure, but was: {message}"
     );
 }
 

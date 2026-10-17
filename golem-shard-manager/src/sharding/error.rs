@@ -253,4 +253,37 @@ mod tests {
             .is_retriable()
         );
     }
+
+    /// An etcd error as tonic reports a connection that failed: `UNAVAILABLE`, with the
+    /// connector's error, and under it `cause`, as its source.
+    fn connect_failure(cause: impl std::error::Error + Send + Sync + 'static) -> ShardManagerError {
+        let status = tonic::Status::from_error(Box::new(tonic::ConnectError(Box::new(cause))));
+        ShardManagerError::EtcdError(etcd_client::Error::GRpcStatus(status))
+    }
+
+    #[test]
+    // A retry presents the same certificate files, so a TLS failure cannot pass on a retry. A
+    // network fault can, and must stay retriable: otherwise an etcd outage stops every replica.
+    fn a_tls_failure_is_not_retriable_but_a_network_fault_is() {
+        for tls_failure in [
+            connect_failure(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "received fatal alert: CertificateRequired",
+            )),
+            connect_failure(rustls::Error::InvalidCertificate(
+                rustls::CertificateError::UnknownIssuer,
+            )),
+        ] {
+            assert!(!tls_failure.is_retriable(), "{tls_failure}");
+        }
+        for kind in [
+            std::io::ErrorKind::ConnectionRefused,
+            std::io::ErrorKind::ConnectionReset,
+            std::io::ErrorKind::TimedOut,
+            std::io::ErrorKind::UnexpectedEof,
+        ] {
+            let network_fault = connect_failure(std::io::Error::new(kind, "network fault"));
+            assert!(network_fault.is_retriable(), "{kind:?}: {network_fault}");
+        }
+    }
 }

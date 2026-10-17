@@ -253,13 +253,19 @@ mod tests {
     #[test]
     fn an_https_endpoint_without_tls_settings_is_refused() {
         let message = refusal(&config("https://etcd:2379", None));
-        assert!(message.contains("persistence.config.tls"), "{message}");
+        assert!(
+            message.contains("uses https://, which needs persistence.config.tls"),
+            "{message}"
+        );
     }
 
     #[test]
     fn an_http_endpoint_with_tls_settings_is_refused() {
         let message = refusal(&config("http://etcd:2379", Some(PemFiles::new().mtls())));
-        assert!(message.contains("https://"), "{message}");
+        assert!(
+            message.contains("must start with https://, because persistence.config.tls is set"),
+            "{message}"
+        );
     }
 
     #[test]
