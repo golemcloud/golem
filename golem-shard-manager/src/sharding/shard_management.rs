@@ -56,7 +56,9 @@ const _: () = assert!(
         < DEFAULT_STATE_READ_TIMEOUT.as_millis() as u64
 );
 
-pub(crate) const DEFAULT_INITIAL_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a new leader waits for the initial health check. The check runs only when a stored
+/// lease has expired, so serving is delayed by it only after an outage longer than a lease.
+pub(crate) const DEFAULT_INITIAL_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone)]
 pub struct ShardManagement {
@@ -191,33 +193,46 @@ impl ShardManagement {
         // count must do neither.
         crate::ensure_shard_count_matches(shard_state.number_of_shards, number_of_shards)?;
 
-        info!("Initial healthcheck started");
-
         let executors: Vec<(ExecutorId, ExecutorAddr, Option<String>)> =
             shard_state.get_executors_with_addrs();
-        let unhealthy_executors = match timeout(
-            initial_health_check_timeout,
-            get_unhealthy_executors(&health_check, &executors),
-        )
-        .await
-        {
-            Ok(unhealthy_executors) => unhealthy_executors,
-            Err(_) => {
-                // Dropping every executor because their probes were slow would empty the routing
-                // table; the periodic health check loop removes the ones that are really gone.
-                error!(
-                    "Initial healthcheck timed out after {initial_health_check_timeout:?}, treating all executors as healthy"
-                );
-                HashSet::new()
-            }
+        // A takeover within every executor's lease learns nothing from a health check that the
+        // executors' own renewals and the periodic check would not tell it, so it serves at once.
+        // After a longer outage the check decides which leases are restarted below, and which
+        // executors are dropped.
+        let unhealthy_executors = if !shard_state.has_expired_lease(Utc::now()) {
+            info!(
+                executors = executors.len(),
+                "Every stored shard lease is still valid; skipping the initial health check"
+            );
+            HashSet::new()
+        } else {
+            info!("Initial healthcheck started");
+            let unhealthy = match timeout(
+                initial_health_check_timeout,
+                get_unhealthy_executors(&health_check, &executors),
+            )
+            .await
+            {
+                Ok(unhealthy_executors) => unhealthy_executors,
+                Err(_) => {
+                    // Dropping every executor because their probes were slow would empty the
+                    // routing table; the periodic health check loop removes the ones that are
+                    // really gone.
+                    error!(
+                        timeout = ?initial_health_check_timeout,
+                        "Initial healthcheck timed out, treating all executors as healthy"
+                    );
+                    HashSet::new()
+                }
+            };
+            info!("Initial healthcheck finished");
+            unhealthy
         };
         let healthy_executors: HashSet<ExecutorId> = executors
             .iter()
             .map(|(id, _, _)| *id)
             .filter(|id| !unhealthy_executors.contains(id))
             .collect();
-
-        info!("Initial healthcheck finished");
 
         let shard_management = ShardManagement {
             shard_state: Arc::new(RwLock::new(shard_state)),
@@ -235,8 +250,8 @@ impl ShardManagement {
 
         // Lease expiries are persisted and absolute, so after any outage longer than one lease
         // every stored expiry is in the past and the first pass's housekeeping would evict the
-        // whole cluster. The health check above has just proved these executors are alive, so their
-        // lease clock restarts here - in one write, before the loop can run.
+        // whole cluster. The executors counted healthy above (all of them when the health check was
+        // skipped) have their lease clock restarted here - in one write, before the loop can run.
         if !healthy_executors.is_empty() {
             let now = Utc::now();
             let regranted = shard_management
