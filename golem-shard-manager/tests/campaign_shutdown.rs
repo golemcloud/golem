@@ -64,7 +64,6 @@ fn unreachable_config() -> EtcdConfig {
         tls: None,
         username: None,
         password: None,
-        auth_token_refresh_interval: Duration::from_secs(60),
     }
 }
 

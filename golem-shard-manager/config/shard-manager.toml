@@ -334,7 +334,6 @@ type = "Disabled"
 # type = "Etcd"
 #
 # [persistence.config]
-# auth_token_refresh_interval = "1m"
 # compaction_retention_revisions = 1000
 # connect_timeout = "10s"
 # endpoints = ["http://localhost:2379"]

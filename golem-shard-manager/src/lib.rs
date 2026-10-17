@@ -26,7 +26,7 @@ use crate::config::HealthCheckK8sConfig;
 use crate::config::{EtcdConfig, HealthCheckMode, PersistenceConfig};
 use crate::quota::{DbQuotaRepo, EtcdQuotaRepo, GrpcResourceDefinitionFetcher, QuotaService};
 use crate::registry_event_subscriber::ShardManagerRegistryInvalidationHandler;
-use crate::sharding::etcd_connection::{connect_for_requests, keep_auth_tokens_fresh};
+use crate::sharding::etcd_connection::connect_for_requests;
 use crate::sharding::etcd_retry::{is_retriable_read, retry_retriable};
 use crate::sharding::healthcheck::GrpcHealthCheck;
 use crate::sharding::worker_executor::WorkerExecutorServiceDefault;
@@ -426,19 +426,6 @@ async fn start_distributed_mode(
     let election = LeaderElection::connect(etcd, LEADER_ELECTION_NAME)
         .await?
         .with_shutdown(shutdown);
-    if etcd.username.is_some() {
-        anyhow::ensure!(
-            !etcd.auth_token_refresh_interval.is_zero(),
-            "persistence.config.auth_token_refresh_interval must be greater than zero"
-        );
-        join_set.spawn(
-            keep_auth_tokens_fresh(
-                vec![kv.clone(), election.client()],
-                etcd.auth_token_refresh_interval,
-            )
-            .in_current_span(),
-        );
-    }
     let elected = campaign_watching_startup(&election, join_set).await?;
 
     metrics::record_elected(

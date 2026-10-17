@@ -448,11 +448,6 @@ impl LeaderElection {
         })
     }
 
-    /// The election channel, for renewing its auth token.
-    pub(crate) fn client(&self) -> Client {
-        self.client.clone()
-    }
-
     /// Ends the campaign when `shutdown` is cancelled. A standby killed while queued leaves its key
     /// in etcd's FIFO for a full TTL, and the next election waits behind it even after a clean
     /// handover.

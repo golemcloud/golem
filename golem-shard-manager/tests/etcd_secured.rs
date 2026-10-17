@@ -405,17 +405,12 @@ async fn a_replica_with_a_wrong_password_does_not_start() {
 }
 
 #[test]
-// etcd-client gets its auth token only when it connects, and etcd drops a token that is not used
-// for `--auth-token-ttl`. A leader idle for longer than that must still be able to step down, which
-// needs the token for the delete of its campaign key.
+// etcd drops a token that is not used for `--auth-token-ttl`. A leader idle for longer than that
+// must still be able to step down, which needs a valid token for the revoke of its lease.
 async fn an_idle_leader_still_holds_a_valid_etcd_token() {
     install_crypto_provider();
     let etcd = SecuredEtcd::with_auth(&["--auth-token-ttl=2"]).await;
-    let mut config = auth_config(&etcd.url, PASSWORD);
-    if let PersistenceConfig::Etcd(etcd) = &mut config.persistence {
-        etcd.auth_token_refresh_interval = Duration::from_millis(500);
-    }
-    let (_leader, leader_details) = spawn_replica(config);
+    let (_leader, leader_details) = spawn_replica(auth_config(&etcd.url, PASSWORD));
     let leader = started(leader_details).await;
 
     tokio::time::sleep(Duration::from_secs(4)).await;
@@ -427,4 +422,39 @@ async fn an_idle_leader_still_holds_a_valid_etcd_token() {
         .step_down()
         .await
         .expect("The step-down needs a token that is still valid");
+}
+
+#[test]
+// A standby's campaign waits inside etcd with the token it was sent with, and etcd checks that token
+// again when the key ahead of it goes away. A standby that waited longer than `--auth-token-ttl` must
+// still take over at once when the leader steps down, not one lease TTL later.
+async fn a_standby_that_waited_longer_than_the_token_ttl_takes_over() {
+    install_crypto_provider();
+    let etcd = SecuredEtcd::with_auth(&["--auth-token-ttl=2"]).await;
+    let mut config = auth_config(&etcd.url, PASSWORD);
+    if let PersistenceConfig::Etcd(etcd) = &mut config.persistence {
+        // Long enough that a campaign key left behind by a failed attempt shows as a late
+        // hand-over, instead of expiring within the wait below.
+        etcd.leader_lease_ttl = Duration::from_secs(6);
+    }
+    let (_leader, leader_details) = spawn_replica(config.clone());
+    let leader = started(leader_details).await;
+
+    let (_standby, standby_details) = spawn_replica(config);
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    leader
+        .leadership
+        .as_ref()
+        .expect("A distributed leader has a leadership handle")
+        .step_down()
+        .await
+        .expect("The step-down needs a token that is still valid");
+
+    let standby = timeout(Duration::from_secs(2), standby_details)
+        .await
+        .expect("The standby should take over well inside one lease TTL")
+        .expect("The standby task ended without a result")
+        .expect("The standby should take over");
+    assert!(standby.leadership.is_some());
 }

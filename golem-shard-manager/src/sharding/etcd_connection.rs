@@ -147,32 +147,17 @@ pub(crate) fn connect_options(config: &EtcdConfig) -> Result<ConnectOptions, Sha
         options = options.with_tls(tls_options(tls)?);
     }
     if let (Some(username), Some(password)) = (&config.username, &config.password) {
-        options = options.with_user(username, password.expose());
+        // etcd drops a token that goes unused for its `--auth-token-ttl`, a JWT token at the end
+        // of its lifetime, and every simple token when a member restarts. A request already sent
+        // with such a token - a standby's campaign waits inside etcd for as long as the leader
+        // lives - can only be repaired when it fails: etcd-client then logs in again and sends the
+        // request once more. etcd checks the token before it applies a request, so the second
+        // send cannot apply a write twice.
+        options = options
+            .with_user(username, password.expose())
+            .with_auto_token_refresh(true);
     }
     Ok(options)
-}
-
-/// Renews the etcd auth token of each client every `interval`, for as long as it runs.
-///
-/// etcd-client gets a token only when it connects, and etcd drops one that goes unused for its
-/// `--auth-token-ttl`, or a JWT token at the end of its lifetime. A client that is idle that long -
-/// a standby's, or the election client after its campaign - would then fail its next request.
-/// A failed renewal is logged and tried again at the next interval.
-pub(crate) async fn keep_auth_tokens_fresh(
-    clients: Vec<Client>,
-    interval: std::time::Duration,
-) -> anyhow::Result<()> {
-    let mut ticks = tokio::time::interval(interval);
-    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    ticks.tick().await;
-    loop {
-        ticks.tick().await;
-        for client in &clients {
-            if let Err(err) = client.refresh_token().await {
-                tracing::warn!(error = %err, "Cannot renew the etcd auth token; trying again later");
-            }
-        }
-    }
 }
 
 /// A client for ordinary key/value requests, bounded by `request_timeout`.
