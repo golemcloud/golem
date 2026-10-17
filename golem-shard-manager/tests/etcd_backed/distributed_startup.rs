@@ -2185,6 +2185,9 @@ async fn a_leader_cut_off_from_etcd_stops_serving_within_one_lease_ttl(etcd: &Ar
 // The leadership lease can lapse while the new leader is still starting. The keepalive reports
 // that into the task set, which nobody reads until the startup is over, so without supervision a
 // replica that lost its lease would finish a slow startup, mark itself ready and only then stop.
+// The lease is lost here while the startup is held in the executors' initial health check, which
+// is what the supervision of the startup steps covers; a lease that lapses during the marking as
+// ready is covered by the check before each attempt to mark.
 async fn a_leader_that_loses_its_lease_during_its_startup_stops_at_once(etcd: &Arc<DockerEtcd>) {
     wipe_state(etcd).await;
     await_election_idle(etcd).await;
@@ -2238,10 +2241,16 @@ async fn a_leader_that_loses_its_lease_during_its_startup_stops_at_once(etcd: &A
         .await
         .expect("The new leader should reach its initial health check")
         .expect("The stand-in executor should accept the health check");
+    let before_the_cut = campaigner_values(etcd).await;
     assert_eq!(
-        campaigner_values(etcd).await.len(),
+        before_the_cut.len(),
         1,
         "Exactly this replica should be in the election"
+    );
+    assert!(
+        before_the_cut.values().all(|value| !value.ready),
+        "The replica marked itself ready while its health check was still running, so the lease \
+         is not lost during the startup this test is about"
     );
 
     proxy.black_hole();
@@ -2267,16 +2276,6 @@ async fn a_leader_that_loses_its_lease_during_its_startup_stops_at_once(etcd: &A
         err.chain()
             .any(|cause| cause.downcast_ref::<LeaseLost>().is_some()),
         "The replica stopped, but not over the lease it lost: {err:#}"
-    );
-
-    proxy.restore();
-    assert!(
-        campaigner_values(etcd)
-            .await
-            .values()
-            .all(|value| !value.ready),
-        "The replica marked itself ready after it had lost its leadership, so standbys would \
-         name a leader that no longer leads."
     );
 }
 

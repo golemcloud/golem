@@ -283,6 +283,58 @@ mod lease_timing_tests {
 }
 
 #[cfg(test)]
+mod startup_supervision_tests {
+    use super::unless_a_task_fails;
+    use test_r::test;
+    use tokio::task::JoinSet;
+
+    /// A set holding a task that has already failed by the time the set is first polled.
+    async fn a_set_with_a_failed_task() -> JoinSet<anyhow::Result<()>> {
+        let mut join_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
+        join_set.spawn(async { Err(anyhow::anyhow!("the lease was lost")) });
+        // Let the task run to its end, so that its result is waiting in the set.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        join_set
+    }
+
+    #[test]
+    // Without the bias `select!` picks a ready branch at random, so one round would pass by luck
+    // half of the time; sixty-four rounds make that negligible.
+    async fn a_task_that_already_failed_wins_over_a_step_that_is_ready() {
+        for round in 0..64 {
+            let mut join_set = a_set_with_a_failed_task().await;
+
+            let result =
+                unless_a_task_fails(&mut join_set, std::future::ready(anyhow::Ok(7))).await;
+
+            let err = result.expect_err("the failed task must end the step, not the step's value");
+            assert!(
+                format!("{err:#}").contains("the lease was lost"),
+                "round {round}: the step's value won over a failure that was already there: \
+                 {err:#}"
+            );
+        }
+    }
+
+    #[test]
+    async fn a_step_completes_while_the_tasks_are_healthy() {
+        let mut join_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
+        join_set.spawn(std::future::pending());
+
+        let result = unless_a_task_fails(&mut join_set, async {
+            tokio::task::yield_now().await;
+            anyhow::Ok(7)
+        })
+        .await;
+
+        assert_eq!(
+            result.expect("a healthy task set must not fail the step"),
+            7
+        );
+    }
+}
+
+#[cfg(test)]
 mod advertised_host_tests {
     use super::{advertised_address, validate_advertised_host};
     use crate::config::{EtcdConfig, GrpcApiConfig, PersistenceConfig, ShardManagerConfig};
