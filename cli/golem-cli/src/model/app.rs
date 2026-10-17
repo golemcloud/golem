@@ -4206,7 +4206,7 @@ mod app_builder {
     use golem_common::model::tool_middleware::ToolMiddlewareName;
     use indexmap::IndexMap;
     use itertools::Itertools;
-    use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+    use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, btree_map};
     use std::fmt::Debug;
     use std::path::{Path, PathBuf};
 
@@ -5053,19 +5053,32 @@ mod app_builder {
                                     )
                                     .collect();
 
-                                deployments.entry(domain).or_insert(WithSource::new(
-                                    app.source.to_path_buf(),
-                                    HttpApiDeploymentDeployProperties {
-                                        scheme,
-                                        webhooks_prefix: HttpApiDeploymentCreation::normalize_webhooks_prefix(
-                                            api_deployment
-                                                .webhook_url
-                                                .unwrap_or_else(HttpApiDeploymentCreation::default_webhooks_prefix),
-                                        ),
-                                        openapi_prefix: HttpApiDeploymentCreation::normalize_openapi_endpoint_prefix(api_deployment.openapi_endpoint.unwrap_or(HttpApiDeploymentCreation::default_openapi_endpoint_prefix())),
-                                        agents,
-                                    },
-                                ));
+                                let properties = HttpApiDeploymentDeployProperties {
+                                    scheme,
+                                    webhooks_prefix: HttpApiDeploymentCreation::normalize_webhooks_prefix(
+                                        api_deployment
+                                            .webhook_url
+                                            .unwrap_or_else(HttpApiDeploymentCreation::default_webhooks_prefix),
+                                    ),
+                                    openapi_prefix: HttpApiDeploymentCreation::normalize_openapi_endpoint_prefix(api_deployment.openapi_endpoint.unwrap_or(HttpApiDeploymentCreation::default_openapi_endpoint_prefix())),
+                                    agents,
+                                };
+                                match deployments.entry(domain) {
+                                    btree_map::Entry::Vacant(entry) => {
+                                        entry.insert(WithSource::new(app.source.to_path_buf(), properties));
+                                    }
+                                    btree_map::Entry::Occupied(mut entry) => {
+                                        let domain = entry.key().clone();
+                                        merge_http_api_deployment(
+                                            validation,
+                                            &environment,
+                                            &domain,
+                                            entry.get_mut(),
+                                            &app.source,
+                                            properties,
+                                        );
+                                    }
+                                }
                             }
                         }
                     }
@@ -5118,10 +5131,23 @@ mod app_builder {
                                     exclude: v.exclude,
                                 })).collect();
 
-                                mcp_deployments.entry(domain).or_insert(WithSource::new(
-                                    app.source.to_path_buf(),
-                                    McpDeploymentDeployProperties { agents, tools },
-                                ));
+                                let properties = McpDeploymentDeployProperties { agents, tools };
+                                match mcp_deployments.entry(domain) {
+                                    btree_map::Entry::Vacant(entry) => {
+                                        entry.insert(WithSource::new(app.source.to_path_buf(), properties));
+                                    }
+                                    btree_map::Entry::Occupied(mut entry) => {
+                                        let domain = entry.key().clone();
+                                        merge_mcp_deployment(
+                                            validation,
+                                            &environment,
+                                            &domain,
+                                            entry.get_mut(),
+                                            &app.source,
+                                            properties,
+                                        );
+                                    }
+                                }
                             }
                         }
                     }
@@ -6174,6 +6200,102 @@ mod app_builder {
                 format!("Available {entity_name_plural}:").log_color_help_group(),
                 options.iter().map(|name| format!("- {name}")).join("\n")
             )
+        }
+    }
+
+    /// Merges a further HTTP API deployment entry for an already defined domain of the
+    /// environment. Domain-level options must agree; an agent type listed in both
+    /// entries must have the same options.
+    fn merge_http_api_deployment(
+        validation: &mut ValidationBuilder,
+        environment: &EnvironmentName,
+        domain: &Domain,
+        existing: &mut WithSource<HttpApiDeploymentDeployProperties>,
+        source: &Path,
+        properties: HttpApiDeploymentDeployProperties,
+    ) {
+        if existing.value.scheme != properties.scheme
+            || existing.value.webhooks_prefix != properties.webhooks_prefix
+            || existing.value.openapi_prefix != properties.openapi_prefix
+        {
+            validation.add_error(format!(
+                "HTTP API deployment {} in environment {} is defined in {} and {} with different scheme, webhookUrl or openapiEndpoint",
+                domain.0.log_color_highlight(),
+                environment.0.log_color_highlight(),
+                existing.source.display(),
+                source.display(),
+            ));
+            return;
+        }
+        for (agent, options) in properties.agents {
+            match existing.value.agents.entry(agent) {
+                btree_map::Entry::Vacant(entry) => {
+                    entry.insert(options);
+                }
+                btree_map::Entry::Occupied(entry) => {
+                    if entry.get() != &options {
+                        validation.add_error(format!(
+                            "Agent type {} in HTTP API deployment {} in environment {} has different options in {} and {}",
+                            entry.key().0.log_color_highlight(),
+                            domain.0.log_color_highlight(),
+                            environment.0.log_color_highlight(),
+                            existing.source.display(),
+                            source.display(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Merges a further MCP deployment entry for an already defined domain of the
+    /// environment. An agent type or tool listed in both entries must have the same
+    /// options.
+    fn merge_mcp_deployment(
+        validation: &mut ValidationBuilder,
+        environment: &EnvironmentName,
+        domain: &Domain,
+        existing: &mut WithSource<McpDeploymentDeployProperties>,
+        source: &Path,
+        properties: McpDeploymentDeployProperties,
+    ) {
+        for (agent, options) in properties.agents {
+            match existing.value.agents.entry(agent) {
+                btree_map::Entry::Vacant(entry) => {
+                    entry.insert(options);
+                }
+                btree_map::Entry::Occupied(entry) => {
+                    if entry.get() != &options {
+                        validation.add_error(format!(
+                            "Agent type {} in MCP deployment {} in environment {} has different options in {} and {}",
+                            entry.key().0.log_color_highlight(),
+                            domain.0.log_color_highlight(),
+                            environment.0.log_color_highlight(),
+                            existing.source.display(),
+                            source.display(),
+                        ));
+                    }
+                }
+            }
+        }
+        for (tool, options) in properties.tools {
+            match existing.value.tools.entry(tool) {
+                btree_map::Entry::Vacant(entry) => {
+                    entry.insert(options);
+                }
+                btree_map::Entry::Occupied(entry) => {
+                    if entry.get() != &options {
+                        validation.add_error(format!(
+                            "Tool {} in MCP deployment {} in environment {} has different options in {} and {}",
+                            entry.key().as_str().log_color_highlight(),
+                            domain.0.log_color_highlight(),
+                            environment.0.log_color_highlight(),
+                            existing.source.display(),
+                            source.display(),
+                        ));
+                    }
+                }
+            }
         }
     }
 
@@ -10044,6 +10166,111 @@ bridge:
                 && errors[0].contains("one domain per environment"),
             "{}",
             errors[0]
+        );
+    }
+
+    #[test]
+    fn deployments_for_the_same_domain_are_merged() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            httpApi:
+              deployments:
+                local:
+                  - subdomain: app
+                    agents:
+                      First: {}
+                  - domain: app.localhost:9006
+                    agents:
+                      Second: {}
+                      First: {}
+
+            mcp:
+              deployments:
+                local:
+                  - subdomain: tools
+                    agents:
+                      First: {}
+                  - subdomain: tools
+                    agents:
+                      Second: {}
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
+        let local = EnvironmentName("local".to_string());
+
+        let http_api = app.http_api_deployments(&local).unwrap();
+        assert_eq!(http_api.len(), 1);
+        let agents = &http_api[&Domain("app.localhost:9006".to_string())]
+            .value
+            .agents;
+        assert_eq!(
+            agents
+                .keys()
+                .map(|agent| agent.0.as_str())
+                .collect::<Vec<_>>(),
+            vec!["First", "Second"]
+        );
+
+        let mcp = app.mcp_deployments(&local).unwrap();
+        assert_eq!(mcp.len(), 1);
+        let agents = &mcp[&Domain("tools.localhost:9007".to_string())]
+            .value
+            .agents;
+        assert_eq!(
+            agents
+                .keys()
+                .map(|agent| agent.0.as_str())
+                .collect::<Vec<_>>(),
+            vec!["First", "Second"]
+        );
+    }
+
+    #[test]
+    fn deployments_for_the_same_domain_must_not_conflict() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            httpApi:
+              deployments:
+                local:
+                  - domain: app.example.com
+                    agents:
+                      First:
+                        testSessionHeaderName: X-Test-Auth
+                  - domain: app.example.com
+                    agents:
+                      First: {}
+                  - domain: other.example.com
+                  - domain: other.example.com
+                    webhookUrl: /hooks
+        "# };
+
+        let errors = load_app_errors(source);
+
+        assert_eq!(errors.len(), 2, "\n{}", errors.join("\n\n"));
+        assert!(
+            errors.iter().any(|error| error.contains("First")
+                && error.contains("app.example.com")
+                && error.contains("different options")),
+            "\n{}",
+            errors.join("\n\n")
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("other.example.com")
+                    && error.contains("different scheme, webhookUrl or openapiEndpoint")),
+            "\n{}",
+            errors.join("\n\n")
         );
     }
 
