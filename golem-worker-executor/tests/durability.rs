@@ -361,8 +361,12 @@ async fn custom_durability_counter_ids_handle_nested_and_concurrent_no_input_cal
         payload: String,
     }
 
+    // The fast call runs nested under the slow one, so the slow call may finish only after the
+    // fast call recorded its `End`. The test releases the slow response once it sees that `End`.
+    let fast_finished = Arc::new(tokio::sync::Notify::new());
     let server_response = response.clone();
     let server_history = history.clone();
+    let server_fast_finished = fast_finished.clone();
     let server = tokio::spawn(
         async move {
             let slow_recorded = Arc::new(tokio::sync::Notify::new());
@@ -374,6 +378,7 @@ async fn custom_durability_counter_ids_handle_nested_and_concurrent_no_input_cal
                     let history = server_history.clone();
                     let slow_recorded = slow_recorded.clone();
                     let fast_counter_assigned = fast_counter_assigned.clone();
+                    let fast_finished = server_fast_finished.clone();
                     async move {
                         // Record slow first, but assign fast's response counter before slow's.
                         if params.payload == "fast" {
@@ -391,6 +396,9 @@ async fn custom_durability_counter_ids_handle_nested_and_concurrent_no_input_cal
                         );
                         if params.payload == "fast" {
                             fast_counter_assigned.notify_one();
+                        }
+                        if params.payload == "slow" {
+                            fast_finished.notified().await;
                         }
                         result
                     }
@@ -418,10 +426,43 @@ async fn custom_durability_counter_ids_handle_nested_and_concurrent_no_input_cal
         .into_typed::<Vec<String>>()?;
     assert_eq!(nested, vec!["0-nested", "1-root-sibling"]);
 
-    let concurrent = executor
-        .invoke_and_await_agent(&component, &agent_id, "concurrent_no_input", data_value!())
-        .await?
-        .into_typed::<Vec<String>>()?;
+    let release_slow = async {
+        // The concurrent calls record the fourth and the fifth custom `Start`; the fast call
+        // records the fifth.
+        loop {
+            executor.commit_oplog(&worker_id).await?;
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let fast_start = oplog
+                .iter()
+                .filter(|entry| {
+                    matches!(&entry.entry, PublicOplogEntry::Start(params)
+                        if params.function_name == "golem-it::test-generator"
+                            || params.function_name == "golem-it::test-generator-parent")
+                })
+                .nth(4)
+                .map(|entry| entry.oplog_index);
+            if let Some(fast_start) = fast_start
+                && oplog.iter().any(|entry| {
+                    matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == fast_start)
+                })
+            {
+                fast_finished.notify_one();
+                break anyhow::Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    };
+    let (concurrent, released) = tokio::join!(
+        executor.invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "concurrent_no_input",
+            data_value!()
+        ),
+        release_slow
+    );
+    released?;
+    let concurrent = concurrent?.into_typed::<Vec<String>>()?;
     assert_eq!(
         concurrent,
         vec!["3-slow", "2-fast"],
