@@ -1000,7 +1000,6 @@ fn rpc_durable_request_captures_scope_card_and_logical_streaming_origin_determin
         input: SchemaValue::Tuple {
             elements: Vec::new(),
         },
-        local_denial: Some("agent:invoke denied at admission".to_string()),
         logical_streaming_origin: Some(StreamInvocationId {
             callee_environment_id: EnvironmentId::new(),
             callee: AgentId {

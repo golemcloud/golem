@@ -184,6 +184,7 @@ message RawStartParameters {
   optional DurableInvocationId invocation_id = 6;
   optional uint64 observational_owner = 7;
   optional RawSpanStarted span_started = 8;
+  optional string denial = 9;
 }
 
 message RawEndParameters {

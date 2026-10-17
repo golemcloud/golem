@@ -110,6 +110,9 @@ oplog_entry! {
     /// for ordinary replayable calls.
     /// `request` is `Some(...)` for real host calls and `None` for scopes that have no
     /// host-level request payload (batched-write, future transaction scopes).
+    /// `denial` is the reason the host denied the call before it ran. A denied call never runs
+    /// its operation: its `End` holds the denied response, and recovery of a `Start` without a
+    /// terminal completes it with that response.
     Start {
         hint: false
         wit_raw_type: "raw-start-parameters"
@@ -122,6 +125,7 @@ oplog_entry! {
             request: Option<payload::OplogPayload<payload::HostRequest>>,
             durable_function_type: DurableFunctionType,
             span_started: Option<Box<SpanStarted>>,
+            denial: Option<String>,
         }
         public {
             parent_start_index: Option<OplogIndex>,
@@ -131,6 +135,7 @@ oplog_entry! {
             request: Option<TypedSchemaValue>,
             durable_function_type: PublicDurableFunctionType,
             span_started: Option<PublicSpanStarted>,
+            denial: Option<String>,
         }
     },
     /// Marks the successful completion of a durable host call (or scope) started by the

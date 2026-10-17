@@ -108,7 +108,8 @@ object OplogApi {
     observationalOwner: Option[OplogIndex],
     request: Option[TypedSchemaValue],
     wrappedFunctionType: DurabilityApi.DurableFunctionType,
-    spanStarted: Option[SpanStarted] = None
+    spanStarted: Option[SpanStarted] = None,
+    denial: Option[String] = None
   )
 
   final case class EndParameters(
@@ -662,7 +663,8 @@ object OplogApi {
       observationalOwner = raw.observationalOwner.toOption.map(index => BigInt(index.toString)),
       request = raw.request.toOption.map(typedFromJs),
       wrappedFunctionType = DurabilityApi.DurableFunctionType.fromJs(raw.durableFunctionType),
-      spanStarted = raw.spanStarted.toOption.map(parseSpanStarted)
+      spanStarted = raw.spanStarted.toOption.map(parseSpanStarted),
+      denial = raw.denial.toOption
     )
 
   private def parseEndParameters(raw: JsEndParameters): EndParameters =

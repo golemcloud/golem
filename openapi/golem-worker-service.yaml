@@ -10930,6 +10930,8 @@ components:
           $ref: '#/components/schemas/PublicDurableFunctionType'
         spanStarted:
           $ref: '#/components/schemas/PublicSpanStarted'
+        denial:
+          type: string
     r#StreamCancelParams:
       type: object
       title: r#StreamCancelParams

@@ -4162,6 +4162,7 @@ impl TestCaseBuilder {
                 request: Some(OplogPayload::Inline(Box::new(i))),
                 durable_function_type: func_type,
                 span_started: None,
+                denial: None,
             },
             |status| status,
         )

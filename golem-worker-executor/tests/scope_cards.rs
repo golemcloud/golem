@@ -31,11 +31,11 @@ use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::types::{SerializableP3SocketErrorCode, SerializableRpcError};
 use golem_common::model::oplog::{
     HostRequestGolemRpcActivate, HostResponse, HostResponseFileSystemStat,
-    HostResponseGolemRpcActivate, HostResponseP3FileSystemStat,
+    HostResponseGolemRpcActivate, HostResponseKVUnit, HostResponseP3FileSystemStat,
     HostResponseP3FileSystemWriteAdmission, HostResponseP3SocketsConnect,
     HostResponsePermissionCheck, OplogEntry, OplogIndex, PublicOplogEntry, PublicQueuedCardEvent,
 };
-use golem_common::model::worker::AgentConfigEntryDto;
+use golem_common::model::worker::{AgentConfigEntryDto, RevertToOplogIndex, RevertWorkerTarget};
 use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, PendingCardEventRef, PromiseId};
 use golem_common::schema::{FromSchema, SchemaGraph, SchemaType, SchemaValue};
 use golem_common::{agent_id, data_value};
@@ -3729,6 +3729,112 @@ async fn denied_filesystem_imports_are_recorded_and_replayed_after_restart(
         root_before_restart,
         "the replay must not apply a denied mutation of the root directory"
     );
+    Ok(())
+}
+
+/// A `Start` of a denied call without its `End` is a crash between the two. Recovery must
+/// complete the call with the recorded denial instead of running the denied operation.
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn recovery_completes_a_denied_call_without_its_end_as_denied(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let cache_bucket = "__golem_wasi_keyvalue_cache";
+    let key = "probe-key";
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("KeyValue")
+        .update_agent_provision_config("KeyValue", |config| {
+            config.initial_permissions.lower_bound.positive.extend([
+                kv_permission("read", "probe-store", key),
+                kv_permission("read", cache_bucket, key),
+            ]);
+        })
+        .store()
+        .await?;
+    let agent = agent_id!("KeyValue", "denied-call-without-end");
+    configure_scope_card_root(&authority, &component, &agent)?;
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+
+    for (method, function_name, bucket, params) in [
+        (
+            "eventual_probe",
+            "keyvalue::eventual::set",
+            "probe-store",
+            data_value!("set", "probe-store", key, vec![1u8]),
+        ),
+        (
+            "cache_probe",
+            "keyvalue::cache::set",
+            cache_bucket,
+            data_value!("set", key, vec![1u8]),
+        ),
+    ] {
+        let denied = executor
+            .invoke_and_await_agent(&component, &agent, method, params)
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert!(denied.is_err(), "{function_name} must be denied");
+
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let (start_index, denial) = oplog
+            .iter()
+            .rev()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start) if start.function_name == function_name => {
+                    Some((entry.oplog_index, start.denial.clone()))
+                }
+                _ => None,
+            })
+            .ok_or_else(|| anyhow::anyhow!("no Start of {function_name} was recorded"))?;
+        assert!(
+            denial.is_some(),
+            "the Start of {function_name} must record its denial"
+        );
+
+        executor
+            .revert(
+                &worker_id,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: start_index,
+                }),
+            )
+            .await?;
+        // The revert unloads the agent, so this invocation first recovers the reverted call.
+        let stored = executor
+            .invoke_and_await_agent(&component, &agent, "get_result", data_value!(bucket, key))
+            .await?
+            .into_typed::<Result<Option<Vec<u8>>, String>>()?;
+        assert_eq!(
+            stored,
+            Ok(None),
+            "recovery must not run the denied {function_name}"
+        );
+
+        let oplog = executor.get_oplog(&worker_id, start_index).await?;
+        let response = oplog
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::End(end) if end.start_index == start_index => {
+                    end.response.clone()
+                }
+                _ => None,
+            })
+            .ok_or_else(|| anyhow::anyhow!("recovery did not complete {function_name}"))?;
+        let response = HostResponseKVUnit::from_value(response.value())?;
+        assert!(
+            response.result.is_err(),
+            "recovery must complete {function_name} with its denial, got {:?}",
+            response.result
+        );
+    }
     Ok(())
 }
 
