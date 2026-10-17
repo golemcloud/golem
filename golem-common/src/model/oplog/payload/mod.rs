@@ -760,6 +760,18 @@ oplog_payload! {
         ToolAttachmentWrite { outcome: ToolAttachmentWriteOutcome },
         ToolAttachmentTerminalResult { outcome: ToolAttachmentTerminalOutcome },
         ToolAttachmentClosed { cause: ByteStreamCloseCause },
+        /// The wallet a `self-wallet` call observed: each listed persistent card serialized as a
+        /// `StoredCard`, in the order the guest received them, and the serialized `ScopeCard`
+        /// lent to the invocation when it was listed.
+        PermissionWallet {
+            cards: Vec<Vec<u8>>,
+            scope_card: Option<Vec<u8>>,
+        },
+        /// The wallet version a `self-version` call observed.
+        PermissionWalletVersion {
+            wallet_id_hash: Vec<u8>,
+            generation: u64,
+        },
     }
 }
 
@@ -1012,7 +1024,9 @@ pub mod host_functions {
         (GolemToolStdinWait => "golem::tool::host::tool-stdin-closed", "wait", ToolAttachmentEndpoint, ToolAttachmentClosed),
         (GolemToolOutputWrite => "golem::tool::streams::tool-output-writer", "write", ToolAttachmentWrite, ToolAttachmentWrite),
         (GolemToolOutputFinish => "golem::tool::streams::tool-output-writer", "finish", ToolAttachmentFinish, ToolAttachmentTerminalResult),
-        (GolemToolOutputFail => "golem::tool::streams::tool-output-writer", "fail", ToolAttachmentFail, ToolAttachmentTerminalResult)
+        (GolemToolOutputFail => "golem::tool::streams::tool-output-writer", "fail", ToolAttachmentFail, ToolAttachmentTerminalResult),
+        (GolemPermissionsSelfWallet => "golem::permissions::wallet", "self-wallet", NoInput, PermissionWallet),
+        (GolemPermissionsSelfVersion => "golem::permissions::wallet", "self-version", NoInput, PermissionWalletVersion)
     }
 }
 

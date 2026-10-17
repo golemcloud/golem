@@ -110,8 +110,8 @@ latest canonical snapshot. Each outstanding entity retains a wallet-prefix recei
 its first committed body entry or Start, before trailing hints. Before that boundary exists, its
 claim-time prefix allows pre-Start body work to run without waiting for itself. Delivered events
 advance the local generation; later physical read-ahead cannot change the retained seed. Store
-construction uses this evidence, not the cursor's latest prefix. This does not record otherwise
-unrecorded wallet observations.
+construction uses this evidence, not the cursor's latest prefix. Guest wallet reads are recorded
+separately, as described below.
 Primary pins resolve definitions at their own physical index, even when a sibling consumed the
 install. Retained Starts preserve pending preparation; cancellation lets the next boundary help
 finish it. Completed bodies remain historical through validation; incomplete bodies adopt canonical
@@ -131,10 +131,19 @@ once; subsequent live commits cannot be overwritten by historical projection. Ta
 publication retires the generation for ordinary reconstruction rather than folding old history
 over live state. Live revocation and expiry checks remain part of authority synchronization.
 
-Wallet observation recording is unchanged. Adjacent unrecorded wallet reads can still diverge
-after reconstruction when a wallet event falls between the reads; canonical live ownership does
-not supply that missing historical observation association. Do not substitute current live state
-for recorded inputs or weaken replay checks to hide this limit.
+Card events are hints positioned after the entry that precedes them, so replay can apply an event
+before a guest read that observed the wallet without it. Guest wallet reads are therefore recorded
+(`permissions/mod.rs`): `self-wallet` is a `ReadLocal` call whose `End` (`PermissionWallet`)
+holds every listed `StoredCard` and the lent `ScopeCard` when it was listed, and `self-version`
+records its `PermissionWalletVersion` token. Replay of a completed read returns the recorded view
+and reads neither the wallet nor the card registry. A read whose `Start` has no committed `End`
+was never observed by the guest; repair completes it live at its own `Start`, after the live
+transition, against the canonical live wallet. A crash after a committed `End` replays the
+recorded view. Authorization decisions (`inspect-card`, derivation, installation) are not
+recorded: they still evaluate the replayed wallet at their boundary, so a card event between two
+adjacent decisions can still diverge after reconstruction. Do not substitute current live state
+for recorded inputs or weaken replay checks to hide that limit. Tests: the
+`wallet_reads_survive_reconstruction` cases in `tests/scope_cards.rs`.
 
 ### Structural tool authorization
 
