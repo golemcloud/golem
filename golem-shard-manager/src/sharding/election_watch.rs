@@ -192,7 +192,6 @@ impl ElectionWatcher {
             Ok(revision) => revision,
             Err(err) => return err,
         };
-        *backoff = self.retry.min;
 
         let mut watch_client = self.client.watch_client();
         let options = WatchOptions::new()
@@ -214,6 +213,10 @@ impl ElectionWatcher {
         progress.set_missed_tick_behavior(MissedTickBehavior::Delay);
         progress.tick().await;
 
+        // A read alone proves little: a watch that fails right after it is created would
+        // otherwise re-read at the shortest delay for ever. The backoff starts over only once
+        // the stream has delivered a message.
+        let mut delivered = false;
         loop {
             tokio::select! {
                 message = responses.message() => match message {
@@ -233,6 +236,10 @@ impl ElectionWatcher {
                         ));
                     }
                     Ok(Some(response)) => {
+                        if !delivered {
+                            delivered = true;
+                            *backoff = self.retry.min;
+                        }
                         self.heard();
                         if !response.events().is_empty()
                             && let Err(err) = self.read(&mut kv).await
