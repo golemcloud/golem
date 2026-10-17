@@ -661,7 +661,8 @@ async fn deadline_selection(
             Arc::new(move |config| {
                 config.agent_sockets.enabled = true;
                 config.resource_usage_metering = metering;
-                config.limits.max_invocation_duration = Some(Duration::from_secs(3600));
+                config.limits.max_invocation_duration =
+                    Some(Duration::from_secs(if timeout_first { 5 } else { 3600 }));
                 config.retry.max_attempts = 1;
             }),
         )
@@ -739,6 +740,7 @@ async fn deadline_selection(
             }
         })
         .await??;
+        let committed_prefix = executor.stored_oplog(&id).await;
         let generation = worker.resident_generation_for_test();
         let acquisitions = worker.permit_acquisitions_for_test();
         let selected_first = timeout_first || success_first;
@@ -746,12 +748,11 @@ async fn deadline_selection(
         let mut raw = worker.raw_interrupt_for_test();
         let (at_outcome, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
         if timeout_first {
-            worker.expire_invocation_deadline_for_test();
             let deadline_interrupt =
                 tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??;
             assert!(
                 matches!(deadline_interrupt, InterruptKind::Interrupt(_)),
-                "explicit deadline expiry must emit one Interrupt: {deadline_interrupt:?}"
+                "configured deadline expiry must emit one Interrupt: {deadline_interrupt:?}"
             );
             assert!(matches!(
                 raw.try_recv(),
@@ -857,6 +858,12 @@ async fn deadline_selection(
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
             .await;
+        let raw_after_stop = executor.stored_oplog(&id).await;
+        assert!(raw_after_stop.len() >= committed_prefix.len());
+        assert_eq!(
+            &raw_after_stop[..committed_prefix.len()],
+            committed_prefix.as_slice()
+        );
         let errors: Vec<_> = entries
             .values()
             .filter_map(|entry| match entry {
@@ -909,7 +916,8 @@ async fn deadline_selection(
             );
         } else if timeout_first {
             assert!(
-                matches!(errors.as_slice(), [AgentError::InternalError(_)]),
+                matches!(errors.as_slice(), [AgentError::InternalError(message)]
+                    if message == "invocation exceeded the configured maximum invocation duration of 5s"),
                 "{errors:?}"
             );
             assert_eq!(suspends, 0);

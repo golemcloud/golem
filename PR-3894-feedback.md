@@ -195,7 +195,12 @@ Findings 11-14 have separate linked comments.
     terminal/history/physical-cleanup guarantees; do not rebuild the old private-election conjunction
     if its production state machine is removed. Pre-commit append backpressure is not that checkpoint.
   - [ ] Address remaining idle-close, completed-replay and deletion-stage gates.
-  - [ ] Address remaining actor/settlement fault controls, monthly time and invocation-deadline controls.
+  - [x] Remove the complete invocation-deadline control family. The Worker watch field, forced-expiry
+    setter and test-feature timer branch are removed. Native selection tests use the configured
+    timer and preserve their original assertions, with complete raw-prefix and exact timeout-text
+    checks added. Those cases, the ordinary parked-P3 deadline case, strict lint and the production
+    check pass locally. Monthly time and the generic stop protocol remain separate open work.
+  - [ ] Address remaining actor/settlement fault controls and monthly time controls.
   - [ ] Address the keyed filesystem metadata gate and remaining protocol ordering controls.
   - [ ] For any hook proposed to remain, document the otherwise untestable guarantee, minimal scope
     and why its scheduling changes do not invalidate the test. Existing main-owned hooks are not
@@ -219,6 +224,8 @@ Findings 11-14 have separate linked comments.
     preserved except observation enum/path names. No recovery repair is included.
   - [x] Remove the remaining WebSocket reader-lock observer with its ordering gates. Existing tracing
     supplies actual Pending/Returned/Dropped and exact connection binding, without Worker test state.
+  - [x] Delete the invocation-deadline watch state and Worker expiry interfaces with their producer
+    branch. The native tests now use the existing timer, as recorded under F10.
   - [ ] Address the keyed filesystem gate; oplog backpressure is not actual metadata Pending.
   - [ ] Address monthly-acceptance observers/completion projections, idle/tail observations,
     private lifecycle projections, scripted allocation support and test-only entity construction.

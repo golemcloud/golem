@@ -864,8 +864,6 @@ struct StopProgressState {
     permit_acquisitions: usize,
     #[cfg(test)]
     window_close_tasks: usize,
-    #[cfg(feature = "test-utils")]
-    invocation_deadline: Option<tokio::sync::watch::Sender<tokio::time::Instant>>,
 }
 
 #[cfg(feature = "test-utils")]

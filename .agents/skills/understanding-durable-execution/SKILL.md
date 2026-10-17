@@ -482,6 +482,13 @@ candidate with that request. Monthly ephemeral errors map only the exact matchin
 an independent guest error, timeout or unmatched interruption keeps its boundary classification.
 No separate origin enum or origin-specific callback remains. Publication errors stay observable
 through stop cleanup rather than replacing an unrelated invocation error.
+The invocation deadline uses the same configured Tokio timer with and without `test-utils`. There
+is no Worker watch channel or forced-expiry setter. Native selection tests leave TCP input silent,
+observe the timer's actual typed interrupt and hold the ordinary outcome append before requesting
+a later quota stop. Their other cases let quota or success finish first. They require the exact
+five-second timeout text and complete committed raw prefix. Native cases, strict lint and production
+compilation pass locally. This timer-control removal does not remove the remaining stop publication
+protocol.
 Before recording a typed interruption, the ordinary failure callback acknowledges only its exact
 matching, already-published terminal request. A different kind, unpublished or freezing request is
 left untouched. This prevents later monthly observations from replacing an observed stop without

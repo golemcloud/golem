@@ -676,42 +676,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     #[cfg(feature = "test-utils")]
-    pub(crate) fn invocation_deadline_for_test(
-        &self,
-        duration: Duration,
-    ) -> impl Future<Output = ()> + Send + 'static {
-        let (advance, mut deadline) =
-            tokio::sync::watch::channel(tokio::time::Instant::now() + duration);
-        self.stop_progress.lock().unwrap().invocation_deadline = Some(advance);
-        async move {
-            loop {
-                let expires = *deadline.borrow_and_update();
-                tokio::select! {
-                    _ = tokio::time::sleep_until(expires) => return,
-                    changed = deadline.changed() => {
-                        if changed.is_err() {
-                            tokio::time::sleep_until(expires).await;
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn expire_invocation_deadline_for_test(&self) {
-        self.stop_progress
-            .lock()
-            .unwrap()
-            .invocation_deadline
-            .as_ref()
-            .expect("invocation deadline armed")
-            .send(tokio::time::Instant::now())
-            .expect("invocation deadline still pending");
-    }
-
-    #[cfg(feature = "test-utils")]
     pub fn accepted_stop_receipt_for_test(&self) -> tokio::sync::broadcast::Receiver<()> {
         self.stop_progress
             .lock()

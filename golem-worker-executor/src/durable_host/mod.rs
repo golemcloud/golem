@@ -4411,15 +4411,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let timer = duration.map(|duration| {
             let latch = latch.clone();
             let execution_status = self.execution_status.clone();
-            #[cfg(feature = "test-utils")]
-            let deadline = self
-                .public_state
-                .worker()
-                .invocation_deadline_for_test(duration);
             tokio::spawn(async move {
-                #[cfg(feature = "test-utils")]
-                deadline.await;
-                #[cfg(not(feature = "test-utils"))]
                 tokio::time::sleep(duration).await;
                 latch.store(true, Ordering::Release);
                 let interrupt_signal = {
