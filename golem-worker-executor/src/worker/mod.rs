@@ -88,7 +88,8 @@ use crate::services::linear_memory::{LinearMemoryTracker, SHARED_LINEAR_MEMORY_E
 use crate::services::oplog::plugin::ForwardingOplog;
 use crate::services::oplog::{
     ArchiveWait, CommitLevel, EphemeralOplog, MultiLayerOplog, Oplog, OplogError, OplogFence,
-    OplogLifecycleGuard, OplogOps, OplogRefusal, UnreadableOplog, downcast_oplog,
+    OplogLifecycleGuard, OplogOps, OplogPayloadDownloadError, OplogRefusal, UnreadableOplog,
+    downcast_oplog,
 };
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::resource_usage_metering::ResourceUsageAccount;
@@ -5184,6 +5185,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// full invocation, downloading its payload from external storage if needed. The status record
     /// only keeps a lightweight reference, so callers that need to execute the invocation hydrate
     /// it on demand.
+    ///
+    /// A storage that did not answer gives `RecoveryRequired`. An entry or payload that does not
+    /// decode, or another entry at the referenced index, gives `OplogFailed` for this agent.
     async fn hydrate_pending_invocation(
         &self,
         pending: &PendingInvocationRef,
@@ -5198,12 +5202,27 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 invocation_context,
                 ..
             } => {
-                let agent_payload = self.oplog.download_payload(payload.clone()).await.map_err(|e| {
-                    WorkerExecutorError::unknown(format!(
-                        "Failed to download pending agent invocation payload at oplog index {}: {e}",
-                        pending.oplog_index
-                    ))
-                })?;
+                let agent_payload = self
+                    .oplog
+                    .download_payload_classified(payload.clone())
+                    .await
+                    .map_err(|error| match error {
+                        OplogPayloadDownloadError::Backend(error) => {
+                            WorkerExecutorError::recovery_required(format!(
+                                "failed to download the pending agent invocation payload at oplog index {}: {error:#}",
+                                pending.oplog_index
+                            ))
+                        }
+                        OplogPayloadDownloadError::Corrupt(error) => {
+                            WorkerExecutorError::oplog_failed(
+                                self.agent_id(),
+                                format!(
+                                    "corrupt pending agent invocation payload at oplog index {}: {error:#}",
+                                    pending.oplog_index
+                                ),
+                            )
+                        }
+                    })?;
                 let invocation_context = InvocationContextStack::from_oplog_data(
                     trace_id,
                     trace_states,
@@ -5216,10 +5235,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     payload,
                 })
             }
-            other => Err(WorkerExecutorError::unknown(format!(
-                "Expected a PendingAgentInvocation oplog entry at index {}, but found {other:?}",
-                pending.oplog_index
-            ))),
+            other => Err(WorkerExecutorError::oplog_failed(
+                self.agent_id(),
+                format!(
+                    "expected a PendingAgentInvocation oplog entry at index {}, but found {other:?}",
+                    pending.oplog_index
+                ),
+            )),
         }
     }
 

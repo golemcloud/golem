@@ -25,7 +25,7 @@ use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PublicOplogEntry};
-use golem_common::model::{AgentId, AgentStatus, OwnedAgentId};
+use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, OwnedAgentId};
 use golem_common::{agent_id, data_value};
 use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::storage::blob::{
@@ -939,6 +939,103 @@ async fn a_failed_rebuild_does_not_fail_a_committed_invocation_whose_result_left
     assert!(
         matches!(lookup, LookupResult::Complete(Ok(_))),
         "the committed invocation must read as its success: {lookup:?}"
+    );
+    Ok(())
+}
+
+/// A queued invocation whose pending entry is in archived history that does not decode. The status
+/// rebuilds, so only the hydration of the queued invocation reads the history. The owner records
+/// the failure and stops the agent with the cause, instead of retrying it without end: the queued
+/// invocation fails with the decode error, and no invocation starts after the failure.
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn a_queued_invocation_whose_entry_does_not_decode_fails_the_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let agent = Arc::new(
+        ArchiveFaultAgent::start(
+            last_unique_id,
+            deps,
+            host_api_tests,
+            "undecodable-queued-invocation",
+            None,
+        )
+        .await?,
+    );
+    let owned_agent_id = OwnedAgentId::new(agent.context.default_environment_id, &agent.agent_id);
+    let worker = agent
+        .executor
+        .active_agents()
+        .try_get(&owned_agent_id)
+        .await
+        .expect("the agent is loaded after its first invocation");
+    let mut events = worker.events().subscribe();
+    let queued = IdempotencyKey::fresh();
+
+    // The enqueue folds every entry before it, so the status of the first invocation does not
+    // need the history.
+    let (result, before_failure) = agent
+        .succeed_over_a_failing_rebuild(deps, ARCHIVE_CORRUPT, async |agent| {
+            agent
+                .executor
+                .invoke_agent_with_key(
+                    &agent.component,
+                    &agent.agent,
+                    &queued,
+                    "get_self_metadata_result",
+                    data_value!(),
+                )
+                .await
+        })
+        .await?;
+    result.expect("the invocation before the queued one does not read the history");
+
+    let queued_result = tokio::time::timeout(
+        Duration::from_secs(60),
+        events.wait_for(|event| match event {
+            Event::InvocationCompleted {
+                agent_id,
+                idempotency_key,
+                result,
+            } if agent_id == &agent.agent_id && idempotency_key == &queued => Some(result.clone()),
+            _ => None,
+        }),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("the queued invocation must fail, not stay pending"))??;
+    let error = queued_result.expect_err("a queued invocation that does not hydrate must not run");
+    let error = error.to_string();
+    assert!(
+        error.contains("failed to decode"),
+        "the queued invocation must fail with the decode error: {error}"
+    );
+
+    agent.fault.restore();
+    assert!(
+        agent.records_an_error_after(before_failure).await?,
+        "the owner must record the failed hydration"
+    );
+    let oplog = agent
+        .executor
+        .get_oplog(&agent.agent_id, before_failure.next())
+        .await?;
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_))),
+        "no invocation may start after the failed hydration: {oplog:#?}"
+    );
+    assert_eq!(
+        agent
+            .executor
+            .get_worker_metadata(&agent.agent_id)
+            .await?
+            .status,
+        AgentStatus::Failed
     );
     Ok(())
 }

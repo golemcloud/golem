@@ -348,7 +348,10 @@ status stays detached until a later fold or rebuild succeeds. A caller that took
 of `commit_oplog_before_status_update` does not wait for the refusal, so the owner finds it
 itself: the invocation loop chooses work only from `Worker::get_repaired_status`, which rebuilds a
 detached status first, and a rebuild that fails again is recorded like a failed recovery and
-ends in infrastructure recovery or in a stop with `OplogFailed` (`unrepaired_status_outcome`).
+ends in infrastructure recovery or in a stop with `OplogFailed` (`unreadable_oplog_outcome`). A
+pending invocation whose entry or payload does not hydrate takes the same path:
+`hydrate_pending_invocation` classifies the failure as `RecoveryRequired` or `OplogFailed`, and the
+loop does not retry it immediately.
 `AppendInvocationIfVersion` also rebuilds a detached status before it checks the key. A detached
 status can still name an invocation whose completion was committed and published as current, so
 the hydrated result cache keeps the keys of committed completions that the status has not folded

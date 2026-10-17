@@ -2035,7 +2035,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                             Ok(SelectedWork::Idle(status)) => {
                                 self.handle_idle_status(&status).await
                             }
-                            Err(error) => self.unrepaired_status_outcome(&error).await,
+                            Err(error) => self.unreadable_oplog_outcome(&error).await,
                         };
 
                         match result {
@@ -2168,11 +2168,12 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         ))
     }
 
-    /// What the loop does when the status could not be rebuilt from the oplog, for example after
-    /// a commit whose receipt its caller already took. The failure is recorded like a failed
-    /// recovery: an oplog whose storage did not answer recovers after a delay and keeps its
+    /// What the loop does when the oplog does not give what the next work needs: the status
+    /// could not be rebuilt, for example after a commit whose receipt its caller already took, or
+    /// the selected pending invocation could not be hydrated. The failure is recorded like a
+    /// failed recovery: an oplog whose storage did not answer recovers after a delay and keeps its
     /// pending work, and one that does not read for good stops the agent with the cause.
-    async fn unrepaired_status_outcome(&self, error: &WorkerExecutorError) -> CommandOutcome {
+    async fn unreadable_oplog_outcome(&self, error: &WorkerExecutorError) -> CommandOutcome {
         self.parent.record_recovery_failure(error).await;
         infrastructure_failure_outcome(self.parent.retired_for_lost_shard(), error, || {
             self.parent.next_infrastructure_recovery_delay()
@@ -2339,7 +2340,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     agent_id = %self.owned_agent_id.agent_id,
                     "Failed to hydrate pending invocation from oplog: {error}"
                 );
-                return CommandOutcome::BreakInnerLoop(RetryDecision::Immediate);
+                return self.unreadable_oplog_outcome(&error).await;
             }
         };
 
