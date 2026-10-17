@@ -1775,6 +1775,10 @@ async fn marking_the_leader_ready_survives_a_dead_member_in_the_endpoint_list(
     let election_name = unique_election_name();
     let config = EtcdConfig {
         endpoints: vec!["http://127.0.0.1:1".to_string(), etcd.client_url()],
+        // A refusing member takes a share of the requests at random; a short backoff gives the
+        // campaign and each mark many attempts inside their budgets.
+        retry_min_delay: Duration::from_millis(10),
+        retry_max_delay: Duration::from_millis(50),
         ..election_config(etcd)
     };
     let election = LeaderElection::connect(&config, election_name.clone())
@@ -1786,6 +1790,9 @@ async fn marking_the_leader_ready_survives_a_dead_member_in_the_endpoint_list(
         .expect("The campaign should finish despite the dead member")
         .expect("The campaign should be won");
 
+    // Nothing else renews the lease while the marks run, and the marks must not depend on
+    // finishing inside one lease TTL.
+    let keepalive = tokio::spawn(elected.keepalive.run());
     for attempt in 1..=10 {
         elected
             .leadership
@@ -1793,6 +1800,7 @@ async fn marking_the_leader_ready_survives_a_dead_member_in_the_endpoint_list(
             .await
             .unwrap_or_else(|err| panic!("Marking ready failed on attempt {attempt}: {err}"));
     }
+    keepalive.abort();
 }
 
 /// Waits until the watch's view satisfies `ready`.
