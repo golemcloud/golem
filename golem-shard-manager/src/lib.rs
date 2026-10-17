@@ -357,6 +357,14 @@ pub(crate) fn ensure_shard_count_matches(
 }
 
 /// Blocks until elected, returning the etcd client and the fence every state write is guarded on.
+/// Counts a retriable etcd failure before the campaign as a failed campaign attempt: the metric
+/// that shows a replica which cannot reach etcd.
+fn count_retriable_failure(err: &ShardManagerError) {
+    if is_retriable_read(err) {
+        metrics::record_campaign_attempt_failure();
+    }
+}
+
 async fn start_distributed_mode(
     etcd: &EtcdConfig,
     deployment: &Deployment,
@@ -395,7 +403,20 @@ async fn start_distributed_mode(
     );
 
     let settings = EtcdConnectSettings::load(etcd)?;
-    let kv = connect_requests_with(etcd, &settings).await?;
+    // With a user, etcd-client logs in as it connects, so a connect can meet an etcd that is down:
+    // retried like the read below, while a wrong password or certificate still ends the startup.
+    let kv = retry_retriable(
+        "connecting to etcd",
+        || async {
+            connect_requests_with(etcd, &settings)
+                .await
+                .inspect_err(count_retriable_failure)
+        },
+        &shutdown,
+        etcd.retry_min_delay,
+        etcd.retry_max_delay,
+    )
+    .await?;
     info!(
         endpoints = etcd.endpoints.join(", "),
         state_key = STATE_KEY,
@@ -409,11 +430,7 @@ async fn start_distributed_mode(
         || async {
             EtcdRoutingTablePersistence::stored_number_of_shards(&kv)
                 .await
-                .inspect_err(|err| {
-                    if is_retriable_read(err) {
-                        metrics::record_campaign_attempt_failure();
-                    }
-                })
+                .inspect_err(count_retriable_failure)
         },
         &shutdown,
         etcd.retry_min_delay,
@@ -424,9 +441,19 @@ async fn start_distributed_mode(
         ensure_shard_count_matches(stored, number_of_shards)?;
     }
 
-    let election = LeaderElection::connect_with(etcd, &settings, LEADER_ELECTION_NAME)
-        .await?
-        .with_shutdown(shutdown);
+    let election = retry_retriable(
+        "connecting the election client to etcd",
+        || async {
+            LeaderElection::connect_with(etcd, &settings, LEADER_ELECTION_NAME)
+                .await
+                .inspect_err(count_retriable_failure)
+        },
+        &shutdown,
+        etcd.retry_min_delay,
+        etcd.retry_max_delay,
+    )
+    .await?
+    .with_shutdown(shutdown);
     let elected = campaign_watching_startup(&election, join_set).await?;
 
     metrics::record_elected(

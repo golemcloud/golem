@@ -584,3 +584,30 @@ async fn a_standby_that_waited_longer_than_the_token_ttl_takes_over(
         .expect("The standby should take over");
     assert!(standby.leadership.is_some());
 }
+
+/// A host port for an etcd container that must keep its port across a restart.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|listener| listener.local_addr())
+        .expect("Cannot find a free port")
+        .port()
+}
+
+#[test]
+// With a user, etcd-client logs in as it connects, so the connect itself meets an etcd that is not
+// there yet. The replica must wait for etcd, as it does without a user, instead of exiting.
+async fn a_replica_with_a_user_waits_for_an_etcd_that_starts_later(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
+    let pki = TestPki::new();
+    let etcd = auth_etcd(&pki, pki.etcd_options().with_host_port(free_port())).await;
+    etcd.stop().await;
+
+    let (_replica, details) = spawn_replica(auth_config(&etcd.client_url(), PASSWORD, &pki));
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    etcd.start_again().await;
+
+    let replica = started(details).await;
+    assert!(replica.leadership.is_some());
+}
