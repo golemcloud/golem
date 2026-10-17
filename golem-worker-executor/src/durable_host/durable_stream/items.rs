@@ -20,6 +20,7 @@ use super::publication::{STREAM_SEGMENT_MAX_EVENTS, STREAM_SEGMENT_TARGET_BYTES}
 use super::registration::{registration_matches, registration_record};
 use super::terminals::fenced_by_terminal;
 use super::*;
+use crate::services::oplog::{OplogPayloadDownloadError, OplogReadError, OplogReadSource};
 
 /// Latest committed position and terminal state of a durable stream.
 pub struct StreamHead {
@@ -207,6 +208,34 @@ impl DurableStreamStore {
         self.resolve_nested_handles(&record.nested_stream_ids).await
     }
 
+    /// Downloads the payload of a committed record that a reader of the stream history needs. A
+    /// payload store that did not answer is a read of this oplog that can pass later, as an archive
+    /// layer that did not answer is, so it is kept apart from history that does not decode.
+    async fn download_history_payload<
+        T: desert_rust::BinaryCodec + std::fmt::Debug + Clone + PartialEq + Send + Sync + 'static,
+    >(
+        &self,
+        payload: OplogPayload<T>,
+    ) -> Result<T, StreamStoreError> {
+        self.oplog
+            .download_payload_classified(payload)
+            .await
+            .map_err(|error| match error {
+                OplogPayloadDownloadError::Backend(error) => {
+                    StreamStoreError::Unreadable(UnreadableOplog::new(
+                        &self.producer,
+                        OplogReadError::source_unavailable(
+                            OplogReadSource::Other("oplog payload store"),
+                            format!("{error:#}"),
+                        ),
+                    ))
+                }
+                OplogPayloadDownloadError::Corrupt(error) => {
+                    StreamStoreError::CorruptHistory(format!("{error:#}"))
+                }
+            })
+    }
+
     pub(crate) async fn read_session_record(
         &self,
         oplog_index: OplogIndex,
@@ -216,11 +245,7 @@ impl DurableStreamStore {
                 "session metadata points at a non-session record".into(),
             ));
         };
-        let record = self
-            .oplog
-            .download_payload(record)
-            .await
-            .map_err(StreamStoreError::Oplog)?;
+        let record = self.download_history_payload(record).await?;
         if !record.has_supported_format() {
             return Err(StreamStoreError::CorruptHistory(
                 "unsupported or malformed durable Stream Session record version".into(),
@@ -238,11 +263,7 @@ impl DurableStreamStore {
                 "stream batch index points at a non-item record".into(),
             ));
         };
-        let mut record = self
-            .oplog
-            .download_payload(record)
-            .await
-            .map_err(StreamStoreError::Oplog)?;
+        let mut record = self.download_history_payload(record).await?;
         self.fork_lineage
             .project_item_batch(oplog_index, &mut record)
             .map_err(StreamStoreError::CorruptHistory)?;

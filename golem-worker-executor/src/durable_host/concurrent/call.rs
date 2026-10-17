@@ -5978,6 +5978,8 @@ fn response_has_bounded_encoding_stack<Resp: 'static>() -> bool {
         TypeId::of::<HostResponseQuotaCommitResult>(),
         TypeId::of::<HostResponsePermissionCardDerived>(),
         TypeId::of::<HostResponsePermissionCardTransferComplete>(),
+        TypeId::of::<HostResponsePermissionWallet>(),
+        TypeId::of::<HostResponsePermissionWalletVersion>(),
         TypeId::of::<HostResponseP3KeyvalueIncomingValueStream>(),
         TypeId::of::<HostResponseP3BlobstoreIncomingValueStream>(),
         TypeId::of::<HostResponseP3HttpClientConsumeBodyChunk>(),

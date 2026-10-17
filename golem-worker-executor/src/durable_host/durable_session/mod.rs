@@ -2033,7 +2033,7 @@ impl StreamSession {
                     error = %error,
                     "Rejecting durable input items"
                 );
-                return Err(SessionError::from(error.to_string()));
+                return Err(SessionError::from(error));
             }
         };
         let mut nested_mappings = Vec::with_capacity(nested_transport_ids.len());
@@ -2168,7 +2168,7 @@ impl StreamSession {
                     error = %error,
                     "Rejecting durable input end"
                 );
-                Err(SessionError::from(error.to_string()))
+                Err(SessionError::from(error))
             }
         }
     }
@@ -4992,13 +4992,12 @@ impl StreamSession {
                     bytes.push(value);
                     let flush_deadline = tokio::time::Instant::now() + PACKED_U8_OUTPUT_FLUSH_DELAY;
                     while bytes.len() < MAX_PACKED_U8_STREAM_ITEM_SIZE {
-                        let next = match tokio::time::timeout_at(flush_deadline, reader.next())
-                            .await
-                        {
-                            Ok(Ok(Some(next))) => next,
-                            Ok(Ok(None)) | Err(_) => break,
-                            Ok(Err(error)) => return Err(SessionError::from(error.to_string())),
-                        };
+                        let next =
+                            match tokio::time::timeout_at(flush_deadline, reader.next()).await {
+                                Ok(Ok(Some(next))) => next,
+                                Ok(Ok(None)) | Err(_) => break,
+                                Ok(Err(error)) => return Err(SessionError::from(error)),
+                            };
                         let expected_sequence = first_sequence
                             .checked_add(bytes.len() as u64)
                             .ok_or_else(|| "packed-u8 output sequence overflow".to_string())?;

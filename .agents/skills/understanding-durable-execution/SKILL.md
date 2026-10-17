@@ -332,7 +332,12 @@ retries, fails the open, and the open-oplog cache keeps nothing. The open fails 
 `OplogFailed`, or with `RecoveryRequired` when the storage did not answer. A stream session index
 rebuilt over an unreadable oplog returns `SessionError::Unreadable`, which keeps the
 `UnreadableOplog` up to the boundary, where it becomes `OplogFailed` or `RecoveryRequired` by its
-kind. An ephemeral oplog whose writer task cannot store a batch in the first
+kind. An invocation session attachment records a failed session terminal (`fail_protocol`) only
+for a violation of the session protocol (`grpc/invocation_session/mod.rs::end_attachment_on_failure`).
+When a read of the session history meets storage that did not answer (including a stream payload
+download), the attachment ends without a terminal frame, and the client reattaches from its
+durable cursors. A fence or an oplog that failed for good goes out as its worker error and
+records nothing. An ephemeral oplog whose writer task cannot store a batch in the first
 archive layer latches `OplogError::ArchiveWrite` like the fence: every later add and commit is
 refused, so the agent stops. Every caller that handles a fence handles both as `OplogRefusal`
 (`services/oplog/mod.rs`): the status actor answers its receipts with the refusal, and a write
@@ -1877,9 +1882,12 @@ cursor (`OwnerExecution`, `worker/instance.rs`).
   scopes and derived surfaces, not independent live membership. Accepted wallet commits publish
   through the status actor even if their producer is cancelled; owner-wide interest is the union
   of wallet, scope and admission-candidate contributions. Historical bodies retain recorded wallets
-  and pins until their own live transition, never borrowing the latest live snapshot. Adjacent
-  unrecorded wallet observations still lack an exact historical association; this ownership model
-  does not change observation recording. The root `Start` records the pinned
+  and pins until their own live transition, never borrowing the latest live snapshot. Guest
+  `self-wallet` and `self-version` reads are `ReadLocal` calls whose `End` records the exact
+  observed view, so replay returns each read's own observation whatever card events it applies
+  around it; an incomplete read completes live at its own `Start`. Authorization decisions such
+  as `inspect-card` and derivation are not recorded and still evaluate the replayed wallet; a card
+  event between two of them can diverge the same way. The root `Start` records the pinned
   chain plan; descendants record root plus position, and every occurrence retains the original
   calling principal and typed static installation parameters. Component and host leaves use the
   same dispatch path.

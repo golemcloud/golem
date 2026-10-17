@@ -70,6 +70,36 @@ See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-re
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-worker-service/config/worker-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-worker-service/config/worker-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-worker-service)
 
+#### Long-lived connections
+
+Set every load balancer and proxy idle timeout longer than the keep-alive interval. Allow margin for network delay. Enable WebSocket upgrades and disable response buffering for SSE routes. A proxy with a fixed maximum connection lifetime can still close a connection that has traffic.
+
+The worker service uses these settings in `config/worker-service.toml`:
+
+```toml
+[invocation_session]
+keep_alive_interval = "30s"
+max_pong_timeout = "0s"
+
+[mcp]
+sse_keep_alive_interval = "15s"
+
+[durable_streams]
+long_poll_timeout = "30s"
+```
+
+The invocation session WebSocket sends Pings at `keep_alive_interval`, which must be non-zero. The default `max_pong_timeout = "0s"` disables the Pong deadline, but Pings continue. Set a positive duration to require a Pong within that duration after a Ping is flushed to the socket.
+
+The `golem-client` socket task reads and answers Pings while an invocation waits, even when the caller does not poll for output. When its bounded output buffers fill, it pauses socket reads and answers Pings when reading resumes. It does not send separate client Pings.
+
+A positive Pong deadline is a strict responsiveness limit, not a reliable dead-peer test. Backpressure in either direction can delay Pong processing, including full server input queues or byte budgets and full client output buffers. Enable it only when neither endpoint can remain backpressured longer than the timeout. Otherwise keep the default `"0s"`.
+
+MCP uses the RMCP transport's SSE comment keep-alive on open GET and POST streams. `sse_keep_alive_interval` must be non-zero. Durable stream SSE emits a `control` event after each read, including empty reads. An idle read waits for at most `long_poll_timeout`, with an executor cap of 30 seconds, so no separate SSE heartbeat is needed.
+
+Environment variable equivalents are `GOLEM__INVOCATION_SESSION__KEEP_ALIVE_INTERVAL`, `GOLEM__INVOCATION_SESSION__MAX_PONG_TIMEOUT`, `GOLEM__MCP__SSE_KEEP_ALIVE_INTERVAL`, and `GOLEM__DURABLE_STREAMS__LONG_POLL_TIMEOUT`.
+
+For `golem server run`, nest these sections under `worker_service`, for example `[worker_service.invocation_session]`. Add `WORKER_SERVICE` to the environment variable path, for example `GOLEM__WORKER_SERVICE__MCP__SSE_KEEP_ALIVE_INTERVAL`.
+
 ### Worker Executor
 
 [golem-worker-executor](https://github.com/golemcloud/golem/tree/main/golem-worker-executor) is responsible for running the [agents](/next/concepts/agents) that belong to assigned shards. The service keeps each agent's oplog in **indexed storage** - PostgreSQL, SQLite or Redis - and uses key-value and blob storage alongside it.
@@ -119,7 +149,7 @@ See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-co
 
 ### Golem Router
 
-[golem-router](https://github.com/golemcloud/golem/tree/main/golem-router) is an [Nginx](https://nginx.org/) proxy that serves the services on one port, routed by host. Requests for the management host reach the registry service and the management API of the worker service. Requests for every other host reach the custom request port of the worker service, which serves the HTTP API and MCP deployments by domain. Point every name at the router in DNS.
+[golem-router](https://github.com/golemcloud/golem/tree/main/golem-router) is an [Envoy](https://www.envoyproxy.io/) proxy that serves the services on one port, routed by host. Requests for the management host reach the registry service and the management API of the worker service. Requests for every other host reach the custom request port of the worker service, which serves the HTTP API and MCP deployments by domain. Point every name at the router in DNS. The image runs Envoy as uid and gid 65534.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -128,17 +158,21 @@ See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-co
 | `GOLEM_ROUTER_WORKER_SERVICE_HOST` | Host of the worker service | required |
 | `GOLEM_ROUTER_WORKER_SERVICE_PORT` | Worker service HTTP API (`port`) | `9005` |
 | `GOLEM_ROUTER_WORKER_SERVICE_CUSTOM_REQUEST_PORT` | Worker service `custom_request_port` | `9006` |
-| `GOLEM_ROUTER_PORT` | Port the router listens on, IPv4 and IPv6 | `80` |
-| `GOLEM_ROUTER_RESOLVER` | Arguments of the Nginx `resolver` directive, for example `fdaa::3` or `127.0.0.11 ipv6=off` | the name servers of `/etc/resolv.conf` |
-| `GOLEM_ROUTER_RESOLVER_VALID` | How long a resolved address is used | `10s` |
-| `GOLEM_ROUTER_CLIENT_MAX_BODY_SIZE` | Largest request body, such as a component upload | `1g` |
-| `GOLEM_ROUTER_STREAM_TIMEOUT` | Longest time without data on a connection | `1h` |
+| `GOLEM_ROUTER_PORT` | Port the router listens on, IPv4 and IPv6 | `8080` |
+| `GOLEM_ROUTER_TRUSTED_HOPS` | Number of proxies in front of the router whose `X-Forwarded-For` and `X-Forwarded-Proto` it trusts | `0` |
+| `GOLEM_ROUTER_STREAM_IDLE_TIMEOUT` | Longest time without data on a request or a connection, in seconds | `3600s` |
+| `GOLEM_ROUTER_DNS_REFRESH_RATE` | How often the router resolves the service host names again, in seconds | `10s` |
+| `GOLEM_ROUTER_MAX_CONNECTIONS` | Largest number of open client connections | `50000` |
 
-The router resolves the service host names again when `GOLEM_ROUTER_RESOLVER_VALID` runs out, so it follows a service that restarts with a new address, and it starts before the services are resolvable. It does not buffer requests or responses, so server-sent events and other long-lived streams reach the client at once, and it passes websocket upgrades. It sends the original `Host` header, with its port, and sets `X-Forwarded-Host` to the same value. It sets `X-Forwarded-Proto` to the value that a proxy in front of it sent, `http` or `https`, or else to its own scheme.
+The container arguments are added to the arguments of Envoy, for example `--log-level debug`.
+
+The router sends HTTP/2 without TLS to the services, so a request that the client cancels is also cancelled in the service. It sends websocket upgrades over HTTP/1.1. A request has no time limit, so invocations that wait for a result, server-sent events, MCP sessions and websockets stay open for as long as they send data; `GOLEM_ROUTER_STREAM_IDLE_TIMEOUT` ends a silent one. The router does not limit the size of a request body; the services apply their own limits. It accepts header names with an underscore and keeps an encoded slash in the path. It resolves the service host names again every `GOLEM_ROUTER_DNS_REFRESH_RATE`, so it follows a service that restarts with a new address, and it starts before the services are resolvable. The router answers `/metrics` on the management host with 404, so the metrics of the services do not reach the clients; scrape the services directly.
+
+The router keeps the original `Host` header, with its port, and sets `X-Forwarded-Host` to the same value. It appends the address of the client to `X-Forwarded-For`, and sets `X-Forwarded-Proto` to its own scheme, `http`. Where TLS ends at a proxy in front of the router, set `GOLEM_ROUTER_TRUSTED_HOPS` to `1`, so that the router keeps the `X-Forwarded-Proto` of that proxy.
 
 The worker service accepts `X-Forwarded-Host` and `X-Forwarded-Proto` only from the addresses in `route_resolver.trusted_ingress_addresses` (`GOLEM__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES`). Add the address of the router to it, so that the worker service takes the scheme from the router, for example `https` where TLS ends in front of the router. Reserve the management host in the registry service with `domain_registration.reserved_domains` (`GOLEM__DOMAIN_REGISTRATION__RESERVED_DOMAINS`), so that no environment can register it.
 
-See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-router/golem-router.conf.template), [docker image](https://hub.docker.com/r/golemservices/golem-router)
+See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-router/docker/golem-router-entrypoint.sh), [docker image](https://hub.docker.com/r/golemservices/golem-router)
 
 ## Network Addresses
 

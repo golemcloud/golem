@@ -30,7 +30,8 @@ use tracing::{Instrument, Level, error, info};
 ///
 /// origin: the request that opened this connection, to link the proxy's span back to
 /// keep_alive_interval: Interval at which Ping messages are sent
-/// max_pong_timeout: Maximum time to wait for a Pong message before considering the connection dead
+/// max_pong_timeout: Maximum time to wait for a Pong message before considering the connection dead;
+/// zero keeps Pings enabled without requiring Pongs within a deadline
 // The proxy runs for the connection's whole life - hours, for a `connect` websocket -
 // so it is the root of its own trace, linked to the request that opened it rather than
 // nested under it. The origin has to be captured by the caller: poem drives the upgrade
@@ -166,28 +167,53 @@ where
     }
 }
 
-mod keep_alive {
+pub(crate) mod keep_alive {
     use std::{
         pin::Pin,
+        sync::Arc,
         task::{Context, Poll},
         time::Duration,
     };
 
+    use futures::task::{ArcWake, AtomicWaker, waker_ref};
     use futures::{Future, Sink, SinkExt, Stream, StreamExt};
     use poem::web::websocket::Message;
     use tokio::time::Instant;
     use tracing::debug;
 
+    #[derive(Default)]
+    struct WebSocketWakers {
+        reader: AtomicWaker,
+        writer: AtomicWaker,
+    }
+
+    impl ArcWake for WebSocketWakers {
+        fn wake_by_ref(wakers: &Arc<Self>) {
+            wakers.reader.wake();
+            wakers.writer.wake();
+        }
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum PingState {
+        Idle,
+        WaitingForReady,
+        Flushing { pong_received: bool },
+        WaitingForPong,
+    }
+
     pub struct WebSocketKeepAlive<A, B> {
         sink: A,
         stream: B,
         max_pong_timeout: Duration,
-        // When last ping was sent
-        last_ping: Option<Instant>,
+        ping_state: PingState,
         // Timer that triggers sending of Ping messages at regular intervals
         ping_interval: Pin<Box<tokio::time::Interval>>,
-        // Is reset when a Ping message is sent
+        // Armed only after the Ping has been flushed.
         pong_timeout: Pin<Box<tokio::time::Sleep>>,
+        // Reading sends Pings through the application sink. Either poller can register
+        // the sink's readiness waker, so readiness must wake both pollers.
+        wakers: Arc<WebSocketWakers>,
     }
 
     fn far_future() -> Instant {
@@ -217,10 +243,11 @@ mod keep_alive {
             WebSocketKeepAlive {
                 sink,
                 stream,
-                last_ping: None,
+                ping_state: PingState::Idle,
                 ping_interval,
                 max_pong_timeout,
                 pong_timeout: Box::pin(tokio::time::sleep_until(far_future())),
+                wakers: Arc::default(),
             }
         }
     }
@@ -243,14 +270,23 @@ mod keep_alive {
             mut self: std::pin::Pin<&mut Self>,
             cx: &mut Context<'_>,
         ) -> Poll<Option<Self::Item>> {
+            let wakers = self.wakers.clone();
+            wakers.reader.register(cx.waker());
+            let waker = waker_ref(&wakers);
+            let mut context = Context::from_waker(&waker);
+            let cx = &mut context;
             if (self.pong_timeout.as_mut().poll(cx).is_ready() || self.pong_timeout.is_elapsed())
-                && self.last_ping.is_some()
+                && self.ping_state == PingState::WaitingForPong
             {
                 debug!("Ping confirmation timed out");
                 return Poll::Ready(Some(Err(KeepAliveError::Timeout)));
             }
 
-            if self.ping_interval.poll_tick(cx).is_ready() && self.last_ping.is_none() {
+            if self.ping_state == PingState::Idle && self.ping_interval.poll_tick(cx).is_ready() {
+                self.ping_state = PingState::WaitingForReady;
+            }
+
+            if self.ping_state == PingState::WaitingForReady {
                 debug!("Initiating WebSocket Ping");
 
                 let sink_ready = self.sink.poll_ready_unpin(cx).map_err(|e| {
@@ -260,38 +296,56 @@ mod keep_alive {
 
                 if sink_ready.is_pending() {
                     debug!("Waiting for sink to be ready");
-                    return Poll::Pending;
+                } else {
+                    self.sink
+                        .start_send_unpin(Message::Ping(Vec::new()))
+                        .map_err(|e| {
+                            debug!("Error sending WebSocket Ping");
+                            KeepAliveError::Sink(e)
+                        })?;
+                    self.ping_state = PingState::Flushing {
+                        pong_received: false,
+                    };
                 }
+            }
 
-                self.sink
-                    .start_send_unpin(Message::Ping(Vec::new()))
-                    .map_err(|e| {
-                        debug!("Error sending WebSocket Ping");
-                        KeepAliveError::Sink(e)
-                    })?;
-
-                let _ = self.sink.poll_flush_unpin(cx).map_err(|e| {
+            if let PingState::Flushing { pong_received } = self.ping_state {
+                let flushed = self.sink.poll_flush_unpin(cx).map_err(|e| {
                     debug!("Error flushing WebSocket Ping");
                     KeepAliveError::Sink(e)
                 })?;
-
-                debug!("WebSocket Ping sent");
-
-                let now = Instant::now();
-                let timeout = now + self.max_pong_timeout;
-
-                self.last_ping = Some(now);
-                self.pong_timeout.as_mut().reset(timeout);
+                if flushed.is_ready() {
+                    debug!("WebSocket Ping sent");
+                    if !self.max_pong_timeout.is_zero() && !pong_received {
+                        let timeout = Instant::now() + self.max_pong_timeout;
+                        self.ping_state = PingState::WaitingForPong;
+                        self.pong_timeout.as_mut().reset(timeout);
+                    } else {
+                        self.ping_state = PingState::Idle;
+                        self.ping_interval.as_mut().reset();
+                    }
+                    // Poll again to register timers even without incoming traffic.
+                    cx.waker().wake_by_ref();
+                }
             }
 
             match self.stream.poll_next_unpin(cx) {
                 Poll::Ready(Some(Ok(Message::Pong(pong)))) => {
                     debug!("Received WebSocket confirmation Pong");
-                    self.last_ping = None;
-                    self.ping_interval.as_mut().reset();
-
-                    // Expiration that should never fire.
-                    self.pong_timeout.as_mut().reset(far_future());
+                    match self.ping_state {
+                        PingState::Flushing { .. } => {
+                            // The peer can receive the Ping before its flush reports completion.
+                            self.ping_state = PingState::Flushing {
+                                pong_received: true,
+                            };
+                        }
+                        PingState::WaitingForReady => {}
+                        PingState::Idle | PingState::WaitingForPong => {
+                            self.ping_state = PingState::Idle;
+                            self.ping_interval.as_mut().reset();
+                            self.pong_timeout.as_mut().reset(far_future());
+                        }
+                    }
 
                     Poll::Ready(Some(Ok(Message::Pong(pong))))
                 }
@@ -313,7 +367,10 @@ mod keep_alive {
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
         ) -> Poll<Result<(), Self::Error>> {
-            self.sink.poll_ready_unpin(cx)
+            let wakers = self.wakers.clone();
+            wakers.writer.register(cx.waker());
+            let waker = waker_ref(&wakers);
+            self.sink.poll_ready_unpin(&mut Context::from_waker(&waker))
         }
 
         fn start_send(mut self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
@@ -324,14 +381,20 @@ mod keep_alive {
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
         ) -> Poll<Result<(), Self::Error>> {
-            self.sink.poll_flush_unpin(cx)
+            let wakers = self.wakers.clone();
+            wakers.writer.register(cx.waker());
+            let waker = waker_ref(&wakers);
+            self.sink.poll_flush_unpin(&mut Context::from_waker(&waker))
         }
 
         fn poll_close(
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
         ) -> Poll<Result<(), Self::Error>> {
-            self.sink.poll_close_unpin(cx)
+            let wakers = self.wakers.clone();
+            wakers.writer.register(cx.waker());
+            let waker = waker_ref(&wakers);
+            self.sink.poll_close_unpin(&mut Context::from_waker(&waker))
         }
     }
 
@@ -340,7 +403,7 @@ mod keep_alive {
         use test_r::test;
 
         use std::sync::Once;
-        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
         use super::*;
         use poem::web::websocket::Message;
@@ -349,6 +412,211 @@ mod keep_alive {
         use tokio_stream::wrappers::ReceiverStream;
         use tokio_util::sync::PollSender;
         use tracing::{Instrument, Level};
+
+        #[derive(Default)]
+        struct GatedSinkState {
+            ready: AtomicBool,
+            flushed: AtomicBool,
+            sent: AtomicUsize,
+            flush_polls: AtomicUsize,
+            waker: AtomicWaker,
+        }
+
+        struct GatedSink(Arc<GatedSinkState>);
+
+        impl Sink<Message> for GatedSink {
+            type Error = ();
+
+            fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), ()>> {
+                self.0.waker.register(cx.waker());
+                if self.0.ready.load(Ordering::SeqCst) {
+                    Poll::Ready(Ok(()))
+                } else {
+                    Poll::Pending
+                }
+            }
+
+            fn start_send(self: Pin<&mut Self>, message: Message) -> Result<(), ()> {
+                assert!(matches!(message, Message::Ping(_)));
+                self.0.sent.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+
+            fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), ()>> {
+                self.0.flush_polls.fetch_add(1, Ordering::SeqCst);
+                self.0.waker.register(cx.waker());
+                if self.0.flushed.load(Ordering::SeqCst) {
+                    Poll::Ready(Ok(()))
+                } else {
+                    Poll::Pending
+                }
+            }
+
+            fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), ()>> {
+                self.poll_flush(cx)
+            }
+        }
+
+        fn gated_websocket(
+            state: Arc<GatedSinkState>,
+        ) -> WebSocketKeepAlive<GatedSink, futures::stream::Pending<Result<Message, ()>>> {
+            gated_websocket_with_input(state, futures::stream::pending())
+        }
+
+        fn gated_websocket_with_input<S: Stream<Item = Result<Message, ()>> + Unpin>(
+            state: Arc<GatedSinkState>,
+            input: S,
+        ) -> WebSocketKeepAlive<GatedSink, S> {
+            let mut websocket = WebSocketKeepAlive::from_sink_and_stream(
+                input,
+                GatedSink(state),
+                Duration::from_secs(3600),
+                Duration::from_millis(20),
+            );
+            websocket.ping_interval.as_mut().reset_immediately();
+            websocket
+        }
+
+        async fn input_remains_readable_during_a_pending_ping(ready: bool) {
+            let state = Arc::new(GatedSinkState {
+                ready: AtomicBool::new(ready),
+                ..Default::default()
+            });
+            let input = futures::stream::iter([
+                Ok(Message::Text("cancel".into())),
+                Ok(Message::Close(None)),
+            ]);
+            let mut websocket = gated_websocket_with_input(state.clone(), input);
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            let first = timeout(Duration::from_secs(1), websocket.next())
+                .await
+                .expect("a pending Ping must not block an application message");
+            assert!(matches!(first, Some(Ok(Message::Text(text))) if text == "cancel"));
+            assert!(matches!(
+                timeout(Duration::from_secs(1), websocket.next())
+                    .await
+                    .unwrap(),
+                Some(Ok(Message::Close(None)))
+            ));
+            assert!(
+                timeout(Duration::from_secs(1), websocket.next())
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(state.sent.load(Ordering::SeqCst), usize::from(ready));
+        }
+
+        #[test]
+        #[test_r::timeout("5s")]
+        async fn pending_ping_readiness_does_not_block_application_messages_close_or_eof() {
+            input_remains_readable_during_a_pending_ping(false).await;
+        }
+
+        #[test]
+        #[test_r::timeout("5s")]
+        async fn pending_ping_flush_does_not_block_application_messages_close_or_eof() {
+            input_remains_readable_during_a_pending_ping(true).await;
+        }
+
+        #[test]
+        #[test_r::timeout("5s")]
+        async fn pong_received_during_flush_does_not_discard_the_pending_flush() {
+            let state = Arc::new(GatedSinkState {
+                ready: AtomicBool::new(true),
+                ..Default::default()
+            });
+            let input = futures::stream::iter([Ok(Message::Pong(vec![]))])
+                .chain(futures::stream::pending());
+            let mut websocket = gated_websocket_with_input(state.clone(), input);
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            assert!(matches!(
+                timeout(Duration::from_secs(1), websocket.next())
+                    .await
+                    .unwrap(),
+                Some(Ok(Message::Pong(_)))
+            ));
+            let flushes = state.flush_polls.load(Ordering::SeqCst);
+            state.flushed.store(true, Ordering::SeqCst);
+            state.waker.wake();
+            assert!(futures::poll!(websocket.next()).is_pending());
+            assert!(state.flush_polls.load(Ordering::SeqCst) > flushes);
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            assert!(
+                futures::poll!(websocket.next()).is_pending(),
+                "an already received Pong must not be timed out after the flush completes"
+            );
+            assert_eq!(state.sent.load(Ordering::SeqCst), 1);
+        }
+
+        #[test]
+        #[test_r::timeout("5s")]
+        async fn unsolicited_pong_does_not_discard_a_ping_waiting_for_readiness() {
+            let state = Arc::new(GatedSinkState::default());
+            let input = futures::stream::iter([Ok(Message::Pong(vec![]))])
+                .chain(futures::stream::pending());
+            let mut websocket = gated_websocket_with_input(state.clone(), input);
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            assert!(matches!(
+                timeout(Duration::from_secs(1), websocket.next())
+                    .await
+                    .unwrap(),
+                Some(Ok(Message::Pong(_)))
+            ));
+            state.ready.store(true, Ordering::SeqCst);
+            state.flushed.store(true, Ordering::SeqCst);
+            state.waker.wake();
+            assert!(futures::poll!(websocket.next()).is_pending());
+            assert_eq!(state.sent.load(Ordering::SeqCst), 1);
+        }
+
+        #[test]
+        #[test_r::timeout("5s")]
+        async fn pending_ping_readiness_is_retried_without_another_interval_tick() {
+            let state = Arc::new(GatedSinkState {
+                flushed: AtomicBool::new(true),
+                ..Default::default()
+            });
+            let mut websocket = gated_websocket(state.clone());
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            assert!(futures::poll!(websocket.next()).is_pending());
+            assert_eq!(state.sent.load(Ordering::SeqCst), 0);
+            state.ready.store(true, Ordering::SeqCst);
+            state.waker.wake();
+            assert!(futures::poll!(websocket.next()).is_pending());
+            assert_eq!(
+                state.sent.load(Ordering::SeqCst),
+                1,
+                "the consumed interval tick must retain its pending Ping"
+            );
+        }
+
+        #[test]
+        #[test_r::timeout("5s")]
+        async fn pong_deadline_starts_only_after_the_ping_flushes() {
+            let state = Arc::new(GatedSinkState {
+                ready: AtomicBool::new(true),
+                ..Default::default()
+            });
+            let mut websocket = gated_websocket(state.clone());
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            assert!(futures::poll!(websocket.next()).is_pending());
+            assert_eq!(state.sent.load(Ordering::SeqCst), 1);
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            assert!(
+                futures::poll!(websocket.next()).is_pending(),
+                "an unflushed Ping must not start a Pong deadline"
+            );
+            state.flushed.store(true, Ordering::SeqCst);
+            state.waker.wake();
+            assert!(futures::poll!(websocket.next()).is_pending());
+            assert!(matches!(
+                timeout(Duration::from_secs(1), websocket.next())
+                    .await
+                    .unwrap(),
+                Some(Err(KeepAliveError::Timeout))
+            ));
+        }
 
         static TRACING_SETUP: Once = Once::new();
 

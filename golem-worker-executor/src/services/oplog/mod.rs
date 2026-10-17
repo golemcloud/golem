@@ -85,8 +85,10 @@ pub use ephemeral::tests::fixture as gated_ephemeral_fixture;
 
 pub use reader::{OplogReadError, UnreadableOplog};
 
+pub(crate) use reader::OplogReadSource;
+
 #[cfg(test)]
-pub(crate) use reader::{OplogReadSource, checked_range_end, exact_from_source};
+pub(crate) use reader::{checked_range_end, exact_from_source};
 
 #[cfg(test)]
 pub mod tests;
