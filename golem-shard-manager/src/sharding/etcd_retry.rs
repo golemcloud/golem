@@ -54,11 +54,15 @@ fn is_request_timeout(err: &ShardManagerError) -> bool {
 /// after etcd received the request, so those stay false.
 ///
 /// `etcd-client` hands each request to a random endpoint of its balancer, and an endpoint that
-/// refuses connections stays in the rotation, so with one member down a share of the requests
+/// cannot be connected to stays in the rotation, so with one member down a share of the requests
 /// fail this way at once. The failure arrives as `Unavailable` whose source is the transport error
-/// of the connection attempt, ending in the refusal of the operating system. The same code with a
-/// reset connection ends in a different error, and a timeout or a cancelled request has other
-/// codes altogether.
+/// of the connection attempt, and tonic wraps every error of that attempt in [`tonic::ConnectError`].
+/// That marker is present when the connection was refused, when the name did not resolve and when
+/// the connection attempt ran into the connect timeout, and the request had not been written in
+/// any of them. It is absent when a request fails on an established connection (a request
+/// timeout, a reset or a closed connection), so it is the marker used here and the operating
+/// system's error kind is not: a timed-out or reset socket can also happen after the request was
+/// written.
 pub fn never_reached_etcd(err: &etcd_client::Error) -> bool {
     let etcd_client::Error::GRpcStatus(status) = err else {
         return false;
@@ -72,10 +76,7 @@ pub fn never_reached_etcd(err: &etcd_client::Error) -> bool {
         return false;
     }
     while let Some(error) = source {
-        if error
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(|io| io.kind() == std::io::ErrorKind::ConnectionRefused)
-        {
+        if error.is::<tonic::ConnectError>() {
             return true;
         }
         source = error.source();

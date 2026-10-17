@@ -1321,6 +1321,12 @@ fn replacement_shard_state(number_of_shards: usize) -> ShardLeaseState {
 /// balancer's rotation and fails each request that lands on it at once.
 pub(crate) const DEAD_MEMBER: &str = "http://127.0.0.1:1";
 
+/// A member whose name does not resolve, as when a Compose service or a pod is gone.
+const UNRESOLVABLE_MEMBER: &str = "http://golem-no-such-member.invalid:2379";
+
+/// A member that never answers the connection attempt.
+const BLACK_HOLED_MEMBER: &str = "http://192.0.2.1:2379";
+
 /// How many requests to send through an endpoint list with a dead member. Each one lands on the
 /// dead member with a chance of about one in two, so a run this long meets it many times over.
 const REQUESTS_THROUGH_DEAD_MEMBER: usize = 30;
@@ -1329,7 +1335,11 @@ const REQUESTS_THROUGH_DEAD_MEMBER: usize = 30;
 pub(crate) async fn request_client(endpoints: &[String]) -> etcd_client::Client {
     etcd_client::Client::connect(
         endpoints,
-        Some(etcd_client::ConnectOptions::new().with_timeout(Duration::from_millis(500))),
+        Some(
+            etcd_client::ConnectOptions::new()
+                .with_connect_timeout(Duration::from_millis(200))
+                .with_timeout(Duration::from_millis(500)),
+        ),
     )
     .await
     .expect("Cannot connect a client to the endpoint list")
@@ -1363,7 +1373,25 @@ async fn only_a_failure_to_connect_counts_as_never_reaching_etcd(etcd: &Arc<Dock
          never shown a connect failure"
     );
 
-    // etcd answered, and said no: the request was received.
+    // A member whose name no longer resolves, and one whose address swallows the connection
+    // attempt until the connect timeout: nothing was sent in either case. The documentation
+    // range of RFC 5737 is never routed, so the second is a black hole on any network.
+    for (what, endpoint) in [
+        ("a name that does not resolve", UNRESOLVABLE_MEMBER),
+        ("an address that never answers", BLACK_HOLED_MEMBER),
+    ] {
+        let err = request_client(&[endpoint.to_string()])
+            .await
+            .kv_client()
+            .txn(a_read_only_txn())
+            .await
+            .expect_err("A request to an unreachable member must fail");
+        assert!(
+            never_reached_etcd(&err),
+            "A request that failed to connect to {what} was not recognized as unsent: {err:?}"
+        );
+    }
+
     // etcd answered, and said no: the request was received.
     let live = request_client(&[etcd.client_url()]).await;
     let err = live
