@@ -225,3 +225,115 @@ wasm-rquickjs workspace is now `/Users/noise64/workspace/wasm-rquickjs-alt-02`, 
 `feat/node-tool-processes`, starting from main `f8da7c10`. No upstream runtime source change or
 rquickjs fork is involved in this proof. The installed compiler was not replaced; the probe used
 the temporary released 0.4.13 CLI.
+
+### Stream scheduling probe
+
+`node_native_tool_stream_scheduling_probe` uses the same temporary wrapper and the current
+Rust streaming provider/caller. It does not add host hooks. Rebundle the current `tool-probe.js`,
+inject it, and Wizer-initialize it before running. The native override still changes only
+`ToolRpc.invokeAndAwait`; `asyncInvokeAndAwait` and `FutureInvokeResult.get` keep their upstream
+signatures.
+
+Choose cases with `GOLEM_NODE_TOOL_STREAM_PROBE_CASES` (comma-separated):
+
+- `streams-async` / `streams-sync`: independently drain stdout and stderr.
+- `streams-echo-async` / `streams-echo-sync`: preselect eight binary stdin bytes and check their
+  echoed byte count and checksum.
+- `streams-pressure-async` / `streams-pressure-sync`: drain 32 MiB, in 64 KiB chunks, checking
+  count/checksum without retaining the entire output. This exceeds the default live attachment
+  buffer and tests whether the pumps can progress, not merely whether small output fits.
+- `streams-cancel-async`: observe the child's output marker, then explicitly cancel its pending
+  stdin/clock race. A following echo case uses the same owner and a fresh tool sidecar.
+
+Run async controls separately from blocking cases. Each call has a 30-second failure bound;
+timeouts are a finding, not an expected-success assertion or evidence of a particular deadlock
+without examining the trace. These are transport probes, not Node API or tool permission tests.
+
+```sh
+GOLEM_NODE_TOOL_EXECUTOR_PROBE_WASM=/absolute/path/to/stream-probe-wizer.wasm \
+GOLEM_NODE_TOOL_STREAM_PROBE_CASES=streams-async,streams-echo-async,streams-pressure-async,streams-cancel-async,streams-echo-async \
+RUST_MIN_STACK=33554432 cargo test --locked --offline --profile dev-ci -j 2 \
+  -p golem-worker-executor --features test-utils --test integration -- \
+  node_native_tool_stream_scheduling_probe --include-ignored \
+  --test-threads 1 --nocapture --report-time
+```
+
+### Stream probe findings
+
+The [stream observations](observations-2026-10-17-streams.json) retain source/artifact hashes and
+the successful async controls separately from the failed blocking-pressure case:
+
+- Both paths pass small independent stdout/stderr and the eight-byte binary stdin echo.
+- The async path drains 32 MiB successfully (one exploratory sample: 3.236 s).
+- Explicit cancellation after the child's marker completes, followed by successful binary echo
+  on the same owner. This tests existing async ToolRpc cancellation, not a new Node adapter.
+- The blocking path reaches 258 child output-write host calls and no output finish, then hits
+  the 30-second bound. Those calls are attempts, not proof of 258 accepted chunks. No panic or
+  resource-exhaustion terminal appears. This is consistent with the 16 MiB buffer plus in-flight
+  reads filling while the JavaScript drainer cannot continue.
+- The original filesystem matrix/reconstruction gate still passes with the expanded fixture.
+
+This is a limitation of the proposed JS-pump/sync-terminal combination, not evidence of a Golem
+defect: the tool host contract already requires concurrent terminal and stream progress. Do not
+increase the buffer or remove backpressure to hide it.
+
+The next transport gate is bounded collection outside the paused QuickJS runtime. Reuse tracked
+tool execution, the owner filesystem lane, binding/card checks and journaled attachment
+observations. A raw AttachmentConsumer read is not a replacement for durable input observation.
+Also do not call guest-facing create-output/terminal helpers as intermediate steps of a new host
+function: completion delivery is a tail operation, and falsely marking internal results as
+guest-delivered would break reconstruction. A host-internal path must preserve that distinction.
+
+Timeout/overflow winner selection, cancellation followed by reuse, permission refusal and crash
+windows remain implementation gates. The generic wasm-rquickjs registration/initialization hook
+has a separate real-host proof below; it is not yet a production Golem command adapter.
+
+### Local iteration cost
+
+The shared native build reran when these common-package fixtures changed during compilation:
+the skipped shadow build emits no narrow rerun rule, so Cargo watches the package. Freeze common
+fixtures before starting a native harness build, then use the prebuilt binary for JS-only
+iterations. The small tool-world Wasm template and inject-js/Wizer path avoid repeating that build.
+
+### Generic process backend checkpoint
+
+`backend-probe.js` and `backend-init.js` use the scalar `wit/` world above. The adapter maps only
+the experimental `answer` command to its native host function; it is not a tool-name/CLI adapter.
+The implementation lives in `wasm-rquickjs-alt-02` on `feat/node-tool-processes`.
+
+The generic extension adds runtime-local backend registration and a lazy initializer module.
+Inline Node/shebang execution retains priority. No Golem policy or new Cargo feature flag is
+added to wasm-rquickjs. The current initializer name is `wasm-rquickjs-runtime-init`, which also
+avoids a colon in generated source filenames.
+
+Generate with two separate module arguments (not a comma-separated argument):
+
+```sh
+"$probe_cli" generate-wrapper-crate \
+  --wit golem-common/tests/fixtures/node-tool-processes/wit --target wasi-p3 \
+  --js-modules probe=golem-common/tests/fixtures/node-tool-processes/backend-probe.js \
+  --js-modules wasm-rquickjs-runtime-init=golem-common/tests/fixtures/node-tool-processes/backend-init.js \
+  --output "$probe_dir/backend-component"
+```
+
+The released 0.4.13 CLI does not contain the new hook. For the recorded local experiment, the
+changed skeleton sources were copied into the generated crate before compiling. A normal source
+build must use the modified compiler/external-skeleton workflow. Preserve the changed
+`builtin/child_process.js`, `builtin/child_process.rs`, `builtin/child_process_backend.js`,
+`builtin_p3.rs` and `internal/runtime_services.rs`. Build with `p3,encoding`, Wizer-initialize, and
+run the existing opt-in scalar harness. Do not claim the installed compiler was upgraded.
+
+The [backend observations](observations-2026-10-17-backend.json) include the real-host proof and
+five alternating baseline/candidate process pairs with identical unconfigured-backend workloads.
+They retain all two hundred samples and actual source/artifact hashes. The timing snapshot
+predates the later execSync/error forwarding and portable initializer-name changes; it is not a
+final performance gate. Fresh-job medians were about 76–77 ms in both variants. Native compilation
+ran concurrently, and sub-millisecond scalar differences are noisy.
+
+The final API fixture under `examples/runtime/process-backend` in wasm-rquickjs passed through
+the existing Wasmtime CLI after Wizer, with an explicit root preopen. It covers byte/encoded
+output, nonzero exit, spawn error codes, execSync forwarding, invalid registration, async spawn
+delegation, local Node priority and independent fresh-runtime registration. Its normal runtime
+group6 test is added, but the native Rust harness, P2 lane and complete Clippy matrix remain
+pending. Disk reached 92%; further heavy builds are paused rather than cleaning other caches
+without permission.

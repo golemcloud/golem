@@ -8,6 +8,155 @@ use super::*;
 use std::time::Instant;
 use test_r::test;
 
+/// Compare the existing async observer with the experimentally sync-lowered
+/// terminal import. Select cases explicitly; build the fixture before running.
+#[test]
+#[ignore]
+#[timeout("3m")]
+async fn node_native_tool_stream_scheduling_probe(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_provider")] streaming: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let probe_path =
+        std::path::PathBuf::from(std::env::var("GOLEM_NODE_TOOL_EXECUTOR_PROBE_WASM")?)
+            .canonicalize()?;
+    let cases = std::env::var("GOLEM_NODE_TOOL_STREAM_PROBE_CASES")?;
+    let context = TestContext::new(last_unique_id);
+    let environment = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment.clone()),
+            configure: Some(Arc::new(|config| config.retry.max_attempts = 0)),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let probe = executor
+        .component(
+            &context.default_environment_id,
+            &probe_path.with_extension("").to_string_lossy(),
+        )
+        .store()
+        .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        probe.id,
+        probe.revision,
+        "node-tool-processes-probe",
+        "ToolStreamingCaller",
+        extract_component_metadata(&probe_path, false, true)
+            .await?
+            .tools,
+    );
+    let provider = executor
+        .component_dep(&context.default_environment_id, streaming)
+        .store()
+        .await?;
+    let provider_deployment = deployment_state(
+        context.account_id,
+        provider.id,
+        provider.revision,
+        "golem-it:tool-streaming-rust-provider",
+        "ToolStreamingCaller",
+        extract_component_metadata(
+            &deps
+                .component_directory
+                .join(format!("{}.wasm", streaming.wasm_name)),
+            false,
+            true,
+        )
+        .await?
+        .tools,
+    );
+    deployment
+        .registered_tools
+        .extend(provider_deployment.registered_tools);
+    for (owner, bindings) in provider_deployment.tool_bindings {
+        deployment
+            .tool_bindings
+            .entry(owner)
+            .or_default()
+            .extend(bindings);
+    }
+    for bindings in deployment.tool_bindings.values_mut() {
+        // The parent probe needs the owner filesystem, not its streaming child.
+        bindings
+            .get_mut(&ToolName::try_from("node-tool-probe").expect("valid probe tool name"))
+            .unwrap()
+            .filesystem_access = ToolFilesystemAccess::Allowed;
+    }
+    environment.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    for mode in cases.split(',') {
+        anyhow::ensure!(matches!(
+            mode,
+            "streams-sync"
+                | "streams-async"
+                | "streams-echo-sync"
+                | "streams-echo-async"
+                | "streams-pressure-sync"
+                | "streams-pressure-async"
+                | "streams-cancel-async"
+        ));
+        println!("node-tool-stream starting mode={mode}");
+        let started = Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(30),
+            invoke_cli_tool(
+                &executor,
+                &caller_component,
+                "node-stream-scheduling",
+                "node-tool-probe",
+                "/workspace",
+                vec![mode],
+            ),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("stream scheduling probe timed out: {mode}"))??;
+        assert_eq!(result.exit_code, 0, "{mode}: {result:?}");
+        assert!(result.stderr.is_empty(), "{mode}: {result:?}");
+        let (bytes, checksum, stderr_bytes, stderr_checksum) = if mode.contains("cancel") {
+            (7, 700, 0, 0)
+        } else if mode.contains("echo") {
+            (8, 661, 0, 0)
+        } else if mode.contains("pressure") {
+            let sum: u64 = (0..512_u32)
+                .map(|index| u64::from(index % 251) * 65536)
+                .sum();
+            (512 * 65536, sum, 0, 0)
+        } else {
+            (7, 700, 14, 1455)
+        };
+        let suffix = if mode.contains("cancel") {
+            ":cancelled"
+        } else {
+            ""
+        };
+        assert_eq!(
+            String::from_utf8(result.stdout)?,
+            format!("{mode}:{bytes}:{checksum}:{stderr_bytes}:{stderr_checksum}{suffix}\n")
+        );
+        println!(
+            "node-tool-stream completed mode={mode} elapsed_us={}",
+            started.elapsed().as_micros()
+        );
+    }
+    Ok(())
+}
+
 /// Opt-in feasibility probe, built before the test. There are no linker overrides or
 /// test-only runtime hooks: the JS tool and write-file use ordinary tool admission.
 #[test]

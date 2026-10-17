@@ -1,0 +1,1596 @@
+{
+  "date": "2026-10-17",
+  "scope": "Generic runtime-local command backend foundation. Native Golem scalar host/component harness, not Golem tool dispatch.",
+  "wasmRquickjsBase": "f8da7c102cb2a81c7f0b2365be24150c387f3f8b",
+  "compiler": "Released CLI 0.4.13, with the changed skeleton files copied into temporary generated crates before compiling. The compiler itself was not rebuilt.",
+  "wasmProfile": "release; p3,encoding",
+  "nativeProfile": "dev-ci",
+  "wizer": true,
+  "functional": {
+    "passed": true,
+    "cases": 20,
+    "hostCalls": 20,
+    "nestedComponentCalls": 10,
+    "mainAndFreshExecutionJobs": true,
+    "inlineNodePriority": true,
+    "unknownFallback": true,
+    "invalidRegistrationPreservesBackend": true,
+    "parentDisableDoesNotDisableFreshJob": true,
+    "freshJobDoesNotChangeParent": true,
+    "artifact": {
+      "bytes": 12807801,
+      "sha256": "dce0a919bda11168cf7a1adc23f1dff547ec9ff41e3f5d547269c70a4e38e1ea"
+    },
+    "timingsComparableToBaseline": false,
+    "note": "Functional entries also execute inline Node controls; their timings do not isolate backend cost."
+  },
+  "unconfiguredComparison": {
+    "alternatingProcessPairs": 5,
+    "callsPerProcess": 20,
+    "rowsPerVariant": 100,
+    "timingScope": "Export call excluding initial component compilation and parent Store instantiation. Fresh-job rows include runtime initialization. Each sample has a fresh Store/runtime.",
+    "rssScope": "Whole mixed-case native process including preparation, not per invocation.",
+    "caveats": [
+      "An executor Cargo build ran concurrently.",
+      "Sub-millisecond scalar differences are noisy.",
+      "This is not a production npm/tsc benchmark or a Golem tool trace."
+    ],
+    "variants": {
+      "baseline": {
+        "artifact": {
+          "bytes": 12725771,
+          "sha256": "510dd785fe053db7f971e34d2076c30c483f6051e98f771f4ef031be7ca97ae1"
+        },
+        "runs": [
+          {
+            "run": 1,
+            "maximumResidentSetBytes": 220102656,
+            "rows": [
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 0,
+                "elapsedMs": 9.657499999999999,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 0,
+                "elapsedMs": 0.583375,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 0,
+                "elapsedMs": 83.080541,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 0,
+                "elapsedMs": 77.44595799999999,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 1,
+                "elapsedMs": 0.334166,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 1,
+                "elapsedMs": 0.386917,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 1,
+                "elapsedMs": 75.968333,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 1,
+                "elapsedMs": 76.98183399999999,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 2,
+                "elapsedMs": 0.355541,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 2,
+                "elapsedMs": 0.448208,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 2,
+                "elapsedMs": 75.908833,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 2,
+                "elapsedMs": 76.633208,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 3,
+                "elapsedMs": 0.346042,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 3,
+                "elapsedMs": 0.399,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 3,
+                "elapsedMs": 77.808042,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 3,
+                "elapsedMs": 78.191,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 4,
+                "elapsedMs": 0.354167,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 4,
+                "elapsedMs": 0.468875,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 4,
+                "elapsedMs": 78.54875,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 4,
+                "elapsedMs": 75.34887499999999,
+                "result": 42
+              }
+            ]
+          },
+          {
+            "run": 2,
+            "maximumResidentSetBytes": 215793664,
+            "rows": [
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 0,
+                "elapsedMs": 0.9847499999999999,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 0,
+                "elapsedMs": 0.5273329999999999,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 0,
+                "elapsedMs": 77.32183300000001,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 0,
+                "elapsedMs": 75.83375000000001,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 1,
+                "elapsedMs": 0.348833,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 1,
+                "elapsedMs": 0.392208,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 1,
+                "elapsedMs": 74.872208,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 1,
+                "elapsedMs": 75.432208,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 2,
+                "elapsedMs": 0.328291,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 2,
+                "elapsedMs": 0.40912499999999996,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 2,
+                "elapsedMs": 75.394792,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 2,
+                "elapsedMs": 75.23608399999999,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 3,
+                "elapsedMs": 0.3255,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 3,
+                "elapsedMs": 0.383958,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 3,
+                "elapsedMs": 74.320292,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 3,
+                "elapsedMs": 74.166959,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 4,
+                "elapsedMs": 0.313,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 4,
+                "elapsedMs": 0.400833,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 4,
+                "elapsedMs": 74.299375,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 4,
+                "elapsedMs": 74.682417,
+                "result": 42
+              }
+            ]
+          },
+          {
+            "run": 3,
+            "maximumResidentSetBytes": 211714048,
+            "rows": [
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 0,
+                "elapsedMs": 0.951041,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 0,
+                "elapsedMs": 0.5035000000000001,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 0,
+                "elapsedMs": 74.39712499999999,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 0,
+                "elapsedMs": 74.967125,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 1,
+                "elapsedMs": 0.31275,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 1,
+                "elapsedMs": 0.359375,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 1,
+                "elapsedMs": 78.09087500000001,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 1,
+                "elapsedMs": 78.122625,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 2,
+                "elapsedMs": 0.313167,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 2,
+                "elapsedMs": 0.384958,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 2,
+                "elapsedMs": 77.30525,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 2,
+                "elapsedMs": 76.32116699999999,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 3,
+                "elapsedMs": 0.347708,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 3,
+                "elapsedMs": 0.64525,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 3,
+                "elapsedMs": 78.470792,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 3,
+                "elapsedMs": 76.761167,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 4,
+                "elapsedMs": 0.35724999999999996,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 4,
+                "elapsedMs": 0.40558299999999997,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 4,
+                "elapsedMs": 77.393458,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 4,
+                "elapsedMs": 77.295666,
+                "result": 42
+              }
+            ]
+          },
+          {
+            "run": 4,
+            "maximumResidentSetBytes": 220184576,
+            "rows": [
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 0,
+                "elapsedMs": 0.919416,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 0,
+                "elapsedMs": 0.546791,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 0,
+                "elapsedMs": 75.27779199999999,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 0,
+                "elapsedMs": 76.14379100000001,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 1,
+                "elapsedMs": 0.330625,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 1,
+                "elapsedMs": 0.384291,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 1,
+                "elapsedMs": 74.534042,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 1,
+                "elapsedMs": 75.28779200000001,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 2,
+                "elapsedMs": 0.32104099999999997,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 2,
+                "elapsedMs": 0.379667,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 2,
+                "elapsedMs": 74.287375,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 2,
+                "elapsedMs": 74.722917,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 3,
+                "elapsedMs": 0.33275,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 3,
+                "elapsedMs": 0.416625,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 3,
+                "elapsedMs": 77.904208,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 3,
+                "elapsedMs": 78.697875,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 4,
+                "elapsedMs": 0.388542,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 4,
+                "elapsedMs": 0.419208,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 4,
+                "elapsedMs": 77.232417,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 4,
+                "elapsedMs": 77.623583,
+                "result": 42
+              }
+            ]
+          },
+          {
+            "run": 5,
+            "maximumResidentSetBytes": 213565440,
+            "rows": [
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 0,
+                "elapsedMs": 1.0629170000000001,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 0,
+                "elapsedMs": 0.698333,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 0,
+                "elapsedMs": 80.047,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 0,
+                "elapsedMs": 79.365375,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 1,
+                "elapsedMs": 0.39354100000000003,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 1,
+                "elapsedMs": 0.563458,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 1,
+                "elapsedMs": 79.412375,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 1,
+                "elapsedMs": 80.460833,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 2,
+                "elapsedMs": 0.380791,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 2,
+                "elapsedMs": 0.50325,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 2,
+                "elapsedMs": 78.671375,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 2,
+                "elapsedMs": 77.287042,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 3,
+                "elapsedMs": 0.34325,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 3,
+                "elapsedMs": 0.557125,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 3,
+                "elapsedMs": 78.05149999999999,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 3,
+                "elapsedMs": 79.655333,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 4,
+                "elapsedMs": 0.517,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 4,
+                "elapsedMs": 0.7781659999999999,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 4,
+                "elapsedMs": 78.812542,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 4,
+                "elapsedMs": 80.317209,
+                "result": 42
+              }
+            ]
+          }
+        ]
+      },
+      "candidate": {
+        "artifact": {
+          "bytes": 12738587,
+          "sha256": "5ae6378a62264d5d60d92552fc57cb0e1f95b2409ffcace58df862bd447429bf"
+        },
+        "runs": [
+          {
+            "run": 1,
+            "maximumResidentSetBytes": 214433792,
+            "rows": [
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 0,
+                "elapsedMs": 0.959792,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 0,
+                "elapsedMs": 0.48887500000000006,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 0,
+                "elapsedMs": 78.767333,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 0,
+                "elapsedMs": 78.217875,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 1,
+                "elapsedMs": 0.362958,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 1,
+                "elapsedMs": 0.423417,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 1,
+                "elapsedMs": 77.722,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 1,
+                "elapsedMs": 76.194417,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 2,
+                "elapsedMs": 0.3545,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 2,
+                "elapsedMs": 0.494292,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 2,
+                "elapsedMs": 76.858583,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 2,
+                "elapsedMs": 77.94541600000001,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 3,
+                "elapsedMs": 0.40454100000000004,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 3,
+                "elapsedMs": 0.424,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 3,
+                "elapsedMs": 76.83095900000001,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 3,
+                "elapsedMs": 76.75783299999999,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 4,
+                "elapsedMs": 0.332458,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 4,
+                "elapsedMs": 0.36866699999999997,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 4,
+                "elapsedMs": 77.02487500000001,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 4,
+                "elapsedMs": 77.94612500000001,
+                "result": 42
+              }
+            ]
+          },
+          {
+            "run": 2,
+            "maximumResidentSetBytes": 212189184,
+            "rows": [
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 0,
+                "elapsedMs": 0.967875,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 0,
+                "elapsedMs": 0.597375,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 0,
+                "elapsedMs": 77.781208,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 0,
+                "elapsedMs": 78.585375,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 1,
+                "elapsedMs": 0.375875,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 1,
+                "elapsedMs": 0.461625,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 1,
+                "elapsedMs": 75.330709,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 1,
+                "elapsedMs": 74.95275,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 2,
+                "elapsedMs": 0.341458,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 2,
+                "elapsedMs": 0.409291,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 2,
+                "elapsedMs": 76.019167,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 2,
+                "elapsedMs": 77.44,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 3,
+                "elapsedMs": 0.347125,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 3,
+                "elapsedMs": 0.404458,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 3,
+                "elapsedMs": 74.412542,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 3,
+                "elapsedMs": 74.748958,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 4,
+                "elapsedMs": 0.31833300000000003,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 4,
+                "elapsedMs": 0.374167,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 4,
+                "elapsedMs": 74.736375,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 4,
+                "elapsedMs": 75.33262500000001,
+                "result": 42
+              }
+            ]
+          },
+          {
+            "run": 3,
+            "maximumResidentSetBytes": 210616320,
+            "rows": [
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 0,
+                "elapsedMs": 0.950083,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 0,
+                "elapsedMs": 0.503084,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 0,
+                "elapsedMs": 78.580167,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 0,
+                "elapsedMs": 77.55429099999999,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 1,
+                "elapsedMs": 0.341959,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 1,
+                "elapsedMs": 0.37545900000000004,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 1,
+                "elapsedMs": 75.439458,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 1,
+                "elapsedMs": 74.889459,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 2,
+                "elapsedMs": 0.34133399999999997,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 2,
+                "elapsedMs": 0.47725,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 2,
+                "elapsedMs": 76.41575,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 2,
+                "elapsedMs": 76.185542,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 3,
+                "elapsedMs": 0.33849999999999997,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 3,
+                "elapsedMs": 0.367334,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 3,
+                "elapsedMs": 76.12487499999999,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 3,
+                "elapsedMs": 77.80695899999999,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 4,
+                "elapsedMs": 0.344291,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 4,
+                "elapsedMs": 0.38525000000000004,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 4,
+                "elapsedMs": 75.015125,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 4,
+                "elapsedMs": 77.584417,
+                "result": 42
+              }
+            ]
+          },
+          {
+            "run": 4,
+            "maximumResidentSetBytes": 210370560,
+            "rows": [
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 0,
+                "elapsedMs": 1.05225,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 0,
+                "elapsedMs": 0.8445,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 0,
+                "elapsedMs": 76.1585,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 0,
+                "elapsedMs": 75.467791,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 1,
+                "elapsedMs": 0.332125,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 1,
+                "elapsedMs": 0.399792,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 1,
+                "elapsedMs": 76.05120799999999,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 1,
+                "elapsedMs": 75.71208299999999,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 2,
+                "elapsedMs": 0.7549170000000001,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 2,
+                "elapsedMs": 0.461584,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 2,
+                "elapsedMs": 75.988958,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 2,
+                "elapsedMs": 75.673291,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 3,
+                "elapsedMs": 0.379708,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 3,
+                "elapsedMs": 0.433709,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 3,
+                "elapsedMs": 75.14375,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 3,
+                "elapsedMs": 77.262833,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 4,
+                "elapsedMs": 0.3595,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 4,
+                "elapsedMs": 0.41812499999999997,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 4,
+                "elapsedMs": 74.297834,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 4,
+                "elapsedMs": 75.407166,
+                "result": 42
+              }
+            ]
+          },
+          {
+            "run": 5,
+            "maximumResidentSetBytes": 222265344,
+            "rows": [
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 0,
+                "elapsedMs": 1.104541,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 0,
+                "elapsedMs": 0.628166,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 0,
+                "elapsedMs": 79.953542,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 0,
+                "elapsedMs": 80.69025,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 1,
+                "elapsedMs": 0.39725,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 1,
+                "elapsedMs": 0.530958,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 1,
+                "elapsedMs": 78.415125,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 1,
+                "elapsedMs": 81.126209,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 2,
+                "elapsedMs": 0.400208,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 2,
+                "elapsedMs": 0.6669999999999999,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 2,
+                "elapsedMs": 79.09933299999999,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 2,
+                "elapsedMs": 77.95420899999999,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 3,
+                "elapsedMs": 0.383958,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 3,
+                "elapsedMs": 0.61225,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 3,
+                "elapsedMs": 78.276,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 3,
+                "elapsedMs": 77.38779199999999,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": false,
+                "repetition": 4,
+                "elapsedMs": 0.338625,
+                "result": 42
+              },
+              {
+                "entry": "run",
+                "nested": true,
+                "repetition": 4,
+                "elapsedMs": 0.48950000000000005,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": false,
+                "repetition": 4,
+                "elapsedMs": 77.608959,
+                "result": 42
+              },
+              {
+                "entry": "run-job",
+                "nested": true,
+                "repetition": 4,
+                "elapsedMs": 78.04775,
+                "result": 42
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "isFinalSourceSnapshot": false,
+    "snapshotNote": "These timings precede execSync/spawn-error forwarding and the portable initializer module-name adjustment. They describe the recorded source hashes, not a final performance gate."
+  },
+  "candidateControlSources": {
+    "src/builtin/child_process.js": {
+      "bytes": 76792,
+      "sha256": "8d8bab3795199647e8c8ed458f1f3e435c655093f99db4d20027a9a2e06f227c"
+    },
+    "src/builtin/child_process.rs": {
+      "bytes": 490,
+      "sha256": "3736aba57248367ef432cae279992223def1741504ecc6db2e3b14b51f5bff80"
+    },
+    "src/builtin/child_process_backend.js": {
+      "bytes": 850,
+      "sha256": "cdcfb5fd1a040a6598e27779350e1f14fe85c6a6530e80475bb6dd6fe0f54b24"
+    },
+    "src/builtin_p3.rs": {
+      "bytes": 28509,
+      "sha256": "f070c57a828cf3df3d7084e74d01cc56095755e18ab8e3f8a8dadad59d35ec63"
+    },
+    "src/internal/runtime_services.rs": {
+      "bytes": 31830,
+      "sha256": "2bb1129453d14c1f1713a972aeffaed8b4375488ea5b35ec9dc13ea100907e9c"
+    }
+  },
+  "notYetValidated": [
+    "Production Golem command parsing and policy integration",
+    "Host-owned stream collection for blocking calls",
+    "New-adapter timeout/cancellation/replay",
+    "Async child-process adapter lifecycle",
+    "P2 runtime",
+    "SDK integration",
+    "npm/tsc workload performance"
+  ],
+  "apiSmoke": {
+    "passed": true,
+    "runner": "Existing Wasmtime CLI with P3/HTTP enabled and an explicit root preopen.",
+    "wizer": true,
+    "initializerModule": "wasm-rquickjs-runtime-init",
+    "checks": [
+      "byte and encoded outputs",
+      "nonzero exit through execFileSync",
+      "spawn error code preserved",
+      "execSync shell forwarding",
+      "invalid registrations and Promise-valued sync results rejected",
+      "async spawn delegation",
+      "local Node priority",
+      "parent disable with independently initialized fresh job"
+    ],
+    "artifact": {
+      "bytes": 12970942,
+      "sha256": "42e6768fb2727e0c953940aa7edb5098d81648426fddf34a37a26ad9ecf551a1"
+    },
+    "sourceHashes": {
+      "src/builtin/child_process.js": {
+        "bytes": 77045,
+        "sha256": "cf3767e9a4c5a790225848ecff4cc4bfd9e3dc7d981e0a81f170142a9c9a1ff1"
+      },
+      "src/builtin/child_process.rs": {
+        "bytes": 490,
+        "sha256": "3736aba57248367ef432cae279992223def1741504ecc6db2e3b14b51f5bff80"
+      },
+      "src/builtin/child_process_backend.js": {
+        "bytes": 850,
+        "sha256": "cdcfb5fd1a040a6598e27779350e1f14fe85c6a6530e80475bb6dd6fe0f54b24"
+      },
+      "src/builtin_p3.rs": {
+        "bytes": 28509,
+        "sha256": "f070c57a828cf3df3d7084e74d01cc56095755e18ab8e3f8a8dadad59d35ec63"
+      },
+      "src/internal/runtime_services.rs": {
+        "bytes": 31830,
+        "sha256": "ed2874254e6c4e86b8e4cca427af27b489d213a5acd0f57a9678606dab18a47d"
+      }
+    },
+    "nativeRuntimeTestHarnessRun": false,
+    "p2Run": false,
+    "clippyMatrixRun": false,
+    "note": "The normal runtime group6 test is added. Its exact JS sources were executed via this small generated P3 component; the native Rust test harness and full feature matrix remain pending."
+  }
+}

@@ -1,7 +1,7 @@
 // Feasibility fixture only: invoke-and-await is synchronously lowered by the
 // generated native binding. This is not the proposed child_process API.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { ToolRpc } from 'golem:tool/host@0.1.0';
+import { ToolRpc, createOutput, createStdin } from 'golem:tool/host@0.1.0';
 import { runJavaScript } from 'wasm-rquickjs:execution';
 import {
     ok,
@@ -41,6 +41,79 @@ function callSynchronously(input) {
     if (!result?.result) throw new Error('write-file returned no structured result');
 }
 
+// Deliberately uses JS-owned pumps on both paths. This tests whether changing
+// only the terminal import's lowering is sufficient; it is not the backend.
+async function probeStreams(mode) {
+    const echo = mode.includes('echo');
+    const pressure = mode.includes('pressure');
+    const cancel = mode === 'streams-cancel-async';
+    const path = [echo || cancel ? 'run' : pressure ? 'produce' : 'dual-reconstruct'];
+    const command = getToolType('streaming').command(path);
+    const wireInput = typedSchemaValueToWit({
+        graph: command.inputSchema.graph,
+        value: command.packJson(echo || cancel ? { mode: cancel ? 'stdin-or-clock' : 'echo' } : pressure
+            ? { 'chunk-count': 512, 'chunk-size': 65536 }
+            : { mode: 'redaction-terminals' }),
+    });
+    let stdin;
+    let inputWriter;
+    if (echo || cancel) {
+        const [writer, source, closed] = createStdin();
+        // Preselect stdin before entering the blocking import: this isolates
+        // output scheduling from a separate JS input-producer dependency.
+        if (!cancel) {
+            await writer.write(new Uint8Array([0, 255, 1, 128, 0, 13, 10, 254]));
+            await writer.finish();
+        }
+        inputWriter = writer;
+        stdin = source;
+        closed[Symbol.dispose]?.();
+    }
+    const [stdoutTarget, stdout] = createOutput();
+    const stderrEndpoints = !echo && !pressure && !cancel ? createOutput() : undefined;
+    let future;
+    async function drain(source) {
+        let bytes = 0;
+        let checksum = 0;
+        for await (const item of source) {
+            if (item.tag !== 'ok') {
+                if (cancel && item.val.tag === 'cancelled') break;
+                throw new Error(`Child output failure: ${JSON.stringify(item)}`);
+            }
+            bytes += item.val.length;
+            for (const byte of item.val) checksum = (checksum + byte) >>> 0;
+            // The child writes this marker before racing open stdin against a
+            // ten-minute clock wait. Cancel only after observing actual work.
+            if (cancel && bytes === 7) future.cancel();
+        }
+        return { bytes, checksum };
+    }
+    const outputs = Promise.all([
+        drain(stdout),
+        stderrEndpoints ? drain(stderrEndpoints[1]) : Promise.resolve({ bytes: 0, checksum: 0 }),
+    ]);
+    // Start the JS readers before the synchronous native import. This does not
+    // assume that their native tasks can keep progressing while JS is paused.
+    await Promise.resolve();
+    const rpc = new ToolRpc('streaming');
+    const args = [path, wireInput, stdin, stdoutTarget, stderrEndpoints?.[0]];
+    future = mode.endsWith('-async') ? rpc.asyncInvokeAndAwait(...args) : undefined;
+    let cancelled = false;
+    try {
+        const result = future ? await future.get() : rpc.invokeAndAwait(...args);
+        if (!result?.result) throw new Error('Missing child structured result');
+    } catch (error) {
+        if (!cancel || error.tag !== 'cancelled') throw error;
+        cancelled = true;
+    } finally {
+        inputWriter?.[Symbol.dispose]?.();
+    }
+    if (cancel && !cancelled) throw new Error('Child did not return the cancellation terminal');
+    const [out, err] = await outputs;
+    future?.[Symbol.dispose]?.();
+    return `${mode}:${out.bytes}:${out.checksum}:${err.bytes}:${err.checksum}${cancel ? ':cancelled' : ''}\n`;
+}
+
 probe.implement({
     async 'node-tool-probe'(input, context) {
         if (globalThis.nodeToolProbeInvoked || process.env.GOLEM_NODE_TOOL_PROBE_INVOCATION) {
@@ -49,6 +122,13 @@ probe.implement({
         globalThis.nodeToolProbeInvoked = true;
         process.env.GOLEM_NODE_TOOL_PROBE_INVOCATION = 'active';
         const [mode, content = 'nested-owner-data'] = input.args;
+        if (/^streams-(echo-|pressure-)?(sync|async)$/.test(mode) || mode === 'streams-cancel-async') {
+            const text = await probeStreams(mode);
+            const writer = context.stdout.getWriter();
+            try { await writer.write(new TextEncoder().encode(text)); }
+            finally { writer.releaseLock(); }
+            return ok({ exit_code: 0 });
+        }
         if (!['baseline', 'nested', 'job-baseline', 'job-nested', 'verify'].includes(mode)) {
             throw new Error(`Unexpected probe mode: ${mode}`);
         }
