@@ -2023,16 +2023,19 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                         }
 
                         let result = match self.select_next_work().await {
-                            SelectedWork::Resident(message) => {
+                            Ok(SelectedWork::Resident(message)) => {
                                 self.internal_invocation(message).await
                             }
-                            SelectedWork::Durable(pending) => {
+                            Ok(SelectedWork::Durable(pending)) => {
                                 self.execute_selected_durable(pending).await
                             }
-                            SelectedWork::ApplyPendingUpdate => {
+                            Ok(SelectedWork::ApplyPendingUpdate) => {
                                 CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
                             }
-                            SelectedWork::Idle(status) => self.handle_idle_status(&status).await,
+                            Ok(SelectedWork::Idle(status)) => {
+                                self.handle_idle_status(&status).await
+                            }
+                            Err(error) => self.unrepaired_status_outcome(&error).await,
                         };
 
                         match result {
@@ -2106,7 +2109,10 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     }
 
     async fn internal_status_change_requires_permit(&self) -> bool {
-        if !self.active.read().await.is_empty() || self.interrupts.has_interrupt().await {
+        if !self.active.read().await.is_empty()
+            || self.interrupts.has_interrupt().await
+            || self.parent.last_known_status_detached()
+        {
             return true;
         }
 
@@ -2130,9 +2136,10 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     }
 
     /// Filesystem commands alternate with pending work at invocation boundaries after
-    /// initialization. Selecting a durable reference does not consume it.
-    async fn select_next_work(&mut self) -> SelectedWork {
-        let status = self.parent.get_last_known_status().await;
+    /// initialization. Selecting a durable reference does not consume it. Work is chosen only from
+    /// a status that is a fold of the oplog: the error of a rebuild that fails is returned instead.
+    async fn select_next_work(&mut self) -> Result<SelectedWork, WorkerExecutorError> {
+        let status = self.parent.get_repaired_status().await?;
         let mut queue = self.active.write().await;
         queue.retain(|invocation| !invocation.is_abandoned());
         if let Err(error) = Worker::<Ctx>::ensure_not_failed(
@@ -2153,12 +2160,23 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             .parsed_agent_id
             .as_ref()
             .map(|_| self.parent.initialization_idempotency_key());
-        SelectedWork::next(
+        Ok(SelectedWork::next(
             &mut queue,
             status,
             constructor_key.as_ref(),
             &mut self.filesystem_turn_used,
-        )
+        ))
+    }
+
+    /// What the loop does when the status could not be rebuilt from the oplog, for example after
+    /// a commit whose receipt its caller already took. The failure is recorded like a failed
+    /// recovery: an oplog whose storage did not answer recovers after a delay and keeps its
+    /// pending work, and one that does not read for good stops the agent with the cause.
+    async fn unrepaired_status_outcome(&self, error: &WorkerExecutorError) -> CommandOutcome {
+        self.parent.record_recovery_failure(error).await;
+        infrastructure_failure_outcome(self.parent.retired_for_lost_shard(), error, || {
+            self.parent.next_infrastructure_recovery_delay()
+        })
     }
 
     /// Checks — before publishing `waiting_for_command = true`, which makes the
