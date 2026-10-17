@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::clients::shard_manager_leader::{LeaderAddress, is_not_leader, leader_of};
-use crate::grpc::client::{GrpcClient, GrpcClientConfig, MultiTargetGrpcClient};
+use crate::clients::shard_manager_router::{Attempts, LeaderRouter};
+use crate::grpc::client::GrpcClientConfig;
 use crate::model::quota_lease::{PendingReservation, QuotaLease};
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 use golem_api_grpc::proto::golem::shardmanager::v1::{
     AcquireQuotaLeaseRequest, BatchRenewQuotaLeasesRequest, DeregisterRequest,
     ExecutorEndpoint as GrpcExecutorEndpoint, GetRoutingTableRequest, RegisterRequest,
@@ -33,7 +32,7 @@ use golem_common::model::protobuf::{
 use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_common::model::{RetryConfig, RoutingTable, ShardEpoch, ShardId, ShardLeaseRevision};
 use golem_common::retriable_error::IsRetriableError;
-use golem_common::retries::{RetryState, with_retries};
+use golem_common::retries::with_retries;
 use golem_common::{IntoAnyhow, SafeDisplay, grpc_uri};
 use http::Uri;
 use serde::{Deserialize, Serialize};
@@ -41,13 +40,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::future::Future;
 use std::net::IpAddr;
-use std::pin::Pin;
-use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, Instant};
-use tonic::codec::CompressionEncoding;
-use tonic::transport::Channel;
-use tonic::{Code, Status};
-use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
+use std::time::Instant;
 use uuid::Uuid;
 
 /// Client for the shard manager service.
@@ -286,284 +279,17 @@ impl HasConfigExamples<GrpcShardManagerConfig> for GrpcShardManagerConfig {
     }
 }
 
-/// How long the client waits to connect to a leader that a replica named. Shorter than the
-/// configured `connect_timeout`: a named leader that does not answer quickly is usually gone, and
-/// the configured address can name its successor.
-const LEADER_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
-
-type Client = ShardManagerServiceClient<OtelGrpcService<Channel>>;
-
-fn new_client(channel: OtelGrpcService<Channel>, max_message_size: usize) -> Client {
-    ShardManagerServiceClient::new(channel)
-        .send_compressed(CompressionEncoding::Gzip)
-        .accept_compressed(CompressionEncoding::Gzip)
-        .max_decoding_message_size(max_message_size)
-        .max_encoding_message_size(max_message_size)
-}
-
-/// One attempt with a short connect: on any failure the client goes back to the configured
-/// address, whose replicas know the current leader.
-fn leader_client_config(config: &GrpcClientConfig) -> GrpcClientConfig {
-    GrpcClientConfig {
-        connect_timeout: config.connect_timeout.min(LEADER_CONNECT_TIMEOUT),
-        retries_on_unavailable: RetryConfig {
-            max_attempts: 0,
-            ..config.retries_on_unavailable.clone()
-        },
-        ..config.clone()
-    }
-}
-
-/// The outcome of one pass of `GrpcShardManager::routed`.
-enum Routed<R> {
-    Done(Result<R, Status>),
-    /// The leader that a replica named could not be reached; a later pass may reach its successor.
-    LeaderUnreachable(Status),
-}
-
-/// A failure of the connection or of the peer's process, not an answer from the shard manager.
-fn is_transport_failure(status: &Status) -> bool {
-    matches!(
-        status.code(),
-        Code::Unavailable | Code::Unknown | Code::Cancelled | Code::DeadlineExceeded
-    )
-}
-
-/// Whether a call may be sent again after a failure that the peer may have seen.
-#[derive(Clone, Copy)]
-enum Attempts {
-    Retried,
-    Once,
-}
-
 #[derive(Clone)]
 pub struct GrpcShardManager {
-    /// The configured address, which reaches any replica.
-    client: GrpcClient<Client>,
-    /// Direct connections to the leader that a replica named.
-    leaders: MultiTargetGrpcClient<Client>,
-    /// The leader that the last answer named, until a call to it fails.
-    leader: Arc<Mutex<Option<LeaderAddress>>>,
-    tls: bool,
+    router: LeaderRouter,
     retries: RetryConfig,
-    /// The budget for waiting out a leader that the replicas name but nobody can reach.
-    retries_on_unavailable: RetryConfig,
 }
 
 impl GrpcShardManager {
     pub fn new(config: &GrpcShardManagerConfig) -> Self {
         Self {
-            client: GrpcClient::new(
-                "shard_manager",
-                new_client,
-                config.uri(),
-                config.client_config.clone(),
-            )
-            .with_redirect(is_not_leader),
-            leaders: MultiTargetGrpcClient::new(
-                "shard_manager_leader",
-                new_client,
-                leader_client_config(&config.client_config),
-            )
-            .with_redirect(is_not_leader),
-            leader: Arc::new(Mutex::new(None)),
-            tls: config.client_config.tls_enabled(),
+            router: LeaderRouter::new(config),
             retries: config.retries.clone(),
-            retries_on_unavailable: config.client_config.retries_on_unavailable.clone(),
-        }
-    }
-
-    /// Sends one call to the leader: to the one already known, otherwise to the configured
-    /// address, following a replica that names the leader.
-    ///
-    /// A replica that names the leader has not run the call, so following it is safe even for a
-    /// call that must not be repeated. A failed call to a known leader is not repeated for such a
-    /// call, because it may have run; the caller's own schedule tries again.
-    ///
-    /// After an ungraceful stop, the replicas name the dead leader until its etcd lease expires. A
-    /// call that may be repeated waits that out with the configured `retries_on_unavailable`, as
-    /// it waited out a closed port before the replicas named their leader.
-    async fn routed<F, R>(
-        &self,
-        description: &'static str,
-        attempts: Attempts,
-        f: F,
-    ) -> Result<R, Status>
-    where
-        F: for<'a> Fn(
-                &'a mut Client,
-            ) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
-            + Send
-            + Sync,
-    {
-        let mut unreachable = None;
-        let mut retries = RetryState::new(&self.retries_on_unavailable);
-        loop {
-            retries.start_attempt();
-            match self
-                .route_once(description, attempts, &f, &mut unreachable)
-                .await
-            {
-                Routed::Done(result) => return result,
-                Routed::LeaderUnreachable(status) => {
-                    if matches!(attempts, Attempts::Retried) && retries.failed_attempt().await {
-                        continue;
-                    }
-                    return Err(status);
-                }
-            }
-        }
-    }
-
-    /// One pass of [`Self::routed`]. `unreachable` is the named leader that this call could not
-    /// reach; while the replicas still name it, the pass ends without trying it again.
-    async fn route_once<F, R>(
-        &self,
-        description: &'static str,
-        attempts: Attempts,
-        f: &F,
-        unreachable: &mut Option<LeaderAddress>,
-    ) -> Routed<R>
-    where
-        F: for<'a> Fn(
-                &'a mut Client,
-            ) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
-            + Send
-            + Sync,
-    {
-        if let Some(leader) = self.known_leader() {
-            match self.send_to_leader(description, &leader, attempts, f).await {
-                Ok(result) => return Routed::Done(Ok(result)),
-                Err(status) => {
-                    if let Some(next) = leader_of(&status) {
-                        self.forget_leader(&leader);
-                        return self
-                            .follow(description, next, attempts, f, unreachable)
-                            .await;
-                    }
-                    // The shard manager answers most refusals inside a successful response, but
-                    // some with a status such as `InvalidArgument`: those come from a working
-                    // leader, which stays the one to call.
-                    if !is_transport_failure(&status) {
-                        return Routed::Done(Err(status));
-                    }
-                    self.forget_leader(&leader);
-                    if matches!(attempts, Attempts::Once) {
-                        return Routed::Done(Err(status));
-                    }
-                    *unreachable = Some(leader);
-                }
-            }
-        }
-
-        let status = match self.send_to_configured(description, attempts, f).await {
-            Ok(result) => return Routed::Done(Ok(result)),
-            Err(status) => status,
-        };
-        match leader_of(&status) {
-            // Named until that leader's lease expires; wait, then ask again.
-            Some(next) if unreachable.as_ref() == Some(&next) => Routed::LeaderUnreachable(status),
-            Some(next) => {
-                self.follow(description, next, attempts, f, unreachable)
-                    .await
-            }
-            // The configured address has already spent its own retries.
-            None => Routed::Done(Err(status)),
-        }
-    }
-
-    async fn follow<F, R>(
-        &self,
-        description: &'static str,
-        leader: LeaderAddress,
-        attempts: Attempts,
-        f: &F,
-        unreachable: &mut Option<LeaderAddress>,
-    ) -> Routed<R>
-    where
-        F: for<'a> Fn(
-                &'a mut Client,
-            ) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
-            + Send
-            + Sync,
-    {
-        // Two calls redirected by different replicas can race here; a stale leader that wins is
-        // forgotten at its first failure.
-        self.remember_leader(leader.clone());
-        match self.send_to_leader(description, &leader, attempts, f).await {
-            Ok(result) => Routed::Done(Ok(result)),
-            Err(status) if leader_of(&status).is_some() || is_transport_failure(&status) => {
-                self.forget_leader(&leader);
-                if matches!(attempts, Attempts::Once) {
-                    return Routed::Done(Err(status));
-                }
-                *unreachable = Some(leader);
-                Routed::LeaderUnreachable(status)
-            }
-            Err(status) => Routed::Done(Err(status)),
-        }
-    }
-
-    async fn send_to_leader<F, R>(
-        &self,
-        description: &'static str,
-        leader: &LeaderAddress,
-        attempts: Attempts,
-        f: &F,
-    ) -> Result<R, Status>
-    where
-        F: for<'a> Fn(
-                &'a mut Client,
-            ) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
-            + Send
-            + Sync,
-    {
-        let target = leader.uri(self.tls);
-        match attempts {
-            Attempts::Retried => self.leaders.call(description, target, f).await,
-            Attempts::Once => {
-                self.leaders
-                    .call_without_retry(description, target, f)
-                    .await
-            }
-        }
-    }
-
-    async fn send_to_configured<F, R>(
-        &self,
-        description: &'static str,
-        attempts: Attempts,
-        f: &F,
-    ) -> Result<R, Status>
-    where
-        F: for<'a> Fn(
-                &'a mut Client,
-            ) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
-            + Send
-            + Sync,
-    {
-        match attempts {
-            Attempts::Retried => self.client.call(description, f).await,
-            Attempts::Once => self.client.call_without_retry(description, f).await,
-        }
-    }
-
-    fn known_leader(&self) -> Option<LeaderAddress> {
-        self.leader
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-
-    fn remember_leader(&self, leader: LeaderAddress) {
-        *self.leader.lock().unwrap_or_else(PoisonError::into_inner) = Some(leader);
-    }
-
-    /// Only while it is still the one that failed: a concurrent call may have learned a newer one.
-    fn forget_leader(&self, leader: &LeaderAddress) {
-        let mut known = self.leader.lock().unwrap_or_else(PoisonError::into_inner);
-        if known.as_ref() == Some(leader) {
-            *known = None;
         }
     }
 }
@@ -572,7 +298,8 @@ impl GrpcShardManager {
 impl ShardManager for GrpcShardManager {
     async fn get_routing_table(&self) -> Result<RoutingTable, ShardManagerError> {
         let response = self
-            .routed("get_routing_table", Attempts::Retried, move |client| {
+            .router
+            .call("get_routing_table", Attempts::Retried, move |client| {
                 Box::pin(client.get_routing_table(GetRoutingTableRequest {}))
             })
             .await?
@@ -602,7 +329,8 @@ impl ShardManager for GrpcShardManager {
             |(shard_manager, endpoint, pod_name, executor_id)| {
                 Box::pin(async move {
                     let (sent_at, response) = shard_manager
-                        .routed("register", Attempts::Retried, move |client| {
+                        .router
+                        .call("register", Attempts::Retried, move |client| {
                             let request = RegisterRequest {
                                 endpoint: Some((*endpoint).into()),
                                 pod_name: pod_name.clone(),
@@ -656,7 +384,8 @@ impl ShardManager for GrpcShardManager {
         shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     ) -> Result<ShardLease, ShardLeaseError> {
         let (sent_at, response) = self
-            .routed("renew_shard_lease", Attempts::Once, move |client| {
+            .router
+            .call("renew_shard_lease", Attempts::Once, move |client| {
                 let request = RenewShardLeaseRequest {
                     executor_id: executor_id.to_string(),
                     shard_epochs: shard_epochs_to_proto(
@@ -687,7 +416,8 @@ impl ShardManager for GrpcShardManager {
         shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     ) -> Result<(), ShardLeaseError> {
         let response = self
-            .routed("deregister", Attempts::Once, move |client| {
+            .router
+            .call("deregister", Attempts::Once, move |client| {
                 let request = DeregisterRequest {
                     executor_id: executor_id.to_string(),
                     shard_epochs: shard_epochs_to_proto(
@@ -715,7 +445,8 @@ impl ShardManager for GrpcShardManager {
         endpoint: ExecutorEndpoint,
     ) -> Result<QuotaLease, QuotaError> {
         let response = self
-            .routed("acquire_quota_lease", Attempts::Retried, move |client| {
+            .router
+            .call("acquire_quota_lease", Attempts::Retried, move |client| {
                 let request = AcquireQuotaLeaseRequest {
                     environment_id: Some(environment_id.into()),
                     resource_name: resource_name.0.clone(),
@@ -745,7 +476,8 @@ impl ShardManager for GrpcShardManager {
         pending_reservations: Vec<PendingReservation>,
     ) -> Result<QuotaLease, QuotaError> {
         let response = self
-            .routed("renew_quota_lease", Attempts::Retried, move |client| {
+            .router
+            .call("renew_quota_lease", Attempts::Retried, move |client| {
                 let request = RenewQuotaLeaseRequest {
                     resource_definition_id: Some(resource_definition_id.into()),
                     endpoint: Some(endpoint.into()),
@@ -789,7 +521,8 @@ impl ShardManager for GrpcShardManager {
             .collect();
 
         let response = self
-            .routed(
+            .router
+            .call(
                 "batch_renew_quota_leases",
                 Attempts::Retried,
                 move |client| {
@@ -826,7 +559,8 @@ impl ShardManager for GrpcShardManager {
         unused: u64,
     ) -> Result<(), QuotaError> {
         let response = self
-            .routed("release_quota_lease", Attempts::Retried, move |client| {
+            .router
+            .call("release_quota_lease", Attempts::Retried, move |client| {
                 let request = ReleaseQuotaLeaseRequest {
                     resource_definition_id: Some(resource_definition_id.into()),
                     endpoint: Some(endpoint.into()),

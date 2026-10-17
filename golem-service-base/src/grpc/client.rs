@@ -628,6 +628,22 @@ where
             .await
     }
 
+    /// [`Self::call`] or [`Self::call_without_retry`], chosen by `retry_the_call`.
+    pub(crate) async fn call_with_retry<F, R>(
+        &self,
+        description: impl AsRef<str>,
+        retry_the_call: bool,
+        f: F,
+    ) -> Result<R, Status>
+    where
+        F: for<'a> Fn(&'a mut T) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
+            + Send,
+    {
+        self.inner
+            .call_with_retry(description, self.endpoint.clone(), retry_the_call, f)
+            .await
+    }
+
     /// See [`MultiTargetGrpcClient::with_redirect`].
     pub fn with_redirect(self, is_redirect: fn(&Status) -> bool) -> Self {
         Self {
@@ -724,7 +740,7 @@ where
         self.call_with_retry(description, endpoint, false, f).await
     }
 
-    async fn call_with_retry<F, R>(
+    pub(crate) async fn call_with_retry<F, R>(
         &self,
         description: impl AsRef<str>,
         endpoint: Uri,
@@ -1117,7 +1133,7 @@ impl<'a> CallAttempts<'a> {
     }
 }
 
-fn requires_reconnect(e: &Status) -> bool {
+pub(crate) fn requires_reconnect(e: &Status) -> bool {
     // A request that ran out of its own time says nothing about the health of
     // the connection it ran on. Without this the registry client
     // (request_timeout = 30s) would tear down the channel every caller shares
