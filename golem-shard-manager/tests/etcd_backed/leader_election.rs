@@ -1876,6 +1876,24 @@ async fn add_campaigner_directly(etcd: &DockerEtcd, election_name: &str, lease_t
     lease
 }
 
+/// Waits until the watch is established on etcd's side, not merely until the first read is
+/// published: a campaigner that comes and goes is seen only through the watch stream.
+async fn await_established_watch(
+    etcd: &DockerEtcd,
+    watch: &mut ElectionWatch,
+    election_name: &str,
+) {
+    await_view(watch, |view| view.campaigners.is_empty()).await;
+    let lease = add_campaigner_directly(etcd, election_name, 10).await;
+    await_view(watch, |view| view.campaigners.len() == 1).await;
+    inspection_client(etcd)
+        .await
+        .lease_revoke(lease)
+        .await
+        .unwrap();
+    await_view(watch, |view| view.campaigners.is_empty()).await;
+}
+
 #[test]
 #[tracing::instrument(skip_all)]
 // A watch that loses its stream, whether etcd cancelled it (a compaction past its revision) or the
@@ -1894,13 +1912,18 @@ async fn the_election_watch_recovers_after_its_connection_drops(etcd: &Arc<Docke
         .expect("Connecting the election client through the proxy should succeed");
     let (mut watch, watcher) = election.watch();
     let watcher = tokio::spawn(watcher.run());
-    await_view(&mut watch, |view| view.campaigners.is_empty()).await;
+    await_established_watch(etcd, &mut watch, &election_name).await;
 
+    let restarts_before = watch.restarts();
     proxy.drop_all_connections().await;
     let lease = add_campaigner_directly(etcd, &election_name, 10).await;
 
     let view = await_view(&mut watch, |view| view.campaigners.len() == 1).await;
     assert_eq!(view.leader().map(|leader| leader.lease), Some(lease));
+    assert!(
+        watch.restarts() > restarts_before,
+        "The watcher should have restarted after its connection dropped"
+    );
 
     inspection_client(etcd)
         .await
@@ -1927,17 +1950,24 @@ async fn the_election_watch_recovers_after_etcd_goes_silent(etcd: &Arc<DockerEtc
         .expect("Connecting the election client through the proxy should succeed");
     let (mut watch, watcher) = election.watch();
     let watcher = tokio::spawn(watcher.run());
-    await_view(&mut watch, |view| view.campaigners.is_empty()).await;
+    // Established first: a watch still being created when the hole opens would time out, which
+    // is a restart, but not one caused by the silence.
+    await_established_watch(etcd, &mut watch, &election_name).await;
     assert!(watch.answered_within(TEST_LEASE_TTL));
 
+    let restarts_before = watch.restarts();
     proxy.black_hole();
-    timeout(TEST_LEASE_TTL * 2, async {
-        while watch.answered_within(TEST_LEASE_TTL) {
+    // Nothing but the quiet limit can fail while the connection is silent: it yields neither an
+    // error nor a close. So a restart before `restore` proves the watcher gave up the stream on
+    // its own, rather than receiving bytes the proxy held back and delivers on `restore`.
+    timeout(TEST_LEASE_TTL * 4, async {
+        while watch.restarts() == restarts_before {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await
-    .expect("The watch should report etcd's silence within two lease TTLs");
+    .expect("The watcher should restart on its own while etcd is silent");
+    assert!(!watch.answered_within(TEST_LEASE_TTL));
 
     let lease = add_campaigner_directly(etcd, &election_name, 10).await;
     assert!(

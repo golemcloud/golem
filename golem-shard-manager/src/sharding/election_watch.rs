@@ -23,6 +23,7 @@
 use crate::sharding::error::ShardManagerError;
 use crate::sharding::leader_election::{ElectionValue, RetryDelays, bounded};
 use etcd_client::{Client, GetOptions, KeyValue, KvClient, WatchOptions};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 use tokio::sync::watch;
@@ -82,6 +83,7 @@ impl CampaignView {
 pub struct ElectionWatch {
     view: watch::Receiver<Option<CampaignView>>,
     last_answer: Arc<Mutex<Option<Instant>>>,
+    restarts: Arc<AtomicU64>,
 }
 
 impl ElectionWatch {
@@ -104,6 +106,15 @@ impl ElectionWatch {
         answered_within(&self.last_answer, window)
     }
 
+    /// How many times the watcher has given up its stream and read the election again.
+    ///
+    /// **Tests only**: it lets a test tell a watch that recovered by restarting from one that
+    /// merely received delayed bytes.
+    #[doc(hidden)]
+    pub fn restarts(&self) -> u64 {
+        self.restarts.load(Ordering::SeqCst)
+    }
+
     /// Waits for the next change of the view. Pends forever once the watcher has stopped, which
     /// only happens when the replica stops.
     pub async fn changed(&mut self) {
@@ -124,6 +135,7 @@ pub struct ElectionWatcher {
     retry: RetryDelays,
     view: watch::Sender<Option<CampaignView>>,
     last_answer: Arc<Mutex<Option<Instant>>>,
+    restarts: Arc<AtomicU64>,
 }
 
 impl ElectionWatcher {
@@ -136,10 +148,12 @@ impl ElectionWatcher {
     ) -> (ElectionWatch, Self) {
         let (sender, receiver) = watch::channel(None);
         let last_answer = Arc::new(Mutex::new(None));
+        let restarts = Arc::new(AtomicU64::new(0));
         (
             ElectionWatch {
                 view: receiver,
                 last_answer: last_answer.clone(),
+                restarts: restarts.clone(),
             },
             Self {
                 client,
@@ -149,6 +163,7 @@ impl ElectionWatcher {
                 retry,
                 view: sender,
                 last_answer,
+                restarts,
             },
         )
     }
@@ -159,6 +174,7 @@ impl ElectionWatcher {
         let mut backoff = self.retry.min;
         loop {
             let err = self.follow(&mut backoff).await;
+            self.restarts.fetch_add(1, Ordering::SeqCst);
             warn!(
                 error = %err,
                 retry_in = ?backoff,
