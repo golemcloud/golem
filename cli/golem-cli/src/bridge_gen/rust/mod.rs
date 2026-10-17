@@ -4580,7 +4580,6 @@ impl RustBridgeGenerator {
     }
 }
 
-// TODO: use published version when available
 /// A remapped name replaces the generated definition, so its codecs assume the
 /// exact schema body of the builtin it stands for.
 fn validate_remapped_types(type_naming: &TypeNaming<RustTypeName>) -> anyhow::Result<()> {
@@ -4615,6 +4614,7 @@ fn validate_remapped_types(type_naming: &TypeNaming<RustTypeName>) -> anyhow::Re
     Ok(())
 }
 
+// TODO: use published version when available
 enum GolemDependencySource {
     Path(std::path::PathBuf),
     GitMain,
