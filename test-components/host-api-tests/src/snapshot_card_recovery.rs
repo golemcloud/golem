@@ -401,14 +401,13 @@ pub trait ScopeCardAgent {
     fn remembered_wallet_observations(&self) -> Vec<u64>;
 
     /// Makes the card operation `operation` twice and keeps the outcome of each call in agent
-    /// state: `ok`, or the kind of the permission error. Between the two calls the agent logs
-    /// `CARD_DECISION_GAP_MARKER` and then busy-loops `spin` iterations without a host call, so
-    /// no recorded entry separates the two calls. `install-card` inspects and then installs cards
-    /// restricted to a foreign recipient on `target_agent_id` of `component_id`.
+    /// state: `ok`, or the kind of the permission error. Between the two calls the agent only logs
+    /// `CARD_DECISION_GAP_MARKER`, so no recorded entry separates the two calls. `install-card`
+    /// inspects and then installs cards restricted to a foreign recipient on `target_agent_id` of
+    /// `component_id`.
     fn remember_card_decisions_around_gap(
         &self,
         operation: String,
-        spin: u64,
         component_id: ComponentId,
         target_agent_id: String,
     ) -> Vec<String>;
@@ -908,7 +907,6 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
     fn remember_card_decisions_around_gap(
         &self,
         operation: String,
-        spin: u64,
         component_id: ComponentId,
         target_agent_id: String,
     ) -> Vec<String> {
@@ -961,11 +959,6 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
             "",
             CARD_DECISION_GAP_MARKER,
         );
-        let mut x = 0u64;
-        for i in 0..spin {
-            x = std::hint::black_box(x.wrapping_mul(6364136223846793005).wrapping_add(i));
-        }
-        std::hint::black_box(x);
         let second = decide();
         let outcomes = vec![first, second];
         *self.card_decisions.borrow_mut() = outcomes.clone();
