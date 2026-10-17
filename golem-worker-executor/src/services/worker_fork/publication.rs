@@ -234,6 +234,7 @@ pub(crate) async fn write_guest_result(
                 request: Some(request_payload),
                 durable_function_type: DurableFunctionType::WriteRemote,
                 span_started: None,
+                denial: None,
             },
             Box::new(move |start_index| OplogEntry::End {
                 timestamp: now,

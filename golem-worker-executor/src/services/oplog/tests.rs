@@ -6148,6 +6148,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
             request: Some(request),
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
+            denial: None,
         }
         .rounded();
         oplog.add(entry.clone()).await.unwrap();
@@ -12013,6 +12014,7 @@ async fn reserved_large_request_is_durable_via_commit_barrier(_tracing: &Tracing
             request: Some(request_payload),
             durable_function_type: DurableFunctionType::ReadRemote,
             span_started: None,
+            denial: None,
         })
         .await
         .unwrap();
@@ -12102,6 +12104,7 @@ async fn reserved_small_request_stays_inline(_tracing: &Tracing) {
             request: Some(request_payload),
             durable_function_type: DurableFunctionType::ReadRemote,
             span_started: None,
+            denial: None,
         })
         .await
         .unwrap();
@@ -12155,6 +12158,7 @@ fn reserved_start_entry_builder(
         request: Some(request_payload),
         durable_function_type: DurableFunctionType::ReadRemote,
         span_started: None,
+        denial: None,
     }
 }
 

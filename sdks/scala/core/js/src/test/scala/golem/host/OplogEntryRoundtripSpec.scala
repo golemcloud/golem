@@ -410,7 +410,8 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
               )
             ),
             kind = "client"
-          )
+          ),
+          denial = "access denied"
         )
       )
       val parsed = OplogEntry.fromJs(raw)
@@ -424,6 +425,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         s.params.observationalOwner.contains(BigInt(11)),
         s.params.request.isDefined,
         s.params.wrappedFunctionType == DurabilityApi.DurableFunctionType.ReadRemote,
+        s.params.denial.contains("access denied"),
         span.spanId == "span-1",
         span.traceId == "trace-1",
         span.traceStates == List("vendor=opaque", "sampled=true"),
@@ -516,7 +518,8 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
               observationalOwner = js.undefined,
               request = js.undefined,
               durableFunctionType = js.Dynamic.literal(tag = "read-local"),
-              spanStarted = js.undefined
+              spanStarted = js.undefined,
+              denial = js.undefined
             )
           )
         )
@@ -551,6 +554,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         .asInstanceOf[OplogEntry.Cancelled]
       assertTrue(
         start.params.spanStarted.isEmpty,
+        start.params.denial.isEmpty,
         end.params.spanFinished.isEmpty,
         end.params.spanAttributes.isEmpty,
         cancelled.params.spanFinished.isEmpty,

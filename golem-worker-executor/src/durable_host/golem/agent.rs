@@ -813,40 +813,40 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         promise_id: core_wire::PromiseId,
     ) -> anyhow::Result<Result<String, WebhookError>> {
         let promise_id: PromiseId = promise_id.clone().into();
-        let denied = if self.state.is_live() {
-            match agent_method_target(agent_owner(self), AgentVerb::Invoke, "create-webhook") {
-                Ok(target) => self.authorize_live_permission(&target).await?.is_err(),
-                Err(_) => true,
-            }
-        } else {
-            false
-        };
-        let mut handle = DurableCallSession::<GolemAgentCreateWebhook, NotCancellable>::start(
+        let begun = DurableCallSession::<GolemAgentCreateWebhook, NotCancellable>::begin(
             self,
-            HostRequestGolemApiPromiseId {
-                promise_id: promise_id.clone(),
-            },
             DurableFunctionType::ReadRemote,
         )
         .await?;
 
         let response = 'result: {
+            let mut handle = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let denied = match agent_method_target(
+                        agent_owner(self),
+                        AgentVerb::Invoke,
+                        "create-webhook",
+                    ) {
+                        Ok(target) => self.authorize_live_permission(&target).await?.is_err(),
+                        Err(_) => true,
+                    };
+                    let request = HostRequestGolemApiPromiseId {
+                        promise_id: promise_id.clone(),
+                    };
+                    if denied {
+                        break 'result begun
+                            .start_live_denied(self, request, WEBHOOK_PERMISSION_DENIED.to_string())
+                            .await?;
+                    }
+                    begun.start_live(self, request).await?
+                }
+                ResolvedCall::Replay(handle) => handle,
+            };
             if !handle.is_live() {
                 match handle.replay(self).await? {
                     CallReplayOutcome::Replayed(replayed) => break 'result replayed,
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
-            }
-
-            if denied {
-                break 'result handle
-                    .complete(
-                        self,
-                        HostResponseGolemAgentWebhookUrl {
-                            result: Err(WEBHOOK_PERMISSION_DENIED.to_string()),
-                        },
-                    )
-                    .await?;
             }
 
             if promise_id.agent_id.component_id != self.owner_component_metadata().id {
