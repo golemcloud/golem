@@ -4111,19 +4111,23 @@ async fn measured_check<Ctx: WorkerCtx>(
 }
 
 /// What the loop does after a periodic snapshot record did not reach the oplog. A payload that
-/// was not made skips the snapshot. A refused write means the shard has a new owner, and a failed
-/// archive write is latched, so every later write fails the same way: the loop stops. An oplog
-/// that does not read for good also stops the loop. Any other failed write, and an oplog whose
-/// storage did not answer, retries.
+/// was not made skips the snapshot. A refused write means the shard has a new owner: the loop
+/// stops without an error. A failed archive write is latched, so every later write fails the same
+/// way, and an oplog that does not read for good cannot go on either: the loop stops and carries
+/// the error to the stop, which gives it to the waiting callers. Any other failed write, and an
+/// oplog whose storage did not answer, retries.
 fn periodic_failure_outcome(failure: &PeriodicFailure) -> CommandOutcome {
     match failure {
         PeriodicFailure::Entry(_) => CommandOutcome::Continue,
         PeriodicFailure::Write(OplogError::Unreadable(unreadable)) if unreadable.is_transient() => {
             CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
         }
+        PeriodicFailure::Write(OplogError::Fenced(_)) => {
+            CommandOutcome::BreakInnerLoop(RetryDecision::None)
+        }
         PeriodicFailure::Write(
-            OplogError::Fenced(_) | OplogError::ArchiveWrite { .. } | OplogError::Unreadable(_),
-        ) => CommandOutcome::BreakInnerLoop(RetryDecision::None),
+            error @ (OplogError::ArchiveWrite { .. } | OplogError::Unreadable(_)),
+        ) => CommandOutcome::BreakOuterLoop(Some(WorkerExecutorError::from(error.clone()))),
         PeriodicFailure::Write(OplogError::Payload(_) | OplogError::Maintenance(_)) => {
             CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
         }
@@ -4368,6 +4372,14 @@ mod tests {
             expected_epoch: golem_common::model::ShardEpoch(2),
             actual_epoch: Some(golem_common::model::ShardEpoch(3)),
         };
+        let archive_write = crate::services::oplog::OplogError::ArchiveWrite {
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId::new(),
+                agent_id: "archive-write".to_string(),
+            },
+            level: 0,
+            details: "failed".to_string(),
+        };
         assert_eq!(
             [
                 PeriodicFailure::Entry("no payload".to_string()),
@@ -4375,14 +4387,7 @@ mod tests {
                 PeriodicFailure::Write(crate::services::oplog::OplogError::Payload(
                     "failed".to_string()
                 )),
-                PeriodicFailure::Write(crate::services::oplog::OplogError::ArchiveWrite {
-                    agent_id: golem_common::model::AgentId {
-                        component_id: golem_common::model::component::ComponentId::new(),
-                        agent_id: "archive-write".to_string(),
-                    },
-                    level: 0,
-                    details: "failed".to_string(),
-                }),
+                PeriodicFailure::Write(archive_write.clone()),
             ]
             .each_ref()
             .map(periodic_failure_outcome),
@@ -4390,7 +4395,7 @@ mod tests {
                 CommandOutcome::Continue,
                 CommandOutcome::BreakInnerLoop(RetryDecision::None),
                 CommandOutcome::BreakInnerLoop(RetryDecision::Immediate),
-                CommandOutcome::BreakInnerLoop(RetryDecision::None),
+                CommandOutcome::BreakOuterLoop(Some(WorkerExecutorError::from(archive_write))),
             ]
         );
     }
@@ -5370,7 +5375,7 @@ mod tests {
     }
 
     /// A periodic snapshot record that did not reach the oplog because its storage did not answer
-    /// retries; an oplog that does not read for good stops the loop.
+    /// retries; an oplog that does not read for good stops the loop with its error.
     #[test]
     fn a_periodic_record_over_an_unavailable_oplog_retries() {
         use crate::services::oplog::{
@@ -5392,12 +5397,15 @@ mod tests {
             ))),
             CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
         );
+        let corruption = UnreadableOplog::new(
+            &agent_id,
+            OplogReadError::corruption(OplogReadSource::Archive(1), "bad chunk"),
+        );
         assert_eq!(
-            periodic_failure_outcome(&unreadable(OplogReadError::corruption(
-                OplogReadSource::Archive(1),
-                "bad chunk",
+            periodic_failure_outcome(&PeriodicFailure::Write(OplogError::Unreadable(
+                corruption.clone()
             ))),
-            CommandOutcome::BreakInnerLoop(RetryDecision::None)
+            CommandOutcome::BreakOuterLoop(Some(WorkerExecutorError::from(corruption)))
         );
     }
 
