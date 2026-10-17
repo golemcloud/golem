@@ -22,6 +22,10 @@ use golem_shard_manager::config::{
     EtcdConfig, EtcdPassword, EtcdTlsConfig, GrpcApiConfig, PersistenceConfig, ShardManagerConfig,
 };
 use golem_shard_manager::{Deployment, RunDetails, STATE_KEY};
+use rcgen::{
+    BasicConstraints, CertificateParams, CertifiedIssuer, DnType, ExtendedKeyUsagePurpose, IsCa,
+    Issuer, KeyPair, KeyUsagePurpose,
+};
 use std::path::PathBuf;
 use std::time::Duration;
 use test_r::test;
@@ -46,10 +50,82 @@ fn install_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
-fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/etcd-tls")
-        .join(name)
+/// A test CA, an etcd server certificate and a client certificate signed by it, and a second CA
+/// that signed neither, written as PEM files to a directory that lives as long as this value.
+///
+/// The server certificate names `localhost` only, not `127.0.0.1`, so a connection to the IP
+/// address needs `server_name`.
+struct TestPki {
+    dir: tempfile::TempDir,
+    ca_pem: String,
+    server_pem: String,
+    server_key_pem: String,
+}
+
+impl TestPki {
+    fn new() -> Self {
+        let ca = test_ca("golem test CA");
+        let (server_pem, server_key_pem) =
+            signed_by(&ca, "localhost", ExtendedKeyUsagePurpose::ServerAuth);
+        let (client_pem, client_key_pem) = signed_by(
+            &ca,
+            "golem-shard-manager",
+            ExtendedKeyUsagePurpose::ClientAuth,
+        );
+        let dir = tempfile::tempdir().expect("Cannot create a directory for the test certificates");
+        for (name, pem) in [
+            ("ca.pem", ca.pem()),
+            ("client.pem", client_pem),
+            ("client-key.pem", client_key_pem),
+            ("other-ca.pem", test_ca("another test CA").pem()),
+        ] {
+            std::fs::write(dir.path().join(name), pem).expect("Cannot write a test certificate");
+        }
+        Self {
+            dir,
+            ca_pem: ca.pem(),
+            server_pem,
+            server_key_pem,
+        }
+    }
+
+    fn path(&self, name: &str) -> PathBuf {
+        self.dir.path().join(name)
+    }
+
+    /// CA, client certificate and key; no server name.
+    fn mtls(&self) -> EtcdTlsConfig {
+        EtcdTlsConfig {
+            ca_cert_file: self.path("ca.pem"),
+            client_cert_file: Some(self.path("client.pem")),
+            client_key_file: Some(self.path("client-key.pem")),
+            server_name: None,
+        }
+    }
+}
+
+fn test_ca(name: &str) -> CertifiedIssuer<'static, KeyPair> {
+    let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
+    params.distinguished_name.push(DnType::CommonName, name);
+    params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+    CertifiedIssuer::self_signed(params, KeyPair::generate().unwrap()).unwrap()
+}
+
+/// A certificate for `name` and its private key, both PEM.
+fn signed_by(
+    ca: &CertifiedIssuer<'static, KeyPair>,
+    name: &str,
+    usage: ExtendedKeyUsagePurpose,
+) -> (String, String) {
+    let mut params = CertificateParams::new(vec![name.to_string()]).unwrap();
+    params.distinguished_name.push(DnType::CommonName, name);
+    params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+    params.extended_key_usages = vec![usage];
+    let key = KeyPair::generate().unwrap();
+    let issuer: &Issuer<'static, KeyPair> = ca;
+    let cert = params.signed_by(&key, issuer).unwrap();
+    (cert.pem(), key.serialize_pem())
 }
 
 /// One etcd server in its own container, plaintext with authentication or TLS with client
@@ -61,7 +137,7 @@ struct SecuredEtcd {
 
 impl SecuredEtcd {
     /// TLS on the client port, and etcd requires a client certificate signed by the test CA.
-    async fn with_mtls() -> Self {
+    async fn with_mtls(pki: &TestPki) -> Self {
         let mut flags = base_flags("https");
         flags.extend(
             [
@@ -75,9 +151,9 @@ impl SecuredEtcd {
         let image = GenericImage::new("gcr.io/etcd-development/etcd", "v3.5.17")
             .with_exposed_port(2379.tcp())
             .with_wait_for(WaitFor::message_on_stderr("ready to serve client requests"))
-            .with_copy_to("/certs/server.pem", fixture("server.pem"))
-            .with_copy_to("/certs/server-key.pem", fixture("server-key.pem"))
-            .with_copy_to("/certs/ca.pem", fixture("ca.pem"))
+            .with_copy_to("/certs/server.pem", pki.server_pem.clone().into_bytes())
+            .with_copy_to("/certs/server-key.pem", pki.server_key_pem.clone().into_bytes())
+            .with_copy_to("/certs/ca.pem", pki.ca_pem.clone().into_bytes())
             .with_cmd(flags);
         let container = image.start().await.expect("Cannot start the TLS etcd");
         let port = container.get_host_port_ipv4(2379).await.unwrap();
@@ -147,15 +223,6 @@ async fn connect_with_retry(url: &str) -> etcd_client::Client {
     })
     .await
     .expect("etcd did not answer")
-}
-
-fn mtls() -> EtcdTlsConfig {
-    EtcdTlsConfig {
-        ca_cert_file: fixture("ca.pem"),
-        client_cert_file: Some(fixture("client.pem")),
-        client_key_file: Some(fixture("client-key.pem")),
-        server_name: None,
-    }
 }
 
 fn config(etcd: EtcdConfig) -> ShardManagerConfig {
@@ -290,14 +357,12 @@ async fn elect_write_and_hand_over(config: ShardManagerConfig, mut inspect: etcd
     assert!(standby.leadership.is_some());
 }
 
-async fn inspection_client_tls(url: &str) -> etcd_client::Client {
+async fn inspection_client_tls(url: &str, pki: &TestPki) -> etcd_client::Client {
     let tls = TlsOptions::new()
-        .ca_certificate(etcd_client::Certificate::from_pem(
-            std::fs::read(fixture("ca.pem")).unwrap(),
-        ))
+        .ca_certificate(etcd_client::Certificate::from_pem(&pki.ca_pem))
         .identity(etcd_client::Identity::from_pem(
-            std::fs::read(fixture("client.pem")).unwrap(),
-            std::fs::read(fixture("client-key.pem")).unwrap(),
+            std::fs::read(pki.path("client.pem")).unwrap(),
+            std::fs::read(pki.path("client-key.pem")).unwrap(),
         ));
     timeout(STARTUP_TIMEOUT, async {
         loop {
@@ -324,38 +389,57 @@ async fn inspection_client_auth(url: &str) -> etcd_client::Client {
 #[test]
 async fn a_replica_elects_writes_and_hands_over_over_mtls() {
     install_crypto_provider();
-    let etcd = SecuredEtcd::with_mtls().await;
-    let inspect = inspection_client_tls(&etcd.url).await;
-    elect_write_and_hand_over(tls_config(&etcd.url, mtls()), inspect).await;
+    let pki = TestPki::new();
+    let etcd = SecuredEtcd::with_mtls(&pki).await;
+    let inspect = inspection_client_tls(&etcd.url, &pki).await;
+    elect_write_and_hand_over(tls_config(&etcd.url, pki.mtls()), inspect).await;
 }
 
 #[test]
 async fn a_server_name_checks_the_certificate_of_an_ip_endpoint() {
     install_crypto_provider();
-    let etcd = SecuredEtcd::with_mtls().await;
-    let inspect = inspection_client_tls(&etcd.url).await;
+    let pki = TestPki::new();
+    let etcd = SecuredEtcd::with_mtls(&pki).await;
+    let inspect = inspection_client_tls(&etcd.url, &pki).await;
     let ip_url = etcd.url.replace("localhost", "127.0.0.1");
     let config = tls_config(
         &ip_url,
         EtcdTlsConfig {
             server_name: Some("localhost".to_string()),
-            ..mtls()
+            ..pki.mtls()
         },
     );
     elect_write_and_hand_over(config, inspect).await;
 }
 
 #[test]
+// The server certificate does not name 127.0.0.1, so without `server_name` the check fails: this
+// is what makes the test above prove that `server_name` is used.
+async fn an_ip_endpoint_without_a_server_name_does_not_start() {
+    install_crypto_provider();
+    let pki = TestPki::new();
+    let etcd = SecuredEtcd::with_mtls(&pki).await;
+    let _ready = inspection_client_tls(&etcd.url, &pki).await;
+    let ip_url = etcd.url.replace("localhost", "127.0.0.1");
+    let message = refused(tls_config(&ip_url, pki.mtls())).await;
+    assert!(
+        message.contains("NotValidForName"),
+        "The refusal should name the certificate's names, but was: {message}"
+    );
+}
+
+#[test]
 async fn a_replica_without_a_client_certificate_does_not_start() {
     install_crypto_provider();
-    let etcd = SecuredEtcd::with_mtls().await;
-    let _ready = inspection_client_tls(&etcd.url).await;
+    let pki = TestPki::new();
+    let etcd = SecuredEtcd::with_mtls(&pki).await;
+    let _ready = inspection_client_tls(&etcd.url, &pki).await;
     let message = refused(tls_config(
         &etcd.url,
         EtcdTlsConfig {
             client_cert_file: None,
             client_key_file: None,
-            ..mtls()
+            ..pki.mtls()
         },
     ))
     .await;
@@ -368,13 +452,14 @@ async fn a_replica_without_a_client_certificate_does_not_start() {
 #[test]
 async fn a_replica_that_trusts_another_ca_does_not_start() {
     install_crypto_provider();
-    let etcd = SecuredEtcd::with_mtls().await;
-    let _ready = inspection_client_tls(&etcd.url).await;
+    let pki = TestPki::new();
+    let etcd = SecuredEtcd::with_mtls(&pki).await;
+    let _ready = inspection_client_tls(&etcd.url, &pki).await;
     let message = refused(tls_config(
         &etcd.url,
         EtcdTlsConfig {
-            ca_cert_file: fixture("other-ca.pem"),
-            ..mtls()
+            ca_cert_file: pki.path("other-ca.pem"),
+            ..pki.mtls()
         },
     ))
     .await;

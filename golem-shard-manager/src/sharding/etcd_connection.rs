@@ -179,18 +179,34 @@ mod tests {
     use std::path::PathBuf;
     use test_r::test;
 
-    fn fixture(name: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/etcd-tls")
-            .join(name)
+    /// A self-signed certificate and its key as PEM files, in a directory that lives as long as
+    /// this value. The checks here only parse the files, so one certificate serves as both the CA
+    /// and the client certificate.
+    struct PemFiles {
+        dir: tempfile::TempDir,
     }
 
-    fn mtls() -> EtcdTlsConfig {
-        EtcdTlsConfig {
-            ca_cert_file: fixture("ca.pem"),
-            client_cert_file: Some(fixture("client.pem")),
-            client_key_file: Some(fixture("client-key.pem")),
-            server_name: None,
+    impl PemFiles {
+        fn new() -> Self {
+            let rcgen::CertifiedKey { cert, signing_key } =
+                rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("cert.pem"), cert.pem()).unwrap();
+            std::fs::write(dir.path().join("key.pem"), signing_key.serialize_pem()).unwrap();
+            Self { dir }
+        }
+
+        fn path(&self, name: &str) -> PathBuf {
+            self.dir.path().join(name)
+        }
+
+        fn mtls(&self) -> EtcdTlsConfig {
+            EtcdTlsConfig {
+                ca_cert_file: self.path("cert.pem"),
+                client_cert_file: Some(self.path("cert.pem")),
+                client_key_file: Some(self.path("key.pem")),
+                server_name: None,
+            }
         }
     }
 
@@ -216,12 +232,14 @@ mod tests {
 
     #[test]
     fn tls_settings_with_valid_files_build_options() {
-        connect_options(&config("https://etcd:2379", Some(mtls()))).expect("mTLS is accepted");
+        let files = PemFiles::new();
+        connect_options(&config("https://etcd:2379", Some(files.mtls())))
+            .expect("mTLS is accepted");
         let server_only = EtcdTlsConfig {
             client_cert_file: None,
             client_key_file: None,
             server_name: Some("localhost".to_string()),
-            ..mtls()
+            ..files.mtls()
         };
         connect_options(&config("https://127.0.0.1:2379", Some(server_only)))
             .expect("TLS without a client certificate is accepted");
@@ -235,7 +253,7 @@ mod tests {
 
     #[test]
     fn an_http_endpoint_with_tls_settings_is_refused() {
-        let message = refusal(&config("http://etcd:2379", Some(mtls())));
+        let message = refusal(&config("http://etcd:2379", Some(PemFiles::new().mtls())));
         assert!(message.contains("https://"), "{message}");
     }
 
@@ -247,14 +265,15 @@ mod tests {
 
     #[test]
     fn a_client_certificate_without_its_key_is_refused_and_the_reverse() {
+        let files = PemFiles::new();
         for tls in [
             EtcdTlsConfig {
                 client_key_file: None,
-                ..mtls()
+                ..files.mtls()
             },
             EtcdTlsConfig {
                 client_cert_file: None,
-                ..mtls()
+                ..files.mtls()
             },
         ] {
             let message = refusal(&config("https://etcd:2379", Some(tls)));
@@ -265,9 +284,10 @@ mod tests {
 
     #[test]
     fn a_missing_file_is_refused_with_its_setting_name() {
+        let files = PemFiles::new();
         let tls = EtcdTlsConfig {
-            ca_cert_file: fixture("no-such-file.pem"),
-            ..mtls()
+            ca_cert_file: files.path("no-such-file.pem"),
+            ..files.mtls()
         };
         let message = refusal(&config("https://etcd:2379", Some(tls)));
         assert!(message.contains("ca_cert_file"), "{message}");
@@ -276,9 +296,10 @@ mod tests {
 
     #[test]
     fn a_file_without_a_certificate_is_refused() {
+        let files = PemFiles::new();
         let tls = EtcdTlsConfig {
-            ca_cert_file: fixture("client-key.pem"),
-            ..mtls()
+            ca_cert_file: files.path("key.pem"),
+            ..files.mtls()
         };
         let message = refusal(&config("https://etcd:2379", Some(tls)));
         assert!(message.contains("ca_cert_file"), "{message}");
@@ -286,9 +307,10 @@ mod tests {
 
     #[test]
     fn a_key_file_without_a_key_is_refused() {
+        let files = PemFiles::new();
         let tls = EtcdTlsConfig {
-            client_key_file: Some(fixture("client.pem")),
-            ..mtls()
+            client_key_file: Some(files.path("cert.pem")),
+            ..files.mtls()
         };
         let message = refusal(&config("https://etcd:2379", Some(tls)));
         assert!(message.contains("client_key_file"), "{message}");
