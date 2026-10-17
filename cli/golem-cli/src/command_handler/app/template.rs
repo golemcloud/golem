@@ -20,8 +20,9 @@ use crate::app::build::check::{
 use crate::app::context::{find_main_source_from, validated_to_anyhow};
 use crate::app::template::{
     AppTemplateAgent, AppTemplateCommon, AppTemplateComponent, AppTemplateName, InMemoryFs,
-    MultiComponentLayoutUpgradePlan, MultiComponentLayoutUpgradePlanStep, SafeTemplatePlan,
-    SafeTemplatePlanStep, TemplatePlan, TemplatePlanBuilder, TextEdit, UnsafeTemplatePlan,
+    MovedPathKind, MultiComponentLayoutUpgradePlan, MultiComponentLayoutUpgradePlanStep,
+    SafeTemplatePlan, SafeTemplatePlanStep, TemplatePlan, TemplatePlanBuilder, TextEdit,
+    UnsafeTemplatePlan,
 };
 use crate::command_handler::Handlers;
 use crate::command_handler::app::AppCommandHandler;
@@ -52,8 +53,9 @@ use tracing::debug;
 #[derive(Debug)]
 struct ExistingComponent {
     pub language: GuestLanguage,
-    pub dir: PathBuf, // relative path, defined in the manifest 'dir' property
-    pub component_dir: PathBuf, // canonical resolved dir
+    pub dir: PathBuf,             // component_dir, relative to the application root
+    pub component_dir: PathBuf,   // canonical resolved dir
+    pub manifest_source: PathBuf, // the manifest file where the component is defined
     pub manifest_source_dir: PathBuf, // source of the manifest, where the component is defined
 }
 
@@ -96,6 +98,11 @@ struct NewTemplateInputs {
     pub component_templates: BTreeMap<ComponentName, AppTemplateComponent>,
     pub agent_templates: BTreeMap<AppTemplateName, AppTemplateAgent>,
     pub all_component_directories: BTreeMap<ComponentName, PathBuf>,
+    /// The manifests of the existing components that an included manifest declares, not the
+    /// root manifest of the application.
+    pub included_component_manifests: BTreeMap<ComponentName, PathBuf>,
+    pub layout_upgrade_plans: BTreeMap<ComponentName, MultiComponentLayoutUpgradePlan>,
+    pub layout_upgrade: MultiComponentLayoutUpgradePlan,
 }
 
 pub struct TemplateHandler {
@@ -161,6 +168,20 @@ impl TemplateHandler {
         let (safe_template_plan, unsafe_template_plan) = template_plan.partition();
 
         self.validate_new_template_plan(&unsafe_template_plan)?;
+
+        for (component_name, upgrade_plan) in &template_inputs.layout_upgrade_plans {
+            self.log_multi_component_layout_upgrade_plan(component_name, upgrade_plan);
+
+            if !upgrade_plan.is_empty()
+                && !self
+                    .ctx
+                    .interactive_handler()
+                    .confirm_multi_component_layout_upgrade(component_name)?
+            {
+                bail!(NonSuccessfulExit);
+            }
+        }
+
         self.log_new_template_plan(&safe_template_plan);
 
         if !safe_template_plan.is_empty()
@@ -172,6 +193,7 @@ impl TemplateHandler {
             bail!(NonSuccessfulExit);
         }
 
+        self.apply_multi_component_layout_upgrade_plan(&template_inputs.layout_upgrade)?;
         self.apply_new_template_plan(&safe_template_plan)?;
 
         match claude_skills_ctx.mode {
@@ -272,11 +294,15 @@ impl TemplateHandler {
                                         component_name
                                     )
                                 })?,
-                                dir: component
-                                    .dir()
-                                    .unwrap_or_else(|| Path::new(","))
-                                    .to_path_buf(),
+                                dir: match fs::strip_prefix_or_err(
+                                    component.component_dir(),
+                                    app_ctx.application().app_root_dir(),
+                                )? {
+                                    dir if dir.as_os_str().is_empty() => PathBuf::from("."),
+                                    dir => dir.to_path_buf(),
+                                },
                                 component_dir: component.component_dir().to_path_buf(),
+                                manifest_source: fs::normalize_path_lexically(component.source()),
                                 manifest_source_dir: fs::parent_or_err(component.source())?
                                     .to_path_buf(),
                             };
@@ -498,6 +524,7 @@ impl TemplateHandler {
         let mut common_templates = BTreeMap::new();
         let mut component_templates = BTreeMap::new();
         let mut agent_templates = BTreeMap::new();
+        let mut layout_upgrade_plans = BTreeMap::new();
 
         for template_name in template_names {
             let component_name = template_to_component.get(template_name).ok_or_else(|| {
@@ -646,21 +673,7 @@ impl TemplateHandler {
                             component_template.as_ref(),
                         )?;
 
-                        self.validate_multi_component_layout_upgrade_plan(&upgrade_plan)?;
-
-                        self.log_multi_component_layout_upgrade_plan(component_name, &upgrade_plan);
-
-                        if !upgrade_plan.is_empty()
-                            && !self
-                                .ctx
-                                .interactive_handler()
-                                .confirm_multi_component_layout_upgrade(component_name)?
-                        {
-                            bail!(NonSuccessfulExit);
-                        }
-
-                        self.apply_multi_component_layout_upgrade_plan(&upgrade_plan)?;
-
+                        layout_upgrade_plans.insert(component_name.clone(), upgrade_plan);
                         all_component_directories.insert(component_name.clone(), new_component_dir);
                     }
                     None => {
@@ -678,6 +691,14 @@ impl TemplateHandler {
             all_component_directories
         );
 
+        // The upgrades of all promoted components are applied together, so they are validated
+        // together: two components cannot move the same files
+        let mut layout_upgrade = MultiComponentLayoutUpgradePlan::new();
+        for upgrade_plan in layout_upgrade_plans.values() {
+            layout_upgrade.extend(upgrade_plan.clone());
+        }
+        self.validate_multi_component_layout_upgrade_plan(&layout_upgrade)?;
+
         // We extend the component templates again to include promoted existing components
         for component_name in all_component_directories.keys() {
             if let Some(component) = existing_components.get(component_name)
@@ -688,11 +709,23 @@ impl TemplateHandler {
             }
         }
 
+        let root_manifest = fs::normalize_path_lexically(&application_path.join("golem.yaml"));
+        let included_component_manifests = existing_components
+            .iter()
+            .filter(|(_, component)| component.manifest_source != root_manifest)
+            .map(|(component_name, component)| {
+                (component_name.clone(), component.manifest_source.clone())
+            })
+            .collect();
+
         Ok(NewTemplateInputs {
             common_templates,
             component_templates,
             agent_templates,
             all_component_directories,
+            included_component_manifests,
+            layout_upgrade_plans,
+            layout_upgrade,
         })
     }
 
@@ -704,7 +737,8 @@ impl TemplateHandler {
         template_inputs: &NewTemplateInputs,
         claude_skills_ctx: &ClaudeSkillsContext,
     ) -> anyhow::Result<TemplatePlan> {
-        let mut template_plan_builder = TemplatePlanBuilder::new();
+        let mut template_plan_builder =
+            TemplatePlanBuilder::with_layout_upgrade(template_inputs.layout_upgrade.clone());
 
         for (common_template_name, common_template) in &template_inputs.common_templates {
             template_plan_builder.add(
@@ -724,15 +758,26 @@ impl TemplateHandler {
                     )
                 })?;
 
-            template_plan_builder.add(
-                component_template.0.name.as_str(),
-                &component_template.generate(
+            let generated = match template_inputs
+                .included_component_manifests
+                .get(component_name)
+            {
+                Some(manifest_path) => generate_component_template_in_manifest(
+                    component_template,
+                    application_name,
+                    application_path,
+                    component_dir,
+                    component_name,
+                    manifest_path,
+                )?,
+                None => component_template.generate(
                     application_name,
                     application_path,
                     component_name,
                     component_dir,
                 )?,
-            );
+            };
+            template_plan_builder.add(component_template.0.name.as_str(), &generated);
         }
 
         for (agent_template_name, agent_template) in &template_inputs.agent_templates {
@@ -813,33 +858,33 @@ impl TemplateHandler {
             GuestLanguage::TypeScript | GuestLanguage::Effect => {
                 let target_root = application_path.join(new_component_dir);
 
-                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                    source: application_path.join("src"),
-                    target: target_root.join("src"),
-                });
-                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                    source: application_path.join("tsconfig.json"),
-                    target: target_root.join("tsconfig.json"),
-                });
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_dir(
+                    application_path.join("src"),
+                    target_root.join("src"),
+                ));
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_file(
+                    application_path.join("tsconfig.json"),
+                    target_root.join("tsconfig.json"),
+                ));
             }
             GuestLanguage::Rust => {
                 let target_root = application_path.join(new_component_dir);
 
-                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                    source: application_path.join("Cargo.toml"),
-                    target: target_root.join("Cargo.toml"),
-                });
-                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                    source: application_path.join("src"),
-                    target: target_root.join("src"),
-                });
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_file(
+                    application_path.join("Cargo.toml"),
+                    target_root.join("Cargo.toml"),
+                ));
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_dir(
+                    application_path.join("src"),
+                    target_root.join("src"),
+                ));
 
                 let cargo_target_dir = application_path.join("target");
-                if cargo_target_dir.exists() {
-                    upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                        source: cargo_target_dir,
-                        target: target_root.join("target"),
-                    });
+                if cargo_target_dir.is_dir() {
+                    upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_dir(
+                        cargo_target_dir,
+                        target_root.join("target"),
+                    ));
                 }
             }
             GuestLanguage::Scala => {
@@ -848,10 +893,10 @@ impl TemplateHandler {
                 // build.sbt and project/ stay at the application root: build.sbt
                 // declares ThisBuild settings (scalaVersion, ...) and pairs with
                 // project/build.properties + project/plugins.sbt as the sbt meta-build.
-                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                    source: application_path.join("src"),
-                    target: target_root.join("src"),
-                });
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_dir(
+                    application_path.join("src"),
+                    target_root.join("src"),
+                ));
 
                 // The per-component <component_snake>.sbt file stays at the app root
                 // but its `lazy val ... = project.in(file("componentDir"))` reference
@@ -873,27 +918,27 @@ impl TemplateHandler {
                 // whole-directory move: it relocates go.mod/go.sum and every package
                 // (agents/, internal/, any user package) in one step. golem-temp lives
                 // at the app root, outside the module, so it is untouched.
-                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                    source: component.component_dir.clone(),
-                    target: application_path.join(new_component_dir),
-                });
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_dir(
+                    component.component_dir.clone(),
+                    application_path.join(new_component_dir),
+                ));
             }
             GuestLanguage::MoonBit => {
                 let target_root = application_path.join(new_component_dir);
 
-                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                    source: application_path.join("moon.pkg"),
-                    target: target_root.join("moon.pkg"),
-                });
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_file(
+                    application_path.join("moon.pkg"),
+                    target_root.join("moon.pkg"),
+                ));
                 for entry in std::fs::read_dir(application_path)? {
                     let entry = entry?;
                     let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) == Some("mbt") {
+                    if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("mbt") {
                         let file_name = entry.file_name();
-                        upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
-                            source: path.clone(),
-                            target: target_root.join(&file_name),
-                        });
+                        upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_file(
+                            path.clone(),
+                            target_root.join(&file_name),
+                        ));
                     }
                 }
             }
@@ -923,7 +968,7 @@ impl TemplateHandler {
 
         for step in upgrade_plan.steps() {
             match step {
-                MultiComponentLayoutUpgradePlanStep::Move { source, target } => {
+                MultiComponentLayoutUpgradePlanStep::Move { source, target, .. } => {
                     logln(format!(
                         "- {} {} to {}",
                         "move".yellow(),
@@ -954,9 +999,38 @@ impl TemplateHandler {
         let mut validation_errors = Vec::<String>::new();
         let mut targets = BTreeSet::<PathBuf>::new();
 
+        for (a, b) in upgrade_plan.overlapping_moves() {
+            validation_errors.push(format!(
+                "Overlapping move paths in plan: {} and {}",
+                a.display().to_string().log_color_error_highlight(),
+                b.display().to_string().log_color_error_highlight()
+            ));
+        }
+
         for step in upgrade_plan.steps() {
             match step {
-                MultiComponentLayoutUpgradePlanStep::Move { target, .. } => {
+                MultiComponentLayoutUpgradePlanStep::Move {
+                    source,
+                    target,
+                    kind,
+                } => {
+                    if !source.exists() {
+                        validation_errors.push(format!(
+                            "Source path does not exist: {}",
+                            source.display().to_string().log_color_error_highlight()
+                        ));
+                    } else if *kind == MovedPathKind::Dir && !source.is_dir() {
+                        validation_errors.push(format!(
+                            "Source path is not a directory: {}",
+                            source.display().to_string().log_color_error_highlight()
+                        ));
+                    } else if *kind == MovedPathKind::File && !source.is_file() {
+                        validation_errors.push(format!(
+                            "Source path is not a regular file: {}",
+                            source.display().to_string().log_color_error_highlight()
+                        ));
+                    }
+
                     if !targets.insert(target.clone()) {
                         validation_errors.push(format!(
                             "Duplicate target in plan: {}",
@@ -1071,7 +1145,7 @@ impl TemplateHandler {
 
         for step in upgrade_plan.steps() {
             match step {
-                MultiComponentLayoutUpgradePlanStep::Move { source, target } => {
+                MultiComponentLayoutUpgradePlanStep::Move { source, target, .. } => {
                     log_action(
                         "Moving",
                         format!(
@@ -1218,6 +1292,69 @@ impl TemplateHandler {
 
         Ok(())
     }
+}
+
+/// Generates the component template of an existing component that an included manifest
+/// declares. The files of the template stay relative to the application root, but the
+/// component entry goes into that manifest, not into the root manifest, and its `dir` is
+/// relative to the directory of that manifest, as the manifest defines it.
+fn generate_component_template_in_manifest(
+    component_template: &AppTemplateComponent,
+    application_name: &ApplicationName,
+    application_dir: &Path,
+    component_dir: &Path,
+    component_name: &ComponentName,
+    manifest_path: &Path,
+) -> anyhow::Result<InMemoryFs> {
+    let manifest_dir = fs::parent_or_err(manifest_path)?;
+    let normalized_component_dir =
+        fs::normalize_path_lexically(&application_dir.join(component_dir));
+    let Ok(dir_in_manifest) = normalized_component_dir.strip_prefix(manifest_dir) else {
+        bail!(
+            "Cannot apply the component template to component {}: its directory {} is not inside the directory of its manifest {}",
+            component_name.as_str().log_color_highlight(),
+            normalized_component_dir
+                .display()
+                .to_string()
+                .log_color_error_highlight(),
+            manifest_path.display().to_string().log_color_highlight()
+        );
+    };
+    let dir_in_manifest = if dir_in_manifest.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        dir_in_manifest.to_path_buf()
+    };
+
+    let generated = component_template.generate(
+        application_name,
+        application_dir,
+        component_name,
+        component_dir,
+    )?;
+    let generated_in_manifest_dir = component_template.generate(
+        application_name,
+        manifest_dir,
+        component_name,
+        &dir_in_manifest,
+    )?;
+    let root_manifest = application_dir.join("golem.yaml");
+    let manifest_dir_manifest = manifest_dir.join("golem.yaml");
+
+    let mut files = generated
+        .files()
+        .iter()
+        .filter(|(path, _)| **path != root_manifest)
+        .map(|(path, contents)| (path.clone(), contents.clone()))
+        .collect::<BTreeMap<_, _>>();
+    if let Some(manifest) = generated_in_manifest_dir
+        .files()
+        .get(&manifest_dir_manifest)
+    {
+        files.insert(manifest_path.to_path_buf(), manifest.clone());
+    }
+
+    Ok(InMemoryFs::from_files(files))
 }
 
 fn is_non_empty_dir(path: &Path) -> anyhow::Result<bool> {

@@ -2058,7 +2058,7 @@ script_runner = "@duckscript"
 script = '''
 set_env CARGO_TARGET_DIR ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}
 cd sdks/ts
-exec --fail-on-error npx pnpm install --frozen-lockfile
+exec --fail-on-error npx pnpm install --frozen-lockfile --config.confirmModulesPurge=false
 exec --fail-on-error npx pnpm --filter @golemcloud/golem-ts-sdk run build
 exec --fail-on-error npx pnpm run build-agent-template
 cd ../..
@@ -2163,7 +2163,7 @@ script_runner = "@duckscript"
 script = '''
 set_env CARGO_TARGET_DIR ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}
 cd sdks/ts
-exec --fail-on-error npx pnpm install --frozen-lockfile
+exec --fail-on-error npx pnpm install --frozen-lockfile --config.confirmModulesPurge=false
 exec --fail-on-error npx pnpm --filter @golemcloud/golem-ts-sdk run build
 exec --fail-on-error npx pnpm run build-agent-template
 cd ../..

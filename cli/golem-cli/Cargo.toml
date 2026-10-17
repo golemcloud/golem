@@ -118,6 +118,7 @@ tree-sitter = { workspace = true }
 tree-sitter-go = { workspace = true }
 tree-sitter-json = { workspace = true }
 tree-sitter-rust = { workspace = true }
+tree-sitter-scala = { workspace = true }
 tree-sitter-typescript = { workspace = true }
 tree-sitter-yaml = { workspace = true }
 strip-ansi-escapes = { workspace = true }

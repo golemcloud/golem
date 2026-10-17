@@ -264,6 +264,8 @@ pub(crate) struct TestOplog {
     state: Mutex<TestOplogState>,
     read_ranges: Mutex<Vec<(OplogIndex, u64)>>,
     point_reads: AtomicU64,
+    /// Entries whose point read fails as a storage that did not answer.
+    unavailable_reads: Mutex<std::collections::BTreeSet<OplogIndex>>,
 }
 
 impl Debug for TestOplog {
@@ -275,6 +277,12 @@ impl Debug for TestOplog {
 impl TestOplog {
     pub(crate) fn take_read_ranges(&self) -> Vec<(OplogIndex, u64)> {
         std::mem::take(&mut *self.read_ranges.lock().unwrap())
+    }
+
+    /// Makes the point reads of `indices` fail as a storage that did not answer, until the next
+    /// call replaces the set.
+    pub(crate) fn make_reads_unavailable(&self, indices: impl IntoIterator<Item = OplogIndex>) {
+        *self.unavailable_reads.lock().unwrap() = indices.into_iter().collect();
     }
 
     pub(crate) fn committed_length(&self) -> u64 {
@@ -449,6 +457,20 @@ impl Oplog for TestOplog {
 
     async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, UnreadableOplog> {
         self.point_reads.fetch_add(1, Ordering::Relaxed);
+        if self
+            .unavailable_reads
+            .lock()
+            .unwrap()
+            .contains(&oplog_index)
+        {
+            return Err(UnreadableOplog::new(
+                &identity().agent_id,
+                crate::services::oplog::OplogReadError::source_unavailable(
+                    OplogReadSource::Archive(0),
+                    format!("archive did not answer the read of {oplog_index}"),
+                ),
+            ));
+        }
         Ok(self
             .state
             .lock()

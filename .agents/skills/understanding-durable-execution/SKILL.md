@@ -332,7 +332,12 @@ retries, fails the open, and the open-oplog cache keeps nothing. The open fails 
 `OplogFailed`, or with `RecoveryRequired` when the storage did not answer. A stream session index
 rebuilt over an unreadable oplog returns `SessionError::Unreadable`, which keeps the
 `UnreadableOplog` up to the boundary, where it becomes `OplogFailed` or `RecoveryRequired` by its
-kind. An ephemeral oplog whose writer task cannot store a batch in the first
+kind. An invocation session attachment records a failed session terminal (`fail_protocol`) only
+for a violation of the session protocol (`grpc/invocation_session/mod.rs::end_attachment_on_failure`).
+When a read of the session history meets storage that did not answer (including a stream payload
+download), the attachment ends without a terminal frame, and the client reattaches from its
+durable cursors. A fence or an oplog that failed for good goes out as its worker error and
+records nothing. An ephemeral oplog whose writer task cannot store a batch in the first
 archive layer latches `OplogError::ArchiveWrite` like the fence: every later add and commit is
 refused, so the agent stops. Every caller that handles a fence handles both as `OplogRefusal`
 (`services/oplog/mod.rs`): the status actor answers its receipts with the refusal, and a write
