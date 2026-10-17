@@ -1507,6 +1507,7 @@ async fn record_live_card_liveness(
             ))),
             durable_function_type: DurableFunctionType::ReadRemote,
             span_started: None,
+            denial: None,
         })
         .await?;
     active
