@@ -1723,6 +1723,7 @@ pub trait OplogOps: Oplog {
             request: Some(request_payload),
             durable_function_type: function_type,
             span_started: None,
+            denial: None,
         };
         let (start_idx, end_idx) = self
             .add_pair(

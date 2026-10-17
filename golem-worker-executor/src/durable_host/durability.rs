@@ -2109,6 +2109,7 @@ async fn begin_custom_invocation<U: Send + 'static, Ctx: WorkerCtx>(
                     request: Some(persisted_request),
                     durable_function_type: start_function_type,
                     span_started: None,
+                    denial: None,
                 })
                 .await
                 .map_err(WorkerExecutorError::from)

@@ -1436,6 +1436,7 @@ async fn stage_entity_boundary(
             ))),
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: None,
+            denial: None,
         })
         .await?;
     assert_eq!(index, scope.invocation_id().start_index());
@@ -1460,6 +1461,7 @@ async fn record_entity_self_wallet(
             )))),
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
+            denial: None,
         })
         .await?;
     oplog

@@ -569,7 +569,7 @@ function summary(e) {
   const p = e.entry; const t = e.type;
   switch (t) {
     case 'Create': return [span('fn', 'agent created'), ' ', span('val', `revision ${p.componentRevision} · ${p.agentMode || ''} · ${fmtBytes(p.componentSize || 0)}` + (p.parent ? ` · parent ${p.parent.agentId || ''}` : ''))];
-    case 'Start': return [span('fn', p.functionName), span('val', '(' + typedText(p.request, 110) + ')'), p.observationalOwner != null ? span('val', ' · observational') : null];
+    case 'Start': return [span('fn', p.functionName), span('val', '(' + typedText(p.request, 110) + ')'), p.observationalOwner != null ? span('val', ' · observational') : null, p.denial != null ? span('err', ' · denied: ' + p.denial) : null];
     case 'End': return [span('val', '← #' + idxOf(p.startIndex)), ' ', p.response != null ? [arrow(), span('val', typedText(p.response, 120))] : span('val', 'scope end'), p.forcedCommit ? span('val', ' · forced commit') : null];
     case 'Cancelled': return [span('err', 'cancelled'), span('val', ' ← #' + idxOf(p.startIndex)), p.partial != null ? [span('val', ' · partial: '), span('val', typedText(p.partial, 80))] : null];
     case 'CompletionDelivered': return [span('val', 'result of #' + idxOf(p.startIndex) + ' delivered to the guest')];
@@ -741,6 +741,7 @@ function groupHeader(n) {
     if (n.completion) right.push(h('span', { class: 'tag ' + (n.completion.type === 'CompletionDiscarded' ? 'warn' : ''), title: n.completion.type }, n.completion.type === 'CompletionDiscarded' ? 'discarded' : 'delivered'));
     if (n.frames.length) right.push(h('span', { class: 'tag' }, n.frames.length + ' frames'));
     if (p.observationalOwner != null) right.push(h('span', { class: 'tag' }, 'observational'));
+    if (p.denial != null) right.push(h('span', { class: 'tag warn', title: p.denial }, 'denied'));
     if (end) right.push(h('span', { class: 'tag', title: 'end entry index' }, '→ #' + end.index));
   } else if (n.kind === 'entity') {
     const inv = n.inv; const op = inv.operation;
