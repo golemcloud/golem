@@ -1285,9 +1285,9 @@ impl LeaderLocator {
 /// (build metadata is ignored). A development build announces the `git describe` text of its
 /// last tag, such as `1.6.0-rc2-156-g2917a80d2`, which compares as a pre-release of the release
 /// that tag belongs to: newer than `1.6.0-rc2` and older than `1.6.0`. A build made after a
-/// release tag (`1.6.0-12-g2917a80d2`) is older than `1.6.0`. Two builds of one tag compare by their text, so
-/// a count of commits that gains a digit does not order as a number. A replica that announces nothing, or a
-/// text that is no semantic version, is never newer and never moves.
+/// release tag (`1.6.0-12-g2917a80d2`) is older than `1.6.0`. Two builds of one tag compare by
+/// their text, so a count of commits that gains a digit does not order as a number. A replica that
+/// announces nothing, or a text that is no semantic version, is never newer and never moves.
 pub(crate) fn newer_version_behind(
     view: &CampaignView,
     own_lease: i64,
