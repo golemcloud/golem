@@ -1,0 +1,37 @@
+# Ingress load on the network path only: NLB, Envoy proxies, Cilium and worker-service,
+# without the executors. ingress-load.yaml calls echo, and the executors stop it at about
+# 1900 req/s, which is far below what the network path must carry.
+#
+# The requests are ones that worker-service answers itself (method noInvocation):
+# - REST: an invoke-agent request with constructor parameters of the wrong type.
+#   worker-service authenticates the token, resolves the app, environment and agent type,
+#   and refuses the request with 400 before it calls an executor. The benchmark counts
+#   only that 400 as success.
+# - HTTP API: GET /openapi.json of the domain. worker-service resolves the domain and the
+#   route, and serves the document from its cache.
+#
+# Run it like ingress-load.yaml, with `suite: ingress-load-network.yaml`. late-starts
+# counts requests that the runner started more than 20 ms late: if it is not near 0, the
+# runner limited the rate, not the cluster.
+
+name: ingress-load-network
+ingress:
+  # The network path has no cache with a TTL to wait out, so shorter steps than
+  # ingress-load.yaml.
+  stepSecs: 300
+  agentsPerAccount: 4
+  requestsPerConnection: 0
+  http1Percent: 30
+  httpApiPercent: 50
+  httpApiDomains: 8
+  setupConcurrency: 32
+  mix:
+    - { method: noInvocation, weight: 1 }
+benchmarks:
+  # size   = accounts, each one a client with its own connection and token
+  # length = target requests per second from all accounts together
+  - name: ingress-load
+    iterations: 1
+    clusterSize: [2]
+    size: [1000]
+    length: [2000, 4000, 6000, 8000, 10000]

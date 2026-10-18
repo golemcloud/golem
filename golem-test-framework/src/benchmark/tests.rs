@@ -193,6 +193,19 @@ fn ingress_load_suite_has_its_settings() {
 }
 
 #[test]
+fn ingress_load_network_suite_calls_no_executor() {
+    let suite = suite("ingress-load-network.yaml");
+    let settings = suite.ingress.expect("the suite sets the ingress settings");
+    assert_eq!(settings.mix.len(), 1);
+    assert_eq!(settings.mix[0].method, IngressMethod::NoInvocation);
+    assert_eq!(settings.step_secs, 300);
+    assert_eq!(
+        suite.benchmarks[0].length,
+        vec![2000, 4000, 6000, 8000, 10000]
+    );
+}
+
+#[test]
 fn ingress_load_mix_suite_has_its_mix() {
     let mix = suite("ingress-load-mix.yaml")
         .ingress
