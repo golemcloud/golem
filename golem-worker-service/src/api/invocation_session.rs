@@ -20,6 +20,7 @@ use crate::invocation_session_token::{
     decode_session_agent_identity, encode_session_agent_identity,
 };
 use crate::service::auth::AuthServiceError;
+use crate::service::worker::connect_proxy::is_websocket_capacity_error;
 use crate::service::worker::connect_proxy::keep_alive::{KeepAliveError, WebSocketKeepAlive};
 use crate::service::worker::{
     PublicAgentSessionResume, PublicAgentSessionStart, PublicAgentSessionStartError,
@@ -1248,13 +1249,8 @@ fn invocation_session_websocket_error(
 ) -> std::io::Error {
     match error {
         KeepAliveError::Sink(error) | KeepAliveError::Stream(error) => {
-            // Poem erases non-I/O tungstenite errors to io::Error::other(String).
-            // Match only its capacity diagnostic; wire-level tests cover this adapter.
-            if error.kind() == std::io::ErrorKind::Other
-                && error
-                    .to_string()
-                    .starts_with("Space limit exceeded: Message too long: ")
-            {
+            // Wire-level tests cover this adapter.
+            if is_websocket_capacity_error(&error) {
                 message_too_large_error()
             } else {
                 error

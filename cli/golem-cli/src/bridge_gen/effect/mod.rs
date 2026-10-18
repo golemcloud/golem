@@ -13,6 +13,12 @@ pub(crate) fn effect_stream_alias(agent_name: &str) -> String {
     naming.fresh("EffectStream")
 }
 
+pub(crate) fn effect_result_alias(agent_name: &str) -> String {
+    let mut naming = ParameterNaming::new();
+    naming.reserve(agent_name);
+    naming.fresh("EffectResult")
+}
+
 /// Maps TypeScript SDK stream references to Effect's native stream type.
 pub(crate) fn effect_type_reference(source: &str, stream_alias: &str) -> String {
     const SOURCE: &str = "base.AgentStream<";

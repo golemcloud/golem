@@ -54,6 +54,10 @@ type = "LocalFileSystem"
 
 [registry_service.blob_storage.config]
 
+[registry_service.body_limits]
+api = 33554432
+upload = 2147483648
+
 [registry_service.builtin_artifacts.source_overrides]
 
 [registry_service.builtin_plugins]
@@ -111,6 +115,12 @@ type = "Unrestricted"
 type = "Disabled"
 
 [registry_service.grpc.tls.config]
+
+[registry_service.http_server]
+http2_adaptive_window = false
+http2_initial_connection_window_size = 1048576
+http2_initial_stream_window_size = 1048576
+http2_max_header_list_size = 65536
 
 [registry_service.initial_accounts.builtin_plugin_owner]
 email = "builtin-plugin-owner@golem.cloud"
@@ -219,6 +229,12 @@ strict_issuer_url_validation = false
 [router]
 address = "127.0.0.1"
 port = 9881
+
+[router.http_server]
+http2_adaptive_window = false
+http2_initial_connection_window_size = 1048576
+http2_initial_stream_window_size = 1048576
+http2_max_header_list_size = 65536
 
 [shard_manager]
 bind_address = "127.0.0.1"
@@ -699,9 +715,18 @@ type = "LocalFileSystem"
 
 [worker_service.blob_storage.config]
 
+[worker_service.body_limits]
+api = 33554432
+mcp = 33554432
+
 [worker_service.component_service]
 component_cache_max_capacity = 1024
 current_component_cache_ttl = "1m"
+
+[worker_service.connect_websocket]
+max_frame_size = 33554432
+max_message_size = 33554432
+max_write_buffer_size = 67108864
 
 [worker_service.durable_streams]
 long_poll_timeout = "30s"
@@ -735,6 +760,12 @@ type = "Disabled"
 
 [worker_service.grpc.tls.config]
 
+[worker_service.http_server]
+http2_adaptive_window = false
+http2_initial_connection_window_size = 1048576
+http2_initial_stream_window_size = 1048576
+http2_max_header_list_size = 65536
+
 [worker_service.http_session]
 cleanup_timeout = "2s"
 command_queue_frames = 16
@@ -750,6 +781,11 @@ retry_delay = "100ms"
 [worker_service.invocation_session]
 keep_alive_interval = "30s"
 max_pong_timeout = "0s"
+
+[worker_service.invocation_session.websocket]
+max_frame_size = 33554432
+max_message_size = 33554432
+max_write_buffer_size = 67108864
 
 [worker_service.invocation_session_tokens]
 issuer = "local-worker-service"
@@ -940,6 +976,10 @@ type = "Disabled"
 # min_delay = "100ms"
 # multiplier = 3.0
 #
+# [registry_service.body_limits]
+# api = 33554432
+# upload = 2147483648
+#
 # [registry_service.builtin_artifacts.source_overrides]
 #
 # [registry_service.builtin_plugins]
@@ -1002,6 +1042,12 @@ type = "Disabled"
 # type = "Disabled"
 #
 # [registry_service.grpc.tls.config]
+#
+# [registry_service.http_server]
+# http2_adaptive_window = false
+# http2_initial_connection_window_size = 1048576
+# http2_initial_stream_window_size = 1048576
+# http2_max_header_list_size = 65536
 #
 # [registry_service.initial_accounts.builtin_plugin_owner]
 # email = "builtin-plugin-owner@golem.cloud"
@@ -1110,6 +1156,12 @@ type = "Disabled"
 # [router]
 # address = "127.0.0.1"
 # port = 9881
+#
+# [router.http_server]
+# http2_adaptive_window = false
+# http2_initial_connection_window_size = 1048576
+# http2_initial_stream_window_size = 1048576
+# http2_max_header_list_size = 65536
 #
 # [shard_manager]
 # bind_address = "127.0.0.1"
@@ -1647,9 +1699,18 @@ type = "Disabled"
 # min_delay = "100ms"
 # multiplier = 3.0
 #
+# [worker_service.body_limits]
+# api = 33554432
+# mcp = 33554432
+#
 # [worker_service.component_service]
 # component_cache_max_capacity = 1024
 # current_component_cache_ttl = "1m"
+#
+# [worker_service.connect_websocket]
+# max_frame_size = 33554432
+# max_message_size = 33554432
+# max_write_buffer_size = 67108864
 #
 # [worker_service.durable_streams]
 # long_poll_timeout = "30s"
@@ -1688,6 +1749,12 @@ type = "Disabled"
 #
 # [worker_service.grpc.tls.config]
 #
+# [worker_service.http_server]
+# http2_adaptive_window = false
+# http2_initial_connection_window_size = 1048576
+# http2_initial_stream_window_size = 1048576
+# http2_max_header_list_size = 65536
+#
 # [worker_service.http_session]
 # cleanup_timeout = "2s"
 # command_queue_frames = 16
@@ -1703,6 +1770,11 @@ type = "Disabled"
 # [worker_service.invocation_session]
 # keep_alive_interval = "30s"
 # max_pong_timeout = "0s"
+#
+# [worker_service.invocation_session.websocket]
+# max_frame_size = 33554432
+# max_message_size = 33554432
+# max_write_buffer_size = 67108864
 #
 # [worker_service.invocation_session_tokens]
 # issuer = "local-worker-service"

@@ -542,7 +542,10 @@ fn registry_error(
         (RegistryServiceError::LimitExceeded(_), _) => {
             refused(ComponentServiceRefusal::LimitExceeded)
         }
-        (RegistryServiceError::AlreadyExists(_), _) => refused(ComponentServiceRefusal::Other),
+        (
+            RegistryServiceError::AlreadyExists(_) | RegistryServiceError::RuntimeCardRevoked(_),
+            _,
+        ) => refused(ComponentServiceRefusal::Other),
     }
 }
 

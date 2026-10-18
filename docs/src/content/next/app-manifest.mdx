@@ -598,7 +598,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     since: Release.R_1_5_0
   }}>
     ***Optional object*** for defining HTTP API deployments.
-    Deployments can be defined in multiple manifests, and they are merged during deployment.
+    Deployments can be defined in multiple manifests, and they are merged during deployment. Entries that resolve to the same domain in one environment become one deployment with the agents of all entries. Their `scheme`, `webhookUrl` and `openapiEndpoint` must be the same, and an agent type that is in more than one of them must have the same options in each.
   </Field>
 
   <Field meta={{
@@ -646,7 +646,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     path: "httpApi.deployments.<environment-name>[*].agents",
     since: Release.R_1_5_0
   }}>
-    ***Optional map of HTTP API deployment options*** by **agent type name**.
+    ***Optional map of HTTP API deployment options*** by **agent type name**. An agent type can be listed in only one HTTP API deployment per environment, because the webhook URL of the agent type uses a single domain. One deployment can serve many agent types. To serve the same functionality on another domain, define a separate agent type for that domain that calls the original agent.
   </Field>
 
   <Field meta={{
@@ -681,7 +681,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     path: "mcp.deployments.<environment-name>",
     since: Release.R_1_5_0
   }}>
-    ***Optional list of MCP deployments*** for the environment.
+    ***Optional list of MCP deployments*** for the environment. Entries that resolve to the same domain become one deployment with the agents and tools of all entries; an agent type or tool that is in more than one of them must have the same options in each.
   </Field>
 
   <Field meta={{

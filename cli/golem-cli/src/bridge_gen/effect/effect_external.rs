@@ -214,6 +214,35 @@ impl EffectExternalBridgeGenerator {
         }))
     }
 
+    /// Parameter declarations. The last `config_count` parameters are agent config values,
+    /// which can always be omitted; before them, the trailing run of Option parameters can
+    /// be omitted.
+    fn signature(
+        &self,
+        params: &[(String, SchemaType)],
+        config_count: usize,
+    ) -> anyhow::Result<String> {
+        let configs_from = params.len() - config_count;
+        let optional_from = self
+            .inner
+            .optional_suffix_start(params[..configs_from].iter().map(|(_, schema)| schema));
+        Ok(params
+            .iter()
+            .enumerate()
+            .map(|(index, (name, schema))| {
+                Ok(if index < optional_from {
+                    format!("{name}: {}", self.input_type(schema)?)
+                } else {
+                    format!(
+                        "{name}?: {}",
+                        self.input_type(self.inner.omittable_param_type(schema))?
+                    )
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?
+            .join(", "))
+    }
+
     fn input(&self, input: &InputSchema) -> anyhow::Result<Vec<(String, SchemaType)>> {
         match self.inner.ts_input(input)? {
             TsInput::Params(values) => {
@@ -269,6 +298,7 @@ impl EffectExternalBridgeGenerator {
         }
         for (name, phantom, with_config) in variants {
             let mut params = self.input(&self.agent_type.constructor.input_schema)?;
+            let config_count = if with_config { configs.len() } else { 0 };
             let mut naming = ParameterNaming::new();
             naming.reserve_many(params.iter().map(|(name, _)| name.clone()));
             if phantom {
@@ -296,7 +326,7 @@ impl EffectExternalBridgeGenerator {
                     )
                 }));
             }
-            self.write_effect_call(out, true, name, &params, None, false)?;
+            self.write_effect_call(out, true, name, &params, config_count, None, false)?;
         }
         Ok(())
     }
@@ -336,6 +366,7 @@ impl EffectExternalBridgeGenerator {
             false,
             name,
             &params,
+            0,
             Some((&method.output_schema, output)),
             streaming,
         )?;
@@ -352,6 +383,7 @@ impl EffectExternalBridgeGenerator {
         constructor: bool,
         name: &str,
         params: &[(String, SchemaType)],
+        config_count: usize,
         output: Option<(&OutputSchema, String)>,
         streaming: bool,
     ) -> anyhow::Result<()> {
@@ -361,11 +393,7 @@ impl EffectExternalBridgeGenerator {
         let value = naming.fresh("value");
         let controller = naming.fresh("controller");
         let signal = naming.fresh("signal");
-        let signature = params
-            .iter()
-            .map(|(n, t)| Ok(format!("{n}: {}", self.input_type(t)?)))
-            .collect::<anyhow::Result<Vec<_>>>()?
-            .join(", ");
+        let signature = self.signature(params, config_count)?;
         let converted = params
             .iter()
             .enumerate()
@@ -480,11 +508,7 @@ impl EffectExternalBridgeGenerator {
                 ),
             );
         }
-        let signature = all
-            .iter()
-            .map(|(n, t)| Ok(format!("{n}: {}", self.input_type(t)?)))
-            .collect::<anyhow::Result<Vec<_>>>()?
-            .join(", ");
+        let signature = self.signature(&all, 0)?;
         let mut args: Vec<String> = if variant == "trigger" {
             Vec::new()
         } else {

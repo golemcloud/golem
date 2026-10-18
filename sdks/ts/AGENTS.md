@@ -102,7 +102,7 @@ This SDK is part of the main Golem repository but is **not built by `cargo make 
 
 ```shell
 # From repository root
-cargo make build-cli-test-bins-non-ci
+cargo make build-cli-test-bins
 (cd sdks/ts && npx pnpm run build && npx pnpm run build-agent-template)
 # Build the specific test components required by <affected-filter>.
 cargo-test-r run --package golem-cli --test integration <affected-filter> -- --report-time --nocapture

@@ -1820,6 +1820,9 @@ pub enum RegistryServiceError {
     NotFound(String),
     #[error("AlreadyExists: {0}")]
     AlreadyExists(String),
+    /// The runtime card was revoked; its id can never be created again.
+    #[error("RuntimeCardRevoked: {0}")]
+    RuntimeCardRevoked(String),
     #[error("Internal server error: {0}")]
     InternalServerError(String),
     #[error("Cound not authenticate: {0}")]
@@ -1842,6 +1845,7 @@ impl SafeDisplay for RegistryServiceError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::AlreadyExists(_) => self.to_string(),
+            Self::RuntimeCardRevoked(_) => self.to_string(),
             Self::BadRequest(_) => self.to_string(),
             Self::CouldNotAuthenticate(_) => self.to_string(),
             Self::LimitExceeded(_) => self.to_string(),
@@ -1867,6 +1871,12 @@ impl From<golem_api_grpc::proto::golem::registry::v1::RegistryServiceError>
         match value.error {
             Some(Error::LimitExceeded(error)) => Self::LimitExceeded(error.error),
             Some(Error::NotFound(error)) => Self::NotFound(error.error),
+            Some(Error::AlreadyExists(error))
+                if error.code
+                    == golem_common::base_model::api::error_code::RUNTIME_CARD_REVOKED =>
+            {
+                Self::RuntimeCardRevoked(error.error)
+            }
             Some(Error::AlreadyExists(error)) => Self::AlreadyExists(error.error),
             Some(Error::BadRequest(errors)) => Self::BadRequest(errors.errors),
             Some(Error::InternalError(error)) => Self::InternalServerError(error.error),

@@ -814,9 +814,21 @@ async fn dropping_executor_releases_services(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let counter_id = agent_id!("Counter", "release-services");
+    executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
     let leak_detector = executor.leak_detector();
 
     // Verify the sentinel is alive while the executor is running
@@ -827,16 +839,13 @@ async fn dropping_executor_releases_services(
 
     drop(executor);
 
-    // Give background tasks a moment to be aborted and cleaned up
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
-    // After dropping the executor, the service graph should be fully deallocated.
-    // If this assertion fails, there is a circular Arc reference preventing cleanup.
-    assert!(
-        leak_detector.upgrade().is_none(),
-        "Service graph leaked! The All struct was not deallocated after dropping the executor. \
-         This indicates a circular Arc reference in the service dependency graph."
-    );
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while leak_detector.upgrade().is_some() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("Service graph leaked after dropping an executor with a cached agent");
 
     Ok(())
 }

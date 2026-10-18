@@ -44,9 +44,11 @@ use golem_common::model::entity::{
 };
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
+use golem_common::model::oplog::payload::types::SerializablePermissionCardLiveness;
 use golem_common::model::oplog::payload::{
-    HostRequest, HostRequestEntityInvocation, HostRequestNoInput, HostResponse,
-    HostResponseEntityInvocation, HostResponsePermissionWallet,
+    HostRequest, HostRequestEntityInvocation, HostRequestNoInput,
+    HostRequestPermissionCardLiveness, HostResponse, HostResponseEntityInvocation,
+    HostResponsePermissionCardLiveness, HostResponsePermissionWallet,
 };
 use golem_common::model::oplog::{
     DurableFunctionType, DurableInvocationId, OplogEntry, OplogIndex, OplogPayload,
@@ -75,7 +77,7 @@ use golem_worker_executor::preview2::golem_api_1_x::host::Host as GolemApiHost;
 use golem_worker_executor::preview2::golem_api_1_x::retry::Host as RetryHost;
 use golem_worker_executor::services::HasComponentService;
 use golem_worker_executor::services::active_agents::ActiveAgent;
-use golem_worker_executor::services::card::{CardService, CardState};
+use golem_worker_executor::services::card::{CardService, CardState, RuntimeCardCreation};
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::oplog::CommitLevel;
 use golem_worker_executor::worker::EvictionClass;
@@ -174,7 +176,7 @@ impl CardService for FailingCheckCardService {
         &self,
         card: StoredCard,
         provenance: CardManagedByRuntimeDerived,
-    ) -> Result<StoredCard, WorkerExecutorError> {
+    ) -> Result<RuntimeCardCreation, WorkerExecutorError> {
         TestCardService.create_runtime_card(card, provenance).await
     }
 
@@ -319,7 +321,13 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
         .with_authority_wallet(wallet_cards.clone());
         stage_entity_boundary(&active, &scope).await?;
         let claim = if historical {
+            // The body reads its wallet once, and each of its two scope derivations checks the
+            // liveness of every wallet parent, so its history records each of those answers.
             record_entity_self_wallet(&active, parent_start.next(), &wallet_cards).await?;
+            let checked_parents = wallet_cards.iter().chain(&wallet_cards);
+            for (ordinal, card) in (1u64..).zip(checked_parents) {
+                record_live_card_liveness(&active, parent_start.next(), ordinal, card).await?;
+            }
             finish_entity_boundary(&active, parent_start.next()).await?;
             active
                 .execution()
@@ -1467,6 +1475,52 @@ async fn record_entity_self_wallet(
                         .map(|card| golem_common::serialization::serialize(card).unwrap())
                         .collect(),
                     scope_card: None,
+                }),
+            ))),
+            forced_commit: false,
+            span_finished: None,
+            span_attributes: None,
+        })
+        .await?;
+    Ok(())
+}
+
+async fn record_live_card_liveness(
+    active: &ActiveAgent<TestWorkerCtx>,
+    entity_start: OplogIndex,
+    ordinal: u64,
+    card: &StoredCard,
+) -> Result<(), WorkerExecutorError> {
+    let start_index = active
+        .execution()
+        .oplog()
+        .add(OplogEntry::Start {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            parent_start_index: Some(entity_start),
+            function_name: HostFunctionName::GolemPermissionsCardLiveness,
+            invocation_id: Some(DurableInvocationId::new(entity_start, ordinal)),
+            observational_owner: None,
+            request: Some(OplogPayload::Inline(Box::new(
+                HostRequest::PermissionCardLiveness(HostRequestPermissionCardLiveness {
+                    card_id: card.card_id().0,
+                }),
+            ))),
+            durable_function_type: DurableFunctionType::ReadRemote,
+            span_started: None,
+            denial: None,
+        })
+        .await?;
+    active
+        .execution()
+        .oplog()
+        .add(OplogEntry::End {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            start_index,
+            response: Some(OplogPayload::Inline(Box::new(
+                HostResponse::PermissionCardLiveness(HostResponsePermissionCardLiveness {
+                    liveness: SerializablePermissionCardLiveness::Live(
+                        golem_common::serialization::serialize(card).unwrap(),
+                    ),
                 }),
             ))),
             forced_commit: false,
