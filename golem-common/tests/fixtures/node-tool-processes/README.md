@@ -483,19 +483,23 @@ They exercise binary stdin after `spawn`, distinct outputs, a nonzero command ex
 allocation refusal, immutable dispatch refusal, a blocked write during cancellation,
 early consumer close, abort, timeout, output overflow, a failed close watcher and
 cleanup after a disposer fails. Invalid cancellation options are rejected before
-discovery. These tests run on host Node; they are not evidence that the new async
+discovery. Immediate help and completed commands must emit `spawn` before `exit`,
+including when started from a Promise continuation. The normal CI check task runs
+these tests. They run on host Node; they are not evidence that the new async
 adapter or admission getter works in a Golem component.
 
 The TS, Effect and Scala template sources register the same lazy backend. Built-in
-JavaScript tools inherit it through the TS template. The TS generator was checked
-with the feature compiler and a fresh temporary output directory, without replacing
-the existing wrapper cache. The generated source contains the initializer, backend,
-admission getter and asynchronous collector. This is source-generation evidence,
-not a compiled/Wizer or runtime acceptance result. Effect generation currently
-requires its missing dependency installation and runtime bundles.
+JavaScript tools inherit it through the TS template. The TS and Effect generators
+were checked with the feature compiler and fresh temporary output directories,
+without replacing existing wrapper caches. The generated source contains byte-identical
+copies of the initializer and backend, plus the admission getter and asynchronous
+collector bindings. This is source-generation evidence, not a compiled/Wizer or
+runtime acceptance result. The Effect runtime bundles also build. The Go bindings
+were regenerated through the official task; their WASI package check and the Go
+guest SDK's native tests pass.
 
 Before acceptance, compile and run the new native admission assertions and common
-host-contract test, regenerate the remaining Go/MoonBit bindings, build all three
+host-contract test, regenerate the remaining MoonBit bindings, build all three
 SDK templates, and exercise the async adapter in main and fresh runtimes. The
 earlier completion WASM predates `admitted` and must not stand in for that test.
 Shell routing, non-pipe stdio, synchronous deadlines, mid-call recovery, memory
