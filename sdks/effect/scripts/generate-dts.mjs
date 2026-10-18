@@ -62,8 +62,10 @@ try {
     }
     cpSync(join(output, "exports.d.ts"), join(mergedDir, template.declarationFile))
   }
-  const custom = join(packageDir, "golem-types", "node-sqlite-extensions.d.ts")
-  if (existsSync(custom)) cpSync(custom, join(mergedDir, "node-sqlite-extensions.d.ts"))
+  for (const declaration of ["node-sqlite-extensions.d.ts", "wasm-rquickjs-execution.d.ts"]) {
+    const custom = join(packageDir, "golem-types", declaration)
+    if (existsSync(custom)) cpSync(custom, join(mergedDir, declaration))
+  }
   rmSync(typesDir, { recursive: true, force: true })
   renameSync(mergedDir, typesDir)
 } finally {

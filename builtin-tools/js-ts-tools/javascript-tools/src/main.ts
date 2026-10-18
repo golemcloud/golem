@@ -1,6 +1,6 @@
-import { lstatSync, readFileSync, readdirSync, rmdirSync, unlinkSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, rmdirSync, unlinkSync } from 'node:fs';
 import fsPromises from 'node:fs/promises';
-import { createRequire } from 'node:module';
+import { createRequire, stripTypeScriptTypes } from 'node:module';
 import { join, resolve } from 'node:path';
 import { ok, processExitStatusSchema, toolDefinition } from '@golemcloud/golem-ts-sdk';
 import { z } from 'zod/v4';
@@ -14,7 +14,10 @@ import {
   NPM_VERSION,
   npmInvocation,
 } from './npm-runtime.js';
+import { compileEvalSource, NodeOptionError, parseNodeArguments } from './node-args.js';
+import type { NodeInvocation } from './node-args.js';
 import { rewriteNpxArguments } from './npx-args.js';
+import { npxTypeScriptShim } from './npx-typescript-shim.js';
 
 const DEFAULT_CWD = '/';
 const NPM_ROOT = '/toolchain/npm/node_modules/npm';
@@ -28,7 +31,9 @@ type NpmBundle = {
 
 const nodeTool = toolDefinition('node', { requiresFilesystem: true })
   .version('0.1.9')
-  .doc("Run a JavaScript file or inline expression with Golem's Node-compatible runtime.")
+  .doc(
+    "Run a JavaScript or TypeScript file (.js, .mjs, .cjs, .ts, .mts, .cts) or inline source with Golem's Node-compatible runtime. TypeScript runs without flags: types are removed and not checked; use the tsc tool to type-check.",
+  )
   .annotations({ openWorld: false })
   .body((body) =>
     body
@@ -40,7 +45,7 @@ const nodeTool = toolDefinition('node', { requiresFilesystem: true })
       .tail('args', z.string(), {
         separator: '--',
         verbatim: true,
-        doc: 'A script path and its arguments, an inline expression with -e, or a Node option.',
+        doc: 'A script path and its arguments, or -e/--eval with JavaScript or TypeScript source, or -v/--version. Before the script or -e, --input-type=commonjs or commonjs-typescript selects how -e source is read; --input-type=module is not supported, so run a .mjs or .mts file instead. --experimental-strip-types, --experimental-transform-types, --no-experimental-strip-types, --no-warnings and --enable-source-maps are accepted and change nothing. Other Node options are rejected.',
       })
       .stdout({
         required: true,
@@ -84,7 +89,9 @@ const npmTool = toolDefinition('npm', { requiresFilesystem: true })
 
 const npxTool = toolDefinition('npx', { requiresFilesystem: true })
   .version('10.9.9+golem.9')
-  .doc('Run a command provided by a local or downloaded npm package.')
+  .doc(
+    'Run a command provided by a local or downloaded npm package. When tsx or ts-node is not installed in the project, `npx tsx <file>` and `npx ts-node <file>` (and their -e forms) run through the node tool, which runs TypeScript without downloading anything and without type checking; `node <file>` does the same directly.',
+  )
   .annotations({ openWorld: false })
   .body((body) =>
     body
@@ -169,18 +176,21 @@ async function runNpm(
   }
 }
 
-function parseNodeArguments(args: string[]): {
-  source?: string;
-  entry?: string;
-  argv: string[];
-} {
-  if (args[0] === '--version' || args[0] === '-v') return { source: '', argv: args };
-  if (args[0] === '--eval' || args[0] === '-e') {
-    if (args[1] === undefined) throw new Error('node --eval requires source');
-    return { source: args[1], argv: ['node', ...args.slice(2)] };
+function stripEvalTypes(source: string): string {
+  // The runtime reports every experimental feature once; the eval transform is an
+  // implementation detail of the tool, not a feature the program asked for.
+  const emitWarning = process.emitWarning;
+  process.emitWarning = ((warning: string | Error, ...rest: unknown[]) => {
+    if (rest[0] === 'ExperimentalWarning' && String(warning).startsWith('stripTypeScriptTypes')) {
+      return;
+    }
+    return (emitWarning as (...args: unknown[]) => void).call(process, warning, ...rest);
+  }) as typeof process.emitWarning;
+  try {
+    return stripTypeScriptTypes(source, { mode: 'transform', sourceUrl: '[eval]' });
+  } finally {
+    process.emitWarning = emitWarning;
   }
-  if (!args[0]) throw new Error('node requires a file or --eval source');
-  return { entry: args[0], argv: ['node', args[0], ...args.slice(1)] };
 }
 
 async function runNode(
@@ -190,7 +200,7 @@ async function runNode(
     stderr: WritableStream<Uint8Array>;
   },
 ) {
-  let parsed: ReturnType<typeof parseNodeArguments> | undefined;
+  let parsed: NodeInvocation | undefined;
   let parseError: unknown;
   try {
     parsed = parseNodeArguments(input.args);
@@ -201,10 +211,10 @@ async function runNode(
   const home = join(cwd, '.golem-home');
   const globalScope = globalThis as typeof globalThis & { require: NodeJS.Require };
   const originalRequire = globalScope.require;
-  if (parsed?.source !== undefined) globalScope.require = createRequire(join(cwd, '[eval]'));
+  if (parsed?.kind === 'eval') globalScope.require = createRequire(join(cwd, '[eval]'));
   return runCli(
     {
-      argv: parsed?.argv ?? ['node', ...input.args],
+      argv: parsed?.kind === 'version' ? input.args : (parsed?.argv ?? ['node', ...input.args]),
       cwd,
       environment: {
         HOME: home,
@@ -216,20 +226,19 @@ async function runNode(
     },
     streams,
     async () => {
-      if (parseError !== undefined) throw parseError;
-      if (input.args[0] === '--version' || input.args[0] === '-v') {
-        process.stdout.write(`${process.version}\n`);
-        return;
+      if (parseError instanceof NodeOptionError) {
+        process.stderr.write(`${parseError.message}\n`);
+        process.exit(9);
       }
-      const entry = parsed!.entry ? resolve(cwd, parsed!.entry) : undefined;
-      if (parsed!.source !== undefined) {
-        const AsyncFunction = Object.getPrototypeOf(async () => undefined).constructor as new (
-          ...args: string[]
-        ) => () => Promise<unknown>;
-        await new AsyncFunction(parsed!.source)();
+      if (parseError !== undefined) throw parseError;
+      if (parsed!.kind === 'version') {
+        process.stdout.write(`${process.version}\n`);
+      } else if (parsed!.kind === 'eval') {
+        await compileEvalSource(parsed!.source, parsed!.typescript, stripEvalTypes)();
       } else {
-        readFileSync(entry!);
-        await import(entry!);
+        const entry = resolve(cwd, parsed!.entry);
+        readFileSync(entry);
+        await import(entry);
       }
     },
   ).finally(() => {
@@ -245,6 +254,32 @@ npmTool.implement({
   npm: async (input, context) => ok({ exit_code: await runNpm('npm', input, context) }),
 });
 
+async function runNpx(
+  input: { cwd: string; registry: string; args: string[] },
+  streams: {
+    stdout: WritableStream<Uint8Array>;
+    stderr: WritableStream<Uint8Array>;
+  },
+) {
+  const shim = npxTypeScriptShim(input.args, validatedCwd(input.cwd), existsSync);
+  if (shim === undefined) return runNpm('npx', input, streams);
+  if (shim.kind === 'error') {
+    return runCli({ argv: ['npx', ...input.args], cwd: input.cwd }, streams, () => {
+      process.stderr.write(`${shim.message}\n`);
+      process.exitCode = 1;
+    });
+  }
+  if (shim.notice !== undefined) {
+    const writer = streams.stderr.getWriter();
+    try {
+      await writer.write(new TextEncoder().encode(`${shim.notice}\n`));
+    } finally {
+      writer.releaseLock();
+    }
+  }
+  return runNode({ cwd: input.cwd, args: shim.args }, streams);
+}
+
 npxTool.implement({
-  npx: async (input, context) => ok({ exit_code: await runNpm('npx', input, context) }),
+  npx: async (input, context) => ok({ exit_code: await runNpx(input, context) }),
 });

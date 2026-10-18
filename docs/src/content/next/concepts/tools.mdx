@@ -80,8 +80,8 @@ Tool calls are part of the agent's durable execution. Every tool call executes e
 |---|---|
 | `bash` | A bash-compatible shell with coreutils, `curl`, and `wget`. Other tools bound to the agent can be called as commands. |
 | `read-file`, `write-file`, `edit-file`, `ls`, `grep` | Read, write, edit, list, and search files |
-| `node` | A Node.js-compatible JavaScript runtime |
-| `npm`, `npx` | The npm package manager |
+| `node` | A Node.js-compatible JavaScript runtime that also runs TypeScript files and `-e` source without flags (no type checking) |
+| `npm`, `npx` | The npm package manager. When `tsx` or `ts-node` is not installed, `npx tsx` and `npx ts-node` run through `node` |
 | `tsc` | The TypeScript compiler |
 | `python` | Python scripts and modules in RustPython, with a frozen standard library. Native extensions, subprocesses, and sockets are unavailable. |
 | `git` | Local repositories and HTTP(S) remotes: clone, fetch, push, pull, merge, and linear rebase. SSH, repository hooks, and external credential helpers are unavailable. |
