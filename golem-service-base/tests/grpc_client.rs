@@ -1845,3 +1845,41 @@ async fn without_a_redirect_check_the_same_answer_is_retried() {
     );
     peer.shutdown().await;
 }
+
+#[test]
+async fn a_redirect_is_returned_at_once_on_every_slot_of_a_pool_and_keeps_its_connection() {
+    const SLOTS: usize = 3;
+    let (peer, requests) = serve_redirecting_peer().await;
+    let endpoint: Uri = format!("http://{}", peer.addr).parse().unwrap();
+    let client = single_target_executor_client(
+        endpoint,
+        GrpcClientConfig {
+            connection_pool_size: std::num::NonZeroUsize::new(SLOTS).unwrap(),
+            ..retrying_config()
+        },
+    )
+    .with_redirect(is_redirect);
+
+    // The calls rotate over the slots, so two rounds reach every slot twice.
+    for _ in 0..2 * SLOTS {
+        let status = ping_single(&client)
+            .await
+            .expect_err("the peer only redirects");
+        assert!(
+            is_redirect(&status),
+            "expected the redirect itself, got {status:?}"
+        );
+    }
+
+    assert_eq!(
+        requests.load(std::sync::atomic::Ordering::SeqCst),
+        2 * SLOTS,
+        "each call must reach the peer exactly once, on whichever slot it took"
+    );
+    assert_eq!(
+        peer.connections.load(std::sync::atomic::Ordering::SeqCst),
+        SLOTS,
+        "a redirect must not cost a slot its connection"
+    );
+    peer.shutdown().await;
+}
