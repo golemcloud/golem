@@ -1114,7 +1114,7 @@ dependencies = ["merge-openapi", "diff-openapi", "check-docs-openapi"]
 
 [tasks.unit-tests-and-checks]
 description = "Runs unit tests and source drift checks in one cargo-make invocation"
-dependencies = ["check-openapi", "check-docs-skills", "check-reflection-conformance", "check-builtin-artifacts", "check-wit", "unit-tests"]
+dependencies = ["check-openapi", "check-docs-skills", "check-reflection-conformance", "check-builtin-artifacts", "check-wit", "test-javascript-tool-process-backend", "unit-tests"]
 
 [tasks.diff-openapi]
 description = "Checks if the generated openapi spec is the same as the one in the openapi directory"

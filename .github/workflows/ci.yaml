@@ -131,6 +131,10 @@ jobs:
           java-version: 21
       - name: Setup SBT
         uses: sbt/setup-sbt@v1
+      - name: Setup Node.js (for the tool-process adapter tests)
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
       - uses: ./.github/actions/restore-binaries
         with:
           disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
