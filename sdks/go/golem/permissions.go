@@ -48,11 +48,16 @@ import (
 // A card wraps a host handle, and nothing turns data into one: no constructor
 // takes a CardID, a string or JSON, and a card does not serialize. Derivation
 // inputs are requests the host checks against the parent's grants.
+// Persistent derivation returns a [PersistentCard], whose host-provided Kind
+// distinguishes concrete and template cards. Common operations such as Install
+// work on either case. Before sending one as a method or tool value, select
+// its Concrete or Template view; do not infer the kind from the request or Inspect.
 //
 // Revoke and Install consume the card, as sending it does: afterwards the card
 // is moved, even when the call failed, and every further use panics with
 // [ErrPermissionCardMoved]. ID, Parents and ExpiresAt trap when the host no
-// longer knows the card.
+// longer knows the card, or when the card is revoked or expired; the other
+// operations on such a card return a [PermissionError].
 //
 // A [ScopeCard] from [DeriveScope] lends grants to awaited calls for the
 // current invocation only; see [MethodDef.WithScopeCard].
@@ -75,7 +80,7 @@ type AnyPermissionCard interface {
 	// Inspect returns the card's grants. It needs the card:inspect verb.
 	Inspect() (CardView, error)
 	// Derive derives a narrower child card. It needs the card:derive verb.
-	Derive(b Bounds, lifespan Option[Lifespan]) (PermissionCard, error)
+	Derive(b Bounds, lifespan Option[Lifespan]) (PersistentCard, error)
 	// Revoke revokes the card and every card derived from it, consuming it.
 	Revoke() (uint32, error)
 	// Install installs the card on target, consuming it.
@@ -88,7 +93,7 @@ type AnyPermissionCard interface {
 }
 
 // ScopeParent is a card [DeriveScope] accepts as a parent: a
-// [PermissionCard], a [PolymorphicPermissionCard], a [ScopeCard] or a
+// [PermissionCard], a [PolymorphicPermissionCard], a [PersistentCard], a [ScopeCard] or a
 // [WalletCard], or a struct that embeds one, which stands for the embedded
 // card. Nothing outside the package can implement it otherwise.
 type ScopeParent interface {
@@ -165,8 +170,12 @@ type CardView struct {
 // [DeriveFromWallet] and [DeriveScope] the four lists are the child's complete
 // lattice. The host rejects a lattice its parents do not cover.
 //
-// Requested grants must be concrete: the host rejects a grant with a slot
-// variable such as ?agent or ?env with [PermissionInvalidPattern].
+// Persistent derivation accepts slot variables such as ?agent and ?env. They
+// name the eventual holder, not the caller, and the host validates the request
+// for every possible holder. A template parent must be in the caller's wallet.
+// DeriveScope requires concrete grants and rejects slots with
+// [PermissionInvalidPattern]. Tool owner slots do not acquire the caller's
+// tool aliases or component metadata.
 type Bounds struct {
 	LowerPositive []PatternGrant
 	LowerNegative []PatternGrant
@@ -502,8 +511,8 @@ type permissionsHost struct {
 	parents          func(c *types.PermissionCard) []types.CardId
 	expiresAt        func(c *types.PermissionCard) witTypes.Option[perm.Timestamp]
 	inspect          func(c *types.PermissionCard) witTypes.Result[perm.CardView, perm.PermissionError]
-	derive           func(parent *types.PermissionCard, lp, ln, up, un []perm.PatternGrant, lifespan witTypes.Option[perm.Duration]) witTypes.Result[*types.PermissionCard, perm.PermissionError]
-	deriveFromWallet func(lp, ln, up, un []perm.PatternGrant, lifespan witTypes.Option[perm.Duration]) witTypes.Result[*types.PermissionCard, perm.PermissionError]
+	derive           func(parent *types.PermissionCard, lp, ln, up, un []perm.PatternGrant, lifespan witTypes.Option[perm.Duration]) witTypes.Result[perm.PersistentCard, perm.PermissionError]
+	deriveFromWallet func(lp, ln, up, un []perm.PatternGrant, lifespan witTypes.Option[perm.Duration]) witTypes.Result[perm.PersistentCard, perm.PermissionError]
 	deriveScope      func(parents []*types.PermissionCard, lp, ln, up, un []perm.PatternGrant) witTypes.Result[*types.PermissionCard, perm.PermissionError]
 	revoke           func(c *types.PermissionCard) witTypes.Result[uint32, perm.PermissionError]
 	install          func(c *types.PermissionCard, target perm.Holder) witTypes.Result[witTypes.Unit, perm.PermissionError]
@@ -533,11 +542,19 @@ func newPermissionCard(h *types.PermissionCard) PermissionCard {
 	return PermissionCard{st: &permissionCardState{h: h}}
 }
 
-func cardResult(r witTypes.Result[*types.PermissionCard, perm.PermissionError]) (PermissionCard, error) {
+func cardResult(r witTypes.Result[perm.PersistentCard, perm.PermissionError]) (PersistentCard, error) {
 	if r.IsErr() {
-		return PermissionCard{}, permissionErrorFromWit(r.Err())
+		return PersistentCard{}, permissionErrorFromWit(r.Err())
 	}
-	return newPermissionCard(r.Ok()), nil
+	c := r.Ok()
+	switch c.Tag() {
+	case perm.PersistentCardConcrete:
+		return PersistentCard{st: &permissionCardState{h: c.Concrete()}, kind: WalletCardConcrete}, nil
+	case perm.PersistentCardTemplate:
+		return PersistentCard{st: &permissionCardState{h: c.Template()}, kind: WalletCardTemplate}, nil
+	default:
+		panic(fmt.Sprintf("golem: unknown persistent card kind %d", c.Tag()))
+	}
 }
 
 func permissionUnitResult(r witTypes.Result[witTypes.Unit, perm.PermissionError]) error {
@@ -577,7 +594,7 @@ func (st *permissionCardState) inspect() (CardView, error) {
 	}, nil
 }
 
-func (st *permissionCardState) derive(b Bounds, lifespan Option[Lifespan]) (PermissionCard, error) {
+func (st *permissionCardState) derive(b Bounds, lifespan Option[Lifespan]) (PersistentCard, error) {
 	return cardResult(permissionsHostOps.derive(st.borrow(),
 		grantsToWit(b.LowerPositive), grantsToWit(b.LowerNegative),
 		grantsToWit(b.UpperPositive), grantsToWit(b.UpperNegative),
@@ -631,12 +648,12 @@ func (c PermissionCard) MustInspect() CardView { return Must(c.st.inspect()) }
 // Derive derives a child card bounded by this one: it keeps the positive
 // grants of b and adds the negative ones, and lives for lifespan, or as long
 // as this card when None. It needs the card:derive verb.
-func (c PermissionCard) Derive(b Bounds, lifespan Option[Lifespan]) (PermissionCard, error) {
+func (c PermissionCard) Derive(b Bounds, lifespan Option[Lifespan]) (PersistentCard, error) {
 	return c.st.derive(b, lifespan)
 }
 
 // MustDerive is [PermissionCard.Derive] that panics on a refusal.
-func (c PermissionCard) MustDerive(b Bounds, lifespan Option[Lifespan]) PermissionCard {
+func (c PermissionCard) MustDerive(b Bounds, lifespan Option[Lifespan]) PersistentCard {
 	return Must(c.st.derive(b, lifespan))
 }
 
@@ -673,14 +690,14 @@ func (c PolymorphicPermissionCard) Inspect() (CardView, error) { return c.pst.in
 func (c PolymorphicPermissionCard) MustInspect() CardView { return Must(c.pst.inspect()) }
 
 // Derive derives a child card bounded by this one, as [PermissionCard.Derive]
-// does. A template card is first resolved for this agent, so the child is
-// concrete; this needs the card to be in the agent's wallet.
-func (c PolymorphicPermissionCard) Derive(b Bounds, lifespan Option[Lifespan]) (PermissionCard, error) {
+// does. The parent is checked in the caller's scope and must be in its wallet;
+// requested slots still name the eventual holder.
+func (c PolymorphicPermissionCard) Derive(b Bounds, lifespan Option[Lifespan]) (PersistentCard, error) {
 	return c.pst.derive(b, lifespan)
 }
 
 // MustDerive is [PolymorphicPermissionCard.Derive] that panics on a refusal.
-func (c PolymorphicPermissionCard) MustDerive(b Bounds, lifespan Option[Lifespan]) PermissionCard {
+func (c PolymorphicPermissionCard) MustDerive(b Bounds, lifespan Option[Lifespan]) PersistentCard {
 	return Must(c.pst.derive(b, lifespan))
 }
 
@@ -852,8 +869,9 @@ func WalletVersion() WalletVersionToken {
 
 // DeriveFromWallet derives a card with the lattice b from a card in the
 // agent's wallet that covers it, living for lifespan. It needs the card:derive
-// verb.
-func DeriveFromWallet(b Bounds, lifespan Option[Lifespan]) (PermissionCard, error) {
+// verb. The host returns the concrete or template case; see [Bounds] for the
+// meaning and validation of requested slots.
+func DeriveFromWallet(b Bounds, lifespan Option[Lifespan]) (PersistentCard, error) {
 	return cardResult(permissionsHostOps.deriveFromWallet(
 		grantsToWit(b.LowerPositive), grantsToWit(b.LowerNegative),
 		grantsToWit(b.UpperPositive), grantsToWit(b.UpperNegative),
@@ -861,12 +879,13 @@ func DeriveFromWallet(b Bounds, lifespan Option[Lifespan]) (PermissionCard, erro
 }
 
 // MustDeriveFromWallet is [DeriveFromWallet] that panics on a refusal.
-func MustDeriveFromWallet(b Bounds, lifespan Option[Lifespan]) PermissionCard {
+func MustDeriveFromWallet(b Bounds, lifespan Option[Lifespan]) PersistentCard {
 	return Must(DeriveFromWallet(b, lifespan))
 }
 
 // DeriveScope derives a scope card with the lattice b from parents, which may
 // be persistent cards and scope cards. It needs the card:derive verb.
+// The requested grants must be concrete: slots return [PermissionInvalidPattern].
 //
 // A scope card is valid only during the invocation that derived it. Attach it
 // to the awaited calls this invocation makes, with [MethodDef.WithScopeCard] or

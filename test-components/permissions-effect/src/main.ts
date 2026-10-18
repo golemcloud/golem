@@ -158,6 +158,8 @@ defineAgent({
 
           // 1. Derive from the wallet and 2. inspect.
           const card = yield* Permissions.deriveFromWallet(bounds);
+          if (!Schema.is(WitTypes.PermissionCard)(card))
+            return yield* Effect.die("expected concrete card");
           const view = yield* Permissions.inspect(card);
           result.derivedView = view;
 

@@ -2,9 +2,12 @@ name: CI
 on:
   release:
     types: [published]
+  workflow_dispatch:
+  workflow_call:
   push:
     branches:
       - main
+      - "release/*"
       # Long-lived maintenance branches for shipped major.minor lines,
       # e.g. `1.5.x`. The wildcard means a new `1.6.x` branch starts running
       # CI on push automatically when it is created.
@@ -150,6 +153,8 @@ jobs:
           key: ${{ runner.os }}-bun-${{ hashFiles('docs/bun.lockb') }}
           restore-keys: |
             ${{ runner.os }}-bun-
+      - name: Test release tooling
+        run: cargo make --profile ci check-shared-crates-versioning
       # Share cargo-make's full workspace metadata discovery across all checks.
       - name: Unit tests and source drift checks
         run: cargo make --profile ci --time-summary --skip-tasks test-component-middleware-unit-tests unit-tests-and-checks
@@ -1811,7 +1816,7 @@ jobs:
         run: docker/check-images.sh
 
   builtin-artifacts-release-tests:
-    if: github.event_name == 'release' && github.ref_type == 'tag'
+    if: github.event_name == 'release' && startsWith(github.ref, 'refs/tags/v')
     runs-on: blacksmith-32vcpu-ubuntu-2204
     env:
       CARGO_BUILD_JOBS: 20
@@ -1831,7 +1836,7 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
-    if: github.event_name == 'release' && github.ref_type == 'tag'
+    if: github.event_name == 'release' && startsWith(github.ref, 'refs/tags/v')
     strategy:
       fail-fast: false
       matrix:
@@ -1892,7 +1897,7 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
-    if: github.event_name == 'release' && github.ref_type == 'tag'
+    if: github.event_name == 'release' && startsWith(github.ref, 'refs/tags/v')
     strategy:
       fail-fast: false
       matrix:
@@ -1910,7 +1915,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 1
+          fetch-depth: 0
       - uses: ./.github/actions/prepare-builtin-release
       - uses: ./.github/actions/setup-rust
         with:
@@ -1955,7 +1960,8 @@ jobs:
       - docker-golem-build
       - docker-image-checks
       - builtin-artifacts-release-tests
-    if: github.event_name == 'release' && github.ref_type == 'tag'
+      - release-prerequisites
+    if: github.event_name == 'release' && startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v5
         with:
@@ -1977,7 +1983,8 @@ jobs:
     needs:
       - docker-image-checks
       - builtin-artifacts-release-tests
-    if: github.event_name == 'release' && github.ref_type == 'tag'
+      - release-prerequisites
+    if: github.event_name == 'release' && startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v5
         with:
@@ -2000,7 +2007,8 @@ jobs:
       - docker-targets-build
       - docker-image-checks
       - builtin-artifacts-release-tests
-    if: github.event_name == 'release' && github.ref_type == 'tag'
+      - release-prerequisites
+    if: github.event_name == 'release' && startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v5
         with:
@@ -2032,7 +2040,8 @@ jobs:
       - docker-targets-build
       - docker-image-checks
       - builtin-artifacts-release-tests
-    if: github.event_name == 'release' && github.ref_type == 'tag'
+      - release-prerequisites
+    if: github.event_name == 'release' && startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v5
         with:
@@ -2058,9 +2067,11 @@ jobs:
           dockerfile: ./golem-component-compilation-service/docker/Dockerfile
           platforms: ${{ env.PLATFORMS }}
 
-  publish:
+  release-prerequisites:
     needs:
-      - builtin-artifacts-release-tests
+      - build-and-store
+      - build-cli-test-bins
+      - builtin-artifacts
       - check-clippy-and-format
       - unit-tests-and-checks
       - config-checks
@@ -2074,31 +2085,50 @@ jobs:
       - it-cli-agents
       - it-cli-streaming
       - consolidate-test-reports
-    if: "startsWith(github.ref, 'refs/tags/v')"
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && startsWith(github.ref, 'refs/tags/v'))
     env:
       CARGO_BUILD_JOBS: 20
     runs-on: blacksmith-32vcpu-ubuntu-2204
+    timeout-minutes: 260
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 1
+          fetch-depth: 0
       - uses: ./.github/actions/setup-rust
         with:
-          fetch-tag: 'true'
-          cache-shared-key: 'release'
-          cache-save-if: 'true'
-          install-protoc: 'true'
-      - id: get_version
-        uses: battila7/get-version-action@v2
-      - name: Publish all packages
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-          VERSION: ${{ steps.get_version.outputs.version-without-v }}
-        run: cargo make --profile ci publish
+          use-cache: 'false'
+          install-cargo-binstall: 'true'
+      - name: Verify shared crate release
+        run: cargo make --profile ci verify-shared-crates
+      - uses: ./.github/actions/restore-binaries
+        with:
+          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
+          run-id: ${{ github.run_id }}
+          copy-to-target: 'true'
+      - uses: ./.github/actions/restore-cli-test-binary
+        with:
+          disk-key: ${{ needs.build-cli-test-bins.outputs.cli-binary-disk-key }}
+          run-id: ${{ github.run_id }}
+          destination: target/dev-release-ci
+      - uses: ./.github/actions/restore-builtin-artifacts
+        with:
+          disk-key: ${{ needs.builtin-artifacts.outputs.artifacts-disk-key }}
+          run-id: ${{ github.run_id }}
+      - uses: ./.github/actions/check-published-sdks
+        with:
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+          moonbit-version: ${{ env.MOONBIT_INSTALL_VERSION }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-prerequisite-logs
+          path: |
+            tmp/check-published-sdks.log
+            tmp/golem-cli-test-server-logs/
 
   publish-binaries:
     if: github.event_name == 'release' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'golemcloud/golem'
-    needs: builtin-artifacts-release-tests
+    needs: [builtin-artifacts-release-tests, release-prerequisites]
     strategy:
       fail-fast: false
       matrix:
@@ -2126,7 +2156,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 1
+          fetch-depth: 0
       - uses: ./.github/actions/prepare-builtin-release
       - uses: ./.github/actions/setup-rust
         with:
@@ -2271,7 +2301,7 @@ jobs:
 
   publish-slack-notification:
     needs:
-      - publish
+      - release-prerequisites
       - docker-publish-1
       - docker-publish-2
     if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
@@ -2280,9 +2310,9 @@ jobs:
       - name: Publish Slack Notification
         uses: rtCamp/action-slack-notify@v2
         env:
-          SLACK_COLOR: ${{ needs.publish.result }}
+          SLACK_COLOR: ${{ needs.release-prerequisites.result }}
           SLACK_ICON: https://uploads-ssl.webflow.com/64721eeec7cd7ef4f6f1683e/64831138b73a996d0e831773_32.png
           SLACK_TITLE: "Release Notification"
-          SLACK_MESSAGE: "Publish - cargo result: `${{ needs.publish.result }}`, docker-1 result: `${{ needs.docker-publish-1.result }}`, docker-2 result: `${{ needs.docker-publish-2.result }}`"
+          SLACK_MESSAGE: "Release prerequisites: `${{ needs.release-prerequisites.result }}`, docker-1 result: `${{ needs.docker-publish-1.result }}`, docker-2 result: `${{ needs.docker-publish-2.result }}`"
           SLACK_USERNAME: CI
           SLACK_WEBHOOK: ${{ secrets.SLACK_ALERT_URL }}

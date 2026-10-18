@@ -73,6 +73,7 @@ include_dir = { workspace = true }
 jsonschema = { workspace = true }
 mime = { workspace = true }
 mime_guess = { workspace = true }
+mimalloc = { workspace = true }
 openidconnect = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry-prometheus-text-exporter = { workspace = true }

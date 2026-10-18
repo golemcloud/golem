@@ -832,7 +832,7 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
     use golem_common::model::oplog::host_functions::HostFunctionName;
     use golem_common::model::oplog::{HostRequest, OplogEntry};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
-    use golem_worker_executor::services::card::{CardService, CardState};
+    use golem_worker_executor::services::card::{CardService, CardState, RuntimeCardCreation};
     use golem_worker_executor::services::golem_config::SnapshotPolicy;
     use golem_worker_executor::services::oplog::OplogOps;
     use golem_worker_executor_test_utils::TestCardService;
@@ -860,7 +860,7 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
             &self,
             card: StoredCard,
             provenance: CardManagedByRuntimeDerived,
-        ) -> Result<StoredCard, WorkerExecutorError> {
+        ) -> Result<RuntimeCardCreation, WorkerExecutorError> {
             let call = self.calls.fetch_add(1, Ordering::SeqCst);
             if call < self.release.len() {
                 self.entered

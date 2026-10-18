@@ -55,6 +55,29 @@ macro_rules! define_polymorphic_permission_pattern {
         pub enum PolymorphicPermissionPattern {
             $($variant(PolymorphicClassPermissionPattern<$class>),)+
         }
+
+        impl From<PermissionPattern> for PolymorphicPermissionPattern {
+            fn from(permission: PermissionPattern) -> Self {
+                match permission {
+                    $(PermissionPattern::$variant(p) => Self::$variant(PolymorphicClassPermissionPattern {
+                        owner: p.owner.into(), recipient: p.recipient, verb: p.verb, resource: p.resource,
+                    }),)+
+                }
+            }
+        }
+
+        impl PolymorphicPermissionPattern {
+            pub fn as_concrete(&self) -> Option<PermissionPattern> {
+                match self {
+                    $(Self::$variant(p) => Some(PermissionPattern::$variant(ClassPermissionPattern {
+                        owner: p.owner.as_concrete()?, recipient: p.recipient.clone(),
+                        verb: p.verb, resource: p.resource.clone(),
+                    })),)+
+                }
+            }
+
+            pub fn has_slots(&self) -> bool { self.as_concrete().is_none() }
+        }
     };
 }
 

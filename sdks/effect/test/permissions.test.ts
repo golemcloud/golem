@@ -78,7 +78,10 @@ const cardId = (serial: number): TypesHost.CardId => ({
 
 type WalletKind = TypesHost.WalletCard["tag"]
 
-const makeHost = (walletKinds: ReadonlyArray<WalletKind> = ["concrete", "template"]) => {
+const makeHost = (
+  walletKinds: ReadonlyArray<WalletKind> = ["concrete", "template"],
+  derivedKind: TypesHost.PersistentCard["tag"] = "concrete",
+) => {
   const events: string[] = []
   const failures = new Map<string, unknown>()
   let serial = 0
@@ -112,18 +115,24 @@ const makeHost = (walletKinds: ReadonlyArray<WalletKind> = ["concrete", "templat
       fail("derive")
       events.push(`derive:${fake(parent).serial}:${lifespan?.iso8601 ?? "-"}`)
       // A lifespan gives the child a fixed fake expiry that names its serial.
-      return mint(
-        { lowerPositive, lowerNegative, upperPositive, upperNegative },
-        [fake(parent).serial],
-        lifespan === undefined
-          ? undefined
-          : { seconds: 1_000n + BigInt(serial + 1), nanoseconds: 5 },
-      )
+      return {
+        tag: derivedKind,
+        val: mint(
+          { lowerPositive, lowerNegative, upperPositive, upperNegative },
+          [fake(parent).serial],
+          lifespan === undefined
+            ? undefined
+            : { seconds: 1_000n + BigInt(serial + 1), nanoseconds: 5 },
+        ),
+      }
     },
     deriveFromWallet: (lowerPositive, lowerNegative, upperPositive, upperNegative, lifespan) => {
       fail("deriveFromWallet")
       events.push(`deriveFromWallet:${lifespan?.iso8601 ?? "-"}`)
-      return mint({ lowerPositive, lowerNegative, upperPositive, upperNegative })
+      return {
+        tag: derivedKind,
+        val: mint({ lowerPositive, lowerNegative, upperPositive, upperNegative }),
+      }
     },
     deriveScope: (parents, lowerPositive, lowerNegative, upperPositive, upperNegative) => {
       events.push(`deriveScope:${parents.map((p) => fake(p).serial).join(",")}`)
@@ -191,6 +200,19 @@ const failureOf = <A, E>(exit: Exit.Exit<A, E>): E => {
 }
 
 describe("Permissions", () => {
+  it.effect("preserves the host template tag for wallet and child derivation", () => {
+    const host = makeHost([], "template")
+    return Effect.gen(function* () {
+      const parent = yield* Permissions.deriveFromWallet({})
+      const child = yield* Permissions.derive(parent, {})
+      for (const card of [parent, child]) {
+        expect(Schema.is(WitTypes.PolymorphicPermissionCard)(card)).toBe(true)
+        expect(Schema.is(WitTypes.PermissionCard)(card)).toBe(false)
+        yield* Permissions.release(card)
+      }
+    }).pipe(Effect.provide(host.layer))
+  })
+
   it.effect(
     "derives from the wallet, inspects, and derives a child that borrows its parent",
     () => {
@@ -303,7 +325,9 @@ describe("Permissions", () => {
   it.effect("moves the card before revoke, even when the host rejects the revocation", () => {
     const host = makeHost()
     return Effect.gen(function* () {
-      const card = yield* Permissions.deriveFromWallet({})
+      const card = Schema.decodeUnknownSync(WitTypes.PermissionCard)(
+        yield* Permissions.deriveFromWallet({}),
+      )
       host.failures.set("revoke", { tag: "not-permitted", val: "card:revoke is not permitted" })
       const error = failureOf(yield* Effect.exit(Permissions.revoke(card)))
       expect(error).toBeInstanceOf(Permissions.PermissionError)
@@ -320,7 +344,9 @@ describe("Permissions", () => {
   it.effect("returns the revoked count", () => {
     const host = makeHost()
     return Effect.gen(function* () {
-      const card = yield* Permissions.deriveFromWallet({})
+      const card = Schema.decodeUnknownSync(WitTypes.PermissionCard)(
+        yield* Permissions.deriveFromWallet({}),
+      )
       expect(yield* Permissions.revoke(card)).toBe(3)
     }).pipe(Effect.provide(host.layer))
   })
@@ -332,7 +358,9 @@ describe("Permissions", () => {
         componentId: { uuid: { highBits: 1n, lowBits: 2n } },
         agentId: "Target(1)",
       })
-      const card = yield* Permissions.deriveFromWallet({})
+      const card = Schema.decodeUnknownSync(WitTypes.PermissionCard)(
+        yield* Permissions.deriveFromWallet({}),
+      )
       host.failures.set("install", { tag: "install-recipient-mismatch", val: "wrong recipient" })
       const error = failureOf(yield* Effect.exit(Permissions.install(card, target)))
       expect(error).toMatchObject({ _tag: "PermissionError", kind: "install-recipient-mismatch" })
@@ -352,7 +380,9 @@ describe("Permissions", () => {
   it.effect("rejects an invalid account holder without moving the card", () => {
     const host = makeHost()
     return Effect.gen(function* () {
-      const card = yield* Permissions.deriveFromWallet({})
+      const card = Schema.decodeUnknownSync(WitTypes.PermissionCard)(
+        yield* Permissions.deriveFromWallet({}),
+      )
       const error = failureOf(
         yield* Effect.exit(Permissions.install(card, Permissions.Holder.account("not-a-uuid"))),
       )
@@ -503,7 +533,9 @@ describe("Permissions non-forgeability", () => {
   it.effect("cards and card IDs cannot be constructed, serialized, or decoded from data", () => {
     const host = makeHost()
     return Effect.gen(function* () {
-      const card = yield* Permissions.deriveFromWallet({})
+      const card = Schema.decodeUnknownSync(WitTypes.PermissionCard)(
+        yield* Permissions.deriveFromWallet({}),
+      )
       expect(() => JSON.stringify(card)).toThrow(/cannot be serialized/)
       expect(
         () =>
@@ -561,7 +593,9 @@ describe("Permissions non-forgeability", () => {
   it.effect("decodes only SDK-lifted cards from schema values", () => {
     const host = makeHost()
     return Effect.gen(function* () {
-      const card = yield* Permissions.deriveFromWallet({})
+      const card = Schema.decodeUnknownSync(WitTypes.PermissionCard)(
+        yield* Permissions.deriveFromWallet({}),
+      )
       expect(Bridge.permissionCardFromSchemaValue(Bridge.permissionCardToSchemaValue(card))).toBe(
         card,
       )
@@ -577,7 +611,9 @@ describe("Permissions non-forgeability", () => {
   it.effect("shares the card registry with another copy of the SDK in the same component", () => {
     const host = makeHost()
     return Effect.gen(function* () {
-      const card = yield* Permissions.deriveFromWallet({})
+      const card = Schema.decodeUnknownSync(WitTypes.PermissionCard)(
+        yield* Permissions.deriveFromWallet({}),
+      )
       vi.resetModules()
       const copy = yield* Effect.promise(
         () => import("../src/internal/schema-model/permissionCardHandle.js"),
@@ -665,6 +701,7 @@ describe("wallet card kinds and polymorphic cards", () => {
     return Effect.gen(function* () {
       const template = cardOf((yield* Permissions.wallet)[0], "Template")
       const concrete = yield* Permissions.deriveFromWallet({})
+      if (!Schema.is(WitTypes.PermissionCard)(concrete)) throw new Error("expected concrete card")
       expect(() => JSON.stringify(template)).toThrow(/cannot be serialized/)
       expect(Object.keys(Permissions)).not.toContain("PolymorphicPermissionCard")
       expect(Schema.is(WitTypes.PolymorphicPermissionCard)({ serial: 1 })).toBe(false)
@@ -917,7 +954,9 @@ describe("scope cards on awaited calls", () => {
       const walletCard = cardOf((yield* Permissions.wallet)[0], "Concrete")
       const scope = yield* Permissions.deriveScope([walletCard], {})
       yield* Permissions.release(scope)
-      const card = yield* Permissions.deriveFromWallet({})
+      const card = Schema.decodeUnknownSync(WitTypes.PermissionCard)(
+        yield* Permissions.deriveFromWallet({}),
+      )
       const reader = yield* Reader.client.get({ name: "a" })
       expect(
         failureOf(yield* Effect.exit(reader.give.withScopeCard(scope)({ card }))),
@@ -955,7 +994,9 @@ describe("scope cards on awaited calls", () => {
     return Effect.gen(function* () {
       const walletCard = cardOf((yield* Permissions.wallet)[0], "Concrete")
       const scope = yield* Permissions.deriveScope([walletCard], {})
-      const card = yield* Permissions.deriveFromWallet({})
+      const card = Schema.decodeUnknownSync(WitTypes.PermissionCard)(
+        yield* Permissions.deriveFromWallet({}),
+      )
       const connection = yield* (yield* RpcClient).connect(
         "PermissionReader",
         {} as never,
@@ -1067,7 +1108,9 @@ describe("scope cards on awaited calls", () => {
     return Effect.gen(function* () {
       const walletCard = cardOf((yield* Permissions.wallet)[0], "Concrete")
       const scope = yield* Permissions.deriveScope([walletCard], {})
-      const card = yield* Permissions.deriveFromWallet({})
+      const card = Schema.decodeUnknownSync(WitTypes.PermissionCard)(
+        yield* Permissions.deriveFromWallet({}),
+      )
       const connection = yield* (yield* RpcClient).connect(
         "PermissionReader",
         {} as never,
@@ -1092,7 +1135,9 @@ describe("scope cards on awaited calls", () => {
     const host = makeHost()
     const calls: Array<RecordedCall> = []
     return Effect.gen(function* () {
-      const card = yield* Permissions.deriveFromWallet({})
+      const card = Schema.decodeUnknownSync(WitTypes.PermissionCard)(
+        yield* Permissions.deriveFromWallet({}),
+      )
       const connection = yield* (yield* RpcClient).connect(
         "PermissionReader",
         {} as never,
@@ -1127,7 +1172,9 @@ describe("scope cards on awaited calls", () => {
     const host = makeHost()
     const calls: Array<RecordedCall> = []
     return Effect.gen(function* () {
-      const card = yield* Permissions.deriveFromWallet({})
+      const card = Schema.decodeUnknownSync(WitTypes.PermissionCard)(
+        yield* Permissions.deriveFromWallet({}),
+      )
       const reader = yield* Reader.client.get({ name: "a" })
       expect(failureOf(yield* Effect.exit(reader.give({ card })))).toMatchObject({
         _tag: "RpcCallError",
@@ -1145,7 +1192,9 @@ describe("scope cards on awaited calls", () => {
   it.effect("restores secrets and quota tokens and drops streams of an unsent tree", () => {
     const host = makeHost()
     return Effect.gen(function* () {
-      const card = yield* Permissions.deriveFromWallet({})
+      const card = Schema.decodeUnknownSync(WitTypes.PermissionCard)(
+        yield* Permissions.deriveFromWallet({}),
+      )
       const rawSecret = { secret: 1 } as never
       const rawToken = { token: 1 } as never
       const secret = createGuestSecretHandle(SECRET_INTERNAL, rawSecret)
@@ -1193,7 +1242,9 @@ describe("scope cards on awaited calls", () => {
     return Effect.gen(function* () {
       const walletCard = cardOf((yield* Permissions.wallet)[0], "Concrete")
       const scope = yield* Permissions.deriveScope([walletCard], {})
-      const card = yield* Permissions.deriveFromWallet({})
+      const card = Schema.decodeUnknownSync(WitTypes.PermissionCard)(
+        yield* Permissions.deriveFromWallet({}),
+      )
       const tree = yield* Effect.promise(() => schemaValueToWitAsync(cardRecord(card)))
       const cardNode = tree.valueNodes.find((node) => node.tag === "permission-card-handle")!
       const raw = cardNode.val

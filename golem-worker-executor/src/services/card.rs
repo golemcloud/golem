@@ -35,7 +35,7 @@ pub trait CardService: Send + Sync {
         &self,
         _card: StoredCard,
         _provenance: CardManagedByRuntimeDerived,
-    ) -> Result<StoredCard, WorkerExecutorError> {
+    ) -> Result<RuntimeCardCreation, WorkerExecutorError> {
         Err(WorkerExecutorError::runtime(
             "runtime permission-card creation is not supported by this card service",
         ))
@@ -87,6 +87,15 @@ pub enum CardState {
     #[default]
     Unknown,
     Live(Box<StoredCard>),
+    Revoked,
+}
+
+/// The outcome of a runtime permission-card creation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RuntimeCardCreation {
+    Created(Box<StoredCard>),
+    /// The card was created and then revoked before. The registry never creates a revoked
+    /// runtime card again, so every later attempt has this outcome.
     Revoked,
 }
 
@@ -271,7 +280,7 @@ impl CardService for CardServiceDefault {
         &self,
         card: StoredCard,
         provenance: CardManagedByRuntimeDerived,
-    ) -> Result<StoredCard, WorkerExecutorError> {
+    ) -> Result<RuntimeCardCreation, WorkerExecutorError> {
         let card_id = card.card_id();
         let revocation_version = {
             let state = self.state.read().await;
@@ -281,16 +290,23 @@ impl CardService for CardServiceDefault {
                 .copied()
                 .unwrap_or_default()
         };
-        let card = self
+        let card = match self
             .registry_service
             .create_runtime_card(card, provenance)
             .await
-            .map_err(|err| {
-                WorkerExecutorError::runtime(format!(
+        {
+            Ok(card) => card,
+            Err(RegistryServiceError::RuntimeCardRevoked(_)) => {
+                self.record_revoked_cards(&[card_id]).await;
+                return Ok(RuntimeCardCreation::Revoked);
+            }
+            Err(err) => {
+                return Err(WorkerExecutorError::runtime(format!(
                     "Failed creating runtime permission card: {}",
                     err.to_safe_string()
-                ))
-            })?;
+                )));
+            }
+        };
 
         let mut state = self.state.write().await;
         let revocation_is_newer = state
@@ -307,7 +323,7 @@ impl CardService for CardServiceDefault {
                 CardState::Live(Box::new(card.clone()))
             };
         }
-        Ok(card)
+        Ok(RuntimeCardCreation::Created(Box::new(card)))
     }
 
     async fn revoke_card(&self, card_id: CardId) -> Result<CardRevokeResult, WorkerExecutorError> {
@@ -1483,7 +1499,7 @@ mod tests {
                 .create_runtime_card(card.clone(), provenance)
                 .await
                 .unwrap(),
-            card
+            RuntimeCardCreation::Created(Box::new(card))
         );
         assert_live(&service.check_cards(vec![card_id]).await.unwrap(), card_id);
         assert_eq!(lookup_count.load(Ordering::SeqCst), 0);

@@ -10,6 +10,16 @@ API deployment definitions conflict error: /task-agents/{name}/tasks
 
 Make sure to remove or update conflicting deployments before redeploying.
 
+## Agent type deployed to multiple domains
+
+An agent type can be listed in only one HTTP API deployment per environment, because the webhook URL of the agent type uses a single domain. If `golem.yaml` lists the same agent type under two deployments of one environment, loading the manifest fails before anything is deployed:
+
+```bash filename="Terminal" copy
+Agent type MyAgent is deployed to multiple HTTP API domains in environment local: app.localhost:9006, sandbox.localhost:9006. ...
+```
+
+List the agent type under one domain only. One domain can serve many agent types. To serve the same functionality on another domain, define a separate agent type for that domain that calls the original agent.
+
 ## Type mismatch errors
 
 When an endpoint receives input that doesn't match the expected parameter types, Golem returns a `400 Bad Request` with details about the type mismatch. This makes Golem's API gateway much more type-safe than a typical gateway where requests are always routed to the backend regardless of input validity.

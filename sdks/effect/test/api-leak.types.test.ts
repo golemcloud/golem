@@ -114,9 +114,9 @@ type AssertEqual<X, Y> =
   > = Permissions.parents(card)
   const _inspect: Effect.Effect<Permissions.CardView, Failure, PermissionsClient> =
     Permissions.inspect(card)
-  const _derive: Effect.Effect<Permissions.PermissionCard, Failure, PermissionsClient> =
+  const _derive: Effect.Effect<Permissions.PersistentCard, Failure, PermissionsClient> =
     Permissions.derive(card, bounds, Permissions.Lifespan.fromIso8601("P1D"))
-  const _deriveFromWallet: Effect.Effect<Permissions.PermissionCard, Failure, PermissionsClient> =
+  const _deriveFromWallet: Effect.Effect<Permissions.PersistentCard, Failure, PermissionsClient> =
     Permissions.deriveFromWallet(bounds)
   const _deriveScope: Effect.Effect<Permissions.ScopeCard, Failure, PermissionsClient> =
     Permissions.deriveScope([card, scope], bounds)
@@ -192,7 +192,7 @@ type AssertEqual<X, Y> =
     Permissions.PolymorphicPermissionCard,
     Bridge.PolymorphicPermissionCard
   > = true
-  const _templateDerive: Effect.Effect<Permissions.PermissionCard, Failure, PermissionsClient> =
+  const _templateDerive: Effect.Effect<Permissions.PersistentCard, Failure, PermissionsClient> =
     Permissions.derive(template, bounds)
   const _templateOps = [
     Permissions.id(template),

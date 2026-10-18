@@ -104,6 +104,84 @@ pub struct PermissionCard {
     handle: GuestPermissionCardHandle,
 }
 
+/// An owned persistent card, labelled with the kind returned by the host.
+#[derive(Debug)]
+pub enum PersistentCard {
+    Concrete(PermissionCard),
+    Template(PolymorphicPermissionCard),
+}
+
+impl PersistentCard {
+    fn from_raw(raw: raw::PersistentCard) -> Self {
+        match raw {
+            raw::PersistentCard::Concrete(card) => Self::Concrete(PermissionCard::from_raw(card)),
+            raw::PersistentCard::Template(card) => {
+                Self::Template(PolymorphicPermissionCard::from_raw(card))
+            }
+        }
+    }
+
+    /// The identifier of this card.
+    pub fn id(&self) -> CardId {
+        match self {
+            Self::Concrete(card) => card.id(),
+            Self::Template(card) => card.id(),
+        }
+    }
+
+    /// The identifiers of the cards this card was derived from.
+    pub fn parents(&self) -> Vec<CardId> {
+        match self {
+            Self::Concrete(card) => card.parents(),
+            Self::Template(card) => card.parents(),
+        }
+    }
+
+    /// The expiry time, or `None` for an unbounded lifespan.
+    pub fn expires_at(&self) -> Option<Timestamp> {
+        match self {
+            Self::Concrete(card) => card.expires_at(),
+            Self::Template(card) => card.expires_at(),
+        }
+    }
+
+    /// Returns the grant lists. Requires `card:inspect`.
+    pub fn inspect(&self) -> Result<CardView, PermissionError> {
+        match self {
+            Self::Concrete(card) => card.inspect(),
+            Self::Template(card) => card.inspect(),
+        }
+    }
+
+    /// Derives a child whose kind is selected by the host.
+    pub fn derive(
+        &self,
+        bounds: &Bounds,
+        lifespan: Option<&Lifespan>,
+    ) -> Result<Self, PermissionError> {
+        match self {
+            Self::Concrete(card) => card.derive(bounds, lifespan),
+            Self::Template(card) => card.derive(bounds, lifespan),
+        }
+    }
+
+    /// Revokes this card and its descendants, consuming the handle.
+    pub fn revoke(self) -> Result<u32, PermissionError> {
+        match self {
+            Self::Concrete(card) => card.revoke(),
+            Self::Template(card) => card.revoke(),
+        }
+    }
+
+    /// Installs this card for the target, consuming the handle.
+    pub fn install(self, target: &Holder) -> Result<(), PermissionError> {
+        match self {
+            Self::Concrete(card) => card.install(target),
+            Self::Template(card) => card.install(target),
+        }
+    }
+}
+
 const CARD_MOVED: &str = "permission card has already been moved (revoked, installed, or \
      transferred to another agent) and can no longer be used";
 
@@ -162,6 +240,7 @@ impl PermissionCard {
     /// The positive lists of `bounds` select the grants of this card that the
     /// child retains. The negative lists of `bounds` are denials that the child
     /// adds. The child's lifespan cannot exceed the lifespan of this card.
+    /// The host selects the child's kind, independently of this card's kind.
     ///
     /// # Panics
     ///
@@ -170,7 +249,7 @@ impl PermissionCard {
         &self,
         bounds: &Bounds,
         lifespan: Option<&Lifespan>,
-    ) -> Result<PermissionCard, PermissionError> {
+    ) -> Result<PersistentCard, PermissionError> {
         derive_child(&self.handle, bounds, lifespan)
     }
 
@@ -223,8 +302,8 @@ impl std::fmt::Debug for PermissionCard {
 ///
 /// The SDK offers no conversion between a template card and a
 /// [`PermissionCard`].
-/// [`derive`](Self::derive) resolves the template for the caller and returns a
-/// concrete [`PermissionCard`]. As an agent method parameter or result, this
+/// [`derive`](Self::derive) returns the persistent kind selected by the host.
+/// As an agent method parameter or result, this
 /// type declares a `permission-card` with `polymorphic: true`, and a
 /// [`PermissionCard`] declares `polymorphic: false`. The host refuses an agent
 /// method input or output whose card does not match the declared kind. The
@@ -285,7 +364,7 @@ impl PolymorphicPermissionCard {
         inspect_card(&self.handle)
     }
 
-    /// Derives a concrete child card from this card. Requires `card:derive`.
+    /// Derives a persistent child card from this card. Requires `card:derive`.
     ///
     /// The host first resolves this template card for the caller, so this
     /// card must be in the caller's wallet. The bounds then apply as in
@@ -298,7 +377,7 @@ impl PolymorphicPermissionCard {
         &self,
         bounds: &Bounds,
         lifespan: Option<&Lifespan>,
-    ) -> Result<PermissionCard, PermissionError> {
+    ) -> Result<PersistentCard, PermissionError> {
         derive_child(&self.handle, bounds, lifespan)
     }
 
@@ -377,7 +456,7 @@ fn derive_child(
     handle: &GuestPermissionCardHandle,
     bounds: &Bounds,
     lifespan: Option<&Lifespan>,
-) -> Result<PermissionCard, PermissionError> {
+) -> Result<PersistentCard, PermissionError> {
     let bounds = RawBounds::from(bounds);
     let lifespan = lifespan.map(Lifespan::to_raw);
     with_raw_card(handle, |card| {
@@ -390,7 +469,7 @@ fn derive_child(
             lifespan.as_ref(),
         )
     })
-    .map(PermissionCard::from_raw)
+    .map(PersistentCard::from_raw)
     .map_err(PermissionError::from)
 }
 
@@ -477,10 +556,16 @@ pub fn wallet_version() -> WalletVersionToken {
 /// Unlike [`PermissionCard::derive`], all four lists of `bounds` are the full
 /// requested grant lists of the new card. The host refuses the request if the
 /// wallet does not cover them.
+///
+/// The host returns a concrete or template card. Requested slots name the
+/// eventual installed holder; template parents remain scoped to the caller.
+/// The host validates slots in every requested grant, including denials.
+/// Tool owners with slots use metadata-free normalization: short aliases
+/// that need metadata are refused.
 pub fn derive_from_wallet(
     bounds: &Bounds,
     lifespan: Option<&Lifespan>,
-) -> Result<PermissionCard, PermissionError> {
+) -> Result<PersistentCard, PermissionError> {
     let bounds = RawBounds::from(bounds);
     let lifespan = lifespan.map(Lifespan::to_raw);
     raw_derive::derive_from_wallet(
@@ -490,7 +575,7 @@ pub fn derive_from_wallet(
         &bounds.upper_negative,
         lifespan.as_ref(),
     )
-    .map(PermissionCard::from_raw)
+    .map(PersistentCard::from_raw)
     .map_err(PermissionError::from)
 }
 
@@ -500,6 +585,8 @@ pub fn derive_from_wallet(
 /// card of the current invocation. The host resolves a template parent for
 /// the caller. All four lists of `bounds` are the full requested grant lists
 /// of the new card.
+/// Requested slots are refused with [`PermissionError::InvalidPattern`]:
+/// scope grants must be concrete.
 ///
 /// # Panics
 ///
@@ -534,6 +621,15 @@ pub enum ScopeParent<'a> {
 impl<'a> From<&'a PermissionCard> for ScopeParent<'a> {
     fn from(card: &'a PermissionCard) -> Self {
         Self::Card(card)
+    }
+}
+
+impl<'a> From<&'a PersistentCard> for ScopeParent<'a> {
+    fn from(card: &'a PersistentCard) -> Self {
+        match card {
+            PersistentCard::Concrete(card) => Self::Card(card),
+            PersistentCard::Template(card) => Self::Template(card),
+        }
     }
 }
 

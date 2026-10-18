@@ -2154,7 +2154,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<Option<AgentMetadata>, WorkerExecutorError> {
         let _retired_lifecycle =
             if let Some(worker) = deps.active_agents().try_get(owned_agent_id).await {
-                if let Some(status) = worker.state_actor.observe_status().await? {
+                if let Some(status) = worker.state_actor.observe_repaired_status().await? {
                     let mut metadata = worker.get_initial_worker_metadata();
                     metadata.last_known_status = status.as_ref().clone();
                     return Ok(Some(metadata));

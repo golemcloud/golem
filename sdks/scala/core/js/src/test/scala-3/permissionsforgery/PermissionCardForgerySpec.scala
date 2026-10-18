@@ -29,6 +29,7 @@ trait PermissionCardKindsProbe {
   def exchangeTemplate(
     card: golem.host.PermissionsApi.PolymorphicPermissionCard
   ): golem.host.PermissionsApi.PolymorphicPermissionCard
+  def exchangePersistent(card: golem.host.PermissionsApi.PermissionCard): golem.host.PermissionsApi.PersistentCard
 }
 
 /**
@@ -221,8 +222,8 @@ object PermissionCardForgerySpec extends ZIOSpecDefault {
         def label(card: PermissionCard) = WalletCard.Template(card)
       """)
       val derivesConcrete: List[Error] = typeCheckErrors("""
-        import golem.host.PermissionsApi.{Bounds, PermissionCard, PermissionError, PolymorphicPermissionCard}
-        def child(card: PolymorphicPermissionCard): Either[PermissionError, PermissionCard] = card.derive(Bounds.empty)
+        import golem.host.PermissionsApi.{Bounds, PersistentCard, PermissionError, PolymorphicPermissionCard}
+        def child(card: PolymorphicPermissionCard): Either[PermissionError, PersistentCard] = card.derive(Bounds.empty)
       """)
       assertTrue(
         inaccessible(construct),
@@ -281,7 +282,8 @@ object PermissionCardForgerySpec extends ZIOSpecDefault {
         }
       assertTrue(
         cardSpecs(WireToolMacro.inputGraph[PermissionCardKindsProbe](List("exchange"))) == List(false),
-        cardSpecs(WireToolMacro.inputGraph[PermissionCardKindsProbe](List("exchange-template"))) == List(true)
+        cardSpecs(WireToolMacro.inputGraph[PermissionCardKindsProbe](List("exchange-template"))) == List(true),
+        cardSpecs(WireToolMacro.inputGraph[PermissionCardKindsProbe](List("exchange-persistent"))) == List(false)
       )
     },
     test("generated agent and tool clients accept a card in signatures") {

@@ -47,7 +47,7 @@ import golem.host.PermissionsApi._
 // Module level
 val entries: List[WalletCard]                        = wallet()
 val version: WalletVersionToken                      = walletVersion()
-val fromWallet: Either[PermissionError, PermissionCard] =
+val fromWallet: Either[PermissionError, PersistentCard] =
   deriveFromWallet(Bounds(lowerPositive = List(grant)), Some(Lifespan(1.hour)))
 val scope: Either[PermissionError, ScopeCard]        = deriveScope(List(parent), Bounds(lowerPositive = List(grant)))
 val modules: List[KernelModule]                      = listModules()
@@ -58,7 +58,7 @@ card.id; card.parents; card.expiresAt
 card.inspect()                                  // Either[PermissionError, CardView]
 
 // PermissionCard and PolymorphicPermissionCard
-card.derive(Bounds(...), Some(Lifespan(10.minutes)))  // Either[PermissionError, PermissionCard]
+card.derive(Bounds(...), Some(Lifespan(10.minutes)))  // Either[PermissionError, PersistentCard]
 card.revoke()                                   // moves the card; Either[PermissionError, Long]: revoked card count
 card.install(Holder.agent(componentId, "Target(\"b\")"))  // moves the card
 
@@ -76,16 +76,28 @@ wallet().foreach {
 - For `card.derive`, the positive lists of `Bounds` are the grants of the parent to retain and the
   negative lists are the denials to add. For `deriveFromWallet` and `deriveScope`, the four lists
   are the complete requested lattice.
-- `derive` on a `PolymorphicPermissionCard` returns a concrete `PermissionCard`: the host resolves
-  the template parent for the holder.
-- Requested grants must be concrete. A grant with a slot variable such as `?agent` or `?env`, for
-  example one that `inspect()` returned from a template card, is rejected with `InvalidPattern`.
-  Deriving a new template card, with slot variables in its grants, is not supported yet.
+- Persistent derivation returns `PersistentCard.Concrete(card)` or `PersistentCard.Template(card)`,
+  labelled by the host. Match the case before passing the card through a concrete or template schema.
+  The sum supports the common card operations.
+- Persistent derivation accepts owner slots such as `?agent` and `?env`.
+  Slots in resource IDs are not supported and fail with `InvalidPattern`.
+  Child slots name the eventual installed holder, not the deriving caller.
+  A template parent is still resolved for the caller in
+  whose wallet it is installed. Every possible child instantiation must narrow that resolved parent.
+  The host stores the original slots; the universal envelope is proof only.
+- Explicit derivation inherits the parent's exact denials and adds requested denials; wallet
+  derivation takes complete bounds. Slot-bearing denials cannot prove universal attenuation, so
+  the host may conservatively refuse a request; concrete inherited denials remain.
+- Scope cards stay concrete: requested slots fail with `InvalidPattern` and an explicit message.
+  For a slot-bearing tool owner, the host does not resolve aliases against caller metadata and
+  rejects metadata-dependent short flags. Use primary names.
 - An expected failure is a `Left(PermissionError)`. A host trap is not converted: `id`, `parents`
-  and `expiresAt` trap when the host does not know the handle.
+  and `expiresAt` trap when the host does not know the handle, or when its card is revoked or
+  expired.
 - Revocation removes authority: a revoked card and the cards derived from it leave the holders'
-  wallets. A handle that the agent still holds may keep reporting its cached view; do not use
-  `inspect` on such a handle to decide whether authority is still present.
+  wallets. `inspect`, `derive`, `deriveScope` and `install` on a handle whose card is revoked or
+  expired return `Left(PermissionError.CardRevoked)` or `Left(PermissionError.CardExpired)`, so
+  `inspect` detects revocation.
 - After a card is moved (revoked, installed, released or sent), every use throws
   `IllegalStateException`.
 - `revoke` and `install` move the card before they call the host, also when the host returns an

@@ -21,7 +21,7 @@ var _ = agent.Handle(Forward, func(_ *golem.Context[state], in ForwardIn) golem.
 })
 ```
 
-In a tool, bind it like any other argument (`s.Positional(&a.Card)`) or return it. Use `golem.PolymorphicPermissionCard` when the card's grants may leave the owner or resource id open (a template card). The card types do not convert into each other. A receiver decodes a card as the type its parameter declares. The host refuses an agent call input or output whose card does not match the declared kind.
+In a tool, bind it like any other argument (`s.Positional(&a.Card)`) or return it. Use `golem.PolymorphicPermissionCard` when the card's grants contain owner slot variables (a template card). The card types do not convert into each other. A receiver decodes a card as the type its parameter declares. The host refuses an agent call input or output whose card does not match the declared kind.
 
 ## Managing cards
 
@@ -47,7 +47,10 @@ n, err := card.Revoke() // n counts the revoked cards
 ```
 
 - `golem.Bounds` holds the four grant lists. For `card.Derive`, the positive lists name the parent's grants the child keeps and the negative lists the denials it adds. For `golem.DeriveFromWallet` and `golem.DeriveScope` the four lists are the child's complete lattice. The host rejects a lattice the parents do not cover.
-- Requested grants must be concrete. A grant with a slot variable such as `?agent` or `?env`, for example one that `Inspect` returned for a template wallet card, fails with `golem.PermissionInvalidPattern`: deriving a new template card, with slot variables in its grants, is not supported yet. A child derived from a template parent is a concrete `PermissionCard`.
+- Persistent derivation returns `golem.PersistentCard`. Use `Kind()`, `Concrete()` or `Template()` to narrow the host-labelled result before passing it through a concrete or template schema. The sum supports the common card operations.
+- Persistent derivation accepts owner slots such as `?agent` and `?env`. Slots in resource IDs are not supported and fail with `golem.PermissionInvalidPattern`. Child slots name the eventual installed holder, not the deriving caller. A template parent is still resolved for the caller in whose wallet it is installed. Every possible child instantiation must narrow that resolved parent. The host stores the original slots; the universal envelope is proof only.
+- Explicit derivation inherits the parent's exact denials and adds requested denials; wallet derivation takes complete bounds. Slot-bearing denials cannot prove universal attenuation, so the host may conservatively refuse a request; concrete inherited denials remain.
+- Scope cards stay concrete: requested slots fail with `golem.PermissionInvalidPattern` and an explicit message. For a slot-bearing tool owner, the host does not resolve aliases against caller metadata and rejects metadata-dependent short flags. Use primary names.
 - `golem.LifespanOf(d)` takes a positive `time.Duration`. `golem.ParseLifespan("P1DT12H")` takes ISO-8601 text of days, hours, minutes and seconds (`PnDTnHnMnS`). Years, months and weeks have no fixed length, and the host rejects them. A zero lifespan is refused.
 - `golem.Wallet()` returns the wallet's cards as `golem.WalletCard` values, each labelled with its kind. `w.Kind()` is `golem.WalletCardConcrete`, `golem.WalletCardTemplate` or `golem.WalletCardScope`, and exactly one accessor gives the card as the type of its kind: `w.Concrete()` a `golem.PermissionCard`, `w.Template()` a `golem.PolymorphicPermissionCard` (its grants may contain slot variables such as `?agent`), `w.Scope()` a `golem.ScopeCard`. The other accessors return `false`, and the card types do not convert into each other. `ID`, `Parents`, `ExpiresAt` and `Inspect` work on a `WalletCard` of every kind, and it can be a `DeriveScope` parent. A `WalletCard` cannot be sent; send the `PermissionCard` from `Concrete()` or the `PolymorphicPermissionCard` from `Template()`. Each is a fresh handle: call `Release()` on the ones you do not keep, or `golem.ReleaseCards(cards...)`.
 - During an invocation that received a scope card, the list also contains that scope card as a `WalletCardScope` entry if the agent holds `card:inspect`. Like a scope card from `DeriveScope`, it is retired when the invocation ends.
@@ -70,7 +73,7 @@ for _, w := range golem.Wallet() {
 
 - Deriving from a template card resolves it for the calling agent; the card must be in the agent's wallet.
 - `golem.AgentHolder` is the only install target the host accepts today; `golem.AccountHolder` and `golem.AppHolder` return `PermissionNotPermitted`.
-- `card.ID()` returns an opaque `golem.CardID`: compare it with `card.Parents()` or use it as a map key. It has no other use, and nothing turns it back into a card. Printing or serializing it shows a placeholder, never the identifier. `ID`, `Parents` and `ExpiresAt` trap when the host no longer knows the card.
+- `card.ID()` returns an opaque `golem.CardID`: compare it with `card.Parents()` or use it as a map key. It has no other use, and nothing turns it back into a card. Printing or serializing it shows a placeholder, never the identifier. `ID`, `Parents` and `ExpiresAt` trap when the host no longer knows the card, or when the card is revoked or expired. `Inspect`, `Derive`, `DeriveScope` and `Install` on such a card return `golem.PermissionCardRevoked` or `golem.PermissionCardExpired`, so `Inspect` detects revocation.
 - `Revoke` takes the authority of the card and of every card derived from it away from their holders.
 - `golem.ListKernelModules()` lists the resource classes and verbs; `golem.ValidateGrant(g)` checks one grant.
 

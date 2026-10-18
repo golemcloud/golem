@@ -12,8 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::oplog::payload::{HostResponseGolemRdbmsResult, HostResponseGolemRdbmsRowCount};
+use crate::model::oplog::payload::{
+    HostResponseGolemRdbmsRequest, HostResponseGolemRdbmsResult, HostResponseGolemRdbmsRowCount,
+};
 use crate::model::oplog::types::SerializableRdbmsError;
+
+pub fn request<R>(_request: &R, denial: &str) -> HostResponseGolemRdbmsRequest {
+    HostResponseGolemRdbmsRequest {
+        request: Err(SerializableRdbmsError::QueryExecutionFailure(
+            denial.to_string(),
+        )),
+    }
+}
 
 pub fn row_count<R>(_request: &R, denial: &str) -> HostResponseGolemRdbmsRowCount {
     HostResponseGolemRdbmsRowCount {

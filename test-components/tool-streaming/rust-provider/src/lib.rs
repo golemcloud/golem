@@ -5,8 +5,8 @@ use golem_rust::agentic::{
 };
 use golem_rust::golem_agentic::golem::agent::host as agent_host;
 use golem_rust::golem_agentic::golem::tool::host::{self as tool_host, ByteStreamFailure, ToolRpc};
-use golem_rust::quota::QuotaToken;
 use golem_rust::permissions::{self, PermissionCard};
+use golem_rust::quota::QuotaToken;
 use golem_rust::schema::wit::direct::{
     WireError, WirePreflight, WireReader, WireSchemaBuilder, WireWriter,
 };
@@ -510,6 +510,9 @@ impl MatrixPermissionIssuer for MatrixPermissionIssuerImpl {
     async fn issue(&self, principal: Principal) -> PermissionIssue {
         let card = permissions::derive_from_wallet(&Default::default(), None)
             .expect("matrix permission issuer derives a card from the owner wallet");
+        let permissions::PersistentCard::Concrete(card) = card else {
+            panic!("matrix permission issuer expects a concrete card");
+        };
         let owner_agent_id = golem_rust::get_self_metadata()
             .expect("matrix permission issuer owner metadata")
             .agent_id
@@ -647,11 +650,7 @@ struct PermissionsImpl;
 
 #[tool_implementation]
 impl Permissions for PermissionsImpl {
-    async fn exchange(
-        &self,
-        card: PermissionCard,
-        principal: Principal,
-    ) -> PermissionExchange {
+    async fn exchange(&self, card: PermissionCard, principal: Principal) -> PermissionExchange {
         // Panics unless the received card is present and known to the host.
         let _ = card.id();
         let (provider, principal, owner_agent_id) = matrix_resource_evidence(&principal);
@@ -1732,6 +1731,7 @@ impl Streaming for StreamingImpl {
                 | "finish-after-reader-drop"
                 | "stream-failure-success"
                 | "stdin-or-clock"
+                | "stdin-or-two-clocks"
                 | "stdin-or-spin"
         ) {
             if matches!(mode.as_str(), "declared-error" | "stream-failure-success") {
@@ -1773,7 +1773,7 @@ impl Streaming for StreamingImpl {
             "empty" => {}
             // The read of stdin and the work run side by side. The first to end is written to
             // stdout: how stdin ended, or that the work ended first.
-            "stdin-or-clock" | "stdin-or-spin" => {
+            "stdin-or-clock" | "stdin-or-two-clocks" | "stdin-or-spin" => {
                 let read = async {
                     match stdin.next().await {
                         None => "stdin-eof".to_string(),
@@ -1783,19 +1783,34 @@ impl Streaming for StreamingImpl {
                     }
                 };
                 let work = async {
-                    if mode == "stdin-or-clock" {
-                        golem_rust::wasip3::clocks::monotonic_clock::wait_for(600_000_000_000)
-                            .await;
-                        "clock".to_string()
-                    } else {
-                        // Computes without a host call and lets the other task run in between,
-                        // like an interpreter between two commands.
-                        let mut counter: u64 = 0;
-                        loop {
-                            for _ in 0..1_000_000 {
-                                counter = core::hint::black_box(counter.wrapping_add(1));
+                    match mode.as_str() {
+                        "stdin-or-clock" => {
+                            golem_rust::wasip3::clocks::monotonic_clock::wait_for(600_000_000_000)
+                                .await;
+                            "clock".to_string()
+                        }
+                        // A wait that ends, a write, and a wait that does not end: the host
+                        // calls of a script such as `sleep 0.5; echo first; sleep 300`. A stdin
+                        // that ends during the second wait ends it after the first wait and the
+                        // write in the body's call order, and its replay must put it there too.
+                        "stdin-or-two-clocks" => {
+                            golem_rust::wasip3::clocks::monotonic_clock::wait_for(500_000_000)
+                                .await;
+                            write_chunk(&mut stdout, b"first;".to_vec()).await;
+                            golem_rust::wasip3::clocks::monotonic_clock::wait_for(600_000_000_000)
+                                .await;
+                            "clock".to_string()
+                        }
+                        _ => {
+                            // Computes without a host call and lets the other task run in
+                            // between, like an interpreter between two commands.
+                            let mut counter: u64 = 0;
+                            loop {
+                                for _ in 0..1_000_000 {
+                                    counter = core::hint::black_box(counter.wrapping_add(1));
+                                }
+                                golem_rust::wasip3::wit_bindgen::yield_async().await;
                             }
-                            golem_rust::wasip3::wit_bindgen::yield_async().await;
                         }
                     }
                 };
