@@ -21,11 +21,10 @@
 
 ///|
 /// An expected failure of a permission operation, reported by the host.
-/// `CardRevoked` reports a card that the host knows to be revoked. A cached
-/// handle can still resolve after its card is revoked, so the absence of
-/// `CardRevoked` does not prove that a card is live. Host traps (for example an unknown handle
-/// passed to `id`, `parents` or `expires_at`) are not represented here; they
-/// stop the invocation.
+/// `CardRevoked` and `CardExpired` report a card that is revoked or expired;
+/// the host checks the card at every use of its handle. Host traps (for example
+/// an unknown handle, or a revoked or expired card, passed to `id`, `parents`
+/// or `expires_at`) are not represented here; they stop the invocation.
 pub(all) suberror PermissionError {
   NotPermitted(String)
   LowerBoundTooBroad(String)

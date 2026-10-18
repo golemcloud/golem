@@ -1978,6 +1978,34 @@ exactly-once (each `StreamOffset` consumed once per consumer session, owned by
 stream, protocol terminal fencing guest terminals). A change that
 satisfies one does not imply the others.
 
+## Permission-card handles
+
+A persistent permission-card handle (from `self-wallet`, `derive`, `derive-from-wallet`, or a
+received value) caches no liveness. Every guest operation that resolves one — the `id`, `parents`
+and `expires-at` accessors, `inspect-card`, `derive`, `derive-scope` and `install-card` — first
+runs a `ReadRemote` durable call, `golem::permissions::types::card-liveness`
+(`durable_host/permissions/mod.rs::resolve_permission_card`). Live, it asks the card service and
+records `Live(card)`, `Revoked` or `Expired`; replay returns the recorded answer and never asks
+the card service again. A failed lookup, or an answer that omits the card, traps and leaves the
+`Start` incomplete, so recovery asks again; no error is recorded. The answer never depends on wallet membership, which is an unrecorded observation
+(see the historical-ordering limit in the walkthrough). A revoked or expired card gives
+`card-revoked` or `card-expired`; the accessors trap. `revoke-card` resolves its handle inside
+its own recorded call. Runtime-card creation (`persist_runtime_card`) records a typed refusal in
+its `End` when the card service refuses a child because a parent is no longer live. The card
+service reports an expired card as revoked, so the parent's expiry decides between
+`card-expired` and `card-revoked`. Creation repairs an interrupted call only while its repair
+authorization still holds. Otherwise it revokes the card the interrupted attempt may have
+created and records the refusal; the guest has not observed an incomplete call, so either
+outcome is a valid first observation. The registry never creates a revoked runtime card id
+again (`RuntimeCardCreation::Revoked`), so a later repair of a refused repair that failed before
+its `End` records `card-revoked` instead of retrying. `install-card` of a template card records
+the same typed refusals in its `install-card-transfer` `End`. Tests: `tests/scope_cards.rs::{cached_child_handle_reports_its_self_revoked_card_before_and_after_replay,
+received_card_replays_its_recorded_liveness_after_an_external_revocation,
+externally_revoked_cached_handle_returns_typed_errors_and_its_accessors_trap,
+cached_handle_reports_card_expired_after_its_lifespan,
+derive_from_a_card_that_expires_before_its_creation_records_card_expired,
+a_refused_repair_that_fails_after_revoking_its_card_settles_with_card_revoked}`.
+
 ## Wrong model → right model
 | Wrong | Right | Fails under wrong model |
 |---|---|---|
@@ -1986,6 +2014,7 @@ satisfies one does not imply the others.
 | "The voluntary-suspension predicate gates interruption or recovery." | It only defers proactive yielding while live work progresses; explicit interruption and arbitrary Store loss still use ordinary reconstruction. | Simulated-crash tests at arbitrary points (`simulated_crash`, `interrupt`) |
 | "Restart differs from suspend." | Both discard the `Store` and reconstruct. | `counter_resource_test_2_with_restart` (state continues across an executor restart), `reacquire_permits_restart_preserves_accepted_queued_live_invocation` |
 | "Losing a shard reconstructs the agent, like a restart." | It is retired instead: that generation is stopped without writing its status, dropped and never restarted. Only the executor now holding the shard reconstructs it — the new owner, or this one if the shard came back at a higher epoch. | `worker/mod.rs::a_failure_that_is_a_lost_shard_is_given_up_on_every_path`, `services/oplog/tests.rs::a_fenced_oplog_refuses_new_adds_and_keeps_the_indices_it_handed_out_readable`, the fence tests in `tests/indexed_storage.rs` |
+| "A card handle can answer from its cached card, or from wallet membership." | A held handle outlives revocation and expiry, and wallet membership at an arbitrary point is not a recorded input. Each use records the card service's answer as `card-liveness`. | `received_card_replays_its_recorded_liveness_after_an_external_revocation` |
 | "A retried RPC attempt executed the target again." | Same key ⇒ same target invocation; count target mutations, not attempts. | Provider-side counter tests in `tests/rpc.rs` |
 | "Repair should generate a fresh RPC key." | Repair retains the call's own `Start` and derived key. A new saga attempt appends new calls. | RPC crash-recovery tests |
 | "Equal return values prove deduplication." | Deterministic echoes are equal even with duplicate execution; count side effects. | Counter-based RPC tests |
