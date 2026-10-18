@@ -15,7 +15,7 @@ service must own the data, or when the data can exceed one agent's resource limi
 
 SQLite can run in memory or store a database in the agent's isolated filesystem.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Go"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
     TypeScript agents have `node:sqlite` built in. Do not install a native npm SQLite package.
 
@@ -81,6 +81,22 @@ SQLite can run in memory or store a database in the agent's isolated filesystem.
 
     See [Using Embedded SQLite from Rust](/next/how-to-guides/rust/golem-add-sqlite-rust) for the
     full setup.
+  </Tabs.Tab>
+  <Tabs.Tab>
+    The Scala SDK has no supported embedded SQLite binding or SQLite snapshot integration.
+    Scala agents run on the JavaScript guest runtime, not a JVM; JDBC SQLite drivers do not work
+    there. The runtime's `node:sqlite` support for TypeScript does not provide a Scala SDK API.
+    Use ordinary agent state for local structured data. For shared SQL data, use the Scala
+    `golem.host.Rdbms` wrappers for [PostgreSQL or MySQL](/next/develop/rdbms), or call a
+    database service over [HTTP](/next/develop/http).
+  </Tabs.Tab>
+  <Tabs.Tab>
+    The MoonBit SDK has no supported embedded SQLite binding or SQLite snapshot integration.
+    Do not assume a native SQLite library can be linked into a MoonBit WebAssembly agent.
+    Use ordinary agent state for local structured data. For shared SQL data, use the generated
+    [PostgreSQL or MySQL bindings](/next/develop/rdbms) under
+    `golemcloud/golem_sdk/interface/golem/rdbms`, or call a database service through the SDK's
+    outgoing [HTTP API](/next/develop/http).
   </Tabs.Tab>
   <Tabs.Tab>
     The Go SDK has no supported embedded SQLite integration. Go agents that need SQL use

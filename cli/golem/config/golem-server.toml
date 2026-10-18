@@ -18,6 +18,8 @@ http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
 max_connection_age = "1m"
 max_message_size = 33554432
+queue_capacity = 100
+upload_queue_capacity = 100
 
 [component_compilation_service.compile_worker.retries_on_unavailable]
 max_attempts = 3
@@ -73,6 +75,7 @@ type = "Enabled"
 [registry_service.component_compilation.config]
 connect_timeout = "10s"
 connection_pool_size = 4
+enqueue_timeout = "1s"
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
@@ -939,6 +942,8 @@ type = "Disabled"
 # http2_keep_alive_while_idle = true
 # max_connection_age = "1m"
 # max_message_size = 33554432
+# queue_capacity = 100
+# upload_queue_capacity = 100
 #
 # [component_compilation_service.compile_worker.retries_on_unavailable]
 # max_attempts = 3
@@ -1011,6 +1016,7 @@ type = "Disabled"
 # [registry_service.component_compilation.config]
 # connect_timeout = "10s"
 # connection_pool_size = 4
+# enqueue_timeout = "1s"
 # http2_keep_alive_interval = "10s"
 # http2_keep_alive_timeout = "10s"
 # http2_keep_alive_while_idle = true

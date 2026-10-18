@@ -32,10 +32,10 @@ var permissionsHostOps = permissionsHost{
 	inspect: func(*types.PermissionCard) witTypes.Result[perm.CardView, perm.PermissionError] {
 		panic(ErrPermissionsOutsideComponent)
 	},
-	derive: func(*types.PermissionCard, []perm.PatternGrant, []perm.PatternGrant, []perm.PatternGrant, []perm.PatternGrant, witTypes.Option[perm.Duration]) witTypes.Result[*types.PermissionCard, perm.PermissionError] {
+	derive: func(*types.PermissionCard, []perm.PatternGrant, []perm.PatternGrant, []perm.PatternGrant, []perm.PatternGrant, witTypes.Option[perm.Duration]) witTypes.Result[perm.PersistentCard, perm.PermissionError] {
 		panic(ErrPermissionsOutsideComponent)
 	},
-	deriveFromWallet: func([]perm.PatternGrant, []perm.PatternGrant, []perm.PatternGrant, []perm.PatternGrant, witTypes.Option[perm.Duration]) witTypes.Result[*types.PermissionCard, perm.PermissionError] {
+	deriveFromWallet: func([]perm.PatternGrant, []perm.PatternGrant, []perm.PatternGrant, []perm.PatternGrant, witTypes.Option[perm.Duration]) witTypes.Result[perm.PersistentCard, perm.PermissionError] {
 		panic(ErrPermissionsOutsideComponent)
 	},
 	deriveScope: func([]*types.PermissionCard, []perm.PatternGrant, []perm.PatternGrant, []perm.PatternGrant, []perm.PatternGrant) witTypes.Result[*types.PermissionCard, perm.PermissionError] {

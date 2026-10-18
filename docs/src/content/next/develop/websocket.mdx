@@ -234,7 +234,7 @@ A physical WebSocket session does not survive runtime reconstruction, whether ca
 
 Both policies replay recorded outcomes unchanged, including messages, timeouts, send results, and close results. Neither changes retry behavior for an ordinary live network disconnect. Session loss is **not proof that an earlier send never reached the peer**. Use application acknowledgments, deduplication, or reconciliation before resending effects.
 
-Incomplete non-idempotent durable scopes still trap through the central recovery guard before the reconstruction policy applies. An `End` entry alone does not override an unfinished scope. An atomic-region rollback can remove the recorded connect from the replay path; executing that connect again then legitimately opens a new session under either policy.
+Recovery repairs eligible incomplete durable calls at their own recorded start and retains completed calls and their outcomes. It does not roll back an atomic region or repeat a completed connect as a new call. The reconstruction policy controls what happens when live code next accesses the reconstructed handle.
 
 ### SDK policy and error forms
 

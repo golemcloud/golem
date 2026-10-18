@@ -29,6 +29,7 @@ type = "Enabled"
 [component_compilation.config]
 connect_timeout = "10s"
 connection_pool_size = 4
+enqueue_timeout = "1s"
 host = "localhost"
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"

@@ -140,15 +140,69 @@ remote outcome before repeating business work. Storage outages remain infrastruc
 </Tabs.Tab>
 
 <Tabs.Tab>
-    The current MoonBit SDK provides an async wrapper around Preview 3 `wasi:http`. Import `golemcloud/golem_sdk/http` as `@http`, construct an `@http.Request` with its generated accessors, and pass it to `@http.send`:
+    The MoonBit SDK wraps Preview 3 `wasi:http`. Import
+    `golemcloud/golem_sdk/http` as `@http`, `moonbitlang/core/encoding/utf8`
+    as `@utf8`, and `moonbitlang/core/json` as `@json` in `moon.pkg`.
+    This function sends the same JSON POST as the other examples:
 
     ```moonbit
-    async fn send(request : @http.Request) -> Result[@http.Response, @http.ErrorCode] {
-      @http.send(request)
+    async fn create_todo(port : Int) -> Json {
+      let payload : Json = { "title": "foo", "body": "bar", "userId": 1 }
+      let bytes = @utf8.encode(payload.stringify())
+      let headers = @http.Fields::fields()
+      guard headers.append(
+        "content-type",
+        @utf8.encode("application/json").to_fixedarray(),
+      ) is Ok(_) else { abort("Invalid content-type header") }
+      let body = @http.Stream::produce(async fn(sink) {
+        guard sink.write_all_bytes(bytes[:]) else { abort("Upload closed") }
+        sink.close()
+      })
+      let (request, sent) = @http.Request::new(
+        headers, Some(body), @http.Future::ready(Ok(None)), None,
+      )
+      guard request.set_method(Post) is Ok(_) else { abort("Invalid method") }
+      guard request.set_scheme(Some(Http)) is Ok(_) else { abort("Invalid scheme") }
+      guard request.set_authority(Some("localhost:\{port}")) is Ok(_) else {
+        abort("Invalid authority")
+      }
+      guard request.set_path_with_query(Some("/todos")) is Ok(_) else {
+        abort("Invalid path")
+      }
+      let response = match @http.send(request) {
+        Ok(response) => response
+        Err(_) => abort("HTTP transport error")
+      }
+      guard sent.get() is Ok(_) else { abort("Request transmission failed") }
+      let status = response.get_status_code()
+      let (incoming, completed) = @http.Response::consume_body(
+        response, @http.Future::ready(Ok(())),
+      )
+      defer incoming.drop()
+      let buffer = Buffer()
+      while incoming.read(4096) is Some(chunk) {
+        for byte in chunk {
+          buffer.write_byte(byte)
+        }
+      }
+      match completed.get() {
+        Ok(Some(trailers)) => trailers.drop()
+        Ok(None) => ()
+        Err(_) => abort("Response body failed")
+      }
+      guard status >= 200 && status < 300 else {
+        abort("API returned HTTP \{status}")
+      }
+      let text = @utf8.decode(buffer.to_bytes()[:])
+      @json.parse(text)
     }
     ```
 
-    This is the exact SDK wrapper signature. Request bodies and response bodies are async byte streams; consume the full response stream before decoding JSON, and use `moonbitlang/core/encoding/utf8` rather than character-to-byte casts.
+    The body producer writes UTF-8 bytes. The reader collects every response chunk
+    and checks completion before decoding UTF-8 and parsing JSON. HTTP error
+    statuses are not transport errors: the example checks the status separately.
+    The example traps on HTTP failures; use your application's error handling
+    instead in production. Invalid UTF-8 and invalid JSON raise decoding errors.
 
 </Tabs.Tab>
 

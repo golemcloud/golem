@@ -17,6 +17,8 @@ http2_keep_alive_timeout = "10s"
 http2_keep_alive_while_idle = true
 max_connection_age = "1m"
 max_message_size = 33554432
+queue_capacity = 100
+upload_queue_capacity = 100
 
 [compile_worker.retries_on_unavailable]
 max_attempts = 3
@@ -140,6 +142,8 @@ without_time = false
 # http2_keep_alive_while_idle = true
 # max_connection_age = "1m"
 # max_message_size = 33554432
+# queue_capacity = 100
+# upload_queue_capacity = 100
 #
 # [compile_worker.retries_on_unavailable]
 # max_attempts = 3

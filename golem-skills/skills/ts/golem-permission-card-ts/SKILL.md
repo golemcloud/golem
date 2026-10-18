@@ -27,15 +27,15 @@ cannot be encoded:
 | `ScopeCard` | An invocation-local card for one awaited RPC call. See [Scope cards](#scope-cards-on-rpc-calls). |
 
 `PermissionCard` and `PolymorphicPermissionCard` have the same operations. `derive` on either
-returns a `PermissionCard`. A template card is a `derive` or `deriveScope` parent only while it is
-in this agent's wallet, where the host resolves it for this agent; a template card received from
+returns `PermissionCard | PolymorphicPermissionCard`, labelled by the host. A template card is a
+`derive` or `deriveScope` parent only while it is in this agent's wallet, where the host resolves
+it for this agent; a template card received from
 another agent returns `not-permitted` there.
 
 ## Grants and bounds
 
 A `PatternGrant` is plain data: `{ class, owner, recipient, verb, resourceId }`, written in the
-manifest as `class(owner) @ recipient : verb : resourceId`. Guest grants must be concrete: no
-`?agent` or `?account` slots.
+manifest as `class(owner) @ recipient : verb : resourceId`.
 
 ```typescript
 const readSecretEnv: permissions.PatternGrant = {
@@ -56,6 +56,19 @@ upperNegative? }`. An omitted list is empty. The meaning depends on the call:
   are the **full requested** lists.
 
 Derive inputs are requests. The host checks them against the parent card or the wallet.
+
+Persistent derivation accepts owner slot variables such as `?agent` and `?env`.
+Slots in resource IDs are not supported and fail with `invalid-pattern`.
+Child slots name the eventual installed holder, not the deriving caller.
+A template parent is still resolved for the
+caller in whose wallet it is installed. Every possible child instantiation must narrow that
+resolved parent. The host stores the original slots; the universal envelope is proof only.
+Explicit derivation inherits the parent's exact denials and adds the requested denials; wallet
+derivation takes complete bounds. Slot-bearing denials cannot prove universal attenuation, so
+the host may conservatively refuse a request; concrete inherited denials remain.
+Scope cards stay concrete: requested slots fail with `invalid-pattern` and an explicit message.
+For a slot-bearing tool owner, the host does not resolve aliases against caller metadata and
+rejects metadata-dependent short flags. Use primary names.
 
 ## Operations
 
@@ -186,6 +199,17 @@ Reflected and dynamic clients take the scope card as a trailing argument:
 default on a client bound to an existing identity.
 
 ## Cards in agent and tool schemas
+
+Narrow a persistent derivation result before sending it through a concrete card schema:
+
+```typescript
+const derived = permissions.deriveFromWallet({ lowerPositive: [readSecretEnv] }).unwrap();
+if (!(derived instanceof permissions.PermissionCard)) {
+  derived.release();
+  throw new Error('expected a concrete card');
+}
+// `derived` now has the type for s.permissionCard({ polymorphic: false }).
+```
 
 Declare a card parameter or result with `s.permissionCard`.
 `s.permissionCard({ polymorphic: false })` carries a `PermissionCard`, and

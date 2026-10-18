@@ -50,7 +50,7 @@ golem agent update 'OrderAgent("order-42")' auto --await
   height={1024}
 />
 
-Replay compares which calls the new code makes, not the data inside them: HTTP requests are matched by method, URL, and headers, and request bodies are not compared. Changing a prompt that is sent in a request body therefore does not by itself make an update fail, and the replayed history keeps the responses the agent actually received. Making different calls, or calls in a different order, during the part of the history being replayed does.
+Replay checks the structural identity of durable host calls, including the host function and its invocation context. For outgoing HTTP, it does not compare the method, URL, headers, or body of a new request with the recorded request. Changing a prompt or a URL therefore does not by itself make an update fail: completed calls still return their recorded responses. A structural mismatch in the calls made during replay can fail the update. Successful replay is not proof that the new code would have made the same HTTP requests.
 
 A failed update does not break the agent: it keeps running on its old version, and new agents start on the new version. For agents that live a long time while their code changes often, enable snapshots on the agent type. An automatic update then only replays the history after the latest snapshot, so only recent activity has to match the new code. In TypeScript, a snapshot can be generated automatically from a schema of the agent's state; you can also write your own save and load functions. For changes to the shape of an agent's state, use a manual update.
 
