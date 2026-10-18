@@ -112,6 +112,15 @@ struct ReportedLeader {
     forgotten: bool,
 }
 
+#[derive(Default)]
+struct LeaderState {
+    /// The leader that the last answer named, until a call to it fails.
+    leader: Option<LeaderAddress>,
+    /// The leader last reported at info level, so that a failover, which forgets and learns the
+    /// same leader again on every pass, logs one line per change instead of one per pass.
+    reported: Option<ReportedLeader>,
+}
+
 /// The outcome of one pass of [`LeaderRouter::call`].
 enum Routed<R> {
     Done(Result<R, Status>),
@@ -154,11 +163,7 @@ pub(crate) struct LeaderRouter {
     configured: GrpcClient<Client>,
     /// Direct connections to the leader that a replica named.
     leaders: MultiTargetGrpcClient<Client>,
-    /// The leader that the last answer named, until a call to it fails.
-    leader: Arc<Mutex<Option<LeaderAddress>>>,
-    /// The leader last reported at info level, so that a failover, which forgets and learns the
-    /// same leader again on every pass, logs one line per change instead of one per pass.
-    reported: Arc<Mutex<Option<ReportedLeader>>>,
+    state: Arc<Mutex<LeaderState>>,
     tls: bool,
     /// The budget for waiting out a leader that the replicas name but nobody can reach.
     retries_on_unavailable: RetryConfig,
@@ -180,8 +185,7 @@ impl LeaderRouter {
                 leader_client_config(config),
             )
             .with_redirect(is_not_leader),
-            leader: Arc::new(Mutex::new(None)),
-            reported: Arc::new(Mutex::new(None)),
+            state: Arc::new(Mutex::new(LeaderState::default())),
             tls: config.client_config.tls_enabled(),
             retries_on_unavailable: config.client_config.retries_on_unavailable.clone(),
         }
@@ -347,32 +351,31 @@ impl LeaderRouter {
     }
 
     fn known_leader(&self) -> Option<LeaderAddress> {
-        self.leader
+        self.state
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+            .leader
             .clone()
     }
 
     fn remember_leader(&self, leader: LeaderAddress) {
-        let mut known = self.leader.lock().unwrap_or_else(PoisonError::into_inner);
-        let mut reported = self.reported.lock().unwrap_or_else(PoisonError::into_inner);
-        if reported.as_ref().map(|r| &r.address) != Some(&leader) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.reported.as_ref().map(|r| &r.address) != Some(&leader) {
             info!(leader = %leader, "Calling a newly named shard manager leader");
-            *reported = Some(ReportedLeader {
+            state.reported = Some(ReportedLeader {
                 address: leader.clone(),
                 forgotten: false,
             });
         }
-        *known = Some(leader);
+        state.leader = Some(leader);
     }
 
     /// Only while it is still the one that failed: a concurrent call may have learned a newer one.
     fn forget_leader(&self, leader: &LeaderAddress, cause: &Status) {
-        let mut known = self.leader.lock().unwrap_or_else(PoisonError::into_inner);
-        if known.as_ref() == Some(leader) {
-            let mut reported = self.reported.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.leader.as_ref() == Some(leader) {
             // A failover forgets the same leader on every pass; only the first loss is news.
-            let first_loss = match reported.as_mut() {
+            let first_loss = match state.reported.as_mut() {
                 Some(r) if &r.address == leader && !r.forgotten => {
                     r.forgotten = true;
                     true
@@ -394,7 +397,7 @@ impl LeaderRouter {
                     "No longer calling this shard manager leader"
                 );
             }
-            *known = None;
+            state.leader = None;
         }
     }
 }
