@@ -4,7 +4,6 @@ export default {
   "golem-quota-go": "Adding Resource Quotas to an Agent (Go)",
   "golem-add-secret-go": "Adding Secrets to a Go Agent",
   "golem-add-config-go": "Adding Typed Configuration to a Go Agent",
-  "golem-atomic-block-go": "Atomic Regions and Durability Controls (Go)",
   "golem-call-tool-go": "Call a Golem Tool from Go",
   "golem-agent-reflection-go": "Calling Agents with Runtime Reflection (Go)",
   "golem-call-another-agent-go": "Calling Another Agent (RPC) in Go",

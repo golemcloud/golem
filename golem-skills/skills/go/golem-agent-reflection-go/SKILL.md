@@ -88,9 +88,12 @@ if !known {
 }
 input := add.Input()                              // a schema.Ref of the parameter record
 fmt.Println(golem.Must(input.ToJSONSchema(true))) // e.g. for an LLM
+if output, hasOutput := add.Output().Get(); hasOutput {
+	fmt.Println(golem.Must(output.ToJSONSchema(true)))
+}
 ```
 
-`Input()` is the parameter record (without host-filled fields such as the principal) and `Output()` the result type, `golem.None` when there is none; both are `schema.Ref`s from `github.com/golemcloud/golem/sdks/go/core/schema`, which pack and unpack canonical JSON and render JSON Schema. `Constructor().Input()` describes the constructor the same way. A discovery miss (not deployed, not visible to the caller) reports `false`. A snapshot never refreshes itself; discover again when a newer deployment matters.
+`Input()` returns a `schema.Ref` for the parameter record (without host-filled fields such as the principal). `Output()` returns a `golem.Option[schema.Ref]`: `golem.None[schema.Ref]()` when there is no result. Use `Get()` and check its boolean before accessing the result schema. A `schema.Ref` from `github.com/golemcloud/golem/sdks/go/core/schema` packs and unpacks canonical JSON and renders JSON Schema. `Constructor().Input()` describes the constructor the same way. A discovery miss (not deployed, not visible to the caller) reports `false`. A snapshot never refreshes itself; discover again when a newer deployment matters.
 
 ## Call a Discovered Agent
 

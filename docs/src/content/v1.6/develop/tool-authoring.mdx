@@ -181,17 +181,23 @@ Callers that are not a shell supply no variables: `golem tool invoke`, generated
 
 ## Call through a typed client
 
-Definition-owned clients preserve the command tree and schemas. TypeScript uses `definition.client()`, Effect uses `Tool.client(definition)`, and the Rust, Scala, MoonBit, and Go code generators project equivalent clients. For a tool implemented in another component or language, add it to bridge generation:
+For an existing built-in tool or MCP import, use [Generate typed clients for existing tools](/v1.6/how-to-guides/common/golem-generating-tool-clients). The guide selects metadata from a release or import, generates the client with `golem build`, and shows how to import and call it. Do not manually reconstruct the existing tool's schema. Generation and deployment bindings are separate: generating a client does not authorize its calls.
+
+Definition-owned clients preserve the command tree and schemas. TypeScript uses `definition.client()`, Effect uses `Tool.client(definition)`, and the Rust, Scala, MoonBit, and Go code generators project equivalent clients. For a tool implemented in another component, add it to the consumer's tool dependencies:
 
 ```yaml filename="golem.yaml"
-bridge:
-  ts:
-    internal:
+components:
+  acme:assistant:
+    # Keep the component's existing dir, templates and build settings.
+    dependencies:
       tools: [files]
-  rust:
-    internal:
-      tools: [files]
+    tools:
+      files: {}
 ```
+
+`golem build` selects the consumer's language, not the provider's language. The
+complete local declaration and binding appear in [Declare and bind](#declare-and-bind).
+Use an explicit bridge selection only for a separate language or output target.
 
 Generated clients call the canonical name through `tool-rpc`; they do not embed a component ID, MCP endpoint, host-native implementation ID, or credential.
 
@@ -255,6 +261,13 @@ agents:
 Bindings expose a tool; permission cards authorize calls. Component bindings provide defaults that agent entries can override, replace, or remove. Readable configuration and secret scopes intersect across retained layers and between environment and owner bindings; revealable secrets are also limited to readable secrets. Filesystem access uses the last explicit cascade value, with denial taking precedence when environment and owner bindings are combined. `toolsMergeMode` can `upsert`, `replace`, or `remove` inherited bindings. Middleware order is environment-wide middleware, then the merged per-tool list (universal or monomorphic), then the leaf tool; `middlewareMergeMode` is `prepend` (the default), `append`, or `replace` and changes only the per-tool list.
 
 The example assumes that the `audit` middleware is declared separately under `tools.middleware`.
+
+`dependencies.tools: [files]` automatically generates the client in the consumer's
+language during `golem build`, after the local provider builds. No explicit bridge
+selection is needed. The separate `tools.files` binding exposes the tool at runtime;
+a dependency does not add a binding, and a binding alone does not generate a client.
+For a tool defined in the same component, use the language SDK's definition-owned
+client instead of a guest-bridge self-dependency.
 
 See [Application Manifest](/v1.6/app-manifest) for every field, merge rule, and validation mode.
 

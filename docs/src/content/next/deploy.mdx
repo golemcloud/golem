@@ -66,7 +66,9 @@ See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-re
 
 ### Worker Service
 
-[golem-worker-service](https://github.com/golemcloud/golem/tree/main/golem-worker-service) provides APIs and [HTTP gateway](/next/operate/architecture#the-gateway) functionality for agents and acts as a routing service for worker executors. It retrieves gateway definitions from the registry service, uses blob storage for initial agent files, and stores gateway sessions in Redis or SQLite.
+[golem-worker-service](https://github.com/golemcloud/golem/tree/main/golem-worker-service) provides APIs and [HTTP gateway](/next/operate/architecture#the-gateway) functionality for agents and acts as a routing service for worker executors. It retrieves gateway definitions from the registry service, uses blob storage for initial agent files, and stores gateway sessions in Redis, SQLite, or PostgreSQL.
+
+To use PostgreSQL for gateway sessions, set `gateway_session_storage.type = "Postgres"` in the worker service configuration. Under `gateway_session_storage.config`, set `host`, `port`, `database`, `username`, `password`, `max_connections`, `pending_login_expiration`, and `cleanup_interval`. The optional `schema` defaults to `golem_worker_service_session_store`, separate from other services' migration tables. For the single executable, nest these settings under `worker_service`; supply the password through `GOLEM__WORKER_SERVICE__GATEWAY_SESSION_STORAGE__CONFIG__PASSWORD` rather than checking it into a configuration file.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-worker-service/config/worker-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-worker-service/config/worker-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-worker-service)
 

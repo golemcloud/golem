@@ -110,19 +110,19 @@ the status is `500`. From Golem's durability point of view, the recorded oplog e
 contains the `500` response, and any subsequent application-level failure derived from the
 status is a separate failure *after* the side effect.
 
-There are two ways to make Golem retry the HTTP call itself when a non-2xx response arrives.
+Use a host retry policy to retry the HTTP call itself when a selected status arrives.
 
 ### Preferred: a `status-code`-keyed retry policy
 
 Define a named retry policy whose predicate explicitly references `status-code`. When the
-response arrives the host transparently re-sends the request — no `Guards.atomically` and no
-application-level throw needed. The resolved response is the *last* attempt. See the
+response arrives the host transparently re-sends the request without an application-level throw.
+The resolved response is the *last* attempt. See the
 [`golem-retry-policies-scala`](/v1.6/how-to-guides/scala/golem-retry-policies-scala) skill for the policy YAML / SDK shape.
 
-> **POST/PUT/PATCH work out of the box.** Idempotence mode defaults to `true`, so a plain `POST
-> /charge` with a body is already eligible for status-code retry — there is **no** need to wrap
-> the call in `Guards.withIdempotenceMode(true) { ... }`. See [`golem-atomic-block-scala`](/v1.6/how-to-guides/scala/golem-atomic-block-scala) for
-> details on when (rarely) to opt out with `Guards.withIdempotenceMode(false) { ... }`.
+> **POST/PUT/PATCH are eligible for retry.** The guest cannot opt out with an idempotence-mode
+> switch. Make writes duplicate-safe at the peer: exactly-once processing requires the peer to
+> enforce an idempotency key. A lost response does not prove the write failed. Do not predicate
+> retry policies on `is-idempotent`; the host no longer supplies that property.
 
 Minimal POST example — the policy is defined once (in `golem.yaml` or via the SDK) and the call
 site is just a plain HTTP call:
@@ -143,7 +143,7 @@ http-5xx-retry:
 ```
 
 ```scala
-// Plain POST — no Guards.atomically, no Guards.withIdempotenceMode wrapper.
+// The host applies the configured status-code policy.
 val options = js.Dynamic.literal(
   method = "POST",
   headers = js.Dynamic.literal("Content-Type" -> "application/json"),
@@ -164,13 +164,12 @@ If status retry "doesn't seem to work", See the [`golem-local-dev-server`](/v1.6
 `HTTP status retry skipped, reason: …` debug line — it pinpoints why a particular request was
 not retried (e.g. `BodyNotFinished`, `NotIdempotent`, `NoRetry`).
 
-### Fallback: `Guards.atomically`
+### Application-level retry
 
-When the retry trigger is application-level (e.g. retrying based on a parsed body field, or
-combining multiple side effects into one logical step), wrap the **entire** request,
-response-body read, and status check in `Guards.atomically { ... }`. The failed atomic block is
-not committed, so recovery re-executes the request instead of replaying the recorded failed
-response. See [`golem-atomic-block-scala`](/v1.6/how-to-guides/scala/golem-atomic-block-scala).
+Use explicit guest control flow or an SDK saga when the decision depends on decoded content.
+Each new attempt appends new calls and retains earlier responses. Throwing after a response
+fails the invocation without retrying the completed request. Host transport and body-resumption
+retries remain host responsibilities.
 
 ## Complete Example in an Agent
 
@@ -212,7 +211,7 @@ final class WeatherAgentImpl(private val city: String) extends WeatherAgent {
 
 ## Calling Golem Agent HTTP Endpoints
 
-When making HTTP requests to other Golem agent endpoints (or your own), the request body must match the **Golem HTTP body mapping convention**: non-binary body parameters are always deserialized from a **JSON object** where each top-level field corresponds to a method parameter name. This is true even when the endpoint has a single body parameter.
+When making HTTP requests to other Golem agent endpoints (or your own), ordinary structured body parameters are deserialized from a **JSON object** with body parameter names as top-level fields. Include only parameters not bound to path/query/header values. A single object parameter named `payload` needs `{"payload": {"name": "Widget", "count": 5}}`, not the bare inner object. Unstructured text and binary parameters instead consume the raw body without this wrapper.
 
 For example, given this endpoint definition:
 
@@ -241,7 +240,7 @@ val options = js.Dynamic.literal(
 )
 ```
 
-> **Rule of thumb:** If the target endpoint is a Golem agent, always send `application/json` with parameter names as JSON keys. See the [`golem-http-params-scala`](/v1.6/how-to-guides/scala/golem-http-params-scala) skill for the full body mapping rules.
+> **Rule of thumb:** For structured Golem agent bodies, send `application/json` with body parameter names as JSON keys. For unstructured text, send raw UTF-8 text with `text/plain`; for unstructured binary, send raw bytes with the appropriate MIME type. Load [`golem-http-params-scala`](/v1.6/how-to-guides/scala/golem-http-params-scala) for the restrictions and the separate CLI positional/native-literal rules; do not reuse the HTTP wrapper for CLI arguments.
 
 ## Key Constraints
 
