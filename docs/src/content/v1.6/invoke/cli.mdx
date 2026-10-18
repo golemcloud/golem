@@ -39,7 +39,7 @@ The following examples show method declarations and the corresponding CLI method
 <Tabs items={["TypeScript", "Effect", "Rust", "Scala", "MoonBit", "Go"]}>
 <Tabs.Tab>
 
-| Method | Input schema | CLI method and arguments |
+| Method | Input declaration | CLI method and arguments |
 |--------|--------------|--------------------------|
 | `prompt` | `input: { text: z.string() }` | `prompt '"hello"'` |
 | `submit` | `input: { request: z.object({ text: z.string() }) }` | `submit '{ text: "hello" }'` |
@@ -51,7 +51,7 @@ Object field names must be unquoted: use `{ text: "hello" }`, not `{"text": "hel
 </Tabs.Tab>
 <Tabs.Tab>
 
-| Method | Input schema | CLI method and arguments |
+| Method | Input declaration | CLI method and arguments |
 |--------|--------------|--------------------------|
 | `prompt` | `input: { text: Schema.String }` | `prompt '"hello"'` |
 | `submit` | `input: { request: Schema.Struct({ text: Schema.String }) }` | `submit '{ text: "hello" }'` |
@@ -63,43 +63,43 @@ Effect agents use TypeScript value syntax, including unquoted object field names
 </Tabs.Tab>
 <Tabs.Tab>
 
-| Method signature | CLI method and arguments |
-|------------------|--------------------------|
-| `fn prompt(&self, text: String)` | `prompt '"hello"'` |
-| `fn submit(&self, request: Request)` with `struct Request { text: String }` | `submit 'Request { text: "hello" }'` |
-| `fn process_order(&self, order_id: String, quantity: u32)` | `process_order '"order-456"' 42` |
-| `fn history(&self)` | `history` |
+| Method | Input declaration | CLI method and arguments |
+|--------|-------------------|--------------------------|
+| `prompt` | `fn prompt(&self, text: String)` | `prompt '"hello"'` |
+| `submit` | `fn submit(&self, request: Request)` with `struct Request { text: String }` | `submit 'Request { text: "hello" }'` |
+| `process_order` | `fn process_order(&self, order_id: String, quantity: u32)` | `process_order '"order-456"' 42` |
+| `history` | `fn history(&self)` | `history` |
 
 See the [Rust invocation guide](/v1.6/how-to-guides/rust/golem-invoke-agent-rust) for other value types.
 
 </Tabs.Tab>
 <Tabs.Tab>
 
-| Method signature | CLI method and arguments |
-|------------------|--------------------------|
-| `def prompt(text: String): Future[Unit]` | `prompt '"hello"'` |
-| `def submit(request: Request): Future[Unit]` with `case class Request(text: String)` | `submit 'Request(text = "hello")'` |
-| `def processOrder(orderId: String, quantity: Int): Future[Unit]` | `processOrder '"order-456"' 42` |
-| `def history(): Future[Unit]` | `history` |
+| Method | Input declaration | CLI method and arguments |
+|--------|-------------------|--------------------------|
+| `prompt` | `def prompt(text: String): Future[Unit]` | `prompt '"hello"'` |
+| `submit` | `def submit(request: Request): Future[Unit]` with `case class Request(text: String)` | `submit 'Request(text = "hello")'` |
+| `processOrder` | `def processOrder(orderId: String, quantity: Int): Future[Unit]` | `processOrder '"order-456"' 42` |
+| `history` | `def history(): Future[Unit]` | `history` |
 
 See the [Scala invocation guide](/v1.6/how-to-guides/scala/golem-invoke-agent-scala) for other value types.
 
 </Tabs.Tab>
 <Tabs.Tab>
 
-| Method signature | CLI method and arguments |
-|------------------|--------------------------|
-| `pub fn MyAgent::prompt(self : Self, text : String) -> Unit` | `prompt '"hello"'` |
-| `pub fn MyAgent::submit(self : Self, request : Request) -> Unit` with `struct Request { text : String }` | `submit 'Request::{ text: "hello" }'` |
-| `pub fn MyAgent::process_order(self : Self, order_id : String, quantity : UInt) -> Unit` | `process_order '"order-456"' 42` |
-| `pub fn MyAgent::history(self : Self) -> Unit` | `history` |
+| Method | Input declaration | CLI method and arguments |
+|--------|-------------------|--------------------------|
+| `prompt` | `pub fn MyAgent::prompt(self : Self, text : String) -> Unit` | `prompt '"hello"'` |
+| `submit` | `pub fn MyAgent::submit(self : Self, request : Request) -> Unit` with `struct Request { text : String }` | `submit 'Request::{ text: "hello" }'` |
+| `process_order` | `pub fn MyAgent::process_order(self : Self, order_id : String, quantity : UInt) -> Unit` | `process_order '"order-456"' 42` |
+| `history` | `pub fn MyAgent::history(self : Self) -> Unit` | `history` |
 
 See the [MoonBit invocation guide](/v1.6/how-to-guides/moonbit/golem-invoke-agent-moonbit) for other value types.
 
 </Tabs.Tab>
 <Tabs.Tab>
 
-| Method | Input struct | CLI method and arguments |
+| Method | Input declaration | CLI method and arguments |
 |--------|--------------|--------------------------|
 | `prompt` | `struct { Text string }` | `prompt '"hello"'` |
 | `submit` | `struct { Request struct { Text string } }` | `submit '{text: "hello"}'` |
@@ -115,13 +115,62 @@ Quote each native literal as one shell argument. For example, `'"hello"'` preser
 
 [Custom HTTP endpoints](/v1.6/invoke/making-custom-apis) use a different input convention: structured JSON bodies contain named body parameters. A single `request` parameter containing a `text` field needs `{"request": {"text": "hello"}}`. Path/query/header parameters are not body fields, and unstructured text and binary parameters use raw bodies. Do not reuse the HTTP body wrapper for CLI arguments.
 
-The [Type Mapping](/v1.6/type-mapping) page describes REST JSON values, not CLI native literals. `--format json` selects output formatting; it does not change input encoding.
+The [Type Mapping](/v1.6/type-mapping) page describes schema-directed JSON values, not CLI native literals or the raw REST wire form. `--format json` selects output formatting; it does not change input encoding.
 
 ## Getting results
 
-When using `invoke` without the `--trigger` flag, the CLI awaits the result of the invocation and prints the result value to the standard output. By default it uses the `text` format, in which case it prints the result value using the source language syntax of the invoked agent (for example `Invocation result in TypeScript syntax:` followed by the value).
+For methods without streams, when using `invoke` without the `--trigger` flag, the CLI awaits the result of the invocation and prints the result value to the standard output. By default it uses the `text` format, in which case it prints the result value using the source language syntax of the invoked agent (for example `Invocation result in TypeScript syntax:` followed by the value).
 
-This can be changed with `--format json` or `--format yaml` to print the invocation result in JSON or YAML, using the [mapping described on Type Mapping page](/v1.6/type-mapping).
+Use `--format json` or `--format yaml` for structured output. The output includes the idempotency key, the typed result in `resultJson` (its schema graph and value), and the source-language rendering in `result` with its `resultFormat`. This is a CLI output envelope, not the bare canonical value described on the [Type Mapping page](/v1.6/type-mapping). Methods with no result omit the result fields.
+
+## Streaming methods
+
+Use `-` for exactly one direct stream input. The default `value` stdin format parses one source-language value per line; `value` stdout emits a sequence of structured lifecycle documents:
+
+```shell
+# JSON/value stdin and stdout for stream<string>.
+printf '"first"\n"second"\n' |
+  golem agent invoke 'MediaAgent("studio-a")' index_words - \
+    --stdin-format value --stdout-format value --format json
+```
+
+Raw mode is restricted to one direct `stream<u8>` or `stream<binary>` input or output. It avoids JSON encoding, making it suitable for multi-megabyte audio and video:
+
+```shell
+# Raw binary stdin to a direct stream<binary> parameter.
+golem agent invoke 'MediaAgent("studio-a")' upload_video - \
+  --stdin-format raw < recording.mp4
+
+# Raw binary stdout from one direct stream<u8> or stream<binary> result.
+golem agent invoke 'MediaAgent("studio-a")' render_audio \
+  --stdout-format raw > soundtrack.aac
+```
+
+For `stream<binary>`, raw stdin forms fixed 64 KiB logical items except for the final shorter item. For `stream<u8>`, each byte is an item. Raw stdout contains only bytes, so diagnostics remain off stdout. These method data streams are separate from the agent's log channels described below.
+
+### Session checkpoints and resume
+
+`--save-session` atomically records the session identity, pending operation, and delivered output cursors, but not credentials or stream values:
+
+```shell
+# Start and continuously checkpoint.
+golem agent invoke 'MediaAgent("studio-a")' render_audio \
+  --stdout-format raw --save-session render-session.json > soundtrack.aac
+
+# Resume only after the previous transport detached.
+golem agent invoke 'MediaAgent("studio-a")' render_audio \
+  --stdout-format raw --resume-session render-session.json >> soundtrack.aac
+
+# Or explicitly fence a transport that may still be attached.
+golem agent invoke 'MediaAgent("studio-a")' render_audio \
+  --stdout-format raw --takeover-session render-session.json >> soundtrack.aac
+```
+
+The CLI does not retry automatically. On resumed input, stdin begins after the server's durable input high-water mark; bytes that had not reached that durable point before the previous process exited cannot be recovered from the checkpoint. Keep checkpoint files private.
+
+Output delivery across a reconnect is at least once. An item written before a crash can be repeated if its cursor was not saved. Deduplicate output before applying external side effects.
+
+See the [checkpoint format](/v1.6/stream-session-public-protocol-v1#13-checkpoint-v1) for persistence details and [Operating Durable Stream Sessions](/v1.6/operate/durable_streams) for service limits and operational recovery.
 
 ## Logs
 

@@ -42,7 +42,7 @@ import {
   HttpClient,
   HttpClientRequest,
   HttpClientResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 import { defineAgent, Http, method, Webhook } from "@golemcloud/effect-golem";
 ```
 
