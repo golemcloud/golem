@@ -83,13 +83,10 @@ impl MonthlyStopOwner {
         proposed: MonthlyCapacity,
         interrupts: &mut super::super::interrupt::InterruptGuard<'_>,
     ) -> Option<PendingWorkerInterrupt> {
-        if !self.target.matches_current(
-            self.fingerprint,
-            self.start_attempt,
-            self.generation,
-            true,
-            &self.current,
-        ) || !*self.target.active.lock().unwrap()
+        if !self
+            .target
+            .matches_current(self.start_attempt, true, &self.current)
+            || !*self.target.active.lock().unwrap()
         {
             return None;
         }
@@ -542,13 +539,11 @@ async fn captured_exhausted_proposal_is_rejected_after_other_store_refund_with_s
         caller.current.lock().unwrap().as_ref().unwrap(),
         &window
     ));
-    assert!(caller.target.matches_current(
-        caller.fingerprint,
-        caller.start_attempt,
-        caller.generation,
-        true,
-        &caller.current
-    ));
+    assert!(
+        caller
+            .target
+            .matches_current(caller.start_attempt, true, &caller.current)
+    );
     let mut guard = caller.interrupts.lock().await;
     assert!(caller.register(proposed, &mut guard).is_none());
     assert!(!guard.has_interrupt());
@@ -574,32 +569,8 @@ async fn monthly_target_identity_mismatch_does_not_read_current_window() {
         })
         .is_err()
     );
-    for (fingerprint, attempt, generation, held) in [
-        (
-            AgentFingerprint::new(),
-            owner.start_attempt,
-            owner.generation,
-            true,
-        ),
-        (owner.fingerprint, Uuid::new_v4(), owner.generation, true),
-        (
-            owner.fingerprint,
-            owner.start_attempt,
-            owner.generation + 1,
-            true,
-        ),
-        (
-            owner.fingerprint,
-            owner.start_attempt,
-            owner.generation,
-            false,
-        ),
-    ] {
-        assert!(
-            !owner
-                .target
-                .matches_current(fingerprint, attempt, generation, held, &poisoned)
-        );
+    for (attempt, held) in [(Uuid::new_v4(), true), (owner.start_attempt, false)] {
+        assert!(!owner.target.matches_current(attempt, held, &poisoned));
     }
 }
 
@@ -615,11 +586,12 @@ async fn monthly_body_rejects_changed_capacity_inactive_target_and_terminal_clai
     let current = owner.sample();
     assert!(current.exhaustion.is_some());
     let original_tail = owner.tail.lock().unwrap().clone();
-    let mut changes = [current; 4];
+    let mut changes = [current; 5];
     changes[0].policy_revision += 1;
     changes[1].period.year += 1;
     changes[2].fuel_generation = Some(99);
     changes[3].exhaustion = None;
+    changes[4].policy_status = golem_service_base::model::MonthlyResourcePolicyStatus::Unavailable;
     for proposed in changes {
         assert!(owner.register(proposed, &mut guard).is_none());
         assert!(!guard.has_interrupt());
@@ -864,13 +836,7 @@ async fn same_revision_memory_credit_rejects_captured_exhaustion_without_stop() 
     ));
     assert!(Arc::ptr_eq(&owner.target, &window));
     assert!(*window.active.lock().unwrap());
-    assert!(window.matches_current(
-        owner.fingerprint,
-        owner.start_attempt,
-        owner.generation,
-        true,
-        &owner.current
-    ));
+    assert!(window.matches_current(owner.start_attempt, true, &owner.current));
     let original_tail = owner.tail.lock().unwrap().clone();
     let mut guard = owner.interrupts.lock().await;
     assert!(
@@ -891,22 +857,31 @@ async fn replaced_monthly_target_cannot_match_otherwise_equal_capacity() {
     policy.available_memory_gb_seconds = 0;
     assert!(entry.apply_monthly_snapshot_for_test(1, policy, 0));
     let proposed = owner.sample();
-    let generation = std::sync::atomic::AtomicU64::new(owner.generation);
     let running = super::super::lifecycle_tests::running_lifecycle(
         owner.interrupts.clone(),
         owner.start_attempt,
         true,
     );
-    assert!(owner.target.matches_running_owner(
-        &running,
-        owner.fingerprint,
-        &generation,
-        &owner.current
-    ));
+    assert!(owner.target.matches_running_owner(&running, &owner.current));
+    // A retry can keep its start attempt. Window identity must reject the queued sample
+    // even before the old monitor is deactivated and with unchanged exhausted capacity.
+    let retry = target(owner.fingerprint, owner.start_attempt, owner.generation + 1);
+    *owner.current.lock().unwrap() = Some(retry.clone());
+    assert!(*owner.target.active.lock().unwrap());
+    assert_eq!(owner.sample(), proposed);
+    assert!(!owner.target.matches_running_owner(&running, &owner.current));
+    assert!(retry.matches_running_owner(&running, &owner.current));
+    let original_tail = owner.tail.lock().unwrap().clone();
+    {
+        let mut guard = owner.interrupts.lock().await;
+        assert!(owner.register(proposed, &mut guard).is_none());
+        assert!(!guard.has_interrupt());
+    }
+    assert!(owner.monthly.lock().unwrap().is_none());
+    assert!(Arc::ptr_eq(&original_tail, &owner.tail.lock().unwrap()));
     let replacement = target(owner.fingerprint, Uuid::new_v4(), owner.generation + 1);
     *owner.current.lock().unwrap() = Some(replacement.clone());
     *owner.target.active.lock().unwrap() = false;
-    let generation = std::sync::atomic::AtomicU64::new(replacement.resident_generation);
     let running = super::super::lifecycle_tests::running_lifecycle(
         owner.interrupts.clone(),
         replacement.start_attempt,
@@ -917,18 +892,8 @@ async fn replaced_monthly_target_cannot_match_otherwise_equal_capacity() {
     assert_ne!(replacement.start_attempt, owner.start_attempt);
     assert!(replacement.resident_generation > owner.generation);
     assert!(!Arc::ptr_eq(&owner.target, &replacement));
-    assert!(!owner.target.matches_running_owner(
-        &running,
-        owner.fingerprint,
-        &generation,
-        &owner.current
-    ));
-    assert!(replacement.matches_running_owner(
-        &running,
-        owner.fingerprint,
-        &generation,
-        &owner.current
-    ));
+    assert!(!owner.target.matches_running_owner(&running, &owner.current));
+    assert!(replacement.matches_running_owner(&running, &owner.current));
     let equal_fields = target(
         replacement.fingerprint,
         replacement.start_attempt,
@@ -936,18 +901,8 @@ async fn replaced_monthly_target_cannot_match_otherwise_equal_capacity() {
     );
     *owner.current.lock().unwrap() = Some(equal_fields.clone());
     assert_eq!(owner.sample(), proposed);
-    assert!(!replacement.matches_running_owner(
-        &running,
-        owner.fingerprint,
-        &generation,
-        &owner.current
-    ));
-    assert!(equal_fields.matches_running_owner(
-        &running,
-        owner.fingerprint,
-        &generation,
-        &owner.current
-    ));
+    assert!(!replacement.matches_running_owner(&running, &owner.current));
+    assert!(equal_fields.matches_running_owner(&running, &owner.current));
     assert!(!owner.interrupts.has_interrupt().await);
     assert!(owner.monthly.lock().unwrap().is_none());
 }
@@ -999,26 +954,19 @@ async fn monthly_running_owner_guard_rejects_non_running_lifecycle() {
     policy.available_memory_gb_seconds = 0;
     assert!(entry.apply_monthly_snapshot_for_test(1, policy, 0));
     assert!(owner.sample().exhaustion.is_some());
-    let generation = std::sync::atomic::AtomicU64::new(owner.generation);
     let running = super::super::lifecycle_tests::running_lifecycle(
         owner.interrupts.clone(),
         owner.start_attempt,
         true,
     );
-    assert!(owner.target.matches_running_owner(
-        &running,
-        owner.fingerprint,
-        &generation,
-        &owner.current
-    ));
+    assert!(owner.target.matches_running_owner(&running, &owner.current));
     let (lifecycles, _pending) = non_running_monthly_lifecycles(running, owner.start_attempt);
     for lifecycle in lifecycles {
-        assert!(!owner.target.matches_running_owner(
-            &lifecycle,
-            owner.fingerprint,
-            &generation,
-            &owner.current
-        ));
+        assert!(
+            !owner
+                .target
+                .matches_running_owner(&lifecycle, &owner.current)
+        );
         assert!(!owner.interrupts.has_interrupt().await);
         assert!(owner.monthly.lock().unwrap().is_none());
     }
@@ -1036,7 +984,6 @@ async fn monthly_running_owner_guard_skips_current_window_for_non_running_lifecy
         })
         .is_err()
     );
-    let generation = std::sync::atomic::AtomicU64::new(owner.generation);
     let running = super::super::lifecycle_tests::running_lifecycle(
         owner.interrupts.clone(),
         owner.start_attempt,
@@ -1044,31 +991,20 @@ async fn monthly_running_owner_guard_skips_current_window_for_non_running_lifecy
     );
     let (lifecycles, _pending) = non_running_monthly_lifecycles(running, owner.start_attempt);
     for lifecycle in lifecycles {
-        assert!(!owner.target.matches_running_owner(
-            &lifecycle,
-            owner.fingerprint,
-            &generation,
-            &poisoned
-        ));
+        assert!(!owner.target.matches_running_owner(&lifecycle, &poisoned));
     }
 }
 
 #[test]
 #[timeout("5s")]
-async fn monthly_running_owner_guard_checks_identity_generation_permit_and_target() {
+async fn monthly_running_owner_guard_checks_start_permit_and_target() {
     let (_entry, owner, _other) = prepaid_stop_owners().await;
-    let generation = std::sync::atomic::AtomicU64::new(owner.generation);
     let running = super::super::lifecycle_tests::running_lifecycle(
         owner.interrupts.clone(),
         owner.start_attempt,
         true,
     );
-    assert!(owner.target.matches_running_owner(
-        &running,
-        owner.fingerprint,
-        &generation,
-        &owner.current
-    ));
+    assert!(owner.target.matches_running_owner(&running, &owner.current));
     let poisoned = Mutex::new(Some(owner.target.clone()));
     assert!(
         std::panic::catch_unwind(|| {
@@ -1077,27 +1013,7 @@ async fn monthly_running_owner_guard_checks_identity_generation_permit_and_targe
         })
         .is_err()
     );
-    for (fingerprint, attempt, generation, held) in [
-        (
-            AgentFingerprint::new(),
-            owner.start_attempt,
-            owner.generation,
-            true,
-        ),
-        (owner.fingerprint, Uuid::new_v4(), owner.generation, true),
-        (
-            owner.fingerprint,
-            owner.start_attempt,
-            owner.generation + 1,
-            true,
-        ),
-        (
-            owner.fingerprint,
-            owner.start_attempt,
-            owner.generation,
-            false,
-        ),
-    ] {
+    for (attempt, held) in [(Uuid::new_v4(), true), (owner.start_attempt, false)] {
         let lifecycle = super::super::lifecycle_tests::running_lifecycle(
             owner.interrupts.clone(),
             attempt,
@@ -1109,26 +1025,19 @@ async fn monthly_running_owner_guard_checks_identity_generation_permit_and_targe
         inner
             .concurrent_agent_permit_held
             .store(held, Ordering::Release);
-        assert!(!owner.target.matches_running_owner(
-            &lifecycle,
-            fingerprint,
-            &std::sync::atomic::AtomicU64::new(generation),
-            &poisoned
-        ));
+        assert!(!owner.target.matches_running_owner(&lifecycle, &poisoned));
     }
-    assert!(!owner.target.matches_running_owner(
-        &running,
-        owner.fingerprint,
-        &generation,
-        &Mutex::new(None)
-    ));
+    assert!(
+        !owner
+            .target
+            .matches_running_owner(&running, &Mutex::new(None))
+    );
     let equal_fields = target(owner.fingerprint, owner.start_attempt, owner.generation);
-    assert!(!owner.target.matches_running_owner(
-        &running,
-        owner.fingerprint,
-        &generation,
-        &Mutex::new(Some(equal_fields))
-    ));
+    assert!(
+        !owner
+            .target
+            .matches_running_owner(&running, &Mutex::new(Some(equal_fields)))
+    );
     // Keep the real permit alive for the entire identity test.
     drop(owner.permit);
 }

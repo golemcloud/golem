@@ -157,17 +157,13 @@ impl MonthlyWindowTarget {
     fn matches_running_owner(
         self: &Arc<Self>,
         lifecycle: &WorkerInstance,
-        fingerprint: AgentFingerprint,
-        resident_generation: &std::sync::atomic::AtomicU64,
         current: &Mutex<Option<Arc<Self>>>,
     ) -> bool {
         let WorkerInstance::Running(running) = lifecycle else {
             return false;
         };
         self.matches_current(
-            fingerprint,
             running.start_attempt,
-            resident_generation.load(std::sync::atomic::Ordering::Acquire),
             running
                 .concurrent_agent_permit_held
                 .load(std::sync::atomic::Ordering::Acquire),
@@ -177,15 +173,13 @@ impl MonthlyWindowTarget {
 
     fn matches_current(
         self: &Arc<Self>,
-        fingerprint: AgentFingerprint,
         start_attempt: Uuid,
-        resident_generation: u64,
         permit_held: bool,
         current: &Mutex<Option<Arc<Self>>>,
     ) -> bool {
-        self.fingerprint == fingerprint
-            && self.start_attempt == start_attempt
-            && self.resident_generation == resident_generation
+        // The private Worker slot binds the target to its owner. Each new window replaces
+        // the Arc, and closing a window deactivates it before its permit can be reused.
+        self.start_attempt == start_attempt
             && permit_held
             && current
                 .lock()
@@ -938,12 +932,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return false;
         }
         let lifecycle = self.instance.lock().await;
-        if !target.matches_running_owner(
-            &lifecycle,
-            self.initial_worker_metadata.fingerprint,
-            &self.resident_generation,
-            &self.monthly_window,
-        ) {
+        if !target.matches_running_owner(&lifecycle, &self.monthly_window) {
             return false;
         }
         let active = target.active.lock().unwrap();
