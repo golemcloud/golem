@@ -406,18 +406,22 @@ function killSignal(value) {
   return signal;
 }
 
+function validateTimeout(timeout) {
+  if (
+    timeout !== undefined &&
+    (!Number.isSafeInteger(timeout) || timeout < 0)
+  ) {
+    throw new RangeError("timeout must be a non-negative safe integer");
+  }
+}
+
 function spawnTool(host, runtimeProcess, command, args, options) {
   const enabled = runtimeProcess.env.GOLEM_NODE_TOOL_PROCESSES;
   if (enabled === "0" || enabled === "false") return undefined;
   const maxBuffer = options.maxBuffer ?? DEFAULT_MAX_BUFFER;
   if (!Number.isSafeInteger(maxBuffer) || maxBuffer < 0)
     throw new RangeError("maxBuffer must be a non-negative safe integer");
-  if (
-    options.timeout !== undefined &&
-    (!Number.isSafeInteger(options.timeout) || options.timeout < 0)
-  ) {
-    throw new RangeError("timeout must be a non-negative safe integer");
-  }
+  validateTimeout(options.timeout);
   const defaultSignal = killSignal(options.killSignal ?? "SIGTERM");
   const modes = stdioModes(runtimeProcess, options);
   if (
@@ -737,6 +741,7 @@ export function createToolProcessBackend(host, runtimeProcess) {
     spawnSync(command, args, options = {}) {
       const enabled = runtimeProcess.env.GOLEM_NODE_TOOL_PROCESSES;
       if (enabled === "0" || enabled === "false") return undefined;
+      validateTimeout(options.timeout);
       // These cases need the asynchronous/cancellation adapter. Do not silently
       // run a command with an ignored option while that adapter is unavailable.
       if (options.timeout > 0) {

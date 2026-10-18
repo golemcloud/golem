@@ -299,6 +299,18 @@ test("finite input preserves a view slice and the requested string encoding", ()
   );
 });
 
+test("invalid sync deadlines are rejected before tool discovery or admission", () => {
+  const f = fixture();
+  for (const timeout of [-1, 0.5, NaN, Infinity, "1", null, 2 ** 53]) {
+    assert.throws(
+      () => f.backend.spawnSync("tsc", [], { timeout }),
+      RangeError,
+    );
+  }
+  assert.deepEqual(f.calls, []);
+  assert.equal(f.backend.spawnSync("tsc", [], { timeout: 0 }).status, 7);
+});
+
 test("invalid input is rejected before tool discovery or admission", () => {
   const f = fixture();
   assert.throws(() => f.backend.spawnSync("tsc", [], { input: 7 }), TypeError);
