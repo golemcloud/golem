@@ -258,10 +258,15 @@ impl AccountResourceOverrideService {
             plan.max_memory_per_worker_user_configurable,
         );
         if let Some(grant) = admin_grant {
-            limit.effective_value =
-                golem_common::model::account_usage::ResourceLimitValue::from_memory_value(
-                    grant.value,
-                );
+            if let golem_common::model::account_usage::ResourceLimitValue::Finite(base) =
+                limit.effective_value
+            {
+                limit.effective_value =
+                    golem_common::model::account_usage::ResourceLimitValue::from_memory_value(
+                        AccountResourceOverrideDimension::MaxMemoryPerWorker
+                            .resolve_grant_value(base.value, Some(grant.value)),
+                    );
+            }
             limit.active_admin_grant = Some(grant);
         }
         Ok(limit)
@@ -300,10 +305,14 @@ impl AccountResourceOverrideService {
         if plan.max_disk_space_per_worker_enabled
             && let Some(grant) = admin_grant
         {
-            limit.effective_value =
-                golem_common::model::account_usage::StorageResourceLimitValue::from_storage_value(
-                    grant.value,
-                );
+            if let golem_common::model::account_usage::StorageResourceLimitValue::Finite(base) =
+                limit.effective_value
+            {
+                limit.effective_value =
+                    golem_common::model::account_usage::StorageResourceLimitValue::from_storage_value(
+                        AccountResourceOverrideDimension::MaxDiskSpacePerWorker.resolve_grant_value(base.value, Some(grant.value)),
+                    );
+            }
             limit.active_admin_grant = Some(grant);
         }
         Ok(limit)

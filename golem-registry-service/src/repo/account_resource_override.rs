@@ -1084,7 +1084,10 @@ impl DbAccountResourceOverrideRepo<PostgresPool> {
         {
             return Err(AdminResourceGrantRepoError::ValueOverflow);
         }
-        if value <= current {
+        if value <= current
+            || (policy.dimension == AccountResourceOverrideDimension::MaxMemoryPerWorker
+                && is_unlimited_memory(current))
+        {
             return Err(AdminResourceGrantRepoError::DoesNotIncreaseResolvedValue {
                 value,
                 current,
@@ -1269,7 +1272,7 @@ impl AccountResourceOverrideRepo for DbAccountResourceOverrideRepo<PostgresPool>
                     Self::validate_admin_grant(
                         policy,
                         value,
-                        old_value,
+                        dimension.resolve_grant_value(fallback, Some(old_value)),
                         reason,
                         expires_at.as_ref(),
                         &now,
@@ -1552,6 +1555,22 @@ mod tests {
             OverridePolicy::storage(false, 10, 20, true).fallback_value(Some(15)),
             EFFECTIVELY_UNLIMITED_STORAGE_LIMIT
         );
+    }
+
+    #[test]
+    fn finite_admin_grant_cannot_reduce_unlimited_memory() {
+        let now = SqlDateTime::now();
+        assert!(matches!(
+            DbAccountResourceOverrideRepo::<SqlitePool>::validate_admin_grant(
+                policy(true, true),
+                EFFECTIVELY_UNLIMITED_MEMORY_LIMIT + 1,
+                EFFECTIVELY_UNLIMITED_MEMORY_LIMIT,
+                AdminResourceGrantReason::Support,
+                None,
+                &now,
+            ),
+            Err(AdminResourceGrantRepoError::DoesNotIncreaseResolvedValue { .. })
+        ));
     }
 
     #[test]

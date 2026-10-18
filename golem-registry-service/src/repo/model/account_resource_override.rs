@@ -32,6 +32,18 @@ pub enum AccountResourceOverrideDimension {
 }
 
 impl AccountResourceOverrideDimension {
+    /// Grants raise the permitted amount without replacing a larger normal value.
+    pub fn resolve_grant_value(self, baseline: u64, grant: Option<u64>) -> u64 {
+        if (self == Self::MaxMemoryPerWorker && is_unlimited_memory(baseline))
+            || (self == Self::MaxDiskSpacePerWorker
+                && baseline >= EFFECTIVELY_UNLIMITED_STORAGE_LIMIT)
+        {
+            baseline
+        } else {
+            baseline.max(grant.unwrap_or(baseline))
+        }
+    }
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::MonthlyComputeGcu => "monthly_compute_gcu",

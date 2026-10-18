@@ -77,9 +77,9 @@ golem account limits unset --max-storage-per-agent
 golem account limits unset --max-memory-per-agent
 ```
 
-Clearing a self-service override falls back to the active administrator grant, when present, or the current plan default.
+Clearing a self-service override uses the larger of the current plan default and the active administrator grant, when present.
 
-The CLI creates non-expiring self-service overrides. Administrator grants use a separate administrator-token API, can have an expiry, and take precedence over self-service choices. Grants are absolute replacement values, not additions to the plan amount. A temporary grant does not overwrite a persistent self-service choice, and an expired grant becomes inactive before cleanup removes its row.
+The CLI creates non-expiring self-service overrides. Administrator grants use a separate administrator-token API and can have an expiry. A grant can increase the permitted amount, but never reduce it. Monthly allowances use the larger of the plan amount and the active grant. For per-agent limits, first resolve the valid self-service setting or plan default. Then use the larger of that normal limit and the active grant. For example, a plan allowance of 5 with a grant of 8 permits 8, not 13. Upgrading the plan to 10 permits 10 even while the grant remains active. A temporary grant does not overwrite a persistent self-service choice, and an expired grant becomes inactive before cleanup removes its row. Grants do not create paid-overage consent or enable a disabled resource feature.
 
 ## Usage, quotas, and operator metering
 

@@ -1567,6 +1567,33 @@ mod tests {
     }
 
     #[test]
+    fn resource_policy_preserves_plan_upgrade_over_an_active_grant() {
+        let mut usage = make_policy_usage();
+        usage.plan.monthly_compute_gcu = 10.into();
+        usage.admin_grant_values.monthly_compute_gcu = Some(8);
+        let grant = AdminResourceGrant {
+            dimension: AdminResourceGrantDimension::MonthlyComputeGcu,
+            value: 8,
+            reason: golem_common::model::account_usage::AdminResourceGrantReason::Support,
+            actor_account_id: AccountId::SYSTEM,
+            granted_at: Utc::now(),
+            expires_at: None,
+        };
+        usage.admin_grants = vec![grant.clone()];
+        let policy = AccountUsageService::resource_policy(
+            AccountId(usage.account_id),
+            usage,
+            make_policy_report(Some(ResourceUsageMetering::all_enabled())),
+            hard_limit_mode(),
+        )
+        .unwrap();
+        assert_eq!(policy.monthly.compute_gcu.plan_amount, Some(10));
+        assert_eq!(policy.monthly.compute_gcu.resolved_monthly_amount, Some(10));
+        assert_eq!(policy.monthly.compute_gcu.active_admin_grant, Some(grant));
+        assert_eq!(policy.monthly_usage_mode, MonthlyUsageMode::HardLimit);
+    }
+
+    #[test]
     fn resource_policy_exposes_per_agent_admin_grants() {
         let mut usage = make_policy_usage();
         let memory_grant = AdminResourceGrant {
@@ -1661,7 +1688,7 @@ mod tests {
             }
         );
         assert_eq!(limits.monthly_policy.mode, MonthlyUsageMode::AllowOverage);
-        assert_eq!(limits.monthly_policy.available_fuel, 1_500_000);
+        assert_eq!(limits.monthly_policy.available_fuel, 3_500_000);
         assert_eq!(limits.monthly_policy.available_memory_gb_seconds, 52);
         assert_eq!(
             limits

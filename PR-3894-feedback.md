@@ -12,7 +12,7 @@ Current closeout: A1 and F10/F11 are addressed locally under the documented mini
 rule. The complete monthly test clock and keyed pre-poll filesystem gate are removed. All changed
 clock consumers pass without the clock, and separate post-removal native/body, strict all-target
 lint, production, format and browser checks pass. The user authorized a normal push for backup and
-review closeout. Grants are unchanged. The functional bar is safe eventual stop and intact durability,
+review closeout. The subsequent grant decision is recorded under G1 below. The functional bar is safe eventual stop and intact durability,
 not exact detection latency or quota winning every completion race. This disposition supersedes
 earlier progress notes below. Local completion is not reviewer acceptance or GitHub thread resolution.
 
@@ -24,7 +24,7 @@ earlier progress notes below. Local completion is not reviewer acceptance or Git
 | Findings 10-11: test behavior and Worker-owned orchestration | Addressed locally with the explicit idle/deleting-first exceptions below |
 | Later request to remove the general lifecycle redesign | Addressed locally; ordinary owners restored and retained dependencies documented |
 | CLI command-handler organization | Done locally; focused tests and strict lint pass |
-| Plan/grant precedence proposal | Deferred by user decision; existing replacement precedence unchanged |
+| Plan/grant precedence proposal | Implemented and locally validated: grants can increase but never reduce the permitted amount |
 | Delivery of the repairs | Validated local closeout; reviewer acceptance and unposted replies remain separate |
 
 ### Final retained support and evidence limits
@@ -217,10 +217,22 @@ contract without accepting arbitrary errors or weakening identity, history or cl
   precedence are unchanged. Existing dispatch assertions are preserved. The GitHub thread remains
   unresolved; this checkbox records local completion only.
 
-- [ ] **G1. Consider `max(plan amount, grant)` instead of unconditional grant replacement.** Deferred.
+- [x] **G1. Use increase-only grants instead of unconditional grant replacement.** Approved and locally validated.
   [Vigoo's grant-precedence comment](https://github.com/golemcloud/golem/pull/3894#issuecomment-5710615586).
-  The user deferred this decision. Do not implement a precedence change or call the proposal fixed.
-  An active grant still replaces the plan amount, including after a plan upgrade.
+  The user approved the larger of the monthly Plan Row amount and active grant. Per-agent limits
+  compare the active grant with the valid self-service setting or current Plan Row default.
+  A grant remains an absolute permitted amount, not an additive bonus. It cannot reduce an unlimited
+  limit, enable a disabled feature or create overage consent. Grant writes must increase the current
+  resolved entitlement, including after a plan or owner-setting increase. Grant records and expiry
+  remain intact. No restrictive-grant or penalty mechanism is planned; account closure is separate.
+  Registry policy snapshots, raw executor limits, aggregate GET and owner PUT/DELETE responses now
+  use that rule. Grant metadata remains visible even when a larger normal amount wins. Existing
+  grant audit values are preserved; write validation uses the current entitlement rather than only
+  the previous grant. Focused library and SQLite/PostgreSQL/plain/TLS cases, strict Registry
+  all-target lint, production compilation, Rust formatting and docs version-link checks pass.
+  The documentation change preserves its existing paragraph/link layout. Local Prettier commands
+  exited without a diagnostic and are not reported as passing. No executor, common/schema, WIT/SDK,
+  migration, dependency or account-closure change is included in this correction.
 
 ## Numbered review findings
 
@@ -549,7 +561,7 @@ were fixed as part of the completed items above.
   ownership, scope exclusions and exit gates. This is planning, not feedback resolution.
 - [x] Close A1 and the remaining F10/F11 work against the surviving contracts; retain C1's validated
   handler organization. Do not mark findings resolved merely because an upstream change exists.
-- [ ] Obtain a decision before changing G1 grant precedence.
+- [x] Obtain a decision before changing G1 grant precedence. The user approved increase-only grants.
 - [x] Commit and push the validated executor checkpoint and this checklist:
   [`dd23543175`](https://github.com/golemcloud/golem/commit/dd23543175e51ac86c4c528df99ce39d1de06326).
   The earlier checkpoint was pushed with it. The later validated C1, lifecycle integration and
@@ -559,7 +571,8 @@ were fixed as part of the completed items above.
 
 The user authorized a normal push for backup and then completion of the remaining code feedback.
 The earlier no-push notes describe their capture-time boundary, not the current authorization.
-Grant precedence stays unchanged until the other work is complete and the user chooses the policy.
+The user chose the increase-only grant policy after code-review closeout. Its focused validation
+passes. The requested independent whole-PR review follows the validated commit and push.
 Checkpoint publication does not imply reviewer acceptance or thread resolution.
 
 ## Source coverage

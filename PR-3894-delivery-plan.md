@@ -123,6 +123,22 @@ not close A1 or the remaining F10/F11 requests.
 
 ## Scope decisions
 
+### Approved grant rule
+
+After the code-review closeout, the user approved grants that can increase the permitted amount but
+never reduce it. Monthly amounts use `max(plan, active grant)`. Per-agent limits compare the active
+grant with the normally resolved valid self-service setting or Plan Row default. Grant creation
+remains increase-only, including after those normal values change. Disabled features, unlimited
+limits, expiry, audit records and explicit overage consent keep their existing contracts. This is
+a Registry resolution change, not further executor lifecycle work. No restrictive-grant or penalty
+mechanism is planned; account closure is separate. Earlier unchanged/deferred grant notes below
+record the boundary before this explicit decision.
+
+The Registry implementation and focused SQLite/PostgreSQL/plain/TLS and library cases pass, as do
+strict Registry lint, production compilation, Rust formatting and docs version-link checks. Existing
+grant metadata and audit records remain intact. No executor or schema change was required. Commit
+and push this correction, then run the user's requested independent whole-PR standards/spec review.
+
 ### Code-review closeout
 
 A1 and F10/F11 are addressed locally. The complete virtual monthly clock and pre-poll filesystem

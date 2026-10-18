@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::account_resource_override::persisted_admin_reason;
+use crate::repo::model::account_resource_override::{
+    AccountResourceOverrideDimension, persisted_admin_reason,
+};
 use crate::repo::model::plan::PlanRecord;
 use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
@@ -217,6 +219,29 @@ pub struct AdminResourceGrantValues {
     pub max_disk_space_per_worker: Option<u64>,
 }
 
+impl AdminResourceGrantValues {
+    fn monthly_plan_amounts(&self, plan: &PlanRecord) -> MonthlyPlanAmounts {
+        MonthlyPlanAmounts {
+            compute_gcu: plan
+                .monthly_compute_gcu
+                .get()
+                .max(self.monthly_compute_gcu.unwrap_or(0)),
+            memory_gb_seconds: plan
+                .monthly_memory_gb_seconds
+                .get()
+                .max(self.monthly_memory_gb_seconds.unwrap_or(0)),
+            durable_storage_gb_month: plan
+                .monthly_durable_storage_gb_month
+                .get()
+                .max(self.monthly_durable_storage_gb_month.unwrap_or(0)),
+            ephemeral_storage_gb_month: plan
+                .monthly_ephemeral_storage_gb_month
+                .get()
+                .max(self.monthly_ephemeral_storage_gb_month.unwrap_or(0)),
+        }
+    }
+}
+
 fn resolved_per_agent_value(
     plan_default: u64,
     override_value: Option<u64>,
@@ -263,32 +288,28 @@ impl AccountUsagePlan {
     }
 
     pub fn max_memory_per_worker_value(&self) -> u64 {
-        self.max_memory_grant_value
-            .as_ref()
-            .map(NumericU64::get)
-            .unwrap_or_else(|| {
-                resolved_per_agent_value(
-                    self.plan.max_memory_per_worker.get(),
-                    self.max_memory_override_value.as_ref().map(NumericU64::get),
-                    self.plan.max_memory_per_worker_ceiling.get(),
-                    self.plan.max_memory_per_worker_user_configurable,
-                )
-            })
+        AccountResourceOverrideDimension::MaxMemoryPerWorker.resolve_grant_value(
+            resolved_per_agent_value(
+                self.plan.max_memory_per_worker.get(),
+                self.max_memory_override_value.as_ref().map(NumericU64::get),
+                self.plan.max_memory_per_worker_ceiling.get(),
+                self.plan.max_memory_per_worker_user_configurable,
+            ),
+            self.max_memory_grant_value.as_ref().map(NumericU64::get),
+        )
     }
 
     pub fn max_disk_space_per_worker_value(&self) -> u64 {
         if self.plan.max_disk_space_per_worker_enabled {
-            self.storage_grant_value
-                .as_ref()
-                .map(NumericU64::get)
-                .unwrap_or_else(|| {
-                    resolved_per_agent_value(
-                        self.plan.max_disk_space_per_worker.get(),
-                        self.storage_override_value.as_ref().map(NumericU64::get),
-                        self.plan.max_disk_space_per_worker_ceiling.get(),
-                        self.plan.max_disk_space_per_worker_user_configurable,
-                    )
-                })
+            AccountResourceOverrideDimension::MaxDiskSpacePerWorker.resolve_grant_value(
+                resolved_per_agent_value(
+                    self.plan.max_disk_space_per_worker.get(),
+                    self.storage_override_value.as_ref().map(NumericU64::get),
+                    self.plan.max_disk_space_per_worker_ceiling.get(),
+                    self.plan.max_disk_space_per_worker_user_configurable,
+                ),
+                self.storage_grant_value.as_ref().map(NumericU64::get),
+            )
         } else {
             golem_common::model::account_usage::EFFECTIVELY_UNLIMITED_STORAGE_LIMIT
         }
@@ -301,25 +322,9 @@ impl AccountUsagePlan {
         let grants = self.admin_grant_values();
         Ok(MonthlyPolicySnapshot {
             mode: self.monthly_usage_mode()?,
-            resolved: enabled_monthly_amounts(
-                MonthlyPlanAmounts {
-                    compute_gcu: grants
-                        .monthly_compute_gcu
-                        .unwrap_or_else(|| self.plan.monthly_compute_gcu.get()),
-                    memory_gb_seconds: grants
-                        .monthly_memory_gb_seconds
-                        .unwrap_or_else(|| self.plan.monthly_memory_gb_seconds.get()),
-                    durable_storage_gb_month: grants
-                        .monthly_durable_storage_gb_month
-                        .unwrap_or_else(|| self.plan.monthly_durable_storage_gb_month.get()),
-                    ephemeral_storage_gb_month: grants
-                        .monthly_ephemeral_storage_gb_month
-                        .unwrap_or_else(|| self.plan.monthly_ephemeral_storage_gb_month.get()),
-                },
-                metering,
-            )
-            .resolve()
-            .map_err(|error| RepoError::InternalError(error.into()))?,
+            resolved: enabled_monthly_amounts(grants.monthly_plan_amounts(&self.plan), metering)
+                .resolve()
+                .map_err(|error| RepoError::InternalError(error.into()))?,
         })
     }
 
@@ -641,24 +646,7 @@ impl AccountUsage {
     }
 
     pub fn monthly_plan_amounts(&self) -> MonthlyPlanAmounts {
-        MonthlyPlanAmounts {
-            compute_gcu: self
-                .admin_grant_values
-                .monthly_compute_gcu
-                .unwrap_or_else(|| self.plan.monthly_compute_gcu.get()),
-            memory_gb_seconds: self
-                .admin_grant_values
-                .monthly_memory_gb_seconds
-                .unwrap_or_else(|| self.plan.monthly_memory_gb_seconds.get()),
-            durable_storage_gb_month: self
-                .admin_grant_values
-                .monthly_durable_storage_gb_month
-                .unwrap_or_else(|| self.plan.monthly_durable_storage_gb_month.get()),
-            ephemeral_storage_gb_month: self
-                .admin_grant_values
-                .monthly_ephemeral_storage_gb_month
-                .unwrap_or_else(|| self.plan.monthly_ephemeral_storage_gb_month.get()),
-        }
+        self.admin_grant_values.monthly_plan_amounts(&self.plan)
     }
 
     pub fn usage(&self, usage_type: UsageType) -> u64 {
@@ -955,6 +943,114 @@ mod tests {
         ] {
             assert_eq!(resolved_per_agent_value(value, None, value, false), value);
         }
+    }
+
+    #[test]
+    fn per_agent_grants_never_reduce_plan_or_owner_limits() {
+        let mut plan = test_plan();
+        plan.max_memory_per_worker = 100.into();
+        plan.max_memory_per_worker_ceiling = 1000.into();
+        plan.max_memory_per_worker_user_configurable = true;
+        plan.max_disk_space_per_worker_enabled = true;
+        plan.max_disk_space_per_worker = 100.into();
+        plan.max_disk_space_per_worker_ceiling = 1000.into();
+        plan.max_disk_space_per_worker_user_configurable = true;
+        let mut current = account_usage_plan(plan);
+        current.max_memory_grant_value = Some(300.into());
+        current.storage_grant_value = Some(300.into());
+        assert_eq!(current.max_memory_per_worker_value(), 300);
+        assert_eq!(current.max_disk_space_per_worker_value(), 300);
+
+        current.plan.max_memory_per_worker = 400.into();
+        current.plan.max_disk_space_per_worker = 400.into();
+        assert_eq!(current.max_memory_per_worker_value(), 400);
+        assert_eq!(current.max_disk_space_per_worker_value(), 400);
+        current.max_memory_override_value = Some(500.into());
+        current.storage_override_value = Some(500.into());
+        assert_eq!(current.max_memory_per_worker_value(), 500);
+        assert_eq!(current.max_disk_space_per_worker_value(), 500);
+
+        for unlimited in [
+            golem_common::model::account_usage::EFFECTIVELY_UNLIMITED_MEMORY_LIMIT,
+            u64::MAX,
+        ] {
+            current.plan.max_memory_per_worker = unlimited.into();
+            current.plan.max_memory_per_worker_ceiling = unlimited.into();
+            assert_eq!(current.max_memory_per_worker_value(), unlimited);
+        }
+        current.plan.max_disk_space_per_worker_enabled = false;
+        assert_eq!(
+            current.max_disk_space_per_worker_value(),
+            golem_common::model::account_usage::EFFECTIVELY_UNLIMITED_STORAGE_LIMIT
+        );
+    }
+
+    #[test]
+    fn monthly_grants_never_reduce_an_upgraded_plan_snapshot() {
+        use golem_common::model::account_usage::MonthlyPlanAmounts;
+        use golem_service_base::clients::registry::ResourceUsageMetering;
+
+        let mut plan = test_plan();
+        plan.monthly_compute_gcu = 5.into();
+        plan.monthly_memory_gb_seconds = 50.into();
+        plan.monthly_durable_storage_gb_month = 7.into();
+        plan.monthly_ephemeral_storage_gb_month = 11.into();
+        let mut current = account_usage_plan(plan);
+        current.monthly_compute_grant_value = Some(8.into());
+        current.monthly_memory_grant_value = Some(70.into());
+        current.monthly_durable_storage_grant_value = Some(9.into());
+        current.monthly_ephemeral_storage_grant_value = Some(12.into());
+        assert_eq!(
+            current
+                .monthly_policy_snapshot(ResourceUsageMetering::all_enabled())
+                .unwrap()
+                .resolved,
+            MonthlyPlanAmounts {
+                compute_gcu: 8,
+                memory_gb_seconds: 70,
+                durable_storage_gb_month: 9,
+                ephemeral_storage_gb_month: 12
+            }
+            .resolve()
+            .unwrap()
+        );
+        current.plan.monthly_compute_gcu = 10.into();
+        current.plan.monthly_memory_gb_seconds = 80.into();
+        current.plan.monthly_durable_storage_gb_month = 10.into();
+        current.plan.monthly_ephemeral_storage_gb_month = 13.into();
+        assert_eq!(
+            current
+                .monthly_policy_snapshot(ResourceUsageMetering::all_enabled())
+                .unwrap()
+                .resolved,
+            MonthlyPlanAmounts {
+                compute_gcu: 10,
+                memory_gb_seconds: 80,
+                durable_storage_gb_month: 10,
+                ephemeral_storage_gb_month: 13
+            }
+            .resolve()
+            .unwrap()
+        );
+        let disabled = current
+            .monthly_policy_snapshot(ResourceUsageMetering {
+                compute: false,
+                memory: false,
+                filesystem: false,
+            })
+            .unwrap();
+        assert_eq!(disabled.mode, MonthlyUsageMode::HardLimit);
+        assert_eq!(
+            disabled.resolved,
+            MonthlyPlanAmounts {
+                compute_gcu: 0,
+                memory_gb_seconds: 0,
+                durable_storage_gb_month: 0,
+                ephemeral_storage_gb_month: 0
+            }
+            .resolve()
+            .unwrap()
+        );
     }
 
     #[test]
