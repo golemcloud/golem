@@ -2172,6 +2172,55 @@ async fn a_standby_cut_off_from_etcd_stops_being_ready_but_still_names_the_leade
 
 #[test]
 #[tracing::instrument(skip_all)]
+// A connection to etcd that goes silent without a close, such as one through a node that lost
+// power, is never given up by waiting on it. The standby must replace it by itself, become ready
+// again and name the leader, with nobody lifting the fault.
+async fn a_standby_whose_etcd_connection_goes_silent_recovers_by_itself(etcd: &Arc<DockerEtcd>) {
+    wipe_state(etcd).await;
+    let config = distributed_config(etcd);
+    let (leader, leader_ports) = spawn_replica(config.clone(), CancellationToken::new());
+    let leader_details = timeout(STARTUP_TIMEOUT, leader_ports)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let proxy = BreakableProxy::start(&etcd.client_url()).await;
+    let mut standby_config = config.clone();
+    standby_config.http_port = free_port();
+    if let PersistenceConfig::Etcd(etcd_config) = &mut standby_config.persistence {
+        etcd_config.endpoints = vec![proxy.url()];
+    }
+    let before = campaigner_keys(etcd).await;
+    let (standby, _) = spawn_replica(standby_config.clone(), CancellationToken::new());
+    let standby_address = await_new_campaigner(etcd, &before).await;
+    await_until(STARTUP_TIMEOUT, || readyz(standby_config.http_port)).await;
+
+    proxy.black_hole_existing_connections().await;
+    await_until(LEASE_TTL * 3, || async {
+        !readyz(standby_config.http_port).await
+    })
+    .await;
+
+    // The keepalive of the connection finds it dead after its interval and timeout, and the
+    // replacement connection is not black-holed.
+    await_until(Duration::from_secs(40), || async {
+        readyz(standby_config.http_port).await
+    })
+    .await;
+    let refusal = routing_table_status(standby_address.port)
+        .await
+        .expect_err("a standby never serves");
+    assert_eq!(
+        leader_of(&refusal).map(|address| address.port),
+        Some(leader_details.grpc_port),
+        "the recovered standby names the leader"
+    );
+    leader.abort();
+    standby.abort();
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
 // A replica is ready once it reaches the address it advertises: a leader and a standby alike.
 async fn replicas_that_reach_their_advertised_address_become_ready(etcd: &Arc<DockerEtcd>) {
     wipe_state(etcd).await;
