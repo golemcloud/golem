@@ -366,8 +366,9 @@ pub struct Elected {
 /// so a shutdown can hand over while the keepalive task still renews.
 #[derive(Clone)]
 pub struct LeadershipHandle {
-    /// The election client, to log in again; `lease_client` is one of its sub-clients.
-    client: Client,
+    /// The election client, to log in again; `lease_client` is one of its sub-clients. Behind an
+    /// `Arc`: a `Client` is several KB, and this handle travels by value inside [`Elected`].
+    client: Arc<Client>,
     lease_client: LeaseClient,
     lease_id: i64,
     request_timeout: Duration,
@@ -678,7 +679,7 @@ impl LeaderElection {
             granted_ttl,
             keepalive,
             leadership: LeadershipHandle {
-                client: self.client.clone(),
+                client: Arc::new(self.client.clone()),
                 lease_client: lease_client.clone(),
                 lease_id,
                 request_timeout: self.request_timeout,
