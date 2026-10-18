@@ -254,9 +254,21 @@ async fn run_replica(mode: Mode) -> Running {
 }
 
 async fn run_replica_with(mode: Mode, tls: Option<tonic::transport::ServerTlsConfig>) -> Running {
+    run_replica_at(mode, tls, 0).await
+}
+
+/// A replica on this loopback port, to bring a replica back where another one stood. Port 0 takes
+/// any free port.
+async fn run_replica_at(
+    mode: Mode,
+    tls: Option<tonic::transport::ServerTlsConfig>,
+    port: u16,
+) -> Running {
     // The test binary has no process-level crypto provider; the services install theirs in main.
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
+        .await
+        .unwrap();
     let addr = listener.local_addr().unwrap();
     let delay = Arc::new(Mutex::new(None));
     let fake = FakeLeader {
@@ -1077,5 +1089,43 @@ async fn a_redirect_over_tls_checks_the_leader_against_the_configured_host() {
         .expect("the leader's certificate names the configured host");
     assert_eq!(leader.calls(), 1);
     leader.stop().await;
+    standby.stop().await;
+}
+
+#[test]
+// A leader that has served a call is cached. When it and the configured address then both stop
+// answering, the failed cached leader is the signal that a failover is under way, so the call
+// keeps asking until the configured address is back and names the new leader, even though the
+// configured address itself named nobody on the way.
+async fn a_cached_leader_that_failed_starts_the_wait_when_the_configured_address_is_gone_too() {
+    let first = run_replica(Mode::Leader).await;
+    let standby = run_replica(Mode::Standby(Some(first.address()))).await;
+    let standby_port = standby.addr.port();
+    let client = Arc::new(client_with_default_config("127.0.0.1", standby_port));
+    client
+        .get_routing_table()
+        .await
+        .expect("the standby names the first leader, which is now cached");
+    first.stop().await;
+    standby.stop().await;
+
+    let call = tokio::spawn({
+        let client = client.clone();
+        async move { client.get_routing_table().await }
+    });
+    // The default retries of the configured address are spent after about two seconds. The
+    // address then comes back and names a leader that serves.
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    let second = run_replica(Mode::Leader).await;
+    let standby = run_replica_at(Mode::Standby(Some(second.address())), None, standby_port).await;
+
+    tokio::time::timeout(Duration::from_secs(30), call)
+        .await
+        .expect("the call ends")
+        .expect("the task does not panic")
+        .expect("the configured address names a live leader inside the failover window");
+
+    assert_eq!(second.calls(), 1);
+    second.stop().await;
     standby.stop().await;
 }
