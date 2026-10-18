@@ -309,29 +309,29 @@ The guard is deliberately narrow: durable mode, folded status `Interrupted`, and
 `Restart` still follows automatic reconstruction and clean `Idle` semantics without `Resumed`;
 ephemeral workers remain fail-stop and do not gain a resume path.
 
-### 10a. Suspend reuse requires an established owner
+### 10a. Unloaded stops write ordinary lifecycle hints
 
 ```
 attempt A establishes owner generation G
 #90 Suspend (h)                  ordinary admission callback commits
      monitor request B accepted for the same owner G
      B freezes, fences and publishes its own cause; physical disposal joins
-     no second Suspend           same established owner and FIFO Suspended status
+#91 Suspend (h)                  unloaded stop writes its ordinary hint
 
 new Loading attempt C waits before establishing an owner
-     shared resident counter is still G, but C's established_generation is None
+     shared resident counter is still G
      C accepts a Suspend and joins its own stop/disposal
-#91 Suspend (h)                  C needs its own marker; #90 belongs to the prior owner
+#92 Suspend (h)                  C also writes its ordinary hint
 ```
 
-The loop captures generation provenance only after this attempt successfully begins the owner and
-retains it locally through disposal. An unchanged shared counter alone is not ownership. Reuse also
-requires FIFO status Suspended for that established generation. It never rewrites admission A's
-recorded marker as monitor B's cause. The ordinary callback and status actor own persistence;
-no selected-writer slot or private receipt is consulted. A taken no-body stop still retains its
-physical-disposal obligation independently of marker reuse and public receipt availability.
-Owners: `worker/outcome/mod.rs::{started_marker_generation, unloaded_lifecycle_marker}`,
-`worker/invocation_loop.rs`, `worker/mod.rs::commit_pending_terminal_stop`.
+The unloaded path does not deduplicate lifecycle hints by status or resident provenance. Duplicate
+Suspend hints do not create invocation results or replace committed results. The ordinary callback
+and status actor retain invocation persistence, and invocation exit still uses FIFO status to avoid
+recording a second invocation failure. A taken no-body stop retains its physical-disposal obligation
+independently of public receipt availability. Resource-release observation scopes still roll over
+after an established owner; that bookkeeping does not decide whether a marker is written.
+Owners: `worker/invocation_loop.rs::handle_unloaded_interrupt`,
+`worker/mod.rs::commit_pending_terminal_stop`.
 Tests: `tests/api/interruption/lifecycle/admission.rs` and
 `tests/api/interruption/lifecycle/windows/retained_terminal.rs`.
 

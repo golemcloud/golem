@@ -196,8 +196,9 @@ replay tolerance.
 Startup seals old append tasks, takes the card boundary, commits the horizon and selects the wallet
 baseline before `install_replay_generation_locked` joins prior owner cleanup and begins the new
 tool/deferred-admission generation. That installer is the single reset point. The earlier resident
-attempt counter does not reset owner execution. The loop records established-owner provenance only
-after wallet installation succeeds, including when later context construction fails.
+attempt counter does not reset owner execution. After wallet installation succeeds, the loop marks
+the owner as started so the next resident receives a new resource-release observation scope,
+including when later context construction fails. Lifecycle markers do not use that bookkeeping.
 
 `Worker` (`worker/mod.rs`) receives invocations, persists them, and processes them in order. The
 run loop (`worker/invocation_loop.rs::run`) is:
@@ -260,9 +261,10 @@ for the real held-input regression and the retired reply-only assertions.
 reacquiring an idle concurrent-agent permit, the loop checks resident requests, pending interrupts,
 detached status, durable pending work and snapshot policy. A notification whose work already drained
 does not reopen a billing window. Detached status still wakes ordinary repair before work selection.
-The loaded compute-admission test queues two real readiness requests at the existing idle-close
-barrier. An awaited filesystem update joins the earlier notifications on the same command queue;
-the acquisition count then proves that the stale wake did not reopen another window.
+The loaded compute-admission test queues two real readiness requests while the actual Finished
+append is withheld by the oplog dependency. An awaited filesystem update joins the earlier
+notifications on the same command queue; the acquisition count then proves that the stale wake
+did not reopen another window.
 
 During guest execution, `Context::ensure_fuel`, the `FuelManagement` implementation in
 `workerctx/default.rs`, calls `ensure_monthly_resource_capacity` to check enabled live compute,
@@ -404,7 +406,8 @@ a panicking adapter through the existing weak owner-usage-flusher interface. Ini
 selected-result recording and already-published success need distinct proof boundaries; see
 [idle health with distinct success boundaries](reference/testing-patterns.md#idle-health-with-distinct-success-boundaries).
 Cleanup, startup refusal and the original error remain strict without changing the monitor's await
-graph. The actor cell retains only its documented post-success idle barrier. Monthly monitoring
+graph. The actor case holds the actual Start commit of a later live RPC after observing the
+successful allocation result and its real idle release; no idle-close control remains. Monthly monitoring
 uses the same ordinary Tokio timer in production and test builds.
 
 The actor-loss change removes both test-only actor-stop methods and the monthly target's exit
@@ -413,11 +416,12 @@ fixture. Counter.allocate_memory supplies actual guest allocation at a later idl
 case uses the checkpoint from its running invocation. Test-only capture matches the existing
 before-fence event by target, owner, failure kind and message. It proves the stop path was entered,
 not physical drainage. The tests still require the exact lost-actor error, successful physical
-deletion, retained failed health, startup refusal and unchanged generation and acquisition counts.
+deletion, retained failed health and startup refusal. The completed-result case accounts for the
+later RPC's acquisition, requires unchanged resident generation, and allows no more acquisitions
+through cleanup or refused startup. Test-side capture of ordinary debug diagnostics replaces Worker-owned counters.
 Initial idle precedes guest execution, so its manual-stop-only actor cell retires with that producer.
-Real monitor failure and startup refusal remain covered there. The actual append-fault baseline
-passes. Separate post-removal library/native, strict lint, production and browser checks pass locally.
-No new production event or Worker control is added.
+Real monitor failure and startup refusal remain covered there. No Worker scheduling control remains
+in these actor-loss tests.
 
 The settlement-loss selector is removed. It previously completed settlement
 successfully, then dropped the reply through Worker and window flags. The ordinary ObserverLost
@@ -429,8 +433,8 @@ this test's known clock fault occurs before settlement.
 The native fake reply-drop cells retire with their producer; the native health helper retains its
 other exact cleanup and startup assertions. This is not native settlement-task panic coverage.
 Post-removal library, combined native, strict lint, production and browser checks pass locally.
-Actor-loss removal has separate validation above. The post-success idle exception is described in
-the linked testing patterns; it is not a model for adding more runtime gates.
+Actor-loss removal has separate validation above. The post-success test uses the real RPC commit
+boundary described in the linked testing patterns, without an idle-close gate.
 
 A temporary Registry policy outage is an execution failure, not a disposal failure. The monitor
 requests the same cooperative stop and retains this error separately from cleanup health. After
@@ -520,15 +524,16 @@ replay code.
 The Worker-owned tail observer is removed after passing dual observation.
 Normal root-completion diagnostics and live reads of the existing owner tracker replace its transport;
 see [root completion and live tail ownership](reference/testing-patterns.md#root-completion-and-live-tail-ownership).
-Separate producer-free native/library, strict lint, production and browser checks pass. The remaining
-idle exception needs its concrete post-success justification; feature gating alone is not a reason
-to retain a runtime control.
+Post-success tests hold real dependency operations rather than pausing idle teardown;
+feature gating alone is not a reason to retain a runtime control.
 
-An accepted stop in `WaitingForPermit` takes that attempt's exact task handle before signalling
-Loading subscribers. The driver cancels and joins the task without acquiring its blocked permit,
-then settles the matching startup tracker and `WorkerLoaded` event before resolving the existing
-stop receipt. Restart and Jump preserve pending work without lifecycle or invocation-finished
-markers and request ordinary reconstruction. Dropping the receipt does not cancel the driver.
+An interrupt during initial `WaitingForPermit` queues the ordinary request and signals Loading
+subscribers without cancelling the waiting task. Once permits arrive, the invocation loop handles
+the request before creating a Store; its receipt does not promise completion before permit grant.
+Restart and Jump retain the same start attempt. Deletion and owner retirement still drop the
+waiting worker and abort its task. Initial waiting has no monthly execution window; monthly
+acceptance requires a Running owner with a held permit. Warm permit reacquisition remains
+interruptible in the invocation loop.
 If core initialization stops before a prepared Store exists, the invocation-loop-owned Worker
 stop acknowledges the published interruption under the lifecycle lock. No Store callback remains
 to send that receipt. The real initializer tests in `tests/api/interruption/lifecycle/admission.rs` verify
@@ -536,8 +541,10 @@ cleanup and one receipt, durable Suspend and reconstruction, and an ephemeral ty
 error recorded as Recovery before any guest invocation starts.
 
 The monitor submits a proposal to the existing Worker state actor. Acceptance revalidates the cached
-owner, fingerprint, startup attempt, resident generation, held permit, exact active window, policy
-revision, period, fuel generation and current exhaustion. It queues the same ordinary interruption
+owner, startup attempt, held permit, exact active window, policy status and revision, period, fuel
+generation and current exhaustion. The private Worker slot and exact window identity reject targets
+from replaced executions. Fingerprint and resident generation remain diagnostic fields.
+It queues the same ordinary interruption
 and advances the establishment tail before reporting acceptance. Capacity and request-state locks
 are released before asynchronous establishment. The invocation loop remains the sole primary-Store
 owner. Entity failure selection stays with the existing operation owner; a competing trap or
@@ -603,9 +610,11 @@ removing the exact old generation. No replacement result arbiter or writer regis
 
 Invocation exit reads FIFO-folded status before recording a retry interruption. Only Running or
 Retrying still needs a failure callback. Failed, automatically suspended or completed work must not
-be recorded again because a later stop arrived. Native guest-failure, deadline and pending-Suspend
-append cases require exact single outcomes, not another quota error or Suspend. This fixes the
-intermediate duplicate-callback regression without a private result protocol.
+run that callback again because a later stop arrived. Native guest-failure and deadline cases
+require exact single invocation outcomes, not another quota error. A later unloaded stop can append
+its ordinary Suspend hint after the automatic callback's Suspend; it does not run that callback or
+replace an invocation result. A stop already consumed at invocation exit does not become a second
+unloaded demand; the pending-Suspend append case still checks one hint and one receipt.
 
 `tests/api/fenced_outcome.rs` keeps its exact refused-prefix, physical-release, removal and regrant
 checks through the real oplog dependency. Selection and host completion cases retain result/effect/
@@ -1084,12 +1093,10 @@ cannot reuse a previous owner's marker just because the shared counter is unchan
 A distinct terminal following a completed Restart keeps its own queue
 demand while the original publication stays Restart. Normal loop stop or joined owner retirement
 commits the unclaimed status marker once, including an outer-loop concurrent-permit wait with no
-new Store or permit. Reusing an admission Suspend requires this startup attempt to have established
-the current owner generation and FIFO status already Suspended. The loop retains that
-attempt-derived generation through disposal.
-A new pre-owner attempt has no such provenance even if the shared generation counter is unchanged;
-its stop appends its own marker. Reuse does not rewrite the recorded admission marker as
-the later monitor request. See [the Suspend timeline](reference/timelines.md#10a-suspend-reuse-requires-an-established-owner).
+new Store or permit. An unloaded Suspend or Interrupt writes its ordinary lifecycle hint without
+deduplicating against an earlier Suspend. A later pre-owner attempt also writes its own hint even
+if the resident counter is unchanged. These hints do not replace committed invocation results or
+rewrite the earlier prefix. See [the Suspend timeline](reference/timelines.md#10a-unloaded-stops-write-ordinary-lifecycle-hints).
 Loop stop never claims a terminal merely to discard it. Tests:
 `tests/scalability.rs::interrupt_during_oom_backoff_is_durable_before_restart` and
 `tests/resource_limits/mod.rs::concurrent_agent_limit_restarted_waiter_stops_without_permit`.

@@ -503,21 +503,17 @@ records independently of the API result.
 
 Actor loss has a different limit. At that earlier append hold it can fail the in-flight caller with
 the actual lifecycle-actor error. That does not prove preservation of an already-published result.
-The actor cell therefore retains the existing idle-close barrier. It observes
-the successful result before faulting the held actual positive growth append, then releases that
-barrier. There is no new registry or runtime hook. This is the retained minimal idle exception;
-moving this fault earlier or allowing an error would weaken the surviving result guarantee.
-
-This barrier delays only the natural idle close after result publication. The actor's real append
-failure, ordinary monitor response and cleanup still run through their production owners. The test
-does not use this extended window to claim normal timing or a resource-release deadline. Release
-joins actual disposal and retains failed health. This is a narrow documented exception, not approval
-to add another lifecycle protocol or a claim that all idle controls are removed.
-The remaining barrier's channel carries only release; the unused Boolean panic selector is removed
-separately. Sender cancellation still releases it. That source passes separate colocated library,
-affected native and custom-suspension/real-timer regression checks, strict lint, production compilation
-and browser verification. The retained barrier is distinct from that removed selector and is not
-claimed to have reviewer approval merely because its local checks pass.
+The actor case therefore observes the successful result and real idle release, then starts a later
+live RPC and withholds its actual Start commit through the existing oplog dependency. The real
+execution window and monitor stay active while that dependency call remains pending. Releasing the
+held positive growth append fails the actual lifecycle actor; the ordinary monitor observes its
+closed receiver without a synthetic submission. Only then does the test release the RPC commit
+and join disposal. It requires the original lost-actor error, physical deletion, retained failed
+health, refusal to start, and an unchanged stored prefix. The original successful invocation records
+remain exact; the later RPC adds one Started and must fail without a Finished. It adds one permit
+acquisition but no resident generation. Cleanup and refused startup add neither. No idle-close gate
+or replacement runtime hook is needed. A hold during startup replay is not equivalent: actor loss
+there reaches the outer startup panic path rather than the live monitor-cleanup path under test.
 
 The first positive guest growth can occur in construction. Arm its existing dependency interceptor
 before bootstrap and observe its entry before registering a later Finished hold. The entered append
@@ -643,13 +639,13 @@ upstream SDK or managed-XFS evidence.
 
 ### Retained stop markers and physical release
 
-Assert the marker's provenance, not just its kind or the current generation counter. A committed
-admission Suspend can satisfy a later monitor Suspend for the same established owner with its
-attempt-derived generation and FIFO Suspended status. Preserve the exact earlier prefix. A new
-attempt stopped before establishing an owner must append its
-own Suspend even when the resident counter still names the previous generation. The admission and
-retained-terminal cases assert one and two Suspend entries respectively. The taken no-body demand
-still owns physical disposal; an absent public receipt is not proof that disposal is complete.
+Assert the ordinary lifecycle hints and preserve the exact earlier prefix. An unloaded stop writes
+its own Suspend even if an earlier callback has already committed a Suspend for that resident.
+A new attempt stopped before establishing an owner also appends its own hint when the resident
+counter still names the previous generation. Keep exact marker counts for each exercised path,
+separate from invocation-result assertions: duplicate lifecycle hints must not replace committed
+results or create results for unstarted work. The taken no-body demand still owns physical disposal;
+an absent public receipt is not proof that disposal is complete.
 
 For native cleanup, `tests/api/interruption/lifecycle/health.rs` uses an account limit of one and an
 actual FIFO permit contender. It polls that contender Pending while native directory permissions
@@ -659,7 +655,7 @@ still refuse the retained structural failure. Hold that lease through ordinary p
 permissions are restored, then require verified root removal with generation and acquisition count
 unchanged. Returned execution capacity is not successful filesystem cleanup.
 Keep this real-Worker evidence separate from queue/predecessor and EntityFence body checks.
-The narrowly retained post-success idle barrier has a separate justification.
+The post-success actor case uses an actual live RPC commit, not an idle-close control.
 
 `execution_window_closes_before_filesystem_deletion` calls the actual unload body and captures
 settlement, permit and Store-drop facts at the dependency's entered pending deletion. Require settled
@@ -724,8 +720,11 @@ request; do not restore the stronger single-elected-signal rule through another 
 Native completion and pending-Suspend cases hold real terminal persistence. Subscribe raw before
 public `set_interrupting` and retain its exact returned Some receiver, not a private writer
 projection. A stop can signal during that append. The callback and real teardown still retain the
-Store and permit until required work finishes. Require one exact outcome/marker, unchanged key and
-history, physical cleanup and recovery; do not accept extra quota errors or duplicate Suspend.
+Store and permit until required work finishes. Require one invocation outcome, unchanged key and
+history, physical cleanup and recovery; do not accept extra quota errors. The pending-Suspend
+case consumes the later stop at invocation exit and still requires one hint and one receipt.
+A separate unloaded stop writes its own hint without deduplication against an earlier Suspend;
+that is not a second invocation-failure callback or an invented result.
 
 The shared retained-terminal helper's first automatic phase has no public Some promise. Its private
 after-freeze receipt subscription is gone. At the already-held teardown checkpoint, retain the

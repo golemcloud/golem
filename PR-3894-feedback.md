@@ -8,20 +8,28 @@ Checked means implemented and locally validated. It does **not** mean pushed, ac
 or resolved on GitHub. Partial and deferred requests stay unchecked. This file is the current
 feedback tracker; older investigation notes are history, not the current status.
 
-Current closeout: A1 and F10/F11 are addressed locally under the documented minimal-hook exception
-rule. The complete monthly test clock and keyed pre-poll filesystem gate are removed. All changed
-clock consumers pass without the clock, and separate post-removal native/body, strict all-target
-lint, production, format and browser checks pass. The user authorized a normal push for backup and
-review closeout. The subsequent grant decision is recorded under G1 below. The functional bar is safe eventual stop and intact durability,
-not exact detection latency or quota winning every completion race. This disposition supersedes
-earlier progress notes below. Local completion is not reviewer acceptance or GitHub thread resolution.
+Current follow-up: the idle-close and deleting-first runtime gates are also removed. Tests hold
+real oplog operations and observe ordinary runtime diagnostics. The earlier minimal-hook exceptions
+below are historical, not the current implementation. The follow-up also restores ordinary initial
+permit waiting and failure precedence, removes marker-only provenance and redundant monthly target
+comparisons, and consolidates the unload deadline. These changes are local and uncommitted; earlier
+delivery permissions and validation reports below do not describe this follow-up's delivery state.
+The functional bar remains safe eventual stop and intact durability, not exact detection latency
+or quota winning every completion race.
+
+Combined follow-up validation passes 352 selected library tests and 26 selected native tests,
+package formatting and diff checks. The combined run exposed an obsolete pre-grant completion
+expectation in the retained-marker test; it now checks the same stale-marker boundary across permit
+handoff before a distinct later stop. The walkthrough's changed paragraphs were rendered and
+inspected. This is targeted evidence, not a full-suite, native-XFS, or complete completion-hook
+error/stream-race result.
 
 ## At a glance
 
 | Feedback | Local status |
 | --- | --- |
 | Findings 1-9 and 12-14 | Done locally, within the limits below |
-| Findings 10-11: test behavior and Worker-owned orchestration | Addressed locally with the explicit idle/deleting-first exceptions below |
+| Findings 10-11: test behavior and Worker-owned orchestration | Runtime gates removed locally; tests use actual oplog holds and diagnostic observations |
 | Later request to remove the general lifecycle redesign | Addressed locally; ordinary owners restored and retained dependencies documented |
 | CLI command-handler organization | Done locally; focused tests and strict lint pass |
 | Plan/grant precedence proposal | Implemented and locally validated: grants can increase but never reduce the permitted amount |
@@ -29,15 +37,20 @@ earlier progress notes below. Local completion is not reviewer acceptance or Git
 
 ### Final retained support and evidence limits
 
-- The actor-only idle barrier holds natural close after a published success while a real append
-  failure loses the actor. A pre-commit hold instead permits the original caller to fail. Its one
-  release signal has no panic selector, and sender Drop releases it. The extended window makes no
-  normal-latency claim. Exact result, history, cleanup health and startup-refusal assertions remain.
-- The deleting-first fence isolates outer `Deleting` around a still-Running resident before a
-  terminal is queued. Interrupt-mutex contention would mask a missing outer guard. Main's deletion
-  hook is wired by `TestWorkerCtx`, not the production `Context` used for quota accounting. A test-
-  graph setter cannot reach this Worker. Keep the fixed fence, without a stage selector, rather than
-  add a Context bridge or weaken the test by changing contexts. Sender Drop releases it.
+- Actor health checks observe the completed result and ordinary idle release, then hold a later
+  live invocation's Start commit through the existing oplog wrapper. A failed growth append and
+  the normal monitor exercise cleanup failure without an idle-close gate. Exact original results,
+  history, physical deletion and startup refusal remain checked. The later invocation has one
+  Start, no Finish, and fails; aggregate unload failure includes monitor-close failure.
+- Deleting-first checks hold the actual terminal append. Colocated production admission checks
+  separately reject outer `Deleting` around a still-Running resident. The actual interrupt mutex
+  holder remains for the independent contention test, without a production scheduling branch.
+- Initial interruption receipts may wait for permit grant. Deletion still cancels initial waiting;
+  warm reacquisition remains interruptible. The retained-marker waiting regression checks that the
+  old Suspend cannot settle the new receipt before or after handoff, then supplies a distinct stop.
+- Warm reacquisition, startup readiness/retry, and generic actor-loss recovery remain unchanged.
+  No safe local removal was found: command retention and interruption ordering still matter,
+  startup failures are not known transient, and actor recovery needs fallible status/commit APIs.
 - Read-only snapshots and direct calls of production primitives add no alternative lifecycle path.
   Scripted allocation supplies accounting input, not native-XFS evidence. The scoped entity wrapper
   forwards to the actual constructor; it does not establish dispatcher coverage. Scenario capture
