@@ -19,10 +19,17 @@
 //! each replica as ready and can roll them like any other service. Only the leader serves: a
 //! standby answers each call with `UNAVAILABLE` and, once the leader is ready, the leader's
 //! address, which the shard manager client follows.
+//!
+//! The gate's own refusals (starting, stopping, a lapsed belief before the call, no ready leader)
+//! carry a mark that the call did not run, so that a client may send even a call it must not
+//! repeat to another replica. A redirect names a leader instead, and the refusal for a call that
+//! lapsed while it ran carries no mark, because that call may have taken effect.
 
 use crate::sharding::election_watch::{ElectionWatch, LeaderView};
 use crate::sharding::leader_election::{ElectionValue, LeaseBelief};
-use golem_service_base::clients::shard_manager_leader::{LeaderAddress, not_leader_status};
+use golem_service_base::clients::shard_manager_leader::{
+    LeaderAddress, not_leader_status, refusal_status,
+};
 use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
@@ -182,14 +189,14 @@ impl<S: Clone> LeaderGate<S> {
     fn route(&self) -> Route<S> {
         match &*self.state.read().unwrap_or_else(PoisonError::into_inner) {
             GateState::Starting => {
-                Route::Refuse(Status::unavailable("the shard manager is starting; retry"))
+                Route::Refuse(refusal_status("the shard manager is starting; retry"))
             }
             GateState::Stopped => {
-                Route::Refuse(Status::unavailable("the shard manager is stopping; retry"))
+                Route::Refuse(refusal_status("the shard manager is stopping; retry"))
             }
             GateState::Serving {
                 lease: Some(lease), ..
-            } if !lease.held() => Route::Refuse(Status::unavailable(
+            } if !lease.held() => Route::Refuse(refusal_status(
                 "this shard manager's leadership lease may have lapsed; retry",
             )),
             GateState::Serving { service, lease } => Route::Serve(service.clone(), lease.clone()),
@@ -204,7 +211,7 @@ impl<S: Clone> LeaderGate<S> {
 /// has just won still finds itself here until its startup completes.
 fn standby_answer(leader: LeaderView, own: &LeaderAddress) -> Status {
     match leader {
-        LeaderView::Unread => Status::unavailable(
+        LeaderView::Unread => refusal_status(
             "this replica has not read the shard manager leader from etcd yet; retry",
         ),
         LeaderView::Leader(ElectionValue {
@@ -213,7 +220,7 @@ fn standby_answer(leader: LeaderView, own: &LeaderAddress) -> Status {
             ..
         }) if &address != own => not_leader_status(&address),
         LeaderView::Leader(_) | LeaderView::NoLeader => {
-            Status::unavailable("no shard manager leader is ready yet; retry")
+            refusal_status("no shard manager leader is ready yet; retry")
         }
     }
 }
@@ -442,6 +449,41 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.headers().get("x-served").unwrap(), "yes");
+    }
+
+    #[test]
+    async fn the_refusals_of_a_gate_that_did_not_run_the_call_say_so() {
+        let starting = answer(&LeaderGate::new()).await;
+        assert!(refused_before_running(&status(&starting)), "starting");
+
+        let stopping = standby(LeaderView::NoLeader);
+        stopping.stop();
+        assert!(
+            refused_before_running(&status(&answer(&stopping).await)),
+            "stopping"
+        );
+
+        let lapsed = standby(LeaderView::NoLeader);
+        lapsed.serve(
+            Served,
+            Some(LeaseBelief::until(
+                Instant::now() - Duration::from_millis(1),
+            )),
+        );
+        let lapsed = status(&answer(&lapsed).await);
+        assert!(refused_before_running(&lapsed), "lapsed before running");
+        assert_eq!(leader_of(&lapsed), None);
+
+        for (name, leader) in [
+            ("unread", LeaderView::Unread),
+            ("no leader", LeaderView::NoLeader),
+            ("leader not ready", LeaderView::Leader(value(9002, false))),
+            ("leader is itself", LeaderView::Leader(value(9001, true))),
+        ] {
+            let refusal = status(&answer(&standby(leader)).await);
+            assert!(refused_before_running(&refusal), "{name}");
+            assert_eq!(leader_of(&refusal), None, "{name}");
+        }
     }
 
     #[test]
