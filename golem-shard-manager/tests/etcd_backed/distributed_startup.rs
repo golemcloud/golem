@@ -1239,6 +1239,8 @@ async fn a_dead_member_in_the_endpoint_list_does_not_fail_startup(etcd: &Arc<Doc
     let mut config = distributed_config(etcd);
     config.persistence = PersistenceConfig::Etcd(EtcdConfig {
         endpoints: endpoints.clone(),
+        // Caps the campaign backoff, so attempts that hit the dead member retry quickly.
+        retry_max_delay: Duration::from_millis(500),
         ..etcd_config(etcd)
     });
 
