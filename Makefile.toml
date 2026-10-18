@@ -1497,13 +1497,14 @@ staging = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/shared-crates-release"
 mkdir ${staging}
 crates = array golem-schema-derive golem-schema golem-tool-metadata
 attempts = array before-publication after-publication
+http_code_format = concat "%" "{http_code}"
 for crate in ${crates}
     metadata_path = set "${staging}/${crate}.json"
     url = set "https://crates.io/api/v1/crates/${crate}/${version}"
     found = set false
     for attempt in ${attempts}
         if not ${found}
-            response = exec --fail-on-error curl --silent --show-error --location --retry 3 --retry-max-time 180 --connect-timeout 15 --max-time 60 --output ${metadata_path} --write-out "%{http_code}" --user-agent golem-release ${url}
+            response = exec --fail-on-error curl --silent --show-error --location --retry 3 --retry-max-time 180 --connect-timeout 15 --max-time 60 --output ${metadata_path} --write-out ${http_code_format} --user-agent golem-release ${url}
             status = trim ${response.stdout}
             if equals ${status} 200
                 found = set true
