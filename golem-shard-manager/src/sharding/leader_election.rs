@@ -189,6 +189,12 @@ impl LeaseBelief {
         self.held_at(belief_clock::now())
     }
 
+    /// Moves the deadline to `remaining` from now. **Tests only.**
+    #[cfg(test)]
+    pub(crate) fn rearm_for(&self, remaining: Duration) {
+        self.set(belief_clock::now() + remaining);
+    }
+
     /// How long the belief still holds; zero once it has lapsed.
     pub(crate) fn remaining(&self) -> Duration {
         self.deadline

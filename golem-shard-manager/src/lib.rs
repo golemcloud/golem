@@ -286,9 +286,7 @@ mod lease_timing_tests {
 
 #[cfg(test)]
 mod lease_health_tests {
-    use super::{
-        ShardManagerServiceImpl, ShardManagerServiceServer, report_not_serving_once_lapsed,
-    };
+    use super::{ShardManagerServiceImpl, ShardManagerServiceServer, report_lease_health};
     use crate::sharding::leader_election::LeaseBelief;
     use std::time::Duration;
     use test_r::test;
@@ -331,11 +329,53 @@ mod lease_health_tests {
         let mut client = HealthClient::new(channel);
 
         let belief = LeaseBelief::until(Instant::now() + Duration::from_millis(600));
-        tokio::spawn(report_not_serving_once_lapsed(belief, reporter));
+        tokio::spawn(report_lease_health(
+            belief.clone(),
+            reporter,
+            Duration::from_millis(100),
+        ));
 
         assert_eq!(status(&mut client).await, ServingStatus::Serving as i32);
         tokio::time::sleep(Duration::from_millis(1200)).await;
         assert_eq!(status(&mut client).await, ServingStatus::NotServing as i32);
+
+        // A late acknowledgement or a reconnect brings the belief back, and the gate serves again.
+        belief.rearm_for(Duration::from_secs(30));
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert_eq!(status(&mut client).await, ServingStatus::Serving as i32);
+    }
+
+    #[test]
+    async fn a_renewed_belief_keeps_the_service_serving() {
+        let (reporter, service) = tonic_health::server::health_reporter();
+        reporter
+            .set_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
+            .await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(
+            tonic::transport::Server::builder()
+                .add_service(service)
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)),
+        );
+        let channel = tonic::transport::Endpoint::from_shared(format!("http://127.0.0.1:{port}"))
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        let mut client = HealthClient::new(channel);
+
+        let belief = LeaseBelief::until(Instant::now() + Duration::from_millis(300));
+        tokio::spawn(report_lease_health(
+            belief.clone(),
+            reporter,
+            Duration::from_millis(100),
+        ));
+        for _ in 0..8 {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            belief.rearm_for(Duration::from_millis(300));
+            assert_eq!(status(&mut client).await, ServingStatus::Serving as i32);
+        }
     }
 }
 
@@ -1132,9 +1172,16 @@ pub async fn run(
             anyhow::Ok(())
         })
         .await?;
-        if let Some(belief) = lease_belief.clone() {
+        if let (Some(belief), PersistenceConfig::Etcd(etcd)) =
+            (lease_belief.clone(), &shard_manager_config.persistence)
+        {
             join_set.spawn(
-                report_not_serving_once_lapsed(belief, health_reporter.clone()).in_current_span(),
+                report_lease_health(
+                    belief,
+                    health_reporter.clone(),
+                    LeaseKeepAlive::renewal_interval(etcd.leader_lease_ttl),
+                )
+                .in_current_span(),
             );
         }
 
@@ -1178,27 +1225,41 @@ pub async fn run(
     })
 }
 
-/// Sets the health entry of the shard manager service to NOT_SERVING once the lease belief has
-/// lapsed, which is when the gate starts to refuse calls. Without it a health probe would keep
-/// reporting a leader that serves nothing until the lost lease stops the process. It sleeps until
-/// the deadline and reads it again after each wake, because every renewal moves it. It never
-/// returns, so that the task set does not take it for a stopped task: a lapsed belief ends the
-/// replica, so the entry is not set back.
-async fn report_not_serving_once_lapsed(
+/// Keeps the health entry of the shard manager service in step with the gate: NOT_SERVING while
+/// the lease belief has lapsed, which is when the gate refuses calls, and SERVING again if the
+/// belief comes back, as a late acknowledgement or a reconnect can bring it. Without it a health
+/// probe would keep reporting a leader that serves nothing until the lost lease stops the
+/// process. While the belief holds, it sleeps until the deadline, but never longer than `poll`,
+/// because every renewal moves the deadline and a suspended machine wakes past it; while it has
+/// lapsed it looks again every `poll`. It never returns, so that the task set does not take it for
+/// a stopped task. The entry is SERVING when it starts.
+async fn report_lease_health(
     belief: LeaseBelief,
     health_reporter: tonic_health::server::HealthReporter,
+    poll: Duration,
 ) -> anyhow::Result<()> {
+    let mut serving = true;
     loop {
-        let remaining = belief.remaining();
-        if remaining.is_zero() {
-            break;
+        let held = !belief.remaining().is_zero();
+        if held != serving {
+            serving = held;
+            if held {
+                health_reporter
+                    .set_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
+                    .await;
+            } else {
+                health_reporter
+                    .set_not_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
+                    .await;
+            }
         }
-        tokio::time::sleep(remaining).await;
-    }
-    health_reporter
-        .set_not_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
+        tokio::time::sleep(if held {
+            belief.remaining().min(poll)
+        } else {
+            poll
+        })
         .await;
-    std::future::pending().await
+    }
 }
 
 /// A failed revoke is never propagated: the lease expires on its own, so failing the shutdown
