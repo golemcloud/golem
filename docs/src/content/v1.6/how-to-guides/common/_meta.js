@@ -13,6 +13,7 @@ export default {
   "golem-deploy": "Deploying a Golem Application with `golem deploy`",
   "golem-deployment-version": "Deployment Versions",
   "golem-edit-manifest": "Editing the Golem Application Manifest (golem.yaml)",
+  "golem-generating-tool-clients": "Generate typed clients for existing tools",
   "golem-get-agent-metadata": "Getting Agent Metadata",
   "golem-cli-structured-output": "Golem CLI Structured Output",
   "golem-js-runtime": "Golem JavaScript Runtime (QuickJS)",

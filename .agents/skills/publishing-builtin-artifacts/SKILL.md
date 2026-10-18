@@ -1,6 +1,6 @@
 ---
 name: publishing-builtin-artifacts
-description: Publishes immutable built-in artifacts during manual tagged Golem release preparation. Use for golem-builtins releases, release manifests, checksums, provenance, licenses, or artifact versions.
+description: Publishes immutable built-in artifacts during protected tagged Golem release preparation or authorized local recovery. Use for golem-builtins releases, release manifests, checksums, provenance, licenses, or artifact versions.
 ---
 
 # Publishing Built-in Artifacts
@@ -18,7 +18,21 @@ versions. Bump changed tools in source, registry provisioning, and defaults duri
 release preparation. Replacing local bytes does not rebind published tool
 coordinates in an existing registry database.
 
-## Manual release
+## Protected preparation
+
+Use [releasing-golem](../releasing-golem/SKILL.md) for the complete release order
+and authorization gates. The normal publisher is the protected `golem-release`
+job in `prepare-golem-release.yaml`, dispatched on the exact Golem tag. It runs
+after full reusable CI preflight, creates or resumes the draft, publishes all eight
+entries, and uploads the verified manifest. It never publishes the Golem draft.
+Only this job mints the GitHub App token from environment variable
+`RELEASE_APP_ID` and secret `RELEASE_APP_PRIVATE_KEY`. The App needs contents
+read/write on `golemcloud/golem` and `golemcloud/golem-builtins`. Restrict the
+environment to release tags; required reviewers are recommended. Normal CI has
+no built-in write token. The publisher's CI guard accepts only this workflow's
+`workflow_dispatch` on the matching Golem tag in `golemcloud/golem`.
+
+## Authorized local recovery
 
 1. Use a clean exact release-tag checkout with full history. Push the tag and
    create a draft Golem GitHub release first. The tag must originate on main.
@@ -42,4 +56,5 @@ source archives, and applicable SPDX SBOMs. Never overwrite tags or assets.
 On partial failure, rerun from the same source. The publisher verifies existing
 assets, uploads only missing assets, and verifies the complete public set before
 the outer task creates the manifest. A conflicting asset stops publication.
-Never publish from CI or give CI write credentials for built-in releases.
+An existing manifest must be identical and is verified and reused. Never use
+`--clobber`, move a tag, or bypass the CI guard. Changed bytes require a new tag.

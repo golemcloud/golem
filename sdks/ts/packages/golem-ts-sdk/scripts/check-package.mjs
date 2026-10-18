@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -10,7 +17,8 @@ import { rollup } from 'rollup';
 import ts from 'typescript';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const directory = mkdtempSync(join(tmpdir(), 'golem-ts-package-'));
+// Rollup reports resolved paths; on macOS the temporary directory is behind a symlink.
+const directory = realpathSync(mkdtempSync(join(tmpdir(), 'golem-ts-package-')));
 const npm = (args, cwd = directory) =>
   execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', args, {
     cwd,
@@ -105,7 +113,13 @@ export const publicModules = [${publicComponentModules.map((_, index) => `public
     input: 'virtual:agent-main',
     external: (id) => /^(golem:|wasi:|node:|wasm-rquickjs:)/.test(id),
     onwarn: (warning, warn) => {
-      if (warning.code !== 'CIRCULAR_DEPENDENCY') warn(warning);
+      if (warning.code === 'CIRCULAR_DEPENDENCY') return;
+      if (
+        warning.code === 'INVALID_ANNOTATION' &&
+        warning.id?.replaceAll('\\', '/').includes('/node_modules/')
+      )
+        return;
+      warn(warning);
     },
     plugins: [
       componentPlugin(componentConfiguration(componentInput), componentInput),

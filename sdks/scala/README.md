@@ -331,6 +331,26 @@ import golem.HostApi
 HostApi.oplogCommit(1)
 ```
 
+## Permission card derivation
+
+`PermissionsApi.deriveFromWallet` and both persistent card types' `derive` methods
+return `Either[PermissionError, PersistentCard]`. Match `PersistentCard.Concrete(card)`
+for a `PermissionCard`, or `PersistentCard.Template(card)` for a
+`PolymorphicPermissionCard`. The host selects the case. The SDK never infers the
+kind from request strings and does not call `inspect` to discover it.
+
+The result provides the common card operations directly: `id`, `parents`,
+`expiresAt`, `inspect`, `derive`, `revoke`, `install`, `isPresent`, and `release`.
+It can also be a parent of `deriveScope`. Its schema codecs preserve the sum and
+the owned payload. Sending, installing, revoking, or releasing the payload also
+moves the result; wrapping it does not duplicate authority.
+
+Slots in persistent bounds name the eventual installed holder, not the caller
+that derives the card. Attenuation must hold for every possible slot binding.
+A template parent is evaluated in the caller's scope before attenuation.
+Slot tool owners do not use caller metadata aliases. `deriveScope` remains
+concrete: slot-bearing bounds fail with `PermissionError.InvalidPattern`.
+
 ## Dependencies
 
 - **`zio-blocks-schema`** - Derivation of data types and WIT-compatible codecs

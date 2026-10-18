@@ -16705,6 +16705,23 @@ async fn builtin_javascript_and_typescript_tools_run_in_sidecars_and_reconstruct
         true,
     )
     .await?;
+    // A shell passes its current directory through PWD, so every tool starts where a script is.
+    for tool in javascript_metadata
+        .tools
+        .iter()
+        .chain(&typescript_metadata.tools)
+    {
+        let cwd = tool.commands.nodes[0]
+            .body
+            .as_ref()
+            .and_then(|body| body.options.iter().find(|option| option.long == "cwd"));
+        assert_eq!(
+            cwd.and_then(|option| option.env_var.as_deref()),
+            Some("PWD"),
+            "{:?}",
+            tool.name()
+        );
+    }
     let mut deployment = deployment_state(
         context.account_id,
         javascript_component.id,
@@ -16770,6 +16787,36 @@ async fn builtin_javascript_and_typescript_tools_run_in_sidecars_and_reconstruct
     assert!(immediate_exit.stderr.is_empty());
 
     let behavior_agent = "js-ts-behavior";
+    let npm_init = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "npm",
+        "/workspace",
+        vec!["init", "-y", "--init-version=0.1.0"],
+    )
+    .await?;
+    assert_eq!(
+        npm_init.exit_code,
+        0,
+        "npm init stderr: {}",
+        String::from_utf8_lossy(&npm_init.stderr)
+    );
+    let initialized = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "node",
+        "/workspace",
+        vec![
+            "-e",
+            "const m = JSON.parse(require('node:fs').readFileSync('package.json', 'utf8')); console.log([m.name, m.version, m.license, m.main].join(','))",
+        ],
+    )
+    .await?;
+    assert_eq!(initialized.exit_code, 0);
+    assert_eq!(initialized.stdout, b"workspace,0.1.0,ISC,index.js\n");
+
     let fixture_source = r##"
 const fs = require('node:fs');
 fs.mkdirSync('local-pkg', { recursive: true });
@@ -16860,6 +16907,35 @@ fs.writeFileSync('invalid.ts', 'const value: number = "wrong";\n');
     assert_eq!(npm_invalid.exit_code, 1);
     assert!(String::from_utf8(npm_invalid.stdout)?.contains("Unknown command"));
 
+    // A registry request goes through npm's agent, whose ignored createConnection hook makes the
+    // runtime emit a transport warning that the npm tool keeps out of its output. The runtime warns
+    // once per instance, so the request runs in an owner that has made no registry request yet.
+    let registry = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let registry_url = format!("http://127.0.0.1:{}/", registry.local_addr()?.port());
+    let registry_server = tokio::spawn(async move {
+        axum::serve(
+            registry,
+            Router::new().route("/-/ping", get(|| async { "{}" })),
+        )
+        .await
+    });
+    let npm_ping = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        "js-ts-npm-registry",
+        "npm",
+        "/workspace",
+        vec!["ping", "--registry", &registry_url],
+    )
+    .await?;
+    registry_server.abort();
+    let npm_ping_stderr = String::from_utf8(npm_ping.stderr)?;
+    assert_eq!(npm_ping.exit_code, 0, "npm ping stderr: {npm_ping_stderr}");
+    assert!(
+        !npm_ping_stderr.contains("WASM_RQUICKJS_HTTP_AGENT_TRANSPORT"),
+        "{npm_ping_stderr}"
+    );
+
     exercise_npm_lifecycle_completion(&executor, &caller_component).await?;
 
     let npx = invoke_cli_tool(
@@ -16940,6 +17016,72 @@ fs.writeFileSync('invalid.ts', 'const value: number = "wrong";\n');
     assert_eq!(tsc_build.exit_code, 0);
     assert!(tsc_build.stdout.is_empty());
     assert!(tsc_build.stderr.is_empty());
+
+    // Each invocation evaluates a fresh compiler, so incremental builds rely only on the build
+    // information and output timestamps persisted by earlier invocations.
+    let tsc_build_unchanged = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "tsc",
+        "/workspace",
+        vec![
+            "--build",
+            "--verbose",
+            "--listEmittedFiles",
+            "--pretty",
+            "false",
+        ],
+    )
+    .await?;
+    let tsc_build_unchanged_stdout = String::from_utf8(tsc_build_unchanged.stdout)?;
+    assert_eq!(tsc_build_unchanged.exit_code, 0);
+    assert!(
+        tsc_build_unchanged_stdout.contains("is up to date"),
+        "{tsc_build_unchanged_stdout}"
+    );
+    assert!(
+        !tsc_build_unchanged_stdout.contains("TSFILE:"),
+        "{tsc_build_unchanged_stdout}"
+    );
+    let tsc_source_change = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "node",
+        "/workspace",
+        vec![
+            "-e",
+            "require('node:fs').appendFileSync('valid.ts', 'export const changed = true;\\n')",
+        ],
+    )
+    .await?;
+    assert_eq!(tsc_source_change.exit_code, 0);
+    let tsc_build_changed = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "tsc",
+        "/workspace",
+        vec![
+            "--build",
+            "--verbose",
+            "--listEmittedFiles",
+            "--pretty",
+            "false",
+        ],
+    )
+    .await?;
+    let tsc_build_changed_stdout = String::from_utf8(tsc_build_changed.stdout)?;
+    assert_eq!(tsc_build_changed.exit_code, 0);
+    assert!(
+        tsc_build_changed_stdout.contains("is out of date"),
+        "{tsc_build_changed_stdout}"
+    );
+    assert!(
+        tsc_build_changed_stdout.contains("TSFILE: /workspace/build/valid.js"),
+        "{tsc_build_changed_stdout}"
+    );
 
     drop(executor);
     let executor = start_with_overrides(deps, &context, overrides).await?;
@@ -22121,17 +22263,162 @@ async fn a_cancelled_stdin_is_replayed_after_a_restart(
     .await?;
     let cancelled = close_the_stdin_of_an_external_tool_call(call, StdinClose::Cancel).await?;
     assert_eq!(cancelled.stdout_after_marker, "stdin-cancelled");
+    the_agent_answers_after_a_restart(deps, cancelled).await
+}
+
+/// Covers a tool body whose stdin is cancelled while it waits on a clock, with no earlier host
+/// call of the body that ended: the wait is dropped at the same place in both runs.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_stdin_cancelled_during_a_single_wait_is_replayed_after_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let call = start_an_external_tool_call(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "stdin-or-clock",
+        Default::default(),
+    )
+    .await?;
+    let cancelled = close_the_stdin_of_an_external_tool_call(call, StdinClose::Cancel).await?;
+    assert_eq!(cancelled.stdout_after_marker, "stdin-cancelled");
+    the_agent_answers_after_a_restart(deps, cancelled).await
+}
+
+/// Covers a tool body that made host calls while it read its stdin, and read the end of its
+/// stdin after some of them ended: a wait that ended, a write, and a wait that was still
+/// pending, as a script `sleep 0.5; echo first; sleep 300` stopped with Ctrl+C makes. The body
+/// read the end of its stdin after the first wait and the write; its replay must give it the
+/// end there, not before the first wait ends. A replay that gives it earlier makes the body
+/// drop a wait that ended and never start the pending one, and the agent never answers again.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_stdin_cancelled_after_a_completed_wait_is_replayed_after_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    a_stdin_closed_after_a_completed_wait_is_replayed_after_a_restart(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        StdinClose::Cancel,
+        "first;stdin-cancelled",
+    )
+    .await
+}
+
+/// As [`a_stdin_cancelled_after_a_completed_wait_is_replayed_after_a_restart`], with a stdin
+/// that ends cleanly instead of being cancelled.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn a_stdin_ended_after_a_completed_wait_is_replayed_after_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    a_stdin_closed_after_a_completed_wait_is_replayed_after_a_restart(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        StdinClose::End,
+        "first;stdin-eof",
+    )
+    .await
+}
+
+async fn a_stdin_closed_after_a_completed_wait_is_replayed_after_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    provider: &PrecompiledComponent,
+    caller: &PrecompiledComponent,
+    close: StdinClose,
+    expected_stdout_after_marker: &str,
+) -> anyhow::Result<()> {
+    let mut call = start_an_external_tool_call(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        "stdin-or-two-clocks",
+        Default::default(),
+    )
+    .await?;
+    // The first wait of the body ended and the body wrote `first;`: it is in its second wait
+    // when the client closes the stdin.
+    read_stdout_of_an_external_tool_call_until(&mut call, b"first;").await?;
+    let closed = close_the_stdin_of_an_external_tool_call(call, close).await?;
+    assert_eq!(closed.stdout_after_marker, expected_stdout_after_marker);
+    the_agent_answers_after_a_restart(deps, closed).await
+}
+
+/// Reads the stdout of a running external tool call until what it wrote after the marker ends
+/// with `expected`.
+async fn read_stdout_of_an_external_tool_call_until(
+    call: &mut RunningExternalToolCall,
+    expected: &[u8],
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::invocation_response;
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while !call.stdout[RUN_MARKER.len()..].ends_with(expected) {
+            match call
+                .responses
+                .message()
+                .await?
+                .map(|response| response.response)
+            {
+                Some(Some(invocation_response::Response::OutputItem(item))) => {
+                    call.stdout.extend(item.packed_u8);
+                }
+                other => anyhow::bail!(
+                    "expected {} on stdout, got {other:?}",
+                    String::from_utf8_lossy(expected)
+                ),
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "waited 60 s for {} on stdout",
+            String::from_utf8_lossy(expected)
+        )
+    })?
+}
+
+/// Restarts the executor of an ended external tool call and calls the agent again. The new
+/// executor has no agent in memory: the call loads the agent, and the load replays the ended
+/// call from the journals. The replay must neither fail the agent nor leave the new call
+/// without an answer.
+async fn the_agent_answers_after_a_restart(
+    deps: &WorkerExecutorTestDependencies,
+    ended: EndedExternalToolCall,
+) -> anyhow::Result<()> {
     let EndedExternalToolCall {
         context,
         environment_state,
         executor,
         worker_id,
         ..
-    } = cancelled;
+    } = ended;
     drop(executor);
 
-    // The new executor has no agent in memory. The next call loads the agent, and the load
-    // replays the cancelled call from the journals.
     let executor = start_with_overrides(
         deps,
         &context,
@@ -22157,7 +22444,7 @@ async fn a_cancelled_stdin_is_replayed_after_a_restart(
         oplog
             .iter()
             .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
-        "the replay of the cancelled call must not fail"
+        "the replay of the ended call must not fail"
     );
     next_call?;
     Ok(())

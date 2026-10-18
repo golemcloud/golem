@@ -45,11 +45,12 @@ type PermissionCard = golem_core_types.PermissionCard
 type PatternGrant = golem_permissions_types.PatternGrant
 type PermissionError = golem_permissions_types.PermissionError
 type Duration = golem_permissions_types.Duration
+type PersistentCard = golem_permissions_types.PersistentCard
 
 //go:wasmimport golem:permissions/derive@0.1.0 derive
 func wasm_import_derive(arg0 int32, arg1 uintptr, arg2 uint32, arg3 uintptr, arg4 uint32, arg5 uintptr, arg6 uint32, arg7 uintptr, arg8 uint32, arg9 int32, arg10 uintptr, arg11 uint32, arg12 uintptr)
 
-func Derive(parent *golem_core_types.PermissionCard, lowerPositiveToRetain []golem_permissions_types.PatternGrant, lowerNegativeToAdd []golem_permissions_types.PatternGrant, upperPositiveToRetain []golem_permissions_types.PatternGrant, upperNegativeToAdd []golem_permissions_types.PatternGrant, lifespan witTypes.Option[golem_permissions_types.Duration]) witTypes.Result[*golem_core_types.PermissionCard, golem_permissions_types.PermissionError] {
+func Derive(parent *golem_core_types.PermissionCard, lowerPositiveToRetain []golem_permissions_types.PatternGrant, lowerNegativeToAdd []golem_permissions_types.PatternGrant, upperPositiveToRetain []golem_permissions_types.PatternGrant, upperNegativeToAdd []golem_permissions_types.PatternGrant, lifespan witTypes.Option[golem_permissions_types.Duration]) witTypes.Result[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError] {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
@@ -187,91 +188,104 @@ func Derive(parent *golem_core_types.PermissionCard, lowerPositiveToRetain []gol
 		panic("unreachable")
 	}
 	wasm_import_derive((parent).Handle(), uintptr(result), length, uintptr(result10), length11, uintptr(result18), length19, uintptr(result26), length27, option, option29, option30, returnArea)
-	var result42 witTypes.Result[*golem_core_types.PermissionCard, golem_permissions_types.PermissionError]
+	var result43 witTypes.Result[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-
-		result42 = witTypes.Ok[*golem_core_types.PermissionCard, golem_permissions_types.PermissionError](golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
-	case 1:
-		var variant golem_permissions_types.PermissionError
+		var variant golem_permissions_types.PersistentCard
 		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
 		case 0:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant = golem_permissions_types.MakePermissionErrorNotPermitted(value)
+			variant = golem_permissions_types.MakePersistentCardConcrete(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (4 + 1*4)))))))
 
 		case 1:
-			value31 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant = golem_permissions_types.MakePermissionErrorLowerBoundTooBroad(value31)
-
-		case 2:
-			value32 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorUpperBoundTooBroad(value32)
-
-		case 3:
-			value33 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorWalletMultiSourceRequired(value33)
-
-		case 4:
-			value34 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorCardRevoked(value34)
-
-		case 5:
-			value35 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorCardExpired(value35)
-
-		case 6:
-			value36 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorInstallRecipientMismatch(value36)
-
-		case 7:
-			value37 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorUnknownResourceClass(value37)
-
-		case 8:
-			value38 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorInvalidPattern(value38)
-
-		case 9:
-			value39 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorInvalidVerb(value39)
-
-		case 10:
-			value40 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorInvalidOwner(value40)
-
-		case 11:
-			value41 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorInvalidRecipient(value41)
+			variant = golem_permissions_types.MakePersistentCardTemplate(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (4 + 1*4)))))))
 
 		default:
 			panic("unreachable")
 		}
 
-		result42 = witTypes.Err[*golem_core_types.PermissionCard, golem_permissions_types.PermissionError](variant)
+		result43 = witTypes.Ok[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError](variant)
+	case 1:
+		var variant42 golem_permissions_types.PermissionError
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
+		case 0:
+			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorNotPermitted(value)
+
+		case 1:
+			value31 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorLowerBoundTooBroad(value31)
+
+		case 2:
+			value32 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorUpperBoundTooBroad(value32)
+
+		case 3:
+			value33 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorWalletMultiSourceRequired(value33)
+
+		case 4:
+			value34 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorCardRevoked(value34)
+
+		case 5:
+			value35 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorCardExpired(value35)
+
+		case 6:
+			value36 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorInstallRecipientMismatch(value36)
+
+		case 7:
+			value37 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorUnknownResourceClass(value37)
+
+		case 8:
+			value38 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorInvalidPattern(value38)
+
+		case 9:
+			value39 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorInvalidVerb(value39)
+
+		case 10:
+			value40 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorInvalidOwner(value40)
+
+		case 11:
+			value41 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorInvalidRecipient(value41)
+
+		default:
+			panic("unreachable")
+		}
+
+		result43 = witTypes.Err[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError](variant42)
 	default:
 		panic("unreachable")
 	}
-	result43 := result42
-	return result43
+	result44 := result43
+	return result44
 
 }
 
 //go:wasmimport golem:permissions/derive@0.1.0 derive-from-wallet
 func wasm_import_derive_from_wallet(arg0 uintptr, arg1 uint32, arg2 uintptr, arg3 uint32, arg4 uintptr, arg5 uint32, arg6 uintptr, arg7 uint32, arg8 int32, arg9 uintptr, arg10 uint32, arg11 uintptr)
 
-func DeriveFromWallet(lowerPositive []golem_permissions_types.PatternGrant, lowerNegative []golem_permissions_types.PatternGrant, upperPositive []golem_permissions_types.PatternGrant, upperNegative []golem_permissions_types.PatternGrant, lifespan witTypes.Option[golem_permissions_types.Duration]) witTypes.Result[*golem_core_types.PermissionCard, golem_permissions_types.PermissionError] {
+func DeriveFromWallet(lowerPositive []golem_permissions_types.PatternGrant, lowerNegative []golem_permissions_types.PatternGrant, upperPositive []golem_permissions_types.PatternGrant, upperNegative []golem_permissions_types.PatternGrant, lifespan witTypes.Option[golem_permissions_types.Duration]) witTypes.Result[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError] {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
@@ -409,84 +423,97 @@ func DeriveFromWallet(lowerPositive []golem_permissions_types.PatternGrant, lowe
 		panic("unreachable")
 	}
 	wasm_import_derive_from_wallet(uintptr(result), length, uintptr(result10), length11, uintptr(result18), length19, uintptr(result26), length27, option, option29, option30, returnArea)
-	var result42 witTypes.Result[*golem_core_types.PermissionCard, golem_permissions_types.PermissionError]
+	var result43 witTypes.Result[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-
-		result42 = witTypes.Ok[*golem_core_types.PermissionCard, golem_permissions_types.PermissionError](golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
-	case 1:
-		var variant golem_permissions_types.PermissionError
+		var variant golem_permissions_types.PersistentCard
 		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
 		case 0:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant = golem_permissions_types.MakePermissionErrorNotPermitted(value)
+			variant = golem_permissions_types.MakePersistentCardConcrete(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (4 + 1*4)))))))
 
 		case 1:
-			value31 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant = golem_permissions_types.MakePermissionErrorLowerBoundTooBroad(value31)
-
-		case 2:
-			value32 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorUpperBoundTooBroad(value32)
-
-		case 3:
-			value33 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorWalletMultiSourceRequired(value33)
-
-		case 4:
-			value34 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorCardRevoked(value34)
-
-		case 5:
-			value35 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorCardExpired(value35)
-
-		case 6:
-			value36 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorInstallRecipientMismatch(value36)
-
-		case 7:
-			value37 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorUnknownResourceClass(value37)
-
-		case 8:
-			value38 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorInvalidPattern(value38)
-
-		case 9:
-			value39 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorInvalidVerb(value39)
-
-		case 10:
-			value40 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorInvalidOwner(value40)
-
-		case 11:
-			value41 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = golem_permissions_types.MakePermissionErrorInvalidRecipient(value41)
+			variant = golem_permissions_types.MakePersistentCardTemplate(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (4 + 1*4)))))))
 
 		default:
 			panic("unreachable")
 		}
 
-		result42 = witTypes.Err[*golem_core_types.PermissionCard, golem_permissions_types.PermissionError](variant)
+		result43 = witTypes.Ok[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError](variant)
+	case 1:
+		var variant42 golem_permissions_types.PermissionError
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
+		case 0:
+			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorNotPermitted(value)
+
+		case 1:
+			value31 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorLowerBoundTooBroad(value31)
+
+		case 2:
+			value32 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorUpperBoundTooBroad(value32)
+
+		case 3:
+			value33 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorWalletMultiSourceRequired(value33)
+
+		case 4:
+			value34 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorCardRevoked(value34)
+
+		case 5:
+			value35 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorCardExpired(value35)
+
+		case 6:
+			value36 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorInstallRecipientMismatch(value36)
+
+		case 7:
+			value37 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorUnknownResourceClass(value37)
+
+		case 8:
+			value38 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorInvalidPattern(value38)
+
+		case 9:
+			value39 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorInvalidVerb(value39)
+
+		case 10:
+			value40 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorInvalidOwner(value40)
+
+		case 11:
+			value41 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant42 = golem_permissions_types.MakePermissionErrorInvalidRecipient(value41)
+
+		default:
+			panic("unreachable")
+		}
+
+		result43 = witTypes.Err[golem_permissions_types.PersistentCard, golem_permissions_types.PermissionError](variant42)
 	default:
 		panic("unreachable")
 	}
-	result43 := result42
-	return result43
+	result44 := result43
+	return result44
 
 }
 

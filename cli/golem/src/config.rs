@@ -48,6 +48,7 @@ use golem_registry_service::config::{
 use golem_service_base::config::{
     BlobStorageConfig, LocalFileSystemBlobStorageConfig, S3BlobStorageConfig,
 };
+use golem_service_base::http_server::HttpServerConfig;
 use golem_service_base::service::compiled_component::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig,
 };
@@ -163,6 +164,9 @@ pub struct RouterConfig {
     /// host reach the HTTP API and MCP deployments, like on `worker_service.custom_request_port`.
     /// The registry reserves this host, so no environment can register it as a domain.
     pub management_host: Option<String>,
+    /// HTTP/2 settings of the listener.
+    #[serde(default)]
+    pub http_server: HttpServerConfig,
 }
 
 impl GolemServerConfig {
@@ -187,6 +191,7 @@ impl GolemServerConfig {
                 address: DEFAULT_LOCAL_ROUTER_ADDR.to_string(),
                 port: DEFAULT_LOCAL_ROUTER_PORT,
                 management_host: None,
+                http_server: HttpServerConfig::default(),
             },
             registry_service: RegistryServiceConfig {
                 bind_address: INTERNAL_BIND_ADDRESS,

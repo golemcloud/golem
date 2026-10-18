@@ -20,7 +20,12 @@ use std::time::Duration;
 lazy_static! {
     static ref COMPILATION_QUEUE_LENGTH: Gauge = register_gauge!(
         "component_compilation_queue_length",
-        "Number of outstanding compilation requests"
+        "Number of compilation requests waiting for the compiler"
+    )
+    .unwrap();
+    static ref UPLOAD_QUEUE_LENGTH: Gauge = register_gauge!(
+        "component_compilation_upload_queue_length",
+        "Number of compiled components waiting for upload"
     )
     .unwrap();
 }
@@ -31,6 +36,14 @@ pub fn increment_queue_length() {
 
 pub fn decrement_queue_length() {
     COMPILATION_QUEUE_LENGTH.dec();
+}
+
+pub fn increment_upload_queue_length() {
+    UPLOAD_QUEUE_LENGTH.inc();
+}
+
+pub fn decrement_upload_queue_length() {
+    UPLOAD_QUEUE_LENGTH.dec();
 }
 
 lazy_static! {

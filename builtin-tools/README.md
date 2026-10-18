@@ -38,8 +38,8 @@ response-size, and redirect limits are optional invocation arguments, not
 deployment configuration. HTML is returned as decoded source unless the invocation enables
 conversion to readable text.
 
-The Bash tool is implemented under `builtin-tools/bash/` and built reproducibly, in a pinned
-container, into `builtin-tools/bash.wasm` (`cargo make build-bash-tool`). The `bash` component
+The Bash tool is implemented under `builtin-tools/bash/` and built with the release preset of
+`builtin-tools/bash/golem.yaml` into `builtin-tools/bash.wasm` (`cargo make build-bash-tool`). The `bash` component
 provides the `bash` tool; see [its contract and examples](bash/README.md).
 
 The Python tool source is implemented under `builtin-tools/python/` and built into

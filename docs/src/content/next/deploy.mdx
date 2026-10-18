@@ -66,7 +66,9 @@ See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-re
 
 ### Worker Service
 
-[golem-worker-service](https://github.com/golemcloud/golem/tree/main/golem-worker-service) provides APIs and [HTTP gateway](/next/operate/architecture#the-gateway) functionality for agents and acts as a routing service for worker executors. It retrieves gateway definitions from the registry service, uses blob storage for initial agent files, and stores gateway sessions in Redis or SQLite.
+[golem-worker-service](https://github.com/golemcloud/golem/tree/main/golem-worker-service) provides APIs and [HTTP gateway](/next/operate/architecture#the-gateway) functionality for agents and acts as a routing service for worker executors. It retrieves gateway definitions from the registry service, uses blob storage for initial agent files, and stores gateway sessions in Redis, SQLite, or PostgreSQL.
+
+To use PostgreSQL for gateway sessions, set `gateway_session_storage.type = "Postgres"` in the worker service configuration. Under `gateway_session_storage.config`, set `host`, `port`, `database`, `username`, `password`, `max_connections`, `pending_login_expiration`, and `cleanup_interval`. The optional `schema` defaults to `golem_worker_service_session_store`, separate from other services' migration tables. For the single executable, nest these settings under `worker_service`; supply the password through `GOLEM__WORKER_SERVICE__GATEWAY_SESSION_STORAGE__CONFIG__PASSWORD` rather than checking it into a configuration file.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-worker-service/config/worker-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-worker-service/config/worker-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-worker-service)
 
@@ -265,7 +267,28 @@ See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-sh
 
 ### Component Compilation Service
 
-[golem-component-compilation-service](https://github.com/golemcloud/golem/tree/main/golem-component-compilation-service) is a sidecar service responsible for compiling components. The service uses Blob storage as data storage.
+[golem-component-compilation-service](https://github.com/golemcloud/golem/tree/main/golem-component-compilation-service) warms the compiled-component cache in Blob storage. It is an optional optimisation: if precompilation is skipped or fails, the executor compiles and caches the component on first use. Pending requests are held in memory and are lost on restart. The service compiles one component at a time because Wasmtime already parallelises compilation internally.
+
+The service rejects an enqueue immediately when its request queue is full. The registry still completes the component upload. The registry's `component_compilation.config.enqueue_timeout` bounds the entire enqueue attempt, including connection establishment and retries; its default is `1s`. A timeout skips cache warming, not the component upload. A timed-out request might already have reached the compilation service and can still be compiled. Saturation is not retried inside the upload request.
+
+| Compilation service setting | Default | Meaning |
+| --- | --- | --- |
+| `compile_worker.queue_capacity` | `100` | Maximum pending compilation requests, excluding the component being processed |
+| `compile_worker.upload_queue_capacity` | `100` | Maximum compiled components waiting for upload, excluding the component being uploaded |
+
+Both capacities must be positive. Their environment variables are `GOLEM__COMPILE_WORKER__QUEUE_CAPACITY` and `GOLEM__COMPILE_WORKER__UPLOAD_QUEUE_CAPACITY`. The registry timeout is `GOLEM__COMPONENT_COMPILATION__CONFIG__ENQUEUE_TIMEOUT`.
+
+#### Choose queue capacities
+
+The defaults are starting values, not measured recommendations for golem-dev or golem-prod. Measure each environment with its actual CPU and memory limits and Blob storage backend before selecting values:
+
+1. Use representative small and large components and realistic deployment bursts. For cold-compilation measurements, confirm compiled-blob cache misses and disable or start with a cold Wasmtime filesystem cache (`engine.enable_fs_cache`). Fresh component revisions alone do not bypass the filesystem cache. Measure warm-cache workloads separately.
+2. Observe `component_compilation_time_seconds` and the pending-request queue. Measure sustained successful compilations and artifact uploads per second over wall-clock time. Download time and upload backpressure affect throughput but are outside the histogram. Choose how much cache-warming delay is useful: validate the time from admission until the artifact is available against the expected first invocation. Use measured throughput and that delay to choose the request capacity. A larger queue does not increase compilation throughput.
+3. Exercise slow Blob storage uploads. Observe `component_compilation_upload_queue_length` and process/pod peak memory with the proposed capacity. The upload queue retains compiled components, which can be much larger than request metadata. In addition to the queue, allow for one component being uploaded, one being processed or waiting for upload-queue space, compilation working memory, download buffers, artifact serialization buffers, Blob storage upload buffers, and runtime overhead. Leave headroom below the pod memory limit.
+4. Run a burst that exceeds the request capacity. Confirm that `component_compilation_enqueue_total{outcome="rejected"}` increases in the registry and that uploads remain responsive. Exercise an unavailable or unresponsive compilation service and confirm the configured enqueue budget bounds the extra upload delay.
+5. Record the component mix, resource limits, compilation durations, sustained throughput, time until artifacts are available, queue peaks, peak memory, enqueue outcomes, and upload latency with the chosen golem-dev and golem-prod settings in the deployment configuration review.
+
+Use process or container memory measurements, such as the platform's working-set/RSS metrics. Do not interpret RSS differences between compilations as precise per-component allocation measurements: allocators, shared compiler threads, and retained artifacts affect them. The compilation-duration histogram measures successful Wasmtime component-build calls. It excludes request-queue wait, component download, compiled-blob cache hits, and artifact upload, but includes Wasmtime filesystem-cache loads when that cache is enabled. The queue gauges exclude in-flight work; a flat queue does not prove progress. Check compilation logs and duration samples as well.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-component-compilation-service/config/component-compilation-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-component-compilation-service/config/component-compilation-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-component-compilation-service)
 
@@ -285,16 +308,49 @@ See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-co
 | `GOLEM_ROUTER_STREAM_IDLE_TIMEOUT` | Longest time without data on a request or a connection, in seconds | `3600s` |
 | `GOLEM_ROUTER_DNS_REFRESH_RATE` | How often the router resolves the service host names again, in seconds | `10s` |
 | `GOLEM_ROUTER_MAX_CONNECTIONS` | Largest number of open client connections | `50000` |
+| `GOLEM_ROUTER_CONCURRENCY` | Number of Envoy worker threads (`--concurrency`) | `2` |
+| `GOLEM_ROUTER_STATS_PORT` | Port that serves the Prometheus metrics of Envoy at `/stats/prometheus`, IPv4 and IPv6 | none |
 
-The container arguments are added to the arguments of Envoy, for example `--log-level debug`.
+The container arguments are added to the arguments of Envoy, for example `--log-level debug`. A `--concurrency` argument replaces `GOLEM_ROUTER_CONCURRENCY`.
 
-The router sends HTTP/2 without TLS to the services, so a request that the client cancels is also cancelled in the service. It sends websocket upgrades over HTTP/1.1. A request has no time limit, so invocations that wait for a result, server-sent events, MCP sessions and websockets stay open for as long as they send data; `GOLEM_ROUTER_STREAM_IDLE_TIMEOUT` ends a silent one. The router does not limit the size of a request body; the services apply their own limits. It accepts header names with an underscore and keeps an encoded slash in the path. It resolves the service host names again every `GOLEM_ROUTER_DNS_REFRESH_RATE`, so it follows a service that restarts with a new address, and it starts before the services are resolvable. The router answers `/metrics` on the management host with 404, so the metrics of the services do not reach the clients; scrape the services directly.
+Envoy starts one worker thread for each CPU of the host, not for each CPU of the container limit, and each worker thread opens its own connections to the services. Set `GOLEM_ROUTER_CONCURRENCY` to the CPU limit of the container.
+
+With `GOLEM_ROUTER_STATS_PORT`, the router serves `/stats/prometheus` on that port and answers every other path with 404. The Envoy admin interface listens on `127.0.0.1:19000` in the container and is not reachable from outside it. Do not publish the metrics port to the internet; scrape it from inside the deployment.
+
+The router sends HTTP/2 without TLS to the services, so a request that the client cancels is also cancelled in the service. It sends the WebSockets of the management API, `/connect` and the invocation session (`/v1/agents/invoke-agent-session`), to the worker service over HTTP/1.1. HTTP API deployments do not serve WebSockets, so the router answers a WebSocket upgrade for any other host with 403. When a host name resolves to several replicas, the router sends a request to the replica with the fewest open requests. A request has no time limit, so invocations that wait for a result, server-sent events, MCP sessions and websockets stay open for as long as they send data; `GOLEM_ROUTER_STREAM_IDLE_TIMEOUT` ends a silent one. The router does not limit the size of a request body; the services apply their own limits. It accepts header names with an underscore and keeps an encoded slash in the path. It resolves the service host names again every `GOLEM_ROUTER_DNS_REFRESH_RATE`, so it follows a service that restarts with a new address, and it starts before the services are resolvable. The router answers `/metrics` on the management host with 404, so the metrics of the services do not reach the clients; scrape the services directly.
 
 The router keeps the original `Host` header, with its port, and sets `X-Forwarded-Host` to the same value. It appends the address of the client to `X-Forwarded-For`, and sets `X-Forwarded-Proto` to its own scheme, `http`. Where TLS ends at a proxy in front of the router, set `GOLEM_ROUTER_TRUSTED_HOPS` to `1`, so that the router keeps the `X-Forwarded-Proto` of that proxy.
 
 The worker service accepts `X-Forwarded-Host` and `X-Forwarded-Proto` only from the addresses in `route_resolver.trusted_ingress_addresses` (`GOLEM__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES`). Add the address of the router to it, so that the worker service takes the scheme from the router, for example `https` where TLS ends in front of the router. Reserve the management host in the registry service with `domain_registration.reserved_domains` (`GOLEM__DOMAIN_REGISTRATION__RESERVED_DOMAINS`), so that no environment can register it.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-router/docker/golem-router-entrypoint.sh), [docker image](https://hub.docker.com/r/golemservices/golem-router)
+
+## Request Limits
+
+Every path into an agent has the same payload limit of 32 MiB: the gRPC message from the worker service to the worker executor, the invocation session WebSocket message, and the REST and MCP request body.
+
+| Setting | Service | Default | Description |
+|---------|---------|---------|-------------|
+| `body_limits.api` | worker service, registry service | `33554432` (32 MiB) | Largest REST request body. A larger body gets `413 Payload Too Large` |
+| `body_limits.mcp` | worker service | `33554432` (32 MiB) | Largest MCP request body |
+| `body_limits.upload` | registry service | `2147483648` (2 GiB) | Largest `multipart/form-data` request body: component and plugin uploads with their initial file archives, and initial agent file uploads |
+| `http_server.http2_max_header_list_size` | worker service, registry service | `65536` (64 KiB) | Largest HTTP/2 header list. A larger header list gets `431 Request Header Fields Too Large` |
+| `http_server.http2_initial_stream_window_size` | worker service, registry service | `1048576` (1 MiB) | HTTP/2 flow-control window of each request stream |
+| `http_server.http2_initial_connection_window_size` | worker service, registry service | `1048576` (1 MiB) | HTTP/2 flow-control window of each connection |
+| `http_server.http2_adaptive_window` | worker service, registry service | `false` | Sizes the HTTP/2 windows from the measured bandwidth-delay product, instead of the initial window sizes |
+| `http_server.http2_max_pending_accept_reset_streams` | worker service, registry service | `20` | Streams that the client may reset before the server accepts them, before the server closes the connection (rapid reset protection). Behind a proxy that resets the streams of many clients on a few connections, such as Envoy, a low value closes connections with good requests on them when requests time out. Set it higher there |
+| `http_server.http2_max_local_error_reset_streams` | worker service, registry service | `1024` | Streams that the server may reset because of errors, before it closes the connection |
+| `invocation_session.websocket.max_message_size`, `max_frame_size` | worker service | `33554432` (32 MiB) | Largest WebSocket message and frame of the invocation session. A larger message or frame closes the session with close code 1009 |
+| `invocation_session.websocket.max_write_buffer_size` | worker service | `67108864` (64 MiB) | Outbound bytes that may wait for the client |
+| `connect_websocket.*` | worker service | same as `invocation_session.websocket` | The same limits for the agent event stream (`connect`) |
+
+A request that declares a larger `Content-Length` gets 413 before the service reads its body. A request without `Content-Length` gets 413 when its body passes the limit.
+
+The invocation session and the agent event stream (`connect`) answer a message or frame above their limit with close code 1009. They do not read the payload of a frame whose header declares a larger size.
+
+The HTTP/2 header list limit is above the 60 KiB that Envoy accepts by default, so a gateway in front of Golem decides first. The HTTP/2 settings apply to every HTTP port of the service: for the worker service, `port`, `custom_request_port` and `mcp_port`.
+
+For environment variables, add the path to `GOLEM__`, for example `GOLEM__BODY_LIMITS__API`. For `golem server run`, nest the settings under `worker_service` or `registry_service`, for example `GOLEM__WORKER_SERVICE__BODY_LIMITS__MCP`. The HTTP/2 settings of the `golem server run` listener are `router.http_server`, for example `GOLEM__ROUTER__HTTP_SERVER__HTTP2_MAX_HEADER_LIST_SIZE`.
 
 ## Network Addresses
 

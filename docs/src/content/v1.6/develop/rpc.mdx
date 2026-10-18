@@ -14,6 +14,9 @@ The simplest way to achieve this is to keep all the agent types that need to cal
 
 The first step of calling a remote agent is creating a _client_ for it by specifying which agent type it is and identifying the agent by providing values for its constructor parameters. If the agent identified by the parameters has not been existing yet, it is going to be created and its constructor is executed remotely. If it has been already created, the client just points to it and no action is taken until an _agent method_ is called using it.
 
+The examples below return illustrative weather data for the selected location.
+The caller returns the remote method's result, rather than fetching a real weather service.
+
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 In the following example, we have two agents defined; a weather agent with a constructor parameter identifying a location, and another example agent creating and calling this weather agent.
@@ -35,11 +38,10 @@ In the following example, we have two agents defined; a weather agent with a con
         });
 
         export const WeatherAgentImpl = WeatherAgent.implement({
-            init: () => ({}),
+            init: ({ id }) => ({ location: id.location }),
             methods: {
                 currentWeather() {
-                    // ...
-                    return "";
+                    return `${this.location}: sunny, 18°C`;
                 },
             },
         });
@@ -57,8 +59,7 @@ In the following example, we have two agents defined; a weather agent with a con
             methods: {
                 async run() {
                     const weatherInLondon = WeatherAgent.client.get({ location: "London" });
-                    // ...
-                    return "";
+                    return await weatherInLondon.currentWeather({});
                 },
             },
         });
@@ -71,10 +72,42 @@ In the following example, we have two agents defined; a weather agent with a con
 In Effect TypeScript, the definition's typed client returns scoped Effects:
 
 ```typescript
-const weatherInLondon = yield* WeatherAgent.client.get({ location: "London" })
+import { Effect, Schema } from "effect"
+import { defineAgent, method } from "@golemcloud/effect-golem"
+
+export const WeatherAgent = defineAgent({
+  name: "WeatherAgent",
+  mode: "durable",
+  id: { location: Schema.String },
+  methods: {
+    currentWeather: method({ input: {}, success: Schema.String }),
+  },
+})
+
+export const WeatherAgentImpl = WeatherAgent.implement({
+  init: ({ location }) => Effect.succeed(location),
+  methods: (location) => ({
+    currentWeather: () => Effect.succeed(`${location}: sunny, 18°C`),
+  }),
+})
+
+export const ExampleAgent = defineAgent({
+  name: "ExampleAgent",
+  mode: "durable",
+  id: {},
+  methods: { run: method({ input: {}, success: Schema.String }) },
+}).implement({
+  init: () => Effect.void,
+  methods: () => ({
+    run: () => Effect.scoped(Effect.gen(function* () {
+      const weatherInLondon = yield* WeatherAgent.client.get({ location: "London" })
+      return yield* weatherInLondon.currentWeather({})
+    })).pipe(Effect.orDie),
+  }),
+})
 ```
 
-Use it inside `Effect.scoped(...)` or an existing agent runtime scope. The client exposes each agent method as an Effect-returning function.
+The scope releases the client after the call. The client exposes each agent method as an Effect-returning function. This example uses `Effect.orDie` to trap on RPC failures; alternatively, handle them or map them to an error declared by the calling method.
     </Tabs.Tab>
 
     <Tabs.Tab>
@@ -96,11 +129,11 @@ struct WeatherAgentImpl {
 #[agent_implementation]
 impl WeatherAgent for WeatherAgentImpl {
     fn new(location: String) -> Self {
-        // ...
+        Self { location }
     }
 
     async fn current_weather(&self) -> String {
-        // ...
+        format!("{}: sunny, 18°C", self.location)
     }
 }
 
@@ -120,7 +153,7 @@ impl ExampleAgent for ExampleAgentImpl {
 
     async fn run(&self) -> String {
         let weather_in_london = WeatherAgentClient::get("London".to_string());
-        // ...
+        weather_in_london.current_weather().await
     }
 }
 ```
@@ -150,7 +183,7 @@ trait WeatherAgent extends BaseAgent {
 @agentImplementation()
 final class WeatherAgentImpl(private val location: String) extends WeatherAgent {
   override def currentWeather(): Future[String] = {
-    // ...
+    Future.successful(s"$location: sunny, 18°C")
   }
 }
 
@@ -165,7 +198,7 @@ trait ExampleAgent extends BaseAgent {
 final class ExampleAgentImpl() extends ExampleAgent {
   override def run(): Future[String] = {
     val weatherInLondon = WeatherAgentClient.get("London")
-    // ...
+    weatherInLondon.currentWeather()
   }
 }
 ```
@@ -190,7 +223,7 @@ fn WeatherAgent::new(location : String) -> WeatherAgent {
 
 /// Gets the current weather
 pub fn WeatherAgent::current_weather(self : Self) -> String {
-  // ...
+  "\{self.location}: sunny, 18°C"
 }
 
 #derive.agent
@@ -202,10 +235,12 @@ fn ExampleAgent::new() -> ExampleAgent {
   { last_weather: "" }
 }
 
-pub fn ExampleAgent::run(self : Self) -> String raise @common.AgentError {
+pub async fn ExampleAgent::run(self : Self) -> String {
   let weather_in_london = WeatherAgentClient::get("London")
   defer weather_in_london.drop()
-  // ...
+  let weather = weather_in_london.current_weather()
+  self.last_weather = weather
+  weather
 }
 ```
 
@@ -216,6 +251,8 @@ Here `weather_in_london` is the client for calling a remote `WeatherAgent` - it 
 
     <Tabs.Tab>
 In the following example, we have two agents defined; a weather agent with a constructor parameter identifying a location, and another example agent creating and calling this weather agent. Each agent has a definition package and an implementation package:
+
+These generic methods use Golem's Go toolchain, which the CLI installs for component builds.
 
 ```go filename="agents/weather/weather.go"
 package weather
@@ -244,8 +281,7 @@ var agent = weather.Agent.Implement(func(id weather.ID) *state { return &state{l
 
 func init() {
 	agent.Handle(weather.CurrentWeather, func(ctx *golem.Context[state], _ golem.Unit) string {
-		// ...
-		return ""
+		return ctx.State.location + ": sunny, 18°C"
 	})
 }
 ```
@@ -279,8 +315,7 @@ var agent = example.Agent.Implement(func(example.ID) *state { return &state{} })
 func init() {
 	agent.Handle(example.Run, func(ctx *golem.Context[state], _ golem.Unit) string {
 		weatherInLondon := weather.Agent.Get(weather.ID{Location: "London"})
-		// ...
-		return ""
+		return weather.CurrentWeather.MustCall(weatherInLondon, golem.Unit{})
 	})
 }
 ```
@@ -670,7 +705,7 @@ It is possible to trigger the remote execution of an agent method without awaiti
 
     ```rust
     let remote_agent = BackgroundTaskAgentClient::get(background_job_id);
-    remote_agent.trigger_run_task("hello", 1234);
+    remote_agent.trigger_run_task("hello".to_string(), 1234);
     ```
     </Tabs.Tab>
 

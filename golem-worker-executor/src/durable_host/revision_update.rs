@@ -24,15 +24,15 @@ use crate::services::agent_filesystem::{
 use crate::services::component::ComponentService;
 use crate::services::file_loader::FileLoader;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
+use crate::worker::owner_wallet::WalletCards;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::agent::ParsedAgentId;
-use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{ComponentId, ComponentRevision, InitialAgentFile};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::component::Component;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
@@ -125,7 +125,7 @@ impl AgentInputs {
 
 type AgentState = (
     HashMap<Vec<String>, golem_common::schema::TypedSchemaValue>,
-    BTreeMap<CardId, StoredCard>,
+    WalletCards,
 );
 
 /// A prepared update whose wallet projection is validated before metadata installation.
@@ -224,7 +224,7 @@ pub(crate) async fn prepare_revision_update(
                 .map_err(UpdateStateError::WalletCards)?;
             Some((
                 updated_agent_config,
-                BTreeMap::from([(initial_card.card_id(), initial_card)]),
+                WalletCards::from(vec![(initial_card.card_id(), Arc::new(initial_card))]),
             ))
         }
         None => None,

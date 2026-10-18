@@ -15,7 +15,7 @@ use test_r::{test, timeout};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 
-use super::run;
+use super::{HttpServerConfig, run};
 
 #[derive(Clone, Default)]
 struct LiveBodies {
@@ -89,10 +89,17 @@ fn idle_body(guard: BodyGuard) -> Body {
 async fn spawn_server(
     endpoint: impl poem::Endpoint<Output = poem::Response> + 'static,
 ) -> (SocketAddr, tokio::task::JoinHandle<std::io::Result<()>>) {
+    spawn_server_with(endpoint, HttpServerConfig::default()).await
+}
+
+async fn spawn_server_with(
+    endpoint: impl poem::Endpoint<Output = poem::Response> + 'static,
+    config: HttpServerConfig,
+) -> (SocketAddr, tokio::task::JoinHandle<std::io::Result<()>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let acceptor = TcpAcceptor::from_tokio(listener).unwrap();
-    (address, tokio::spawn(run(acceptor, endpoint)))
+    (address, tokio::spawn(run(acceptor, endpoint, config)))
 }
 
 async fn http1_client(
@@ -345,4 +352,160 @@ async fn request_metadata_errors_and_http1_keep_alive_are_preserved() {
     drop(sender);
     connection.abort();
     server.abort();
+}
+
+async fn http2_client(
+    address: SocketAddr,
+) -> (
+    hyper::client::conn::http2::SendRequest<Empty<Bytes>>,
+    tokio::task::JoinHandle<Result<(), hyper::Error>>,
+) {
+    let io = TokioIo::new(TcpStream::connect(address).await.unwrap());
+    let (sender, connection) = hyper::client::conn::http2::handshake(TokioExecutor::new(), io)
+        .await
+        .unwrap();
+    (sender, tokio::spawn(connection))
+}
+
+fn request_with_header_of_size(size: usize) -> Request<Empty<Bytes>> {
+    Request::builder()
+        .uri("http://localhost/")
+        .header("x-padding", "x".repeat(size))
+        .body(Empty::new())
+        .unwrap()
+}
+
+#[test]
+#[timeout("20s")]
+async fn http2_header_list_above_the_default_limit_gets_431() {
+    let (address, server) = spawn_server(make_sync(|_| poem::Response::default())).await;
+    let (mut sender, connection) = http2_client(address).await;
+
+    // Above the 16 KiB that the servers accepted before the limit was configurable.
+    let accepted = sender
+        .send_request(request_with_header_of_size(48 * 1024))
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), StatusCode::OK);
+
+    let rejected = sender
+        .send_request(request_with_header_of_size(80 * 1024))
+        .await
+        .unwrap();
+    assert_eq!(
+        rejected.status(),
+        StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE
+    );
+
+    drop(sender);
+    connection.abort();
+    server.abort();
+}
+
+#[test]
+#[timeout("20s")]
+async fn http2_header_list_limit_follows_the_config() {
+    let config = HttpServerConfig {
+        http2_max_header_list_size: 4096,
+        ..HttpServerConfig::default()
+    };
+    let (address, server) =
+        spawn_server_with(make_sync(|_| poem::Response::default()), config).await;
+    let (mut sender, connection) = http2_client(address).await;
+
+    let accepted = sender
+        .send_request(request_with_header_of_size(2048))
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), StatusCode::OK);
+
+    let rejected = sender
+        .send_request(request_with_header_of_size(8192))
+        .await
+        .unwrap();
+    assert_eq!(
+        rejected.status(),
+        StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE
+    );
+
+    drop(sender);
+    connection.abort();
+    server.abort();
+}
+
+/// Returns the send capacity that the server grants to a request stream whose body the
+/// endpoint never reads. That capacity is the smaller of the stream and connection windows.
+async fn granted_send_capacity(config: HttpServerConfig, expected: usize) -> usize {
+    let endpoint = make(|_| async {
+        std::future::pending::<()>().await;
+        poem::Response::default()
+    });
+    let (address, server) = spawn_server_with(endpoint, config).await;
+    let socket = TcpStream::connect(address).await.unwrap();
+    let (client, connection) = h2::client::Builder::new()
+        .max_send_buffer_size(4 * expected)
+        .handshake::<_, Bytes>(socket)
+        .await
+        .unwrap();
+    let connection = tokio::spawn(connection);
+    let mut client = client.ready().await.unwrap();
+    let request = Request::builder()
+        .method("POST")
+        .uri("http://localhost/")
+        .body(())
+        .unwrap();
+    let (_response, mut body) = client.send_request(request, false).unwrap();
+    body.reserve_capacity(2 * expected);
+    while body.capacity() < expected {
+        futures::future::poll_fn(|cx| body.poll_capacity(cx))
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    let capacity = body.capacity();
+    connection.abort();
+    server.abort();
+    capacity
+}
+
+#[test]
+#[timeout("20s")]
+async fn http2_initial_windows_follow_the_config() {
+    let window = 4 * 1024 * 1024;
+    let config = HttpServerConfig {
+        http2_initial_stream_window_size: window,
+        http2_initial_connection_window_size: window,
+        ..HttpServerConfig::default()
+    };
+
+    assert_eq!(
+        granted_send_capacity(config, window as usize).await,
+        window as usize
+    );
+}
+
+#[test]
+#[timeout("20s")]
+async fn http2_initial_windows_default_to_1_mib() {
+    let window = 1024 * 1024;
+
+    assert_eq!(
+        granted_send_capacity(HttpServerConfig::default(), window).await,
+        window
+    );
+}
+
+#[test]
+fn config_rejects_windows_above_the_http2_maximum() {
+    assert!(HttpServerConfig::default().validate().is_ok());
+    let config = HttpServerConfig {
+        http2_initial_stream_window_size: 1 << 31,
+        ..HttpServerConfig::default()
+    };
+    assert!(config.validate().is_err());
+    let config = HttpServerConfig {
+        http2_initial_connection_window_size: 1 << 31,
+        ..HttpServerConfig::default()
+    };
+    assert!(config.validate().is_err());
 }

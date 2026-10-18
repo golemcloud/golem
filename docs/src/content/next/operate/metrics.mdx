@@ -28,6 +28,8 @@ Component service exposes the following Prometheus metrics:
 | `api_failure_seconds`      | histogram | `api`, `api_type`, `error`                                                                                 | Measures the duration of failed API requests (both HTTP and gRPC)               |
 | `grpc_api_active_streams`  | gauge     |                                                                                                            | Number of open incoming gRPC streams                                            |
 
+The registry service also exports `component_compilation_enqueue_total`, a counter with the fixed `outcome` labels `accepted`, `rejected`, `failed`, and `timeout`. `accepted` means the compilation service admitted the request, not that compilation finished. `rejected` means its compilation queue was full. `failed` includes transport errors, application errors, and malformed responses. `timeout` means the registry exhausted its overall enqueue budget. These outcomes do not fail the component upload. The counter does not count uploads made with precompilation disabled.
+
 ### Component Compilation Service
 
 Component compilation service exposes the following Prometheus metrics:
@@ -38,8 +40,9 @@ Component compilation service exposes the following Prometheus metrics:
 | `cache_hit_total`                    | counter   | `cache`            | Number of cache hits                           |
 | `cache_miss_total`                   | counter   | `cache`            | Number of cache misses                         |
 | `cache_eviction_total`               | counter   | `cache`, `trigger` | Number of cache evictions                      |
-| `component_compilation_queue_length` | gauge     |                    | Number of compilation requests enqueued        |
-| `compilation_time_seconds`           | histogram |                    | Time to compile a WASM component to native code |
+| `component_compilation_queue_length` | gauge     |                    | Pending compilation requests, excluding the active request |
+| `component_compilation_upload_queue_length` | gauge |                | Compiled components waiting for upload, excluding the active upload |
+| `component_compilation_time_seconds` | histogram |                    | Duration of successful Wasmtime component-build calls; excludes queue wait, download, compiled-blob cache hits, and upload, but includes filesystem-cache loads when enabled |
 
 ### Shard Manager
 

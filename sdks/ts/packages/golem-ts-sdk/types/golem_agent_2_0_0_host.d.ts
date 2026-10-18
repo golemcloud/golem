@@ -65,6 +65,7 @@ declare module 'golem:agent/host@2.0.0' {
     /**
      * Triggers the invocation of a remote method with the given parameters,
      * and returns its final identity immediately.
+     * Scope lending is not supported: `scope-card` must be `none`.
      * @throws RpcError
      */
     invoke(methodName: string, input: SchemaValueTree, scopeCard: PermissionCard | undefined): InvocationMetadata;
@@ -76,6 +77,7 @@ declare module 'golem:agent/host@2.0.0' {
     asyncInvokeAndAwait(methodName: string, input: SchemaValueTree, scopeCard: PermissionCard | undefined): AsyncInvocationWithMetadata;
     /**
      * Schedules an invocation for later and returns its final identity.
+     * Scope lending is not supported: `scope-card` must be `none`.
      * @throws RpcError
      */
     scheduleInvocation(scheduledTime: Datetime, methodName: string, input: SchemaValueTree, scopeCard: PermissionCard | undefined): ScheduledInvocationReceipt;
@@ -83,6 +85,7 @@ declare module 'golem:agent/host@2.0.0' {
      * Schedules an invocation for later and returns its final identity and
      * cancellation capability. Call cancel on the returned resource to
      * cancel the invocation before the scheduled time.
+     * Scope lending is not supported: `scope-card` must be `none`.
      * @throws RpcError
      */
     scheduleCancelableInvocation(scheduledTime: Datetime, methodName: string, input: SchemaValueTree, scopeCard: PermissionCard | undefined): CancelableScheduledInvocationReceipt;

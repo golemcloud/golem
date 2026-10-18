@@ -1,3 +1,5 @@
+import { Callout } from "nextra/components"
+
 # Persistence
 
 ## Introduction
@@ -21,6 +23,65 @@ Currently Golem provides the following implementations, configurable through the
 | Key-value storage | Redis, PostgreSQL, SQLite, multi-SQLite, namespace-routed, in-memory |
 | Indexed storage | Redis, PostgreSQL, SQLite, multi-SQLite, in-memory |
 | Scheduler storage | PostgreSQL, SQLite, in-memory |
+
+## Blob storage on S3
+
+With S3, the blob storage keeps each kind of blob in the bucket that one setting of the `[blob_storage.config]` section names:
+
+| Setting | Blobs |
+| --- | --- |
+| `compilation_cache_bucket` | The compiled components of the compilation cache |
+| `custom_data_bucket` | The blobs that agents write through the WASI Blob Store API |
+| `oplog_payload_bucket` | The large payloads of oplog entries |
+| `compressed_oplog_buckets` | The compressed oplog of the archive layers in the blob storage, one bucket for each layer |
+| `initial_agent_files_bucket` | The initial files of agents |
+| `components_bucket` | The original component Wasm files of the registry service |
+| `filesystem_snapshots_bucket` | The [filesystem snapshots](/v1.6/operate/filesystem_snapshots) of agents |
+
+The key of each object starts with `object_prefix`, when it is set. All services that share the blob storage must use the same endpoint, buckets, `object_prefix` and `namespace_prefixes`. The services do not create buckets.
+
+### One bucket for all blobs
+
+By default (`namespace_prefixes = false`), the bucket keeps the blobs of one kind apart from the blobs of other kinds. So each bucket setting, and each entry of `compressed_oplog_buckets`, must name a different bucket: the keys of two kinds can be the same, and so can the keys of two archive layers. Every service refuses to start when two of these settings name the same bucket, and the error names both settings.
+
+Set `namespace_prefixes = true` to use one bucket for all blobs, for example on a platform that gives one S3-compatible bucket. Then each key starts with a segment for the kind of the blob, after `object_prefix`, and the key of the compressed oplog also holds its layer. No key of one kind is below the prefix of another kind, so all bucket settings can name the same bucket. These settings of the `[blob_storage.config]` section put all blobs into the bucket `golem`. The other S3 settings, such as `region`, `object_prefix` and `retries`, stay as they are:
+
+```toml
+[blob_storage]
+type = "S3"
+
+[blob_storage.config]
+namespace_prefixes = true
+compilation_cache_bucket = "golem"
+custom_data_bucket = "golem"
+oplog_payload_bucket = "golem"
+compressed_oplog_buckets = ["golem"]
+initial_agent_files_bucket = "golem"
+components_bucket = "golem"
+filesystem_snapshots_bucket = "golem"
+```
+
+`compressed_oplog_buckets` must still have one entry for each archive layer in the blob storage (`blob_storage_layers` in the `[oplog]` section).
+
+With `namespace_prefixes = true`, the keys have these prefixes:
+
+| Blobs | Key prefix |
+| --- | --- |
+| Compilation cache | `<object_prefix>/compilation_cache/<environment id>/` |
+| WASI Blob Store data | `<object_prefix>/custom_data/<environment id>/` |
+| Oplog payloads | `<object_prefix>/oplog_payload/<agent mode>/<environment id>/<agent>/` |
+| Compressed oplog | `<object_prefix>/compressed_oplog/<agent mode>/<environment id>/<component id>/<layer>/` |
+| Initial agent files | `<object_prefix>/initial_agent_files/<environment id>/` |
+| Components | `<object_prefix>/component_store/<environment id>/` |
+| Filesystem snapshots | `<object_prefix>/filesystem_snapshots/<environment id>/<agent>/<incarnation id>/` |
+
+Without `object_prefix`, each prefix starts at the segment of its kind. `<agent mode>` is `durable` or `ephemeral`, and `<layer>` is the index of the archive layer in the blob storage, from 0. `<agent>` is the agent part of the location of [filesystem snapshots](/v1.6/operate/filesystem_snapshots#where-the-snapshots-are). The same segments make the directories of the file system blob storage below its `root`.
+
+To give a service access to one kind of blob only, use a policy on its key prefix. For example, without `object_prefix`, grant the object permissions on `arn:aws:s3:::golem/initial_agent_files/*`, and grant `s3:ListBucket` on `arn:aws:s3:::golem` with the condition that `s3:prefix` starts with `initial_agent_files/`. The services list objects to read and delete directories.
+
+<Callout type="warning">
+  The two layouts give different keys to the same blob. Golem does not move the objects when `namespace_prefixes` changes, and it does not read the keys of the other layout. Choose the setting before the first start of a deployment and do not change it later.
+</Callout>
 
 ## Compilation cache
 
@@ -90,7 +151,7 @@ An account's blob storage quota applies only to data that agents write through t
 
 Worker executors enforce the quota from their last known account balance and send net byte changes to the registry service. Concurrent executors can each spend the same stale remaining balance before their next usage update, so a distributed deployment can temporarily exceed the configured limit. S3 deployments correct accounting drift by comparing the recorded total with the physical objects. Reconciliation runs in the background when a resource-limit read or usage update observes that the reconciliation interval has elapsed; it is not a periodic timer. Consequently, an idle account is corrected only after its next such activity, and a delta that overlaps a sweep can require the next successful sweep to converge.
 
-For reconciliation to be accurate, registry services and worker executors must use the same S3 endpoint, `custom_data_bucket`, and `object_prefix`. The custom-data bucket and prefix must not be shared with another blob-storage namespace because namespace keys can otherwise overlap. Both services refuse to start if `filesystem_snapshots_bucket` equals `custom_data_bucket`, even when filesystem snapshots are disabled. This check keeps filesystem snapshots out of the account's blob storage quota.
+For reconciliation to be accurate, registry services and worker executors must use the same S3 endpoint, `custom_data_bucket`, `object_prefix`, and `namespace_prefixes`. With `namespace_prefixes = false`, the services refuse to start when `custom_data_bucket` names the bucket of another setting, even when filesystem snapshots are disabled, because the keys of the two namespaces can otherwise be the same. This check keeps the blobs of other namespaces, such as filesystem snapshots, out of the account's blob storage quota. With `namespace_prefixes = true`, the keys of the custom data have their own prefix, so the custom-data bucket can be the bucket of all blobs (see [One bucket for all blobs](#one-bucket-for-all-blobs)).
 
 Blob mutations and usage reporting are not atomic. An executor crash can lose usage changes that have not reached the registry. Automatic physical reconciliation is enabled only for S3. Filesystem and SQLite deployments enforce quotas using incrementally reported usage, but crash-induced accounting drift can persist indefinitely, including undercounting that permits further writes beyond the configured limit.
 

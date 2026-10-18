@@ -41,6 +41,8 @@ const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(2);
 /// invalidated as soon as possible.
 fn config() -> GrpcClientConfig {
     GrpcClientConfig {
+        connection_pool_size: std::num::NonZeroUsize::MIN,
+        max_connection_age: Duration::ZERO,
         connect_timeout: CONNECT_TIMEOUT,
         request_timeout: None,
         http2_keep_alive_interval: Some(KEEP_ALIVE_INTERVAL),
