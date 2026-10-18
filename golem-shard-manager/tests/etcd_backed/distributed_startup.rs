@@ -239,7 +239,7 @@ async fn queue_order(etcd: &DockerEtcd) -> Vec<u16> {
         .kvs()
         .iter()
         .filter_map(|kv| {
-            let port = ElectionValue::decode(kv.value())?.grpc_address?.port;
+            let port = ElectionValue::decode(kv.value())?.grpc_address.port;
             Some((kv.create_revision(), port))
         })
         .collect();
@@ -256,7 +256,7 @@ async fn await_new_campaigner(etcd: &DockerEtcd, before: &BTreeSet<Vec<u8>>) -> 
                 .into_iter()
                 .find_map(|(key, value)| (!before.contains(&key)).then_some(value))
             {
-                return value.grpc_address.expect("a replica publishes its address");
+                return value.grpc_address;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
@@ -404,14 +404,11 @@ async fn only_a_started_leader_is_marked_ready(etcd: &Arc<DockerEtcd>) {
     let values: Vec<ElectionValue> = campaigner_values(etcd).await.into_values().collect();
     let leader_value = values
         .iter()
-        .find(|value| {
-            value.grpc_address.as_ref().map(|address| address.port)
-                == Some(leader_details.grpc_port)
-        })
+        .find(|value| value.grpc_address.port == leader_details.grpc_port)
         .expect("The leader's value is under the election prefix");
     let standby_value = values
         .iter()
-        .find(|value| value.grpc_address.as_ref() == Some(&standby_address))
+        .find(|value| value.grpc_address == standby_address)
         .expect("The standby's value is under the election prefix");
     assert!(
         leader_value.ready,
@@ -1133,9 +1130,16 @@ async fn a_shutdown_during_the_initial_health_check_exits_cleanly(etcd: &Arc<Doc
 async fn a_step_down_whose_lease_is_already_gone_still_exits_cleanly(etcd: &Arc<DockerEtcd>) {
     await_election_idle(etcd).await;
 
-    let election = LeaderElection::connect(&etcd_config(etcd), LEADER_ELECTION_NAME)
-        .await
-        .expect("Cannot connect to etcd");
+    let election = LeaderElection::connect(
+        &etcd_config(etcd),
+        LEADER_ELECTION_NAME,
+        LeaderAddress {
+            host: "127.0.0.1".to_string(),
+            port: 9,
+        },
+    )
+    .await
+    .expect("Cannot connect to etcd");
     let elected = timeout(STARTUP_TIMEOUT, election.campaign_until_elected())
         .await
         .expect("An uncontested campaign should be won promptly")
@@ -2360,10 +2364,10 @@ async fn wait_out_an_earlier_process_key(etcd: &Arc<DockerEtcd>, earlier_ttl: Du
         .id();
     let stale = ElectionValue {
         identity: "earlier-process".to_string(),
-        grpc_address: Some(LeaderAddress {
+        grpc_address: LeaderAddress {
             host: "127.0.0.1".to_string(),
             port: reserved_port,
-        }),
+        },
         ready: true,
         rollout_generation: None,
     };

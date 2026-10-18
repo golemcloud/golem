@@ -157,9 +157,13 @@ async fn assert_fence_is_live(etcd: &DockerEtcd, fence: &LeaderFence, whose: &st
 // revision.
 async fn an_uncontested_campaign_is_won_immediately(etcd: &Arc<DockerEtcd>) {
     let election_name = unique_election_name();
-    let election = LeaderElection::connect(&election_config(etcd), election_name.clone())
-        .await
-        .expect("Connecting the election client to etcd should succeed");
+    let election = LeaderElection::connect(
+        &election_config(etcd),
+        election_name.clone(),
+        fresh_address(),
+    )
+    .await
+    .expect("Connecting the election client to etcd should succeed");
 
     let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
         .await
@@ -231,7 +235,7 @@ async fn a_below_floor_lease_ttl_is_reported_as_the_clamped_value(etcd: &Arc<Doc
         ..election_config(etcd)
     };
 
-    let election = LeaderElection::connect(&config, unique_election_name())
+    let election = LeaderElection::connect(&config, unique_election_name(), fresh_address())
         .await
         .expect("Connecting the election client to etcd should succeed");
     let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
@@ -268,7 +272,7 @@ async fn campaign_survives_much_longer_than_the_lease_ttl(etcd: &Arc<DockerEtcd>
     let election_name = unique_election_name();
     let config = election_config(etcd);
 
-    let leader_a = LeaderElection::connect(&config, election_name.clone())
+    let leader_a = LeaderElection::connect(&config, election_name.clone(), fresh_address())
         .await
         .expect("Connecting replica A should succeed");
     let elected_a = timeout(CAMPAIGN_TIMEOUT, leader_a.campaign_until_elected())
@@ -284,7 +288,7 @@ async fn campaign_survives_much_longer_than_the_lease_ttl(etcd: &Arc<DockerEtcd>
     // A only keeps leadership while something is renewing its lease.
     let keepalive_a = tokio::spawn(keepalive_a.run());
 
-    let replica_b = LeaderElection::connect(&config, election_name.clone())
+    let replica_b = LeaderElection::connect(&config, election_name.clone(), fresh_address())
         .await
         .expect("Connecting replica B should succeed");
     let mut campaign_b = tokio::spawn(async move { replica_b.campaign_until_elected().await });
@@ -360,7 +364,7 @@ async fn a_standby_is_elected_after_the_leader_lease_expires_without_a_revoke(
     let election_name = unique_election_name();
     let config = election_config(etcd);
 
-    let leader_a = LeaderElection::connect(&config, election_name.clone())
+    let leader_a = LeaderElection::connect(&config, election_name.clone(), fresh_address())
         .await
         .expect("Connecting replica A should succeed");
     let elected_a = timeout(CAMPAIGN_TIMEOUT, leader_a.campaign_until_elected())
@@ -371,7 +375,7 @@ async fn a_standby_is_elected_after_the_leader_lease_expires_without_a_revoke(
     let fence_a_revision = elected_a.fence.create_revision();
     let keepalive_a = tokio::spawn(elected_a.keepalive.run());
 
-    let replica_b = LeaderElection::connect(&config, election_name.clone())
+    let replica_b = LeaderElection::connect(&config, election_name.clone(), fresh_address())
         .await
         .expect("Connecting replica B should succeed");
     let campaign_b = tokio::spawn(async move { replica_b.campaign_until_elected().await });
@@ -427,7 +431,7 @@ async fn a_leader_that_steps_down_hands_over_before_its_lease_could_expire(etcd:
     let election_name = unique_election_name();
     let config = election_config(etcd);
 
-    let leader_a = LeaderElection::connect(&config, election_name.clone())
+    let leader_a = LeaderElection::connect(&config, election_name.clone(), fresh_address())
         .await
         .expect("Connecting replica A should succeed");
     let elected_a = timeout(CAMPAIGN_TIMEOUT, leader_a.campaign_until_elected())
@@ -440,7 +444,7 @@ async fn a_leader_that_steps_down_hands_over_before_its_lease_could_expire(etcd:
     let leadership_a = elected_a.leadership.clone();
     let keepalive_a = tokio::spawn(elected_a.keepalive.run());
 
-    let replica_b = LeaderElection::connect(&config, election_name.clone())
+    let replica_b = LeaderElection::connect(&config, election_name.clone(), fresh_address())
         .await
         .expect("Connecting replica B should succeed");
     let campaign_b = tokio::spawn(async move { replica_b.campaign_until_elected().await });
@@ -514,7 +518,7 @@ async fn a_leader_that_steps_down_hands_over_before_its_lease_could_expire(etcd:
 // explicit revoke is fine here - this is about detection, not about expiry fidelity.
 async fn the_keepalive_task_reports_lease_loss(etcd: &Arc<DockerEtcd>) {
     let config = election_config(etcd);
-    let election = LeaderElection::connect(&config, unique_election_name())
+    let election = LeaderElection::connect(&config, unique_election_name(), fresh_address())
         .await
         .expect("Connecting the election client should succeed");
     let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
@@ -572,7 +576,7 @@ async fn the_keepalive_survives_a_dropped_connection(etcd: &Arc<DockerEtcd>) {
         ..election_config(etcd)
     };
 
-    let election = LeaderElection::connect(&config, unique_election_name())
+    let election = LeaderElection::connect(&config, unique_election_name(), fresh_address())
         .await
         .expect("Connecting the election client through the proxy should succeed");
     let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
@@ -642,7 +646,7 @@ async fn the_watchdog_measures_from_the_last_acknowledged_renewal(etcd: &Arc<Doc
         leader_lease_ttl: lease_ttl,
         ..election_config(etcd)
     };
-    let election = LeaderElection::connect(&config, unique_election_name())
+    let election = LeaderElection::connect(&config, unique_election_name(), fresh_address())
         .await
         .expect("Connecting the election client through the proxy should succeed");
     let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
@@ -694,9 +698,10 @@ async fn the_watchdog_measures_from_the_last_acknowledged_renewal(etcd: &Arc<Doc
         leader_lease_ttl: lease_ttl,
         ..election_config(etcd)
     };
-    let idle_election = LeaderElection::connect(&idle_config, unique_election_name())
-        .await
-        .expect("Connecting the second election client through its proxy should succeed");
+    let idle_election =
+        LeaderElection::connect(&idle_config, unique_election_name(), fresh_address())
+            .await
+            .expect("Connecting the second election client through its proxy should succeed");
     let idle_elected = timeout(CAMPAIGN_TIMEOUT, idle_election.campaign_until_elected())
         .await
         .expect("The campaign should not hang")
@@ -755,7 +760,7 @@ async fn the_watchdog_still_bounds_a_reconnect_that_cannot_succeed(etcd: &Arc<Do
         leader_lease_ttl: lease_ttl,
         ..election_config(etcd)
     };
-    let election = LeaderElection::connect(&config, unique_election_name())
+    let election = LeaderElection::connect(&config, unique_election_name(), fresh_address())
         .await
         .expect("Connecting the election client through the proxy should succeed");
     let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
@@ -813,7 +818,7 @@ async fn a_standby_whose_lease_lapses_mid_campaign_re_campaigns_instead_of_exiti
     let election_name = unique_election_name();
     let config = election_config(etcd);
 
-    let leader_a = LeaderElection::connect(&config, election_name.clone())
+    let leader_a = LeaderElection::connect(&config, election_name.clone(), fresh_address())
         .await
         .expect("Connecting replica A should succeed");
     let elected_a = timeout(CAMPAIGN_TIMEOUT, leader_a.campaign_until_elected())
@@ -823,7 +828,7 @@ async fn a_standby_whose_lease_lapses_mid_campaign_re_campaigns_instead_of_exiti
     let fence_a = elected_a.fence.clone();
     let keepalive_a = tokio::spawn(elected_a.keepalive.run());
 
-    let replica_b = LeaderElection::connect(&config, election_name.clone())
+    let replica_b = LeaderElection::connect(&config, election_name.clone(), fresh_address())
         .await
         .expect("Connecting replica B should succeed");
     let mut campaign_b = tokio::spawn(async move { replica_b.campaign_until_elected().await });
@@ -887,7 +892,7 @@ async fn a_campaign_won_on_an_already_revoked_lease_is_not_accepted(etcd: &Arc<D
     let election_name = unique_election_name();
     let config = election_config(etcd);
 
-    let leader_a = LeaderElection::connect(&config, election_name.clone())
+    let leader_a = LeaderElection::connect(&config, election_name.clone(), fresh_address())
         .await
         .expect("Connecting replica A should succeed");
     let elected_a = timeout(CAMPAIGN_TIMEOUT, leader_a.campaign_until_elected())
@@ -898,7 +903,7 @@ async fn a_campaign_won_on_an_already_revoked_lease_is_not_accepted(etcd: &Arc<D
     let fence_a = elected_a.fence.clone();
     let _keepalive_a = tokio::spawn(elected_a.keepalive.run());
 
-    let replica_b = LeaderElection::connect(&config, election_name.clone())
+    let replica_b = LeaderElection::connect(&config, election_name.clone(), fresh_address())
         .await
         .expect("Connecting replica B should succeed");
     let campaign_b = tokio::spawn(async move { replica_b.campaign_until_elected().await });
@@ -1015,12 +1020,16 @@ async fn a_transient_confirm_failure_does_not_discard_the_win(etcd: &Arc<DockerE
     let election_name = unique_election_name();
     let start_revision = current_revision(etcd).await;
 
-    let election = LeaderElection::connect(&election_config(etcd), election_name.clone())
-        .await
-        .expect("Connecting the election client to etcd should succeed")
-        // The first read only: the second is a real one, and must find the key exactly as the
-        // campaign left it.
-        .with_confirm_hook(|attempt| (attempt == 1).then_some(ShardManagerError::Timeout));
+    let election = LeaderElection::connect(
+        &election_config(etcd),
+        election_name.clone(),
+        fresh_address(),
+    )
+    .await
+    .expect("Connecting the election client to etcd should succeed")
+    // The first read only: the second is a real one, and must find the key exactly as the
+    // campaign left it.
+    .with_confirm_hook(|attempt| (attempt == 1).then_some(ShardManagerError::Timeout));
 
     let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
         .await
@@ -1104,7 +1113,7 @@ async fn a_standby_logs_who_holds_the_leadership_while_it_waits(etcd: &Arc<Docke
     let election_name = unique_election_name();
     let config = election_config(etcd);
 
-    let leader_a = LeaderElection::connect(&config, election_name.clone())
+    let leader_a = LeaderElection::connect(&config, election_name.clone(), fresh_address())
         .await
         .expect("Connecting replica A should succeed");
     let elected_a = timeout(CAMPAIGN_TIMEOUT, leader_a.campaign_until_elected())
@@ -1141,10 +1150,11 @@ async fn a_standby_logs_who_holds_the_leadership_while_it_waits(etcd: &Arc<Docke
 
         let still_waiting = tracing::subscriber::with_default(subscriber, || {
             runtime.block_on(async {
-                let replica_b = LeaderElection::connect(&standby_config, standby_election)
-                    .await
-                    .expect("Connecting replica B should succeed")
-                    .with_standby_log_interval(STANDBY_ANNOUNCE_INTERVAL);
+                let replica_b =
+                    LeaderElection::connect(&standby_config, standby_election, fresh_address())
+                        .await
+                        .expect("Connecting replica B should succeed")
+                        .with_standby_log_interval(STANDBY_ANNOUNCE_INTERVAL);
 
                 timeout(
                     STANDBY_ANNOUNCE_INTERVAL * 5,
@@ -1195,7 +1205,7 @@ async fn a_leaderless_election_reads_back_as_no_leader(etcd: &Arc<DockerEtcd>) {
     let election_name = unique_election_name();
     let config = election_config(etcd);
 
-    let leader_a = LeaderElection::connect(&config, election_name.clone())
+    let leader_a = LeaderElection::connect(&config, election_name.clone(), fresh_address())
         .await
         .expect("Connecting replica A should succeed");
     let elected_a = timeout(CAMPAIGN_TIMEOUT, leader_a.campaign_until_elected())
@@ -1292,7 +1302,7 @@ async fn a_stale_leaders_write_is_rejected_even_at_the_current_revision(etcd: &A
         .await
         .expect("Wiping the state key should succeed");
 
-    let leader_a = LeaderElection::connect(&config, election_name.clone())
+    let leader_a = LeaderElection::connect(&config, election_name.clone(), fresh_address())
         .await
         .expect("Connecting replica A should succeed");
     let elected_a = timeout(CAMPAIGN_TIMEOUT, leader_a.campaign_until_elected())
@@ -1360,7 +1370,7 @@ async fn a_stale_leaders_write_is_rejected_even_at_the_current_revision(etcd: &A
     assert_eq!(read_back, state, "The rejected write must store nothing");
 
     // ... and the fence is specific to A, not a blanket refusal: B can write at the same revision.
-    let replica_b = LeaderElection::connect(&config, election_name)
+    let replica_b = LeaderElection::connect(&config, election_name, fresh_address())
         .await
         .expect("Connecting replica B should succeed");
     let elected_b = timeout(CAMPAIGN_TIMEOUT, replica_b.campaign_until_elected())
@@ -1397,7 +1407,7 @@ async fn the_watchdog_is_armed_from_the_handshake_not_from_the_spawn(etcd: &Arc<
         leader_lease_ttl: lease_ttl,
         ..election_config(etcd)
     };
-    let election = LeaderElection::connect(&config, unique_election_name())
+    let election = LeaderElection::connect(&config, unique_election_name(), fresh_address())
         .await
         .expect("Connecting the election client through the proxy should succeed");
     let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
@@ -1457,7 +1467,7 @@ async fn a_reconnect_that_succeeds_re_arms_the_watchdog(etcd: &Arc<DockerEtcd>) 
         leader_lease_ttl: lease_ttl,
         ..election_config(etcd)
     };
-    let election = LeaderElection::connect(&config, unique_election_name())
+    let election = LeaderElection::connect(&config, unique_election_name(), fresh_address())
         .await
         .expect("Connecting the election client through the proxy should succeed");
     let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
@@ -1513,12 +1523,16 @@ async fn keys_under(etcd: &DockerEtcd, election_name: &str) -> Vec<Vec<u8>> {
 
 async fn a_dropped_campaign_that_had_already_won_leaves_no_key_behind(etcd: &Arc<DockerEtcd>) {
     let election_name = unique_election_name();
-    let election = LeaderElection::connect(&election_config(etcd), election_name.clone())
-        .await
-        .expect("Connecting the election client should succeed")
-        // Holds the attempt inside its confirming read: the campaign is won, so the key exists on
-        // the lease, and the attempt is still in flight and therefore droppable.
-        .with_confirm_hook(|_| Some(ShardManagerError::Timeout));
+    let election = LeaderElection::connect(
+        &election_config(etcd),
+        election_name.clone(),
+        fresh_address(),
+    )
+    .await
+    .expect("Connecting the election client should succeed")
+    // Holds the attempt inside its confirming read: the campaign is won, so the key exists on
+    // the lease, and the attempt is still in flight and therefore droppable.
+    .with_confirm_hook(|_| Some(ShardManagerError::Timeout));
 
     {
         let mut campaign = std::pin::pin!(election.campaign_until_elected());
@@ -1556,17 +1570,21 @@ async fn a_shutdown_during_the_confirming_read_releases_the_lease_at_once(etcd: 
     // The hook both holds the attempt inside its confirming read and reports when it got there,
     // so the shutdown is sent inside that window and nowhere else.
     let confirming = Arc::new(Notify::new());
-    let election = LeaderElection::connect(&election_config(etcd), election_name.clone())
-        .await
-        .expect("Connecting the election client should succeed")
-        .with_shutdown(shutdown.clone())
-        .with_confirm_hook({
-            let confirming = confirming.clone();
-            move |_| {
-                confirming.notify_one();
-                Some(ShardManagerError::Timeout)
-            }
-        });
+    let election = LeaderElection::connect(
+        &election_config(etcd),
+        election_name.clone(),
+        fresh_address(),
+    )
+    .await
+    .expect("Connecting the election client should succeed")
+    .with_shutdown(shutdown.clone())
+    .with_confirm_hook({
+        let confirming = confirming.clone();
+        move |_| {
+            confirming.notify_one();
+            Some(ShardManagerError::Timeout)
+        }
+    });
     let campaign = tokio::spawn(async move { election.campaign_until_elected().await });
 
     timeout(CAMPAIGN_TIMEOUT, confirming.notified())
@@ -1605,7 +1623,7 @@ async fn a_reconnect_that_finds_the_lease_gone_reports_it_as_expired(etcd: &Arc<
         endpoints: vec![proxy.url()],
         ..election_config(etcd)
     };
-    let election = LeaderElection::connect(&config, unique_election_name())
+    let election = LeaderElection::connect(&config, unique_election_name(), fresh_address())
         .await
         .expect("Connecting the election client through the proxy should succeed");
     let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
@@ -1645,6 +1663,12 @@ async fn a_reconnect_that_finds_the_lease_gone_reports_it_as_expired(etcd: &Arc<
     );
 }
 
+/// An address that no other election in the test run uses.
+fn fresh_address() -> LeaderAddress {
+    static NEXT_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(20_000);
+    address(NEXT_PORT.fetch_add(1, std::sync::atomic::Ordering::SeqCst))
+}
+
 fn address(port: u16) -> LeaderAddress {
     LeaderAddress {
         host: "127.0.0.1".to_string(),
@@ -1658,10 +1682,10 @@ fn address(port: u16) -> LeaderAddress {
 // ready before it says so.
 async fn a_new_leader_is_named_with_its_address_but_not_ready(etcd: &Arc<DockerEtcd>) {
     let election_name = unique_election_name();
-    let election = LeaderElection::connect(&election_config(etcd), election_name.clone())
-        .await
-        .expect("Connecting the election client to etcd should succeed")
-        .with_grpc_address(address(4001));
+    let election =
+        LeaderElection::connect(&election_config(etcd), election_name.clone(), address(4001))
+            .await
+            .expect("Connecting the election client to etcd should succeed");
     let _elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
         .await
         .expect("An uncontested campaign should finish")
@@ -1678,7 +1702,7 @@ async fn a_new_leader_is_named_with_its_address_but_not_ready(etcd: &Arc<DockerE
         .expect("The leader should be readable")
         .expect("There is a leader");
 
-    assert_eq!(value.grpc_address, Some(address(4001)));
+    assert_eq!(value.grpc_address, address(4001));
     assert!(
         !value.ready,
         "A leader is not ready before it publishes so: {value:?}"
@@ -1689,10 +1713,10 @@ async fn a_new_leader_is_named_with_its_address_but_not_ready(etcd: &Arc<DockerE
 #[tracing::instrument(skip_all)]
 async fn a_published_leader_is_named_ready(etcd: &Arc<DockerEtcd>) {
     let election_name = unique_election_name();
-    let election = LeaderElection::connect(&election_config(etcd), election_name.clone())
-        .await
-        .expect("Connecting the election client to etcd should succeed")
-        .with_grpc_address(address(4002));
+    let election =
+        LeaderElection::connect(&election_config(etcd), election_name.clone(), address(4002))
+            .await
+            .expect("Connecting the election client to etcd should succeed");
     let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
         .await
         .expect("An uncontested campaign should finish")
@@ -1714,7 +1738,7 @@ async fn a_published_leader_is_named_ready(etcd: &Arc<DockerEtcd>) {
         .await
         .expect("The leader should be readable")
         .expect("There is a leader");
-    assert_eq!(value.grpc_address, Some(address(4002)));
+    assert_eq!(value.grpc_address, address(4002));
     assert!(
         value.ready,
         "The published value should be ready: {value:?}"
@@ -1725,10 +1749,10 @@ async fn a_published_leader_is_named_ready(etcd: &Arc<DockerEtcd>) {
 #[tracing::instrument(skip_all)]
 async fn a_leader_that_stepped_down_cannot_publish(etcd: &Arc<DockerEtcd>) {
     let election_name = unique_election_name();
-    let election = LeaderElection::connect(&election_config(etcd), election_name.clone())
-        .await
-        .expect("Connecting the election client to etcd should succeed")
-        .with_grpc_address(address(4003));
+    let election =
+        LeaderElection::connect(&election_config(etcd), election_name.clone(), address(4003))
+            .await
+            .expect("Connecting the election client to etcd should succeed");
     let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
         .await
         .expect("An uncontested campaign should finish")
@@ -1757,12 +1781,16 @@ async fn a_leader_that_stepped_down_cannot_publish(etcd: &Arc<DockerEtcd>) {
 fn an_election_value_reads_back() {
     let value = ElectionValue {
         identity: "sm-1/pid-7/1792000000".to_string(),
-        grpc_address: Some(address(9002)),
+        grpc_address: address(9002),
         ready: true,
         rollout_generation: None,
     };
     assert_eq!(ElectionValue::decode(&value.encode()), Some(value));
     assert_eq!(ElectionValue::decode(b"sm-1/pid-7/1792000000"), None);
+    assert_eq!(
+        ElectionValue::decode(br#"{"identity":"sm-1","ready":true}"#),
+        None
+    );
 }
 
 #[test]
@@ -1782,10 +1810,9 @@ async fn marking_the_leader_ready_survives_a_dead_member_in_the_endpoint_list(
         retry_max_delay: Duration::from_millis(50),
         ..election_config(etcd)
     };
-    let election = LeaderElection::connect(&config, election_name.clone())
+    let election = LeaderElection::connect(&config, election_name.clone(), address(4004))
         .await
-        .expect("Connecting the election client to etcd should succeed")
-        .with_grpc_address(address(4004));
+        .expect("Connecting the election client to etcd should succeed");
     let elected = timeout(CAMPAIGN_TIMEOUT * 2, election.campaign_until_elected())
         .await
         .expect("The campaign should finish despite the dead member")
@@ -1829,10 +1856,10 @@ async fn await_view(
 // `ready` without a read per call.
 async fn the_election_watch_follows_campaigners_and_the_ready_mark(etcd: &Arc<DockerEtcd>) {
     let election_name = unique_election_name();
-    let first = LeaderElection::connect(&election_config(etcd), election_name.clone())
-        .await
-        .expect("Connecting the election client to etcd should succeed")
-        .with_grpc_address(address(4101));
+    let first =
+        LeaderElection::connect(&election_config(etcd), election_name.clone(), address(4101))
+            .await
+            .expect("Connecting the election client to etcd should succeed");
     let (mut watch, watcher) = first.watch();
     let watcher = tokio::spawn(watcher.run());
 
@@ -1844,7 +1871,7 @@ async fn the_election_watch_follows_campaigners_and_the_ready_mark(etcd: &Arc<Do
     assert_eq!(
         view.leader()
             .and_then(|leader| leader.value.clone())
-            .and_then(|value| value.grpc_address),
+            .and_then(|value| Some(value.grpc_address)),
         Some(address(4101))
     );
 
@@ -1917,7 +1944,7 @@ async fn the_election_watch_recovers_after_its_connection_drops(etcd: &Arc<Docke
         ..election_config(etcd)
     };
     let election_name = unique_election_name();
-    let election = LeaderElection::connect(&config, election_name.clone())
+    let election = LeaderElection::connect(&config, election_name.clone(), fresh_address())
         .await
         .expect("Connecting the election client through the proxy should succeed");
     let (mut watch, watcher) = election.watch();
@@ -1955,7 +1982,7 @@ async fn the_election_watch_recovers_after_etcd_goes_silent(etcd: &Arc<DockerEtc
         ..election_config(etcd)
     };
     let election_name = unique_election_name();
-    let election = LeaderElection::connect(&config, election_name.clone())
+    let election = LeaderElection::connect(&config, election_name.clone(), fresh_address())
         .await
         .expect("Connecting the election client through the proxy should succeed");
     let (mut watch, watcher) = election.watch();
@@ -2016,9 +2043,13 @@ async fn a_leader_value_written_before_the_json_form_is_seen_but_names_no_addres
         .await
         .unwrap();
 
-    let election = LeaderElection::connect(&election_config(etcd), election_name.clone())
-        .await
-        .expect("Connecting the election client to etcd should succeed");
+    let election = LeaderElection::connect(
+        &election_config(etcd),
+        election_name.clone(),
+        fresh_address(),
+    )
+    .await
+    .expect("Connecting the election client to etcd should succeed");
     let (mut watch, watcher) = election.watch();
     let watcher = tokio::spawn(watcher.run());
     await_view(&mut watch, |view| view.leader().is_some()).await;
@@ -2039,10 +2070,9 @@ async fn a_leader_whose_lease_lapsed_before_its_startup_ended_is_never_marked_re
     let election_name = unique_election_name();
     let mut config = election_config(etcd);
     config.endpoints = vec![proxy.url()];
-    let election = LeaderElection::connect(&config, election_name.clone())
+    let election = LeaderElection::connect(&config, election_name.clone(), address(4201))
         .await
-        .expect("Connecting the election client to etcd should succeed")
-        .with_grpc_address(address(4201));
+        .expect("Connecting the election client to etcd should succeed");
     let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
         .await
         .expect("An uncontested campaign should finish")
@@ -2107,10 +2137,9 @@ async fn a_lease_that_lapses_between_attempts_to_mark_ready_ends_the_marking(
     let proxy = BreakableProxy::start(&etcd.client_url()).await;
     let mut config = election_config(etcd);
     config.endpoints = vec![proxy.url()];
-    let election = LeaderElection::connect(&config, unique_election_name())
+    let election = LeaderElection::connect(&config, unique_election_name(), address(4202))
         .await
-        .expect("Connecting the election client to etcd should succeed")
-        .with_grpc_address(address(4202));
+        .expect("Connecting the election client to etcd should succeed");
     let elected = timeout(CAMPAIGN_TIMEOUT, election.campaign_until_elected())
         .await
         .expect("An uncontested campaign should finish")

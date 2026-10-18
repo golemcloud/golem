@@ -593,6 +593,7 @@ impl LeaderElection {
     pub async fn connect(
         config: &EtcdConfig,
         election_name: impl Into<String>,
+        grpc_address: LeaderAddress,
     ) -> Result<Self, ShardManagerError> {
         Ok(Self {
             client: connect_for_election(config).await?,
@@ -603,7 +604,7 @@ impl LeaderElection {
             standby_log_interval: STANDBY_LOG_INTERVAL,
             value: ElectionValue {
                 identity: identity(),
-                grpc_address: None,
+                grpc_address,
                 ready: false,
                 rollout_generation: None,
             },
@@ -620,13 +621,6 @@ impl LeaderElection {
     /// handover.
     pub fn with_shutdown(mut self, shutdown: CancellationToken) -> Self {
         self.shutdown = shutdown;
-        self
-    }
-
-    /// Records where this replica serves gRPC in its election value, so that once it leads and is
-    /// ready, the standbys can send clients to it.
-    pub fn with_grpc_address(mut self, address: LeaderAddress) -> Self {
-        self.value.grpc_address = Some(address);
         self
     }
 
@@ -910,7 +904,7 @@ impl LeaderElection {
             match self.current_leader().await {
                 Ok(Some(leader)) => info!(
                     leader = leader.identity,
-                    leader_address = leader.grpc_address.as_ref().map(ToString::to_string),
+                    leader_address = leader.grpc_address.to_string(),
                     leader_ready = leader.ready,
                     "Still standing by; leadership is held elsewhere"
                 ),
@@ -940,7 +934,7 @@ impl LeaderElection {
         let Some(mut watch) = self.watch.clone() else {
             return std::future::pending().await;
         };
-        let own = self.value.grpc_address.clone();
+        let own = &self.value.grpc_address;
         let mut duplicate: Option<SeenDuplicate> = None;
         // Wakes the loop with no change in the view, so that the patience is measured.
         let mut recheck = interval(granted_ttl / 4);
@@ -955,12 +949,8 @@ impl LeaderElection {
                         newer,
                     };
                 }
-                // The duplicate rule needs an address of our own to compare with.
-                let found = own
-                    .as_ref()
-                    .and_then(|own| duplicate_of(&view, own_lease, own).map(|other| (own, other)));
-                match found {
-                    Some((own, other)) => {
+                match duplicate_of(&view, own_lease, own) {
+                    Some(other) => {
                         let seen = match &mut duplicate {
                             Some(seen) if seen.key == other.key => seen,
                             _ => {
@@ -1125,9 +1115,9 @@ where
 pub struct ElectionValue {
     /// Diagnostic only; see [`identity`].
     pub identity: String,
-    /// Where this replica serves gRPC to other processes. `None` only for a campaigner that serves
-    /// nothing, as in tests of the election alone.
-    pub grpc_address: Option<LeaderAddress>,
+    /// Where this replica serves gRPC to other processes. A value without it is not an
+    /// `ElectionValue`: see [`Self::decode`].
+    pub grpc_address: LeaderAddress,
     pub ready: bool,
     /// The operator's rollout generation of this replica, if set. A standby moves behind a
     /// campaigner of a higher generation, so that a rolling update hands the leadership to a new
@@ -1238,8 +1228,7 @@ pub(crate) fn duplicate_of<'a>(
             && campaigner
                 .value
                 .as_ref()
-                .and_then(|value| value.grpc_address.as_ref())
-                == Some(own)
+                .is_some_and(|value| &value.grpc_address == own)
     })
 }
 
@@ -1275,10 +1264,10 @@ mod tests {
             create_revision: revision,
             value: Some(ElectionValue {
                 identity: format!("sm-{lease}"),
-                grpc_address: Some(LeaderAddress {
+                grpc_address: LeaderAddress {
                     host: "10.0.0.1".to_string(),
                     port,
-                }),
+                },
                 ready: false,
                 rollout_generation: None,
             }),

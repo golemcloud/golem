@@ -158,7 +158,7 @@ fn standby_answer(leader: LeaderView, own: &LeaderAddress) -> Status {
         ),
         LeaderView::Leader(ElectionValue {
             ready: true,
-            grpc_address: Some(address),
+            grpc_address: address,
             ..
         }) if &address != own => not_leader_status(&address),
         LeaderView::Leader(_) | LeaderView::NoLeader => {
@@ -279,7 +279,7 @@ mod tests {
     fn value(port: u16, ready: bool) -> ElectionValue {
         ElectionValue {
             identity: "sm".to_string(),
-            grpc_address: Some(address(port)),
+            grpc_address: address(port),
             ready,
             rollout_generation: None,
         }

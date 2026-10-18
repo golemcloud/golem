@@ -602,10 +602,9 @@ async fn start_distributed_mode(
         "Configured the etcd client for shard lease state persistence"
     );
 
-    let election = LeaderElection::connect(etcd, LEADER_ELECTION_NAME)
+    let election = LeaderElection::connect(etcd, LEADER_ELECTION_NAME, own.clone())
         .await?
         .with_shutdown(shutdown.clone())
-        .with_grpc_address(own.clone())
         .with_rollout_generation(etcd.rollout_generation);
     let (watch, watcher) = election.watch();
     // The campaign reads the same view, to find a replica that advertises this one's address.

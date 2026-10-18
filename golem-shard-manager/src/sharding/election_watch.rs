@@ -316,10 +316,10 @@ mod tests {
     fn value(port: u16, ready: bool) -> Vec<u8> {
         ElectionValue {
             identity: format!("sm-{port}"),
-            grpc_address: Some(LeaderAddress {
+            grpc_address: LeaderAddress {
                 host: "10.0.0.1".to_string(),
                 port,
-            }),
+            },
             ready,
             rollout_generation: None,
         }
