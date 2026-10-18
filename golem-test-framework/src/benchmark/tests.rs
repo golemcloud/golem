@@ -206,6 +206,15 @@ fn ingress_load_network_suite_calls_no_executor() {
 }
 
 #[test]
+fn ingress_load_network_ab_suite_has_the_settings_of_the_network_suite() {
+    let network = suite("ingress-load-network.yaml");
+    let ab = suite("ingress-load-network-ab.yaml");
+    assert_eq!(ab.ingress, network.ingress);
+    assert_eq!(ab.benchmarks[0].size, network.benchmarks[0].size);
+    assert_eq!(ab.benchmarks[0].length, vec![6000, 8000]);
+}
+
+#[test]
 fn ingress_load_mix_suite_has_its_mix() {
     let mix = suite("ingress-load-mix.yaml")
         .ingress

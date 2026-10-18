@@ -1,0 +1,27 @@
+# ingress-load-network.yaml with only the 6000 and 8000 req/s steps, for an A/B test of
+# one change at a time on golem-dev. 6000 was the last step without failures in run
+# 39105106350, and 8000 the first with them. Compare the node CPU of the worker-service
+# nodes in the two steps with that run.
+#
+# Run it like ingress-load.yaml, with `suite: ingress-load-network-ab.yaml`. See
+# ingress-load-network.yaml for the requests.
+
+name: ingress-load-network-ab
+ingress:
+  stepSecs: 300
+  agentsPerAccount: 4
+  requestsPerConnection: 0
+  http1Percent: 30
+  httpApiPercent: 50
+  httpApiDomains: 8
+  setupConcurrency: 32
+  mix:
+    - { method: noInvocation, weight: 1 }
+benchmarks:
+  # size   = accounts, each one a client with its own connection and token
+  # length = target requests per second from all accounts together
+  - name: ingress-load
+    iterations: 1
+    clusterSize: [2]
+    size: [1000]
+    length: [6000, 8000]
