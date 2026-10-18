@@ -1156,3 +1156,104 @@ async fn a_named_leader_whose_host_is_no_uri_authority_is_treated_as_no_leader()
     leader.stop().await;
     standby.stop().await;
 }
+
+/// A TCP forwarder in front of a replica whose connections can be frozen: once frozen it reads
+/// what the peers send and forwards nothing, in either direction, and closes nothing. That is how
+/// a node that lost power looks from the other end of a connection that was open before.
+struct Freezable {
+    addr: SocketAddr,
+    frozen: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Freezable {
+    async fn in_front_of(upstream: SocketAddr) -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let frozen = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = frozen.clone();
+        tokio::spawn(async move {
+            while let Ok((client, _)) = listener.accept().await {
+                let Ok(server) = tokio::net::TcpStream::connect(upstream).await else {
+                    continue;
+                };
+                let (client_read, client_write) = client.into_split();
+                let (server_read, server_write) = server.into_split();
+                tokio::spawn(forward(client_read, server_write, flag.clone()));
+                tokio::spawn(forward(server_read, client_write, flag.clone()));
+            }
+        });
+        Self { addr, frozen }
+    }
+
+    fn address(&self) -> LeaderAddress {
+        LeaderAddress {
+            host: "127.0.0.1".to_string(),
+            port: self.addr.port(),
+        }
+    }
+
+    fn freeze(&self) {
+        self.frozen.store(true, Ordering::SeqCst);
+    }
+}
+
+async fn forward(
+    mut from: tokio::net::tcp::OwnedReadHalf,
+    mut to: tokio::net::tcp::OwnedWriteHalf,
+    frozen: Arc<std::sync::atomic::AtomicBool>,
+) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut buffer = [0u8; 16 * 1024];
+    while let Ok(read) = from.read(&mut buffer).await {
+        if read == 0 {
+            break;
+        }
+        if frozen.load(Ordering::SeqCst) {
+            std::future::pending::<()>().await;
+        }
+        if to.write_all(&buffer[..read]).await.is_err() {
+            break;
+        }
+    }
+}
+
+#[test]
+// The connection to a leader is idle between renewals. When the leader's node loses power, nothing
+// closes it, so the call would hang until the keep-alive gives up; the router must learn within a
+// couple of seconds, not the twenty of the default settings, and then reach the new leader.
+async fn a_kept_leader_connection_that_goes_silent_fails_the_call_within_the_keep_alive_bound() {
+    let old = run_replica(Mode::Leader).await;
+    let proxy = Freezable::in_front_of(old.addr).await;
+    let new = run_replica(Mode::Leader).await;
+    let standby = run_replica(Mode::Standby(Some(proxy.address()))).await;
+    let client = client_with_default_config("127.0.0.1", standby.addr.port());
+    client
+        .get_routing_table()
+        .await
+        .expect("the standby names the leader behind the forwarder");
+    assert_eq!(old.calls(), 1);
+
+    proxy.freeze();
+    standby.set(Mode::Standby(Some(new.address())));
+    let started = Instant::now();
+    client
+        .deregister(Uuid::new_v4(), BTreeMap::new())
+        .await
+        .expect_err("the leader no longer answers");
+    let failed_after = started.elapsed();
+    assert!(
+        failed_after < Duration::from_secs(8),
+        "the call hung for {failed_after:?}"
+    );
+
+    client
+        .get_routing_table()
+        .await
+        .expect("the silent leader is forgotten and the new one is found");
+    assert_eq!(new.calls(), 1);
+    // The forwarder keeps its connection to the old replica open, which a graceful stop would wait
+    // for.
+    old.server.abort();
+    new.stop().await;
+    standby.stop().await;
+}

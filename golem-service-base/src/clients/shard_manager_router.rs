@@ -41,6 +41,13 @@ use tracing::{debug, info};
 /// the configured address can name its successor.
 const LEADER_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// The longest HTTP/2 ping interval, and the longest wait for its answer, on a connection to a
+/// leader. The connection is idle between lease renewals, so nothing else notices a leader whose
+/// node lost power and closed nothing: with the default 10 s and 10 s, the call would outlast the
+/// executor's renewal deadline before the router forgot that leader. The shard manager's gRPC
+/// server answers every ping and enforces no minimum interval, so pinging this often is safe.
+const LEADER_KEEP_ALIVE: Duration = Duration::from_secs(2);
+
 /// How many leaders that an answer named one call follows in one pass. Replicas name each other
 /// only while a leadership change is being observed, so a chain is short; the limit ends a loop
 /// of replicas that disagree.
@@ -114,12 +121,36 @@ fn new_client(channel: OtelGrpcService<Channel>, max_message_size: usize) -> Cli
         .max_encoding_message_size(max_message_size)
 }
 
+/// The configured address as the router uses it: one connection that is never replaced for its
+/// age. Only the leader serves, so a pool spreads no load; and a connection replaced on every age
+/// limit dials the Service again, which can reach a pod that is gone while the Service still lists
+/// it, and costs the whole connect timeout.
+fn configured_client_config(config: &GrpcShardManagerConfig) -> GrpcClientConfig {
+    GrpcClientConfig {
+        connection_pool_size: std::num::NonZeroUsize::MIN,
+        max_connection_age: Duration::ZERO,
+        ..config.client_config.clone()
+    }
+}
+
 /// One attempt with a short connect: on any failure the client goes back to the configured
-/// address, whose replicas know the current leader.
+/// address, whose replicas know the current leader. A connection that goes silent is dropped
+/// within [`LEADER_KEEP_ALIVE`] twice over, so that the failure comes in time to be acted on.
 fn leader_client_config(config: &GrpcShardManagerConfig) -> GrpcClientConfig {
     let client = &config.client_config;
     GrpcClientConfig {
         connect_timeout: client.connect_timeout.min(LEADER_CONNECT_TIMEOUT),
+        http2_keep_alive_interval: Some(
+            client
+                .http2_keep_alive_interval
+                .map_or(LEADER_KEEP_ALIVE, |i| i.min(LEADER_KEEP_ALIVE)),
+        ),
+        http2_keep_alive_timeout: Some(
+            client
+                .http2_keep_alive_timeout
+                .map_or(LEADER_KEEP_ALIVE, |t| t.min(LEADER_KEEP_ALIVE)),
+        ),
+        http2_keep_alive_while_idle: Some(true),
         retries_on_unavailable: RetryConfig {
             max_attempts: 0,
             ..client.retries_on_unavailable.clone()
@@ -140,7 +171,7 @@ fn once_client_config(config: &GrpcShardManagerConfig) -> GrpcClientConfig {
             max_attempts: 0,
             ..client.retries_on_unavailable.clone()
         },
-        ..client.clone()
+        ..configured_client_config(config)
     }
 }
 
@@ -268,7 +299,7 @@ impl LeaderRouter {
                 "shard_manager",
                 new_client,
                 config.uri(),
-                config.client_config.clone(),
+                configured_client_config(config),
             )
             .with_redirect(is_not_leader),
             configured_once: GrpcClient::new(
@@ -620,6 +651,70 @@ mod tests {
         match tls {
             GrpcClientTlsConfig::Enabled(enabled) => enabled.server_domain_name.clone(),
             GrpcClientTlsConfig::Disabled(_) => None,
+        }
+    }
+
+    fn config_with(client_config: GrpcClientConfig) -> GrpcShardManagerConfig {
+        GrpcShardManagerConfig {
+            host: "golem-shard-manager".to_string(),
+            port: 9002,
+            client_config,
+            retries: RetryConfig::default(),
+        }
+    }
+
+    #[test]
+    fn the_leader_connection_is_probed_often_even_while_idle() {
+        let config = leader_client_config(&config_with(GrpcClientConfig::default()));
+        assert_eq!(config.http2_keep_alive_interval, Some(LEADER_KEEP_ALIVE));
+        assert_eq!(config.http2_keep_alive_timeout, Some(LEADER_KEEP_ALIVE));
+        assert_eq!(config.http2_keep_alive_while_idle, Some(true));
+    }
+
+    #[test]
+    fn a_keep_alive_that_is_already_shorter_is_kept_for_the_leader() {
+        let config = leader_client_config(&config_with(GrpcClientConfig {
+            http2_keep_alive_interval: Some(Duration::from_millis(500)),
+            http2_keep_alive_timeout: Some(Duration::from_millis(700)),
+            http2_keep_alive_while_idle: Some(false),
+            ..GrpcClientConfig::default()
+        }));
+        assert_eq!(
+            config.http2_keep_alive_interval,
+            Some(Duration::from_millis(500))
+        );
+        assert_eq!(
+            config.http2_keep_alive_timeout,
+            Some(Duration::from_millis(700))
+        );
+        assert_eq!(config.http2_keep_alive_while_idle, Some(true));
+    }
+
+    #[test]
+    fn a_disabled_keep_alive_is_still_on_for_the_leader() {
+        let config = leader_client_config(&config_with(GrpcClientConfig {
+            http2_keep_alive_interval: None,
+            http2_keep_alive_timeout: None,
+            ..GrpcClientConfig::default()
+        }));
+        assert_eq!(config.http2_keep_alive_interval, Some(LEADER_KEEP_ALIVE));
+        assert_eq!(config.http2_keep_alive_timeout, Some(LEADER_KEEP_ALIVE));
+    }
+
+    #[test]
+    fn the_configured_address_gets_one_connection_that_is_never_replaced_for_its_age() {
+        let client_config = GrpcClientConfig {
+            connection_pool_size: std::num::NonZeroUsize::new(8).unwrap(),
+            max_connection_age: Duration::from_secs(60),
+            ..GrpcClientConfig::default()
+        };
+        let config = config_with(client_config);
+        for built in [
+            configured_client_config(&config),
+            once_client_config(&config),
+        ] {
+            assert_eq!(built.connection_pool_size.get(), 1);
+            assert_eq!(built.max_connection_age, Duration::ZERO);
         }
     }
 
