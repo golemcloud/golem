@@ -122,5 +122,19 @@ CI enforces all of the following on every docs PR via `.github/workflows/docs.ya
 2. Prettier (`bun run format:check`)
 3. TypeScript type checking (`bun run typecheck`)
 4. Link validation (`bun run check-links`)
+5. Tooling tests and representative public guest snippets (`bun run test:tooling`)
+
+The public snippet tests type-check complete TypeScript and Effect examples against the in-tree SDK declarations in both `next` and `v1.6`. Before running `test:tooling` or `build:check` locally, prepare those declarations:
+
+```shell
+# From sdks/ts/
+npx --yes pnpm@10.17.1 install --frozen-lockfile --ignore-scripts
+npx --yes pnpm@10.17.1 --filter @golemcloud/golem-ts-sdk run build
+# From sdks/effect/
+npm ci --ignore-scripts
+npm run build
+```
+
+CI performs the same setup. These checks do not compile every SDK or execute guests inside Golem. The snippet scanner records presence and review status, not compilation evidence.
 
 For an isolated content change, check formatting on the changed paths and run the version/link checks relevant to those pages. For TypeScript, shared components, navigation, versioning, generator, or build configuration changes, run the affected lint/type/build checks; use `bun run build:check` when impact is cross-cutting or unclear. Use `bun run fix` only when lint/format fixes are needed, then inspect the diff.

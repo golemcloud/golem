@@ -65,7 +65,7 @@ for _, w := range golem.Wallet() {
 
 - Deriving from a template card resolves it for the calling agent; the card must be in the agent's wallet.
 - `golem.AgentHolder` is the only install target the host accepts today; `golem.AccountHolder` and `golem.AppHolder` return `PermissionNotPermitted`.
-- `card.ID()` returns an opaque `golem.CardID`: compare it with `card.Parents()` or use it as a map key. It has no other use, and nothing turns it back into a card. Printing or serializing it shows a placeholder, never the identifier. `ID`, `Parents` and `ExpiresAt` trap when the host no longer knows the card.
+- `card.ID()` returns an opaque `golem.CardID`: compare it with `card.Parents()` or use it as a map key. It has no other use, and nothing turns it back into a card. Printing or serializing it shows a placeholder, never the identifier. `ID`, `Parents` and `ExpiresAt` trap when the host no longer knows the card, or when the card is revoked or expired. `Inspect`, `Derive`, `DeriveScope` and `Install` on such a card return `golem.PermissionCardRevoked` or `golem.PermissionCardExpired`, so `Inspect` detects revocation.
 - `Revoke` takes the authority of the card and of every card derived from it away from their holders.
 - `golem.ListKernelModules()` lists the resource classes and verbs; `golem.ValidateGrant(g)` checks one grant.
 

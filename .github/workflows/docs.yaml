@@ -6,10 +6,16 @@ on:
       - main
     paths:
       - "docs/**"
+      - "sdks/ts/**"
+      - "sdks/effect/**"
+      - "sdks/http-contract/**"
       - ".github/workflows/docs.yaml"
   pull_request:
     paths:
       - "docs/**"
+      - "sdks/ts/**"
+      - "sdks/effect/**"
+      - "sdks/http-contract/**"
       - ".github/workflows/docs.yaml"
 
 concurrency:
@@ -46,6 +52,25 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      - name: Setup Node.js for public guest snippet checks
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      # Build only the TypeScript SDK package and Effect declarations. No guest
+      # templates, WASM toolchains, or other language SDKs are required.
+      - name: Prepare in-tree TypeScript SDK
+        working-directory: sdks/ts
+        run: |
+          npx --yes pnpm@10.17.1 install --frozen-lockfile --ignore-scripts
+          npx --yes pnpm@10.17.1 --filter @golemcloud/golem-ts-sdk run build
+
+      - name: Prepare in-tree Effect SDK
+        working-directory: sdks/effect
+        run: |
+          npm ci --ignore-scripts
+          npm run build
 
       - name: Lint / format / typecheck / link-check
         run: bun run build:check

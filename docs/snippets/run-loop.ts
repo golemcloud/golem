@@ -21,9 +21,10 @@ import { readFile, writeFile, appendFile } from "fs/promises"
 import { join } from "path"
 import { existsSync } from "fs"
 import { spawn } from "child_process"
+import { DEFAULT_VERSION } from "../src/lib/versions"
 
 const SNIPPETS_DIR = import.meta.dir
-const PROGRESS_FILE = join(SNIPPETS_DIR, "progress.json")
+const PROGRESS_FILE = join(SNIPPETS_DIR, `progress-${DEFAULT_VERSION}.json`)
 const LOG_FILE = join(SNIPPETS_DIR, "loop.log")
 const MANAGE_SCRIPT = join(SNIPPETS_DIR, "manage-snippets.ts")
 

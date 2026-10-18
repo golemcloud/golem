@@ -102,7 +102,9 @@ releases locally without closing the remote stream. Dropping transport cannot un
 effect.
 
 The SDK retries timeout, transport, rate-limit, and unavailable errors with bounded exponential
-backoff, durable timers, and `Retry-After`. Permanent protocol, fencing, conflict, gone, and size
+backoff, durable timers, and `Retry-After`. `maxRetries` defaults to 8 retries after the first
+attempt; the delay starts at `retryDelayMs` (default 100 ms) and doubles up to 30 s, and a longer
+`Retry-After` wins. `maxRetries: 0` disables retries. Permanent protocol, fencing, conflict, gone, and size
 errors remain typed `DurableStreamError`s. Replay reconstructs checkpoints, buffered items,
 producer state, pending data, and retry budgets and does not repeat completed HTTP. Do not add a
 custom durable/atomic wrapper.

@@ -1,18 +1,229 @@
-import { Callout } from "nextra/components"
+import { Callout, Tabs } from "nextra/components"
 
 # Using AI providers
 
 Golem comes with an [extensive set of libraries](https://github.com/golemcloud/golem-ai) for connecting to various AI and AI related third party providers. These libraries are available as **regular Rust crates** that can be added as dependencies to Rust-based Golem agents. They provide abstractions for various areas, and pluggable implementations for them. This way the actual third party provider can be switched any time without modifying the Golem agent's code.
 
 <Callout type="info">
-  The Golem AI libraries are currently available **only for Rust** projects. For **TypeScript** agents, we recommend using third-party libraries directly (e.g. the official SDKs for OpenAI, Anthropic, etc.). Scala and MoonBit are not covered by these libraries at this time.
+  The Rust crates described below are **Rust-only**. TypeScript, Effect TypeScript, Scala,
+  MoonBit, and Go agents can call provider HTTP APIs directly. A third-party client library
+  must work with the guest runtime's supported HTTP transport; libraries that require native
+  sockets, JVM networking, or native Node.js extensions are not interchangeable with these APIs.
 </Callout>
 
-<Callout type="info">
-  For Scala and MoonBit agents, LLM and AI provider APIs can be called directly using standard HTTP requests (fetch in Scala, WASI HTTP in MoonBit). See the [HTTP client](/v1.6/develop/http) page for making outgoing requests.
-</Callout>
+## Call a provider directly
 
-The currently supported areas are:
+These examples send the same non-streaming OpenAI Chat Completions request. Pass `apiKey` from
+your agent's secret configuration, not from a hard-coded string or a public method parameter.
+Use a model available to your provider account; the examples use `gpt-4o-mini`. They return the
+provider's complete JSON response rather than assuming a particular choice or tool-call shape.
+Call the helper from an agent method. See [HTTP requests](/v1.6/develop/http) for transport details.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+```typescript
+async function askProvider(apiKey: string, prompt: string): Promise<unknown> {
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: prompt }],
+    }),
+  })
+  const body = await response.text()
+  if (!response.ok) throw new Error(`Provider returned HTTP ${response.status}`)
+  return JSON.parse(body)
+}
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```typescript
+import { Effect } from "effect"
+
+function askProvider(apiKey: string, prompt: string) {
+  return Effect.tryPromise({
+    try: async (): Promise<unknown> => {
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [{ role: "user", content: prompt }],
+        }),
+      })
+      const body = await response.text()
+      if (!response.ok) throw new Error(`Provider returned HTTP ${response.status}`)
+      return JSON.parse(body)
+    },
+    catch: () => new Error("Provider request or response decoding failed"),
+  })
+}
+```
+
+Return this Effect from a handler, or use `yield* askProvider(apiKey, prompt)` in
+`Effect.gen`. This uses the supported global `fetch` transport, without a Node.js HTTP client.
+  </Tabs.Tab>
+  <Tabs.Tab>
+```scala
+import scala.concurrent.Future
+import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import scala.scalajs.js
+import scala.scalajs.js.Thenable.Implicits._
+
+def askProvider(apiKey: String, prompt: String): Future[js.Dynamic] = {
+  val payload = js.Dynamic.literal(
+    model = "gpt-4o-mini",
+    messages = js.Array(js.Dynamic.literal(role = "user", content = prompt))
+  )
+  for {
+    response <- js.Dynamic.global.fetch(
+      "https://api.openai.com/v1/chat/completions",
+      js.Dynamic.literal(
+        method = "POST",
+        headers = js.Dynamic.literal(
+          "Authorization" -> s"Bearer $apiKey",
+          "Content-Type" -> "application/json"
+        ),
+        body = js.JSON.stringify(payload)
+      )
+    ).asInstanceOf[js.Promise[js.Dynamic]].toFuture
+    body <- response.text().asInstanceOf[js.Promise[String]].toFuture
+  } yield {
+    if (!response.ok.asInstanceOf[Boolean])
+      throw new RuntimeException(s"Provider returned HTTP ${response.status}")
+    js.JSON.parse(body)
+  }
+}
+```
+
+This is Scala.js interop with the guest runtime's global `fetch`, not a JVM HTTP client.
+  </Tabs.Tab>
+  <Tabs.Tab>
+Import `golemcloud/golem_sdk/http` as `@http`, `moonbitlang/core/encoding/utf8` as
+`@utf8`, `moonbitlang/core/buffer` as `@buffer`, and `moonbitlang/core/json` as `@json`
+in the component's `moon.pkg`.
+
+```moonbit
+async fn ask_provider(api_key : String, prompt : String) -> Json {
+  let payload : Json = {
+    "model": "gpt-4o-mini",
+    "messages": [{ "role": "user", "content": prompt }],
+  }
+  let bytes = @utf8.encode(payload.stringify())
+  let headers = @http.Fields::fields()
+  guard headers.append(
+    "authorization", @utf8.encode("Bearer \{api_key}").to_fixedarray(),
+  ) is Ok(_) else { abort("Invalid authorization header") }
+  guard headers.append(
+    "content-type", @utf8.encode("application/json").to_fixedarray(),
+  ) is Ok(_) else { abort("Invalid content-type header") }
+  let body = @http.Stream::produce(async fn(sink) {
+    guard sink.write_all_bytes(bytes[:]) else { abort("Upload closed") }
+    sink.close()
+  })
+  let (request, sent) = @http.Request::new(
+    headers, Some(body), @http.Future::ready(Ok(None)), None,
+  )
+  guard request.set_method(Post) is Ok(_) else { abort("Invalid method") }
+  guard request.set_scheme(Some(Https)) is Ok(_) else { abort("Invalid scheme") }
+  guard request.set_authority(Some("api.openai.com")) is Ok(_) else {
+    abort("Invalid authority")
+  }
+  guard request.set_path_with_query(Some("/v1/chat/completions")) is Ok(_) else {
+    abort("Invalid path")
+  }
+  let response = match @http.send(request) {
+    Ok(response) => response
+    Err(_) => abort("Provider transport failed")
+  }
+  guard sent.get() is Ok(_) else { abort("Request transmission failed") }
+  let status = response.get_status_code()
+  let (incoming, completed) = @http.Response::consume_body(
+    response, @http.Future::ready(Ok(())),
+  )
+  defer incoming.drop()
+  let buffer = @buffer.new()
+  while incoming.read(4096) is Some(chunk) {
+    for byte in chunk {
+      buffer.write_byte(byte)
+    }
+  }
+  match completed.get() {
+    Ok(Some(trailers)) => trailers.drop()
+    Ok(None) => ()
+    Err(_) => abort("Provider response body failed")
+  }
+  guard status >= 200 && status < 300 else {
+    abort("Provider returned HTTP \{status}")
+  }
+  @json.parse(@utf8.decode(buffer.to_bytes())) catch {
+    _ => abort("Invalid provider JSON")
+  }
+}
+```
+
+This uses the SDK's Preview 3 WASI HTTP wrapper, including request transmission and response
+completion checks. The compact helper aborts on errors; use an application error type in
+production.
+  </Tabs.Tab>
+  <Tabs.Tab>
+```go
+package provider
+
+import (
+    "bytes"
+    "encoding/json"
+    "fmt"
+    "net/http"
+
+    _ "github.com/golemcloud/golem/sdks/go/golem"
+)
+
+func AskProvider(apiKey, prompt string) (json.RawMessage, error) {
+    payload, err := json.Marshal(map[string]any{
+        "model": "gpt-4o-mini",
+        "messages": []map[string]string{{"role": "user", "content": prompt}},
+    })
+    if err != nil { return nil, err }
+    request, err := http.NewRequest(http.MethodPost,
+        "https://api.openai.com/v1/chat/completions", bytes.NewReader(payload))
+    if err != nil { return nil, err }
+    request.Header.Set("Authorization", "Bearer "+apiKey)
+    request.Header.Set("Content-Type", "application/json")
+    response, err := http.DefaultClient.Do(request)
+    if err != nil { return nil, fmt.Errorf("provider transport failed") }
+    defer response.Body.Close()
+    if response.StatusCode < 200 || response.StatusCode >= 300 {
+        return nil, fmt.Errorf("provider returned HTTP %d", response.StatusCode)
+    }
+    var result json.RawMessage
+    if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+        return nil, fmt.Errorf("invalid provider JSON")
+    }
+    return result, nil
+}
+```
+
+The Golem SDK installs the WASI HTTP transport for `net/http`. Do not replace it with a transport
+that dials native sockets.
+  </Tabs.Tab>
+</Tabs>
+
+Do not log the authorization header, prompts, or provider response bodies. Set input and response
+size limits in production. HTTP status failures and invalid JSON need application error handling.
+Do not automatically retry a failed generation: a lost response does not prove the provider did
+not process or charge for the request.
+
+## Rust provider libraries
+
+The Rust libraries support these areas:
 
 - Large Language Models (LLM)
 - Graph Databases
@@ -24,7 +235,8 @@ The currently supported areas are:
 
 To use one of these libraries in a Rust agent, add the corresponding core crate and the desired provider crate(s) as dependencies. The `golem.yaml` files coming from the agent templates include commented-out entries for each possible choice of implementations, so just uncomment the desired ones and provide any necessary configuration (usually in the form of environment variables).
 
-The rest of the page shows detailed information about these libraries, the available implementations and their core Rust traits (without a full documentation of every type involved).
+The rest of the page describes these Rust libraries, their implementations, and their core traits
+(without a full documentation of every type involved).
 
 ## LLMs
 

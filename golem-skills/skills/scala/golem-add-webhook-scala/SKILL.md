@@ -35,7 +35,6 @@ All functions are on the `golem.HostApi` object:
 | `HostApi.createWebhook()` | Creates a webhook (promise + public URL) and returns a `WebhookHandler` |
 | `WebhookHandler.url` | The public URL to share with external systems |
 | `WebhookHandler.await()` | Awaits the webhook POST payload asynchronously (`Future[WebhookRequestPayload]`) |
-| `WebhookHandler.awaitBlocking()` | Blocks until the webhook POST payload arrives (`WebhookRequestPayload`) |
 | `WebhookRequestPayload.json[A]()` | Decodes the POST body as JSON (requires implicit `Schema[A]`) |
 | `WebhookRequestPayload.bytes` | Returns the raw POST body as `Array[Byte]` |
 
@@ -43,6 +42,9 @@ All functions are on the `golem.HostApi` object:
 
 ```scala
 import golem.HostApi
+import golem.HostApi.WebhookRequestPayload
+import scala.concurrent.Future
+import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 ```
 
 ## Webhook URL Structure
@@ -87,7 +89,7 @@ Path variables in `{braces}` are also supported in `webhookSuffix`:
 
 ## Usage Pattern
 
-### 1. Create a Webhook, Share the URL, and Await the Callback (Blocking)
+### 1. Create a Webhook, Share the URL, and Await the Callback
 
 ```scala
 val webhook = HostApi.createWebhook()
@@ -96,7 +98,7 @@ val url = webhook.url
 // Share `url` with an external service (e.g., register it as a callback URL)
 // The agent is durably suspended here until the external service POSTs to the URL
 
-val payload = webhook.awaitBlocking()
+val payload: Future[WebhookRequestPayload] = webhook.await()
 ```
 
 ### 2. Create a Webhook and Await Asynchronously
@@ -110,10 +112,7 @@ val url = webhook.url
 // ... share url ...
 
 val result: Future[WebhookRequestPayload] = webhook.await()
-result.map { payload =>
-  val event = payload.json[MyEvent]()
-  // process event
-}
+val bytes: Future[Array[Byte]] = result.map(_.bytes)
 ```
 
 ### 3. Decode the Payload as JSON
@@ -125,8 +124,7 @@ case class PaymentEvent(status: String, amount: Long) derives Schema
 
 val webhook = HostApi.createWebhook()
 // ... share webhook.url ...
-val payload = webhook.awaitBlocking()
-val event = payload.json[PaymentEvent]()
+val event: Future[PaymentEvent] = webhook.await().map(_.json[PaymentEvent]())
 ```
 
 ### 4. Use Raw Bytes
@@ -134,8 +132,7 @@ val event = payload.json[PaymentEvent]()
 ```scala
 val webhook = HostApi.createWebhook()
 // ... share webhook.url ...
-val payload = webhook.awaitBlocking()
-val raw: Array[Byte] = payload.bytes
+val raw: Future[Array[Byte]] = webhook.await().map(_.bytes)
 ```
 
 ## Complete Example
@@ -146,6 +143,7 @@ import golem.runtime.annotations.{agentDefinition, agentImplementation, endpoint
 import zio.blocks.schema.Schema
 
 import scala.concurrent.Future
+import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 
 case class WebhookEvent(eventType: String, data: String) derives Schema
 
@@ -154,36 +152,30 @@ trait IntegrationAgent extends BaseAgent {
   class Id(val name: String)
 
   @endpoint(method = "POST", path = "/register")
-  def registerAndWait(): String
+  def registerAndWait(): Future[String]
 
   @endpoint(method = "GET", path = "/last-event")
   def getLastEvent(): String
 }
 
 @agentImplementation()
-class IntegrationAgentImpl extends IntegrationAgent {
-  private var name: String = ""
+class IntegrationAgentImpl(private val name: String) extends IntegrationAgent {
   private var lastEvent: String = ""
 
-  override def init(id: Id): Unit = {
-    name = id.name
-  }
-
-  override def registerAndWait(): String = {
+  override def registerAndWait(): Future[String] = {
     // 1. Create a webhook
     val webhook = HostApi.createWebhook()
     val url = webhook.url
 
-    // 2. In a real scenario, you would register `url` with an external service here.
-    //    For this example, the URL is returned so the caller can POST to it.
-    //    The agent is durably suspended while awaiting.
+    // Publish the URL before waiting (replace with your callback registration).
+    println(s"Webhook for $name: $url")
 
     // 3. Wait for the external POST
-    val payload = webhook.awaitBlocking()
-    val event = payload.json[WebhookEvent]()
-
-    lastEvent = s"${event.eventType}: ${event.data}"
-    lastEvent
+    webhook.await().map { payload =>
+      val event = payload.json[WebhookEvent]()
+      lastEvent = s"${event.eventType}: ${event.data}"
+      lastEvent
+    }
   }
 
   override def getLastEvent(): String = lastEvent
@@ -195,6 +187,6 @@ class IntegrationAgentImpl extends IntegrationAgent {
 - The agent **must** have an HTTP mount (`mount = "..."` on `@agentDefinition`) and be deployed via `httpApi` in `golem.yaml`
 - The webhook URL is a one-time-use URL — once POSTed to, the promise is completed and the URL becomes invalid
 - Only `POST` requests to the webhook URL will complete the promise
-- Use `awaitBlocking()` from synchronous code paths; use `await()` for `Future`-based async patterns
+- Return the `Future` from `await()` (or a `map`/`flatMap` of it) from the agent method; do not block or detach the wait
 - The agent is durably suspended while waiting — it survives failures, restarts, and updates
 - JSON decoding requires an implicit `zio.blocks.schema.Schema[A]` instance (use `derives Schema` in Scala 3)

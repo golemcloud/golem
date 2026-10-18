@@ -650,6 +650,7 @@ query|string|No|-
 {
   "entries": [
     {
+      "type": "Included",
       "oplogIndex": 0,
       "attribution": {
         "type": "Agent"
@@ -758,6 +759,130 @@ query|string|No|-
   },
   "firstIndexInChunk": 0,
   "lastIndex": 0
+}
+```
+
+## Get one oplog entry of a worker
+
+Path|Method|Protected
+---|---|---
+`/v1/components/{component_id}/workers/{agent_name}/oplog/{oplog_index}`|GET|Yes
+
+Oplog pages omit entries whose encoded form is larger than a server limit, and describe
+them by their type, timestamp, size and component revision. This endpoint returns such an
+entry in full. Pass the component revision of the description to save the server from
+scanning the oplog for it.
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+component_revision|integer|No|-
+
+**Example Response JSON**
+
+```json copy
+{
+  "oplogIndex": 0,
+  "attribution": {
+    "type": "Agent"
+  },
+  "entry": {
+    "type": "Create",
+    "timestamp": "2019-08-24T14:15:22Z",
+    "agentId": {
+      "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+      "agentId": "string"
+    },
+    "ownerKind": "component-agent",
+    "agentMode": "Durable",
+    "componentRevision": 0,
+    "env": {
+      "property1": "string",
+      "property2": "string"
+    },
+    "createdBy": "25a02396-1048-48f9-bf93-102d2fb7895e",
+    "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
+    "parent": {
+      "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
+      "agentId": "string"
+    },
+    "componentSize": 0,
+    "initialTotalLinearMemorySize": 0,
+    "initialActivePlugins": [
+      {
+        "environmentPluginGrantId": "5db98835-58e8-4101-8179-99ca47494b8d",
+        "pluginPriority": 0,
+        "pluginName": "string",
+        "pluginVersion": "string",
+        "parameters": {
+          "property1": "string",
+          "property2": "string"
+        }
+      }
+    ],
+    "localAgentConfig": [
+      {
+        "path": [
+          "string"
+        ],
+        "value": {
+          "graph": {
+            "defs": [
+              {
+                "id": "string",
+                "name": "string",
+                "body": {
+                  "kind": "ref",
+                  "value": {
+                    "id": "string",
+                    "metadata": {
+                      "doc": "string",
+                      "aliases": [
+                        "string"
+                      ],
+                      "examples": [
+                        "string"
+                      ],
+                      "deprecated": "string",
+                      "role": {
+                        "tag": "multimodal"
+                      }
+                    }
+                  }
+                }
+              }
+            ],
+            "root": {
+              "kind": "ref",
+              "value": {
+                "id": "string",
+                "metadata": {
+                  "doc": "string",
+                  "aliases": [
+                    "string"
+                  ],
+                  "examples": [
+                    "string"
+                  ],
+                  "deprecated": "string",
+                  "role": {
+                    "tag": "multimodal"
+                  }
+                }
+              }
+            }
+          },
+          "value": {
+            "kind": "bool",
+            "value": true
+          }
+        }
+      }
+    ],
+    "originalPhantomId": "b4cbf8ea-df0a-4ef4-9b5d-93ad7b29cf4b",
+    "instanceId": "64d2028c-ae87-4069-a624-66089d957ef9"
+  }
 }
 ```
 

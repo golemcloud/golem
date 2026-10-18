@@ -40,6 +40,14 @@ To get the whole oplog of an agent, you can use the following command:
 golem agent oplog <agent_id>
 ```
 
+For longer oplogs it is easier to explore the journal in a browser. The `--serve` parameter starts a local interactive viewer that groups the entries by invocation, folds host calls, decodes payloads, supports filtering and searching, and loads the oplog page by page:
+
+```shell copy
+golem agent oplog <agent_id> --serve
+```
+
+The `--html` parameter writes the same viewer into a self-contained HTML file with the entries embedded, which is useful for sharing a moderately sized oplog.
+
 See the [CLI agent reference](/v1.6/cli/agents) for more information about how to search the oplog. One debugging scenario can be to look for all oplog entries belonging to a given **idempotency key** that was provided with an invocation that did not behave as expected. Another can be looking for occurrences of external HTTP requests or log entries.
 
 ### Applying changes to an agent
