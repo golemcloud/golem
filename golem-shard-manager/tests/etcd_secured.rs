@@ -36,7 +36,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use test_r::{inherit_test_dep, test, test_dep};
 use tokio::sync::oneshot;
 use tokio::task::{JoinHandle, JoinSet};
@@ -98,13 +98,17 @@ impl TestPki {
             &ca,
             "localhost",
             ExtendedKeyUsagePurpose::ServerAuth,
-            expired,
+            if expired {
+                Validity::Expired
+            } else {
+                Validity::Long
+            },
         );
         let (client_pem, client_key_pem) = signed_by(
             &ca,
             "golem-shard-manager",
             ExtendedKeyUsagePurpose::ClientAuth,
-            false,
+            Validity::Long,
         );
         let dir = tempfile::tempdir().expect("Cannot create a directory for the test certificates");
         for (name, pem) in [
@@ -124,18 +128,39 @@ impl TestPki {
         }
     }
 
-    /// Options for an etcd that requires client certificates, with a new, valid server certificate
-    /// from the same CA: an etcd whose certificate was renewed.
-    fn renewed_mtls_etcd_options(&self) -> DockerEtcdOptions {
+    /// Options for an etcd that requires client certificates, with a new server certificate from
+    /// the same CA: valid, as after a renewal, or expired, as when etcd missed one.
+    fn new_mtls_etcd_options(&self, validity: Validity) -> DockerEtcdOptions {
         let (server_pem, server_key_pem) = signed_by(
             &self.ca,
             "localhost",
             ExtendedKeyUsagePurpose::ServerAuth,
-            false,
+            validity,
         );
         DockerEtcdOptions::new()
             .with_tls(server_pem, server_key_pem)
             .with_client_cert_auth(self.ca_pem.clone())
+    }
+
+    /// Writes a new client certificate from the same CA and its key to `<name>.pem` and
+    /// `<name>-key.pem`, as cert-manager renews a mounted Secret, and returns the TLS settings
+    /// that read them.
+    fn write_client_certificate(&self, name: &str, validity: Validity) -> EtcdTlsConfig {
+        let (cert, key) = signed_by(
+            &self.ca,
+            "golem-shard-manager",
+            ExtendedKeyUsagePurpose::ClientAuth,
+            validity,
+        );
+        let cert_path = self.path(&format!("{name}.pem"));
+        let key_path = self.path(&format!("{name}-key.pem"));
+        std::fs::write(&cert_path, cert).expect("Cannot write a test certificate");
+        std::fs::write(&key_path, key).expect("Cannot write a test key");
+        EtcdTlsConfig {
+            client_cert_file: Some(cert_path),
+            client_key_file: Some(key_path),
+            ..self.mtls()
+        }
     }
 
     fn path(&self, name: &str) -> PathBuf {
@@ -187,18 +212,38 @@ fn test_ca(name: &str) -> CertifiedIssuer<'static, KeyPair> {
     CertifiedIssuer::self_signed(params, KeyPair::generate().unwrap()).unwrap()
 }
 
-/// A certificate for `name` and its private key, both PEM; `expired` makes one that expired in 2002.
+/// How long a test certificate is valid.
+#[derive(Clone, Copy)]
+enum Validity {
+    /// rcgen's default: for as long as any test runs.
+    Long,
+    /// Expired in 2002.
+    Expired,
+    /// Until this moment.
+    Until(SystemTime),
+}
+
+/// A certificate for `name` and its private key, both PEM.
 fn signed_by(
     ca: &CertifiedIssuer<'static, KeyPair>,
     name: &str,
     usage: ExtendedKeyUsagePurpose,
-    expired: bool,
+    validity: Validity,
 ) -> (String, String) {
     let mut params = CertificateParams::new(vec![name.to_string()]).unwrap();
     params.distinguished_name.push(DnType::CommonName, name);
-    if expired {
-        params.not_before = rcgen::date_time_ymd(2001, 1, 1);
-        params.not_after = rcgen::date_time_ymd(2002, 1, 1);
+    match validity {
+        Validity::Long => {}
+        Validity::Expired => {
+            params.not_before = rcgen::date_time_ymd(2001, 1, 1);
+            params.not_after = rcgen::date_time_ymd(2002, 1, 1);
+        }
+        Validity::Until(end) => {
+            params.not_after = rcgen::date_time_ymd(1970, 1, 1)
+                + end
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .expect("A test certificate ends after 1970");
+        }
     }
     params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     params.extended_key_usages = vec![usage];
@@ -213,13 +258,13 @@ async fn mtls_etcd(pki: &TestPki) -> DockerEtcd {
     DockerEtcd::new_with_options(pki.mtls_etcd_options()).await
 }
 
-/// TLS on the client port without client certificates, and authentication enabled: user `USER`
-/// may read and write `/golem/` only.
+/// TLS on the client port, and authentication enabled: user `USER` may read and write `/golem/`
+/// only. The setup presents the test client certificate, so `options` may also require one.
 async fn auth_etcd(pki: &TestPki, options: DockerEtcdOptions) -> DockerEtcd {
     let etcd = DockerEtcd::new_with_options(options).await;
     let client = connect_with_retry(
         &etcd.client_url(),
-        ConnectOptions::new().with_tls(pki.server_tls()),
+        ConnectOptions::new().with_tls(pki.client_tls()),
     )
     .await;
     let mut auth = client.auth_client();
@@ -686,8 +731,11 @@ async fn a_replica_waits_while_etcds_certificate_has_expired(
     );
 
     expired.stop().await;
-    let _renewed =
-        DockerEtcd::new_with_options(pki.renewed_mtls_etcd_options().with_host_port(port)).await;
+    let _renewed = DockerEtcd::new_with_options(
+        pki.new_mtls_etcd_options(Validity::Long)
+            .with_host_port(port),
+    )
+    .await;
     started(details).await;
 }
 
@@ -991,4 +1039,175 @@ async fn a_shutdown_ends_a_startup_that_waits_for_an_etcd_login(
         ),
         "{err:#}"
     );
+}
+
+/// A TCP relay in front of etcd whose connections the test can cut one by one, numbered in the
+/// order they were opened: a way to break one of a replica's two etcd connections and keep the
+/// other.
+struct TcpRelay {
+    url: String,
+    connections: Arc<std::sync::Mutex<Vec<tokio::task::AbortHandle>>>,
+    server: JoinHandle<()>,
+}
+
+impl TcpRelay {
+    async fn start(etcd: &DockerEtcd) -> Self {
+        let target: u16 = etcd
+            .client_url()
+            .rsplit(':')
+            .next()
+            .and_then(|port| port.parse().ok())
+            .expect("etcd's client URL ends with its port");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "https://localhost:{}",
+            listener.local_addr().unwrap().port()
+        );
+        let connections = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let opened = connections.clone();
+        let server = tokio::spawn(async move {
+            let mut relayed = JoinSet::new();
+            while let Ok((mut inbound, _)) = listener.accept().await {
+                let handle = relayed.spawn(async move {
+                    if let Ok(mut outbound) =
+                        tokio::net::TcpStream::connect(("127.0.0.1", target)).await
+                    {
+                        let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+                    }
+                });
+                opened.lock().unwrap().push(handle);
+            }
+        });
+        Self {
+            url,
+            connections,
+            server,
+        }
+    }
+
+    async fn wait_for_connections(&self, count: usize) {
+        timeout(STARTUP_TIMEOUT, async {
+            while self.connections.lock().unwrap().len() < count {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("The replica should open its etcd connections through the relay");
+    }
+
+    /// Closes the connection opened as number `index`, counted from 0.
+    fn cut(&self, index: usize) {
+        self.connections.lock().unwrap()[index].abort();
+    }
+}
+
+impl Drop for TcpRelay {
+    fn drop(&mut self) {
+        self.server.abort();
+    }
+}
+
+#[test]
+// A replica's two etcd clients hold separate connections, and one can break while the other stays
+// up - behind a Service, when the etcd member under one of them restarts. A standby whose
+// certificate expired after its files were renewed must stop, so that its restart reads them, also
+// when only its election connection is refused: that is the connection it needs to take over.
+async fn a_standby_stops_when_only_its_election_connection_meets_a_refused_certificate(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
+    // Client certificates and a user: the check of the renewed files sends no login, so etcd
+    // refuses its read after the handshake, and that answer must still count as accepted files.
+    let pki = TestPki::new();
+    let etcd = auth_etcd(&pki, pki.mtls_etcd_options()).await;
+    let with_user = |url: &str, tls: EtcdTlsConfig| {
+        config(EtcdConfig {
+            endpoints: vec![url.to_string()],
+            tls: Some(tls),
+            username: Some(USER.to_string()),
+            password: Some(EtcdPassword::from(PASSWORD)),
+            // The certificate check runs every `retry_max_delay`.
+            retry_max_delay: Duration::from_secs(1),
+            ..EtcdConfig::default()
+        })
+    };
+    let (_leader, leader_details) = spawn_replica(with_user(&etcd.client_url(), pki.mtls()));
+    started(leader_details).await;
+
+    let relay = TcpRelay::start(&etcd).await;
+    let expiry = SystemTime::now() + Duration::from_secs(8);
+    let config = with_user(
+        &relay.url,
+        pki.write_client_certificate("standby", Validity::Until(expiry)),
+    );
+    let (_standby, mut standby_details) = spawn_replica(config);
+    // The startup read opens the request connection, then the campaign the election connection.
+    relay.wait_for_connections(2).await;
+
+    let until_expired = expiry.duration_since(SystemTime::now()).unwrap_or_default();
+    tokio::time::sleep(until_expired + Duration::from_secs(2)).await;
+    assert!(
+        standby_details.try_recv().is_err(),
+        "The standby keeps waiting on its open connections after its certificate expired"
+    );
+    pki.write_client_certificate("standby", Validity::Long);
+    relay.cut(1);
+
+    let stopped = timeout(STARTUP_TIMEOUT, standby_details)
+        .await
+        .expect("A standby refused on its election connection, with changed files, must stop")
+        .expect("The standby task ended without a result")
+        .map(|_| ())
+        .expect_err("The standby must not become a leader with its expired certificate");
+    let message = format!("{stopped:#}");
+    assert!(
+        message.contains("the TLS files have changed since then"),
+        "The standby should stop because its files changed, but stopped with: {message}"
+    );
+}
+
+#[test]
+// A refused etcd certificate is etcd's to fix. A replica whose files were renewed must not stop for
+// it: its restart would present the new files to the same etcd, be refused at once, and loop.
+async fn a_replica_with_renewed_files_keeps_running_while_etcds_certificate_has_expired(
+    _tracing: &Tracing,
+    _crypto: &CryptoProvider,
+) {
+    let pki = TestPki::new();
+    let port = free_port();
+    let etcd = DockerEtcd::new_with_options(pki.mtls_etcd_options().with_host_port(port)).await;
+    let mut config = tls_config(&etcd.client_url(), pki.mtls());
+    if let PersistenceConfig::Etcd(etcd) = &mut config.persistence {
+        etcd.retry_max_delay = Duration::from_secs(1);
+    }
+    let (_leader, leader_details) = spawn_replica(config.clone());
+    started(leader_details).await;
+    let (_standby, mut standby_details) = spawn_replica(config);
+    tokio::time::sleep(STANDBY_SETTLE).await;
+
+    pki.write_client_certificate("client", Validity::Long);
+    etcd.stop().await;
+    let expired = DockerEtcd::new_with_options(
+        pki.new_mtls_etcd_options(Validity::Expired)
+            .with_host_port(port),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    assert!(
+        standby_details.try_recv().is_err(),
+        "While etcd's certificate has expired, the standby must keep running"
+    );
+
+    expired.stop().await;
+    let _fixed = DockerEtcd::new_with_options(
+        pki.new_mtls_etcd_options(Validity::Long)
+            .with_host_port(port),
+    )
+    .await;
+    let standby = timeout(STARTUP_TIMEOUT, standby_details)
+        .await
+        .expect("Once etcd is fixed, the standby should lead without a restart")
+        .expect("The standby task ended without a result")
+        .expect("The standby should lead");
+    assert!(standby.leadership.is_some());
 }

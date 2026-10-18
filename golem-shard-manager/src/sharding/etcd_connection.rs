@@ -406,38 +406,121 @@ impl EtcdConnectSettings {
     }
 }
 
+/// What etcd makes of the TLS files as they are on disk now.
+enum FilesOnDisk {
+    /// etcd completed the handshake: a restart that reads these files can connect.
+    Accepted,
+    /// etcd refused them too, or they cannot be used: a restart would not help.
+    Refused(String),
+    /// No answer, such as while etcd is down.
+    Unknown(String),
+}
+
+/// Reads the TLS files again, with the startup checks, and tries them on a fresh connection that
+/// sends no login - the handshake is the question, and a login costs etcd a password check.
+async fn try_files_on_disk(config: &EtcdConfig) -> FilesOnDisk {
+    let Some(tls) = &config.tls else {
+        return FilesOnDisk::Unknown("persistence.config.tls is not set".to_string());
+    };
+    let options = match tls_options(tls, &mut Vec::new()) {
+        Ok(tls) => ConnectOptions::new()
+            .with_connect_timeout(config.connect_timeout)
+            .with_timeout(config.request_timeout)
+            .with_tls(tls),
+        Err(err) => return FilesOnDisk::Refused(err.to_string()),
+    };
+    let client = match Client::connect(&config.endpoints, Some(options)).await {
+        Ok(client) => client,
+        Err(err) => return FilesOnDisk::Unknown(err.to_string()),
+    };
+    match client
+        .kv_client()
+        .get(STATE_KEY, Some(GetOptions::new().with_count_only()))
+        .await
+    {
+        Ok(_) => FilesOnDisk::Accepted,
+        Err(err) if is_certificate_failure(&err) => FilesOnDisk::Refused(err.to_string()),
+        // etcd answered, so the handshake passed; with authentication enabled, it refuses the
+        // read itself, which carries no login.
+        Err(etcd_client::Error::GRpcStatus(status))
+            if matches!(
+                status.code(),
+                tonic::Code::InvalidArgument
+                    | tonic::Code::PermissionDenied
+                    | tonic::Code::Unauthenticated
+            ) =>
+        {
+            FilesOnDisk::Accepted
+        }
+        Err(err) => FilesOnDisk::Unknown(err.to_string()),
+    }
+}
+
+/// A count-only read through `client`, bounded by `request_timeout` also on the election client,
+/// which has no request timeout of its own; `None` when it passed or ran out of time.
+async fn refusal_on(client: &Client, request_timeout: Duration) -> Option<etcd_client::Error> {
+    let mut kv = client.kv_client();
+    let read = kv.get(STATE_KEY, Some(GetOptions::new().with_count_only()));
+    match tokio::time::timeout(request_timeout, read).await {
+        Ok(Err(err)) if is_certificate_failure(&err) => Some(err),
+        _ => None,
+    }
+}
+
 /// Watches, while the replica runs, for etcd refusing a certificate. Such a refusal is retried like
 /// a network fault, because etcd's own certificate can be fixed on etcd's side; but renewed files
-/// take effect only on a restart. So when etcd refuses and the TLS files have changed since startup,
-/// this returns an error, which stops the replica; otherwise it logs the refusal and goes on.
+/// take effect only on a restart.
+///
+/// Every `retry_max_delay` it reads through both clients: they hold separate connections, and the
+/// one that reconnects first may be either. When etcd refuses a certificate, the TLS files have
+/// changed since startup, and etcd accepts the files as they are on disk now, this returns an
+/// error, which stops the replica so that its restart reads them. Otherwise a restart would not
+/// help - the files are the same, or etcd refuses the new ones too, as when etcd's own
+/// certificate has expired - so it logs the refusal and goes on.
 pub(crate) async fn watch_refused_certificates(
+    config: EtcdConfig,
     settings: EtcdConnectSettings,
-    client: Client,
-    interval: Duration,
+    requests: Client,
+    election: Client,
 ) -> anyhow::Result<()> {
-    let mut kv = client.kv_client();
     loop {
-        tokio::time::sleep(interval).await;
-        match kv
-            .get(STATE_KEY, Some(GetOptions::new().with_count_only()))
-            .await
-        {
-            Err(err) if is_certificate_failure(&err) => {
-                if settings.tls_files_changed() {
-                    return Err(
-                        anyhow::Error::new(ShardManagerError::TlsHandshakeFailed(err)).context(
-                            "etcd refuses the TLS certificates read at startup, and the TLS files \
-                             have changed since then: stopping, so that a restart reads them",
-                        ),
-                    );
-                }
-                error!(
-                    error = %err,
-                    "etcd refuses the TLS certificates, and the TLS files have not changed; \
-                     retrying"
+        tokio::time::sleep(config.retry_max_delay).await;
+        let refused = match refusal_on(&requests, config.request_timeout).await {
+            Some(err) => err,
+            None => match refusal_on(&election, config.request_timeout).await {
+                Some(err) => err,
+                None => continue,
+            },
+        };
+        if !settings.tls_files_changed() {
+            error!(
+                error = %refused,
+                "etcd refuses the TLS certificates, and the TLS files have not changed; retrying"
+            );
+            continue;
+        }
+        match try_files_on_disk(&config).await {
+            FilesOnDisk::Accepted => {
+                return Err(
+                    anyhow::Error::new(ShardManagerError::TlsHandshakeFailed(refused)).context(
+                        "etcd refuses the TLS certificates read at startup, and the TLS files \
+                         have changed since then and etcd accepts them: stopping, so that a \
+                         restart reads them",
+                    ),
                 );
             }
-            _ => {}
+            FilesOnDisk::Refused(files_error) => error!(
+                error = %refused,
+                files_error,
+                "etcd refuses the TLS certificates read at startup and the TLS files on disk \
+                 alike, so a restart would not help; retrying"
+            ),
+            FilesOnDisk::Unknown(files_error) => warn!(
+                error = %refused,
+                files_error,
+                "etcd refuses the TLS certificates read at startup, and the TLS files on disk \
+                 cannot be tried now; retrying"
+            ),
         }
     }
 }

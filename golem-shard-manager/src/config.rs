@@ -314,8 +314,8 @@ pub struct EtcdConfig {
 /// Each item comes from a PEM file or from an inline value (the PEM, Base64-encoded on one line),
 /// not both.
 /// Files and values are read once, at startup, so a renewed certificate takes effect on a
-/// restart; a running replica stops by itself when etcd refuses its certificates and the files have
-/// changed since startup.
+/// restart. A running replica stops by itself when etcd refuses the certificates it holds, the
+/// files have changed since startup, and etcd accepts the files as they are now.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EtcdTlsConfig {
     /// PEM file with the certificate of the CA that signed etcd's server certificate.

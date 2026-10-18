@@ -467,13 +467,6 @@ async fn start_distributed_mode(
         ensure_shard_count_matches(stored, number_of_shards)?;
     }
 
-    if etcd.tls.is_some() {
-        join_set.spawn(
-            watch_refused_certificates(settings.clone(), kv.clone(), etcd.retry_max_delay)
-                .in_current_span(),
-        );
-    }
-
     let election = retry_retriable(
         "connecting the election client to etcd",
         || async {
@@ -488,6 +481,12 @@ async fn start_distributed_mode(
     )
     .await?
     .with_shutdown(shutdown);
+    if etcd.tls.is_some() {
+        join_set.spawn(
+            watch_refused_certificates(etcd.clone(), settings, kv.clone(), election.client())
+                .in_current_span(),
+        );
+    }
     let elected = campaign_watching_startup(&election, join_set).await?;
 
     metrics::record_elected(
