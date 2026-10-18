@@ -5391,6 +5391,7 @@ pub(crate) async fn settle_tool_children<Ctx: WorkerCtx>(
 
     let execution = store.data().durable_ctx().owner_execution.clone();
     let operations = execution.tool_operations();
+    let entity_cancellation = store.data().durable_ctx().entity_cancellation();
     let primary = store
         .data()
         .durable_ctx()
@@ -5419,6 +5420,12 @@ pub(crate) async fn settle_tool_children<Ctx: WorkerCtx>(
             // A secondary task error must not strand a registered failure continuation,
             // even while election still waits for another terminal selection to settle.
             Err(_) if operations.has_owner_failure() => {}
+            // Cancelling an entity interrupts its guest; its accepted children still have to
+            // resolve their own cancellation inside this Store before the parent settles.
+            Err(_)
+                if entity_cancellation
+                    .as_ref()
+                    .is_some_and(|cancellation| cancellation.is_cancelled()) => {}
             Err(error) => return Err(WorkerExecutorError::runtime(error.to_string())),
         }
     }
