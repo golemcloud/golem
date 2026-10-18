@@ -1268,6 +1268,381 @@ async fn an_incomplete_wallet_read_observes_the_live_wallet_when_repaired(
     .await
 }
 
+/// A card operation whose authorization decision `card_decisions_survive_reconstruction` makes
+/// twice, and the card event that changes the decision between the two calls.
+#[derive(Clone, Copy, Debug)]
+enum CardDecision {
+    /// `derive-scope` from a scope card; the root card is revoked.
+    DeriveScope,
+    /// `inspect-card` without `card:inspect`; a card that grants it is installed.
+    InspectCard,
+    /// `derive` without `card:derive`; a card that grants it is installed.
+    Derive,
+    /// `derive-from-wallet` of `card:inspect` and `card:derive` with only `card:derive`; a card
+    /// that grants `card:inspect` is installed, so no single wallet card covers the request.
+    DeriveFromWallet,
+    /// `install-card` without `card:install` of a card whose recipient excludes the target; a
+    /// card that grants `card:install` is installed, so the second install reaches the recipient
+    /// check instead of the transfer. Each call inspects its card first, so the second call
+    /// applies the card event before its install records anything.
+    InstallCard,
+}
+
+impl CardDecision {
+    fn operation(self) -> &'static str {
+        match self {
+            CardDecision::DeriveScope => "derive-scope",
+            CardDecision::InspectCard => "inspect-card",
+            CardDecision::Derive => "derive",
+            CardDecision::DeriveFromWallet => "derive-from-wallet",
+            CardDecision::InstallCard => "install-card",
+        }
+    }
+
+    fn host_function(self) -> HostFunctionName {
+        match self {
+            CardDecision::DeriveScope => HostFunctionName::GolemPermissionsDeriveScopeDecision,
+            CardDecision::InspectCard => HostFunctionName::GolemPermissionsInspectDecision,
+            CardDecision::Derive => HostFunctionName::GolemPermissionsDeriveDecision,
+            CardDecision::DeriveFromWallet => {
+                HostFunctionName::GolemPermissionsDeriveFromWalletDecision
+            }
+            CardDecision::InstallCard => HostFunctionName::GolemPermissionsInstallDecision,
+        }
+    }
+
+    /// The `card` verbs that the caller's initial card grants.
+    fn initial_card_verbs(self) -> &'static [&'static str] {
+        match self {
+            CardDecision::DeriveScope | CardDecision::InstallCard => &["derive", "inspect"],
+            CardDecision::InspectCard | CardDecision::Derive => &[],
+            CardDecision::DeriveFromWallet => &["derive"],
+        }
+    }
+
+    /// The `card` verb that the card installed between the two calls grants, or `None` when the
+    /// initial card is revoked instead.
+    fn installed_card_verb(self) -> Option<&'static str> {
+        match self {
+            CardDecision::DeriveScope => None,
+            CardDecision::InspectCard | CardDecision::DeriveFromWallet => Some("inspect"),
+            CardDecision::Derive => Some("derive"),
+            CardDecision::InstallCard => Some("install"),
+        }
+    }
+
+    /// The outcomes of the two calls in the live run.
+    fn live_outcomes(self) -> [&'static str; 2] {
+        match self {
+            CardDecision::DeriveScope => ["ok", "not-permitted"],
+            CardDecision::InspectCard | CardDecision::Derive => ["not-permitted", "ok"],
+            CardDecision::DeriveFromWallet => {
+                ["lower-bound-too-broad", "wallet-multi-source-required"]
+            }
+            CardDecision::InstallCard => ["not-permitted", "install-recipient-mismatch"],
+        }
+    }
+}
+
+/// The message that the host-api-tests agent logs between the two calls of
+/// `remember_card_decisions_around_gap`.
+const CARD_DECISION_GAP_MARKER: &str = "card-decision-gap";
+
+fn is_card_decision_gap_marker(entry: &OplogEntry) -> bool {
+    matches!(entry, OplogEntry::Log { message, .. } if message == CARD_DECISION_GAP_MARKER)
+}
+
+/// A concrete card derived from `parent` that grants `card:<verb>`.
+fn concrete_card_granting(parent: CardId, verb: &str) -> StoredCard {
+    StoredCard::Concrete(Card {
+        card_id: CardId::new(),
+        parent_ids: vec![parent],
+        lower_positive: vec![
+            parse_permission_fields("card", "*", "*", verb, "*").expect("valid card grant"),
+        ],
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: Utc::now(),
+        expires_at: None,
+        system_card: false,
+        managed_by: None,
+    })
+}
+
+/// Makes `decision`'s operation twice in one invocation and changes the caller's wallet between
+/// the two calls, where no recorded entry separates them: the agent logs a marker, which is a
+/// hint, and the test queues the card event while a gate holds the guest in the marker's append.
+/// The live run applies the event at the second call only, so the two calls return different
+/// outcomes. Then a new executor reconstructs the agent, which must keep both outcomes: replay
+/// commits the entry before the first call and publishes every card event up to the next
+/// recorded entry, so a first decision that records nothing would observe the event.
+async fn card_decisions_survive_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    host_api_tests: &PrecompiledComponent,
+    agent_name: &str,
+    decision: CardDecision,
+) -> anyhow::Result<()> {
+    use golem_common::model::OwnedAgentId;
+
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .update_agent_provision_config("ScopeCardAgent", |config| {
+            let positive = &mut config.initial_permissions.lower_bound.positive;
+            positive.retain(|pattern| !matches!(pattern, PolymorphicPermissionPattern::Card(_)));
+            positive.extend(decision.initial_card_verbs().iter().map(|verb| {
+                parse_polymorphic_permission(&format!("card(*) @ * : {verb} : *")).unwrap()
+            }));
+        })
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", agent_name);
+    let root_card_id = configure_scope_card_root(&authority, &component, &caller)?;
+    let worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let target = agent_id!("ScopeCardAgent", format!("{agent_name}-target"));
+
+    let owner = executor
+        .active_agent(&OwnedAgentId::new(context.default_environment_id, &worker))
+        .await
+        .ok_or_else(|| anyhow::anyhow!("the agent is not active"))?;
+    let key = IdempotencyKey::fresh();
+    let mut gap = executor
+        .gate_after_next_append(&worker, is_card_decision_gap_marker)
+        .await;
+    let live_call = executor.invoke_and_await_agent_with_key(
+        &component,
+        &caller,
+        &key,
+        "remember_card_decisions_around_gap",
+        data_value!(
+            decision.operation().to_string(),
+            component.id,
+            target.to_string()
+        ),
+    );
+    let change_wallet_in_gap = async {
+        tokio::time::timeout(Duration::from_secs(60), gap.entered()).await?;
+        match decision.installed_card_verb() {
+            None => {
+                owner
+                    .primary()
+                    .queue_card_revocations(&[root_card_id])
+                    .await?;
+            }
+            Some(verb) => {
+                let card = concrete_card_granting(root_card_id, verb);
+                authority.add_card(card.clone());
+                executor.queue_card_install(&worker, card).await?;
+            }
+        }
+        drop(gap);
+        Ok::<_, anyhow::Error>(())
+    };
+    let (live, ()) = tokio::try_join!(live_call, change_wallet_in_gap)?;
+    let live = live.into_typed::<Vec<String>>()?;
+    assert_eq!(
+        live,
+        decision.live_outcomes(),
+        "the card event must change only the second decision"
+    );
+
+    let entries = read_whole_oplog(&owner).await;
+    drop(owner);
+    drop(executor);
+
+    let executor = start_scope_card_executor(deps, &context, authority).await?;
+    let reconstructed = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "remembered_card_decisions",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Vec<String>>()?;
+    assert_eq!(
+        reconstructed, live,
+        "reconstruction must keep the outcome of each decision"
+    );
+
+    let recorded = RecordedCardDecisions::find(&entries, &key, decision)
+        .ok_or_else(|| anyhow::anyhow!("the invocation was not started"))?;
+    let marker = recorded
+        .marker
+        .ok_or_else(|| anyhow::anyhow!("the gap marker was not logged"))?;
+    let first = recorded
+        .decisions
+        .iter()
+        .copied()
+        .rfind(|start| *start < marker)
+        .ok_or_else(|| anyhow::anyhow!("the first decision is not recorded"))?;
+    let second = recorded
+        .decisions
+        .iter()
+        .copied()
+        .find(|start| *start > marker)
+        .ok_or_else(|| anyhow::anyhow!("the second decision is not recorded"))?;
+    assert!(
+        entries
+            .range(first.next()..marker)
+            .any(|(_, entry)| matches!(
+                entry,
+                OplogEntry::End { start_index, .. } if *start_index == first
+            )),
+        "the first decision must be completed before the gap"
+    );
+    assert!(
+        entries
+            .range(marker..second)
+            .any(|(_, entry)| matches!(entry, OplogEntry::CardEventQueued { .. })),
+        "the card event must be queued between the gap marker and the second decision"
+    );
+    Ok(())
+}
+
+/// The oplog positions of `remember_card_decisions_around_gap` in the invocation that `key`
+/// started: the `Start` of each authorization decision of the operation, in order, and the
+/// logged gap marker.
+struct RecordedCardDecisions {
+    decisions: Vec<OplogIndex>,
+    marker: Option<OplogIndex>,
+}
+
+impl RecordedCardDecisions {
+    fn find(
+        entries: &std::collections::BTreeMap<OplogIndex, OplogEntry>,
+        key: &IdempotencyKey,
+        decision: CardDecision,
+    ) -> Option<Self> {
+        let started = entries.iter().find_map(|(index, entry)| {
+            matches!(entry,
+                OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == key
+            )
+            .then_some(*index)
+        })?;
+        let invocation = entries
+            .range(started.next()..)
+            .take_while(|(_, entry)| !matches!(entry, OplogEntry::AgentInvocationFinished { .. }));
+        let mut recorded = Self {
+            decisions: Vec::new(),
+            marker: None,
+        };
+        for (index, entry) in invocation {
+            match entry {
+                OplogEntry::Start { function_name, .. }
+                    if *function_name == decision.host_function() =>
+                {
+                    recorded.decisions.push(*index)
+                }
+                OplogEntry::Log { message, .. } if message == CARD_DECISION_GAP_MARKER => {
+                    recorded.marker = Some(*index)
+                }
+                _ => {}
+            }
+        }
+        Some(recorded)
+    }
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn a_scope_derivation_keeps_its_outcome_after_a_later_revocation_on_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    card_decisions_survive_reconstruction(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        "derive-scope-decisions",
+        CardDecision::DeriveScope,
+    )
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn an_inspect_denial_keeps_its_outcome_after_a_later_grant_on_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    card_decisions_survive_reconstruction(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        "inspect-decisions",
+        CardDecision::InspectCard,
+    )
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn a_derive_denial_keeps_its_outcome_after_a_later_grant_on_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    card_decisions_survive_reconstruction(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        "derive-decisions",
+        CardDecision::Derive,
+    )
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn a_wallet_derivation_keeps_its_error_kind_after_a_later_install_on_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    card_decisions_survive_reconstruction(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        "derive-from-wallet-decisions",
+        CardDecision::DeriveFromWallet,
+    )
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn an_install_denial_keeps_its_outcome_after_a_later_grant_on_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    card_decisions_survive_reconstruction(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        "install-decisions",
+        CardDecision::InstallCard,
+    )
+    .await
+}
+
 /// A concrete card derived from `parent` that grants card inspection.
 fn concrete_inspect_card(parent: CardId, expires_at: Option<chrono::DateTime<Utc>>) -> StoredCard {
     StoredCard::Concrete(Card {

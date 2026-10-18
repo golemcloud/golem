@@ -1919,11 +1919,10 @@ cursor (`OwnerExecution`, `worker/instance.rs`).
   and pins until their own live transition, never borrowing the latest live snapshot. Guest
   `self-wallet` and `self-version` reads are `ReadLocal` calls whose `End` records the exact
   observed view, so replay returns each read's own observation whatever card events it applies
-  around it; an incomplete read completes live at its own `Start`. Authorization decisions such
-  as `inspect-card` and derivation are not recorded and still evaluate the replayed wallet; a card
-  event between two of them can diverge the same way. The root `Start` records the pinned
-  chain plan; descendants record root plus position, and every occurrence retains the original
-  calling principal and typed static installation parameters. Component and host leaves use the
+  around it; an incomplete read completes live at its own `Start`. Card authorization decisions
+  are recorded in the same way (see "Card authorization decisions"). The root `Start` records the
+  pinned chain plan; descendants record root plus position, and every occurrence retains the
+  original calling principal and typed static installation parameters. Component and host leaves use the
   same dispatch path.
 - Middleware can start its next layer repeatedly and concurrently. Each result has independent
   `get`/`cancel`; dropping the observer does not cancel execution. Handler return revokes new
@@ -1993,9 +1992,10 @@ runs a `ReadRemote` durable call, `golem::permissions::types::card-liveness`
 (`durable_host/permissions/mod.rs::resolve_permission_card`). Live, it asks the card service and
 records `Live(card)`, `Revoked` or `Expired`; replay returns the recorded answer and never asks
 the card service again. A failed lookup, or an answer that omits the card, traps and leaves the
-`Start` incomplete, so recovery asks again; no error is recorded. The answer never depends on wallet membership, which is an unrecorded observation
-(see the historical-ordering limit in the walkthrough). A revoked or expired card gives
-`card-revoked` or `card-expired`; the accessors trap. `revoke-card` resolves its handle inside
+`Start` incomplete, so recovery asks again; no error is recorded. The answer never depends on
+wallet membership; the operation's recorded authorization decision holds the wallet data that the
+operation uses. A revoked or expired card gives `card-revoked` or `card-expired`; the accessors
+trap. `revoke-card` resolves its handle inside
 its own recorded call. Runtime-card creation (`persist_runtime_card`) records a typed refusal in
 its `End` when the card service refuses a child because a parent is no longer live. The card
 service reports an expired card as revoked, so the parent's expiry decides between
@@ -2011,6 +2011,27 @@ externally_revoked_cached_handle_returns_typed_errors_and_its_accessors_trap,
 cached_handle_reports_card_expired_after_its_lifespan,
 derive_from_a_card_that_expires_before_its_creation_records_card_expired,
 a_refused_repair_that_fails_after_revoking_its_card_settles_with_card_revoked}`.
+
+### Card authorization decisions
+
+Card events are hints. When replay commits a recorded entry, `skip_forward` publishes every card
+event up to the next recorded entry, and the next authority boundary applies them. A decision that
+records nothing therefore sees on replay the card events that live execution applied only to a
+later call. So `inspect-card`, `derive`, `derive-from-wallet`, `derive-scope` and `install-card`
+each make their authorization decision in a `ReadLocal` call
+(`permissions/mod.rs::record_card_decision`): `golem::permissions::inspect::inspect-card-decision`,
+`golem::permissions::derive::{derive-decision, derive-from-wallet-decision,
+derive-scope-decision}` and `golem::permissions::wallet::install-card-decision`. The request holds
+the card ids of the handles. The `End` (`PermissionCardDecision`) records the outcome, allowed or
+the typed permission error, and on success the serialized data the operation continues with: the
+wallet copy of the `derive` parent, the selected `derive-from-wallet` parent, each `derive-scope`
+parent (a valid scope card, the wallet copy of a persistent parent, or the refusal of an unusable
+parent), and the `install-card` target with its holder identity. Replay returns the recorded
+decision; the rest of the operation is deterministic from it and from the recorded `card-liveness`
+answers. Each decision keeps its place relative to the handle's liveness call: `inspect-card`,
+`derive` and `derive-scope` decide first, `install-card` resolves its handle first. A repaired
+incomplete decision decides at its own `Start`. Tests:
+`tests/scope_cards.rs::card_decisions_survive_reconstruction` and its cases.
 
 ## Wrong model → right model
 | Wrong | Right | Fails under wrong model |
