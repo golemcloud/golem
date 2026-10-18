@@ -113,23 +113,6 @@ async fn stop_requested(mut stdin: InputStream) {
     }
 }
 
-/// Keeps the place of a step of a stop in the call's record. Golem runs a call again from its
-/// record after it loads the agent again: the first run keeps `place`, and every later run gets
-/// the place the first run kept. The request is the same in every run, and the place is the
-/// response: the turn, and whether the script waited there.
-#[cfg(target_arch = "wasm32")]
-fn recorded_turn(place: bash_shell::session::Place) -> bash_shell::session::Place {
-    use golem_rust::durability::{Durability, DurableFunctionType};
-    let (turn, waited) = Durability::<(u64, bool), String>::new(
-        "bash",
-        "stop-turn",
-        DurableFunctionType::ReadLocal,
-        &(),
-    )
-    .run_infallible(|| (place.turn, place.waited));
-    bash_shell::session::Place { turn, waited }
-}
-
 pub async fn run_script(
     cwd: &str,
     script: &str,
@@ -176,8 +159,6 @@ pub async fn run_script(
         session.set_working_dir(cwd).map_err(rejected_cwd)?;
     }
     session.set_time_limit(std::time::Duration::from_secs(u64::from(timeout)));
-    #[cfg(target_arch = "wasm32")]
-    session.set_turn_recorder(recorded_turn);
     #[cfg(target_arch = "wasm32")]
     if let Some(stdin) = stdin {
         session.set_stop_request(stop_requested(stdin));

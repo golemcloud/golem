@@ -521,17 +521,7 @@ pipe. What a call returns is bounded lower, by what Golem can carry (see Output)
   that catches it runs its handler; the call returns 130 in each case. A stream cancelled before
   the script starts ends the call before any of the script runs. Background jobs ignore INT, as
   bash's do without job control, so the end of the run stops and reports them like any leftover
-  job. Golem runs a call again from its record when it loads the agent again, and gives that run
-  the cancel, or the time limit's timer, earlier in a computing script than the first run got it.
-  So the call records how many turns the tasks of the script had taken when each step of a stop
-  acted, and whether the script waited then. A later run acts after the same number of turns: a
-  loop that prints is cut at the same line. A script that is one task and waits is stopped where
-  it waits, if the first run's script waited at that step too. A later run whose script cannot be
-  brought to the recorded place, or gets a completion of its own on the way, fails with a line
-  that says so. This holds for a script that is one task; a script of several tasks that wake
-  each other, such as a loop with a pipeline in each round, can be stopped at another place in
-  a later run. The [process model](docs/process-model.md#replay-safety) says how, and lists the
-  limits.
+  job.
 - **HTTP.** `curl` and `wget` hold at most 64 MiB of a response body when they must buffer it
   (`curl --compressed` decodes the whole body first): past that they fail with
   `curl: response body exceeded 67108864 bytes` (status 4). `curl -m`/`wget -T` bound the whole

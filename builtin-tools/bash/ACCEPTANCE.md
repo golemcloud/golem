@@ -6,13 +6,11 @@ then KILL, and exit code 130. Version 0.2.0 changed it to `run(cwd, script, time
 stops its script at a time limit (600 s by default, at most 3600 s) with TERM, then KILL, and exit
 code 124, and the shell gains GNU's `timeout` command. The artifact rows below are for 0.2.0.
 
-The revisions below are the pins of the source. Under Results, the rows for the standalone
-library tests, the unit tests run as WASM and the shell integration tests are the results of those
-suites on the source of version 0.3.0; the other rows were recorded for version 0.2.0 on the same
-pins. The real-server scenarios were run with the 0.2.0 artifact on 2026-10-02 on Golem
-`0f4bd0e4e`, where the registry provisioned it from the SHA-256 pinned in
-`builtin-artifacts.lock.json`. The conformance matrix runs the same shell library as the
-standalone `cooperative` example, built from the same source and pins.
+Verified on 2026-10-01 on the `builtin-bash-tool` branch with the fork revisions and the artifact
+below. The real-server scenarios were run on 2026-10-02 on Golem `0f4bd0e4e` with that artifact,
+provisioned by the registry from the SHA-256 pinned in `builtin-artifacts.lock.json`. The
+conformance matrix runs the same shell library as the standalone `cooperative` example, built from
+the same source and pins; the other checks were run on that source too.
 Optional Rust argument encoding remains a separate requirement for the full 1.6 surface.
 
 ## Revisions and artifact
@@ -41,9 +39,9 @@ a committed lockfile and immutable Brush/Coreutils git pins, with no local fork 
 | Check | Result |
 |---|---|
 | Shared argv/help parser's moved tests | 15 passed; parser also checks on `wasm32-wasip2` without host features |
-| Standalone workspace library tests | 367 passed: shell 209, component 8, wget 37, curl 87, HTTP transport 26 |
-| Unit tests run as WASM | 171 passed under Wasmtime: shell 163, HTTP transport 8 (the component needs Golem's host; the rest need threads or `tempfile`) |
-| Shell integration tests | 21 passed |
+| Standalone workspace library tests | 365 passed: shell 209, component 6, wget 37, curl 87, HTTP transport 26 |
+| Unit tests run as WASM | 138 passed under Wasmtime: shell 130, HTTP transport 8 (the component needs Golem's host; the rest need threads or `tempfile`) |
+| Shell integration tests | 20 passed |
 | Exact pinned Brush library tests | Core 141, builtins 28 and parser 276 passed (parser's YAML snapshot test is ignored upstream) |
 | Conformance matrix | 2,253 per-PR cases passed on arm64 and on x86-64; exact shell exit code, stdout and stderr, against goldens recorded from Bash 5 and the GNU tools. Of the 18,008 cases including the sweep tier, the 238 that fail on each architecture are exactly those listed in `conformance/sweep-known-failures.json` |
 | Oracle goldens | The goldens `stale` checked on 2026-09-30 matched a fresh run of the oracle image; the 51 cases added since, and one whose script changed, were each recorded from two fresh oracle containers that agreed |
