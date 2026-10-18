@@ -362,7 +362,7 @@ impl EntityInvocationDurability {
                     incomplete_repair_authorized_by_scope: true,
                     ..AccessClaimOptions::default()
                 },
-                async move |_| Ok(request),
+                request,
                 span_started.clone(),
             )
             .await?;
@@ -572,7 +572,7 @@ impl EntityInvocationDurability {
         } else {
             let replay =
                 store.with(|mut access| get_ctx(access.data_mut()).state.replay_state.clone());
-            if replay.has_visible_terminal(handle.start_index()).await {
+            if replay.has_visible_terminal(handle.start_index()).await? {
                 InvocationExecutionMode::ReplayingCompleted
             } else {
                 InvocationExecutionMode::ReplayingIncomplete
@@ -669,7 +669,7 @@ impl EntityInvocationDurability {
         let replay = store.with(|mut access| get_ctx(access.data_mut()).state.replay_state.clone());
         if replay
             .has_visible_scope_descendant(self.handle.start_index())
-            .await
+            .await?
         {
             return Ok(IncompleteLiveRepairBeforeBody::Ready(self));
         }
@@ -772,7 +772,7 @@ impl EntityInvocationDurability {
         });
         let entry = replay
             .visible_terminal_entry(self.handle.start_index())
-            .await
+            .await?
             .ok_or_else(|| {
                 WorkerExecutorError::unexpected_oplog_entry(
                     format!(
@@ -1459,7 +1459,7 @@ where
             incomplete_repair_authorized_by_scope: true,
             ..AccessClaimOptions::default()
         },
-        async move |_| Ok(request),
+        request,
         span_started,
     )
     .await?;
@@ -1632,7 +1632,7 @@ where
     Ctx: WorkerCtx,
 {
     let oplog = store.with(|mut access| get_ctx(access.data_mut()).state.oplog.clone());
-    let entry = oplog.read(start_index).await;
+    let entry = oplog.read(start_index).await?;
     let OplogEntry::Start {
         request: Some(request),
         ..

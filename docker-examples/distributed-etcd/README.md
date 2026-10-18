@@ -8,11 +8,13 @@ replica to run. Every other service still uses Postgres.
 docker compose up
 ```
 
-The Golem APIs are then on `http://localhost:9881`, as in the other example.
+The Golem APIs are then on `http://localhost:9881`, as in the other example. The router sends
+requests for `localhost` (`GOLEM_ROUTER_MANAGEMENT_HOST`) to the Golem APIs, and requests for every
+other host to the HTTP API and MCP deployments.
 
-Distributed mode is newer than the image tag in `.env` (`GOLEM_IMAGES_VERSION`), which is shared with
-`published-postgres`. Point that variable at a release that includes it, or at an image built from
-this repository, before bringing the stack up.
+Distributed mode and the `golem-router` image are newer than the image tag in `.env`
+(`GOLEM_IMAGES_VERSION`), which is shared with `published-postgres`. Point that variable at a release
+that includes them, or at images built from this repository, before bringing the stack up.
 
 ### Checking that it runs
 

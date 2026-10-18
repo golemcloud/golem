@@ -10,6 +10,10 @@ const packageDir = path.resolve(scriptDir, '..');
 // All wrapper crates compile into the first wrapper's resolved target directory
 // so their large shared dependency graph is built only once.
 function resolveTargetDir(manifestPath, wrapperDirectory) {
+  if (process.env.CARGO_TARGET_DIR) {
+    return path.resolve(process.env.CARGO_TARGET_DIR);
+  }
+
   try {
     const output = execFileSync(
       'cargo',
@@ -25,10 +29,6 @@ function resolveTargetDir(manifestPath, wrapperDirectory) {
       `Could not resolve cargo target directory via \`cargo metadata\` (${err.message}); ` +
         `falling back to the default location.`,
     );
-  }
-
-  if (process.env.CARGO_TARGET_DIR) {
-    return path.resolve(process.env.CARGO_TARGET_DIR);
   }
 
   return path.join(packageDir, wrapperDirectory, 'target');

@@ -5974,7 +5974,9 @@ async fn p3_wait_for_cancel_after_internal_end_replays(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::data_value;
-    use golem_common::model::oplog::PublicOplogEntry;
+    use golem_common::model::oplog::{
+        HostRequest, HostRequestMonotonicClockDuration, PublicOplogEntry,
+    };
     use golem_worker_executor_test_utils::ReplayAdmissionStage;
 
     let context = TestContext::new(last_unique_id);
@@ -5991,21 +5993,33 @@ async fn p3_wait_for_cancel_after_internal_end_replays(
         .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
         .await?;
     let boundary = executor.oplog_max_index(&worker).await?;
-    let mut read = executor.gate_next_replay_access_admission(
+    // Each wait starts in its own host task, so the waits reach their gates in any order. The
+    // test lets one wait at a time pass its `Start` and tells the waits apart by their requests.
+    let mut first_start = executor.gate_next_replay_access_admission(
         &worker,
-        "monotonic-clock::now",
-        ReplayAdmissionStage::AfterHostInternalTerminal,
+        "monotonic-clock::wait-for",
+        ReplayAdmissionStage::BeforeLiveStart,
+    );
+    let mut second_start = executor.gate_next_replay_access_admission(
+        &worker,
+        "monotonic-clock::wait-for",
+        ReplayAdmissionStage::BeforeLiveStart,
     );
     let mut first_read = executor.gate_next_replay_access_admission(
         &worker,
         "monotonic-clock::now",
         ReplayAdmissionStage::BeforeDeferredStart,
     );
-    let mut winning_read = executor.gate_next_replay_access_admission(
+    let mut second_read = executor.gate_next_replay_access_admission(
         &worker,
         "monotonic-clock::now",
         ReplayAdmissionStage::BeforeDeferredStart,
     );
+    let long_wait: HostRequest = HostRequestMonotonicClockDuration {
+        duration_in_nanos: 60_000_000_000,
+    }
+    .into();
+    let long_wait = long_wait.into_typed_schema_value()?;
     let invocation = executor.invoke_and_await_agent(
         &component,
         &agent_id,
@@ -6013,9 +6027,37 @@ async fn p3_wait_for_cancel_after_internal_end_replays(
         data_value!(vec![60u64, 0u64]),
     );
     let coordinate = async {
+        tokio::join!(first_start.entered(), second_start.entered());
+        first_start.release();
         first_read.entered().await;
-        first_read.release();
-        winning_read.entered().await;
+        executor.commit_oplog(&worker).await?;
+        let first_is_long = executor
+            .get_oplog(&worker, boundary.next())
+            .await?
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if start.function_name.ends_with("monotonic-clock::wait-for") =>
+                {
+                    Some(start.request.as_ref() == Some(&long_wait))
+                }
+                _ => None,
+            })
+            .expect("the first wait's Start");
+        second_start.release();
+        second_read.entered().await;
+        let (long_read, short_read) = if first_is_long {
+            (first_read, second_read)
+        } else {
+            (second_read, first_read)
+        };
+        // Hold the long wait after the End of its clock read, so the short wait cancels it there.
+        let mut read = executor.gate_next_replay_access_admission(
+            &worker,
+            "monotonic-clock::now",
+            ReplayAdmissionStage::AfterHostInternalTerminal,
+        );
+        long_read.release();
         read.entered().await;
         executor.commit_oplog(&worker).await?;
         let entries = executor.get_oplog(&worker, boundary.next()).await?;
@@ -6036,14 +6078,14 @@ async fn p3_wait_for_cancel_after_internal_end_replays(
         assert!(entries.iter().any(
             |entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == clock.0)
         ));
-        winning_read.release();
-        anyhow::Ok(clock)
+        short_read.release();
+        anyhow::Ok((clock, read))
     };
     let (result, clock) = tokio::time::timeout(Duration::from_secs(10), async {
         tokio::join!(invocation, coordinate)
     })
     .await?;
-    let clock = clock?;
+    let (clock, read) = clock?;
     assert_eq!(result?.into_typed::<u64>()?, 0);
     let entries = executor.get_oplog(&worker, boundary.next()).await?;
     assert!(entries.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::Cancelled(cancelled) if cancelled.start_index == clock.1)));

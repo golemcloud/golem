@@ -1446,6 +1446,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .span_started
                     .map(public_span_started_from_proto)
                     .transpose()?,
+                denial: start.denial,
             })),
             oplog_entry::Entry::End(end) => Ok(PublicOplogEntry::End(EndParams {
                 timestamp: end.timestamp.ok_or("Missing timestamp field")?.into(),
@@ -2105,6 +2106,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         request: start.request.map(TryInto::try_into).transpose()?,
                         durable_function_type: Some(start.durable_function_type.into()),
                         span_started: start.span_started.map(public_span_started_to_proto),
+                        denial: start.denial,
                     },
                 )),
             },
@@ -4088,6 +4090,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                         .span_started
                         .map(public_span_started_to_raw)
                         .map(Box::new),
+                    denial: start.denial,
                 })
             }
             PublicOplogEntry::End(end) => {
@@ -4998,6 +5001,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 request,
                 durable_function_type,
                 span_started,
+                denial,
                 ..
             } => Entry::Start(RawStartParameters {
                 parent_start_index: parent_start_index.map(|id| id.as_u64()),
@@ -5007,6 +5011,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 request: request.map(oplog_payload_to_proto).transpose()?,
                 durable_function_type: Some(durable_function_type_to_proto(durable_function_type)),
                 span_started: span_started.map(|span| raw_span_started_to_proto(*span)),
+                denial,
             }),
             OplogEntry::End {
                 start_index,
@@ -5623,6 +5628,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                         .map(raw_span_started_from_proto)
                         .transpose()?
                         .map(Box::new),
+                    denial: p.denial,
                 })
             }
             Entry::End(p) => {
@@ -6222,6 +6228,26 @@ mod observational_start_proto_tests {
             request: None,
             durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,
+            denial: None,
+        };
+
+        let proto: RawOplogEntry = original.clone().try_into().unwrap();
+        let roundtrip = OplogEntry::try_from(proto).unwrap();
+        assert_eq!(roundtrip, original);
+    }
+
+    #[test]
+    fn denied_start_raw_protobuf_roundtrips() {
+        let original = OplogEntry::Start {
+            timestamp: Timestamp::now_utc().rounded(),
+            parent_start_index: None,
+            function_name: HostFunctionName::KeyvalueEventualSet,
+            invocation_id: None,
+            observational_owner: None,
+            request: None,
+            durable_function_type: DurableFunctionType::WriteRemote,
+            span_started: None,
+            denial: Some("access denied".to_string()),
         };
 
         let proto: RawOplogEntry = original.clone().try_into().unwrap();
@@ -6266,6 +6292,7 @@ mod observational_start_proto_tests {
             request: None,
             durable_function_type: DurableFunctionType::WriteRemote,
             span_started: Some(Box::new(started)),
+            denial: None,
         }
         .rounded();
         let end = OplogEntry::End {

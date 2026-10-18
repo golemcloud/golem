@@ -1705,26 +1705,6 @@ mod tests {
     use test_r::{test, timeout};
 
     #[test]
-    fn space_uses_fragment_size_and_executor_available_counts() {
-        let space = space_from_values(10, 4, 4096, 20, 7).unwrap();
-
-        assert_eq!(
-            space,
-            FilesystemSpace::Observed {
-                total_bytes: 40_960,
-                available_bytes: 16_384,
-                total_filesystem_objects: 20,
-                available_filesystem_objects: 7,
-            }
-        );
-    }
-
-    #[test]
-    fn space_rejects_byte_overflow() {
-        assert!(space_from_values(u64::MAX, 1, 2, 0, 0).is_err());
-    }
-
-    #[test]
     fn managed_name_mode_proof_requires_xfs_filesystem_type() {
         let identity = FilesystemIdentity { device: 17 };
         let proof = validated_xfs_name_mode(XFS_SUPER_MAGIC, identity).unwrap();

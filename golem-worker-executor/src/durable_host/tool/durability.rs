@@ -319,7 +319,7 @@ where
         accessor.getter(),
         DurableFunctionType::WriteLocal,
         AccessClaimOptions::default(),
-        async move |_| Ok(host_request),
+        host_request,
     )
     .await?;
     let (result, delivery) = write_started(
@@ -504,7 +504,7 @@ where
         let OplogEntry::Start {
             request: Some(recorded),
             ..
-        } = oplog.read(start).await
+        } = oplog.read(start).await.map_err(WorkerExecutorError::from)?
         else {
             return Err(call.trap(anyhow::anyhow!("tool output write has no recorded request")));
         };
@@ -760,7 +760,7 @@ pub(super) async fn wait<U: Send + 'static, Ctx: WorkerCtx>(
             accessor.getter(),
             DurableFunctionType::ReadLocal,
             AccessClaimOptions::default(),
-            async move |_| Ok(request),
+            request,
         )
         .await?;
     if !call.is_live() {
@@ -769,7 +769,7 @@ pub(super) async fn wait<U: Send + 'static, Ctx: WorkerCtx>(
         let OplogEntry::Start {
             request: Some(recorded),
             ..
-        } = oplog.read(start).await
+        } = oplog.read(start).await.map_err(WorkerExecutorError::from)?
         else {
             return Err(call.trap(anyhow::anyhow!("tool stdin wait has no recorded request")));
         };
@@ -817,7 +817,7 @@ where
         accessor.getter(),
         DurableFunctionType::WriteLocal,
         AccessClaimOptions::default(),
-        async move |_| Ok(request),
+        request,
     )
     .await?;
     let (result, delivery) = terminal_started(
@@ -857,7 +857,7 @@ where
         let OplogEntry::Start {
             request: Some(recorded),
             ..
-        } = oplog.read(start).await
+        } = oplog.read(start).await.map_err(WorkerExecutorError::from)?
         else {
             return Err(call.trap(anyhow::anyhow!(
                 "tool output terminal has no recorded request"

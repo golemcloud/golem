@@ -208,7 +208,7 @@ macro_rules! oplog_payload {
 
 #[macro_export]
 macro_rules! host_payload_pairs {
-    ( $( ($typename:ident => $iface:literal, $func:literal, $reqtype:ident, $resptype:ident) ),* $(,)? ) => {
+    ( $( ($typename:ident => $iface:literal, $func:literal, $reqtype:ident, $resptype:ident $(, denied = $denied:path)?) ),* $(,)? ) => {
         $(
             ident_mash::mash! {
                 inner_req = "HostRequest" + $reqtype &
@@ -224,7 +224,21 @@ macro_rules! host_payload_pairs {
                     const FQFN: &'static str = concat!($iface, "::", $func);
 
                     const HOST_FUNCTION_NAME: HostFunctionName = HostFunctionName::$typename;
+
+                    $(
+                        fn denied_response(request: &Self::Req, denial: &str) -> Option<Self::Resp> {
+                            Some($denied(request, denial))
+                        }
+                    )?
                 }
+
+                $(
+                    impl $crate::model::oplog::payload::DeniablePair for $typename {
+                        fn denied(request: &Self::Req, denial: &str) -> Self::Resp {
+                            $denied(request, denial)
+                        }
+                    }
+                )?
             }
         )*
 

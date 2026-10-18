@@ -57,6 +57,8 @@ pub struct WorkerServiceConfig {
     pub auth_service: AuthServiceConfig,
     pub webhook_callback_handler: WebhookCallbackHandlerConfig,
     pub invocation_session_tokens: InvocationSessionTokenConfig,
+    pub invocation_session: InvocationSessionConfig,
+    pub mcp: McpConfig,
     #[serde(default)]
     pub agent_resolution_cache: AgentResolutionCacheConfig,
     #[serde(default)]
@@ -72,6 +74,15 @@ impl WorkerServiceConfig {
 
     pub fn is_local_env(&self) -> bool {
         self.environment.to_lowercase() == "local"
+    }
+
+    pub fn validate_keep_alive(&self) -> Result<(), String> {
+        if self.invocation_session.keep_alive_interval.is_zero()
+            || self.mcp.sse_keep_alive_interval.is_zero()
+        {
+            return Err("Invocation session and MCP keep-alive intervals must be non-zero".into());
+        }
+        Ok(())
     }
 }
 
@@ -176,6 +187,12 @@ impl SafeDisplay for WorkerServiceConfig {
             "{}",
             self.agent_resolution_cache.to_safe_string_indented()
         );
+        let _ = writeln!(
+            &mut result,
+            "invocation session: {:?}",
+            self.invocation_session
+        );
+        let _ = writeln!(&mut result, "MCP: {:?}", self.mcp);
 
         let _ = writeln!(&mut result, "HTTP session:");
         let _ = writeln!(
@@ -219,6 +236,8 @@ impl Default for WorkerServiceConfig {
             auth_service: AuthServiceConfig::default(),
             webhook_callback_handler: WebhookCallbackHandlerConfig::default(),
             invocation_session_tokens: InvocationSessionTokenConfig::default(),
+            invocation_session: InvocationSessionConfig::default(),
+            mcp: McpConfig::default(),
             agent_resolution_cache: AgentResolutionCacheConfig::default(),
             http_session: HttpSessionLimits::default(),
             durable_streams: DurableStreamsConfig::default(),
@@ -229,6 +248,39 @@ impl Default for WorkerServiceConfig {
 impl HasConfigExamples<WorkerServiceConfig> for WorkerServiceConfig {
     fn examples() -> Vec<ConfigExample<WorkerServiceConfig>> {
         vec![]
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InvocationSessionConfig {
+    #[serde(with = "humantime_serde")]
+    pub keep_alive_interval: Duration,
+    /// Zero disables the Pong deadline without disabling periodic Pings.
+    /// A positive deadline can disconnect a live peer when either endpoint is backpressured.
+    #[serde(with = "humantime_serde")]
+    pub max_pong_timeout: Duration,
+}
+
+impl Default for InvocationSessionConfig {
+    fn default() -> Self {
+        Self {
+            keep_alive_interval: Duration::from_secs(30),
+            max_pong_timeout: Duration::ZERO,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct McpConfig {
+    #[serde(with = "humantime_serde")]
+    pub sse_keep_alive_interval: Duration,
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            sse_keep_alive_interval: Duration::from_secs(15),
+        }
     }
 }
 
@@ -942,6 +994,55 @@ mod tests {
         make_worker_service_config_loader()
             .load_or_dump_config()
             .expect("Failed to load config");
+    }
+
+    #[test]
+    fn keep_alive_defaults_and_overrides() {
+        let defaults = WorkerServiceConfig::default();
+        assert!(defaults.validate_keep_alive().is_ok());
+        assert_eq!(
+            defaults.invocation_session.keep_alive_interval,
+            Duration::from_secs(30)
+        );
+        assert_eq!(defaults.invocation_session.max_pong_timeout, Duration::ZERO);
+        assert_eq!(
+            defaults.mcp.sse_keep_alive_interval,
+            Duration::from_secs(15)
+        );
+        let config: WorkerServiceConfig = make_worker_service_config_loader()
+            .figment()
+            .merge(Toml::string(
+                r#"
+                [invocation_session]
+                keep_alive_interval = "1s"
+                max_pong_timeout = "2s"
+                [mcp]
+                sse_keep_alive_interval = "3s"
+            "#,
+            ))
+            .extract()
+            .unwrap();
+        assert_eq!(
+            config.invocation_session.keep_alive_interval,
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            config.invocation_session.max_pong_timeout,
+            Duration::from_secs(2)
+        );
+        assert_eq!(config.mcp.sse_keep_alive_interval, Duration::from_secs(3));
+    }
+
+    #[test]
+    fn keep_alive_rejects_zero_intervals() {
+        for setting in 0..2 {
+            let mut config = WorkerServiceConfig::default();
+            match setting {
+                0 => config.invocation_session.keep_alive_interval = Duration::ZERO,
+                _ => config.mcp.sse_keep_alive_interval = Duration::ZERO,
+            }
+            assert!(config.validate_keep_alive().is_err());
+        }
     }
 
     #[test]

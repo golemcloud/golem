@@ -9,7 +9,9 @@ use crate::durable_host::durable_stream::DurableStreamStore;
 use crate::filesystem_snapshot::AgentSnapshots;
 use crate::services::HasOplog;
 use crate::services::agent_filesystem_snapshots::{Baseline, PublishFound, fork_flight};
-use crate::services::oplog::{CommitLevel, OplogOps, OplogService, OplogServiceOps};
+use crate::services::oplog::{
+    CommitLevel, OplogOps, OplogService, OplogServiceOps, UnreadableOplog,
+};
 use crate::services::rpc::DurableStreamRemoteError;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -46,6 +48,12 @@ enum Error {
 impl From<WorkerExecutorError> for Error {
     fn from(error: WorkerExecutorError) -> Self {
         Self::Worker(error)
+    }
+}
+
+impl From<UnreadableOplog> for Error {
+    fn from(error: UnreadableOplog) -> Self {
+        Self::Worker(error.into())
     }
 }
 
@@ -135,11 +143,11 @@ async fn execute<Ctx: WorkerCtx>(
     if service
         .oplog_service
         .exists(&target, AgentMode::Durable)
-        .await
+        .await?
         || service
             .oplog_service
             .exists(&target, AgentMode::Ephemeral)
-            .await
+            .await?
     {
         return Err(reject(Reason::Conflict));
     }
@@ -921,13 +929,13 @@ async fn creation_receipt(
     target: &OwnedAgentId,
 ) -> Result<Option<CreationReceipt>, WorkerExecutorError> {
     let mode = AgentMode::Durable;
-    let horizon = service.get_last_index(target, mode).await;
+    let horizon = service.get_last_index(target, mode).await?;
     if horizon == OplogIndex::NONE {
         return Ok(None);
     }
     let initial = service
         .read_source(target, mode, OplogIndex::INITIAL, 1)
-        .await;
+        .await?;
     let Some(OplogEntry::Create { parameters, .. }) = initial.get(&OplogIndex::INITIAL) else {
         return Ok(None);
     };
@@ -940,7 +948,7 @@ async fn creation_receipt(
         let count = (horizon.as_u64() - covered.as_u64()).min(1024);
         let entries = service
             .read_source(target, mode, covered.next(), count)
-            .await;
+            .await?;
         if entries.len() as u64 != count {
             return Err(WorkerExecutorError::runtime(
                 "incomplete fork creation history",

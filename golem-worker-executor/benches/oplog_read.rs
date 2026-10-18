@@ -75,6 +75,7 @@ impl Fixture {
                 None,
             )
             .await
+            .unwrap()
     }
 }
 
@@ -182,7 +183,8 @@ async fn open_fixture(initial_entries: u64) -> Fixture {
             execution_status(),
             None,
         )
-        .await;
+        .await
+        .unwrap();
 
     for value in 1..initial_entries {
         oplog.add(entry(value)).await.unwrap();
@@ -258,7 +260,8 @@ fn benchmark_fixture(
             |bencher, &count| {
                 bencher.iter(|| {
                     let entries: BTreeMap<OplogIndex, OplogEntry> = runtime
-                        .block_on(fixture.oplog.read_exact(black_box(start), black_box(count)));
+                        .block_on(fixture.oplog.read_exact(black_box(start), black_box(count)))
+                        .unwrap();
                     black_box(entries);
                 });
             },
@@ -285,8 +288,9 @@ fn benchmark_cold_fixture(
                 bencher.iter_batched(
                     || runtime.block_on(fixture.reopen()),
                     |oplog| {
-                        let entries: BTreeMap<OplogIndex, OplogEntry> =
-                            runtime.block_on(oplog.read_exact(black_box(start), black_box(count)));
+                        let entries: BTreeMap<OplogIndex, OplogEntry> = runtime
+                            .block_on(oplog.read_exact(black_box(start), black_box(count)))
+                            .unwrap();
                         black_box(entries);
                     },
                     BatchSize::SmallInput,

@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use super::*;
+use crate::services::oplog::UnreadableOplog;
+use std::collections::BTreeMap;
 
 use crate::durable_host::durability::find_durable_call_trap_context;
 use golem_common::model::oplog::host_functions;
@@ -182,6 +184,7 @@ fn live_unfinished_handle<P: DropPolicy>(
         cancellation_span_id: None,
         span_observer: None,
         parked_undelivered_replay: false,
+        host_internal_calls: false,
         execution_scope: CallExecutionScope {
             retry_from: start_idx,
             durable_scope: None,
@@ -234,6 +237,7 @@ fn synthetic_finished_handle_with_scope<P: DropPolicy>(
         cancellation_span_id: None,
         span_observer: None,
         parked_undelivered_replay: false,
+        host_internal_calls: false,
         execution_scope: scope,
         retry: InFunctionRetryController::new(
             DurableFunctionType::ReadLocal,
@@ -382,6 +386,7 @@ async fn marker_record_over(oplog: Arc<InMemoryOplog>) -> CompletionMarkerRecord
             )))),
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
+            denial: None,
         })
         .await
         .unwrap();
@@ -1002,6 +1007,7 @@ async fn tail_gated_token_over_crash_tail(
             )))),
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
+            denial: None,
         })
         .await
         .unwrap();
@@ -1454,7 +1460,7 @@ impl Oplog for InMemoryOplog {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> std::collections::BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         let entries = self.entries.lock().await;
         let start: u64 = oplog_index.into();
         let mut result = std::collections::BTreeMap::new();
@@ -1467,11 +1473,11 @@ impl Oplog for InMemoryOplog {
             });
             result.insert(OplogIndex::from_u64(i), entry.clone());
         }
-        result
+        Ok(result)
     }
 
-    async fn length(&self) -> u64 {
-        self.entries.lock().await.len() as u64
+    async fn length(&self) -> Result<u64, UnreadableOplog> {
+        Ok(self.entries.lock().await.len() as u64)
     }
 
     async fn upload_raw_payload(
@@ -1511,6 +1517,7 @@ async fn dropped_cancellable_call_records_cancelled_at_next_drain_point() {
             )))),
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
+            denial: None,
         })
         .await
         .unwrap();
@@ -1637,6 +1644,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
             )))),
             durable_function_type: DurableFunctionType::ReadRemote,
             span_started: None,
+            denial: None,
         })
         .await
         .unwrap();

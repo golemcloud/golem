@@ -3746,7 +3746,7 @@ where
             let replay = accessor.with(|mut access| access.get().state.replay_state.clone());
             let (terminal_index, _) = replay
                 .visible_terminal_record(start)
-                .await
+                .await?
                 .ok_or_else(|| anyhow!("recorded tool terminal has no visible End"))?;
             operation.install_recorded_admission_refusal(refusal, terminal_index);
         }
@@ -5481,7 +5481,7 @@ where
                 accepted.durability.scope().invocation_id().start_index(),
             )
         });
-        replay.has_visible_scope_descendant(start).await
+        replay.has_visible_scope_descendant(start).await?
     } else {
         false
     };

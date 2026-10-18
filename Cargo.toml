@@ -314,6 +314,7 @@ tree-sitter = "0.26.5"
 tree-sitter-go = "0.23.4"
 tree-sitter-json = "0.24.8"
 tree-sitter-rust = "0.24.0"
+tree-sitter-scala = "0.26.2"
 tree-sitter-typescript = "0.23.2"
 tree-sitter-yaml = "0.7.2"
 tower = "0.5.2"
@@ -332,7 +333,7 @@ warp = "0.3.7"
 wasip2 = "1.0.2"
 wasm-encoder = "0.251.0"
 wasm-metadata = { version = "0.251.0", features = ["oci"] }
-wasm-rquickjs = { version = "0.4.12", features = ["optimize", "use-golem-wasmtime"] }
+wasm-rquickjs = { version = "0.4.13", features = ["optimize", "use-golem-wasmtime"] }
 wasm-wave = "0.251"
 wasmparser = "0.251.0"
 wasmprinter = "0.251.0"

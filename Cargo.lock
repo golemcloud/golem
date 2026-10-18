@@ -4006,6 +4006,7 @@ dependencies = [
  "tree-sitter-go",
  "tree-sitter-json",
  "tree-sitter-rust",
+ "tree-sitter-scala",
  "tree-sitter-typescript",
  "tree-sitter-yaml",
  "unicode-segmentation",
@@ -4757,6 +4758,7 @@ dependencies = [
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
+ "zstd",
 ]
 
 [[package]]
@@ -4784,6 +4786,7 @@ dependencies = [
  "fred",
  "futures",
  "golem-api-grpc",
+ "golem-client",
  "golem-common",
  "golem-schema",
  "golem-service-base",
@@ -4836,6 +4839,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tokio-stream",
+ "tokio-tungstenite",
  "tokio-util",
  "tonic",
  "tonic-health",
@@ -11368,6 +11372,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter-scala"
+version = "0.26.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24e0ab4505990bfe30051761d40a7bf4033ce5a81c9eda9e20e987a5cdc84826"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "tree-sitter-typescript"
 version = "0.23.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11911,9 +11925,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-rquickjs"
-version = "0.4.12"
+version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d907b8cac1d3a330fe22135c1b225c5e880adacd382b33b8b1ac3be145220e04"
+checksum = "a21c42d3a380a4bd9bcc436686f1f0f682dd6268397077d6f5c27a8c3a2adfee"
 dependencies = [
  "anyhow",
  "camino",
@@ -11923,6 +11937,7 @@ dependencies = [
  "prettier-please",
  "proc-macro2",
  "quote",
+ "rand 0.10.2",
  "syn 2.0.119",
  "tokio",
  "toml_edit 0.22.27",

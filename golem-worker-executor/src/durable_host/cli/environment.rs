@@ -125,7 +125,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     + use<Ctx> {
         let oplog = self.state.oplog.clone();
         async move {
-            let entry = oplog.read(start_index).await;
+            let entry = oplog.read(start_index).await?;
             let request = match entry {
                 OplogEntry::Start {
                     function_name,

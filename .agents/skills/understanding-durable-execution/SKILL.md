@@ -305,7 +305,74 @@ Archive transfers append and verify the destination before dropping the source. 
 failures therefore fail only that maintenance attempt: they are logged, never fail the agent,
 the authoritative source remains intact, and threshold, scheduled or sweep maintenance retries
 with per-agent backoff. A scheduled retry remains valid when later commits advance the oplog tip.
-An archive read needed for replay still fails recovery rather than being treated as absent data.
+An oplog read that does not give the requested entries (an archive chunk that does not decode, a
+blob or indexed storage failure of an archive level, a gap) is never treated as absent data. It
+returns `UnreadableOplog` (`services/oplog/reader.rs`: the agent id and the `OplogReadError` with
+its source, such as `archive layer 1`), and the read paths of replay, status folding and recovery
+carry it up. The read error is classified: a storage that did not answer after its retries
+(`OplogReadError::SourceUnavailable`, from `OplogArchiveError::Unavailable`: an indexed storage
+`Transient` or `Indeterminate` error, or a blob error that `BlobFailure` calls transient or
+refused) becomes `RecoveryRequired`, which the start and the invocation retry with backoff and
+shard-assignment recovery retries by failing the assignment. Corrupt data, a gap, an invalid range
+or any other storage error becomes `WorkerExecutorError::OplogFailed`. Every rule below that names
+`OplogFailed` is about that terminal kind; the same read through storage that did not answer
+gives `RecoveryRequired` instead. `OplogFailed` fails that agent only, fail-stop: the start ends
+through `StartProblem::OplogFailed`, which passes the error in every column of the
+outcome table (no skipped or rejected record, no failed update), and the recovery path records it
+as a terminal `Error` entry, so the agent is `Failed` with the cause. Shard-assignment recovery
+(`get_running_workers_in_shards`, `recovered_status`, `recovered_restart`) logs and skips an agent
+whose oplog failed instead of failing the assignment, so the other agents recover. Nothing deletes
+or rewrites the unreadable data. The `try_*` reads of `Oplog` and `OplogService` stay the
+maintenance reads: they return every storage failure as text for the transfer and the sweep to
+retry.
+
+Opening an oplog can fail (`OplogService::open`/`create`, `OplogConstructor::create_oplog`): an
+archive level whose last index does not read, or whose owning-epoch record fails after its
+retries, fails the open, and the open-oplog cache keeps nothing. The open fails with
+`OplogFailed`, or with `RecoveryRequired` when the storage did not answer. A stream session index
+rebuilt over an unreadable oplog returns `SessionError::Unreadable`, which keeps the
+`UnreadableOplog` up to the boundary, where it becomes `OplogFailed` or `RecoveryRequired` by its
+kind. An invocation session attachment records a failed session terminal (`fail_protocol`) only
+for a violation of the session protocol (`grpc/invocation_session/mod.rs::end_attachment_on_failure`).
+When a read of the session history meets storage that did not answer (including a stream payload
+download), the attachment ends without a terminal frame, and the client reattaches from its
+durable cursors. A fence or an oplog that failed for good goes out as its worker error and
+records nothing. An ephemeral oplog whose writer task cannot store a batch in the first
+archive layer latches `OplogError::ArchiveWrite` like the fence: every later add and commit is
+refused, so the agent stops. Every caller that handles a fence handles both as `OplogRefusal`
+(`services/oplog/mod.rs`): the status actor answers its receipts with the refusal, and a write
+that cannot report it (`Worker::add_to_oplog_or_retire`, the log policy, the oplog processor
+checkpoint) leaves it to the next write that can. Only the fence records a retirement: a failed
+terminal entry of an interrupt that is not a fence fails the waiters with its cause, not as a lost
+shard. A commit whose status the status task must rebuild from an oplog that does not read (when
+the incremental fold of the commit fails) is refused with
+`OplogRefusal::Unreadable`, so the start fails with `OplogFailed` (or `RecoveryRequired` when the
+storage did not answer); unlike the fence and the archive
+write, it is not latched on the oplog, and the caller that receives it fails the agent. The
+status stays detached until a later fold or rebuild succeeds. A caller that took the early receipt
+of `commit_oplog_before_status_update` does not wait for the refusal, so the owner finds it
+itself: the invocation loop chooses work only from `Worker::get_repaired_status`, which rebuilds a
+detached status first, and a rebuild that fails again is recorded like a failed recovery and
+ends in infrastructure recovery or in a stop with `OplogFailed` (`unreadable_oplog_outcome`). A
+pending invocation whose entry or payload does not hydrate takes the same path:
+`hydrate_pending_invocation` classifies the failure as `RecoveryRequired` or `OplogFailed`, and the
+loop does not retry it immediately.
+`AppendInvocationIfVersion` also rebuilds a detached status before it checks the key. A detached
+status can still name an invocation whose completion was committed and published as current, so
+the hydrated result cache keeps the keys of committed completions that the status has not folded
+yet, apart from the evictable payloads, and the terminal stop (`fail_pending_invocations`) does not
+fail those keys. When
+`on_invocation_failure` cannot record the failure of an invocation, the refusal takes the
+classification of its agent error (`terminal_entry_refusal` in `durable_host/mod.rs`). An oplog
+that failed for good fails the invocation with its cause. A storage that did not answer returns
+`InvocationFailureDecision::RecoveryRequired`: the invocation stays pending, and the agent goes to
+infrastructure recovery. When a latched archive write keeps the terminal entry of an ephemeral
+invocation out of the oplog, the terminal stop gives the waiters `OplogFailed` instead of the
+ordinary end of an ephemeral agent. Any other `OplogError` on those paths stays
+fail-stop. Entries committed with `CommitLevel::Deferred` before the failure
+were already acknowledged and are missing from the archived history; an ephemeral agent is never
+resumed from that history, so the agent stops instead of the process. The storage failures of the
+primary oplog are outside this rule and still stop the executor.
 A write the shard-epoch fence refuses is not a storage failure: it ends the transfer as
 `OplogError::Fenced`, latches the oplog's fence and is never retried, because the oplog now
 belongs to the shard's new owner (see "Resharding, revocation and the oplog epoch fence").
@@ -606,6 +673,19 @@ Live (guest-facing accessor path): append `Start` eagerly → run the live actio
 has no markers: its result is delivered when the host function returns. A trap while a call is
 in flight leaves `Start` incomplete (`abandon_for_trap`); a trap never writes `Cancelled`.
 
+**Owned starts.** The guest may cancel a pending accessor call at any point, including during its
+start (drop-event drain, boundary synchronization, `Start` append or claim, session construction).
+So that the oplog does not depend on where the cancellation found the start, every accessor entry
+point (`start_access*`) captures the call's identity in the guest's call and runs the start in an
+owned store task (`OwnedAccessStart`) when the accessor belongs to a guest-visible subtask. The
+task always appends or claims the `Start`; if the guest has dropped the call by then, it drops the
+session, and the drop policy records the call as if the guest had dropped it right after its
+start. A live call is prepared in the guest's call, so it counts as in flight from then on. The
+task holds a tail-work activity and races the worker's interrupt signal. Request builders run in
+the task and receive its accessor. Calls made by host-owned tasks and host-internal calls start
+inline. The start never waits on guest progress; authority waits inside request builders wait on
+card-authority recovery only.
+
 **Host-internal results** use `DurableCallSession::invoke_host_internal_access`: Start/End
 remain durable and identity-validated, but End returns the recorded result directly to the host.
 There is no guest-terminal observer, delivery token, delivery/discard marker, or markerless
@@ -616,6 +696,14 @@ wait parks without issuing the child, while an incomplete outer wait owns cancel
 before reconstructing the deadline from recorded `now + duration`. A completed outer requires
 a recorded completed child. Cancelling after the child's End settles the outer wait without an
 internal delivery marker. Only the outer wait has a real guest-delivery boundary.
+
+A `wait-for` that the guest dropped records `Start` and `Cancelled { partial: None }`, with
+whatever prefix of the `now` read the host reached in between (nothing, an open Start, or a closed
+one). Its claim sets `AccessClaimOptions::host_internal_calls`; when the claimed Start's
+replay-visible terminal is that `Cancelled`, the claim registers the Start as a replay-inert
+subtree root (the custom-invocation mechanism), so the recorded `now` read is drained whether or
+not the replayed host task reaches it. `invoke_host_internal_access` refuses an owner started
+without `host_internal_calls`. Tests: `tests/tool_streaming/dropped_waits.rs`.
 
 P3 timers always return `STARTED` before successful guest delivery, even for zero-duration or
 expired waits. Both live execution and replay yield before completing the outer timer. `wait-for`
@@ -694,6 +782,16 @@ for failure (`authoritative_replay_failure`), not publication over sibling histo
 or discard another task's history. A typed-loss End belongs to the original Start: HTTP without
 resend returns `http-response-incomplete`, RDBMS `resource-lost`, and TCP `connection-broken`.
 UDP `ReadRemote` instead re-executes receive after rebind.
+
+**A denied call records its denial.** When the host denies a live call before it runs, the call
+writes its `Start` with `denial` and an `End` that holds the pair's denied response
+(`BegunCall::start_live_denied`, `DurableCallSession::invoke_deniable_access`, or
+`AccessClaimOptions::denial`). The operation never runs. A pair declares its denied response with
+`denied = ...` in `host_payload_pairs!` (`DeniablePair::denied`); the response depends only on the
+recorded request and the denial, so live execution and recovery produce the same value. Replay of
+a denied `Start` without a terminal does not return `Incomplete`: the session appends the denied
+`End` and returns `Replayed`. A crash between the two entries therefore cannot run the denied
+operation. Call sites keep their replay branch free of authorization.
 
 **P3 HTTP recovery is call-local.** `client::send` records `WriteRemote` for all methods
 (`p3/http/send.rs`). Every method uses `Cancellable`: a guest drop records `Cancelled` and
@@ -1206,7 +1304,8 @@ Other tasks whose handles nothing aborts are joined through
 durable call and tool terminal encoding, and the detached stream session index tasks. Only the
 shutdown of the runtime cancels such a task, for example during the final status flush sweep, so
 a cancelled join parks the caller until the runtime drops it instead of failing it as a storage
-error. A panicked join still fails, and a fail-fast read still panics on a corrupt entry.
+error. A panicked join still fails, and a fail-fast read of the primary oplog still panics on a corrupt
+entry; an archive read returns `UnreadableOplog` instead.
 
 `worker/filesystem_snapshots.rs::UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS` is the code of a manual update
 that cannot take its snapshot on an executor without filesystem snapshots, because the files of the
@@ -1527,6 +1626,32 @@ a different oplog shape. The host-call observation counter is still incremented 
 fast path. The check lives in `services/agent_filesystem/lifecycle/mod.rs::is_immutable_initial_file`;
 the P2/P3 adapters live in `wasi_filesystem/{p2/types.rs,p3/mod.rs}`.
 
+Filesystem permission decisions have a track in the oplog. Every protected P2/P3 filesystem import
+records its permission decision in a normal durable call (`ReadLocal`), allowed or denied, so replay
+returns the recorded decision and never checks a policy. Most imports record a separate
+`filesystem::permissions::check` call before their effect; its request holds the verbs and the
+guest paths, and its response is `Ok(())` or `Err(reason)`. A recorded denial returns
+`not-permitted`. `stat`/`stat-at` (P2 and P3) check inside their own durable call and record a
+denial as their `not-permitted` result; their immutable initial-file fast path records a separate
+check. P3 `write-via-stream` and `append-via-stream` record the decision in their admission call
+(`admit_stream_write`). The live check (`live_permission_decision`,
+`p3_live_permission_decision`) runs only while the Store is live, before the call writes its
+`Start`. A denied check records the denial in its `Start` (`start_live_denied`, or
+`AccessClaimOptions::denial` in `run_deniable_filesystem_access`), so recovery of an incomplete
+denied `Start` completes it with the same denied response and the protected effect does not run.
+An incomplete `Start` without a denial was allowed, so its repair completes it as allowed without a
+new check. A new check in the replay tail has no recorded `Start`, so the call switches to live and
+checks the policy; a P3 call that becomes live after its Store replayed at the call checks after
+its `Start`. P3 imports that await before their check reserve their invocation id first
+(`reserve_invocation_id_before_await`). Test:
+`tests/scope_cards.rs::denied_filesystem_imports_are_recorded_and_replayed_after_restart`.
+
+P2 TCP `start-connect` records its decision in the same way, in a
+`sockets::tcp::permissions::check-connect` call (the request holds the remote address). A recorded
+denial returns `access-denied`, and its replay does not connect. A denial is recorded in the check
+`Start`, so the recovery of an incomplete denied check does not connect either. Test:
+`tests/scope_cards.rs::p2_tcp_connect_denial_is_recorded_and_does_not_reach_the_backend_on_replay`.
+
 Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic
 capability escape refusal as `SandboxEscape`; P2/P3 return `access`, or EACCES, and keep the
 filesystem generation valid. Other `PermissionDenied` failures are terminal. The lifecycle can
@@ -1785,9 +1910,12 @@ cursor (`OwnerExecution`, `worker/instance.rs`).
   scopes and derived surfaces, not independent live membership. Accepted wallet commits publish
   through the status actor even if their producer is cancelled; owner-wide interest is the union
   of wallet, scope and admission-candidate contributions. Historical bodies retain recorded wallets
-  and pins until their own live transition, never borrowing the latest live snapshot. Adjacent
-  unrecorded wallet observations still lack an exact historical association; this ownership model
-  does not change observation recording. The root `Start` records the pinned
+  and pins until their own live transition, never borrowing the latest live snapshot. Guest
+  `self-wallet` and `self-version` reads are `ReadLocal` calls whose `End` records the exact
+  observed view, so replay returns each read's own observation whatever card events it applies
+  around it; an incomplete read completes live at its own `Start`. Authorization decisions such
+  as `inspect-card` and derivation are not recorded and still evaluate the replayed wallet; a card
+  event between two of them can diverge the same way. The root `Start` records the pinned
   chain plan; descendants record root plus position, and every occurrence retains the original
   calling principal and typed static installation parameters. Component and host leaves use the
   same dispatch path.
