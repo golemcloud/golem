@@ -152,6 +152,7 @@ impl HttpSpanCleanupRecorder {
                 ))),
                 durable_function_type: DurableFunctionType::ReadLocal,
                 span_started: None,
+                denial: None,
             };
             let receipt = self.oplog.enqueue_add_pair(start, Box::new(end));
             async move {
@@ -1160,6 +1161,7 @@ pub(super) mod tests {
                 request: Some(OplogPayload::Inline(Box::new(golem_common::model::oplog::HostRequestNoInput {}.into()))),
                 durable_function_type: DurableFunctionType::WriteRemote,
                 span_started: None,
+                denial: None,
             }).await.unwrap();
             let close = finished();
             let terminal = if terminal_kind == "cancelled" {
@@ -1323,6 +1325,7 @@ pub(super) mod tests {
                     ))),
                     durable_function_type: DurableFunctionType::ReadLocal,
                     span_started: None,
+                    denial: None,
                 })
                 .await
                 .unwrap();
@@ -1398,6 +1401,7 @@ pub(super) mod tests {
                 ))),
                 durable_function_type: DurableFunctionType::ReadRemote,
                 span_started: None,
+                denial: None,
             })
             .await
             .unwrap();
@@ -1477,6 +1481,7 @@ pub(super) mod tests {
                 ))),
                 durable_function_type: DurableFunctionType::ReadLocal,
                 span_started: None,
+                denial: None,
             })
             .await
             .unwrap();

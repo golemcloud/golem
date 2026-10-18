@@ -88,7 +88,8 @@ use crate::services::linear_memory::{LinearMemoryTracker, SHARED_LINEAR_MEMORY_E
 use crate::services::oplog::plugin::ForwardingOplog;
 use crate::services::oplog::{
     ArchiveWait, CommitLevel, EphemeralOplog, MultiLayerOplog, Oplog, OplogError, OplogFence,
-    OplogLifecycleGuard, OplogOps, OplogRefusal, UnreadableOplog, downcast_oplog,
+    OplogLifecycleGuard, OplogOps, OplogPayloadDownloadError, OplogRefusal, UnreadableOplog,
+    downcast_oplog,
 };
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::resource_usage_metering::ResourceUsageAccount;
@@ -3963,6 +3964,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.state_actor.status().await
     }
 
+    /// The projection as [`Self::get_last_known_status`] gives it, rebuilt first when a failed
+    /// rebuild left it detached. A rebuild that fails again gives the refusal, reported as in
+    /// [`Self::commit_oplog_and_update_state`].
+    pub(crate) async fn get_repaired_status(
+        &self,
+    ) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
+        self.state_actor
+            .repaired_status()
+            .await
+            .map_err(|refusal| self.refused_by(refusal).into())
+    }
+
+    /// Whether the published status is detached from the oplog: a rebuild runs, or one failed.
+    pub(crate) fn last_known_status_detached(&self) -> bool {
+        self.last_known_status_detached.load(Ordering::Acquire)
+    }
+
     pub(crate) async fn get_export_fork_status(
         &self,
     ) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
@@ -5167,6 +5185,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// full invocation, downloading its payload from external storage if needed. The status record
     /// only keeps a lightweight reference, so callers that need to execute the invocation hydrate
     /// it on demand.
+    ///
+    /// A storage that did not answer gives `RecoveryRequired`. An entry or payload that does not
+    /// decode, or another entry at the referenced index, gives `OplogFailed` for this agent.
     async fn hydrate_pending_invocation(
         &self,
         pending: &PendingInvocationRef,
@@ -5181,12 +5202,27 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 invocation_context,
                 ..
             } => {
-                let agent_payload = self.oplog.download_payload(payload.clone()).await.map_err(|e| {
-                    WorkerExecutorError::unknown(format!(
-                        "Failed to download pending agent invocation payload at oplog index {}: {e}",
-                        pending.oplog_index
-                    ))
-                })?;
+                let agent_payload = self
+                    .oplog
+                    .download_payload_classified(payload.clone())
+                    .await
+                    .map_err(|error| match error {
+                        OplogPayloadDownloadError::Backend(error) => {
+                            WorkerExecutorError::recovery_required(format!(
+                                "failed to download the pending agent invocation payload at oplog index {}: {error:#}",
+                                pending.oplog_index
+                            ))
+                        }
+                        OplogPayloadDownloadError::Corrupt(error) => {
+                            WorkerExecutorError::oplog_failed(
+                                self.agent_id(),
+                                format!(
+                                    "corrupt pending agent invocation payload at oplog index {}: {error:#}",
+                                    pending.oplog_index
+                                ),
+                            )
+                        }
+                    })?;
                 let invocation_context = InvocationContextStack::from_oplog_data(
                     trace_id,
                     trace_states,
@@ -5199,10 +5235,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     payload,
                 })
             }
-            other => Err(WorkerExecutorError::unknown(format!(
-                "Expected a PendingAgentInvocation oplog entry at index {}, but found {other:?}",
-                pending.oplog_index
-            ))),
+            other => Err(WorkerExecutorError::oplog_failed(
+                self.agent_id(),
+                format!(
+                    "expected a PendingAgentInvocation oplog entry at index {}, but found {other:?}",
+                    pending.oplog_index
+                ),
+            )),
         }
     }
 
@@ -5235,17 +5274,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let cached = InvocationResult::Cached {
             result: Ok(output.clone()),
         };
+        let status = self.last_known_status.load_full();
         let mut map = self.hydrated_invocation_results.write().await;
-        map.insert(
+        map.release_projected_completions(&status, self.last_known_status_detached());
+        map.insert_unprojected_completion(
             key.clone(),
             cached,
-            self.last_known_status
-                .load()
-                .invocation_results
-                .revert_generation(),
-            output
-                .oplog_index
-                .unwrap_or_else(|| self.last_known_status.load().oplog_idx),
+            status.invocation_results.revert_generation(),
+            output.oplog_index.unwrap_or(status.oplog_idx),
         );
         // `drop` before taking `origins`: `fail_pending_invocations` locks
         // origins -> hydrated_invocation_results, so holding `map` here would invert that
@@ -10348,10 +10384,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let mut invocation_results = self.hydrated_invocation_results.write().await;
         for idempotency_key in &keys_to_fail {
-            if invocation_results
-                .get_valid(idempotency_key, &status)
-                .is_some()
-            {
+            if invocation_results.is_complete(idempotency_key, &status) {
                 continue;
             }
             if lost_shard {
@@ -12999,6 +13032,16 @@ struct HydratedInvocationResultCache {
     values: HashMap<IdempotencyKey, HydratedInvocationResultCacheEntry>,
     insertion_order: VecDeque<IdempotencyKey>,
     capacity: usize,
+    /// Committed completions the published status may not include yet, by the oplog index of
+    /// their result. The early commit receipt publishes a completion before its fold, and a failed
+    /// fold leaves the status detached with the key still current. Payload eviction must not make
+    /// such a key look unresolved, or terminal cleanup would fail an invocation that succeeded.
+    unprojected_completions: HashMap<IdempotencyKey, UnprojectedCompletion>,
+}
+
+struct UnprojectedCompletion {
+    revert_generation: u64,
+    oplog_idx: OplogIndex,
 }
 
 struct HydratedInvocationResultCacheEntry {
@@ -13014,7 +13057,52 @@ impl HydratedInvocationResultCache {
             values: HashMap::new(),
             insertion_order: VecDeque::new(),
             capacity,
+            unprojected_completions: HashMap::new(),
         }
+    }
+
+    /// Whether `key` has a result on the branch of `status`, cached or committed but not yet
+    /// folded into it.
+    fn is_complete(&self, key: &IdempotencyKey, status: &AgentStatusRecord) -> bool {
+        self.get_valid(key, status).is_some()
+            || self
+                .unprojected_completions
+                .get(key)
+                .is_some_and(|completion| {
+                    completion.revert_generation == status.invocation_results.revert_generation()
+                        && !status
+                            .deleted_regions
+                            .is_in_deleted_region(completion.oplog_idx)
+                })
+    }
+
+    fn insert_unprojected_completion(
+        &mut self,
+        key: IdempotencyKey,
+        value: impl Into<Arc<InvocationResult>>,
+        revert_generation: u64,
+        oplog_idx: OplogIndex,
+    ) {
+        self.unprojected_completions.insert(
+            key.clone(),
+            UnprojectedCompletion {
+                revert_generation,
+                oplog_idx,
+            },
+        );
+        self.insert(key, value, revert_generation, oplog_idx);
+    }
+
+    /// Forgets the unprojected completions that an attached `status` has folded, or that belong to
+    /// another oplog branch.
+    fn release_projected_completions(&mut self, status: &AgentStatusRecord, detached: bool) {
+        if detached {
+            return;
+        }
+        self.unprojected_completions.retain(|_, completion| {
+            completion.revert_generation == status.invocation_results.revert_generation()
+                && completion.oplog_idx > status.oplog_idx
+        });
     }
 
     fn get_valid(
@@ -13060,6 +13148,7 @@ impl HydratedInvocationResultCache {
     }
 
     fn remove(&mut self, key: &IdempotencyKey) -> Option<HydratedInvocationResultCacheEntry> {
+        self.unprojected_completions.remove(key);
         let result = self.values.remove(key);
         if result.is_some() {
             self.insertion_order.retain(|entry| entry != key);
@@ -13070,6 +13159,7 @@ impl HydratedInvocationResultCache {
     fn clear(&mut self) {
         self.values.clear();
         self.insertion_order.clear();
+        self.unprojected_completions.clear();
     }
 }
 

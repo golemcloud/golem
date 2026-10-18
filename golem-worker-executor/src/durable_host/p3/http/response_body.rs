@@ -2387,6 +2387,7 @@ mod tests {
                 )))),
                 durable_function_type: DurableFunctionType::WriteRemote,
                 span_started: None,
+                denial: None,
             })
             .await
             .unwrap();
@@ -2402,6 +2403,7 @@ mod tests {
                 )))),
                 durable_function_type: DurableFunctionType::WriteRemote,
                 span_started: None,
+                denial: None,
             })
             .await
             .unwrap();

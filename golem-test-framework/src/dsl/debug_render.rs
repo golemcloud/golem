@@ -68,6 +68,9 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             if let Some(span) = &params.span_started {
                 let _ = writeln!(result, "{pad}span started:      {span:?}");
             }
+            if let Some(denial) = &params.denial {
+                let _ = writeln!(result, "{pad}denied:            {denial}");
+            }
         }
         PublicOplogEntry::End(params) => {
             let _ = writeln!(result, "END");
