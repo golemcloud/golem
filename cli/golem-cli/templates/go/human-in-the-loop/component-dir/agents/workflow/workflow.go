@@ -5,14 +5,14 @@ package workflow
 
 import "github.com/golemcloud/golem/sdks/go/golem"
 
-type ID struct{ Name string }
+type ID struct{ WorkflowID string }
 
 type StartIn struct{ Approver string }
 
 var Agent = golem.DefineAgent[ID](golem.Spec{
 	Name:        "WorkflowAgent",
 	Description: "A workflow that pauses until a human approves or rejects it",
-	HTTP:        &golem.Mount{Path: "/workflows/{name}"},
+	HTTP:        &golem.Mount{Path: "/workflows/{workflowId}"},
 })
 
 var Start = Agent.Method[StartIn, string]("start",

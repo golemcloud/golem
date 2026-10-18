@@ -1,17 +1,23 @@
 import { Effect, Ref, Schema } from "effect";
-import { defineAgent, Http, method, Snapshot } from "@golemcloud/effect-golem";
+import { defineAgent, Http, method } from "@golemcloud/effect-golem";
 
-export const Counter = defineAgent({
-  name: "Counter",
+export const CounterAgent = defineAgent({
+  name: "CounterAgent",
   description: "A durable named counter",
   mode: "durable",
   id: { name: Schema.String },
   http: Http.mount("/counters/{name}", { cors: ["*"] }),
-  snapshotting: Snapshot.define({
-    schema: Schema.Struct({ count: Schema.Number }),
-    policy: Snapshot.policy.everyN(10),
-  }),
   methods: {
+    add: method({
+      input: { by: Schema.Number },
+      success: Schema.Number,
+      http: [Http.post("/add")],
+    }),
+    reset: method({
+      input: {},
+      success: Schema.Void,
+      http: [Http.post("/reset")],
+    }),
     value: method({
       input: {},
       success: Schema.Number,
@@ -36,11 +42,15 @@ export const Counter = defineAgent({
       return state;
     }),
   methods: (state) => ({
+    add: ({ by }) =>
+      Ref.updateAndGet(state, ({ count }) => ({ count: count + by })).pipe(
+        Effect.map(({ count }) => count),
+      ),
+    reset: () => Ref.set(state, { count: 0 }),
     value: () => Ref.get(state).pipe(Effect.map(({ count }) => count)),
     increment: () =>
       Ref.updateAndGet(state, ({ count }) => ({ count: count + 1 })).pipe(
         Effect.map(({ count }) => count),
       ),
   }),
-  snapshot: Snapshot.ref(),
 });

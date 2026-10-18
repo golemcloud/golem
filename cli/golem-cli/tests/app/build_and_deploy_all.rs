@@ -7,6 +7,7 @@ use golem_cli::fs;
 use golem_cli::model::agent::AgentTypeListView;
 use golem_cli::model::app::BridgeSdkTargetKind;
 use golem_cli::model::language::GuestLanguage;
+use std::collections::BTreeSet;
 use strum::IntoEnumIterator;
 use test_r::{inherit_test_dep, test};
 
@@ -18,39 +19,13 @@ async fn build_and_deploy_all_templates_for_ts() {
 }
 
 #[test]
-async fn effect_default_template_builds() {
-    let mut ctx = TestContext::new();
-    let app_name = "effect-default-template-build";
+async fn build_and_deploy_all_templates_for_effect() {
+    build_and_deploy_all_templates_for_lang(GuestLanguage::Effect).await;
+}
 
-    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
-    ctx.cd(app_name);
-
-    let outputs = ctx
-        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "effect"])
-        .await;
-    assert!(outputs.success_or_dump());
-
-    let outputs = ctx.cli([cmd::BUILD]).await;
-    assert!(outputs.success_or_dump());
-
-    ctx.start_server().await;
-    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
-    assert!(outputs.success_or_dump());
-
-    for (method, expected) in [("increment", "1"), ("increment", "2"), ("value", "2")] {
-        let outputs = ctx
-            .cli([
-                cmd::AGENT,
-                cmd::INVOKE,
-                "Counter(\"template-test\")",
-                method,
-            ])
-            .await;
-        assert!(outputs.success_or_dump());
-        assert!(
-            outputs.stdout_contains_ordered(["Invocation result in TypeScript syntax:", expected])
-        );
-    }
+#[test]
+async fn build_and_deploy_all_templates_for_scala() {
+    build_and_deploy_all_templates_for_lang(GuestLanguage::Scala).await;
 }
 
 #[test]
@@ -118,9 +93,6 @@ async fn streaming_template_builds_for_lang(language: GuestLanguage) {
 async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
     let mut ctx = TestContext::new();
     ctx.add_env_var("DURABLE_STREAM_TOKEN", "integration-test-capability");
-
-    let app_name = format!("all-templates-app-{}", language.id());
-
     let outputs = ctx.cli([cmd::TEMPLATES, flag::FORMAT, "json"]).await;
     assert!(outputs.success_or_dump());
 
@@ -132,30 +104,26 @@ async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
         .map(|template| template.name)
         .collect::<Vec<_>>();
 
-    // MoonBit does not yet support single->multi component upgrade via
-    // incremental template application, so we only apply the base template.
-    let templates: Vec<_> = if language == GuestLanguage::MoonBit {
-        vec![language.id().to_string()]
-    } else {
-        templates
-    };
+    ctx.start_server().await;
+    let root = ctx.cwd_path().to_path_buf();
+    for template in templates {
+        ctx.cd(&root);
+        build_and_deploy_template(&mut ctx, &template).await;
+    }
+}
 
-    println!("{templates:#?}");
-
+async fn build_and_deploy_template(ctx: &mut TestContext, template: &str) {
+    let app_name = format!("template-{}", template.replace('/', "-"));
     fs::create_dir_all(ctx.cwd_path_join(&app_name)).unwrap();
     ctx.cd(app_name);
 
-    for template in &templates {
-        let outputs = ctx
-            .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, template])
-            .await;
-        assert!(outputs.success_or_dump());
-    }
-
-    let outputs = ctx.cli([cmd::BUILD]).await;
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, template])
+        .await;
     assert!(outputs.success_or_dump());
 
-    ctx.start_server().await;
+    let outputs = ctx.cli([flag::YES, cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
@@ -169,6 +137,109 @@ async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
         .flat_map(|view| view.agent_types)
         .collect::<Vec<_>>();
 
+    let example = template.split_once('/').map_or("default", |(_, name)| name);
+    let expected_names: &[&str] = match example {
+        "default" => &["CounterAgent"],
+        "json" => &["TaskAgent"],
+        "snapshotting" => &["CounterWithSnapshotAgent"],
+        "human-in-the-loop" => &["HumanAgent", "WorkflowAgent"],
+        "streaming" => &["StreamingAgent"],
+        "counter-arktype" => &["CounterArktype"],
+        "counter-valibot" => &["CounterValibot"],
+        _ => panic!("unexpected public template: {template}"),
+    };
+    assert_eq!(
+        deployed_agent_types
+            .iter()
+            .map(|agent| agent.agent_type.type_name.as_str())
+            .collect::<BTreeSet<_>>(),
+        expected_names.iter().copied().collect::<BTreeSet<_>>(),
+        "agent names for {template}"
+    );
+
+    if example == "default" {
+        let counter = "CounterAgent(\"template-test\")";
+        for (method, args, expected) in [
+            ("increment", vec![], Some("1")),
+            ("add", vec!["7"], Some("8")),
+            ("value", vec![], Some("8")),
+            ("reset", vec![], None),
+            ("value", vec![], Some("0")),
+        ] {
+            let outputs = ctx
+                .cli([vec![cmd::AGENT, cmd::INVOKE, counter, method], args].concat())
+                .await;
+            assert!(outputs.success_or_dump());
+            if let Some(expected) = expected {
+                assert!(outputs.stdout_contains_ordered(["Invocation result", expected]));
+            }
+        }
+    }
+
+    if example == "human-in-the-loop" {
+        let workflow = "WorkflowAgent(\"report-q3\")";
+        let human = "HumanAgent(\"alice\")";
+        let snake_case = template.starts_with("rust/") || template.starts_with("moonbit/");
+        let (list, decide) = if snake_case {
+            ("list_pending_approvals", "decide_approval")
+        } else {
+            ("listPendingApprovals", "decideApproval")
+        };
+        let outputs = ctx
+            .cli([
+                cmd::AGENT,
+                cmd::INVOKE,
+                "--trigger",
+                "--idempotency-key",
+                "approval",
+                workflow,
+                "start",
+                "\"alice\"",
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+
+        tokio::time::timeout(std::time::Duration::from_secs(120), async {
+            loop {
+                let outputs = ctx.cli([cmd::AGENT, cmd::INVOKE, human, list]).await;
+                assert!(outputs.success_or_dump());
+                if outputs.stdout_contains("report-q3") {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+        })
+        .await
+        .expect("the workflow did not register its constructor ID for approval");
+
+        let outputs = ctx
+            .cli([
+                cmd::AGENT,
+                cmd::INVOKE,
+                human,
+                decide,
+                "\"report-q3\"",
+                "\"approved\"",
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+        assert!(outputs.stdout_contains("Workflow report-q3 was approved"));
+
+        let outputs = ctx
+            .cli([
+                cmd::AGENT,
+                cmd::INVOKE,
+                "--idempotency-key",
+                "approval",
+                workflow,
+                "start",
+                "\"alice\"",
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+        assert!(outputs.stdout_contains("Workflow report-q3 was approved"));
+    }
+
     // Checking bridge SDK generation for all agents and languages, one by one
     let mut failed_bridge_sdks = vec![];
     for language in GuestLanguage::iter()
@@ -177,6 +248,7 @@ async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
         for deployed_agent_type in &deployed_agent_types {
             let output = ctx
                 .cli([
+                    flag::YES,
                     cmd::GENERATE_BRIDGE,
                     flag::LANGUAGE,
                     language.id(),
@@ -351,9 +423,8 @@ fn assert_multi_component_layout(app_root: &std::path::Path, language: GuestLang
     }
 }
 
-// We only select a few non-conflicting templates from all apps.
-// Scala and MoonBit defaults both define CounterAgent, so we give the
-// MoonBit component an explicit name to avoid agent-type collisions.
+// Agent type names are unique across an environment, not just within a component.
+// Keep the public templates consistent and rename colliding generated fixtures here.
 #[test]
 async fn build_mixed_language_app() {
     let mut ctx = TestContext::new();

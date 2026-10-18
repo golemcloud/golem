@@ -34,11 +34,11 @@ For an agent declared with `defineAgent`:
 
 Do not infer an agent type from the exported TypeScript binding or translate method names to
 snake_case. The generated Effect starter currently declares its counter with the exact runtime
-name `Counter`:
+name `CounterAgent`:
 
 ```typescript
-export const Counter = defineAgent({
-  name: "Counter",
+export const CounterAgent = defineAgent({
+  name: "CounterAgent",
   id: { name: Schema.String },
   methods: {
     increment: method({
@@ -49,11 +49,11 @@ export const Counter = defineAgent({
 });
 ```
 
-Schedule that starter agent as `Counter("c1")`, not `CounterAgent("c1")`:
+Schedule that starter agent as `CounterAgent("c1")`:
 
 ```shell
 golem agent invoke --trigger --schedule-at 2026-03-15T10:30:00Z \
-  'Counter("c1")' increment
+  'CounterAgent("c1")' increment
 ```
 
 If an exported TypeScript binding and the `name` metadata differ, the metadata still controls the

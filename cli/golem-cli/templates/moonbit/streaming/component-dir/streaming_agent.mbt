@@ -83,11 +83,16 @@ pub fn StreamingAgent::transform(
 }
 
 ///|
-/// Returns multiple independent sibling streams.
-pub fn StreamingAgent::siblings(
+/// Returns a stream of streams.
+pub fn StreamingAgent::nested(
   self : Self,
-) -> Array[@schema.AgentStream[UInt]] {
-  [self.stream([10, 20]), self.stream([30, 40])]
+) -> @schema.AgentStream[@schema.AgentStream[UInt]] {
+  @schema.AgentStream::produce(async fn(writer) {
+    if writer.write_all([self.stream([10, 20]), self.stream([30, 40])])
+      is @schema.PeerDropped {
+      self.cancelled_producers += 1
+    }
+  })
 }
 
 ///|
@@ -165,8 +170,9 @@ pub async fn StreamingAgent::append_external(
   values : Array[String],
   close : Bool,
 ) -> String? {
-  let writer = self.external_auth.with_handle(auth =>
-    external_json_writer(url, producer_id, auth))
+  let writer = self.external_auth.with_handle(auth => {
+    external_json_writer(url, producer_id, auth)
+  })
   defer writer.drop()
   writer.append(values, close~).next_offset
 }
@@ -176,8 +182,9 @@ pub async fn StreamingAgent::read_external(
   self : Self,
   url : String,
 ) -> Array[String] {
-  let reader = self.external_auth.with_handle(auth =>
-    external_json_reader(url, auth))
+  let reader = self.external_auth.with_handle(auth => {
+    external_json_reader(url, auth)
+  })
   defer reader.close()
   let values : Array[String] = []
   for ;; {

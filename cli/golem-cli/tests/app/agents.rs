@@ -2275,7 +2275,7 @@ async fn test_rust_counter() {
 }
 
 /// End-to-end test for the Go SDK: creates a Go app from the composable counter
-/// template, adds a second agent package via the snapshotting template (proving
+/// template, adds a second agent package via the JSON template (proving
 /// the merged main.go barrel deploys and runs, not just compiles), then deploys
 /// and invokes methods on both agents against a live local server. This is the
 /// CLI-driven integration layer for the Go SDK — the wasi-touching RPC/host path
@@ -2316,7 +2316,7 @@ async fn test_go_counter() {
             flag::COMPONENT_NAME,
             component_name,
             flag::TEMPLATE,
-            "go/snapshotting",
+            "go/json",
         ])
         .await;
     assert!(outputs.success_or_dump());
@@ -2346,21 +2346,27 @@ async fn test_go_counter() {
     assert!(outputs.success_or_dump());
     assert!(outputs.stdout_contains_ordered(["Invocation result", "6"]));
 
-    // SessionAgent (from the snapshotting template): spend 10 -> 10, total -> 10.
-    // Invoking it at all proves the composed second package registered and runs.
-    let session = format!("SessionAgent(\"{}\")", Uuid::new_v4());
+    // Creating and listing a task proves the composed second package runs.
+    let tasks = format!("TaskAgent(\"{}\")", Uuid::new_v4());
 
     let outputs = ctx
-        .cli([flag::YES, cmd::AGENT, cmd::INVOKE, &session, "spend", "10"])
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &tasks,
+            "createTask",
+            r#"{title: "Review the counter"}"#,
+        ])
         .await;
     assert!(outputs.success_or_dump());
-    assert!(outputs.stdout_contains_ordered(["Invocation result", "10"]));
+    assert!(outputs.stdout_contains_ordered(["Invocation result", "Review the counter"]));
 
     let outputs = ctx
-        .cli([flag::YES, cmd::AGENT, cmd::INVOKE, &session, "total"])
+        .cli([flag::YES, cmd::AGENT, cmd::INVOKE, &tasks, "getTasks"])
         .await;
     assert!(outputs.success_or_dump());
-    assert!(outputs.stdout_contains_ordered(["Invocation result", "10"]));
+    assert!(outputs.stdout_contains_ordered(["Invocation result", "Review the counter"]));
 }
 
 /// Builds a real Scala component and exercises streaming through both the
