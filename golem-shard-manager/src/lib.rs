@@ -823,6 +823,84 @@ fn advertised_address(
     })
 }
 
+/// How long one attempt to reach the replica's own advertised address may take.
+const OWN_ADDRESS_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(2);
+/// The pause between two attempts to reach the replica's own advertised address.
+const OWN_ADDRESS_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+/// The least time between two warnings that the advertised address does not reach the replica.
+const OWN_ADDRESS_WARNING_INTERVAL: Duration = Duration::from_secs(30);
+
+/// One attempt to reach the replica's own advertised address from the inside, the way a client
+/// that was sent there would.
+///
+/// Without server TLS the attempt asks the gRPC health service, which confirms that a gRPC server
+/// answers at the address. With server TLS it stops at the TCP connect: a TLS client would need
+/// the CA certificate that clients are given, which this process does not hold.
+async fn reach_own_address(own: &LeaderAddress, tls: bool) -> anyhow::Result<()> {
+    if tls {
+        tokio::net::TcpStream::connect((own.host.as_str(), own.port)).await?;
+        return Ok(());
+    }
+    let channel = tonic::transport::Endpoint::from_shared(own.uri(false).to_string())?
+        .connect()
+        .await?;
+    let answer = tonic_health::pb::health_client::HealthClient::new(channel)
+        .check(tonic_health::pb::HealthCheckRequest {
+            service: String::new(),
+        })
+        .await?
+        .into_inner();
+    anyhow::ensure!(
+        answer.status == tonic_health::pb::health_check_response::ServingStatus::Serving as i32,
+        "the gRPC server at the address does not report that it is serving"
+    );
+    Ok(())
+}
+
+/// Retries [`reach_own_address`] until it works and then lets the gate say that the replica is
+/// ready. A wrong `grpc.advertised_host` or `grpc.advertised_port` passes every other check, and
+/// the clients that are sent to such an address find nothing.
+///
+/// A replica whose network does not route a pod's own traffic to its externally advertised address
+/// stays unready as well.
+async fn confirm_own_address(
+    own: LeaderAddress,
+    tls: bool,
+    gate: LeaderGate<ShardManagerGrpcService>,
+) -> anyhow::Result<()> {
+    let mut last_warning: Option<tokio::time::Instant> = None;
+    loop {
+        let attempt =
+            tokio::time::timeout(OWN_ADDRESS_ATTEMPT_TIMEOUT, reach_own_address(&own, tls))
+                .await
+                .unwrap_or_else(|_| {
+                    Err(anyhow::anyhow!(
+                        "no answer within {OWN_ADDRESS_ATTEMPT_TIMEOUT:?}"
+                    ))
+                });
+        match attempt {
+            Ok(()) => break,
+            Err(error) => {
+                if last_warning.is_none_or(|at| at.elapsed() >= OWN_ADDRESS_WARNING_INTERVAL) {
+                    last_warning = Some(tokio::time::Instant::now());
+                    warn!(
+                        advertised_address = %own,
+                        error = format!("{error:#}"),
+                        "This replica cannot reach its own advertised address, so it stays not \
+                         ready. Check grpc.advertised_host and grpc.advertised_port"
+                    );
+                }
+            }
+        }
+        tokio::time::sleep(OWN_ADDRESS_RETRY_INTERVAL).await;
+    }
+    gate.own_address_reached();
+    info!(advertised_address = %own, "This replica reaches its own advertised address");
+    // A task that finishes during the startup is reported as a finished task; this one has
+    // nothing left to do, and ends with the others.
+    std::future::pending().await
+}
+
 /// Checks the configured startup, persistence, retry, and lease timings, returning warnings worth
 /// logging and refusing outright combinations that cannot work.
 ///
@@ -1063,6 +1141,18 @@ pub async fn run(
             }
             PersistenceConfig::Etcd(etcd) => {
                 let own = advertised_address(&shard_manager_config, grpc_port)?;
+                gate.require_own_address_check();
+                join_set.spawn(
+                    confirm_own_address(
+                        own.clone(),
+                        matches!(
+                            shard_manager_config.grpc.tls,
+                            GrpcServerTlsConfig::Enabled(_)
+                        ),
+                        gate.clone(),
+                    )
+                    .in_current_span(),
+                );
                 let (kv, fence, leadership, belief) = start_distributed_mode(
                     etcd,
                     &deployment,

@@ -26,6 +26,7 @@ use golem_service_base::clients::shard_manager_leader::{LeaderAddress, not_leade
 use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -73,12 +74,16 @@ enum GateState<S> {
 /// Shared by the gRPC server, which asks it about each call, and `run()`, which moves it on.
 pub(crate) struct LeaderGate<S> {
     state: Arc<RwLock<GateState<S>>>,
+    /// Whether this replica still has to reach its own advertised address before it is ready.
+    /// An atomic of its own, so that `/readyz` stays a cheap read.
+    own_address_pending: Arc<AtomicBool>,
 }
 
 impl<S> Clone for LeaderGate<S> {
     fn clone(&self) -> Self {
         Self {
             state: self.state.clone(),
+            own_address_pending: self.own_address_pending.clone(),
         }
     }
 }
@@ -92,7 +97,19 @@ impl<S: Clone> LeaderGate<S> {
     pub fn new() -> Self {
         Self {
             state: Arc::new(RwLock::new(GateState::Starting)),
+            own_address_pending: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// From now on the replica is not ready until [`Self::own_address_reached`] is called. Only
+    /// distributed mode, whose replicas advertise an address to each other, asks for this.
+    pub fn require_own_address_check(&self) {
+        self.own_address_pending.store(true, Ordering::Release);
+    }
+
+    /// The replica's advertised address reaches the replica itself.
+    pub fn own_address_reached(&self) {
+        self.own_address_pending.store(false, Ordering::Release);
     }
 
     pub fn stand_by(
@@ -118,8 +135,13 @@ impl<S: Clone> LeaderGate<S> {
 
     /// What `/readyz` answers. A serving replica is ready while it believes it holds its lease; a
     /// standby while etcd answers it, so that a replica cut off from etcd is taken out of a
-    /// rollout's count; a starting replica never.
+    /// rollout's count; a starting replica never. A distributed replica is also not ready while its
+    /// advertised address does not reach it, because the clients that are sent there would find
+    /// nothing.
     pub fn is_ready(&self) -> bool {
+        if self.own_address_pending.load(Ordering::Acquire) {
+            return false;
+        }
         match &*self.state.read().unwrap_or_else(PoisonError::into_inner) {
             GateState::Starting => false,
             GateState::Standby {
@@ -379,6 +401,29 @@ mod tests {
             answer(&gate).await.headers().get("x-served").unwrap(),
             "yes"
         );
+    }
+
+    #[test]
+    fn a_replica_that_cannot_reach_its_own_address_is_not_ready() {
+        let gate = standby(LeaderView::NoLeader);
+        gate.require_own_address_check();
+        assert!(
+            !gate.is_ready(),
+            "a standby whose advertised address has not been reached is not ready"
+        );
+
+        gate.own_address_reached();
+        assert!(gate.is_ready(), "reaching the address makes it ready");
+
+        let leader: LeaderGate<Served> = LeaderGate::new();
+        leader.require_own_address_check();
+        leader.serve(Served, None);
+        assert!(
+            !leader.is_ready(),
+            "a serving replica is not ready before its address has been reached either"
+        );
+        leader.own_address_reached();
+        assert!(leader.is_ready());
     }
 
     #[test]

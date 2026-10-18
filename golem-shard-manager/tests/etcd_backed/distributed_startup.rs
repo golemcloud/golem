@@ -2148,6 +2148,76 @@ async fn a_standby_cut_off_from_etcd_stops_being_ready_but_still_names_the_leade
 
 #[test]
 #[tracing::instrument(skip_all)]
+// A replica is ready once it reaches the address it advertises: a leader and a standby alike.
+async fn replicas_that_reach_their_advertised_address_become_ready(etcd: &Arc<DockerEtcd>) {
+    wipe_state(etcd).await;
+    let mut leader_config = distributed_config(etcd);
+    leader_config.http_port = free_port();
+    let (leader, leader_ports) = spawn_replica(leader_config.clone(), CancellationToken::new());
+    timeout(STARTUP_TIMEOUT, leader_ports)
+        .await
+        .unwrap()
+        .unwrap();
+    await_until(STARTUP_TIMEOUT, || readyz(leader_config.http_port)).await;
+
+    let mut standby_config = distributed_config(etcd);
+    standby_config.http_port = free_port();
+    let before = campaigner_keys(etcd).await;
+    let (standby, _) = spawn_replica(standby_config.clone(), CancellationToken::new());
+    await_new_campaigner(etcd, &before).await;
+    await_until(STARTUP_TIMEOUT, || readyz(standby_config.http_port)).await;
+
+    leader.abort();
+    standby.abort();
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
+// A wrong advertised address passes every other check: etcd answers, the port is bound. Clients
+// that are sent there would find nothing, so the replica must not count as ready for a rollout.
+async fn a_standby_whose_advertised_address_does_not_reach_it_stays_unready(
+    etcd: &Arc<DockerEtcd>,
+) {
+    wipe_state(etcd).await;
+    let mut leader_config = distributed_config(etcd);
+    leader_config.http_port = free_port();
+    let (leader, leader_ports) = spawn_replica(leader_config.clone(), CancellationToken::new());
+    timeout(STARTUP_TIMEOUT, leader_ports)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let mut standby_config = distributed_config(etcd);
+    standby_config.http_port = free_port();
+    // Nothing listens here: the standby serves on its own bound port, not on the one it names.
+    standby_config.grpc.advertised_port = Some(free_port());
+    let before = campaigner_keys(etcd).await;
+    let (standby, _) = spawn_replica(standby_config.clone(), CancellationToken::new());
+    await_new_campaigner(etcd, &before).await;
+
+    // Several attempts of the replica's own check fit in this window.
+    let became_ready = timeout(Duration::from_secs(4), async {
+        while !readyz(standby_config.http_port).await {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    assert!(
+        became_ready.is_err(),
+        "a replica that cannot reach its advertised address must not become ready"
+    );
+    assert!(!readyz(standby_config.http_port).await);
+    assert!(
+        readyz(leader_config.http_port).await,
+        "the replica with a working address is ready"
+    );
+
+    leader.abort();
+    standby.abort();
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
 // A leader cut off from etcd must stop serving within one lease TTL: from then on another replica
 // may lead.
 async fn a_leader_cut_off_from_etcd_stops_serving_within_one_lease_ttl(etcd: &Arc<DockerEtcd>) {
