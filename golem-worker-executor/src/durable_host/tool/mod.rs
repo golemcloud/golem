@@ -3557,6 +3557,34 @@ where
     }
 }
 
+async fn drive_tool_reconstruction_startup<T>(
+    body: impl Future<Output = T>,
+    ready: Option<oneshot::Receiver<()>>,
+    on_ready: impl FnOnce(),
+) -> T {
+    let Some(mut ready) = ready else {
+        return body.await;
+    };
+    tokio::pin!(body);
+    tokio::select! {
+        biased;
+        started = &mut ready => {
+            if started.is_ok() {
+                on_ready();
+            }
+            body.await
+        }
+        result = &mut body => {
+            // The body may send readiness and finish in the same poll. The
+            // select's first branch was already polled; do not lose that send.
+            if ready.try_recv().is_ok() {
+                on_ready();
+            }
+            result
+        }
+    }
+}
+
 async fn execute_accepted_tool_call<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     accepted: AcceptedToolCall,
@@ -3580,7 +3608,7 @@ where
         .then(|| accepted.durability.historical_reconstruction_hold())
         .flatten();
     let reconstruction_supervisor = replaying_reconstruction.then(oneshot::channel);
-    let (inner_supervisor_started, mut inner_supervisor_ready) = match reconstruction_supervisor {
+    let (inner_supervisor_started, inner_supervisor_ready) = match reconstruction_supervisor {
         Some((started, ready)) => (Some(started), Some(ready)),
         None => (None, None),
     };
@@ -3613,24 +3641,14 @@ where
             execution_future.await
         }
     };
-    tokio::pin!(execution_future);
-    let mut result = if let Some(ready) = inner_supervisor_ready.as_mut() {
-        tokio::select! {
-            biased;
-            started = ready => {
-                if started.is_ok() {
-                    if let Some(started) = completed_supervisor_started.take() {
-                        let _ = started.send(());
-                    }
-                    drop(reconstruction_hold.take());
-                }
-                execution_future.await
+    let mut result =
+        drive_tool_reconstruction_startup(execution_future, inner_supervisor_ready, || {
+            if let Some(started) = completed_supervisor_started.take() {
+                let _ = started.send(());
             }
-            result = &mut execution_future => result,
-        }
-    } else {
-        execution_future.await
-    };
+            drop(reconstruction_hold.take());
+        })
+        .await;
     if let Err(error) = &mut result {
         rollback_live_attachment_admission_rejection(&cleanup_operation).await;
         let mut failed_resources = failed_resources.lock().unwrap().take();
@@ -3769,7 +3787,7 @@ where
         .await?
     {
         if recorded_tool_body_is_skipped(&recorded)? {
-            return execute_recorded_skipped_tool_call(
+            let completion = execute_recorded_skipped_tool_call(
                 accessor,
                 durability,
                 operation,
@@ -3780,7 +3798,14 @@ where
                 deferred_admission_inserted,
                 &mut eager_deferred_cleanup,
             )
-            .await;
+            .await?;
+            // A recorded pre-body cancellation/refusal has no body supervisor to
+            // announce startup. Publish readiness only after its no-body replay
+            // has validated and settled, just as a running reconstruction does.
+            if let Some(started) = completed_supervisor_started.take() {
+                let _ = started.send(());
+            }
+            return Ok(completion);
         }
         if let RecordedEntityTerminal::Completed(response) = &recorded
             && let Some(refusal) = terminal_from_response(response)?.admission_refusal.clone()
@@ -7205,12 +7230,13 @@ mod tests {
         ResolvedToolCommand, SkippedToolAttachmentEndpoints, ToolOutputEntry,
         ToolOutputWriterEntry, ToolStdinEntry, ToolStdinStreamConsumer, UnderlyingToolEntry,
         WitRegisteredTool, await_native_entity_body, caller_tool_owner,
-        classify_tool_discovery_error, cleanup_tool_endpoints, first_output_limit_error,
-        guest_body_accepts_admission_rejection, materialize_output_writer, merge_discovered_tools,
-        native_output_handles, option_args, output_limit_error, publish_output_completions,
-        recorded_tool_body_is_skipped, resolve_tool_command, select_native_body_result,
-        terminal_tool_discovery_error, validate_declared_tool_error, validate_declared_tool_result,
-        validate_native_tool_output, validate_stream_attachments,
+        classify_tool_discovery_error, cleanup_tool_endpoints, drive_tool_reconstruction_startup,
+        first_output_limit_error, guest_body_accepts_admission_rejection,
+        materialize_output_writer, merge_discovered_tools, native_output_handles, option_args,
+        output_limit_error, publish_output_completions, recorded_tool_body_is_skipped,
+        resolve_tool_command, select_native_body_result, terminal_tool_discovery_error,
+        validate_declared_tool_error, validate_declared_tool_result, validate_native_tool_output,
+        validate_stream_attachments,
     };
     use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
     use crate::durable_host::entity::RecordedEntityTerminal;
@@ -7268,6 +7294,68 @@ mod tests {
     use tokio::sync::mpsc;
     use wasmtime::component::{Component, Linker, Resource, ResourceTable, StreamReader};
     use wasmtime::{Config, Engine, Store};
+
+    #[test]
+    async fn reconstruction_startup_preserves_readiness_sent_in_the_final_body_poll() {
+        for result in [Ok(42), Err("reconstruction failed")] {
+            let notifications = AtomicUsize::new(0);
+            let (started, ready) = tokio::sync::oneshot::channel();
+            let actual = drive_tool_reconstruction_startup(
+                async {
+                    started.send(()).unwrap();
+                    result
+                },
+                Some(ready),
+                || {
+                    notifications.fetch_add(1, Ordering::SeqCst);
+                },
+            )
+            .await;
+            assert_eq!(actual, result);
+            assert_eq!(notifications.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn reconstruction_startup_notifies_before_waiting_for_body_completion() {
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (released, release) = tokio::sync::oneshot::channel();
+        let result = drive_tool_reconstruction_startup(
+            async {
+                started.send(()).unwrap();
+                release.await.unwrap();
+                42
+            },
+            Some(ready),
+            || {
+                released.send(()).unwrap();
+            },
+        )
+        .await;
+        assert_eq!(result, 42);
+    }
+
+    #[test]
+    async fn reconstruction_startup_does_not_invent_readiness_or_replace_body_errors() {
+        for result in [Ok(42), Err("reconstruction failed")] {
+            let notifications = AtomicUsize::new(0);
+            let (started, ready) = tokio::sync::oneshot::channel();
+            let actual = drive_tool_reconstruction_startup(
+                async {
+                    drop(started);
+                    result
+                },
+                Some(ready),
+                || {
+                    notifications.fetch_add(1, Ordering::SeqCst);
+                },
+            )
+            .await;
+            assert_eq!(actual, result);
+            assert_eq!(notifications.load(Ordering::SeqCst), 0);
+        }
+    }
 
     #[test]
     fn underlying_capability_rejects_missing_and_wrong_type_resource_handles() {

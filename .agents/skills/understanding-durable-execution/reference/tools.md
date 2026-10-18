@@ -416,9 +416,12 @@ Replay chooses one of three `InvocationExecutionMode`s (`golem-common/src/model/
   guest import). The
   test oracle is "no repeated external effect", not "no second guest call". One exception:
   `execute_accepted_tool_call_inner` first checks `recorded_terminal_access`; a terminal whose
-  `body_execution` is `Skipped` (admission was rejected before the body ran, e.g. an attachment
+  `body_execution` is `Skipped` (cancellation or rejection before the body ran, e.g. an attachment
   upgrade hitting `ResourceExhausted`) is returned by `execute_recorded_skipped_tool_call` with no
   guest call at all (`tests/tool_streaming.rs::incomplete_tool_replay_persists_attachment_upgrade_rejection`).
+  Successful no-body reconstruction also acknowledges the asynchronous startup handshake, after
+  validating and settling the recorded terminal. No body-start notification is possible or needed;
+  an error still fails startup rather than being acknowledged as ready.
 - `ReplayingIncomplete` — a `Start` without terminal switches the body to live and completes it
   under the *original* `Start` index; `enter_incomplete_live_repair_before_body_access` avoids
   deadlocking the primary's own transition. For a filesystem-incapable asynchronous invocation,
