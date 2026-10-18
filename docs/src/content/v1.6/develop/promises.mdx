@@ -87,164 +87,6 @@ When a promise is completed, an arbitrary byte array can be attached to it as a 
     </Tabs.Tab>
 </Tabs>
 
-The returned value has the type `PromiseId`, and defined as the following (including the nested types):
-
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
-    <Tabs.Tab>
-        ```typescript
-        export type OplogIndex = bigint
-
-        export type Uuid = {
-            highBits: bigint
-            lowBits: bigint
-        }
-
-        // Represents a Golem component
-        export type ComponentId = {
-            uuid: Uuid
-        }
-
-        // Represents a Golem agent
-        export type AgentId = {
-            componentId: ComponentId
-            agentId: string
-        }
-
-        // A promise ID is a value that can be passed to an external Golem API to complete that promise
-        // from an arbitrary external source, while Golem agents can await for this completion.
-        export type PromiseId = {
-            agentId: AgentId
-            oplogIdx: OplogIndex
-        }
-        ```
-    </Tabs.Tab>
-
-    <Tabs.Tab>
-        Effect TypeScript re-exports the host `PromiseId` type as `Agents.PromiseId`. Its wire shape is the same Golem agent ID and oplog index structure shown in the TypeScript tab. Prefer the exported type rather than duplicating that structure:
-
-        ```typescript
-        import type { Agents } from "@golemcloud/effect-golem"
-
-        type PromiseId = Agents.PromiseId
-        ```
-    </Tabs.Tab>
-
-    <Tabs.Tab>
-        ```rust
-        pub type OplogIndex = u64;
-
-        pub struct Uuid {
-            pub high_bits: u64,
-            pub low_bits: u64,
-        }
-
-        // Represents a Golem component
-        pub struct ComponentId {
-            pub uuid: Uuid,
-        }
-
-        // Represents a Golem agent
-        pub struct AgentId {
-            pub component_id: ComponentId,
-            pub agent_id: String,
-        }
-
-        // A promise ID is a value that can be passed to an external Golem API to complete that promise
-        // from an arbitrary external source, while Golem agents can await for this completion.
-        pub struct PromiseId {
-            pub agent_id: AgentId,
-            pub oplog_idx: OplogIndex,
-        }
-        ```
-    </Tabs.Tab>
-
-    <Tabs.Tab>
-        ```scala
-        import scala.scalajs.js
-
-        type OplogIndex = js.BigInt
-
-        @js.native
-        sealed trait Uuid extends js.Object {
-          def highBits: js.BigInt = js.native
-          def lowBits: js.BigInt = js.native
-        }
-
-        // Represents a Golem component
-        @js.native
-        sealed trait ComponentId extends js.Object {
-          def uuid: Uuid = js.native
-        }
-
-        // Represents a Golem agent
-        @js.native
-        sealed trait AgentId extends js.Object {
-          def componentId: ComponentId = js.native
-          def agentId: String = js.native
-        }
-
-        // A promise ID is a value that can be passed to an external Golem API to complete that promise
-        // from an arbitrary external source, while Golem agents can await for this completion.
-        @js.native
-        sealed trait PromiseId extends js.Object {
-          def agentId: AgentId = js.native
-          def oplogIdx: OplogIndex = js.native
-        }
-        ```
-    </Tabs.Tab>
-
-    <Tabs.Tab>
-        ```moonbit
-        pub type OplogIndex = UInt64
-
-        pub(all) struct Uuid {
-          high_bits : UInt64
-          low_bits : UInt64
-        }
-
-        // Represents a Golem component
-        pub(all) struct ComponentId {
-          uuid : Uuid
-        }
-
-        // Represents a Golem agent
-        pub(all) struct AgentId {
-          component_id : ComponentId
-          agent_id : String
-        }
-
-        // A promise ID is a value that can be passed to an external Golem API to complete that promise
-        // from an arbitrary external source, while Golem agents can await for this completion.
-        pub(all) struct PromiseId {
-          agent_id : AgentId
-          oplog_idx : OplogIndex
-        }
-        ```
-    </Tabs.Tab>
-
-    <Tabs.Tab>
-        ```go
-        // A 128-bit identifier
-        type UUID [16]byte
-
-        // Represents a Golem agent
-        type AgentID struct {
-            ComponentID UUID
-            AgentID     string
-        }
-
-        // A promise ID is a value that can be passed to an external Golem API to complete that promise
-        // from an arbitrary external source, while Golem agents can await for this completion.
-        type PromiseID struct {
-            AgentID    AgentID
-            OplogIndex uint64
-        }
-        ```
-
-        These are exported from the `golem` package as `golem.UUID`, `golem.AgentID` and `golem.PromiseID`.
-    </Tabs.Tab>
-</Tabs>
-
 ### Awaiting a promise
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
@@ -318,24 +160,16 @@ The returned value has the type `PromiseId`, and defined as the following (inclu
     ```
     </Tabs.Tab>
     <Tabs.Tab>
-    Assuming the `golemcloud/golem_sdk/api` package is imported as `@api` and `moonbitlang/core/json` is imported as `@json`, use `await_promise` to get the raw byte payload, then decode it from JSON:
+    Import `golemcloud/golem_sdk/api` as `@api`, `moonbitlang/core/json` as `@json`, and `moonbitlang/core/encoding/utf8` as `@utf8` in `moon.pkg`. Use `await_promise` to get the raw byte payload, then decode UTF-8 and JSON:
 
     ```moonbit
     struct MyPayload {
       id : String
     } derive(ToJson, @json.FromJson)
 
-    fn bytes_to_string(bytes : Bytes) -> String {
-      let chars : Array[Char] = []
-      for i in 0..<bytes.length() {
-        chars.push(Int::unsafe_to_char(bytes[i].to_int()))
-      }
-      String::from_array(chars)
-    }
-
     async fn wait_for_payload(promise_id : @api.PromiseId) -> MyPayload {
       let payload = @api.await_promise(promise_id)
-      let json = @json.parse(bytes_to_string(payload)) catch {
+      let json = @json.parse(@utf8.decode(payload)) catch {
         _ => panic()
       }
       let decoded : MyPayload = @json.from_json(json) catch {
@@ -442,17 +276,13 @@ Note that if an agent is only **awaiting** Golem promises (one or more), the age
     ```
     </Tabs.Tab>
     <Tabs.Tab>
-    Assuming the `golemcloud/golem_sdk/api` package is imported as `@api`, encode the payload as JSON and pass it to `complete_promise`:
+    Import `golemcloud/golem_sdk/api` as `@api` and `moonbitlang/core/encoding/utf8` as `@utf8` in `moon.pkg`. Encode the JSON payload as UTF-8 and pass it to `complete_promise`:
 
     ```moonbit
     struct Data {
       id : String
       meta : String
     } derive(ToJson)
-
-    fn string_to_bytes(value : String) -> Bytes {
-      Bytes::from_array(value.to_array().map(fn(char) { char.to_int().to_byte() }))
-    }
 
     fn complete_from_agent(promise_id : @api.PromiseId) -> Bool {
       let payload = Data::{
@@ -461,7 +291,7 @@ Note that if an agent is only **awaiting** Golem promises (one or more), the age
       }
       @api.complete_promise(
         promise_id,
-        string_to_bytes(payload.to_json().stringify()),
+        @utf8.encode(payload.to_json().stringify()),
       )
     }
     ```

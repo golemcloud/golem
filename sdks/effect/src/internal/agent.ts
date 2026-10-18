@@ -794,7 +794,15 @@ export const registerAgent = <
       methodCodecs.set(methodName, mc)
       methodHttpInputs.push({
         name: methodName,
-        params: spec.input,
+        params: Object.fromEntries(
+          Object.entries(spec.input).filter(
+            ([name]) =>
+              mc.inputSchema.tag !== "parameters" ||
+              mc.inputSchema.val.some(
+                (field) => field.name === name && field.source.tag === "user-supplied",
+              ),
+          ),
+        ),
         endpoints: spec.http ?? [],
         nonStringBindableParams: collectNonStringBindableParams(spec.input),
         stringBindableParams: collectStringBindableParams(spec.input),

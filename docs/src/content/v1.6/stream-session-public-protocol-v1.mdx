@@ -13,6 +13,12 @@ oplog records, attachment epochs, durable offsets, internal stream IDs, or
 component fingerprints. Implementations may use those concepts behind this
 boundary.
 
+Use [external bridge libraries](/v1.6/invoke/bridge-libraries#streaming-methods)
+for typed application clients, or [CLI streaming methods](/v1.6/invoke/cli#streaming-methods)
+for command-line invocation and checkpoints. Both use this protocol. See
+[Operating Durable Stream Sessions](/v1.6/operate/durable_streams) for service
+limits and operational recovery.
+
 ## 1. Transport and handshake
 
 The endpoint is:
@@ -20,6 +26,8 @@ The endpoint is:
 ```text
 GET /v1/agents/invoke-agent-session
 ```
+
+Use `ws:` for an HTTP server and `wss:` for HTTPS.
 
 The client MUST send:
 

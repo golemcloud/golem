@@ -20,14 +20,24 @@ async function fences(version: string, file: string, language: string) {
 // These checks consume complete public fences, not copies or SDK mocks. They
 // check guest source types, not WASM compilation, host calls, or provider access.
 for (const version of ["next", "v1.6"]) {
-  for (const page of ["develop/ai.mdx", "develop/rpc.mdx"]) {
+  for (const page of [
+    "develop/ai.mdx",
+    "develop/rpc.mdx",
+    "develop/reflection.mdx",
+    "develop/forking.mdx",
+    "develop/quotas.mdx",
+  ]) {
     test(`${version}/${page}: TypeScript and Effect examples typecheck against the in-tree SDKs`, async () => {
       const blocks = (await fences(version, page, "typescript")).filter(code =>
-        page === "develop/rpc.mdx"
-          ? code.includes("export const WeatherAgent = defineAgent(")
-          : code.includes("function askProvider(")
+        page === "develop/forking.mdx"
+          ? code.includes("type RunResult")
+          : page === "develop/rpc.mdx"
+            ? code.includes("export const WeatherAgent = defineAgent(")
+            : page === "develop/reflection.mdx" || page === "develop/quotas.mdx"
+              ? code.includes("export ")
+              : code.includes("function askProvider(")
       )
-      expect(blocks).toHaveLength(2)
+      expect(blocks).toHaveLength(page === "develop/reflection.mdx" ? 4 : 2)
       for (const code of blocks) {
         expect(typecheckPublicExample(code)).toEqual([])
       }

@@ -23,6 +23,7 @@ export default {
     type: "separator",
     title: "Usage",
   },
+  usage: "Overview",
   deploy: {
     title: "Deploy",
   },
@@ -53,5 +54,6 @@ export default {
   "name-mapping": "Name Mapping",
   "type-mapping": "Type Mapping",
   "rest-api": "REST API",
+  "stream-session-public-protocol-v1": "Streaming Protocol v1",
   "js-apis": "JavaScript APIs",
 }

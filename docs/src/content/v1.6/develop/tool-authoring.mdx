@@ -205,6 +205,88 @@ Generated clients call the canonical name through `tool-rpc`; they do not embed 
 
 Commands may declare neither output, stdout only, stderr only, or both. A started invocation exposes each declared output independently from its structured result. When both outputs are present, drain them concurrently: waiting for one channel to finish before reading the other can apply backpressure and stall the provider. A structured success can contain stderr bytes, and a structured failure can still have output attachments that must be drained or cancelled.
 
+For bounded outputs, collect all three outcomes before handling a failure. These helpers accept a started invocation from a generated client, before either output has been read. They buffer the attachments in memory; for large outputs, instead run two streaming consumers alongside the result and close or cancel resources on early exit.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+  <Tabs.Tab>
+```typescript
+import type { StartedToolInvocation } from '@golemcloud/golem-ts-sdk';
+
+export async function drain<A>(invocation: StartedToolInvocation<A>) {
+  const collected = await invocation.collect();
+  // Collection settles both outputs even if the structured result rejects.
+  return collected;
+}
+```
+
+`collect()` reads stdout and stderr concurrently with `result`. Each of `collected.result`, `collected.stdout`, and `collected.stderr` has a `status` of `fulfilled` or `rejected`. A fulfilled output's `value` is `Uint8Array | undefined`: `undefined` means absent, not an empty output. Inspect all three outcomes; stderr bytes alone do not indicate failure. Collection releases its readers, including on read failure.
+  </Tabs.Tab>
+  <Tabs.Tab>
+```typescript
+import type { BridgeTool } from '@golemcloud/effect-golem';
+
+export const drain = <A, E, R>(
+  invocation: BridgeTool.StartedToolInvocation<A, E, R>,
+) => invocation.collect;
+```
+
+Run the returned `Effect` inside the invocation's existing host-service scope. `collect` runs the result and both output drains with unbounded concurrency and records ordinary failures as separate `Result` values in `result`, `stdout`, and `stderr`; a failed result does not interrupt the drains. Successful output values are `Uint8Array | undefined`. Scope cleanup handles interruption; do not detach the result as a substitute for draining outputs.
+  </Tabs.Tab>
+  <Tabs.Tab>
+```rust
+use golem_rust::agentic::{CollectedToolInvocation, ToolInvocation};
+
+pub async fn drain<T, E>(
+    invocation: ToolInvocation<T, E>,
+) -> CollectedToolInvocation<T, E> {
+    invocation.collect().await
+}
+```
+
+`collect()` joins the result future with both output consumers. The returned `result`, `stdout`, and `stderr` are separate `Result` values; outputs contain `Option<Vec<u8>>`. `Ok(None)` means absent. It consumes the invocation and releases its output resources after completion or channel failure. Do not use `?` on the result before finishing the drains. Middleware's `underlying.start(...)` handle uses `get()` instead of `result()`; join `get()` with both forwarding tasks, including when it returns an error.
+  </Tabs.Tab>
+  <Tabs.Tab>
+```scala
+import golem.tool.{CollectedToolInvocation, ToolInvocation}
+import scala.concurrent.{ExecutionContext, Future}
+
+def drain[E, A](invocation: ToolInvocation[E, A])(
+    implicit ec: ExecutionContext
+): Future[CollectedToolInvocation[E, A]] =
+  invocation.collect()
+```
+
+`collect()` starts both output consumers alongside the result future. Inspect the separate `Either` values in `result`, `stdout`, and `stderr`. Outputs contain `Option[Array[Byte]]`; `Right(None)` means absent. Non-fatal channel failures stay in their output outcome instead of failing fast and abandoning the other channel. Cancellation and fatal failures remain failed futures; cancel the invocation if abandoning the call.
+  </Tabs.Tab>
+  <Tabs.Tab>
+Import `"golemcloud/golem_sdk/tool" @tool` in `moon.pkg`.
+
+```moonbit
+pub async fn[T, E] drain(
+  invocation : @tool.TypedToolInvocation[T, E],
+) -> @tool.CollectedToolInvocation[T, E] {
+  defer invocation.drop()
+  invocation.collect()
+}
+```
+
+`collect()` spawns both output drains in a task group while awaiting the structured result. Inspect `result`, `stdout`, and `stderr` separately. Outputs are `Result[Bytes?, ToolStreamError]`; `Ok(None)` means absent. Ordinary failures stay in the collected outcomes, while task cancellation propagates. The deferred `drop()` releases the invocation handle on either path.
+  </Tabs.Tab>
+  <Tabs.Tab>
+```go
+package example
+
+import "github.com/golemcloud/golem/sdks/go/golem/tool"
+
+func Drain[O any](invocation *tool.Invocation[O]) tool.Collected[O] {
+    return invocation.Collect()
+}
+```
+
+`Collect()` starts a goroutine for each output and waits for the result and both drains. Inspect `Err`, `StdoutErr`, and `StderrErr` independently; `Stdout` and `Stderr` retain the bytes read, including partial data on a read failure. A nil output means absent. If you take `Stdout()` or `Stderr()` yourself, read or close that reader: `Wait()` drains only outputs that you have not taken. Closing a reader stops only that channel, not the call or the other output.
+  </Tabs.Tab>
+</Tabs>
+
 Output stream state is durable. Golem records each channel under a distinct identity, checkpoints delivery separately, and reconstructs the same stdout/stderr separation after suspension or executor restart. Middleware must forward, consume, or cancel each attachment independently and must not relabel one channel as the other.
 
 ## Add middleware

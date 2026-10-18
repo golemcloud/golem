@@ -21,14 +21,13 @@
 // by the Rust executor tests in golem-worker-executor/tests/readonly.rs and by
 // the HTTP integration tests in integration-tests/tests/custom_api/readonly_http.rs.
 //
-// The `method({ readOnly })` surface expresses every legacy
+// The `method({ readOnly })` surface expresses every
 // cache-policy variant: `readOnly: true` (the base default, `until-write`),
 // `readOnly: { cache: 'no-cache' }`, `readOnly: { cache: { ttlNanos } }`, and
-// per-principal caching via `readOnly: { usesPrincipal: true }` (which replaces
-// the decorator's principal-parameter-derived flag).
+// per-principal caching inferred from a direct `s.principal()` input.
 
 import { z } from 'zod';
-import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
+import { defineAgent, method, http, s } from '@golemcloud/golem-ts-sdk';
 
 export const TsReadonlyAgent = defineAgent({
   name: 'TsReadonlyAgent',
@@ -53,9 +52,9 @@ export const TsReadonlyAgent = defineAgent({
 
     // Principal-aware: the cache key includes the caller principal.
     getCountFor: method({
-      input: {},
+      input: { caller: s.principal() },
       returns: z.number(),
-      readOnly: { usesPrincipal: true },
+      readOnly: true,
       http: http.get('/count-for'),
     }),
 

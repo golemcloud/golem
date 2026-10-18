@@ -2,953 +2,562 @@ import { Callout, Tabs } from "nextra/components"
 
 # Type mapping
 
-The types used in the component's code are mapped to JSON when used in the invocation REST API. This page lists all the supported types and how they are mapped.
+This reference describes **canonical, schema-directed application JSON**, as used by the schema JSON codecs and MCP structured values. The schema determines the meaning of each value; these shapes are not JavaScript's `JSON.stringify` rules for guest objects.
 
 <Callout type="info">
-The examples below show the JSON **value** part used by the REST invocation API.
-When calling the raw invoke endpoints, each argument and result is wrapped as a typed value object as described in the [Invoke via HTTP](/v1.6/invoke/http) page.
-These JSON examples are not CLI input syntax. The [CLI invocation page](/v1.6/invoke/cli#encoding-parameters) describes positional arguments and native language literals.
+  The raw [invocation REST API](/v1.6/invoke/http) uses a different representation: `kind`/`value`
+  tagged values, positional record fields, and a schema graph. [CLI input
+  literals](/v1.6/invoke/cli#encoding-parameters) use native syntax, not these JSON examples. CLI
+  `--format json` output is a structured result envelope that includes the typed result, not a bare
+  canonical value. [Custom HTTP APIs](/v1.6/invoke/making-custom-apis) can also use raw text or
+  binary bodies; not every HTTP endpoint uses canonical JSON.
 </Callout>
 
-## Language types to JSON
+For a record with one `u32` field named `count`:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
-    <Tabs.Tab>
-        The following TypeScript types are supported:
+| Canonical application JSON | REST wire value (schema supplied separately)                      |
+| -------------------------- | ----------------------------------------------------------------- |
+| `{"count":5}`              | `{"kind":"record","value":{"fields":[{"kind":"u32","value":5}]}}` |
 
-        | TypeScript type | JSON representation | Remarks
-        | --------------- | ------------------- | -------
-        | `string`        | `"hello world"`     | JSON string |
-        | `boolean`       | `true`, `false`     | JSON boolean |
-        | `number`        | `1234.0`            | JSON number |
-        | `bigint`        | `1234`              | JSON number |
-        | `Array<T>`      | `["one", "two", "three"]` | JSON array |
-        | Type literal `{ ... }` | `{ "a": "hello", "b": 1234 }` | JSON object |
-        | Interface with value fields | `{ "field1": "value", "field2": 42 }` | JSON object |
-        | `Map<K, V>`     | `[["key1", 100], ["key2", -2]]` | Array of key-value pairs, **not** a JSON object |
-        | `{ tag: "x", val: T1 } \| { tag: "y", val: T2 } \| ...` | `{ "x": "hello" }` | Single-key JSON object; the `val` is optional, if missing the value is `null` |
-        | `"x" \| "y" \| ...` | `"x"` | JSON string; TypeScript `enum`s are not supported, use string literal unions instead |
-        | Other union           | `{ "case1": "hello" }` | Anonymous unions use `case1`, `case2`, etc. Named union types use the type name as a prefix, for example `type UnionType = string \| number` becomes `UnionType1`, `UnionType2` |
-        | `[T1, T2, T3]`  | `["hello", 1234, true]` | Fixed-order JSON array |
-        | `T \| undefined` | `"value"` or `null` | `null` represents the missing value |
-        | `T \| null` | `"value"` or `null` | `null` represents the missing value |
-        | `field?: T`     | `42` or `null` | Optional fields use `null` for the missing case |
-        | `Uint8Array`  | `[104, 101, 108, 108, 111]` | JSON array of numbers |
-        | `Int8Array`   | `[-1, 0, 1]` | JSON array of numbers |
-        | `Uint16Array` | `[65535, 0, 1]` | JSON array of numbers |
-        | `Int16Array`  | `[-32768, 0, 32767]` | JSON array of numbers |
-        | `Uint32Array` | `[4294967295, 0, 1]` | JSON array of numbers |
-        | `Int32Array`  | `[-2147483648, 0, 2147483647]` | JSON array of numbers |
-        | `BigUint64Array` | `[18446744073709551615, 0, 1]` | JSON array of numbers |
-        | `BigInt64Array`  | `[-9223372036854775808, 0, 9223372036854775807]` | JSON array of numbers |
-        | `Float32Array` | `[3.4028235e+38, 0, -3.4028235e+38]` | JSON array of numbers |
-        | `Float64Array` | `[1.7976931348623157e+308, 0, -1.7976931348623157e+308]` | JSON array of numbers |
-    </Tabs.Tab>
-    <Tabs.Tab>
-        Effect agents use Effect `Schema` values to define their wire types:
+## Shared JSON rules
 
-        | Effect Schema | JSON representation | Remarks |
-        | ------------- | ------------------- | ------- |
-        | `Schema.String` | `"hello world"` | JSON string |
-        | `Schema.Boolean` | `true`, `false` | JSON boolean |
-        | `Schema.Number` | `1234.0` | JSON number |
-        | `Schema.BigInt` | `1234` | JSON number |
-        | `Schema.Array(T)` | `["one", "two"]` | JSON array; decoded as a readonly array |
-        | `Schema.Struct({ ... })` | `{ "a": "hello", "b": 1234 }` | JSON object |
-        | `Schema.Tuple([T1, T2])` | `["hello", 1234]` | Fixed-order JSON array |
-        | `Schema.NullOr(T)` | `"value"` or `null` | Value or `null` |
-        | `Schema.optional(T)` | field value or `null` | The Effect-side property may be omitted; JSON includes the field with `null` |
-        | `Schema.Literals(["x", "y"])` | `"x"` | JSON string enum |
-        | `Schema.ReadonlyMap(K, V)` | `[["key", 1]]` | Array of key-value pairs |
-        | `WitTypes.Uint8` and other WIT numeric schemas | `0` to `255` | Use these when exact WIT integer width matters |
+- Strings, booleans, and integers up to 32 bits use ordinary JSON strings, booleans, and numbers. A character is a string containing one Unicode scalar value.
+- **Every `s64` and `u64` value is a decimal string**, including elements of lists and typed arrays: `"-9223372036854775808"`, `"18446744073709551615"`. This avoids JavaScript precision loss.
+- Floating-point values use JSON numbers. Non-finite values (`NaN` and infinities) are rejected.
+- Records use schema field names. Optional fields appear as `null` when absent on output; input may omit an optional record field.
+- Options use the inner value or `null`. Results use `{"ok":value}` or `{"err":value}`. A result arm with no schema payload uses `{"ok":null}` or `{"err":null}`. This is distinct from a payload whose schema is an empty tuple or record; consult the SDK's result schema rather than assuming that every language unit type becomes a payloadless arm.
+- A variant case with a payload uses a single-key object, such as `{"Text":"hi"}`. A **payloadless case is a string**, such as `"Empty"`, even in a variant that also has payload cases. All-unit enums likewise use strings. Names and casing come from the schema.
+- Tuples use fixed-order arrays, lists use arrays, maps use arrays of key-value pairs, and flags use arrays of selected names.
 
-        Custom Effect schemas are supported when the Effect SDK's WIT codec can compile their encoded shape.
-    </Tabs.Tab>
-    <Tabs.Tab>
-            The following Rust types are supported:
+### Composite examples
 
-            | Rust type            | JSON representation | Remarks
-            | -------------------- | ------------------- | -------
-            | `String`             | `"hello world"`     | JSON string |
-            | `bool`               | `true`, `false`     | JSON boolean |
-            | `f64`                | `1234.0`            | JSON number |
-            | `f32`                | `3.14`              | JSON number |
-            | `i8`                 | `-128`, `0`, `127`  | JSON number |
-            | `u8`                 | `0`, `255`          | JSON number |
-            | `i16`                | `-32768`, `0`, `32767` | JSON number |
-            | `u16`                | `0`, `65535`        | JSON number |
-            | `i32`                | `-2147483648`, `0`, `2147483647` | JSON number |
-            | `u32`                | `0`, `4294967295`   | JSON number |
-            | `i64`                | `-9223372036854775808`, `0`, `9223372036854775807` | JSON number |
-            | `u64`                | `0`, `18446744073709551615` | JSON number |
-            | `Vec<T>`             | `[1, 2, 3]`         | JSON array |
-            | `Option<T>`          | `42` or `null`       | Value or `null` |
-            | `struct MyStruct { field1: T1, field2: T2 }` | `{ "field1": "value", "field2": 42 }` | JSON object |
-            | `enum MyEnum { X(T1), Y(T2), Z }` | `{ "x": "hello" }`, `{ "z": null }` | Single-key JSON object; no-payload cases use `null` |
-            | `()`                 | `null`               | Unit maps to JSON null |
-            | `(T1, T2, T3)`      | `[42, "hello", true]` | Fixed-order JSON array |
-            | `HashMap<K, V>`      | `[["key1", 100], ["key2", -2]]` | Array of key-value pairs, **not** a JSON object |
-
-        In addition to these, the `golem-rust` library implements `Schema` for several third-party libraries as well, behind feature flags.
-        Enable the required feature flag on your existing `golem-rust` dependency to use them (for example, add `"chrono"` to the `features` list):
-
-        | Feature flag | Rust type |
-        |--------------|-----------|
-        | `chrono` | `chrono::DateTime<chrono::Utc>` |
-        | `chrono` | `chrono::DateTime<chrono::FixedOffset>` |
-        | `chrono` | `chrono::DateTime<chrono::Local>` |
-        | `chrono` | `chrono::NaiveDate` |
-        | `chrono` | `chrono::NaiveTime` |
-        | `chrono` | `chrono::NaiveDateTime` |
-        | `chrono` | `chrono::FixedOffset` |
-        | `chrono` | `chrono::Month` |
-        | `chrono` | `chrono::Weekday` |
-        | `uuid` | `uuid::Uuid` |
-        | `serde_json_types` | `serde_json::Value` |
-        | `url` | `url::Url` |
-        | `bytes` | `bytes::Bytes` |
-        | `mac_address` | `mac_address::MacAddress` |
-        | `bigdecimal` | `bigdecimal::BigDecimal` |
-        | `rust_decimal` | `rust_decimal::Decimal` |
-        | `num_bigint` | `num_bigint::BigInt` |
-        | `bit_vec` | `bit_vec::BitVec` |
-        | `nonempty_collections` | `nonempty_collections::NEVec<T>` |
-        | `default` | `http::Uri` |
-        | `default` | `wasi::logging::logging::Level` |
-        | `default` | `wasi::io::error::Error` |
-
-        These additional types serialize using the same JSON rules described on this page, according to their `Schema` implementation.
-     </Tabs.Tab>
-    <Tabs.Tab>
-        The following Scala types are supported. Custom types used in agent methods need a `zio.blocks.schema.Schema` instance, for example via `derives Schema` in Scala 3.
-
-        | Scala type | JSON representation | Remarks
-        | ---------- | ------------------- | -------
-        | `String` | `"hello world"` | JSON string |
-        | `Boolean` | `true`, `false` | JSON boolean |
-        | `Double` | `1234.0` | JSON number |
-        | `Float` | `3.14` | JSON number |
-        | `Byte` | `-128`, `0`, `127` | JSON number |
-        | `Short` | `-32768`, `0`, `32767` | JSON number |
-        | `Int` | `-2147483648`, `0`, `2147483647` | JSON number |
-        | `Long` | `-9223372036854775808`, `0`, `9223372036854775807` | JSON number |
-        | `List[T]` | `[1, 2, 3]` | JSON array |
-        | `Option[T]` | `42` or `null` | Value or `null` |
-        | `case class MyStruct(field1: T1, field2: T2)` | `{ "field1": "value", "field2": 42 }` | JSON object |
-        | Pure enum or sealed trait with case objects | `"low"` | JSON string |
-        | Sealed trait or enum with payload cases | `{ "text": "hello" }`, `{ "empty": null }` | Single-key JSON object; no-payload cases use `null` |
-        | `Unit` | `null` | Unit maps to JSON null |
-        | `(T1, T2, T3)` | `["hello", 1234, true]` | Fixed-order JSON array |
-        | `Map[K, V]` | `[["key1", 100], ["key2", -2]]` | Array of key-value pairs, **not** a JSON object |
-    </Tabs.Tab>
-    <Tabs.Tab>
-        The following MoonBit types are supported. Custom types used in agent methods need `#derive.golem_schema`.
-
-        | MoonBit type | JSON representation | Remarks
-        | ------------ | ------------------- | -------
-        | `String` | `"hello world"` | JSON string |
-        | `Bool` | `true`, `false` | JSON boolean |
-        | `Double` | `1234.0` | JSON number |
-        | `Float` | `3.14` | JSON number |
-        | `Int` | `-2147483648`, `0`, `2147483647` | JSON number |
-        | `UInt` | `0`, `4294967295` | JSON number |
-        | `Int64` | `-9223372036854775808`, `0`, `9223372036854775807` | JSON number |
-        | `UInt64` | `0`, `18446744073709551615` | JSON number |
-        | `Byte` | `0`, `255` | JSON number |
-        | `Bytes` | `[104, 101, 108, 108, 111]` | JSON array of numbers |
-        | `Array[T]` | `["one", "two", "three"]` | JSON array |
-        | `Array[(K, V)]` | `[["key1", 100], ["key2", -2]]` | Array of key-value pairs, **not** a JSON object |
-        | `T?` | `"value"` or `null` | Value or `null` |
-        | `#derive.golem_schema struct MyStruct { field1 : T1, field2 : T2 }` | `{ "field1": "value", "field2": 42 }` | JSON object |
-        | `#derive.golem_schema enum MyEnum { Low, High }` | `"high"` | All-unit enums are JSON strings |
-        | `#derive.golem_schema enum MyEnum { Coordinates(x~ : Double, y~ : Double), Empty }` | `{ "coordinates": { "x": 12.5, "y": 7.0 } }`, `{ "empty": null }` | Single-key JSON object; no-payload cases use `null` |
-        | `Unit` | `null` | Unit maps to JSON null |
-        | `(T1, T2, T3)` | `["hello", 1234, true]` | Fixed-order JSON array |
-    </Tabs.Tab>
-    <Tabs.Tab>
-        The following Go types are supported. Method parameters are the exported fields of the method's input struct, and struct field names map to schema names in lowerCamelCase with each initialism as one word (`OrderID` becomes `orderId`, `APIKey` becomes `apiKey`), as the other SDKs name the same fields.
-
-        | Go type | JSON representation | Remarks
-        | ------- | ------------------- | -------
-        | `string` | `"hello world"` | JSON string |
-        | `bool` | `true`, `false` | JSON boolean |
-        | `float64` | `1234.0` | JSON number |
-        | `float32` | `3.14` | JSON number |
-        | `int8` | `-128`, `0`, `127` | JSON number |
-        | `uint8` | `0`, `255` | JSON number |
-        | `int16` | `-32768`, `0`, `32767` | JSON number |
-        | `uint16` | `0`, `65535` | JSON number |
-        | `int32` | `-2147483648`, `0`, `2147483647` | JSON number |
-        | `uint32` | `0`, `4294967295` | JSON number |
-        | `int64` | `-9223372036854775808`, `0`, `9223372036854775807` | JSON number |
-        | `uint64` | `0`, `18446744073709551615` | JSON number |
-        | `int`, `uint` | — | Rejected: their width is platform-dependent, use a sized integer type |
-        | `[]T` | `[1, 2, 3]` | JSON array; a nil slice is an empty list. `[]byte` is a JSON array of numbers |
-        | `[N]T` | `[1, 2, 3]` | Fixed-length JSON array |
-        | `*T`, `golem.Option[T]` | `42` or `null` | Value or `null` |
-        | `struct { Field1 T1; Field2 T2 }` | `{ "field1": "value", "field2": 42 }` | JSON object; only exported fields are included |
-        | `map[K]V` | `[["key1", 100], ["key2", -2]]` | Array of key-value pairs, **not** a JSON object; `K` must be a primitive type |
-        | Interface registered with `golem.DefineVariant` | `{ "card": { "number": "4242" } }`, `{ "cash": null }` | Single-key JSON object; a case whose type is an empty struct has no payload and uses `null` |
-        | Integer type registered with `golem.DefineEnum` | `"active"` | JSON string |
-        | Bool-field struct registered with `golem.DefineFlags` | `["read", "write"]` | JSON array of the set flag names |
-        | `golem.Tuple1[T]` … `golem.Tuple8[...]` | `["hello", 1234]` | Fixed-order JSON array |
-        | `golem.Result[Ok, Err]` | `{ "ok": 42 }`, `{ "err": "message" }` | Single-key JSON object |
-        | `golem.Unit` | — | Method input or output with no parameters or no result |
-
-        A variant is a sealed interface plus one Go type per case, and an enum is a named integer type whose constants run from `0`:
-
-        ```go
-        type PaymentMethod interface{ isPaymentMethod() }
-
-        type Card struct{ Number string }
-        type Cash struct{}
-
-        func (Card) isPaymentMethod() {}
-        func (Cash) isPaymentMethod() {}
-
-        var _ = golem.DefineVariant[PaymentMethod](
-            golem.Case[Card]("card"),
-            golem.Case[Cash]("cash"),
-        )
-
-        type Status int32
-
-        const (
-            StatusActive Status = iota
-            StatusClosed
-        )
-
-        var _ = golem.DefineEnum[Status]("active", "closed")
-        ```
-
-        In addition, `time.Time`, `time.Duration` and `golem.UUID` map to the schema's `datetime`, `duration` and `uuid` types, and `golem.Text`, `golem.Binary`, `golem.URL`, `golem.Path` and `golem.Quantity[U]` map to the corresponding restrictable schema types.
-    </Tabs.Tab>
-</Tabs>
-
-There are some special, Golem agent specific types that can be used in the agent constructor and methods as well:
-
-### Unstructured text
-Unstructured text is an arbitrary string, optionally annotated with a language code, that is either passed directly to/from the agent, or as an URL reference. The agent can optionally specify the set of supported language codes.
-
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
-    <Tabs.Tab>
-    ```typescript
-    import { UnstructuredText } from '@golemcloud/golem-ts-sdk';
-
-    async function exampleMethod(
-        unstructuredTextWithLanguageCode: UnstructuredText<["en"]>,
-    ): Promise<void> {
-        // ...
-    }
-    ```
-
-    The type parameter is optional; if missing, there will be no restrictions for the language of the text. It's possible
-    to list multiple language codes that are accepted by the agent.
-
-    The type itself represents either an inline string or a remote reference:
-
-    ```typescript
-    type LanguageCode = string;
-
-    export type UnstructuredText<LC extends LanguageCode[] = []> =
-      | {
-          tag: 'url';
-          val: string;
-        }
-      | {
-          tag: 'inline';
-          val: string;
-          languageCode?: LC[number];
-        };
-    ```
-    </Tabs.Tab>
-
-    <Tabs.Tab>
-    ```typescript
-    import { method, Schema, Unstructured } from "@golemcloud/effect-golem"
-
-    const EnglishText = Unstructured.UnstructuredText({
-      restrictions: [{ languageCode: "en" }],
-    })
-
-    const exampleMethod = method({
-      input: { text: EnglishText },
-      success: Schema.Void,
-    })
-    ```
-
-    With no `restrictions`, `UnstructuredText()` accepts any language code. Values are `{ _tag: "inline", val, languageCode? }` or `{ _tag: "url", val }`.
-    </Tabs.Tab>
-
-    <Tabs.Tab>
-    ```rust
-    use golem_rust::agentic::UnstructuredText;
-    use golem_rust::AllowedLanguages;
-
-    fn example_method(
-        unstructured_text_with_language_code: UnstructuredText<MyLanguageCode>,
-    ) {
-        // ...
-    }
-
-    #[derive(Debug, Clone, AllowedLanguages)]
-    enum MyLanguageCode {
-        #[code("en")]
-        En,
-        #[code("es")]
-        Spanish,
-        #[code("de")]
-        German,
-    }
-    ```
-
-    The type parameter is optional; if missing, there will be no restrictions for the language of the text.
-    If we are specifying the allowed languages, we need to define an enum deriving the `AllowedLanguages` trait.
-    The above code defines three allowed language codes: "en", "es", and "de". With attribute `code` we can
-    customize the actual language code name, otherwise the enum variant name in lowercase is used.
-
-    ```rust
-    use std::fmt::Debug;
-
-    /// Represents a text value that can either be inline or a URL reference.
-    ///
-    /// `LC` specifies the allowed language codes for inline text. Defaults to `AnyLanguage`,
-    /// which allows all languages.
-    #[derive(Debug, Clone)]
-    pub enum UnstructuredText<LC: AllowedLanguages = AnyLanguage> {
-        Url(String),
-        Text {
-            text: String,
-            language_code: Option<LC>,
-        },
-    }
-
-    /// Trait for types representing allowed language codes.
-    ///
-    /// Implement this trait for enums representing supported languages. Provides
-    /// conversion between enum variants and their string language codes.
-    /// Use the `#[derive(AllowedLanguages)]` macro to automatically implement this trait.
-    pub trait AllowedLanguages: Debug + Clone {
-        fn all() -> &'static [&'static str];
-
-        fn from_language_code(code: &str) -> Option<Self>
-        where
-            Self: Sized;
-
-        fn to_language_code(&self) -> &'static str;
-    }
-
-    #[derive(Debug, Clone)]
-    pub struct AnyLanguage;
-
-    ```
-    </Tabs.Tab>
-
-    <Tabs.Tab>
-    Use `golem.schema.UnstructuredText[L]` for inline text with an optional language code or a URL reference. Use `String` as the type argument for unrestricted language codes, or a string-literal union such as `"en" | "de"` to restrict them. Construct values with `UnstructuredText.fromInline(...)` or `UnstructuredText.fromUrl(...)`. See the [Scala HTTP parameter guide](/v1.6/how-to-guides/scala/golem-http-params-scala) for raw-body mapping.
-
-    ```scala
-    import golem.schema.UnstructuredText
-
-    val greeting: UnstructuredText["en" | "de"] =
-      UnstructuredText.fromInline("Hello", "en")
-    val document: UnstructuredText[String] =
-      UnstructuredText.fromUrl("https://example.com/document.txt")
-    ```
-    </Tabs.Tab>
-
-    <Tabs.Tab>
-    Use `@schema.UnstructuredText[L]` from `golemcloud/golem_sdk/schema` for inline text with an optional language code or a URL reference. The type argument implements `AllowedLanguages`; use `AnyLanguage` for unrestricted language codes. Construct values with `UnstructuredText::inline(...)` or `UnstructuredText::url(...)`. See the [MoonBit HTTP parameter guide](/v1.6/how-to-guides/moonbit/golem-http-params-moonbit) for raw-body mapping.
-
-    ```moonbit
-    let greeting : @schema.UnstructuredText[@schema.AnyLanguage] =
-      @schema.UnstructuredText::inline("Hello", language="en")
-    let document : @schema.UnstructuredText[@schema.AnyLanguage] =
-      @schema.UnstructuredText::url("https://example.com/document.txt")
-    ```
-    </Tabs.Tab>
-
-    <Tabs.Tab>
-    ```go
-    type EnEsDe struct{}
-
-    func (EnEsDe) Languages() []string { return []string{"en", "es", "de"} }
-
-    type ExampleMethodIn struct {
-        Text golem.UnstructuredText[EnEsDe]
-    }
-
-    var ExampleMethod = Agent.Method[ExampleMethodIn, golem.Unit]("exampleMethod")
-    ```
-
-    The type parameter is a marker type whose `Languages()` method lists the accepted language codes; use
-    `golem.AnyLanguage` for no restrictions.
-
-    The type itself carries either an inline string or a remote reference. A non-empty `URL` is the reference;
-    otherwise `Text` is the content, in `Language` when it is set:
-
-    ```go
-    type Languages interface {
-        Languages() []string
-    }
-
-    type UnstructuredText[L Languages] struct {
-        URL      string
-        Text     string
-        Language string
-    }
-
-    inline := golem.UnstructuredText[EnEsDe]{Text: "hola", Language: "es"}
-    byURL := golem.UnstructuredText[EnEsDe]{URL: "https://example.com/doc.txt"}
-    ```
-    </Tabs.Tab>
-
-</Tabs>
-
-### Unstructured binary
-Unstructured binary data is similar to unstructured text, but it is annotated (and restricted by) MIME types.
-
-
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
-    <Tabs.Tab>
-    ```typescript
-    import {
-      UnstructuredBinary,
-    } from '@golemcloud/golem-ts-sdk';
-
-    async exampleMethod(
-      unstructuredBinaryWithMimeType: UnstructuredBinary<['application/json']>,
-    ): Promise<void> {
-        // ...
-    }
-    ```
-
-    The type parameter specifies the set of allowed MIME types for the binary data.
-    The type itself represents either an inline byte array or a remote reference:
-
-    ```typescript
-    type MimeType = string;
-
-    export type UnstructuredBinary<MT extends MimeType[] | MimeType = MimeType> =
-      | {
-          tag: 'url';
-          val: string;
-        }
-      | {
-          tag: 'inline';
-          val: Uint8Array;
-          mimeType: MT extends MimeType[] ? MT[number] : MimeType;
-        };
-    ```
-  </Tabs.Tab>
-      <Tabs.Tab>
-      ```typescript
-      import { method, Schema, Unstructured } from "@golemcloud/effect-golem"
-
-      const JsonOrPng = Unstructured.UnstructuredBinary({
-        restrictions: [
-          { mimeType: "application/json" },
-          { mimeType: "image/png" },
-        ],
-      })
-
-      const exampleMethod = method({
-        input: { binary: JsonOrPng },
-        success: Schema.Void,
-      })
-      ```
-
-      Values are `{ _tag: "inline", val: Uint8Array, mimeType? }` or `{ _tag: "url", val }`.
-    </Tabs.Tab>
-      <Tabs.Tab>
-      ```rust
-      use golem_rust::agentic::UnstructuredBinary;
-      use golem_rust::AllowedMimeTypes;
-
-      fn example_method(
-        unstructured_binary_with_mime_type: UnstructuredBinary<MyMimeType>,
-      ) {
-          // ...
-      }
-
-
-     #[derive(Debug, Clone, AllowedMimeTypes)]
-     enum MyMimeType {
-         #[mime_type("application/json")]
-         ApplicationJson,
-         #[mime_type("image/png")]
-         ImagePng,
-     }
-      ```
-
-      The type parameter specifies the set of allowed MIME types for the binary data.
-      The type itself represents either an inline byte array or a remote reference:
-
-      ```rust
-
-     /// Represents a binary value that can either be inline or a URL reference.
-     ///
-     /// `MT` specifies the allowed MIME types for inline binary data.
-     #[derive(Debug, Clone)]
-     pub enum UnstructuredBinary<MT: AllowedMimeTypes> {
-         Url(String),
-         Inline { data: Vec<u8>, mime_type: MT },
-     }
-
-     /// Trait for types representing allowed MIME types.
-     ///
-     /// Implement this trait for enums representing supported MIME types. Provides
-     /// conversion between enum variants and their string MIME type values.
-     /// Use the `#[derive(AllowedMimeTypes)]` macro to automatically implement this trait.
-     pub trait AllowedMimeTypes: Debug + Clone {
-         fn all() -> &'static [&'static str];
-
-         fn from_string(mime_type: &str) -> Option<Self>
-         where
-             Self: Sized;
-
-         fn to_string(&self) -> String;
-     }
-      ```
-    </Tabs.Tab>
-    <Tabs.Tab>
-    Use `golem.schema.UnstructuredBinary[M]` for inline bytes with an optional MIME type or a URL reference. Use `String` as the type argument for unrestricted MIME types, or a string-literal union such as `"image/png" | "image/jpeg"` to restrict them. Construct values with `UnstructuredBinary.fromInline(...)` or `UnstructuredBinary.fromUrl(...)`. See the [Scala HTTP parameter guide](/v1.6/how-to-guides/scala/golem-http-params-scala) for raw-body mapping.
-
-    ```scala
-    import golem.schema.UnstructuredBinary
-
-    val data: UnstructuredBinary["application/octet-stream"] =
-      UnstructuredBinary.fromInline(Array[Byte](1, 2, 3), "application/octet-stream")
-    val image: UnstructuredBinary[String] =
-      UnstructuredBinary.fromUrl("https://example.com/image.png")
-    ```
-    </Tabs.Tab>
-    <Tabs.Tab>
-    Use `@schema.UnstructuredBinary[M]` from `golemcloud/golem_sdk/schema` for inline bytes with an optional MIME type or a URL reference. The type argument implements `AllowedMimeTypes`; use `AnyMimeType` for unrestricted MIME types. Construct values with `UnstructuredBinary::inline(...)` or `UnstructuredBinary::url(...)`. A bare `Bytes` parameter also accepts a raw binary HTTP body when it is the only body parameter. See the [MoonBit HTTP parameter guide](/v1.6/how-to-guides/moonbit/golem-http-params-moonbit) for raw-body mapping.
-
-    ```moonbit
-    let data : @schema.UnstructuredBinary[@schema.AnyMimeType] =
-      @schema.UnstructuredBinary::inline(b"\x01\x02\x03", mime_type="application/octet-stream")
-    let image : @schema.UnstructuredBinary[@schema.AnyMimeType] =
-      @schema.UnstructuredBinary::url("https://example.com/image.png")
-    ```
-    </Tabs.Tab>
-    <Tabs.Tab>
-    ```go
-    type JSONOrPNG struct{}
-
-    func (JSONOrPNG) MimeTypes() []string { return []string{"application/json", "image/png"} }
-
-    type ExampleMethodIn struct {
-        Binary golem.UnstructuredBinary[JSONOrPNG]
-    }
-
-    var ExampleMethod = Agent.Method[ExampleMethodIn, golem.Unit]("exampleMethod")
-    ```
-
-    The type parameter is a marker type whose `MimeTypes()` method lists the allowed MIME types; use
-    `golem.AnyMimeType` for no restrictions.
-    The type itself carries either an inline byte array or a remote reference. A non-empty `URL` is the reference;
-    otherwise `Data` is the content, of `MimeType`:
-
-    ```go
-    type MimeTypes interface {
-        MimeTypes() []string
-    }
-
-    type UnstructuredBinary[M MimeTypes] struct {
-        URL      string
-        Data     []byte
-        MimeType string
-    }
-    ```
-    </Tabs.Tab>
-</Tabs>
-
-
-### Multimodal values
-Agents can work with **multimodal values** as input or output.
-It allows passing an arbitrary number of values of different types in a single parameter or return value.
-When defining a parameter or return value as multimodal, we define the possible data types that can be used in that position, and the actual values will be an arbitrary number of values of these types, in any combination.
-
-There are three variants of multimodal values supported:
-
-* `Multimodal` type , allowing to pass an arbitrary number of values which is either an unstructured text or binary.
-* `MultimodalCustom<T>`, allowing to pass an arbitrary number of values which is either an unstructured text or binary or a user defined structured type `T`.
-* `MultimodalAdvanced<T>` , allowing to pass an arbitrary number of values of the user defined structured type `T`.
-
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
-    <Tabs.Tab>
-
-    ```typescript
-
-    type MyStructuredData = {
-      field1: string;
-      field2: number;
-    }
-
-    type TextBinaryOrCustom =
-      | { tag: 'text'; val: UnstructuredText }
-      | { tag: 'binary'; val: UnstructuredBinary }
-      | { tag: 'custom'; val: MyStructuredData }
-
-    async exampleMultimodalMethod(
-      input: Multimodal,
-    ): Promise<void> {
-      // ...
-    }
-
-    async exampleMultimodalCustomMethod(
-      input: MultimodalAdvanced<TextBinaryOrCustom>,
-    ): Promise<void> {
-      // ...
-    }
-
-    async exampleMultimodalAdvanced(
-      input: MultimodalAdvanced<TextOrImage>,
-    ): Promise<void> {
-      // ...
-    }
-
-    export type TextOrImage =
-      | { tag: 'text'; val: string }
-      | { tag: 'image'; val: Uint8Array }
-
-    ```
-
-    For code-first agent methods, spelling the custom case out as a tagged union keeps the schema generator able to resolve the custom payload type. It is equivalent to `MultimodalCustom<MyStructuredData>` shown below.
-
-    Here is the definition of all three variants of multimodal in typescript SDK:
-
-
-    ```typescript
-    export type MultimodalAdvanced<T> = T[];
-
-    export type Multimodal = MultimodalAdvanced<BasicModality>;
-
-    export type MultimodalCustom<T> = MultimodalAdvanced<CustomModality<T>>;
-
-    export type BasicModality =
-      | { tag: 'text'; val: UnstructuredText }
-      | { tag: 'binary'; val: UnstructuredBinary }
-
-    export type CustomModality<T> =
-      | { tag: 'text'; val: UnstructuredText }
-      | { tag: 'binary'; val: UnstructuredBinary }
-      | { tag: 'custom'; val: T }
-
-    ```
-
-    </Tabs.Tab>
-
-    <Tabs.Tab>
-    ```typescript
-    import { Schema } from "effect"
-    import { method, Multimodal, WitTypes } from "@golemcloud/effect-golem"
-
-    const BasicContent = Multimodal.multimodalTextImage()
-
-    const ContentWithMetadata = Multimodal.multimodalTextImageCustom(
-      Schema.Struct({ field1: Schema.String, field2: Schema.Number }),
-      { customName: "metadata" },
-    )
-
-    const FullyCustom = Multimodal.multimodal({
-      text: Schema.String,
-      image: Schema.Array(WitTypes.Uint8),
-    })
-
-    const exampleMethod = method({
-      input: { content: BasicContent },
-      success: Schema.Void,
-    })
-    ```
-
-    `Multimodal.multimodal(...)` defines the named cases. Runtime values are ordered arrays of `{ _tag: caseName, value }`. The convenience constructors use Effect's supported unstructured text and binary element schemas.
-    </Tabs.Tab>
-
-    <Tabs.Tab>
-
-    ```rust
-
-    use golem_rust::agentic::{Multimodal, MultimodalAdvanced, MultimodalCustom};
-    use golem_rust::{MultimodalSchema, Schema};
-
-    fn example_multimodal_method(
-      input: Multimodal,
-    ) {
-      // ...
-    }
-
-    fn example_multimodal_custom_method(
-      input: MultimodalCustom<MyStructuredData>,
-    ) {
-      // ...
-    }
-
-    // MyStructuredData can be used as `T` in MultimodalCustom<T> as long as it implements `Schema`.
-    #[derive(Schema)]
-    struct MyStructuredData {
-      field1: String,
-      field2: u32,
-    }
-
-    // When it comes to MultimodalAdvanced with user-defined types, we can define an enum representing the possible types:
-    // This needs to have an instance of `MultimodalSchema` which can be derived using `#[derive(MultimodalSchema)]`
-    fn example_multimodal_advanced_method(
-      input: MultimodalAdvanced<TextOrImage>,
-    ) {
-      // ...
-    }
-
-    #[derive(MultimodalSchema)]
-    enum TextOrImage {
-      Text(String),
-      Image(Vec<u8>),
-    }
-    ```
-
-    Here is the definition of all three variants of multimodal in rust SDK:
-
-
-    ```rust
-
-    pub struct Multimodal {
-        value: MultimodalAdvanced<BasicModality>,
-    }
-
-    pub enum BasicModality {
-        Text(UnstructuredText),
-        Binary(UnstructuredBinary<String>),
-    }
-
-    pub struct MultimodalCustom<T: Schema> {
-        value: MultimodalAdvanced<CustomModality<T>>,
-    }
-
-    pub enum CustomModality<T: Schema> {
-        Basic(BasicModality),
-        Custom(T),
-    }
-
-
-    pub struct MultimodalAdvanced<T: MultimodalSchema> {
-        pub items: Vec<T>,
-    }
-    ```
-
-    </Tabs.Tab>
-
-    <Tabs.Tab>
-    The current Scala SDK does not expose the removed `Multimodal`, `MultimodalItems`, `TextSegment`, or `BinarySegment` APIs. Use supported structured schemas instead.
-    </Tabs.Tab>
-
-    <Tabs.Tab>
-
-    ```moonbit
-    #derive.multimodal
-    pub(all) enum TextOrImage {
-      Text(String)
-      Image(Bytes)
-    }
-
-    ///|
-    #derive.agent
-    struct MultimodalAgent {
-      name : String
-    }
-
-    ///|
-    fn MultimodalAgent::new(name : String) -> MultimodalAgent {
-      { name, }
-    }
-
-    ///|
-    pub fn MultimodalAgent::analyze(
-      self : Self,
-      input : @multimodal.Multimodal[TextOrImage],
-    ) -> Unit {
-      ignore(self)
-      ignore(input)
-    }
-    ```
-
-    In MoonBit, define the complete modality enum with `#derive.multimodal`, then use it as `T` in `@multimodal.Multimodal[T]`. There are no current `@types.TextOrBinary` or `@types.CustomModality[T]` wrappers; model the exact supported cases in your enum.
-
-    Here are the relevant multimodal types in the MoonBit SDK:
-
-
-    ```moonbit
-    pub(all) struct Multimodal[T] {
-      items : Array[T]
-    } derive(Show, Eq)
-    ```
-
-    </Tabs.Tab>
-
-    <Tabs.Tab>
-
-    ```go
-    type MyStructuredData struct {
-        Field1 string
-        Field2 uint32
-    }
-
-    // Unstructured text, unstructured binary, or MyStructuredData.
-    type TextBinaryOrCustom interface{ isTextBinaryOrCustom() }
-
-    type TextItem struct{ Value golem.UnstructuredText[golem.AnyLanguage] }
-    type BinaryItem struct{ Value golem.UnstructuredBinary[golem.AnyMimeType] }
-    type CustomItem struct{ Value MyStructuredData }
-
-    func (TextItem) isTextBinaryOrCustom()   {}
-    func (BinaryItem) isTextBinaryOrCustom() {}
-    func (CustomItem) isTextBinaryOrCustom() {}
-
-    var _ = golem.DefineVariant[TextBinaryOrCustom](
-        golem.WrappedCase[TextItem]("text"),
-        golem.WrappedCase[BinaryItem]("binary"),
-        golem.WrappedCase[CustomItem]("custom"),
-    )
-
-    // A fully user-defined set of modalities.
-    type TextOrImage interface{ isTextOrImage() }
-
-    type Text struct{ Value string }
-    type Image struct{ Value []byte }
-
-    func (Text) isTextOrImage()  {}
-    func (Image) isTextOrImage() {}
-
-    var _ = golem.DefineVariant[TextOrImage](
-        golem.WrappedCase[Text]("text"),
-        golem.WrappedCase[Image]("image"),
-    )
-
-    type MultimodalIn struct{ Input golem.Multimodal }
-    type MultimodalCustomIn struct{ Input golem.MultimodalOf[TextBinaryOrCustom] }
-    type MultimodalAdvancedIn struct{ Input golem.MultimodalOf[TextOrImage] }
-
-    var (
-        ExampleMultimodal         = Agent.Method[MultimodalIn, golem.Unit]("exampleMultimodal")
-        ExampleMultimodalCustom   = Agent.Method[MultimodalCustomIn, golem.Unit]("exampleMultimodalCustom")
-        ExampleMultimodalAdvanced = Agent.Method[MultimodalAdvancedIn, golem.Unit]("exampleMultimodalAdvanced")
-    )
-    ```
-
-    The Go SDK has no separate `MultimodalCustom` type: a custom set of modalities, including one that mixes unstructured text and binary with your own type, is a variant registered with `golem.DefineVariant` and used as `T` in `golem.MultimodalOf[T]`.
-
-    Here are the multimodal types in the Go SDK:
-
-    ```go
-    type MultimodalOf[T any] []T
-
-    type Modality interface{ isModality() }
-
-    type TextModality struct{ Value UnstructuredText[AnyLanguage] }
-    type BinaryModality struct{ Value UnstructuredBinary[AnyMimeType] }
-
-    type Multimodal = MultimodalOf[Modality]
-    ```
-
-    </Tabs.Tab>
-
-</Tabs>
-
-## Composite types in JSON
-
-The REST API encodes structured values using the following JSON shapes:
-
-### Records
-
-Records are JSON objects with the same field names as defined in the source code:
+Record:
 
 ```json
 { "a": "hello", "b": 1234 }
 ```
 
-### Variants
-
-Variants (tagged unions with payloads) are encoded as a single-key JSON object, where the key is the case name. Cases without a payload use `null` as the value:
-
-```json
-{ "restricted": ["one", "two", "three"] }
-{ "none": null }
-{ "any": null }
-```
-
-### Enums
-
-Enums (variants where all cases have no payload) are encoded as a JSON string:
-
-```json
-"low"
-"medium"
-"high"
-```
-
-### Options
-
-Optional values are encoded as the inner value when present, or `null` when absent:
-
-```json
-"hello"
-null
-```
-
-### Results
-
-Result types are encoded as a JSON object with either an `ok` or an `err` field:
-
-```json
-{ "ok": "success value" }
-{ "err": "error message" }
-```
-
-If the success or error type is unit, use `null`:
-
-```json
-{ "ok": null }
-```
-
-### Tuples
-
-Tuples are encoded as fixed-order JSON arrays:
+Tuple:
 
 ```json
 [1234, "hello world", 103]
 ```
 
-### Lists
-
-Lists are encoded as JSON arrays:
+List:
 
 ```json
 ["one", "two", "three"]
 ```
 
-### Maps
+Map (not an object, even with string keys):
 
-Maps are encoded as arrays of key-value pairs (not as JSON objects, to support non-string keys):
-
+{/* prettier-ignore */}
 ```json
 [["key1", 100], ["key2", -2]]
 ```
 
-### Flags
-
-Flags represent a set of selected values, encoded as a JSON array of strings:
+Flags:
 
 ```json
 ["get", "put"]
 ```
 
-### Handles
+### Rich values
 
-Handles identify **resources** and are returned by invoking resource constructors through the Golem invocation API. They are represented as opaque strings in JSON:
+These schema categories have the same canonical shapes across SDKs. Restrictions narrow accepted values; they do not change these shapes.
 
-```json
-"urn:worker:component-id/worker-name/resource-id"
+| Schema category | Canonical JSON example                                   |
+| --------------- | -------------------------------------------------------- |
+| UUID            | `"550e8400-e29b-41d4-a716-446655440000"`                 |
+| Datetime        | `"2026-01-02T03:04:05.000000000Z"` (UTC RFC 3339)        |
+| Duration        | `{"nanoseconds":"1500000000"}`                           |
+| Text            | `{"text":"hello","language":"en"}`                       |
+| Binary          | `{"bytes":"AQID","mimeType":"application/octet-stream"}` |
+| URL             | `"https://example.com/file"`                             |
+| Path            | `"/data/file.txt"`                                       |
+| Quantity        | `{"mantissa":"12345","scale":2,"unit":"m"}`              |
+
+Binary bytes use **unpadded base64url**, not a numeric array. Language and MIME type annotations are optional. Ordinary byte lists remain numeric arrays; choose a rich binary schema explicitly when that is the intended contract.
+
+## SDK types to JSON
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+
+TypeScript agents declare runtime schemas. An arbitrary interface, type alias, or TypeScript union does not define the transport schema. The table uses the Zod adapter as a concrete example. Valibot, ArkType, and Effect adapters have their own supported constructors; do not assume that every schema library feature is supported.
+
+| Schema                                                | Canonical JSON                        | Guest value / remarks                                        |
+| ----------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------ |
+| `z.string()`, `z.boolean()`                           | `"hi"`, `true`                        | String, boolean                                              |
+| `z.number()`                                          | `1.5`                                 | `number`, defaults to `f64`                                  |
+| `z.bigint()`                                          | `"42"`                                | `bigint`, defaults to **unsigned `u64`**                     |
+| `s.s64()`, `s.u64()`                                  | `"-42"`, `"42"`                       | Explicit signed/unsigned 64-bit integers                     |
+| `s.s8()` … `s.s32()`, `s.u8()` … `s.u32()`, `s.f32()` | `42`                                  | Exact numeric widths                                         |
+| `z.object({count: z.number()})`                       | `{"count":5}`                         | Record                                                       |
+| `z.array(z.string())`                                 | `["hi"]`                              | Array                                                        |
+| `z.tuple([z.string(), z.number()])`                   | `["hi",5]`                            | Tuple                                                        |
+| `z.enum(["low", "high"])`                             | `"low"`                               | String enum                                                  |
+| `z.union([z.string(), z.number()])`                   | `{"case0":"hi"}` or `{"case1":5}`     | Generic zero-based case names; no type-alias prefix          |
+| `z.discriminatedUnion("tag", [...])`                  | `{"case0":{"tag":"text","val":"hi"}}` | Ordinary branch records; no automatic `tag`/`val` unwrapping |
+| `z.optional(T)`, `s.option(T)`                        | inner value or `null`                 | Missing value is guest `undefined`                           |
+| `z.nullable(T)`                                       | inner value or `null`                 | Missing value is guest `null`                                |
+| `z.record(K,V)`, `z.map(K,V)`                         | `[["key",5]]`                         | Map schema; guest object or `Map` respectively               |
+| `s.result(Ok,Err)`                                    | `{"ok":5}` or `{"err":"failed"}`      | Typed result                                                 |
+| `z.void()` as method return                           | no result                             | Not an ordinary JSON `null` value                            |
+
+Use `s.uint8Array()`, `s.int8Array()`, `s.uint16Array()`, `s.int16Array()`, `s.uint32Array()`, `s.int32Array()`, `s.float32Array()`, `s.float64Array()`, `s.bigInt64Array()`, and `s.bigUint64Array()` for typed arrays. All produce lists. The bigint constructors produce decimal-string elements, for example `["-1","0","1"]`. `s.bytes()` aliases the `list<u8>` constructor, not rich binary.
+
+| Rich schema / export                  | Category                           |
+| ------------------------------------- | ---------------------------------- |
+| `s.char()`, `s.uuid()`                | Character, UUID                    |
+| `s.datetime()`, `s.duration()`        | Datetime, duration                 |
+| `s.url()`, `s.text()`, `s.binary()`   | URL, text, binary                  |
+| `Path(options?)`, `Quantity(options)` | Path, quantity schema constructors |
+
+```typescript
+import { method, s } from "@golemcloud/golem-ts-sdk"
+import { z } from "zod"
+
+const increment = method({
+  input: { count: s.u32(), note: z.optional(z.string()) },
+  returns: s.u64(),
+})
 ```
 
-Handles must not be constructed by hand — use the values returned from resource constructors.
+</Tabs.Tab>
+<Tabs.Tab>
+
+Effect agents use `Schema` values. Custom schemas work only when the SDK codec supports their encoded shape; this is not a promise to support arbitrary classes or index signatures.
+
+| Effect schema                                      | Canonical JSON                   | Remarks                                         |
+| -------------------------------------------------- | -------------------------------- | ----------------------------------------------- |
+| `Schema.String`, `Schema.Boolean`, `Schema.Number` | `"hi"`, `true`, `1.5`            | Number defaults to `f64`                        |
+| `Schema.BigInt`                                    | `"-42"`                          | Defaults to **signed `s64`**                    |
+| `WitTypes.Uint8` and other numeric pins            | `255`                            | Exact width; `s64`/`u64` pins still use strings |
+| `Schema.Array(T)`                                  | `[1,2]`                          | Readonly array                                  |
+| `Schema.Struct({count: Schema.Number})`            | `{"count":5}`                    | Record                                          |
+| `Schema.Tuple([T1,T2])`                            | `["hi",5]`                       | Tuple                                           |
+| `Schema.Literals(["low","high"])`                  | `"low"`                          | Enum                                            |
+| `Schema.NullOr(T)`                                 | inner value or `null`            | Guest `null` for none                           |
+| `Schema.UndefinedOr(T)`, `Schema.optional(T)`      | inner value or `null`            | Guest `undefined` / omitted property            |
+| `Schema.Option(T)`                                 | inner value or `null`            | Guest Effect `Option`                           |
+| `Schema.Result(Ok,Err)`                            | `{"ok":5}` or `{"err":"failed"}` | Guest Effect `Result`                           |
+| `Schema.ReadonlyMap(K,V)`, `Schema.HashMap(K,V)`   | `[["key",5]]`                    | Map                                             |
+| `WitTypes.FixedList(T, length)`                    | `[1,2]`                          | Array of the specified length                   |
+| `WitTypes.Flags(["read","write"])`                 | `["read"]`                       | Guest boolean tuple in declaration order        |
+
+Tagged unions require a literal `_tag`. The remaining fields form a **record payload**: a branch with `_tag: "Text"` and `text: "hi"` becomes `{"Text":{"text":"hi"}}`. A `_tag`-only branch becomes `"Empty"`. Generic unions use `case0`, `case1`, and so on; case names can be configured with `WitTypes.withVariantCaseName`.
+
+Numeric pins are `WitTypes.Int8`, `Int16`, `Int32`, `Int64`, `Uint8`, `Uint16`, `Uint32`, `Uint64`, `Float32`, and `Float64`. Typed-array schemas such as `WitTypes.Uint8ArraySchema` and `WitTypes.BigInt64ArraySchema` use lists; 64-bit elements remain decimal strings. `Schema.NullishOr(T)` preserves `null` and `undefined` as distinct variant cases rather than collapsing both into one option.
+
+| Rich schema                                                    | Category            |
+| -------------------------------------------------------------- | ------------------- |
+| `WitTypes.Char`                                                | Character           |
+| `WitTypes.Datetime`, `WitTypes.Duration`                       | Datetime, duration  |
+| `WitTypes.Url()`, `WitTypes.Path()`, `WitTypes.Quantity(spec)` | URL, path, quantity |
+| `WitTypes.Text()`, `WitTypes.Binary()`                         | Text, binary        |
+
+```typescript
+import { Schema } from "effect"
+import { method, WitTypes } from "@golemcloud/effect-golem"
+
+const increment = method({
+  input: { count: WitTypes.Uint32, note: Schema.UndefinedOr(Schema.String) },
+  success: WitTypes.Uint64,
+})
+```
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+Use `golem_rust::Schema` for custom records and enums. The derive and standard implementations use the shared `golem-schema` model.
+
+| Rust type                                      | Canonical JSON                                       |
+| ---------------------------------------------- | ---------------------------------------------------- |
+| `String`, `bool`, `char`                       | `"hi"`, `true`, `"λ"`                                |
+| `i8`, `i16`, `i32`, `u8`, `u16`, `u32`         | JSON number in the type's range                      |
+| `i64`, `u64`, `usize`                          | Decimal string (`usize` uses `u64`)                  |
+| `f32`, `f64`                                   | Finite JSON number                                   |
+| `Vec<T>`, `HashSet<T>`                         | JSON array                                           |
+| `HashMap<K,V>`, `BTreeMap<K,V>`                | Key-value pair array                                 |
+| `Option<T>`                                    | Inner value or `null`                                |
+| `Result<T,E>`                                  | `{"ok":5}` or `{"err":"failed"}`                     |
+| `std::ops::Bound<T>`                           | `{"included":5}`, `{"excluded":5}`, or `"unbounded"` |
+| `()`                                           | `[]`                                                 |
+| Tuples of arity 1–8                            | Fixed-order array                                    |
+| Struct                                         | Object with schema field names                       |
+| `enum Choice { X(String), Z }`                 | `{"X":"hi"}` or `"Z"`                                |
+| All-unit enum, e.g. `enum Level { Low, High }` | `"Low"`                                              |
+| `Box<T>`, `Rc<T>`, `Arc<T>`                    | Same as `T`                                          |
+
+Derives preserve case names by default. Use derive `rename` / `rename_all` attributes when a different schema name is needed.
+
+`uuid::Uuid` and `chrono::DateTime<chrono::Utc>` have unconditional UUID and datetime implementations; no `uuid` feature is required. The following optional integrations are enabled on the `golem-rust` dependency:
+
+| Feature                | Type                                      | Canonical JSON example                                                    |
+| ---------------------- | ----------------------------------------- | ------------------------------------------------------------------------- |
+| `chrono`               | `NaiveDate`, `NaiveTime`, `NaiveDateTime` | `"2026-01-02"`, `"03:04:05.000000000"`, `"2026-01-02T03:04:05.000000000"` |
+| `chrono`               | `chrono::Duration`                        | `{"nanoseconds":"1500000000"}`                                            |
+| `serde_json_types`     | `serde_json::Value`                       | `"{\"count\":5}"` (a string containing JSON)                              |
+| `url`                  | `url::Url`                                | `"https://example.com/"`                                                  |
+| `bytes`                | `bytes::Bytes`                            | `{"bytes":"AQID"}` (rich binary, unlike `Vec<u8>`)                        |
+| `mac_address`          | `mac_address::MacAddress`                 | `{"bytes":[0,1,2,3,4,5]}` (fixed six bytes)                               |
+| `bigdecimal`           | `bigdecimal::BigDecimal`                  | `"123.45"`                                                                |
+| `rust_decimal`         | `rust_decimal::Decimal`                   | `"123.45"`                                                                |
+| `num_bigint`           | `num_bigint::BigInt`                      | `"12345678901234567890"`                                                  |
+| `bit_vec`              | `bit_vec::BitVec`                         | `[true,false]`                                                            |
+| `nonempty_collections` | `nonempty_collections::NEVec<T>`          | `{"items":[1,2]}`                                                         |
+
+The SDK also supports `std::time::Duration` as duration and `std::path::PathBuf` as path. It exposes `Quantity<U>` for quantities, with `U` implementing `QuantityUnit`. Derive attributes can select rich text, binary, URL, or path schemas and add restrictions to fields.
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+Custom Scala types need a `zio.blocks.schema.Schema` instance, for example `derives Schema`.
+
+| Scala type                                  | Canonical JSON                                       |
+| ------------------------------------------- | ---------------------------------------------------- |
+| `String`, `Boolean`, `Char`                 | `"hi"`, `true`, `"λ"`                                |
+| `Byte`, `Short`, `Int`                      | Signed JSON number                                   |
+| `Long`                                      | Decimal string                                       |
+| `Float`, `Double`                           | Finite JSON number                                   |
+| `BigInt`, `BigDecimal`                      | Decimal string                                       |
+| `golem.UByte`, `golem.UShort`, `golem.UInt` | Unsigned JSON number                                 |
+| `golem.ULong`                               | Unsigned decimal string                              |
+| `List[T]`, `Vector[T]`, arrays              | JSON array                                           |
+| `Array[Byte]`                               | Unsigned byte array, e.g. `[0,255]`                  |
+| `List[Byte]`                                | Signed byte array, e.g. `[0,-1]`                     |
+| `Option[T]`                                 | Inner value or `null`                                |
+| `Either[E,T]`                               | `Left` → `{"err":value}`, `Right` → `{"ok":value}`   |
+| `Unit`                                      | `[]`                                                 |
+| Tuples                                      | Fixed-order array                                    |
+| `Map[K,V]`                                  | Key-value pair array                                 |
+| Case class                                  | Object with schema field names                       |
+| All-unit enum                               | String, e.g. `"Low"`                                 |
+| Payload enum / sealed trait                 | Named payload object or payloadless string `"Empty"` |
+
+Case names are preserved. `Text(text: String)` becomes `{"Text":{"text":"hi"}}`. **Only** a single field specifically named `value` unwraps: `Text(value: String)` becomes `{"Text":"hi"}`.
+
+| Rich Scala type                                                       | Category            |
+| --------------------------------------------------------------------- | ------------------- |
+| `java.util.UUID`                                                      | UUID                |
+| `java.time.Instant`, `java.time.Duration`                             | Datetime, duration  |
+| `golem.schema.GolemPath`, `golem.schema.Url`, `golem.schema.Quantity` | Path, URL, quantity |
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+Custom MoonBit records and enums use `#derive.golem_schema`. Case names are preserved; `#derive.case(name=...)` can rename a case.
+
+| MoonBit type                                 | Canonical JSON                                      |
+| -------------------------------------------- | --------------------------------------------------- |
+| `String`, `Bool`, `Char`                     | `"hi"`, `true`, `"λ"`                               |
+| `Byte`, `UInt16`, `UInt`, `Int`              | JSON number in the type's range                     |
+| `Int64`, `UInt64`                            | Decimal string                                      |
+| `Float`, `Double`                            | Finite JSON number                                  |
+| `Array[T]`, `Array[Byte]`                    | JSON array, byte elements are numbers               |
+| `Bytes`                                      | `{"bytes":"aGVsbG8"}` (rich binary)                 |
+| `Map[K,V]`                                   | Key-value pair array (a real map schema)            |
+| `Array[(K,V)]`                               | Array of tuples; same JSON shape, but a list schema |
+| `T?`                                         | Inner value or `null`                               |
+| `Result[T,E]`                                | `{"ok":value}` or `{"err":value}`                   |
+| `Unit`                                       | `[]`                                                |
+| Tuples                                       | Fixed-order array                                   |
+| Struct                                       | Object with schema field names                      |
+| All-unit enum                                | String, e.g. `"High"`                               |
+| `Coordinates(x~ : Double, y~ : Double)` case | `{"Coordinates":{"x":12.5,"y":7}}`                  |
+| Payloadless `Empty` case in a mixed enum     | `"Empty"`                                           |
+
+| Rich MoonBit type                                    | Category            |
+| ---------------------------------------------------- | ------------------- |
+| `@types.Datetime`, `@types.Uuid`                     | Datetime, UUID      |
+| `@schema.Duration`, `@schema.Text[S]`                | Duration, text      |
+| `@schema.Url`, `@schema.Path`, `@schema.Quantity[U]` | URL, path, quantity |
+| `Bytes`                                              | Binary              |
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+Method parameters are the exported fields of the input struct. Field names become lowerCamelCase, treating each initialism as one word: `OrderID` → `orderId`, `APIKey` → `apiKey`.
+
+| Go type                                               | Canonical JSON / remarks                                                 |
+| ----------------------------------------------------- | ------------------------------------------------------------------------ |
+| `string`, `bool`                                      | `"hi"`, `true`                                                           |
+| `int8`, `int16`, `int32`, `uint8`, `uint16`, `uint32` | JSON number in the type's range                                          |
+| `int64`, `uint64`                                     | Decimal string                                                           |
+| `int`, `uint`                                         | Rejected; use sized integers                                             |
+| `float32`, `float64`                                  | Finite JSON number                                                       |
+| `golem.Char`                                          | One Unicode scalar string; `rune` is instead an `int32`                  |
+| `[]T`, `[N]T`                                         | JSON array; nil slice becomes `[]`                                       |
+| `[]byte`                                              | Numeric byte list, not rich binary                                       |
+| `*T`, `golem.Option[T]`                               | Inner value or `null`                                                    |
+| Struct                                                | Object containing exported fields                                        |
+| `map[K]V`                                             | Key-value pair array; keys must be primitive                             |
+| `golem.DefineVariant` interface                       | `{"card":{"number":"4242"}}`; empty-struct case → `"cash"`               |
+| `golem.DefineEnum` integer type                       | Registered string, e.g. `"active"`                                       |
+| `golem.DefineFlags` bool-field struct                 | Selected names, e.g. `["read","write"]`                                  |
+| `golem.Tuple1[T]` … `golem.Tuple8[...]`               | Fixed-order array                                                        |
+| `golem.Result[Ok,Err]`                                | `{"ok":5}` or `{"err":"failed"}`                                         |
+| `golem.Unit`                                          | No method parameters/result at the method boundary; nested value is `{}` |
+
+```go
+type PaymentMethod interface{ isPaymentMethod() }
+type Card struct{ Number string }
+type Cash struct{}
+func (Card) isPaymentMethod() {}
+func (Cash) isPaymentMethod() {}
+
+var _ = golem.DefineVariant[PaymentMethod](
+    golem.Case[Card]("card"),
+    golem.Case[Cash]("cash"),
+)
+
+type Status int32
+const (
+    StatusActive Status = iota
+    StatusClosed
+)
+var _ = golem.DefineEnum[Status]("active", "closed")
+```
+
+| Rich Go type                                   | Category                 |
+| ---------------------------------------------- | ------------------------ |
+| `golem.UUID`, `time.Time`, `time.Duration`     | UUID, datetime, duration |
+| `golem.Text`, `golem.Binary`                   | Text, binary             |
+| `golem.URL`, `golem.Path`, `golem.Quantity[U]` | URL, path, quantity      |
+
+</Tabs.Tab>
+</Tabs>
+
+## Unstructured text and binary
+
+Unstructured values carry inline content or a URL reference. Inline content uses the rich text or binary shape, not a bare string or numeric byte list:
+
+| Value                       | Canonical JSON                                                      |
+| --------------------------- | ------------------------------------------------------------------- |
+| Inline text                 | `{"inline":{"text":"hi","language":"en"}}`                          |
+| Inline binary               | `{"inline":{"bytes":"AQID","mimeType":"application/octet-stream"}}` |
+| URL reference (either kind) | `{"url":"https://example.com/file"}`                                |
+
+Language and MIME restrictions constrain supported content, not the JSON representation. Guest values use SDK-specific constructors or tags; they are not copies of the canonical JSON objects.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+
+```typescript
+import { method, s } from "@golemcloud/golem-ts-sdk"
+import { z } from "zod"
+
+const consume = method({
+  input: {
+    text: s.unstructuredText({ languages: ["en"] }),
+    data: s.unstructuredBinary({ mimeTypes: ["application/octet-stream"] }),
+  },
+  returns: z.void(),
+})
+```
+
+Guest text is `{tag:'inline', val:'hi', languageCode:'en'}` or `{tag:'url', val:'https://example.com/file'}`. Guest binary uses `val: Uint8Array` and optional `mimeType`. Omit restrictions to accept any language/MIME type.
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+```typescript
+import { Schema } from "effect"
+import { method, Unstructured } from "@golemcloud/effect-golem"
+
+const consume = method({
+  input: {
+    text: Unstructured.UnstructuredText({ restrictions: [{ languageCode: "en" }] }),
+    data: Unstructured.UnstructuredBinary({
+      restrictions: [{ mimeType: "application/octet-stream" }],
+    }),
+  },
+  success: Schema.Void,
+})
+```
+
+Guest values use `_tag`, not `tag`: `{_tag:"inline", val:"hi", languageCode:"en"}` or `{_tag:"url", val: url}`. Binary inline values carry `Uint8Array` and optional `mimeType`. These are boundary-only `ElementSpec` values, not schemas nestable in `Schema.Struct`. Optional unstructured values are supported only in the success position.
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+```rust
+use golem_rust::agentic::{UnstructuredText, UnstructuredBinary};
+use golem_rust::AllowedLanguages;
+
+#[derive(Debug, Clone, AllowedLanguages)]
+enum Language {
+    #[code("en")]
+    English,
+}
+
+let greeting = UnstructuredText::Text {
+    text: "hi".to_string(),
+    language_code: Some(Language::English),
+};
+let data: UnstructuredBinary<String> = UnstructuredBinary::Inline {
+    data: vec![1, 2, 3],
+    mime_type: "application/octet-stream".to_string(),
+};
+```
+
+Use `UnstructuredText::Url` / `UnstructuredBinary::Url` for references. Unrestricted text defaults to `AnyLanguage`, which holds a `String`; unrestricted binary uses `String`. Derive `AllowedLanguages` with `#[code(...)]` or `AllowedMimeTypes` with `#[mime_type(...)]` to restrict values.
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+```scala
+import golem.schema.{UnstructuredText, UnstructuredBinary}
+
+val greeting: UnstructuredText["en" | "de"] =
+  UnstructuredText.fromInline("hi", "en")
+val data: UnstructuredBinary["application/octet-stream"] =
+  UnstructuredBinary.fromInline(Array[Byte](1, 2, 3), "application/octet-stream")
+val document: UnstructuredText[String] =
+  UnstructuredText.fromUrl("https://example.com/file")
+```
+
+Use `String` for unrestricted language/MIME values, or string-literal unions for restrictions. Both kinds provide `fromInline` and `fromUrl`.
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+```moonbit
+let greeting : @schema.UnstructuredText[@schema.AnyLanguage] =
+  @schema.UnstructuredText::inline("hi", language="en")
+let data : @schema.UnstructuredBinary[@schema.AnyMimeType] =
+  @schema.UnstructuredBinary::inline(b"\x01\x02\x03", mime_type="application/octet-stream")
+let document : @schema.UnstructuredText[@schema.AnyLanguage] =
+  @schema.UnstructuredText::url("https://example.com/file")
+```
+
+The `@schema` package is `golemcloud/golem_sdk/schema`. Restriction types implement `AllowedLanguages` or `AllowedMimeTypes`; `AnyLanguage` / `AnyMimeType` leave them unrestricted. Both kinds provide `inline` and `url` constructors.
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+```go
+type English struct{}
+func (English) Languages() []string { return []string{"en"} }
+
+inline := golem.UnstructuredText[English]{Text: "hi", Language: "en"}
+byURL := golem.UnstructuredText[English]{URL: "https://example.com/file"}
+data := golem.UnstructuredBinary[golem.AnyMimeType]{
+    Data: []byte{1, 2, 3}, MimeType: "application/octet-stream",
+}
+```
+
+A non-empty `URL` selects a reference; otherwise `Text` or `Data` holds inline content. Restriction markers implement `Languages() []string` or `MimeTypes() []string`. Use `golem.AnyLanguage` / `golem.AnyMimeType` for unrestricted values.
+
+</Tabs.Tab>
+</Tabs>
+
+## Multimodal values
+
+A multimodal value is an ordered list of named variant cases. Each occurrence carries one of the declared payload types. Cases, casing, and guest wrappers depend on the SDK; there is no single set of wrapper types shared by every language.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+
+```typescript
+import { method, s } from "@golemcloud/golem-ts-sdk"
+import { z } from "zod"
+
+const analyze = method({
+  input: {
+    content: s.multimodal([
+      { name: "text", schema: s.unstructuredText() },
+      { name: "image", schema: s.unstructuredBinary() },
+    ]),
+  },
+  returns: z.void(),
+})
+```
+
+Guest arrays use an **outer** `{tag, value}` wrapper, for example `[{tag:'text', value:{tag:'inline', val:'hi'}}]`. Canonical JSON instead uses `[{"text":{"inline":{"text":"hi"}}}]`. Use runtime schemas to declare custom cases too.
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+```typescript
+import { Schema } from "effect"
+import { method, Multimodal, WitTypes } from "@golemcloud/effect-golem"
+
+const analyze = method({
+  input: {
+    content: Multimodal.multimodal({
+      text: Schema.String,
+      image: Schema.Array(WitTypes.Uint8),
+    }),
+  },
+  success: Schema.Void,
+})
+```
+
+Guest arrays use `{_tag: caseName, value}`. This example's canonical JSON is `[{"text":"hi"},{"image":[1,2,3]}]`. `multimodalTextImage()` instead uses unstructured content with case names `text` and `image` (binary content). `multimodalTextImageCustom(schema, {customName:"metadata"})` adds a structured case; its default name is `custom`. Multimodal carriers are boundary-only, like unstructured elements.
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+```rust
+use golem_rust::agentic::MultimodalAdvanced;
+use golem_rust::MultimodalSchema;
+
+#[derive(MultimodalSchema)]
+enum TextOrImage {
+    Text(String),
+    Image(Vec<u8>),
+}
+
+let content = MultimodalAdvanced {
+    items: vec![TextOrImage::Text("hi".to_string())],
+};
+```
+
+Canonical JSON is `[{"Text":"hi"}]`. `Multimodal` provides unstructured `Text` / `Binary` cases (names preserved); `MultimodalCustom<T>` adds a structured `Custom` case. Use `MultimodalAdvanced<T>` with a `MultimodalSchema` enum for an explicit case set.
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+The Scala SDK currently has no public multimodal wrappers. Use supported structured schemas instead.
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+```moonbit
+#derive.multimodal
+pub(all) enum TextOrImage {
+  Text(String)
+  Image(Bytes)
+}
+```
+
+Use `@multimodal.Multimodal[TextOrImage]` with an `items` array of enum values. Canonical JSON is `[{"Text":"hi"},{"Image":{"bytes":"AQID"}}]`. Define the complete set of cases in the enum; names remain `Text` and `Image`.
+
+</Tabs.Tab>
+<Tabs.Tab>
+
+```go
+type TextOrImage interface{ isTextOrImage() }
+type Text struct{ Value string }
+type Image struct{ Value []byte }
+func (Text) isTextOrImage() {}
+func (Image) isTextOrImage() {}
+
+var _ = golem.DefineVariant[TextOrImage](
+    golem.WrappedCase[Text]("text"),
+    golem.WrappedCase[Image]("image"),
+)
+
+content := golem.MultimodalOf[TextOrImage]{Text{Value: "hi"}, Image{Value: []byte{1, 2, 3}}}
+```
+
+Canonical JSON is `[{"text":"hi"},{"image":[1,2,3]}]`. `golem.Multimodal` provides unstructured text/binary cases. For custom combinations, register a variant and use `golem.MultimodalOf[T]`; `WrappedCase` unwraps the `Value` field.
+
+</Tabs.Tab>
+</Tabs>
+
+## Values outside this JSON reference
+
+Secrets, quota tokens, and permission cards are host-managed capabilities, not user-constructible JSON values. Streams and futures do not have a canonical JSON transport on this page. Use the dedicated [secrets](/v1.6/develop/config-and-secrets), [quotas](/v1.6/develop/quotas), and [durable streams](/v1.6/develop/durable-streams) guides for the supported APIs and boundaries.
