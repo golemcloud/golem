@@ -284,6 +284,37 @@ mod lease_timing_tests {
 }
 
 #[cfg(test)]
+mod accept_tests {
+    use super::accept_until;
+    use std::time::Duration;
+    use test_r::test;
+    use tokio_util::sync::CancellationToken;
+
+    #[test]
+    async fn a_connect_after_the_stop_is_refused_not_left_waiting() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stop = CancellationToken::new();
+        let _incoming = accept_until(listener, stop.clone());
+        tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("the listener accepts before the stop");
+
+        stop.cancel();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .is_ok()
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("a connect after the stop is refused");
+    }
+}
+
+#[cfg(test)]
 mod lease_health_tests {
     use super::{
         ShardManagerGrpcService, ShardManagerServiceImpl, ShardManagerServiceServer,
@@ -591,8 +622,35 @@ pub struct RunDetails {
     pub http_port: u16,
     pub grpc_port: u16,
     pub leadership: Option<LeadershipHandle>,
-    /// What the replica's stop acts on; see [`serve_until_stopped`].
+    /// What the replica's stop acts on; see [`serve_until_stopped`]. `None` is a value built by
+    /// hand: a stop then refuses nothing and closes no server.
     pub stop: Option<ServerStop>,
+}
+
+/// The connections that the listener accepts, as a stream for the server. The listener is dropped
+/// when `stop` fires, or when the stream is, so that a client which dials a stopping replica is
+/// refused at once and not left waiting in a queue that nobody serves.
+fn accept_until(
+    listener: tokio::net::TcpListener,
+    stop: CancellationToken,
+) -> tokio_stream::wrappers::ReceiverStream<std::io::Result<tokio::net::TcpStream>> {
+    let (accepted_tx, accepted_rx) = tokio::sync::mpsc::channel(1);
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                biased;
+                () = stop.cancelled() => break,
+                () = accepted_tx.closed() => break,
+                accepted = listener.accept() => {
+                    let connection = accepted.map(|(stream, _)| stream);
+                    if accepted_tx.send(connection).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+    tokio_stream::wrappers::ReceiverStream::new(accepted_rx)
 }
 
 /// How long a stopping replica waits for the calls that are running to finish before its server
@@ -604,14 +662,15 @@ struct ServerInner {
     /// Asks the server to stop accepting and to close its connections once their calls finish.
     shutdown: CancellationToken,
     closed: tokio::sync::watch::Receiver<bool>,
-    abort: tokio::task::AbortHandle,
     /// Set by a stop that closes the server itself, after the leadership is released.
     closed_by_stop: std::sync::atomic::AtomicBool,
 }
 
-/// Closes the server when the task that holds it is dropped, unless a stop is in charge of
-/// that: whoever drops or aborts the task set of a replica ends its server too, as it did when the
-/// server ran in that set.
+/// Asks the server to close when the task that holds this is dropped, unless a stop is in charge
+/// of that: whoever drops or aborts the task set of a replica ends its server too, as it did when
+/// the server ran in that set. A stop sets `closed_by_stop` first, because it aborts that task
+/// while the server must still answer for the gate. The server then closes within
+/// [`SERVER_DRAIN_LIMIT`].
 struct CloseServerOnDrop(Arc<ServerInner>);
 
 impl Drop for CloseServerOnDrop {
@@ -628,7 +687,6 @@ impl Drop for CloseServerOnDrop {
 
 /// The parts of a replica that its stop acts on, in the order it acts on them: the gate stops
 /// answering, then the leadership is released, then the gRPC server closes its connections.
-#[derive(Clone)]
 pub struct ServerStop {
     gate: LeaderGate<ShardManagerGrpcService>,
     health_reporter: tonic_health::server::HealthReporter,
@@ -653,18 +711,12 @@ impl ServerStop {
     }
 
     /// Closes the server: it stops accepting, and its connections close once the calls running on
-    /// them are done, at most [`SERVER_DRAIN_LIMIT`] from now.
+    /// them are done. The server task bounds that wait itself by [`SERVER_DRAIN_LIMIT`].
     async fn close(&self) {
         self.server.shutdown.cancel();
         let mut closed = self.server.closed.clone();
-        let drained = tokio::time::timeout(SERVER_DRAIN_LIMIT, closed.wait_for(|closed| *closed));
-        if drained.await.is_err() {
-            warn!(
-                limit = ?SERVER_DRAIN_LIMIT,
-                "Calls were still running when the shard manager's server was due to close; dropping it"
-            );
-            self.server.abort.abort();
-        }
+        // An error means the server task is gone, which is as closed as it gets.
+        let _ = closed.wait_for(|closed| *closed).await;
     }
 }
 
@@ -678,6 +730,8 @@ async fn stop_replica(
     join_set: &mut JoinSet<anyhow::Result<()>>,
     leadership: Option<&LeadershipHandle>,
 ) {
+    // If this future is dropped before the server is closed below, the server still closes.
+    let _close_on_drop = stop.map(|stop| stop.server.shutdown.clone().drop_guard());
     if let Some(stop) = stop {
         stop.refuse_calls().await;
         stop.close_after_release();
@@ -1251,7 +1305,6 @@ pub async fn run(
     let grpc_port = listener.local_addr()?.port();
 
     let server_shutdown = CancellationToken::new();
-    let server_shutdown_signal = server_shutdown.clone();
     let server_gate = gate.clone();
     let (closed_tx, closed_rx) = tokio::sync::watch::channel(false);
     let mut server = Server::builder();
@@ -1261,9 +1314,10 @@ pub async fn run(
     // Its own task, outside the task set: the set is stopped before the leadership is released,
     // and the server must still be answering for the gate then. It closes when the stop says so,
     // or when the task that watches it below is dropped.
+    let task_shutdown = server_shutdown.clone();
     let server_task = tokio::spawn(
         async move {
-            let served = server
+            let serving = server
                 .layer(
                     middleware::server::OtelGrpcLayer::default()
                         .filter(filters::reject_healthcheck),
@@ -1271,11 +1325,27 @@ pub async fn run(
                 .add_service(reflection_service)
                 .add_service(GatedService::new(server_gate))
                 .add_service(health_service)
-                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), {
-                    let shutdown = server_shutdown_signal;
+                .serve_with_incoming_shutdown(accept_until(listener, task_shutdown.clone()), {
+                    let shutdown = task_shutdown.clone();
                     async move { shutdown.cancelled().await }
-                })
-                .await;
+                });
+            let mut serving = std::pin::pin!(serving);
+            // Once the stop has begun, the connections get `SERVER_DRAIN_LIMIT` to finish their
+            // calls and close; then the server is dropped, with whatever is left.
+            let drain_limit = async {
+                task_shutdown.cancelled().await;
+                tokio::time::sleep(SERVER_DRAIN_LIMIT).await;
+            };
+            let served = tokio::select! {
+                served = &mut serving => served,
+                () = drain_limit => {
+                    warn!(
+                        limit = ?SERVER_DRAIN_LIMIT,
+                        "Connections of the shard manager's server did not close in time; dropping it"
+                    );
+                    Ok(())
+                }
+            };
             let _ = closed_tx.send(true);
             served.map_err(anyhow::Error::from)
         }
@@ -1284,7 +1354,6 @@ pub async fn run(
     let server_inner = Arc::new(ServerInner {
         shutdown: server_shutdown,
         closed: closed_rx,
-        abort: server_task.abort_handle(),
         closed_by_stop: std::sync::atomic::AtomicBool::new(false),
     });
     let stop = ServerStop {
