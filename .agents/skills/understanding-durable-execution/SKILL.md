@@ -1626,7 +1626,10 @@ snapshot names of the dropped region that no live record outside it uses
 Guest `revert-agent` resolves a count-based target only after its call resolves as new work,
 before authorization and `Start`. The permission resource is the resolved oplog index, and the
 request records the resolved cut and observed target tip. Incomplete repair reuses that request
-rather than resolving the count against newer target history.
+rather than resolving the count against newer target history. Resolution failures use the same
+immutable rejected-call path as permission refusals: `Start.denial` freezes the error and `End`
+returns it. Recovery of either a completed failure or a rejected `Start` without `End` never
+resolves the target again or dispatches the revert.
 
 Filesystem metadata has one deliberately deterministic exception to ordinary durable host-call
 recording. P2/P3 `stat` and `stat-at` of Golem's file at the exact path of a **read-only** component

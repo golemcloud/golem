@@ -1032,23 +1032,36 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let mut handle = match begun.resolve(self).await? {
                 ResolvedCall::Live(begun) => {
                     if !is_self
-                        && let golem_common::model::worker::RevertWorkerTarget::RevertLastInvocations(target) = &target {
+                        && let golem_common::model::worker::RevertWorkerTarget::RevertLastInvocations(count) = &target {
                             let owned_agent_id =
                                 OwnedAgentId::new(self.owned_agent_id.environment_id, &agent_id);
                             resolved_revert = match Worker::<Ctx>::resolve_revert_last_invocations(
                                 &self.state,
                                 &owned_agent_id,
-                                target.number_of_invocations,
+                                count.number_of_invocations,
                             )
                             .await
                             {
                                 Ok(resolved) => Some(resolved),
-                                Err(WorkerExecutorError::AgentNotFound { .. }) => {
-                                    return Ok(Err(agent_operation_error(format!(
-                                        "agent {owned_agent_id} does not exist"
-                                    ))));
+                                Err(error) => {
+                                    let error = match error {
+                                        WorkerExecutorError::AgentNotFound { .. } => {
+                                            format!("agent {owned_agent_id} does not exist")
+                                        }
+                                        error => error.to_string(),
+                                    };
+                                    // Freeze the refusal in Start too: incomplete recovery must
+                                    // not resolve a formerly invalid target against newer history.
+                                    break 'result begun.start_live_denied(
+                                        self,
+                                        HostRequestGolemApiRevertAgent {
+                                            agent_id: agent_id.clone(),
+                                            target: target.clone(),
+                                            resolved_revert: None,
+                                        },
+                                        error,
+                                    ).await?;
                                 }
-                                Err(error) => return Ok(Err(agent_operation_error(error.to_string()))),
                             };
                         }
                     let resource = match (&target, &resolved_revert) {

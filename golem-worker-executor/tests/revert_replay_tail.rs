@@ -206,3 +206,153 @@ async fn replay_tail_revert_records_and_authorizes_the_resolved_index(
     );
     Ok(())
 }
+
+#[test]
+#[timeout("120s")]
+async fn revert_resolution_errors_survive_replay_tail_and_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for missing in [false, true] {
+        let context = TestContext::new(last_unique_id);
+        let executor = start_with_overrides(deps, &context, Default::default()).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, host_api_tests)
+            .store()
+            .await?;
+        let target = agent_id!("GolemHostApi", format!("resolution-target-{missing}"));
+        let target_id = executor.start_agent(&component.id, target.clone()).await?;
+        if missing {
+            executor.delete_worker(&target_id).await?;
+        }
+        let count = if missing { 1u64 } else { 4u64 };
+        let caller = agent_id!("GolemHostApi", format!("resolution-caller-{missing}"));
+        let caller_id = executor.start_agent(&component.id, caller.clone()).await?;
+        let error = executor
+            .invoke_and_await_agent(
+                &component,
+                &caller,
+                "revert_last_invocations_result",
+                data_value!(target_id.clone(), count),
+            )
+            .await?
+            .into_typed::<Result<(), String>>()?
+            .expect_err("count resolution must fail");
+        assert!(error.contains(if missing {
+            "does not exist"
+        } else {
+            "Could not find 4 invocations"
+        }));
+        let before = executor.get_oplog(&caller_id, OplogIndex::INITIAL).await?;
+        let invocation = before
+            .iter()
+            .rev()
+            .find(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+            .unwrap()
+            .oplog_index;
+        // Remove the failed call, but retain its invocation so it runs at the replay tail.
+        executor
+            .revert(
+                &caller_id,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: invocation,
+                }),
+            )
+            .await?;
+        executor.resume(&caller_id, true).await?;
+        executor
+            .wait_for_status(&caller_id, AgentStatus::Idle, Duration::from_secs(30))
+            .await?;
+        let after = executor.get_oplog(&caller_id, OplogIndex::INITIAL).await?;
+        let start = after
+            .iter()
+            .find(|entry| {
+                entry.oplog_index > before.last().unwrap().oplog_index
+                    && matches!(&entry.entry, PublicOplogEntry::Start(start)
+                    if start.function_name == "golem::api::revert_worker" && start.denial.is_some())
+            })
+            .expect("failed replay-tail resolution must record its rejection in Start");
+
+        // Both failures would now resolve successfully. Historical replay must not consult
+        // this newer target state, even if the rejection's End is lost.
+        if missing {
+            executor.start_agent(&component.id, target.clone()).await?;
+        }
+        for _ in 0..6 {
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &target,
+                    "get_self_metadata_result",
+                    data_value!(),
+                )
+                .await?;
+        }
+        let target_before = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
+        executor
+            .revert(
+                &caller_id,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: start.oplog_index,
+                }),
+            )
+            .await?;
+        drop(executor);
+        let executor = start_with_overrides(deps, &context, Default::default()).await?;
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &caller,
+                "get_self_metadata_result",
+                data_value!(),
+            )
+            .await?;
+        let recovered = executor.get_oplog(&caller_id, OplogIndex::INITIAL).await?;
+        let response = recovered
+            .iter()
+            .rev()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::End(end)
+                    if end.start_index == start.oplog_index
+                        && entry.oplog_index > after.last().unwrap().oplog_index =>
+                {
+                    end.response.as_ref()
+                }
+                _ => None,
+            })
+            .expect("recovery must complete the failed resolution");
+        let response = golem_common::model::oplog::payload::HostResponseGolemApiUnit::from_value(
+            response.value(),
+        )?;
+        let recovered_error = response.result.expect_err("recovery must retain the error");
+        assert!(recovered_error.contains(if missing {
+            "does not exist"
+        } else {
+            "Could not find 4 invocations"
+        }));
+        let target_after = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
+        assert_eq!(
+            target_before.last().unwrap().oplog_index,
+            target_after.last().unwrap().oplog_index
+        );
+        // Reconstruct the completed failure too, not just its incomplete Start.
+        drop(executor);
+        let executor = start_with_overrides(deps, &context, Default::default()).await?;
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &caller,
+                "get_self_metadata_result",
+                data_value!(),
+            )
+            .await?;
+        let target_after = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
+        assert_eq!(
+            target_before.last().unwrap().oplog_index,
+            target_after.last().unwrap().oplog_index
+        );
+    }
+    Ok(())
+}
