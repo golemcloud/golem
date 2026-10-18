@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use super::RegistryService;
+use crate::components::cloud_http::{SpreadClients, cloud_client_builder};
 use async_trait::async_trait;
 use golem_client::{Context, Security};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::plan::PlanId;
-use std::time::Duration;
 use tokio::sync::OnceCell;
 use tracing::info;
 use url::Url;
@@ -56,26 +56,18 @@ impl CloudRegistryService {
     }
 }
 
-/// Constructs the tuned HTTP client for cloud-mode benchmark connections.
+/// Constructs the HTTP client for cloud-mode benchmark connections.
 ///
-/// Settings: large connection pool (1024), 90-second idle timeout, TCP
-/// nodelay, and 180-second request timeout.
-///
-/// Note: `http2_prior_knowledge()` is deliberately **not** set. Prior
-/// knowledge is for h2c (HTTP/2 over plain HTTP). All cloud endpoints are
-/// HTTPS, where HTTP/2 is negotiated through ALPN during the TLS handshake
-/// (TLS termination happens at Envoy). Setting prior knowledge would bypass
-/// ALPN and can cause protocol errors.
+/// The client sends the requests over `CLOUD_CONNECTIONS` connections, spread evenly over
+/// the zones of the gateway; see `SpreadClients`. The settings of each connection are in
+/// `cloud_client_builder`.
 pub fn new_cloud_reqwest_client() -> reqwest_middleware::ClientWithMiddleware {
-    let client = reqwest::ClientBuilder::new()
-        .pool_max_idle_per_host(1024)
-        .pool_idle_timeout(Duration::from_secs(90))
-        .tcp_nodelay(true)
-        .timeout(Duration::from_secs(180))
+    let fallback = cloud_client_builder()
         .build()
         .expect("Failed to build cloud HTTP client");
-    reqwest_middleware::ClientBuilder::new(client)
+    reqwest_middleware::ClientBuilder::new(fallback)
         .with(reqwest_tracing::TracingMiddleware::default())
+        .with(SpreadClients::new())
         .build()
 }
 

@@ -28,6 +28,7 @@ use tracing::{debug, info, trace};
 use url::Url;
 
 pub mod blob_storage;
+pub mod cloud_http;
 pub mod component_compilation_service;
 mod docker;
 pub mod durable_streams_client;
