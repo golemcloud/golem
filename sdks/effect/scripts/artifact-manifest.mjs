@@ -30,6 +30,8 @@ const inputRoots = [
   "tsconfig.json",
   "../http-contract/index.ts",
   "../http-contract/package.json",
+  "../javascript/runtime-init.js",
+  "../javascript/tool-process-backend.js",
   "scripts/build-types-entry.mjs",
   "scripts/generate-agent-template.mjs",
   "scripts/compile-agent-templates.mjs",

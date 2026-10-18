@@ -111,6 +111,8 @@ for role_spec in "${roles[@]}"; do
     --wit "$wit_root" \
     --world "$world" \
     --target wasi-p3 \
+    --js-modules "wasm-rquickjs-runtime-init=$sdk_root/../javascript/runtime-init.js" \
+    --js-modules "golem-tool-process-backend=$sdk_root/../javascript/tool-process-backend.js" \
     --js-modules "user=@slot" \
     --output "$wrapper_dir"
 

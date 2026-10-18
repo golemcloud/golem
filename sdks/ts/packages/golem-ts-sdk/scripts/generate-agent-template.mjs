@@ -52,7 +52,11 @@ function useForkedWitBindgen(cargoTomlPath) {
 // ---------------------------------------------------------------------------
 
 const sourceWit = resolve(process.cwd(), '../../wit');
-const sharedModules = [['@golemcloud/golem-ts-sdk/middleware', 'dist/middleware.mjs']];
+const sharedModules = [
+  ['@golemcloud/golem-ts-sdk/middleware', 'dist/middleware.mjs'],
+  ['wasm-rquickjs-runtime-init', '../../../javascript/runtime-init.js'],
+  ['golem-tool-process-backend', '../../../javascript/tool-process-backend.js'],
+];
 
 function walk(dir) {
   return readdirSync(dir).flatMap((entry) => {
