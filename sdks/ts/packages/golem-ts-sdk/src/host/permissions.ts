@@ -549,7 +549,8 @@ export abstract class PersistentCard {
  *
  * {@link PermissionCard.id}, {@link PermissionCard.parents} and
  * {@link PermissionCard.expiresAt} trap when the host no longer knows the card,
- * for example after it was revoked by another holder.
+ * or when the card is revoked or expired. The other operations on such a card
+ * return a `card-revoked` or `card-expired` {@link PermissionError}.
  *
  * In an agent or tool schema, declare it with
  * `s.permissionCard({ polymorphic: false })`.
