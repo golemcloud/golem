@@ -38,7 +38,7 @@ use golem_worker_executor::model::LookupResult;
 use golem_worker_executor::services::HasEvents;
 use golem_worker_executor::services::events::Event;
 use golem_worker_executor::services::golem_config::OplogConfig;
-use golem_worker_executor::services::oplog::{CommitLevel, CompressedOplogChunk};
+use golem_worker_executor::services::oplog::CompressedOplogChunk;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, agent_oplog_length, archived_oplog_chunks,
@@ -781,7 +781,8 @@ async fn an_unavailable_archive_after_an_early_commit_receipt_recovers_the_agent
 /// As [`an_unavailable_archive_after_an_early_commit_receipt_recovers_the_agent`], but the
 /// archived history does not decode. The owner stops the agent for good with the cause: the
 /// failure is recorded, a later invocation fails with the cause without running, and the
-/// committed invocation stays successful.
+/// committed invocation stays successful. Metadata reports the unreadable history, then the
+/// terminal failure once reads recover, without starting the agent again.
 #[test]
 #[timeout("4m")]
 #[tracing::instrument]
@@ -802,6 +803,14 @@ async fn a_corrupt_archive_after_an_early_commit_receipt_fails_the_agent(
             )
             .await?,
         );
+        let owned_agent_id =
+            OwnedAgentId::new(agent.context.default_environment_id, &agent.agent_id);
+        let worker = agent
+            .executor
+            .active_agents()
+            .try_get(&owned_agent_id)
+            .await
+            .expect("the agent is loaded after its first invocation");
 
         let (result, before_failure) = agent
             .succeed_over_a_failing_rebuild(deps, mode, async |_| Ok(()))
@@ -824,7 +833,39 @@ async fn a_corrupt_archive_after_an_early_commit_receipt_fails_the_agent(
             );
         }
 
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        while worker.is_loaded().await {
+            anyhow::ensure!(
+                tokio::time::Instant::now() < deadline,
+                "the agent whose status does not rebuild must stop"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        let error = agent
+            .executor
+            .get_worker_metadata(&agent.agent_id)
+            .await
+            .expect_err("metadata must not return a detached status while history is corrupt");
+        let error = format!("{error:#}");
+        assert!(
+            error.contains(&agent.agent_id.component_id.to_string())
+                && error.contains("early-receipt-corrupt-archive")
+                && error.contains("failed to decode"),
+            "the metadata failure does not name the agent and the decode error: {error}"
+        );
+        assert!(!worker.is_loaded().await);
+
         agent.fault.restore();
+        assert_eq!(
+            agent
+                .executor
+                .get_worker_metadata(&agent.agent_id)
+                .await?
+                .status,
+            AgentStatus::Failed
+        );
+        assert!(!worker.is_loaded().await);
         assert!(
             agent.records_an_error_after(before_failure).await?,
             "the owner must record the failed rebuild"
@@ -834,18 +875,12 @@ async fn a_corrupt_archive_after_an_early_commit_receipt_fails_the_agent(
             .get_oplog(&agent.agent_id, before_failure.next())
             .await?;
         assert!(
-            !oplog
-                .iter()
-                .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_))),
-            "no invocation may start after the failed rebuild: {oplog:#?}"
-        );
-        assert_eq!(
-            agent
-                .executor
-                .get_worker_metadata(&agent.agent_id)
-                .await?
-                .status,
-            AgentStatus::Failed
+            !oplog.iter().any(|entry| matches!(
+                entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(_)
+                    | PublicOplogEntry::RecoverySucceeded(_)
+            )),
+            "metadata observation must not restart the failed agent: {oplog:#?}"
         );
 
         let healthy = agent_id!("GolemHostApi", "healthy-next-to-corrupt-archive");
@@ -968,9 +1003,14 @@ async fn a_failed_rebuild_does_not_fail_a_committed_invocation_whose_result_left
     );
 
     agent.fault.restore();
-    worker
-        .commit_oplog_and_update_state(CommitLevel::Always)
-        .await?;
+    assert_eq!(
+        agent
+            .executor
+            .get_worker_metadata(&agent.agent_id)
+            .await?
+            .status,
+        AgentStatus::Failed
+    );
     let lookup = worker.lookup_invocation_result(&committed).await;
     assert!(
         matches!(lookup, LookupResult::Complete(Ok(_))),
