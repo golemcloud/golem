@@ -3749,6 +3749,40 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     kind,
                 )
             }
+            Err(WorkerExecutorError::Interrupted { kind }) => {
+                let decision = match self
+                    .store
+                    .data_mut()
+                    .on_invocation_failure(&full_function_name, &TrapType::Interrupt(kind))
+                    .await
+                {
+                    InvocationFailureDecision::Retry(decision) => decision,
+                    InvocationFailureDecision::Infrastructure(error) => {
+                        return self.invocation_failure_recovery(&error);
+                    }
+                };
+                // A lost shard writes nothing more: a terminal streaming-session failure would end
+                // an invocation the shard's new owner resumes.
+                if matches!(kind, InterruptKind::ShardLost) {
+                    return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+                }
+                if self.uses_streams
+                    && !matches!(kind, InterruptKind::Jump)
+                    && let Err(error) = self
+                        .parent
+                        .fail_durable_streaming_session(idempotency_key, kind.to_string())
+                        .await
+                {
+                    if self.parent.retire_if_shard_lost(&error) {
+                        return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+                    }
+                    self.parent
+                        .durable_stream_producer
+                        .changed()
+                        .notify_waiters();
+                }
+                failed_agent_invocation_outcome(self.parent.agent_mode(), decision, None)
+            }
             // Intercepted before the arm below, which would flatten it into an
             // `AgentError::InternalError` and append an `Error` entry to the very oplog that
             // just refused the write.
@@ -3771,9 +3805,50 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 self.parent.record_recovery_failure(&error).await;
                 self.invocation_failure_recovery(&error)
             }
-            Err(error) => {
+            Err(
+                error @ WorkerExecutorError::InvocationFailed {
+                    error:
+                        AgentError::EphemeralCannotSuspend(_) | AgentError::EphemeralFuelExhausted(_),
+                    ..
+                },
+            ) => {
                 self.agent_invocation_failed(&full_function_name, idempotency_key, Err(error))
                     .await
+            }
+            Err(error) => {
+                // A refused commit is the `OplogFenced` arm above; this is the hook's own failure.
+                let trap_type = TrapType::Error {
+                    error: AgentError::InternalError(error.to_string()),
+                    retry_from: OplogIndex::INITIAL,
+                    semantic_trap_retry_override: None,
+                };
+                if let InvocationFailureDecision::Infrastructure(error) = self
+                    .store
+                    .data_mut()
+                    .on_invocation_failure(&full_function_name, &trap_type)
+                    .await
+                {
+                    return self.invocation_failure_recovery(&error);
+                }
+                if self.uses_streams
+                    && let Err(error) = self
+                        .parent
+                        .fail_durable_streaming_session(idempotency_key, error.to_string())
+                        .await
+                {
+                    if self.parent.retire_if_shard_lost(&error) {
+                        return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+                    }
+                    self.parent
+                        .durable_stream_producer
+                        .changed()
+                        .notify_waiters();
+                }
+                failed_agent_invocation_outcome(
+                    self.parent.agent_mode(),
+                    RetryDecision::None,
+                    Some(&error),
+                )
             }
         }
     }
@@ -3821,20 +3896,9 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 || self.parent.next_infrastructure_recovery_delay(),
             );
         }
-        let actual_trap = match result {
-            Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
-            Err(error) => Some(TrapType::from_worker_executor_error::<Ctx>(
-                error,
-                OplogIndex::INITIAL,
-                self.parent.agent_mode(),
-            )),
-        };
         let trap_type = match owner_failure {
             Some(OwnerFailureWinner::Trap(trap)) => Some(trap),
-            Some(OwnerFailureWinner::Lifecycle(kind)) => match actual_trap {
-                Some(trap @ (TrapType::Error { .. } | TrapType::Exit)) => Some(trap),
-                _ => Some(TrapType::Interrupt(kind)),
-            },
+            Some(OwnerFailureWinner::Lifecycle(kind)) => Some(TrapType::Interrupt(kind)),
             Some(OwnerFailureWinner::Infrastructure(error)) => {
                 Some(TrapType::from_worker_executor_error::<Ctx>(
                     error,
@@ -3842,7 +3906,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     self.parent.agent_mode(),
                 ))
             }
-            None => actual_trap,
+            None => match result {
+                Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
+                Err(error) => Some(TrapType::from_worker_executor_error::<Ctx>(
+                    error,
+                    OplogIndex::INITIAL,
+                    self.parent.agent_mode(),
+                )),
+            },
         };
         let shard_lost = matches!(
             trap_type,
