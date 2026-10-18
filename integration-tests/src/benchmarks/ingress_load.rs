@@ -41,8 +41,8 @@ use golem_common::model::permission_share::{
 use golem_common::schema::ExternalSchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
-    Benchmark, BenchmarkError, BenchmarkRecorder, BenchmarkResultValue, IngressSettings, ResultKey,
-    RunConfig,
+    Benchmark, BenchmarkError, BenchmarkRecorder, BenchmarkResultValue, IngressMethod,
+    IngressMixEntry, IngressSettings, ResultKey, RunConfig,
 };
 use golem_test_framework::config::benchmark::TestMode;
 use golem_test_framework::config::dsl_impl::TestUserContext;
@@ -50,6 +50,7 @@ use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use indoc::indoc;
 use reqwest::Url;
+use serde_json::json;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -83,6 +84,8 @@ pub struct IngressLoadIteration {
     domain_owners: Vec<(TestUserContext<BenchmarkTestDependencies>, EnvironmentId)>,
     accounts: Arc<Vec<Account>>,
     rest_url: Url,
+    /// The entry of the mix for each slot of the request cycle. See `mix_schedule`.
+    schedule: Arc<Vec<usize>>,
 }
 
 /// One client: an account with its own connection, token and agents.
@@ -90,10 +93,23 @@ struct Account {
     user: TestUserContext<BenchmarkTestDependencies>,
     bearer: String,
     client: AccountClient,
-    /// The request body for each agent of the account, for the REST invoke endpoint.
+    /// The requests for each entry of the mix.
+    calls: Vec<AccountCall>,
+}
+
+/// The requests of one entry of the mix, for each agent of an account.
+struct AccountCall {
+    /// The request body for each agent, for the REST invoke endpoint.
     rest_bodies: Vec<bytes::Bytes>,
-    /// The URL and, outside the cloud, the Host header for each HTTP API agent.
-    http_api_targets: Vec<(Url, Option<String>)>,
+    /// The request for each HTTP API agent.
+    http_api_targets: Vec<HttpApiTarget>,
+}
+
+struct HttpApiTarget {
+    url: Url,
+    /// The Host header, outside the cloud.
+    host: Option<String>,
+    body: Option<bytes::Bytes>,
 }
 
 struct AccountClient {
@@ -240,6 +256,83 @@ fn agent(name: String) -> ParsedAgentId {
     agent_id!(AGENT_TYPE, name)
 }
 
+/// The name of the method in result keys and failure messages.
+fn method_label(method: IngressMethod) -> &'static str {
+    match method {
+        IngressMethod::Echo => "echo",
+        IngressMethod::Sleep => "sleep",
+        IngressMethod::OplogHeavy => "oplog-heavy",
+        IngressMethod::CpuIntensive => "cpu-intensive",
+    }
+}
+
+/// Checks that each entry of the mix has a weight and the values its method needs.
+fn check_mix(mix: &[IngressMixEntry]) -> Result<(), String> {
+    if mix.is_empty() {
+        return Err("the mix has no entries".to_string());
+    }
+    for entry in mix {
+        let label = method_label(entry.method);
+        if entry.weight == 0 {
+            return Err(format!("{label} has weight 0"));
+        }
+        let missing = match entry.method {
+            IngressMethod::Echo => None,
+            IngressMethod::Sleep => entry.millis.is_none().then_some("millis"),
+            IngressMethod::OplogHeavy | IngressMethod::CpuIntensive => {
+                entry.length.is_none().then_some("length")
+            }
+        };
+        if let Some(field) = missing {
+            return Err(format!("{label} needs {field}"));
+        }
+    }
+    Ok(())
+}
+
+/// The mix entry for each slot of one request cycle. Each entry gets as many slots as its
+/// weight (divided by the common divisor of the weights), spread over the cycle, so the
+/// methods interleave instead of coming in runs.
+fn mix_schedule(weights: &[usize]) -> Vec<usize> {
+    fn gcd(a: usize, b: usize) -> usize {
+        if b == 0 { a } else { gcd(b, a % b) }
+    }
+    let divisor = weights.iter().copied().fold(0, gcd).max(1);
+    let weights = weights
+        .iter()
+        .map(|w| (w / divisor) as i64)
+        .collect::<Vec<_>>();
+    let total: i64 = weights.iter().sum();
+    let mut current = vec![0i64; weights.len()];
+    (0..total)
+        .map(|_| {
+            for (c, w) in current.iter_mut().zip(&weights) {
+                *c += w;
+            }
+            // The first of the largest, so the cycle is the same in every run.
+            let best = (0..weights.len())
+                .max_by_key(|&i| (current[i], std::cmp::Reverse(i)))
+                .expect("the mix has entries");
+            current[best] -= total;
+            best
+        })
+        .collect()
+}
+
+/// The duration key of a path and mix entry. With one entry, the key has no method name,
+/// as in the echo-only runs.
+fn duration_key(path: Path, mix: &[IngressMixEntry], call: usize) -> String {
+    if mix.len() == 1 {
+        format!("{}-invocation", path.prefix())
+    } else {
+        format!(
+            "{}-{}-invocation",
+            path.prefix(),
+            method_label(mix[call].method)
+        )
+    }
+}
+
 impl IngressLoad {
     fn rest_url(deps: &BenchmarkTestDependencies) -> Url {
         let worker_service = deps.worker_service();
@@ -361,7 +454,20 @@ impl IngressLoad {
         app_name: &str,
         env_name: &str,
         agent_id: &ParsedAgentId,
+        entry: &IngressMixEntry,
     ) -> anyhow::Result<bytes::Bytes> {
+        let (method_name, parameters) = match entry.method {
+            IngressMethod::Echo => ("echo", data_value!("benchmark")),
+            IngressMethod::Sleep => ("sleep", data_value!(entry.millis.unwrap_or_default())),
+            IngressMethod::OplogHeavy => (
+                "oplog_heavy",
+                data_value!(entry.length.unwrap_or_default(), true),
+            ),
+            IngressMethod::CpuIntensive => (
+                "cpu_intensive",
+                data_value!(entry.length.unwrap_or_default() as f64),
+            ),
+        };
         let request = AgentInvocationRequest {
             app_name: app_name.to_string(),
             env_name: env_name.to_string(),
@@ -370,11 +476,9 @@ impl IngressLoad {
                 .map_err(anyhow::Error::msg)?,
             phantom_id: agent_id.phantom_id,
             config: None,
-            method_name: "echo".to_string(),
-            method_parameters: ExternalSchemaValue::try_from(
-                data_value!("benchmark").into_parts().1,
-            )
-            .map_err(anyhow::Error::msg)?,
+            method_name: method_name.to_string(),
+            method_parameters: ExternalSchemaValue::try_from(parameters.into_parts().1)
+                .map_err(anyhow::Error::msg)?,
             mode: AgentInvocationMode::Await,
             schedule_at: None,
             idempotency_key: None,
@@ -383,6 +487,33 @@ impl IngressLoad {
         };
         Ok(bytes::Bytes::from(serde_json::to_vec(&request)?))
     }
+
+    /// The HTTP API request of a mix entry for the agent `name`, on the domain at `base`.
+    fn http_api_target(
+        base: &str,
+        host: &Option<String>,
+        name: &str,
+        entry: &IngressMixEntry,
+    ) -> anyhow::Result<HttpApiTarget> {
+        let (path, body) = match entry.method {
+            IngressMethod::Echo => ("echo/load", None),
+            // The HTTP API takes a u64 only as a string.
+            IngressMethod::Sleep => (
+                "sleep",
+                Some(json!({"millis": entry.millis.map(|millis| millis.to_string())})),
+            ),
+            IngressMethod::OplogHeavy => (
+                "oplog-heavy",
+                Some(json!({"length": entry.length, "commit": true})),
+            ),
+            IngressMethod::CpuIntensive => ("cpu-intensive", Some(json!({"length": entry.length}))),
+        };
+        Ok(HttpApiTarget {
+            url: Url::parse(&format!("{base}/rust/{name}/{path}"))?,
+            host: host.clone(),
+            body: body.map(|body| bytes::Bytes::from(body.to_string())),
+        })
+    }
 }
 
 /// Sends one request and returns why it failed, if it did.
@@ -390,23 +521,30 @@ async fn send(
     account: &Account,
     rest_url: &Url,
     path: Path,
+    call: usize,
     agent: usize,
     clients_created: &AtomicU64,
 ) -> Result<(), String> {
     let client = account.client.next(clients_created);
+    let call = &account.calls[call];
     let request = match path {
         Path::Rest => client
             .post(rest_url.clone())
             .bearer_auth(&account.bearer)
             .header("Content-Type", "application/json; charset=utf-8")
-            .body(account.rest_bodies[agent].clone()),
+            .body(call.rest_bodies[agent].clone()),
         Path::HttpApi => {
-            let (url, host) = &account.http_api_targets[agent];
-            let request = client.post(url.clone());
-            match host {
-                Some(host) => request.header("Host", host),
-                None => request,
+            let target = &call.http_api_targets[agent];
+            let mut request = client.post(target.url.clone());
+            if let Some(host) = &target.host {
+                request = request.header("Host", host);
             }
+            if let Some(body) = &target.body {
+                request = request
+                    .header("Content-Type", "application/json")
+                    .body(body.clone());
+            }
+            request
         }
     };
     match request.send().await {
@@ -459,9 +597,11 @@ fn path_of(n: u64, http_api_percent: usize) -> Path {
 /// accounts do not all send at the same moment. A request is due at a fixed time and
 /// its latency counts from that time, so a request that starts late because the
 /// client fell behind counts the delay as well.
+#[allow(clippy::too_many_arguments)]
 async fn drive(
     accounts: Arc<Vec<Account>>,
     rest_url: Arc<Url>,
+    schedule: Arc<Vec<usize>>,
     rate: f64,
     step: Duration,
     settings: &IngressSettings,
@@ -474,11 +614,27 @@ async fn drive(
     let end = start + step;
     let agents = settings.agents_per_account.max(1);
     let http_api_percent = settings.http_api_percent;
+    let keys = Arc::new(
+        (0..settings.mix.len())
+            .map(|call| {
+                [Path::Rest, Path::HttpApi].map(|path| duration_key(path, &settings.mix, call))
+            })
+            .collect::<Vec<_>>(),
+    );
+    let labels = Arc::new(
+        settings
+            .mix
+            .iter()
+            .map(|entry| (settings.mix.len() > 1).then(|| method_label(entry.method)))
+            .collect::<Vec<_>>(),
+    );
 
     let clients = (0..count)
         .map(|index| {
             let accounts = accounts.clone();
             let rest_url = rest_url.clone();
+            let schedule = schedule.clone();
+            let (keys, labels) = (keys.clone(), labels.clone());
             let stats = stats.clone();
             let recorder = recorder.clone();
             tokio::spawn(async move {
@@ -493,6 +649,9 @@ async fn drive(
                     tokio::time::sleep_until(due).await;
                     let path = path_of(n, http_api_percent);
                     let agent = (n as usize / 2) % agents;
+                    // The two requests of a pair (one per path at 50%) call the same method,
+                    // and each client starts at its own place in the cycle.
+                    let call = schedule[(n as usize / 2 + index) % schedule.len()];
                     n += 1;
 
                     if in_flight.load(Ordering::Relaxed) >= MAX_IN_FLIGHT_PER_CLIENT {
@@ -505,20 +664,29 @@ async fn drive(
                     let stats = stats.clone();
                     let recorder = recorder.clone();
                     let in_flight = in_flight.clone();
+                    let (keys, labels) = (keys.clone(), labels.clone());
                     tokio::spawn(async move {
                         let account = &accounts[index];
-                        let result =
-                            send(account, &rest_url, path, agent, &stats.clients_created).await;
+                        let result = send(
+                            account,
+                            &rest_url,
+                            path,
+                            call,
+                            agent,
+                            &stats.clients_created,
+                        )
+                        .await;
                         let latency = due.elapsed();
                         match result {
                             Ok(()) => {
                                 stats.path(path).succeeded.fetch_add(1, Ordering::Relaxed);
-                                recorder.duration(
-                                    &ResultKey::primary(format!("{}-invocation", path.prefix())),
-                                    latency,
-                                );
+                                let key = &keys[call][matches!(path, Path::HttpApi) as usize];
+                                recorder.duration(&ResultKey::primary(key.clone()), latency);
                             }
-                            Err(message) => stats.path(path).fail(message),
+                            Err(message) => stats.path(path).fail(match labels[call] {
+                                Some(label) => format!("{label}: {message}"),
+                                None => message,
+                            }),
                         }
                         in_flight.fetch_sub(1, Ordering::Relaxed);
                     });
@@ -551,9 +719,10 @@ impl Benchmark for IngressLoad {
         indoc! {
             "Sends `length` requests per second in all from `size` accounts, each one a client
             with its own connection and token, for the step length of the `ingress` settings of
-            the suite. The accounts call the echo method of agents in one shared environment,
-            through the REST invoke endpoint and through the HTTP API. The clients send at a fixed
-            rate, whether or not their earlier requests have returned.
+            the suite. The accounts call agents in one shared environment, through the REST invoke
+            endpoint and through the HTTP API, with the methods of the `mix` setting (echo only by
+            default). The clients send at a fixed rate, whether or not their earlier requests have
+            returned.
             "
         }
     }
@@ -605,6 +774,7 @@ impl Benchmark for IngressLoad {
                 "size (accounts) and length (req/s) must be above 0",
             ));
         }
+        check_mix(&settings.mix).map_err(|err| setup_error(format!("ingress mix: {err}")))?;
 
         info!("Setting up the shared environment");
         let owner = deps.user().await.map_err(setup_error)?;
@@ -666,18 +836,30 @@ impl Benchmark for IngressLoad {
                     )
                     .await?;
                     let owner_email = owner_ref.account_email.as_str();
-                    let mut rest_bodies = Vec::new();
-                    let mut http_api_targets = Vec::new();
-                    for n in 0..settings.agents_per_account.max(1) {
-                        rest_bodies.push(Self::rest_body(
-                            owner_email,
-                            app_name,
-                            env_name,
-                            &agent(format!("a{index}-{n}")),
-                        )?);
-                        let (base, host) = &domain_bases[index % domain_bases.len()];
-                        let url = Url::parse(&format!("{base}/rust/a{index}-{n}-http/echo/load"))?;
-                        http_api_targets.push((url, host.clone()));
+                    let (base, host) = &domain_bases[index % domain_bases.len()];
+                    let mut calls = Vec::new();
+                    for entry in &settings.mix {
+                        let mut rest_bodies = Vec::new();
+                        let mut http_api_targets = Vec::new();
+                        for n in 0..settings.agents_per_account.max(1) {
+                            rest_bodies.push(Self::rest_body(
+                                owner_email,
+                                app_name,
+                                env_name,
+                                &agent(format!("a{index}-{n}")),
+                                entry,
+                            )?);
+                            http_api_targets.push(Self::http_api_target(
+                                base,
+                                host,
+                                &format!("a{index}-{n}-http"),
+                                entry,
+                            )?);
+                        }
+                        calls.push(AccountCall {
+                            rest_bodies,
+                            http_api_targets,
+                        });
                     }
                     anyhow::Ok(Account {
                         bearer: user.token.secret().to_string(),
@@ -693,8 +875,7 @@ impl Benchmark for IngressLoad {
                                 index,
                             ),
                         ),
-                        rest_bodies,
-                        http_api_targets,
+                        calls,
                     })
                 }
             })
@@ -712,22 +893,36 @@ impl Benchmark for IngressLoad {
                 .collect(),
             accounts: Arc::new(accounts),
             rest_url,
+            schedule: Arc::new(mix_schedule(
+                &settings
+                    .mix
+                    .iter()
+                    .map(|entry| entry.weight)
+                    .collect::<Vec<_>>(),
+            )),
         })
     }
 
-    /// Calls every agent once on each path, so the agents exist before the step starts.
+    /// Calls every agent once on each path, so the agents exist before the step starts. It
+    /// uses the first echo entry of the mix, or the first entry when the mix has no echo.
     async fn warmup(
         &self,
         _benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
     ) -> BenchmarkResultValue {
         let clients_created = AtomicU64::new(0);
+        let call = self
+            .settings
+            .mix
+            .iter()
+            .position(|entry| entry.method == IngressMethod::Echo)
+            .unwrap_or(0);
         let calls = context
             .accounts
             .iter()
             .enumerate()
             .flat_map(|(index, account)| {
-                (0..account.rest_bodies.len()).flat_map(move |agent| {
+                (0..account.calls[call].rest_bodies.len()).flat_map(move |agent| {
                     [(index, Path::Rest, agent), (index, Path::HttpApi, agent)]
                 })
             })
@@ -741,7 +936,7 @@ impl Benchmark for IngressLoad {
                 let account = &accounts[index];
                 let mut last = Ok(());
                 for _ in 0..WARMUP_ATTEMPTS {
-                    last = send(account, rest_url, path, agent, clients_created).await;
+                    last = send(account, rest_url, path, call, agent, clients_created).await;
                     if last.is_ok() {
                         break;
                     }
@@ -781,6 +976,7 @@ impl Benchmark for IngressLoad {
         drive(
             context.accounts.clone(),
             Arc::new(context.rest_url.clone()),
+            context.schedule.clone(),
             rate,
             step,
             &self.settings,
@@ -896,6 +1092,53 @@ mod tests {
         assert!(
             accepted.is_ok(),
             "the client did not connect to the pinned address"
+        );
+    }
+
+    #[test]
+    fn mix_schedule_gives_each_entry_its_weight_and_interleaves() {
+        let schedule = mix_schedule(&[50, 20, 20, 10]);
+        assert_eq!(schedule.len(), 10);
+        for (entry, weight) in [(0, 5), (1, 2), (2, 2), (3, 1)] {
+            assert_eq!(schedule.iter().filter(|&&e| e == entry).count(), weight);
+        }
+        // The entries interleave: echo, with half the weight, never comes three times in a row.
+        assert!(
+            schedule.windows(3).all(|run| run != [0, 0, 0]),
+            "{schedule:?}"
+        );
+        assert_eq!(mix_schedule(&[1]), vec![0]);
+    }
+
+    #[test]
+    fn check_mix_wants_the_values_of_each_method() {
+        let entry = |method, millis, length| IngressMixEntry {
+            method,
+            weight: 1,
+            millis,
+            length,
+        };
+        assert!(check_mix(&[entry(IngressMethod::Echo, None, None)]).is_ok());
+        assert!(check_mix(&[]).is_err());
+        assert!(check_mix(&[entry(IngressMethod::Sleep, None, None)]).is_err());
+        assert!(check_mix(&[entry(IngressMethod::OplogHeavy, None, Some(10))]).is_ok());
+        assert!(check_mix(&[entry(IngressMethod::CpuIntensive, Some(5), None)]).is_err());
+    }
+
+    #[test]
+    fn the_duration_key_names_the_method_only_in_a_mix() {
+        let echo = IngressSettings::default().mix;
+        assert_eq!(duration_key(Path::Rest, &echo, 0), "rest-invocation");
+        let mut mix = echo.clone();
+        mix.push(IngressMixEntry {
+            method: IngressMethod::Sleep,
+            weight: 1,
+            millis: Some(10),
+            length: None,
+        });
+        assert_eq!(
+            duration_key(Path::HttpApi, &mix, 1),
+            "http-api-sleep-invocation"
         );
     }
 

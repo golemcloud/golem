@@ -22,7 +22,8 @@ pub use config::{
     BenchmarkConfig, BenchmarkSuite, BenchmarkSuiteItem, DensityAction, DensityAgentModeArg,
     DensityPromiseRuntimeArg, DensityPromiseTopologyArg, DensityPromiseWaiterPresenceArg,
     DensityScenarioArg, DensityScheduleTargetPatternArg, DensityScheduleTargetResidencyArg,
-    DensitySectionArg, DensitySharingArg, DensitySnapshottingArg, IngressSettings, RunConfig,
+    DensitySectionArg, DensitySharingArg, DensitySnapshottingArg, IngressMethod, IngressMixEntry,
+    IngressSettings, RunConfig,
 };
 pub use results::{
     BenchmarkArtifact, BenchmarkArtifacts, BenchmarkResult, BenchmarkRunResult, BenchmarkRunner,

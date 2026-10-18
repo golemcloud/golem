@@ -334,6 +334,33 @@ pub struct IngressSettings {
     pub http_api_domains: usize,
     /// Accounts set up at the same time.
     pub setup_concurrency: usize,
+    /// The agent methods that the requests call, each with a share of the requests. The
+    /// default is echo only, the least work an invocation can do.
+    pub mix: Vec<IngressMixEntry>,
+}
+
+/// One agent method in the request mix of the ingress-load benchmark.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IngressMixEntry {
+    pub method: IngressMethod,
+    /// The share of the requests, relative to the weights of the other entries.
+    pub weight: usize,
+    /// For sleep: how long the agent sleeps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub millis: Option<u64>,
+    /// For oplogHeavy: the number of oplog commits. For cpuIntensive: the matrix size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum IngressMethod {
+    Echo,
+    Sleep,
+    OplogHeavy,
+    CpuIntensive,
 }
 
 impl Default for IngressSettings {
@@ -346,6 +373,12 @@ impl Default for IngressSettings {
             http_api_percent: 50,
             http_api_domains: 8,
             setup_concurrency: 32,
+            mix: vec![IngressMixEntry {
+                method: IngressMethod::Echo,
+                weight: 1,
+                millis: None,
+                length: None,
+            }],
         }
     }
 }
