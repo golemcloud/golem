@@ -2768,13 +2768,17 @@ async fn a_client_that_cannot_reach_the_named_leader_recovers_when_the_leadershi
         ..GrpcShardManagerConfig::default()
     });
     let started = Instant::now();
-    timeout(STARTUP_TIMEOUT, client.get_routing_table())
-        .await
-        .expect("the call must end within its budget instead of hanging")
-        .expect_err("nothing serves at the address the standby names");
+    // A call that is tried once, so that it ends at the first failed connect; a call that may be
+    // repeated would keep waiting for a failover to end.
+    timeout(
+        STARTUP_TIMEOUT,
+        client.deregister(Uuid::new_v4(), BTreeMap::new()),
+    )
+    .await
+    .expect("the call must end within its budget instead of hanging")
+    .expect_err("nothing serves at the address the standby names");
     // The client's connect timeout is 10 s by default, but towards a named leader it is capped at
-    // 2 s, and a pass that failed on the named leader skips it once. Two tries cost about 4 s; two
-    // 10 s connects would cost 20 s.
+    // 2 s. One try costs about 2 s; a 10 s connect would cost 10 s.
     assert!(
         started.elapsed() < Duration::from_secs(9),
         "the call took {:?}; an unreachable leader must cost the short leader connect timeout, \
