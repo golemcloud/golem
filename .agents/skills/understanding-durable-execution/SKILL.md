@@ -1985,6 +1985,17 @@ satisfies one does not imply the others.
 
 ## Permission-card handles
 
+Persistent `derive` and `derive-from-wallet` return the host-tagged `persistent-card` sum:
+`concrete` or `template`. Child slots name the eventual installed holder, not the caller.
+A template parent must be in the caller's wallet and is resolved for that caller. Every possible
+child instantiation must attenuate against that resolved parent. The stored card keeps its original
+slots; the universal envelope is proof only. Explicit derivation inherits the exact parent
+negatives and adds requested denials; wallet derivation takes complete bounds. Slot-bearing denials
+cannot supply universal proof evidence; concrete inherited denials remain. `derive-scope` stays
+concrete and rejects requested slots with `InvalidPattern` and an explicit message. A slot-bearing
+tool owner does not resolve aliases against caller metadata; metadata-dependent short flags are
+rejected instead.
+
 A persistent permission-card handle (from `self-wallet`, `derive`, `derive-from-wallet`, or a
 received value) caches no liveness. Every guest operation that resolves one — the `id`, `parents`
 and `expires-at` accessors, `inspect-card`, `derive`, `derive-scope` and `install-card` — first

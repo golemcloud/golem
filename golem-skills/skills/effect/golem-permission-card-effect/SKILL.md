@@ -39,7 +39,7 @@ import { Permissions } from "@golemcloud/effect-golem"
 
 const kvRead: Permissions.PatternGrant = {
   class: "kv",
-  owner: "?env",
+  owner: "*",
   recipient: "*",
   verb: "read",
   resourceId: "store.key",
@@ -64,8 +64,22 @@ const delegate = Effect.gen(function* () {
 
 - `derive(card, bounds, lifespan?)`: the positive bounds are the parent grants to retain, and the
   negative bounds are the denials to add. `derive` accepts a `PermissionCard` or a
-  `PolymorphicPermissionCard` and always returns a `PermissionCard`: a template parent is resolved
-  against the caller.
+  `PolymorphicPermissionCard` and returns `PersistentCard`, the union of those two types, labelled
+  by the host. Narrow with `Schema.is(WitTypes.PermissionCard)` before a concrete schema, or
+  `Schema.is(WitTypes.PolymorphicPermissionCard)` before a template schema (`Schema` from `effect`,
+  `WitTypes` from `@golemcloud/effect-golem`).
+- Persistent derivation accepts owner slots such as `?agent` and `?env`.
+  Slots in resource IDs are not supported and fail with `invalid-pattern`.
+  Child slots name the eventual installed holder, not the deriving caller.
+  A template parent is still resolved for the caller in
+  whose wallet it is installed. Every possible child instantiation must narrow that resolved parent.
+  The host stores the original slots; the universal envelope is proof only.
+- Explicit derivation inherits the parent's exact denials and adds requested denials; wallet
+  derivation takes complete bounds. Slot-bearing denials cannot prove universal attenuation, so
+  the host may conservatively refuse a request; concrete inherited denials remain.
+- Scope cards stay concrete: requested slots fail with `invalid-pattern` and an explicit message.
+  For a slot-bearing tool owner, the host does not resolve aliases against caller metadata and
+  rejects metadata-dependent short flags. Use primary names.
 - `deriveFromWallet(bounds, lifespan?)` and `deriveScope(parents, bounds)` take the complete
   requested lattice. Omitted bound lists are empty.
 - `Lifespan.fromIso8601("P30D")` or `Lifespan.fromDuration("1 hour")` builds a lifespan. Use days

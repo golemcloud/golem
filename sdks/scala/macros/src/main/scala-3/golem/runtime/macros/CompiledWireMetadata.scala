@@ -57,6 +57,22 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
       )
         return SchemaType(SchemaTypeBody.PermissionCardType(PermissionCardSpec(polymorphic = true)))
       if (
+        ty.typeSymbol.fullName == "golem.host.PermissionsApi.PersistentCard" ||
+        ty.show == "golem.host.PermissionsApi.PersistentCard"
+      )
+        return t.variant(
+          List(
+            t.variantCase(
+              "concrete",
+              Some(SchemaType(SchemaTypeBody.PermissionCardType(PermissionCardSpec(polymorphic = false))))
+            ),
+            t.variantCase(
+              "template",
+              Some(SchemaType(SchemaTypeBody.PermissionCardType(PermissionCardSpec(polymorphic = true))))
+            )
+          )
+        )
+      if (
         ty.typeSymbol.fullName == "golem.host.QuotaApi.NamedQuotaToken" ||
         ty.show.startsWith("golem.host.QuotaApi.NamedQuotaToken[")
       ) {

@@ -19,6 +19,9 @@ extern "wasm" fn resource_drop_count(kind : Int) -> Int = "golem:test" "resource
 extern "wasm" fn reset_permission_host() = "golem:test" "reset-permission-host"
 
 ///|
+extern "wasm" fn set_persistent_template(enabled : Int) = "golem:test" "set-persistent-template"
+
+///|
 extern "wasm" fn lend_permission_scope_card() = "golem:test" "lend-permission-scope-card"
 
 ///|
@@ -133,11 +136,34 @@ test "derive_child borrows the parent and sends the lifespan" {
   let indefinite = parent.derive_child(@permissions.Bounds::new())
   assert_eq(permission_host_stat(6), -1)
   debug_inspect(indefinite.expires_at(), content="None")
-  let grandchild : @permissions.PermissionCard = child.derive_child(
+  let grandchild : @permissions.PersistentCard = child.derive_child(
     @permissions.Bounds::new(),
   )
   assert_eq(permission_host_stat(4), 100)
   assert_true(grandchild.parents() == [child.id()])
+}
+
+///|
+test "persistent derivations preserve the host tag independently of the request" {
+  fresh_host()
+  let bounds = @permissions.Bounds::new()
+  let concrete = @permissions.derive_from_wallet(bounds)
+  assert_true(concrete is Concrete(_))
+  set_persistent_template(1)
+  let template = @permissions.derive_from_wallet(bounds)
+  assert_true(template is Template(_))
+  let child = concrete.derive_child(bounds)
+  assert_true(child is Template(_))
+  assert_true(child.parents() == [concrete.id()])
+  set_persistent_template(0)
+  let grandchild = template.derive_child(bounds)
+  assert_true(grandchild is Concrete(_))
+  assert_true(grandchild.parents() == [template.id()])
+  template.drop()
+  assert_true(template.is_moved())
+  child.drop()
+  grandchild.drop()
+  concrete.drop()
 }
 
 ///|

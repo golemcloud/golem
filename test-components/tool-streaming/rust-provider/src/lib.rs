@@ -5,8 +5,8 @@ use golem_rust::agentic::{
 };
 use golem_rust::golem_agentic::golem::agent::host as agent_host;
 use golem_rust::golem_agentic::golem::tool::host::{self as tool_host, ByteStreamFailure, ToolRpc};
-use golem_rust::quota::QuotaToken;
 use golem_rust::permissions::{self, PermissionCard};
+use golem_rust::quota::QuotaToken;
 use golem_rust::schema::wit::direct::{
     WireError, WirePreflight, WireReader, WireSchemaBuilder, WireWriter,
 };
@@ -510,6 +510,9 @@ impl MatrixPermissionIssuer for MatrixPermissionIssuerImpl {
     async fn issue(&self, principal: Principal) -> PermissionIssue {
         let card = permissions::derive_from_wallet(&Default::default(), None)
             .expect("matrix permission issuer derives a card from the owner wallet");
+        let permissions::PersistentCard::Concrete(card) = card else {
+            panic!("matrix permission issuer expects a concrete card");
+        };
         let owner_agent_id = golem_rust::get_self_metadata()
             .expect("matrix permission issuer owner metadata")
             .agent_id
@@ -647,11 +650,7 @@ struct PermissionsImpl;
 
 #[tool_implementation]
 impl Permissions for PermissionsImpl {
-    async fn exchange(
-        &self,
-        card: PermissionCard,
-        principal: Principal,
-    ) -> PermissionExchange {
+    async fn exchange(&self, card: PermissionCard, principal: Principal) -> PermissionExchange {
         // Panics unless the received card is present and known to the host.
         let _ = card.id();
         let (provider, principal, owner_agent_id) = matrix_resource_evidence(&principal);

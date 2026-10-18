@@ -69,7 +69,12 @@ fn reveal_secret(secret: &GuestSecretHandle) -> Result<String, String> {
 }
 
 fn permission_card() -> Result<PermissionCard, String> {
-    permissions::derive_from_wallet(&Bounds::default(), None).map_err(|error| error.to_string())
+    match permissions::derive_from_wallet(&Bounds::default(), None)
+        .map_err(|error| error.to_string())?
+    {
+        permissions::PersistentCard::Concrete(card) => Ok(card),
+        permissions::PersistentCard::Template(_) => Err("expected a concrete card".to_string()),
+    }
 }
 
 /// The agent's initial card, a template card.
@@ -192,6 +197,9 @@ impl CapabilityRpcSender for CapabilityRpcSenderImpl {
         let child = card
             .derive(&Bounds::default(), None)
             .map_err(|error| error.to_string())?;
+        let permissions::PersistentCard::Concrete(child) = child else {
+            return Err("expected a concrete child card".to_string());
+        };
         let sent_card_id = card.id();
         let quota = QuotaToken::new("capability-rpc", 1);
         let client = CapabilityRpcReceiverClient::get(receiver_name);

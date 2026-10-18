@@ -60,7 +60,7 @@ use golem_common::model::card::{
     PolymorphicPermissionPattern, RenderedPermissionFields, ScopeCard, StoredCard,
     WalletDerivationParent, agent_delegation_surface_from_wallet, card_matches_agent_recipient,
     instantiate_polymorphic_card_for_agent, monomorphize_card_for_agent, parse_permission_fields,
-    permission_class_metadata,
+    parse_polymorphic_permission_fields, permission_card_envelope, permission_class_metadata,
 };
 use golem_common::model::oplog::host_functions::{
     GolemPermissionsCardLiveness, GolemPermissionsDeriveDecision,
@@ -742,25 +742,27 @@ async fn normalize_tool_grants<Ctx: WorkerCtx>(
         if grant.class != "tool" {
             continue;
         }
-        let mut pattern = match parse_permission_fields(
+        let mut pattern = match parse_polymorphic_permission_fields(
             &grant.class,
             &grant.owner,
             &grant.recipient,
             &grant.verb,
             "*",
         ) {
-            Ok(PermissionPattern::Tool(pattern)) => pattern,
+            Ok(PolymorphicPermissionPattern::Tool(pattern)) => pattern,
             Ok(_) => unreachable!("tool class was checked"),
             Err(error) => return Ok(Err(permission_error_from_parse(error))),
         };
         let tool_name = match &pattern.owner {
-            ToolOwnerPattern::Tool {
-                account,
-                application,
-                environment,
-                component,
-                tool,
-            } if account == &ctx.owner_component_metadata().account_email
+            golem_common::model::card::owner::PolymorphicToolOwnerPattern::Concrete(
+                ToolOwnerPattern::Tool {
+                    account,
+                    application,
+                    environment,
+                    component,
+                    tool,
+                },
+            ) if account == &ctx.owner_component_metadata().account_email
                 && application == &ctx.owner_component_metadata().application_name
                 && environment == &ctx.owner_component_metadata().environment_name
                 && component == &ctx.owner_component_metadata().component_name =>
@@ -792,7 +794,7 @@ async fn normalize_tool_grants<Ctx: WorkerCtx>(
                 )));
             }
         };
-        *grant = match concrete_pattern_grant(&PermissionPattern::Tool(pattern)) {
+        *grant = match polymorphic_pattern_grant(&PolymorphicPermissionPattern::Tool(pattern)) {
             Ok(grant) => grant,
             Err(error) => return Ok(Err(error)),
         };
@@ -990,11 +992,75 @@ fn derive_expires_at(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct DerivedGrantSets {
-    lower_positive: Vec<PermissionPattern>,
-    lower_negative: Vec<PermissionPattern>,
-    upper_positive: Vec<PermissionPattern>,
-    upper_negative: Vec<PermissionPattern>,
+struct DerivedGrantSets<P = PolymorphicPermissionPattern> {
+    lower_positive: Vec<P>,
+    lower_negative: Vec<P>,
+    upper_positive: Vec<P>,
+    upper_negative: Vec<P>,
+}
+
+impl DerivedGrantSets {
+    fn envelope(
+        &self,
+    ) -> Result<golem_common::model::card::TemplateCardEnvelope, permissions_types::PermissionError>
+    {
+        permission_card_envelope(
+            &self.lower_positive,
+            &self.lower_negative,
+            &self.upper_positive,
+            &self.upper_negative,
+        )
+        .map_err(permissions_types::PermissionError::InvalidPattern)
+    }
+
+    fn as_concrete(&self) -> Option<DerivedGrantSets<PermissionPattern>> {
+        let convert = |grants: &[PolymorphicPermissionPattern]| {
+            grants
+                .iter()
+                .map(PolymorphicPermissionPattern::as_concrete)
+                .collect::<Option<Vec<_>>>()
+        };
+        Some(DerivedGrantSets {
+            lower_positive: convert(&self.lower_positive)?,
+            lower_negative: convert(&self.lower_negative)?,
+            upper_positive: convert(&self.upper_positive)?,
+            upper_negative: convert(&self.upper_negative)?,
+        })
+    }
+
+    fn into_card(
+        self,
+        card_id: CardId,
+        parent_id: CardId,
+        created_at: DateTime<Utc>,
+        expires_at: Option<DateTime<Utc>>,
+    ) -> StoredCard {
+        match self.as_concrete() {
+            Some(grants) => StoredCard::Concrete(Card {
+                card_id,
+                parent_ids: vec![parent_id],
+                lower_positive: grants.lower_positive,
+                lower_negative: grants.lower_negative,
+                upper_positive: grants.upper_positive,
+                upper_negative: grants.upper_negative,
+                created_at,
+                expires_at,
+                system_card: false,
+                managed_by: None,
+            }),
+            None => StoredCard::Polymorphic(PolymorphicCard {
+                card_id,
+                parent_ids: vec![parent_id],
+                lower_positive: self.lower_positive,
+                lower_negative: self.lower_negative,
+                upper_positive: self.upper_positive,
+                upper_negative: self.upper_negative,
+                created_at,
+                expires_at,
+                system_card: false,
+            }),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1034,6 +1100,7 @@ impl ScopeDerivationParent {
     }
 }
 
+#[cfg(test)]
 fn parse_grants(
     grants: &[permissions_types::PatternGrant],
 ) -> Result<Vec<PermissionPattern>, permissions_types::PermissionError> {
@@ -1047,28 +1114,30 @@ fn derive_grant_sets(
     upper_positive_to_retain: &[permissions_types::PatternGrant],
     upper_negative_to_add: &[permissions_types::PatternGrant],
 ) -> Result<DerivedGrantSets, permissions_types::PermissionError> {
-    let lower_positive = parse_grants(lower_positive_to_retain)?;
-    let mut lower_negative = parent.lower_negative.clone();
-    lower_negative.extend(parse_grants(lower_negative_to_add)?);
-    let upper_positive = parse_grants(upper_positive_to_retain)?;
-    let mut upper_negative = parent.upper_negative.clone();
-    upper_negative.extend(parse_grants(upper_negative_to_add)?);
+    let mut grants = parse_derived_grant_sets(
+        lower_positive_to_retain,
+        lower_negative_to_add,
+        upper_positive_to_retain,
+        upper_negative_to_add,
+    )?;
+    grants
+        .lower_negative
+        .splice(0..0, parent.lower_negative.iter().cloned().map(Into::into));
+    grants
+        .upper_negative
+        .splice(0..0, parent.upper_negative.iter().cloned().map(Into::into));
+    let envelope = grants.envelope()?;
 
     DelegationSurface::from_cards(std::slice::from_ref(parent))
         .validate_attenuation(
-            &lower_positive,
-            &lower_negative,
-            &upper_positive,
-            &upper_negative,
+            &envelope.lower_positive,
+            &envelope.lower_negative,
+            &envelope.upper_positive,
+            &envelope.upper_negative,
         )
         .map_err(permission_error_from_algebra)?;
 
-    Ok(DerivedGrantSets {
-        lower_positive,
-        lower_negative,
-        upper_positive,
-        upper_negative,
-    })
+    Ok(grants)
 }
 
 fn parse_derived_grant_sets(
@@ -1077,11 +1146,26 @@ fn parse_derived_grant_sets(
     upper_positive: &[permissions_types::PatternGrant],
     upper_negative: &[permissions_types::PatternGrant],
 ) -> Result<DerivedGrantSets, permissions_types::PermissionError> {
+    let parse = |grants: &[permissions_types::PatternGrant]| {
+        grants
+            .iter()
+            .map(|g| {
+                parse_polymorphic_permission_fields(
+                    &g.class,
+                    &g.owner,
+                    &g.recipient,
+                    &g.verb,
+                    &g.resource_id,
+                )
+                .map_err(permission_error_from_parse)
+            })
+            .collect::<Result<Vec<_>, _>>()
+    };
     Ok(DerivedGrantSets {
-        lower_positive: parse_grants(lower_positive)?,
-        lower_negative: parse_grants(lower_negative)?,
-        upper_positive: parse_grants(upper_positive)?,
-        upper_negative: parse_grants(upper_negative)?,
+        lower_positive: parse(lower_positive)?,
+        lower_negative: parse(lower_negative)?,
+        upper_positive: parse(upper_positive)?,
+        upper_negative: parse(upper_negative)?,
     })
 }
 
@@ -1096,6 +1180,9 @@ fn build_scope_card(
         ));
     }
 
+    let grants = grants.as_concrete().ok_or_else(|| permissions_types::PermissionError::InvalidPattern(
+        "derive-scope does not support slot-bearing requested grants; scope cards must be concrete".to_string()
+    ))?;
     DelegationSurface {
         cards: parents
             .iter()
@@ -1259,12 +1346,13 @@ fn select_wallet_derivation_parent(
     grants: &DerivedGrantSets,
 ) -> Result<Card, permissions_types::PermissionError> {
     let surface = agent_delegation_surface_from_wallet(context, wallet);
+    let envelope = grants.envelope()?;
     let parent_id = match surface
         .select_wallet_derivation_parent(
-            &grants.lower_positive,
-            &grants.lower_negative,
-            &grants.upper_positive,
-            &grants.upper_negative,
+            &envelope.lower_positive,
+            &envelope.lower_negative,
+            &envelope.upper_positive,
+            &envelope.upper_negative,
         )
         .map_err(permission_error_from_algebra)?
     {
@@ -1703,24 +1791,11 @@ async fn persist_derived_card<Ctx: WorkerCtx>(
     created_at: DateTime<Utc>,
     expires_at: Option<DateTime<Utc>>,
     source: PersistentDerivationSource,
-) -> anyhow::Result<Result<Resource<PermissionCardHandleRep>, permissions_types::PermissionError>> {
+) -> anyhow::Result<Result<permissions_types::PersistentCard, permissions_types::PermissionError>> {
     let created = match persist_runtime_card::<Ctx, GolemPermissionsDerivePersist, _, _, _>(
         ctx,
         |ctx, invocation_key, oplog_index| ctx.derive_card_id(invocation_key, oplog_index),
-        |card_id| {
-            StoredCard::Concrete(Card {
-                card_id,
-                parent_ids: vec![parent_id],
-                lower_positive: grants.lower_positive,
-                lower_negative: grants.lower_negative,
-                upper_positive: grants.upper_positive,
-                upper_negative: grants.upper_negative,
-                created_at,
-                expires_at,
-                system_card: false,
-                managed_by: None,
-            })
-        },
+        |card_id| grants.into_card(card_id, parent_id, created_at, expires_at),
         parent_expires_at,
         move |ctx| {
             ensure_persistent_derivation_repair_authority(
@@ -1740,9 +1815,15 @@ async fn persist_derived_card<Ctx: WorkerCtx>(
         Err(refusal) => return Ok(Err(refusal)),
     };
 
-    Ok(Ok(ctx.table().push(PermissionCardHandleRep::new(
+    let template = matches!(&created, StoredCard::Polymorphic(_));
+    let handle = ctx.table().push(PermissionCardHandleRep::new(
         PermissionCardEntry::from_card(created),
-    ))?))
+    ))?;
+    Ok(Ok(if template {
+        permissions_types::PersistentCard::Template(handle)
+    } else {
+        permissions_types::PersistentCard::Concrete(handle)
+    }))
 }
 
 #[allow(
@@ -1789,7 +1870,7 @@ async fn derive_and_persist_card<Ctx: WorkerCtx>(
     grants: DerivedGrantSets,
     lifespan: Option<&permissions_types::Duration>,
     source: PersistentDerivationSource,
-) -> anyhow::Result<Result<Resource<PermissionCardHandleRep>, permissions_types::PermissionError>> {
+) -> anyhow::Result<Result<permissions_types::PersistentCard, permissions_types::PermissionError>> {
     let now = durable_now(ctx).await?;
     let expires_at = match derive_expires_at(now, lifespan, parent.expires_at) {
         Ok(expires_at) => expires_at,
@@ -3182,7 +3263,7 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
         mut upper_positive_to_retain: Vec<permissions_types::PatternGrant>,
         mut upper_negative_to_add: Vec<permissions_types::PatternGrant>,
         lifespan: Option<permissions_types::Duration>,
-    ) -> anyhow::Result<Result<Resource<PermissionCardHandleRep>, permissions_types::PermissionError>>
+    ) -> anyhow::Result<Result<permissions_types::PersistentCard, permissions_types::PermissionError>>
     {
         DurabilityHost::observe_function_call(self, "golem::permissions::derive", "derive");
 
@@ -3273,7 +3354,7 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
         mut upper_positive: Vec<permissions_types::PatternGrant>,
         mut upper_negative: Vec<permissions_types::PatternGrant>,
         lifespan: Option<permissions_types::Duration>,
-    ) -> anyhow::Result<Result<Resource<PermissionCardHandleRep>, permissions_types::PermissionError>>
+    ) -> anyhow::Result<Result<permissions_types::PersistentCard, permissions_types::PermissionError>>
     {
         DurabilityHost::observe_function_call(
             self,
@@ -4691,9 +4772,9 @@ mod tests {
         assert!(
             matches!(
                 derive_grant_sets(&parent, &[requested_with_slot], &[], &ceiling, &[]),
-                Err(permissions_types::PermissionError::InvalidPattern(_))
+                Err(permissions_types::PermissionError::LowerBoundTooBroad(_))
             ),
-            "requested grants must be concrete: a slot variable is not resolved for the caller"
+            "a caller-scoped parent cannot delegate the slot to every holder of its agent type"
         );
 
         let sibling = permissions_types::PatternGrant {
@@ -4857,6 +4938,8 @@ mod tests {
             std::slice::from_ref(&retained),
             std::slice::from_ref(&upper_negative_to_add),
         )
+        .unwrap()
+        .as_concrete()
         .unwrap();
 
         assert_eq!(grants.lower_positive, parent.lower_positive);

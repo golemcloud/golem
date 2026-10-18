@@ -336,18 +336,11 @@ fn connect_local_card_transfer_delivery(
     ));
 }
 
-/// Starts an executor with the scope-card authority and local card-transfer
-/// delivery, and stores the MoonBit component with card authority for the
-/// permission agent.
-async fn start_moonbit_permission_executor(
+pub(super) async fn start_local_card_transfer_executor(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
     authority: Arc<ScopeCardAuthority>,
-    component: &PrecompiledComponent,
-) -> anyhow::Result<(
-    TestWorkerExecutor,
-    golem_common::model::component::ComponentDto,
-)> {
+) -> anyhow::Result<TestWorkerExecutor> {
     let delivery = Arc::new(Mutex::new(None));
     let executor = start_with_overrides(
         deps,
@@ -372,6 +365,22 @@ async fn start_moonbit_permission_executor(
     )
     .await?;
     connect_local_card_transfer_delivery(&delivery, &executor);
+    Ok(executor)
+}
+
+/// Starts an executor with the scope-card authority and local card-transfer
+/// delivery, and stores the MoonBit component with card authority for the
+/// permission agent.
+async fn start_moonbit_permission_executor(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    authority: Arc<ScopeCardAuthority>,
+    component: &PrecompiledComponent,
+) -> anyhow::Result<(
+    TestWorkerExecutor,
+    golem_common::model::component::ComponentDto,
+)> {
+    let executor = start_local_card_transfer_executor(deps, context, authority).await?;
     let component = executor
         .component_dep(&context.default_environment_id, component)
         .update_agent_provision_config(AGENT_TYPE, |config| {
