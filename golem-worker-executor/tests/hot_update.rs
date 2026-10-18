@@ -555,6 +555,10 @@ async fn automatic_update_promotes_snapshot_from_previous_revision(
         .await?;
     assert_eq!(initial.into_typed::<u32>()?, 0);
 
+    // Invocation completion does not wait for its queued automatic snapshot.
+    let invocation_start = last_start_of(&executor, &worker_id, "loaded_snapshot_revision").await?;
+    wait_for_snapshot_after(&executor, &worker_id, invocation_start).await?;
+
     let snapshots_before_update = executor
         .get_oplog(&worker_id, OplogIndex::INITIAL)
         .await?
