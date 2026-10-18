@@ -2889,19 +2889,27 @@ async fn the_client_rides_out_two_handovers_in_a_row(etcd: &Arc<DockerEtcd>) {
         "The second replica reported its port, so it was serving when it was stopped."
     );
 
+    // The first replica has stopped for good, and the client holds a connection that it accepted:
+    // the call below cannot be answered by anyone but the third replica.
+    first_task
+        .await
+        .expect("The first replica's task should not panic")
+        .expect("The first replica stops cleanly");
+
     let table = timeout(STARTUP_TIMEOUT, client.get_routing_table())
         .await
         .expect("the call must end within the startup timeout")
         .expect("the third replica serves after two handovers");
     assert_eq!(table.number_of_shards.value, NUMBER_OF_SHARDS);
+    // The third replica takes the initial health check's time to start. A call answered earlier
+    // was answered by a replica that had stopped.
     assert_eq!(
-        timeout(STARTUP_TIMEOUT, third_started)
+        timeout(Duration::from_millis(500), third_started)
             .await
-            .unwrap()
+            .expect("the third replica was serving when the call was answered")
             .unwrap(),
         third_address.port
     );
-    let _ = first_task.await;
     third_task.abort();
 }
 
