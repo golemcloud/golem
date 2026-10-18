@@ -3541,6 +3541,7 @@ async fn non_existing_oplog() {
         entries: vec![],
         read_starts: Arc::new(std::sync::Mutex::new(Vec::new())),
         raw_payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+        payload_unavailable: false,
         unreadable_from: None,
         unavailable_from: None,
     };
@@ -3970,6 +3971,45 @@ async fn a_rebuild_over_an_unavailable_archive_is_a_recovery_that_passes_later()
     );
     let rebuilt = calculate_status_with_reader(&test_case, &reader, None, || async { None }).await;
     reconstructed_status(rebuilt).expect("the rebuild must pass when the storage answers again");
+}
+
+#[test]
+async fn a_rebuild_with_regions_covering_the_empty_baseline_is_corrupt() {
+    use crate::services::oplog::OplogError;
+    use crate::worker::state_actor::reconstructed_status;
+
+    let region = OplogRegion {
+        start: OplogIndex::NONE,
+        end: OplogIndex::INITIAL,
+    };
+    for entry in [
+        OplogEntry::jump(None, region.clone()),
+        OplogEntry::revert(region),
+    ] {
+        let mut test_case = TestCase::builder(0).build();
+        test_case.entries.push(TestEntry {
+            oplog_entry: entry,
+            expected_status: AgentStatusRecord::default(),
+        });
+        let reader = StatusOplogReader::new(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            None,
+            OplogIndex::from_u64(2),
+        );
+        let rebuilt =
+            calculate_status_with_reader(&test_case, &reader, None, || async { None }).await;
+        let refusal =
+            reconstructed_status(rebuilt).expect_err("invalid regions must refuse the rebuild");
+        let error = WorkerExecutorError::from(OplogError::from(refusal));
+        assert!(matches!(
+            error,
+            WorkerExecutorError::OplogFailed { agent_id, details }
+                if agent_id == test_case.owned_agent_id.agent_id
+                    && details.contains("empty status baseline")
+        ));
+    }
 }
 
 fn rebuild_fixture() -> TestCase {
@@ -4775,6 +4815,7 @@ impl TestCaseBuilder {
                 .collect(),
             read_starts: Arc::new(std::sync::Mutex::new(Vec::new())),
             raw_payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+            payload_unavailable: false,
             unreadable_from: None,
             unavailable_from: None,
         }
@@ -4806,6 +4847,7 @@ struct TestCase {
     /// a recompute folded from. Shared across `self.clone()`s handed out by `oplog_service()`.
     read_starts: Arc<std::sync::Mutex<Vec<u64>>>,
     raw_payloads: Arc<std::sync::Mutex<RawPayloads>>,
+    payload_unavailable: bool,
     /// The first index that does not read, as an archive chunk that does not decode.
     unreadable_from: Option<u64>,
     /// The first index whose archive storage does not answer, as in an outage.
@@ -5030,6 +5072,28 @@ impl OplogService for TestCase {
             .map(|(_, bytes)| bytes.clone())
             .ok_or_else(|| format!("missing raw payload {payload_id}"))
     }
+
+    async fn download_raw_payload_classified(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        payload_id: PayloadId,
+        _md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, crate::services::oplog::RawOplogPayloadDownloadError> {
+        use crate::services::oplog::RawOplogPayloadDownloadError;
+        if self.payload_unavailable {
+            return Err(RawOplogPayloadDownloadError::Backend(anyhow::anyhow!(
+                "injected payload outage"
+            )));
+        }
+        self.raw_payloads
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(stored_id, _)| *stored_id == payload_id)
+            .map(|(_, bytes)| bytes.clone())
+            .ok_or(RawOplogPayloadDownloadError::Missing(payload_id))
+    }
 }
 
 impl HasConfig for TestCase {
@@ -5113,7 +5177,7 @@ async fn run_test_case(test_case: TestCase) {
 }
 
 #[test]
-async fn cold_recompute_downloads_uncached_external_stream_session_payload() {
+async fn cold_recompute_classifies_external_stream_session_payload_failures_and_recovers() {
     let mut test_case = TestCase::builder(1).build();
     let session_key = StreamInvocationId {
         callee_environment_id: test_case.owned_agent_id.environment_id,
@@ -5163,13 +5227,13 @@ async fn cold_recompute_downloads_uncached_external_stream_session_payload() {
         .raw_payloads
         .lock()
         .unwrap()
-        .push((payload_id.clone(), bytes));
+        .push((payload_id.clone(), bytes.clone()));
     test_case.entries.push(TestEntry {
         oplog_entry: OplogEntry::StreamSession {
             timestamp: Timestamp::now_utc(),
             entity_parent_start_index: None,
             record: OplogPayload::External {
-                payload_id,
+                payload_id: payload_id.clone(),
                 md5_hash: vec![0; 16],
                 cached: None,
             },
@@ -5177,6 +5241,50 @@ async fn cold_recompute_downloads_uncached_external_stream_session_payload() {
         },
         expected_status: AgentStatusRecord::default(),
     });
+
+    for failure in ["unavailable", "corrupt", "missing"] {
+        use crate::services::oplog::OplogError;
+        use crate::worker::state_actor::reconstructed_status;
+
+        test_case.payload_unavailable = failure == "unavailable";
+        if failure == "corrupt" {
+            test_case.raw_payloads.lock().unwrap()[0].1 = vec![255];
+        } else if failure == "missing" {
+            test_case.raw_payloads.lock().unwrap().clear();
+        }
+        let reader = StatusOplogReader::new(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            None,
+            OplogIndex::from_u64(test_case.entries.len() as u64),
+        );
+        let rebuilt =
+            calculate_status_with_reader(&test_case, &reader, None, || async { None }).await;
+        let refusal =
+            reconstructed_status(rebuilt).expect_err("payload read must refuse the rebuild");
+        let error = WorkerExecutorError::from(OplogError::from(refusal));
+        match (&error, failure) {
+            (WorkerExecutorError::RecoveryRequired { details, .. }, "unavailable") => {
+                assert!(details.contains("injected payload outage"), "{details}");
+            }
+            (WorkerExecutorError::OplogFailed { agent_id, details }, "corrupt" | "missing") => {
+                assert_eq!(agent_id, &test_case.owned_agent_id.agent_id);
+                assert!(details.contains("stream session payload"), "{details}");
+                assert!(details.contains("oplog index 2"), "{details}");
+                if failure == "missing" {
+                    assert!(details.contains("is missing"), "{details}");
+                }
+            }
+            _ => panic!("unexpected {failure} outcome: {error:?}"),
+        }
+    }
+    test_case.payload_unavailable = false;
+    test_case
+        .raw_payloads
+        .lock()
+        .unwrap()
+        .push((payload_id, bytes));
 
     let status = calculate_last_known_status_for_existing_worker(
         &test_case,

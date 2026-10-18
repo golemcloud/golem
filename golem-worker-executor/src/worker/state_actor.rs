@@ -1059,6 +1059,8 @@ pub(super) fn reconstructed_status(
 ) -> Result<AgentStatusRecord, OplogRefusal> {
     match status {
         Ok(Some(status)) => Ok(status),
+        // An established actor rebuilds a nonempty fixed horizon. Missing entries and regions
+        // that invalidate the empty baseline are unreadable oplogs, not an absent worker.
         Ok(None) => panic!("worker oplog disappeared during status reconstruction"),
         Err(StatusError::Unreadable(unreadable)) => Err(OplogRefusal::Unreadable(unreadable)),
         Err(error) => panic!("oplog status reconstruction: {error}"),
