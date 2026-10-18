@@ -1085,10 +1085,19 @@ impl LeaderElection {
                 );
                 LeaseRead::Gone
             }
-            Ok(response) => LeaseRead::Alive {
-                remaining: response.ttl(),
-                granted: Duration::from_secs(response.granted_ttl().max(0) as u64),
-            },
+            Ok(response) => {
+                let read = LeaseRead::of_answer(response.ttl(), response.granted_ttl());
+                if matches!(read, LeaseRead::Unknown) {
+                    warn!(
+                        lease,
+                        remaining = response.ttl(),
+                        granted = response.granted_ttl(),
+                        "A duplicate key's lease has more time left than it was granted; ignoring \
+                         the answer"
+                    );
+                }
+                read
+            }
             Err(err) => {
                 warn!(
                     lease,
@@ -1319,6 +1328,27 @@ enum LeaseRead {
     Unknown,
 }
 
+impl LeaseRead {
+    /// How long a lease can have left beyond the time it was granted: a renewal that races the
+    /// read, and the second etcd's truncation hides.
+    const SLACK: Duration = Duration::from_secs(2);
+
+    /// An answer with more time left than the lease was granted, such as etcd's "no expiry"
+    /// value, says nothing about a renewal and would hold the evidence beyond every later read, so
+    /// it is treated like a failed read.
+    fn of_answer(remaining: i64, granted: i64) -> Self {
+        let granted = Duration::from_secs(granted.max(0) as u64);
+        let remaining = Duration::from_secs(remaining.max(0) as u64);
+        if remaining > granted + Self::SLACK {
+            return Self::Unknown;
+        }
+        Self::Alive {
+            remaining: remaining.as_secs() as i64,
+            granted,
+        }
+    }
+}
+
 /// Counts how often a lease was seen to end later than it could have ended without a renewal.
 ///
 /// etcd answers a read of a lease in whole seconds, truncated, so the time left on a lease that is
@@ -1344,11 +1374,19 @@ impl RenewalEvidence {
     /// `ttl`. Returns whether the evidence now proves that the lease is renewed.
     pub(crate) fn observe(&mut self, sent: Instant, received: Instant, ttl: i64) -> bool {
         let ttl = Duration::from_secs(ttl.max(0) as u64);
-        let latest_end = received + ttl + Duration::from_secs(1);
+        // An answer too large for an instant is no answer that a lease can give.
+        let (Some(earliest_end), Some(latest_end)) = (
+            sent.checked_add(ttl),
+            received
+                .checked_add(ttl)
+                .and_then(|end| end.checked_add(Duration::from_secs(1))),
+        ) else {
+            return self.extensions >= Self::EXTENSIONS_THAT_PROVE_A_RENEWAL;
+        };
         match self.unextended_end {
             None => self.unextended_end = Some(latest_end),
             // An answer of zero is a lease that ran out and is not yet revoked: it proves nothing.
-            Some(end) if !ttl.is_zero() && sent + ttl > end => {
+            Some(end) if !ttl.is_zero() && earliest_end > end => {
                 self.extensions += 1;
                 self.unextended_end = Some(latest_end);
             }
@@ -1613,6 +1651,35 @@ mod tests {
                 )
                 .then_some(*received)
         })
+    }
+
+    #[test]
+    fn an_implausible_answer_is_ignored_and_cannot_panic() {
+        assert!(matches!(
+            LeaseRead::of_answer(9_223_372_036, 10),
+            LeaseRead::Unknown
+        ));
+        assert!(matches!(
+            LeaseRead::of_answer(i64::MAX, 10),
+            LeaseRead::Unknown
+        ));
+        assert!(matches!(
+            LeaseRead::of_answer(12, 10),
+            LeaseRead::Alive { remaining: 12, .. }
+        ));
+        assert!(matches!(LeaseRead::of_answer(13, 10), LeaseRead::Unknown));
+
+        // Even an answer that reaches `observe` cannot panic or move the evidence.
+        let start = Instant::now();
+        let mut evidence = RenewalEvidence::default();
+        assert!(!evidence.observe(start, start, i64::MAX));
+        assert!(!evidence.observe(start, start, 5));
+        assert!(!evidence.observe(start, start, i64::MAX));
+        assert!(!evidence.observe(
+            start + Duration::from_secs(1),
+            start + Duration::from_secs(1),
+            3
+        ));
     }
 
     #[test]
