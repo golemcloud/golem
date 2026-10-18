@@ -1070,6 +1070,17 @@ pub struct BenchmarkRunResult {
     pub count_results: HashMap<ResultKey, CountResult>,
     #[serde(skip_serializing_if = "HashMap::is_empty", default)]
     pub failures: HashMap<ResultKey, FailureResult>,
+    /// When the measured part of each iteration ran. The results say how fast, and these
+    /// say when, so the metrics of the cluster can be read for the same time.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub run_windows: Vec<RunWindow>,
+}
+
+/// The start and end of the measured part of one iteration, in UTC.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunWindow {
+    pub started_at: DateTime<Utc>,
+    pub finished_at: DateTime<Utc>,
 }
 
 impl BenchmarkRunResult {
@@ -1079,6 +1090,7 @@ impl BenchmarkRunResult {
             duration_results: HashMap::new(),
             count_results: HashMap::new(),
             failures: HashMap::new(),
+            run_windows: Vec::new(),
         }
     }
 
@@ -1154,6 +1166,44 @@ mod tests {
             run_metadata: None,
             results: vec![],
         }
+    }
+
+    #[test]
+    fn run_result_without_run_windows_deserializes() {
+        let result: BenchmarkRunResult = serde_json::from_value(serde_json::json!({
+            "run_config": {
+                "clusterSize": 1,
+                "size": 1,
+                "length": 1,
+                "disableCompilationCache": false
+            }
+        }))
+        .unwrap();
+
+        assert!(result.run_windows.is_empty());
+    }
+
+    #[test]
+    fn run_windows_survive_a_round_trip() {
+        let mut result = BenchmarkRunResult::new(RunConfig {
+            cluster_size: 1,
+            size: 1,
+            length: 1,
+            disable_compilation_cache: false,
+        });
+        let started_at = Utc::now();
+        result.run_windows.push(RunWindow {
+            started_at,
+            finished_at: started_at + chrono::Duration::seconds(30),
+        });
+
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(
+            json["run_windows"][0]["started_at"],
+            serde_json::json!(started_at)
+        );
+        let parsed: BenchmarkRunResult = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.run_windows, result.run_windows);
     }
 
     #[test]
