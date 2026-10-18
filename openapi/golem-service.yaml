@@ -23152,6 +23152,8 @@ components:
           $ref: '#/components/schemas/PublicDurableFunctionType'
         spanStarted:
           $ref: '#/components/schemas/PublicSpanStarted'
+        denial:
+          type: string
       required:
       - timestamp
       - functionName

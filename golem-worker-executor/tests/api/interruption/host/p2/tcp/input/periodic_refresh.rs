@@ -151,10 +151,10 @@ async fn periodic_refresh_stops_overage_tcp(
         ensure!(count_agent_invocation_pair_since(&initial, OplogIndex::INITIAL) == (2, 1));
         let stored = worker.all().oplog_service();
         let read_stored = async || {
-            let last = stored.get_last_index(&owned, mode).await;
+            let last = stored.get_last_index(&owned, mode).await?;
             stored.read_exact(&owned, mode, OplogIndex::INITIAL, last.as_u64()).await
         };
-        let prefix = read_stored().await;
+        let prefix = read_stored().await?;
         let last = *prefix.last_key_value().context("committed invocation prefix")?.0;
         let acquisitions = worker.permit_acquisitions_for_test();
         let mut raw = worker.raw_interrupt_for_test();
@@ -184,10 +184,10 @@ async fn periodic_refresh_stops_overage_tcp(
         ensure!(worker.unload_succeeded_for_test() && !worker.monthly_window_active_for_test());
         ensure!(worker.permit_acquisitions_for_test() == acquisitions);
         ensure!(phase.state() == WaitState::Dropped && phase.window_closed());
-        ensure!(read_stored().await.range(..=last).eq(prefix.iter()), "stop changed the full committed prefix");
+        ensure!(read_stored().await?.range(..=last).eq(prefix.iter()), "stop changed the full committed prefix");
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(completed_setup(&stopped)? == connect_start);
-        let raw_entries = read_stored().await;
+        let raw_entries = read_stored().await?;
         let errors: Vec<_> = raw_entries.values().filter_map(|entry| match entry { OplogEntry::Error { error, .. } => Some(error), _ => None }).collect();
         let suspends = raw_entries.values().filter(|entry| matches!(entry, OplogEntry::Suspend { .. })).count();
         if durable {
@@ -231,7 +231,7 @@ async fn periodic_refresh_stops_overage_tcp(
             Operation::Read.assert_result(join_request(&mut invocation, "durable continuation").await??)?;
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             ensure!(completed_setup(&recovered)? == connect_start);
-            ensure!(read_stored().await.range(..=last).eq(prefix.iter()), "recovery changed the full committed prefix");
+            ensure!(read_stored().await?.range(..=last).eq(prefix.iter()), "recovery changed the full committed prefix");
             ensure!(count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));
             assert_settled_history(&recovered)?;
             Operation::Read.assert_result(executor.invoke_and_await_agent_with_key(&component, &name, &key, Operation::Read.method(), data_value!(port)).await?)?;

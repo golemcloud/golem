@@ -267,7 +267,7 @@ pub(super) async fn pending_promise(
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(history::promise_record(&stopped, &key, &id, false, 0)? == Some(original.clone()));
         ensure!(count_agent_invocation_pair_since(&stopped, OplogIndex::INITIAL) == (2, 1));
-        let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await;
+        let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
         for entry in entries.values() {
             match entry {
                 OplogEntry::Error { kind, entity_parent_start_index, .. } => ensure!(*kind == OplogErrorKind::Invocation && entity_parent_start_index.is_none()),

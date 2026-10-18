@@ -18,9 +18,9 @@ use crate::services::activity::{ActivityGate, ActivityGuard};
 use crate::services::component::ComponentService;
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
-    OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogFence,
-    OplogLifecycleGuard, OplogService, OrderedOplogStart, RawOplogPayloadDownloadError,
-    ReservedRawStartBuilder, StagePublication,
+    OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogLifecycleGuard,
+    OplogRefusal, OplogService, OrderedOplogStart, RawOplogPayloadDownloadError,
+    ReservedRawStartBuilder, StagePublication, UnreadableOplog,
 };
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
@@ -585,7 +585,7 @@ impl OplogConstructor for CreateOplogConstructor {
         self,
         lifecycle: &mut OplogLifecycleGuard,
         close: Box<dyn FnOnce() + Send + Sync>,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         let inner = if let Some(initial_entry) = self.initial_entry {
             if self.fresh {
                 self.inner
@@ -628,6 +628,14 @@ impl OplogConstructor for CreateOplogConstructor {
                 )
                 .await
         };
+        // A failed open caches nothing, so its slot is released at once.
+        let inner = match inner {
+            Ok(inner) => inner,
+            Err(error) => {
+                close();
+                return Err(error);
+            }
+        };
         // Taken from the opened inner oplog, not read up front: the inner open claims the shard
         // epoch, so an index read before it could be behind a losing executor's last commit, and
         // the forwarding buffer would then label its entries with indexes already in use.
@@ -636,7 +644,7 @@ impl OplogConstructor for CreateOplogConstructor {
             None => inner.current_oplog_index().await,
         };
 
-        Arc::new(
+        Ok(Arc::new(
             ForwardingOplog::new(
                 inner,
                 self.oplog_plugins,
@@ -649,7 +657,7 @@ impl OplogConstructor for CreateOplogConstructor {
                 self.plugin_max_elapsed_time,
             )
             .await,
-        )
+        ))
     }
 }
 
@@ -763,7 +771,7 @@ impl OplogService for ForwardingOplogService {
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog + 'static> {
+    ) -> Result<Arc<dyn Oplog + 'static>, WorkerExecutorError> {
         self.oplogs
             .get_or_open(
                 lifecycle,
@@ -798,7 +806,7 @@ impl OplogService for ForwardingOplogService {
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog + 'static> {
+    ) -> Result<Arc<dyn Oplog + 'static>, WorkerExecutorError> {
         self.oplogs
             .get_or_open(
                 lifecycle,
@@ -833,7 +841,7 @@ impl OplogService for ForwardingOplogService {
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog + 'static> {
+    ) -> Result<Arc<dyn Oplog + 'static>, WorkerExecutorError> {
         self.oplogs
             .get_or_open(
                 lifecycle,
@@ -862,7 +870,7 @@ impl OplogService for ForwardingOplogService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogIndex {
+    ) -> Result<OplogIndex, UnreadableOplog> {
         self.inner.get_last_index(owned_agent_id, agent_mode).await
     }
 
@@ -905,7 +913,7 @@ impl OplogService for ForwardingOplogService {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         self.inner
             .read_exact(owned_agent_id, agent_mode, idx, n)
             .await
@@ -917,13 +925,17 @@ impl OplogService for ForwardingOplogService {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         self.inner
             .read_source(owned_agent_id, agent_mode, idx, n)
             .await
     }
 
-    async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
+    async fn exists(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<bool, UnreadableOplog> {
         self.inner.exists(owned_agent_id, agent_mode).await
     }
 
@@ -1566,7 +1578,7 @@ impl Oplog for ForwardingOplog {
         self.inner.wait_for_replicas(replicas, timeout).await
     }
 
-    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+    async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, UnreadableOplog> {
         self.inner.read(oplog_index).await
     }
 
@@ -1574,7 +1586,7 @@ impl Oplog for ForwardingOplog {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         self.inner.read_exact(oplog_index, n).await
     }
 
@@ -1582,7 +1594,7 @@ impl Oplog for ForwardingOplog {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         self.inner.read_source(oplog_index, n).await
     }
 
@@ -1594,7 +1606,7 @@ impl Oplog for ForwardingOplog {
         self.inner.try_read_source(oplog_index, n).await
     }
 
-    async fn length(&self) -> u64 {
+    async fn length(&self) -> Result<u64, UnreadableOplog> {
         self.inner.length().await
     }
 
@@ -1985,7 +1997,20 @@ impl ForwardingOplogState {
         }
 
         let batch_count = (batch_end.as_u64() - batch_start.as_u64() + 1) as usize;
-        let entries = self.read_batch(batch_start, batch_count).await;
+        let entries = match self.read_batch(batch_start, batch_count).await {
+            Ok(entries) => entries,
+            Err(error) => {
+                tracing::error!(
+                    grant_id = %grant_id,
+                    error = %error,
+                    "Oplog processor: failed to read the batch to deliver"
+                );
+                if let Some(s) = self.plugin_state.get_mut(&grant_id) {
+                    s.send_in_progress = false;
+                }
+                return;
+            }
+        };
         if self.forwarding_retired.is_cancelled() {
             return;
         }
@@ -2214,9 +2239,13 @@ impl ForwardingOplogState {
 
     /// Read `count` entries starting at `start` from the buffer if available,
     /// otherwise fall back to the persisted oplog.
-    async fn read_batch(&self, start: OplogIndex, count: usize) -> Vec<OplogEntry> {
+    async fn read_batch(
+        &self,
+        start: OplogIndex,
+        count: usize,
+    ) -> Result<Vec<OplogEntry>, UnreadableOplog> {
         if count == 0 {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         if let Some(buffer) = &self.buffer
@@ -2227,23 +2256,25 @@ impl ForwardingOplogState {
 
             if request_end_idx <= buffer_end_idx {
                 let offset = (start.as_u64() - self.buffer_start_idx.as_u64()) as usize;
-                return buffer.iter().skip(offset).take(count).cloned().collect();
+                return Ok(buffer.iter().skip(offset).take(count).cloned().collect());
             }
         }
 
-        self.inner
+        Ok(self
+            .inner
             .read_exact(start, count as u64)
-            .await
+            .await?
             .into_values()
-            .collect()
+            .collect())
     }
 
     /// Write an OplogProcessorCheckpoint entry, commit it, and update index tracking.
     ///
-    /// `Err` means the agent's oplog was fenced: its shard has a new owner, so nothing more may be
-    /// written and forwarding stops. Giving the agent up is deliberately not this layer's call - a
-    /// storage decorator has no business stopping agents - and it does not need to be: the fence
-    /// latches on the oplog, so the worker's own commit path is refused too and gives it up.
+    /// `Err` means the agent's oplog refused the write: its shard has a new owner, or an archive
+    /// layer did not store its entries. Nothing more may be written and forwarding stops. Giving
+    /// the agent up is deliberately not this layer's call - a storage decorator has no business
+    /// stopping agents - and it does not need to be: the refusal latches on the oplog, so the
+    /// worker's own commit path is refused too and gives it up.
     ///
     /// Any other storage failure keeps the fail-stop behaviour it has always had.
     async fn write_checkpoint(
@@ -2253,12 +2284,12 @@ impl ForwardingOplogState {
         confirmed_up_to: OplogIndex,
         sending_up_to: OplogIndex,
         last_batch_start: OplogIndex,
-    ) -> Result<(), OplogFence> {
+    ) -> Result<(), OplogRefusal> {
         // Checked here as well as when the flush starts: the worker's own write can latch the
         // fence while the flush awaits a send or a lookup, and a checkpoint added after that
         // would still take an index for an entry that is never committed.
         if let Some(fence) = self.inner.fence() {
-            return Err(fence);
+            return Err(OplogRefusal::Fenced(fence));
         }
         if self.pending_checkpoint_activity.is_none() {
             self.pending_checkpoint_activity = Some(
@@ -2279,8 +2310,10 @@ impl ForwardingOplogState {
         let cached_checkpoint = cache_entries.then(|| checkpoint.clone());
         let idx = match self.inner.add(checkpoint).await {
             Ok(idx) => idx,
-            Err(OplogError::Fenced(fence)) => return Err(self.stop_forwarding(fence)),
-            Err(error) => panic!("oplog write: {error}"),
+            Err(error) => match error.into_refusal() {
+                Ok(refusal) => return Err(self.stop_forwarding(refusal)),
+                Err(error) => panic!("oplog write: {error}"),
+            },
         };
         if let Some(checkpoint) = cached_checkpoint {
             self.record_cached([(idx, checkpoint)]);
@@ -2289,8 +2322,10 @@ impl ForwardingOplogState {
         }
         let committed = match self.inner.commit(CommitLevel::Always).await {
             Ok(committed) => committed,
-            Err(OplogError::Fenced(fence)) => return Err(self.stop_forwarding(fence)),
-            Err(error) => panic!("oplog write: {error}"),
+            Err(error) => match error.into_refusal() {
+                Ok(refusal) => return Err(self.stop_forwarding(refusal)),
+                Err(error) => panic!("oplog write: {error}"),
+            },
         };
         if let Some(max_idx) = committed.keys().max().copied() {
             self.last_committed_idx = self.last_committed_idx.max(max_idx);
@@ -2301,16 +2336,17 @@ impl ForwardingOplogState {
         Ok(())
     }
 
-    /// Logs the checkpoint that found the fence and hands the fence back to the caller, which
-    /// stops forwarding for this agent. Every flush after it sees the latched fence and returns
-    /// before writing anything.
-    fn stop_forwarding(&self, fence: OplogFence) -> OplogFence {
+    /// Logs the checkpoint that the oplog refused and hands the refusal back to the caller, which
+    /// stops this flush. After a fence, every later flush sees the latched fence and returns before
+    /// writing anything. A failed archive write latches no fence: a later flush runs, and the oplog
+    /// refuses its checkpoint with the same error.
+    fn stop_forwarding(&self, refusal: OplogRefusal) -> OplogRefusal {
         tracing::info!(
             source_agent = %self.initial_worker_metadata.agent_id,
-            expected_epoch = fence.expected_epoch.0,
-            "Oplog processor: checkpoint fenced, the shard has a new owner - forwarding stopped"
+            refusal = %refusal,
+            "Oplog processor: checkpoint refused - forwarding stopped"
         );
-        fence
+        refusal
     }
 
     /// Prune buffer: drain entries that ALL active/in-flight plugins have confirmed past.
@@ -2599,7 +2635,7 @@ fn oplog_processor_idempotency_key(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::oplog::DurableStreamOplogRecord;
+    use crate::services::oplog::{DurableStreamOplogRecord, OplogFence};
     use golem_common::base_model::component_metadata::KnownExports;
     use golem_common::model::account::AccountId;
     use golem_common::model::application::ApplicationId;
@@ -3394,7 +3430,7 @@ mod tests {
             &self,
             oplog_index: OplogIndex,
             n: u64,
-        ) -> BTreeMap<OplogIndex, OplogEntry> {
+        ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
             self.read_exact_count
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.read_exact_requests
@@ -3413,11 +3449,11 @@ mod tests {
                 });
                 result.insert(OplogIndex::from_u64(i), entry.clone());
             }
-            result
+            Ok(result)
         }
 
-        async fn length(&self) -> u64 {
-            self.entries.lock().unwrap().len() as u64
+        async fn length(&self) -> Result<u64, UnreadableOplog> {
+            Ok(self.entries.lock().unwrap().len() as u64)
         }
 
         async fn upload_raw_payload(&self, _data: Vec<u8>) -> Result<RawOplogPayload, String> {
@@ -3605,7 +3641,7 @@ mod tests {
         state.try_flush().await;
         assert_eq!(recording_plugin.send_count().await, 0);
         assert_eq!(
-            in_memory.length().await,
+            in_memory.length().await.unwrap(),
             3,
             "the refused checkpoint is the only entry the first flush adds"
         );
@@ -3615,7 +3651,7 @@ mod tests {
         state.try_flush().await;
 
         assert_eq!(
-            in_memory.length().await,
+            in_memory.length().await.unwrap(),
             3,
             "a flush after the fence must not add another checkpoint"
         );
@@ -3854,6 +3890,7 @@ mod tests {
         let entries = inner
             .read_exact(OplogIndex::INITIAL, 3)
             .await
+            .unwrap()
             .into_values()
             .collect::<Vec<_>>();
 
@@ -3904,6 +3941,7 @@ mod tests {
                 request: Some(request_payload),
                 durable_function_type: DurableFunctionType::ReadRemote,
                 span_started: None,
+                denial: None,
             }
         };
 

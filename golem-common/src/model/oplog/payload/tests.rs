@@ -856,7 +856,7 @@ use crate::model::oplog::types::{
 };
 use crate::model::oplog::{
     HostPayloadPair, HostRequest, HostRequestCliEnvironmentGetEnvironment,
-    HostRequestEntityInvocation, HostRequestFileSystemPath,
+    HostRequestEntityInvocation, HostRequestFileSystemPath, HostRequestFileSystemPermissionCheck,
     HostRequestGolemAgentGetAgentTypeByAgentId, HostRequestGolemApiOplogEnrich,
     HostRequestGolemApiOplogRead, HostRequestGolemRpcActivate, HostRequestGolemToolGetTool,
     HostRequestGolemToolInvocationRejected, HostRequestGolemToolInvoke,
@@ -864,7 +864,8 @@ use crate::model::oplog::{
     HostRequestKVCacheKeyAndTtl, HostRequestKVCacheKeyValueAndTtl,
     HostRequestMonotonicClockDuration, HostRequestMonotonicClockTimestamp, HostRequestNoInput,
     HostRequestP3HttpClientRequestBodyFrame, HostRequestP3HttpClientSend,
-    HostRequestP3SocketsConnect, HostRequestP3SocketsUdpSend, HostRequestRandomBytes, HostResponse,
+    HostRequestP3SocketsConnect, HostRequestP3SocketsUdpSend, HostRequestRandomBytes,
+    HostRequestSocketsTcpConnectPermissionCheck, HostResponse,
     HostResponseCliEnvironmentGetEnvironment, HostResponseEntityInvocation,
     HostResponseGolemAgentAgentType, HostResponseGolemApiOplogChunk,
     HostResponseGolemApiOplogEntries, HostResponseGolemApiUnit, HostResponseGolemRpcActivate,
@@ -879,8 +880,9 @@ use crate::model::oplog::{
     HostResponseP3KeyvalueIncomingValueStream, HostResponseP3MonotonicClockUnit,
     HostResponseP3SocketsConnect, HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
     HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend,
-    HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponseRandomBytes,
-    HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock, host_functions,
+    HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponsePermissionCheck,
+    HostResponseRandomBytes, HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock,
+    host_functions,
 };
 use crate::model::worker::{
     ResolvedRevert, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget,
@@ -998,7 +1000,6 @@ fn rpc_durable_request_captures_scope_card_and_logical_streaming_origin_determin
         input: SchemaValue::Tuple {
             elements: Vec::new(),
         },
-        local_denial: Some("agent:invoke denied at admission".to_string()),
         logical_streaming_origin: Some(StreamInvocationId {
             callee_environment_id: EnvironmentId::new(),
             callee: AgentId {
@@ -1881,6 +1882,23 @@ fn p3_filesystem_host_payload_pairs_roundtrip() {
                 SerializableP3FsErrorCode::NotPermitted,
             )),
         },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::FilesystemPermissionCheck>(
+        HostRequestFileSystemPermissionCheck {
+            requests: vec![
+                ("delete".to_string(), "/source.txt".to_string()),
+                ("write".to_string(), "/target.txt".to_string()),
+            ],
+        },
+        HostResponsePermissionCheck {
+            result: Err("The permission target is not allowed".to_string()),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::SocketsTcpConnectPermissionCheck>(
+        HostRequestSocketsTcpConnectPermissionCheck {
+            address: "127.0.0.1:9".to_string(),
+        },
+        HostResponsePermissionCheck { result: Ok(()) },
     );
 }
 

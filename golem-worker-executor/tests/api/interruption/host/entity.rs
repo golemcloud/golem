@@ -398,7 +398,7 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
             OplogIndex::INITIAL,
             worker.oplog().current_oplog_index().await.as_u64(),
         )
-        .await;
+        .await?;
     let raw_after_stop = executor.stored_oplog(&id).await;
     assert!(raw_after_stop.len() >= committed_prefix.len());
     assert_eq!(
@@ -470,7 +470,7 @@ async fn pending_receive(
             oplog.commit(CommitLevel::Always).await?;
             let entries = oplog
                 .read_exact(OplogIndex::INITIAL, observed_tip.as_u64())
-                .await;
+                .await?;
             let receives = entries.iter().filter_map(|(index, entry)| match entry {
                 OplogEntry::Start { function_name, parent_start_index, .. }
                     if *index > after && function_name.to_string() == "sockets::types::tcp-socket::receive"

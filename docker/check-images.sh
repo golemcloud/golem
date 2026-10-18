@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Builds the linux/amd64 images of the Golem services and of xfs-quotad without pushing them, and
-# checks the contract of each image:
+# Builds the linux/amd64 images of the Golem services, of the golem executable, of xfs-quotad and of
+# the router without pushing them, and checks the contract of each image:
 #
 # - The image runs as uid and gid 65534, and that user can write the directories of the image
 #   where the default configuration keeps data.
 # - No file in the image has a setuid or setgid bit.
+# - The golem image starts with GOLEM_LITESTREAM=true on a new volume.
+# - Envoy accepts the configuration that the router image writes.
 # - The binary of xfs-quotad has the file capability cap_sys_admin+ep.
 # - xfs-quotad starts only when the container adds SYS_ADMIN and allows privilege escalation.
 #
@@ -37,12 +39,14 @@ services=(
     "golem-shard-manager golem-shard-manager /home/golem /data /data/blob_storage"
     "golem-worker-service golem-worker-service /home/golem /data /data/blob_storage"
     "golem-component-compilation-service golem-component-compilation-service /home/golem /data /data/blob_storage"
+    "cli/golem golem /home/golem /var/lib/golem"
     "golem-xfs-quotad golem-xfs-quotad /run/golem-quota"
+    "golem-router - /home/golem"
 )
 
 for service in "${services[@]}"; do
     read -r directory binary _ <<<"$service"
-    if [ ! -e "$release/$binary" ]; then
+    if [ "$binary" != - ] && [ ! -e "$release/$binary" ]; then
         printf '#!/bin/sh\nexit 0\n' >"$release/$binary"
         chmod +x "$release/$binary"
     fi
@@ -67,6 +71,100 @@ for service in "${services[@]}"; do
     privileged=$("$engine" run --rm --user 0 --entrypoint /usr/bin/find "$image" / -xdev -perm /6000 -type f)
     [ -z "$privileged" ] || fail "$image has setuid or setgid files: $privileged"
 done
+
+# The entrypoint lists the databases of the Litestream configuration, restores each of them from
+# the empty replica, and runs `golem --version` under `litestream replicate`, all as uid 65534.
+golem="$tag_prefix/cli/golem"
+echo "== $golem: startup with Litestream on a new volume"
+volume=$("$engine" volume create)
+output=$("$engine" run --rm -v "$volume:/var/lib/golem" -e GOLEM_LITESTREAM=true \
+    -e GOLEM_LITESTREAM_REPLICA_URL=file:///var/lib/golem/replica "$golem" --version 2>&1) ||
+    fail "$golem with GOLEM_LITESTREAM=true: $output"
+"$engine" volume rm "$volume" >/dev/null
+databases=$(grep -c '^  - path:' cli/golem/docker/litestream.yml)
+restores=$(grep -c "no matching backups found" <<<"$output" || true)
+[ "$restores" = "$databases" ] ||
+    fail "$golem with GOLEM_LITESTREAM=true restored $restores databases, not $databases: $output"
+
+# The entrypoint writes the Envoy configuration from the variables, and Envoy validates it.
+router="$tag_prefix/golem-router"
+echo "== $router: configuration"
+output=$("$engine" run --rm --cap-drop ALL --security-opt no-new-privileges \
+    -e GOLEM_ROUTER_MANAGEMENT_HOST=golem.example -e GOLEM_ROUTER_REGISTRY_SERVICE_HOST=registry \
+    -e GOLEM_ROUTER_WORKER_SERVICE_HOST=worker "$router" --mode validate 2>&1) ||
+    fail "$router: $output"
+
+# The router sends each host to its service and forwards the original authority. A management host
+# with a trailing dot or a port is still the management host; every other host reaches the custom
+# request port. The services are Envoy listeners that answer with their name and the authority.
+echo "== $router: routing by host"
+network=$("$engine" network create "$tag_prefix-router")
+cleanup_router() {
+    "$engine" rm -f "$tag_prefix-router" "$tag_prefix-services" >/dev/null 2>&1 || true
+    "$engine" network rm "$network" >/dev/null 2>&1 || true
+}
+trap cleanup_router EXIT
+listener() {
+    cat <<EOF
+  - address: {socket_address: {address: 0.0.0.0, port_value: $1}}
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: s
+          codec_type: AUTO
+          route_config:
+            virtual_hosts:
+            - name: s
+              domains: ["*"]
+              response_headers_to_add:
+              - header: {key: x-authority, value: "%REQ(:AUTHORITY)%"}
+              routes:
+              - match: {prefix: /}
+                direct_response: {status: 200, body: {inline_string: $2}}
+          http_filters:
+          - name: envoy.filters.http.router
+            typed_config: {"@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router}
+EOF
+}
+stand_ins=$(printf 'static_resources:\n  listeners:\n%s\n%s\n%s\n' "$(listener 8081 registry)" \
+    "$(listener 9005 worker)" "$(listener 9006 custom)")
+"$engine" run -d --name "$tag_prefix-services" --network "$network" --network-alias registry \
+    --network-alias worker --entrypoint envoy "$router" --disable-hot-restart --config-yaml "$stand_ins" >/dev/null
+"$engine" run -d --name "$tag_prefix-router" --network "$network" -p 127.0.0.1::8080 \
+    -e GOLEM_ROUTER_MANAGEMENT_HOST=management.test -e GOLEM_ROUTER_REGISTRY_SERVICE_HOST=registry \
+    -e GOLEM_ROUTER_WORKER_SERVICE_HOST=worker -e GOLEM_ROUTER_DNS_REFRESH_RATE=1s "$router" >/dev/null
+address=$("$engine" port "$tag_prefix-router" 8080/tcp | head -n 1)
+# Prints the authority that the service received and the name of the service.
+served_by() {
+    curl -s -D - --http1.1 -H "Host: $1" "http://$address$2" |
+        tr -d '\r' | sed -n -e 's/^x-authority: //p' -e '$p'
+}
+for _ in $(seq 1 30); do
+    [ "$(served_by app.test / | tail -n 1)" = custom ] && break
+    sleep 1
+done
+# <host> <path> <service>
+cases=(
+    "management.test /v1/agents/test worker"
+    "management.test:443 /v1/agents/test worker"
+    "management.test. /v1/agents/test worker"
+    "management.test.:443 /v1/agents/test worker"
+    "Management.Test. /v1/agents/test worker"
+    "management.test. /v1/components registry"
+    "app.test /v1/agents/test custom"
+    "app.test.:443 /v1/agents/test custom"
+    "management.test.example /v1/agents/test custom"
+)
+for case in "${cases[@]}"; do
+    read -r host path expected <<<"$case"
+    result=$(served_by "$host" "$path" | paste -sd ' ')
+    [ "$result" = "$host $expected" ] ||
+        fail "$router sent $path for host $host to '$result', not to '$host $expected'"
+done
+cleanup_router
+trap - EXIT
 
 quotad="$tag_prefix/golem-xfs-quotad"
 echo "== $quotad: file capability"

@@ -585,7 +585,7 @@ async fn completion_stop(
         let before = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(count_agent_invocation_pair_since(&before, OplogIndex::INITIAL) == (2, 1));
         let start = if operation == Operation::Commit {
-            let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await;
+            let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
             ensure!(!entries.values().any(|e| matches!(e, OplogEntry::CommittedRemoteTransaction { .. })));
             entries.values().find_map(|e| match e { OplogEntry::PreCommitRemoteTransaction { begin_index, .. } => Some(*begin_index), _ => None }).context("entered commit must follow committed pre-marker")?
         } else {
@@ -633,7 +633,7 @@ async fn completion_stop(
         if operation == Operation::Commit {
             state.cleanup.wait_pending().await?;
             ensure!(state.call.state.load(Ordering::SeqCst) == RETURNED);
-            let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await;
+            let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
             ensure!(entries.values().any(|e| matches!(e, OplogEntry::CommittedRemoteTransaction { begin_index, .. } if *begin_index == start)));
             ensure!(entries.values().filter(|e| matches!(e, OplogEntry::End { start_index, .. } if *start_index == start)).count() == 1);
             ensure!(worker.concurrent_agent_permit_is_held().await && worker.monthly_window_active_for_test() && !invocation.is_finished());
@@ -654,7 +654,7 @@ async fn completion_stop(
         let expected: Vec<String> = if operation == Operation::Commit { ["tx-statement", "pre-commit", "commit", "cleanup"].into_iter().map(str::to_string).collect() } else { vec!["first".to_string()] };
         ensure!(state.effects() == expected, "post-completion successor ran before stop: effects={:?}, starts={:?}", state.effects(), state.starts());
         ensure!(state.starts() == if operation == Operation::Commit { vec!["tx-statement", "commit", "cleanup"] } else { vec!["first"] });
-        let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await;
+        let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
         let errors: Vec<_> = entries.values().filter_map(|e| match e { OplogEntry::Error { error, .. } => Some(error), _ => None }).collect();
         if durable {
             ensure!(errors.is_empty(), "{errors:?}");

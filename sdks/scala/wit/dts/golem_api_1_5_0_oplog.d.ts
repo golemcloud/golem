@@ -201,6 +201,8 @@ declare module 'golem:api/oplog@1.5.0' {
    * and blobstore operations — surfaces as a generic `typed-schema-value`
    * tree, identified by `function-name`; there are no per-interface named WIT
    * variants for the payload shapes.
+   * `denial` is the reason the host denied the call before it ran. A denied
+   * call never runs its operation, and its `end` holds the denied response.
    */
   export type StartParameters = {
     timestamp: Datetime;
@@ -211,6 +213,7 @@ declare module 'golem:api/oplog@1.5.0' {
     request?: TypedSchemaValue;
     durableFunctionType: WrappedFunctionType;
     spanStarted?: SpanStarted;
+    denial?: string;
   };
   /**
    * A compact close records the outcome but no error-message payload. Consumers
@@ -822,6 +825,7 @@ declare module 'golem:api/oplog@1.5.0' {
     request?: OplogPayload;
     durableFunctionType: WrappedFunctionType;
     spanStarted?: SpanStarted;
+    denial?: string;
   };
   export type RawEndParameters = {
     timestamp: Datetime;

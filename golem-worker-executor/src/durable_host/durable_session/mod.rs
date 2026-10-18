@@ -1301,7 +1301,7 @@ impl StreamSession {
                                 "durable initial attachment has no pending invocation".to_string()
                             })?
                         )
-                        .await,
+                        .await?,
                     OplogEntry::PendingAgentInvocation { idempotency_key, .. }
                         if idempotency_key == self.session_key.idempotency_key
                 ))
@@ -2033,7 +2033,7 @@ impl StreamSession {
                     error = %error,
                     "Rejecting durable input items"
                 );
-                return Err(SessionError::from(error.to_string()));
+                return Err(SessionError::from(error));
             }
         };
         let mut nested_mappings = Vec::with_capacity(nested_transport_ids.len());
@@ -2168,7 +2168,7 @@ impl StreamSession {
                     error = %error,
                     "Rejecting durable input end"
                 );
-                Err(SessionError::from(error.to_string()))
+                Err(SessionError::from(error))
             }
         }
     }
@@ -4992,13 +4992,12 @@ impl StreamSession {
                     bytes.push(value);
                     let flush_deadline = tokio::time::Instant::now() + PACKED_U8_OUTPUT_FLUSH_DELAY;
                     while bytes.len() < MAX_PACKED_U8_STREAM_ITEM_SIZE {
-                        let next = match tokio::time::timeout_at(flush_deadline, reader.next())
-                            .await
-                        {
-                            Ok(Ok(Some(next))) => next,
-                            Ok(Ok(None)) | Err(_) => break,
-                            Ok(Err(error)) => return Err(SessionError::from(error.to_string())),
-                        };
+                        let next =
+                            match tokio::time::timeout_at(flush_deadline, reader.next()).await {
+                                Ok(Ok(Some(next))) => next,
+                                Ok(Ok(None)) | Err(_) => break,
+                                Ok(Err(error)) => return Err(SessionError::from(error)),
+                            };
                         let expected_sequence = first_sequence
                             .checked_add(bytes.len() as u64)
                             .ok_or_else(|| "packed-u8 output sequence overflow".to_string())?;
@@ -5389,7 +5388,7 @@ impl StreamSession {
         let horizon = self.oplog.current_oplog_index().await;
         while covered < horizon {
             let count = (horizon.as_u64() - covered.as_u64()).min(1024);
-            for (index, entry) in self.oplog.read_exact(covered.next(), count).await {
+            for (index, entry) in self.oplog.read_exact(covered.next(), count).await? {
                 if self
                     .producer
                     .fork_lineage

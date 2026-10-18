@@ -37,7 +37,7 @@ use crate::services::agent_filesystem_snapshots::{
 };
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
-use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogServiceOps};
+use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogServiceOps, UnreadableOplog};
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
 use crate::services::shard::ShardService;
@@ -649,7 +649,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             source.last_known_status,
         )
         .await
-        .map_err(WorkerExecutorError::runtime)?
+        .map_err(WorkerExecutorError::from)?
         .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_source_agent_id.agent_id()))?;
 
         // The stage id also identifies the target incarnation while it is hidden. This lets
@@ -699,7 +699,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 // The source is read, never written, so this handle asserts no epoch.
                 None,
             )
-            .await;
+            .await?;
         let source_oplog = Ctx::wrap_oplog(
             owned_source_agent_id.clone(),
             source_oplog,
@@ -708,11 +708,13 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         let read_source = |index| {
             let source = &owned_source_agent_id;
             async move {
-                self.oplog_service
-                    .read_exact(source, agent_mode, index, 1)
-                    .await
-                    .remove(&index)
-                    .expect("fork source oplog entry is missing")
+                Ok::<_, UnreadableOplog>(
+                    self.oplog_service
+                        .read_exact(source, agent_mode, index, 1)
+                        .await?
+                        .remove(&index)
+                        .expect("fork source oplog entry is missing"),
+                )
             }
         };
 
@@ -721,7 +723,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         let committed_end = self
             .oplog_service
             .get_last_index(&owned_source_agent_id, agent_mode)
-            .await;
+            .await?;
         // Debug playback exposes only its target prefix, even when storage contains later entries.
         let readable_end = committed_end.min(source_oplog.current_oplog_index().await);
         let source_oplog_end = export.map_or(readable_end, |candidate| candidate.horizon);
@@ -740,15 +742,14 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             &owned_source_agent_id,
             source_oplog_end,
         )
-        .await
-        .map_err(WorkerExecutorError::runtime)?;
+        .await?;
         if let Some(spanning) = crate::worker::cut_point::find_construct_spanning_cut_point(
             read_source,
             oplog_index_cut_off,
             source_oplog_end,
             &source_skipped_regions,
         )
-        .await
+        .await?
         {
             return Err(WorkerExecutorError::invalid_request(format!(
                 "Cannot fork worker at oplog index {oplog_index_cut_off}: the cut point is inside {spanning}"
@@ -774,7 +775,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         })?;
         fork_cut.export = export.map(|candidate| candidate.export.clone());
 
-        let initial_oplog_entry = read_source(OplogIndex::INITIAL).await;
+        let initial_oplog_entry = read_source(OplogIndex::INITIAL).await?;
         let initial_size = golem_common::serialization::serialize(&initial_oplog_entry)
             .map_err(WorkerExecutorError::runtime)?
             .len() as u64;
@@ -811,7 +812,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         for oplog_index in oplog_range {
             let mut entry = rewrite_forked_oplog_entry(
-                read_source(oplog_index).await,
+                read_source(oplog_index).await?,
                 &owned_source_agent_id.agent_id,
                 &owned_target_agent_id.agent_id,
             );
@@ -942,7 +943,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     continue;
                 }
                 if let OplogEntry::PendingAgentInvocation { payload, .. } =
-                    read_source(pending_index).await
+                    read_source(pending_index).await?
                     && matches!(
                         self.oplog_service
                             .download_payload(&owned_source_agent_id, agent_mode, payload)

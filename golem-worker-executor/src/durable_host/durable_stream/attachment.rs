@@ -64,7 +64,7 @@ impl DurableStreamStore {
         let introducing = self
             .oplog
             .read_exact(reader_id.introducing_oplog_index, 1)
-            .await
+            .await?
             .into_iter()
             .next()
             .filter(|(index, _)| *index == reader_id.introducing_oplog_index)
@@ -110,7 +110,7 @@ impl DurableStreamStore {
             for (oplog_index, entry) in self
                 .oplog
                 .read_exact(OplogIndex::INITIAL, current.as_u64())
-                .await
+                .await?
             {
                 if self
                     .fork_lineage

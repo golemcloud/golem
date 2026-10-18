@@ -50,7 +50,7 @@ use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{HasAll, NoAdditionalDeps, worker_enumeration};
-use crate::worker::{RetryDecision, Worker};
+use crate::worker::{InvocationFailureDecision, RetryDecision, Worker};
 use crate::workerctx::{
     CallCountManagement, EntityInvocationManagement, ExternalOperations, FileSystemReading,
     FuelManagement, InvocationContextManagement, InvocationHooks, InvocationManagement,
@@ -711,7 +711,7 @@ impl InvocationHooks for Context {
         &mut self,
         full_function_name: &str,
         trap_type: &TrapType,
-    ) -> RetryDecision {
+    ) -> InvocationFailureDecision {
         self.durable_ctx
             .on_invocation_failure(full_function_name, trap_type)
             .await

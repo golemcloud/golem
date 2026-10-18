@@ -14,14 +14,14 @@ use test_r::test;
 
 const CUSTOM_WAIT: &str = "golem-it::test-promise";
 
-async fn history(worker: &Worker<Context>) -> BTreeMap<OplogIndex, OplogEntry> {
-    worker
+async fn history(worker: &Worker<Context>) -> anyhow::Result<BTreeMap<OplogIndex, OplogEntry>> {
+    Ok(worker
         .oplog()
         .read_exact(
             OplogIndex::INITIAL,
             worker.oplog().current_oplog_index().await.as_u64(),
         )
-        .await
+        .await?)
 }
 
 fn roots(
@@ -240,7 +240,7 @@ async fn concurrent_custom_promises_auto_suspend_and_reconstruct_original_scopes
         .await?;
     physical_stop(&worker).await?;
     assert!(!invocation.is_finished());
-    let stopped = history(&worker).await;
+    let stopped = history(&worker).await?;
     let original = roots(&stopped, &key);
     assert_eq!(original.len(), 2);
     assert_eq!(
@@ -268,7 +268,7 @@ async fn concurrent_custom_promises_auto_suspend_and_reconstruct_original_scopes
         vec!["first", "second"]
     );
     assert!(worker.resident_generation_for_test() > generation);
-    assert_completed(&history(&worker).await, &original, &key);
+    assert_completed(&history(&worker).await?, &original, &key);
     let after = executor.stored_oplog(&id).await;
     assert!(after.len() >= prefix.len());
     assert_eq!(&after[..prefix.len()], prefix.as_slice());
@@ -372,7 +372,7 @@ async fn quota_custom_finish(
     let original = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             worker.commit_oplog_and_update_state(CommitLevel::Always).await?;
-            let entries = history(&worker).await;
+            let entries = history(&worker).await?;
             let calls = roots(&entries, &key);
             if calls.len() == 2 && calls.iter().all(|(start, _)| entries.values().any(|entry| matches!(entry,
                 OplogEntry::Start { function_name, observational_owner: Some(owner), .. }
@@ -434,7 +434,7 @@ async fn quota_custom_finish(
     physical_stop(&worker).await?;
     refresh.await?;
     assert!(!worker.monthly_window_active_for_test());
-    let stopped = history(&worker).await;
+    let stopped = history(&worker).await?;
     assert_eq!(roots(&stopped, &key), original);
     let completed: Vec<_> = original.iter().filter(|(start, _)| stopped.values().any(|entry| matches!(entry, OplogEntry::End { start_index, .. } if start_index == start))).map(|(start, _)| *start).collect();
     assert_eq!(
@@ -472,7 +472,7 @@ async fn quota_custom_finish(
         vec!["first", "second"]
     );
     assert!(worker.resident_generation_for_test() > generation);
-    let after = history(&worker).await;
+    let after = history(&worker).await?;
     assert_completed(&after, &original, &key);
     assert_eq!(
         observations(&after, completed[0]),

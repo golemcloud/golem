@@ -127,7 +127,7 @@ async fn waiting_terminal_stop_keeps_its_signal_receipt_and_marker_without_a_per
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         assert_eq!(
             entries
                 .values()

@@ -12,8 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::oplog::multilayer::OplogArchiveError;
+use golem_common::model::AgentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::serialization::{deserialize, serialize};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -38,7 +41,7 @@ impl Display for OplogReadSource {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum OplogReadError {
+pub enum OplogReadError {
     InvalidRange {
         start: OplogIndex,
         count: u64,
@@ -52,6 +55,11 @@ pub(crate) enum OplogReadError {
         detail: String,
     },
     SourceFailure {
+        source: OplogReadSource,
+        detail: String,
+    },
+    /// The storage of the source did not answer, after its retries. A later read can pass.
+    SourceUnavailable {
         source: OplogReadSource,
         detail: String,
     },
@@ -70,6 +78,27 @@ impl OplogReadError {
             source,
             detail: detail.into(),
         }
+    }
+
+    pub fn source_unavailable(source: OplogReadSource, detail: impl Into<String>) -> Self {
+        Self::SourceUnavailable {
+            source,
+            detail: detail.into(),
+        }
+    }
+
+    /// The failure of an archive call that read `source`, keeping whether a later read can pass.
+    pub fn of_archive(source: OplogReadSource, error: OplogArchiveError) -> Self {
+        match error {
+            OplogArchiveError::Unavailable(detail) => Self::source_unavailable(source, detail),
+            OplogArchiveError::Failed(detail) => Self::source_failure(source, detail),
+        }
+    }
+
+    /// Whether a later read can pass: the storage did not answer. Corrupt data, a gap or an invalid
+    /// range gives the same answer on every read.
+    pub fn is_transient(&self) -> bool {
+        matches!(self, Self::SourceUnavailable { .. })
     }
 }
 
@@ -91,14 +120,64 @@ impl Display for OplogReadError {
             Self::SourceFailure { source, detail } => {
                 write!(f, "failed to read oplog data from {source}: {detail}")
             }
+            Self::SourceUnavailable { source, detail } => {
+                write!(f, "oplog data from {source} is unavailable: {detail}")
+            }
         }
     }
 }
 
 impl Error for OplogReadError {}
 
-pub(crate) fn fail_stop<T>(result: Result<T, OplogReadError>) -> T {
-    result.unwrap_or_else(|error| panic!("Oplog read failed: {error}"))
+/// A read of an agent's oplog that did not give the requested entries: a source failed, gave
+/// corrupt data, or left a gap. The agent cannot replay or recover from such an oplog, so the
+/// read fails the agent that asked for it, and nothing else. When the storage did not answer
+/// ([`OplogReadError::is_transient`]), the failure is temporary: the agent is recovered again
+/// later instead of failing for good.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnreadableOplog {
+    pub agent_id: AgentId,
+    pub error: OplogReadError,
+}
+
+impl UnreadableOplog {
+    pub fn new(agent_id: &AgentId, error: OplogReadError) -> Self {
+        Self {
+            agent_id: agent_id.clone(),
+            error,
+        }
+    }
+}
+
+impl Display for UnreadableOplog {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "oplog of {} is unreadable: {}",
+            self.agent_id, self.error
+        )
+    }
+}
+
+impl Error for UnreadableOplog {}
+
+impl UnreadableOplog {
+    /// Whether a later read can pass, see [`OplogReadError::is_transient`].
+    pub fn is_transient(&self) -> bool {
+        self.error.is_transient()
+    }
+}
+
+/// A transient failure is `RecoveryRequired`, which the start and the invocation retry with
+/// backoff. Any other failure is `OplogFailed`, which fails the agent for good.
+impl From<UnreadableOplog> for WorkerExecutorError {
+    fn from(value: UnreadableOplog) -> Self {
+        if value.is_transient() {
+            WorkerExecutorError::recovery_required(value.to_string())
+        } else {
+            WorkerExecutorError::oplog_failed(value.agent_id, value.error.to_string())
+        }
+    }
 }
 
 /// Merges contiguous suffixes returned by oplog storage tiers into one exact logical range.
@@ -338,6 +417,66 @@ impl<T: PartialEq> OplogRead<T> {
 mod tests {
     use super::*;
     use test_r::test;
+
+    #[test]
+    fn an_unreadable_oplog_names_the_agent_and_the_read_error() {
+        let agent_id = golem_common::model::AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: "unreadable".to_string(),
+        };
+        let error = UnreadableOplog::new(
+            &agent_id,
+            OplogReadError::corruption(OplogReadSource::Archive(1), "bad chunk"),
+        );
+        let text = error.to_string();
+        assert_eq!(
+            text,
+            format!("oplog of {agent_id} is unreadable: {}", error.error)
+        );
+    }
+
+    /// A storage that did not answer is a recovery the agent retries; corrupt data fails the
+    /// agent for good.
+    #[test]
+    fn only_an_unavailable_source_is_a_recovery() {
+        let agent_id = golem_common::model::AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: "unreadable".to_string(),
+        };
+        let unavailable = UnreadableOplog::new(
+            &agent_id,
+            OplogReadError::of_archive(
+                OplogReadSource::Archive(1),
+                OplogArchiveError::Unavailable("outage".to_string()),
+            ),
+        );
+        assert!(unavailable.is_transient());
+        assert!(matches!(
+            WorkerExecutorError::from(unavailable),
+            WorkerExecutorError::RecoveryRequired { details, .. }
+                if details.contains("archive layer 1") && details.contains("outage")
+        ));
+
+        let failed = UnreadableOplog::new(
+            &agent_id,
+            OplogReadError::of_archive(
+                OplogReadSource::Archive(1),
+                OplogArchiveError::Failed("bad value".to_string()),
+            ),
+        );
+        assert!(!failed.is_transient());
+        assert!(matches!(
+            WorkerExecutorError::from(failed),
+            WorkerExecutorError::OplogFailed { .. }
+        ));
+        assert!(
+            !UnreadableOplog::new(
+                &agent_id,
+                OplogReadError::corruption(OplogReadSource::Archive(1), "bad chunk")
+            )
+            .is_transient()
+        );
+    }
 
     fn entries(start: u64, end: u64) -> BTreeMap<OplogIndex, u64> {
         (start..=end)

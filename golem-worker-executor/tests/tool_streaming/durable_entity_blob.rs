@@ -1253,6 +1253,7 @@ fn oracle_fixture() -> OplogSnapshot {
             invocation_id: None,
             observational_owner: None,
             request: None,
+            denial: None,
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: Some(Box::new(span.clone())),
         },
@@ -1291,6 +1292,7 @@ fn oracle_fixture() -> OplogSnapshot {
             invocation_id: None,
             observational_owner: None,
             request: None,
+            denial: None,
             durable_function_type: DurableFunctionType::WriteLocal.into(),
             span_started: Some(PublicSpanStarted {
                 span_id: span.span_id,

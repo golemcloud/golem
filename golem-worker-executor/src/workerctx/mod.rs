@@ -43,7 +43,7 @@ use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{HasAll, HasOplog, HasWorker, worker_enumeration};
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
-use crate::worker::{RetryDecision, Worker, WorkerDeletionHook};
+use crate::worker::{InvocationFailureDecision, RetryDecision, Worker, WorkerDeletionHook};
 use async_trait::async_trait;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -506,7 +506,7 @@ pub trait InvocationHooks {
         &mut self,
         full_function_name: &str,
         trap_type: &TrapType,
-    ) -> RetryDecision;
+    ) -> InvocationFailureDecision;
 
     /// Called when an agent invocation succeeds, with the typed result directly.
     ///

@@ -60,6 +60,15 @@ pub(super) enum NodeKind {
     Other,
 }
 
+/// Entry type as a directory read reports it. A file size needs one more `stat_at`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ChildKind {
+    File,
+    Directory,
+    Symlink,
+    Other,
+}
+
 #[derive(Debug)]
 pub(super) enum FsError {
     NotFound,
@@ -72,7 +81,7 @@ pub(super) enum FsError {
 #[derive(Debug, Clone)]
 struct Child {
     name: String,
-    kind: NodeKind,
+    kind: ChildKind,
 }
 
 pub(super) struct FsNode {
@@ -151,8 +160,6 @@ impl FsNode {
     }
 
     async fn children(&self, remaining_entries: &mut usize) -> Result<Vec<Child>, FsError> {
-        use golem_rust::wasip3::filesystem::types::{DescriptorType, PathFlags};
-
         let (mut stream, completion) = self.descriptor.read_directory();
         let mut children = Vec::new();
         let mut name_bytes = 0usize;
@@ -165,19 +172,9 @@ impl FsNode {
             if children.len() >= MAX_DIRECTORY_ENTRIES || name_bytes > MAX_DIRECTORY_NAME_BYTES {
                 return Err(FsError::DirectoryTooLarge);
             }
-            let kind = if matches!(entry.type_, DescriptorType::RegularFile) {
-                let stat = self
-                    .descriptor
-                    .stat_at(PathFlags::empty(), entry.name.clone())
-                    .await
-                    .map_err(map_wasi_error)?;
-                wasi_kind(entry.type_.clone(), stat.size)
-            } else {
-                wasi_kind(entry.type_.clone(), 0)
-            };
             children.push(Child {
+                kind: child_kind(&entry.type_),
                 name: entry.name,
-                kind,
             });
         }
         drop(stream);
@@ -217,6 +214,17 @@ impl FsNode {
         Ok(Self { descriptor, kind })
     }
 
+    async fn file_size(&self, name: &str) -> Result<u64, FsError> {
+        use golem_rust::wasip3::filesystem::types::PathFlags;
+
+        let stat = self
+            .descriptor
+            .stat_at(PathFlags::empty(), name.to_string())
+            .await
+            .map_err(map_wasi_error)?;
+        Ok(stat.size)
+    }
+
     pub(super) async fn read_bounded(&self, limit: usize) -> Result<(Vec<u8>, bool), FsError> {
         let (stream, completion) = self.descriptor.read_via_stream(0);
         let (bytes, at_eof) =
@@ -253,18 +261,48 @@ fn wasi_kind(type_: golem_rust::wasip3::filesystem::types::DescriptorType, size:
     }
 }
 
-pub(super) struct TreeWalker {
+fn child_kind(type_: &golem_rust::wasip3::filesystem::types::DescriptorType) -> ChildKind {
+    use golem_rust::wasip3::filesystem::types::DescriptorType;
+
+    match type_ {
+        DescriptorType::RegularFile => ChildKind::File,
+        DescriptorType::Directory => ChildKind::Directory,
+        DescriptorType::SymbolicLink => ChildKind::Symlink,
+        _ => ChildKind::Other,
+    }
+}
+
+/// One directory on the path of the cursor, opened and read at most once per tool call.
+struct Level {
+    /// The subdirectory and its name in the parent level; `None` for the root.
+    directory: Option<(String, FsNode)>,
+    /// Sorted entries, read when this level is first the innermost one.
+    children: Option<Vec<Child>>,
+}
+
+pub(super) struct TreeWalker<'a> {
+    root: &'a FsNode,
     root_path: String,
     max_depth: u32,
     pub(super) cursor: TreeCursor,
+    /// `levels[i]` is the directory of `cursor.frames[i]`. Callers may change the cursor, so
+    /// each step first drops the levels that the cursor no longer passes through.
+    levels: Vec<Level>,
 }
 
-impl TreeWalker {
-    pub(super) fn new(root_path: String, max_depth: u32, cursor: TreeCursor) -> Self {
+impl<'a> TreeWalker<'a> {
+    pub(super) fn new(
+        root: &'a FsNode,
+        root_path: String,
+        max_depth: u32,
+        cursor: TreeCursor,
+    ) -> Self {
         Self {
+            root,
             root_path,
             max_depth,
             cursor,
+            levels: Vec::new(),
         }
     }
 
@@ -272,35 +310,32 @@ impl TreeWalker {
         &mut self,
         descend: impl Fn(&str) -> bool,
         remaining_entries: &mut usize,
-    ) -> Result<Option<(String, NodeKind)>, WalkerError> {
+    ) -> Result<Option<(String, ChildKind)>, WalkerError> {
         loop {
             if self.cursor.frames.is_empty() {
                 return Ok(None);
             }
-            let directory = self.open_current_directory().await?;
-            let children = directory
-                .children(remaining_entries)
-                .await
-                .map_err(|error| WalkerError {
-                    path: self.current_directory_path(),
-                    budget_exhausted: matches!(error, FsError::WorkBudgetExhausted),
-                    error,
-                })?;
+            self.read_innermost_level(remaining_entries).await?;
             let after = self
                 .cursor
                 .frames
                 .last()
                 .and_then(|frame| frame.after.as_deref());
-            let next = children
-                .into_iter()
-                .find(|child| after.is_none_or(|after| child.name.as_bytes() > after.as_bytes()));
-            let Some(child) = next else {
+            let children = self
+                .levels
+                .last()
+                .and_then(|level| level.children.as_deref())
+                .expect("the innermost level has been read");
+            let position = after.map_or(0, |after| {
+                children.partition_point(|child| child.name.as_bytes() <= after.as_bytes())
+            });
+            let Some(child) = children.get(position).cloned() else {
                 self.cursor.frames.pop();
                 continue;
             };
             self.cursor.frames.last_mut().unwrap().after = Some(child.name.clone());
             let relative = self.current_entry_relative_path();
-            if matches!(child.kind, NodeKind::Directory)
+            if matches!(child.kind, ChildKind::Directory)
                 && self.cursor.frames.len() < self.max_depth as usize
                 && descend(&relative)
             {
@@ -310,60 +345,150 @@ impl TreeWalker {
         }
     }
 
-    async fn open_current_directory(&self) -> Result<FsNode, WalkerError> {
-        let mut node = FsNode::open_root(&self.root_path)
+    /// Reads the size of the entry that the cursor selects. Call it after `next` returns a file.
+    pub(super) async fn selected_file_size(&mut self) -> Result<u64, WalkerError> {
+        let path = join_path(&self.root_path, &self.current_entry_relative_path());
+        let (directory, name) = self.selected_entry().await?;
+        directory
+            .file_size(&name)
             .await
             .map_err(|error| WalkerError {
-                path: self.root_path.clone(),
+                path,
                 error,
                 budget_exhausted: false,
+            })
+    }
+
+    /// Opens the entry that the cursor selects, from the directory that holds it.
+    pub(super) async fn open_selected(&mut self) -> Result<FsNode, WalkerError> {
+        let path = join_path(&self.root_path, &self.current_entry_relative_path());
+        let (directory, name) = self.selected_entry().await?;
+        directory
+            .open_child(&name)
+            .await
+            .map_err(|error| WalkerError {
+                path,
+                error,
+                budget_exhausted: false,
+            })
+    }
+
+    async fn selected_entry(&mut self) -> Result<(&FsNode, String), WalkerError> {
+        self.open_levels().await?;
+        let name = self
+            .cursor
+            .frames
+            .last()
+            .and_then(|frame| frame.after.clone())
+            .ok_or_else(|| WalkerError {
+                path: self.current_directory_path(),
+                error: FsError::Io("cursor does not select an entry".to_string()),
+                budget_exhausted: false,
             })?;
-        for frame in self.cursor.frames.iter().take(self.cursor.frames.len() - 1) {
-            let name = frame.after.as_deref().ok_or_else(|| WalkerError {
+        Ok((self.directory_at(self.levels.len() - 1), name))
+    }
+
+    async fn read_innermost_level(
+        &mut self,
+        remaining_entries: &mut usize,
+    ) -> Result<(), WalkerError> {
+        self.open_levels().await?;
+        let depth = self.levels.len() - 1;
+        if self.levels[depth].children.is_none() {
+            let children = self
+                .directory_at(depth)
+                .children(remaining_entries)
+                .await
+                .map_err(|error| WalkerError {
+                    path: self.current_directory_path(),
+                    budget_exhausted: matches!(error, FsError::WorkBudgetExhausted),
+                    error,
+                })?;
+            self.levels[depth].children = Some(children);
+        }
+        Ok(())
+    }
+
+    /// Opens each directory of the cursor that has no open level yet.
+    async fn open_levels(&mut self) -> Result<(), WalkerError> {
+        self.drop_stale_levels();
+        while self.levels.len() < self.cursor.frames.len() {
+            let depth = self.levels.len();
+            let directory = if depth == 0 {
+                None
+            } else {
+                Some(self.open_level(depth).await?)
+            };
+            self.levels.push(Level {
+                directory,
+                children: None,
+            });
+        }
+        Ok(())
+    }
+
+    async fn open_level(&self, depth: usize) -> Result<(String, FsNode), WalkerError> {
+        let name = self.cursor.frames[depth - 1]
+            .after
+            .clone()
+            .ok_or_else(|| WalkerError {
                 path: self.root_path.clone(),
                 error: FsError::Io("cursor directory frame has no parent child".to_string()),
                 budget_exhausted: false,
             })?;
-            node = node.open_child(name).await.map_err(|error| WalkerError {
-                path: join_path(&self.root_path, &self.directory_components_to(name)),
+        let directory = self
+            .directory_at(depth - 1)
+            .open_child(&name)
+            .await
+            .map_err(|error| WalkerError {
+                path: self.directory_path(depth),
                 error,
                 budget_exhausted: false,
             })?;
-            if !matches!(node.kind(), NodeKind::Directory) {
-                return Err(WalkerError {
-                    path: self.current_directory_path(),
-                    error: FsError::Io("continued directory is no longer a directory".to_string()),
-                    budget_exhausted: false,
-                });
+        if !matches!(directory.kind(), NodeKind::Directory) {
+            return Err(WalkerError {
+                path: self.directory_path(depth),
+                error: FsError::Io("continued directory is no longer a directory".to_string()),
+                budget_exhausted: false,
+            });
+        }
+        Ok((name, directory))
+    }
+
+    fn drop_stale_levels(&mut self) {
+        let frames = &self.cursor.frames;
+        let mut valid = self.levels.len().min(frames.len());
+        for depth in 1..valid {
+            let name = self.levels[depth]
+                .directory
+                .as_ref()
+                .map(|(name, _)| name.as_str());
+            if name != frames[depth - 1].after.as_deref() {
+                valid = depth;
+                break;
             }
         }
-        Ok(node)
+        self.levels.truncate(valid);
     }
 
-    fn directory_components_to(&self, final_name: &str) -> String {
-        let mut names = self
-            .cursor
-            .frames
-            .iter()
-            .take(self.cursor.frames.len().saturating_sub(1))
-            .filter_map(|frame| frame.after.as_deref())
-            .collect::<Vec<_>>();
-        if names.last().copied() != Some(final_name) {
-            names.push(final_name);
-        }
-        names.join("/")
+    fn directory_at(&self, depth: usize) -> &FsNode {
+        self.levels[depth]
+            .directory
+            .as_ref()
+            .map_or(self.root, |(_, directory)| directory)
     }
 
-    fn current_directory_path(&self) -> String {
-        let relative = self
-            .cursor
-            .frames
+    fn directory_path(&self, depth: usize) -> String {
+        let relative = self.cursor.frames[..depth]
             .iter()
-            .take(self.cursor.frames.len().saturating_sub(1))
             .filter_map(|frame| frame.after.as_deref())
             .collect::<Vec<_>>()
             .join("/");
         join_path(&self.root_path, &relative)
+    }
+
+    fn current_directory_path(&self) -> String {
+        self.directory_path(self.cursor.frames.len().saturating_sub(1))
     }
 
     fn current_entry_relative_path(&self) -> String {

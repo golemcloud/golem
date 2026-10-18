@@ -127,7 +127,7 @@ pub(super) async fn entry_count(
             OplogIndex::INITIAL,
             worker.oplog().current_oplog_index().await.as_u64(),
         )
-        .await;
+        .await?;
     // Raw oplog timestamps have millisecond precision on persistence.
     let persisted = intercepted.clone().rounded();
     let count = entries
@@ -165,7 +165,7 @@ pub(super) async fn compute_suspension(worker: &Arc<Worker<Context>>) -> anyhow:
             OplogIndex::INITIAL,
             worker.oplog().current_oplog_index().await.as_u64(),
         )
-        .await;
+        .await?;
     let mut suspends = 0;
     for entry in entries.values() {
         match entry {

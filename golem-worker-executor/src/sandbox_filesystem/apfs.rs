@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use rustix::fs::{CloneFlags, StatVfsMountFlags, fclonefileat, fstatvfs};
+use rustix::fs::{CloneFlags, StatVfs, StatVfsMountFlags, fclonefileat, fstatvfs};
 use std::io::Write;
 
 pub(super) fn bind(
@@ -110,7 +110,12 @@ pub(super) fn clone_file(
 }
 
 pub(super) fn observe_space(root: &File) -> std::io::Result<FilesystemSpace> {
-    let capacity = fstatvfs(root).map_err(std::io::Error::from)?;
+    space_from_capacity(&fstatvfs(root).map_err(std::io::Error::from)?)
+}
+
+/// Gives the space of an APFS development volume whose `fstatvfs` result is `capacity`. A
+/// read-only volume gives a `ReadOnlyFilesystem` error.
+fn space_from_capacity(capacity: &StatVfs) -> std::io::Result<FilesystemSpace> {
     if capacity.f_flag.contains(StatVfsMountFlags::RDONLY) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::ReadOnlyFilesystem,
@@ -313,6 +318,63 @@ mod tests {
         let error = clone_file(&source, &parent, Path::new("clone")).unwrap_err();
         assert_eq!(error.raw_os_error(), Some(libc::EXDEV));
         assert!(!target.path().join("clone").exists());
+    }
+
+    #[test]
+    #[test_r::tag(native_apfs)]
+    fn apfs_temporary_clone_returns_a_clone_failure_without_another_name() {
+        let target = tempfile::tempdir().unwrap();
+        let path = target.path().to_path_buf();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        // A clone that tried the failure again under another name would never return, so the
+        // clone runs on its own thread and the test waits for it with a deadline.
+        std::thread::spawn(move || {
+            let source = File::open("/System/Library/CoreServices/SystemVersion.plist").unwrap();
+            let directory = cap_std::fs::Dir::from_std_file(File::open(&path).unwrap());
+            let _ = sender.send(CapabilityTempFile::from_clone(&directory, &source).map(|_| ()));
+        });
+        let error = receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("a failed clone must end the temporary clone")
+            .unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::EXDEV));
+        assert_eq!(std::fs::read_dir(target.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    #[test_r::tag(native_apfs)]
+    fn apfs_space_uses_the_fragment_size_and_the_free_counts_and_refuses_a_read_only_volume() {
+        let capacity = |f_flag| StatVfs {
+            f_bsize: 1_048_576,
+            f_frsize: 4096,
+            f_blocks: 10,
+            f_bfree: 6,
+            f_bavail: 4,
+            f_files: 20,
+            f_ffree: 9,
+            f_favail: 7,
+            f_fsid: 0,
+            f_flag,
+            f_namemax: 255,
+        };
+
+        assert_eq!(
+            space_from_capacity(&capacity(StatVfsMountFlags::NOSUID)).unwrap(),
+            FilesystemSpace::Observed {
+                total_bytes: 40_960,
+                available_bytes: 16_384,
+                total_filesystem_objects: 20,
+                available_filesystem_objects: 9,
+            }
+        );
+        assert_eq!(
+            space_from_capacity(&capacity(
+                StatVfsMountFlags::RDONLY | StatVfsMountFlags::NOSUID
+            ))
+            .unwrap_err()
+            .kind(),
+            std::io::ErrorKind::ReadOnlyFilesystem
+        );
     }
 
     #[test]

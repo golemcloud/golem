@@ -600,7 +600,7 @@ async fn pending_rpc_scenario(
         }
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(history::caller(&stopped, &key, &target_id, asynchronous, completion_first, usize::from(completion_first))? == Some(original.clone()));
-        let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await;
+        let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
         let mut errors = Vec::new();
         let mut suspends = 0;
         let mut interrupts = 0;

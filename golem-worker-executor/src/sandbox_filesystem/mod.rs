@@ -2311,6 +2311,27 @@ mod tests {
     }
 
     #[test]
+    fn space_uses_fragment_size_and_executor_available_counts() {
+        let space = space_from_values(10, 4, 4096, 20, 7).unwrap();
+
+        assert_eq!(
+            space,
+            FilesystemSpace::Observed {
+                total_bytes: 40_960,
+                available_bytes: 16_384,
+                total_filesystem_objects: 20,
+                available_filesystem_objects: 7,
+            }
+        );
+    }
+
+    #[test]
+    fn space_rejects_byte_overflow() {
+        assert!(space_from_values(u64::MAX, 1, 2, 0, 0).is_err());
+        assert!(space_from_values(1, u64::MAX, 2, 0, 0).is_err());
+    }
+
+    #[test]
     fn file_copy_mode_follows_the_volume() {
         assert_eq!(
             file_copy_mode(&FilesystemVolume::unmanaged_development()),

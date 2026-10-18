@@ -201,7 +201,7 @@ async fn monthly_stop_keeps_typed_signal_and_one_pending_tcp_result(
                     OplogIndex::INITIAL,
                     worker.oplog().current_oplog_index().await.as_u64(),
                 )
-                .await;
+                .await?;
             assert_eq!(
                 entries
                     .values()
@@ -571,7 +571,7 @@ async fn quota_stop_preserves_selected_independent_guest_failure(
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         let errors: Vec<_> = entries
             .values()
             .filter_map(|entry| match entry {
@@ -857,7 +857,7 @@ async fn deadline_selection(
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         let raw_after_stop = executor.stored_oplog(&id).await;
         assert!(raw_after_stop.len() >= committed_prefix.len());
         assert_eq!(
@@ -906,7 +906,7 @@ async fn deadline_selection(
                     OplogIndex::INITIAL,
                     worker.oplog().current_oplog_index().await.as_u64(),
                 )
-                .await;
+                .await?;
             assert_eq!(
                 after
                     .values()

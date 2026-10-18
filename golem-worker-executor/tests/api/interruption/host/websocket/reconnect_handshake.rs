@@ -359,7 +359,7 @@ pub(super) async fn pending_reconnect_handshake(
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(reconnect_pool::operation_start(&stopped, path, 0)? == start);
         assert_invocation(&stopped, &key, 0)?;
-        let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await;
+        let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
         ensure!(entries.values().filter(|entry| matches!(entry, OplogEntry::Suspend { .. })).count() == 1);
         ensure!(!entries.values().any(|entry| matches!(entry, OplogEntry::Error { .. } | OplogEntry::Interrupted { .. } | OplogEntry::Exited { .. })));
         ensure!(!invocation.as_ref().unwrap().is_finished());

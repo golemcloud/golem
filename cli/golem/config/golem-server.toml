@@ -747,6 +747,10 @@ retained_input_frames = 32
 retry_deadline = "10s"
 retry_delay = "100ms"
 
+[worker_service.invocation_session]
+keep_alive_interval = "30s"
+max_pong_timeout = "0s"
+
 [worker_service.invocation_session_tokens]
 issuer = "local-worker-service"
 verify_only_keys = []
@@ -754,6 +758,9 @@ verify_only_keys = []
 [worker_service.invocation_session_tokens.active_key]
 id = "local-development"
 key = "0udALeSRcimBmmLXm6iKY1jg4+IZNXv6LaFkdIQ4hLA="
+
+[worker_service.mcp]
+sse_keep_alive_interval = "15s"
 
 [worker_service.registry_service]
 connect_timeout = "10s"
@@ -1693,6 +1700,10 @@ type = "Disabled"
 # retry_deadline = "10s"
 # retry_delay = "100ms"
 #
+# [worker_service.invocation_session]
+# keep_alive_interval = "30s"
+# max_pong_timeout = "0s"
+#
 # [worker_service.invocation_session_tokens]
 # issuer = "local-worker-service"
 # verify_only_keys = []
@@ -1700,6 +1711,9 @@ type = "Disabled"
 # [worker_service.invocation_session_tokens.active_key]
 # id = "local-development"
 # key = "0udALeSRcimBmmLXm6iKY1jg4+IZNXv6LaFkdIQ4hLA="
+#
+# [worker_service.mcp]
+# sse_keep_alive_interval = "15s"
 #
 # [worker_service.registry_service]
 # connect_timeout = "10s"

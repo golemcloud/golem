@@ -144,6 +144,7 @@ use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValu
 use golem_worker_executor::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
     OplogService, OrderedOplogStart, RawOplogPayloadDownloadError, ReservedRawStartBuilder,
+    UnreadableOplog,
 };
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::quota::QuotaService;
@@ -172,7 +173,9 @@ use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
 use golem_worker_executor::storage::keyvalue::KeyValueStorage;
 use golem_worker_executor::storage::scheduler::SchedulerStorage;
-use golem_worker_executor::worker::{RetryDecision, Worker, WorkerDeletionHook};
+use golem_worker_executor::worker::{
+    InvocationFailureDecision, RetryDecision, Worker, WorkerDeletionHook,
+};
 pub use golem_worker_executor::workerctx::ReplayAdmissionStage;
 use golem_worker_executor::workerctx::{
     CallCountManagement, EntityInvocationBodyHook, EntityInvocationManagement, ExternalOperations,
@@ -736,7 +739,7 @@ impl TestWorkerExecutor {
         let create = services
             .oplog_service()
             .read_exact(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 1)
-            .await
+            .await?
             .remove(&OplogIndex::INITIAL)
             .ok_or_else(|| anyhow!("agent create entry is missing: {owned_agent_id}"))?;
         let OplogEntry::Create { parameters, .. } = create else {
@@ -776,7 +779,8 @@ impl TestWorkerExecutor {
         };
         let last = oplog
             .get_last_index(&owned_agent_id, AgentMode::Durable)
-            .await;
+            .await
+            .expect("the oplog of the test agent reads");
         oplog
             .read_exact(
                 &owned_agent_id,
@@ -785,6 +789,7 @@ impl TestWorkerExecutor {
                 last.as_u64(),
             )
             .await
+            .expect("the oplog of the test agent reads")
             .into_values()
             .collect()
     }
@@ -809,10 +814,10 @@ impl TestWorkerExecutor {
                 OplogIndex::INITIAL,
                 oplog
                     .get_last_index(&owned_agent_id, AgentMode::Durable)
-                    .await
+                    .await?
                     .as_u64(),
             )
-            .await;
+            .await?;
         let mut records = Vec::new();
         for entry in entries.into_values() {
             if let OplogEntry::StreamSession { record, .. } = entry {
@@ -1181,7 +1186,7 @@ impl TestWorkerExecutor {
         let create = services
             .oplog_service()
             .read_exact(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 1)
-            .await
+            .await?
             .remove(&OplogIndex::INITIAL)
             .ok_or_else(|| anyhow!("agent create entry is missing: {owned_agent_id}"))?;
         let OplogEntry::Create { parameters, .. } = create else {
@@ -1228,7 +1233,7 @@ impl TestWorkerExecutor {
             .oplog_service();
         let entries = oplog
             .read_exact(&owned_agent_id, AgentMode::Durable, end_index, 1)
-            .await;
+            .await?;
         match entries.get(&end_index) {
             Some(OplogEntry::End {
                 response:
@@ -1330,7 +1335,7 @@ impl TestWorkerExecutor {
             .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
         let entry = golem_worker_executor::services::HasOplog::oplog(worker.as_ref())
             .read(snapshot_index)
-            .await;
+            .await?;
         match entry {
             OplogEntry::Snapshot { .. } => {}
             OplogEntry::PendingUpdate {
@@ -2737,6 +2742,116 @@ pub async fn take_agent_oplog_over_at_epoch(
     Ok(())
 }
 
+/// The indexed storage of executors started with the SQLite storage config (`start`,
+/// `start_with_overrides`, `start_customized`, `start_with_oplog_config`).
+async fn sqlite_indexed_storage(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+) -> anyhow::Result<SqliteIndexedStorage> {
+    SqliteIndexedStorage::configured(&derive_disjoint_sqlite_config(
+        &sqlite_storage_config(deps, context),
+        "indexed",
+    ))
+    .await
+    .map_err(|err| anyhow!(err))
+}
+
+/// The chunks that the compressed archive `level` holds for the durable agent, as stored: each
+/// with the oplog index of its last entry. Read without going through any executor.
+pub async fn archived_oplog_chunks(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    owned_agent_id: &OwnedAgentId,
+    level: usize,
+) -> anyhow::Result<Vec<(u64, Vec<u8>)>> {
+    let storage = sqlite_indexed_storage(deps, context).await?;
+    Ok(storage
+        .read(
+            "compressed_oplog",
+            "test_read",
+            "compressed_entry",
+            IndexedStorageNamespace::CompressedOpLog {
+                agent_id: owned_agent_id.agent_id(),
+                agent_mode: AgentMode::Durable,
+                level,
+            },
+            &owned_agent_id.agent_id.to_redis_key(),
+            0,
+            i64::MAX as u64,
+        )
+        .await?)
+}
+
+/// Replaces the chunk at `position` (0 is the oldest) of the compressed archive `level` of the
+/// durable agent with a truncated encoding of its entries: the chunk decompresses, but its entries
+/// do not deserialize, as with a chunk whose write was cut short. The other chunks stay as they
+/// are. The storage is reached as by [`take_agent_oplog_over_at_epoch`], so no executor may run on
+/// it meanwhile.
+pub async fn truncate_archived_oplog_chunk(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    owned_agent_id: &OwnedAgentId,
+    level: usize,
+    position: usize,
+) -> anyhow::Result<()> {
+    use golem_worker_executor::services::oplog::CompressedOplogChunk;
+
+    let chunks = archived_oplog_chunks(deps, context, owned_agent_id, level).await?;
+    let (truncated_id, stored) = chunks.get(position).ok_or_else(|| {
+        anyhow!(
+            "archive level {level} holds {} chunks of {owned_agent_id}, none at {position}",
+            chunks.len()
+        )
+    })?;
+    let chunk: CompressedOplogChunk =
+        golem_common::serialization::deserialize(stored).map_err(|err| anyhow!(err))?;
+    let entries = chunk.decompress()?;
+    let encoded = golem_common::serialization::serialize(&entries).map_err(|err| anyhow!(err))?;
+    let truncated = CompressedOplogChunk {
+        count: chunk.count,
+        compressed_data: zstd::encode_all(&encoded[..encoded.len() / 2], 0)?,
+    };
+
+    let storage = sqlite_indexed_storage(deps, context).await?;
+    let namespace = IndexedStorageNamespace::CompressedOpLog {
+        agent_id: owned_agent_id.agent_id(),
+        agent_mode: AgentMode::Durable,
+        level,
+    };
+    let key = owned_agent_id.agent_id.to_redis_key();
+    let (last_id, _) = chunks.last().expect("the chunks are not empty");
+    storage
+        .drop_prefix(
+            "compressed_oplog",
+            "test_truncate",
+            namespace.clone(),
+            &key,
+            *last_id,
+            None,
+        )
+        .await?;
+    for (id, value) in &chunks {
+        let value = if id == truncated_id {
+            golem_common::serialization::serialize(&truncated).map_err(|err| anyhow!(err))?
+        } else {
+            value.clone()
+        };
+        storage
+            .append(
+                "compressed_oplog",
+                "test_truncate",
+                "compressed_entry",
+                namespace.clone(),
+                &key,
+                *id,
+                value,
+                None,
+            )
+            .await?;
+    }
+    Ok(())
+}
+
 /// How many entries the agent's durable oplog holds in storage, read without going through any
 /// executor - the same storage [`take_agent_oplog_over_at_epoch`] writes to.
 pub async fn agent_oplog_length(
@@ -3422,7 +3537,7 @@ impl InvocationHooks for TestWorkerCtx {
         &mut self,
         full_function_name: &str,
         trap_type: &TrapType,
-    ) -> RetryDecision {
+    ) -> InvocationFailureDecision {
         self.durable_ctx
             .on_invocation_failure(full_function_name, trap_type)
             .await
@@ -6299,7 +6414,7 @@ impl Oplog for TestOplog {
         self.oplog.wait_for_replicas(replicas, timeout).await
     }
 
-    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+    async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, UnreadableOplog> {
         let gate = {
             let mut gates = self.additional_test_deps.oplog_read_gates.lock().unwrap();
             let key = (self.owned_agent_id.agent_id.clone(), oplog_index);
@@ -6313,9 +6428,9 @@ impl Oplog for TestOplog {
             .additional_test_deps
             .take_non_snapshot_oplog_read(&self.owned_agent_id.agent_id, oplog_index)
         {
-            return OplogEntry::grow_memory(0);
+            return Ok(OplogEntry::grow_memory(0));
         }
-        let mut entry = self.oplog.read(oplog_index).await;
+        let mut entry = self.oplog.read(oplog_index).await?;
         if matches!(entry, OplogEntry::Snapshot { .. }) {
             self.additional_test_deps
                 .record_oplog_call(&self.owned_agent_id, "read_automatic_snapshot");
@@ -6353,14 +6468,14 @@ impl Oplog for TestOplog {
                 _ => panic!("{oplog_index} is not a snapshot"),
             }
         }
-        entry
+        Ok(entry)
     }
 
     async fn read_exact(
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         let gate = {
             let mut gates = self.additional_test_deps.oplog_read_gates.lock().unwrap();
             let key = (self.owned_agent_id.agent_id.clone(), oplog_index);
@@ -6381,11 +6496,11 @@ impl Oplog for TestOplog {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         self.oplog.read_source(oplog_index, n).await
     }
 
-    async fn length(&self) -> u64 {
+    async fn length(&self) -> Result<u64, UnreadableOplog> {
         self.oplog.length().await
     }
 

@@ -1375,6 +1375,7 @@ fn agent_oplog_structured_output_exposes_secret_metadata_without_stdout_bytes() 
             request: Some(request),
             durable_function_type: PublicDurableFunctionType::WriteLocal(Empty {}),
             span_started: None,
+            denial: None,
         })
         .into(),
     })
@@ -2306,6 +2307,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
                 attributes: vec![span_attribute("span.start", "recorded")],
                 kind: PublicSpanKind::Client,
             }),
+            denial: Some("access denied".to_string()),
         }),
         PublicOplogEntry::End(EndParams {
             timestamp: timestamp(),

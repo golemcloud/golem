@@ -965,7 +965,7 @@ async fn native_failed_cleanup_releases_execution_refuses_startup_and_repairs_wi
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         use golem_common::model::oplog::OplogEntry;
         assert_eq!(
             history

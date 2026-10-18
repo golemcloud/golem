@@ -309,7 +309,7 @@ async fn pending_multi_poll(
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         let errors: Vec<_> = entries
             .values()
             .filter_map(|entry| match entry {
@@ -509,7 +509,7 @@ async fn pending_multi_poll(
                     OplogIndex::INITIAL,
                     worker.oplog().current_oplog_index().await.as_u64(),
                 )
-                .await;
+                .await?;
             ensure!(
                 raw_after == entries,
                 "ephemeral retry must not replay or append history"
@@ -574,7 +574,7 @@ async fn pending_multi_poll(
                     OplogIndex::INITIAL,
                     worker.oplog().current_oplog_index().await.as_u64(),
                 )
-                .await;
+                .await?;
             ensure!(
                 original == entries,
                 "fresh ephemeral identity cannot execute failed history"

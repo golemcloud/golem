@@ -30,7 +30,7 @@ use crate::durable_host::durability::{
 };
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
-    observe_function_call_store, run_read_access, wasi_sockets_view,
+    observe_function_call_store, run_deniable_access, run_read_access, wasi_sockets_view,
 };
 use crate::durable_host::tail_work::TailActivity;
 use crate::services::HasWorker;
@@ -61,6 +61,8 @@ use wasmtime_wasi::p3::sockets::{SocketError, SocketResult};
 use wasmtime_wasi::sockets::{TcpSocket, WasiSockets, WasiSocketsView};
 
 use super::serialize_socket_error;
+
+pub(super) const UNSUPPORTED_SOCKET_TARGET: &str = "unsupported socket address";
 
 pub(super) fn socket_target(
     address: &types::IpSocketAddress,
@@ -1439,35 +1441,33 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                 .state
                 .is_live()
         });
-        let denied = if live {
+        let denial = if live {
             match socket_target(&remote_address) {
-                Some(target) => !matches!(
-                    authorize_live_permissions_at_serialized_access(
-                        store,
-                        durable_worker_ctx::<Ctx, U>,
-                        &[target],
-                    )
-                    .await,
-                    Ok(Ok(_))
-                ),
-                None => true,
+                Some(target) => match authorize_live_permissions_at_serialized_access(
+                    store,
+                    durable_worker_ctx::<Ctx, U>,
+                    &[target],
+                )
+                .await
+                {
+                    Ok(Ok(_)) => None,
+                    Ok(Err(error)) => Some(error.to_string()),
+                    Err(error) => Some(error.to_string()),
+                },
+                None => Some(UNSUPPORTED_SOCKET_TARGET.to_string()),
             }
         } else {
-            false
+            None
         };
         let request_address = remote_address;
-        let response = run_read_access::<_, _, Ctx, P3SocketsTypesTcpSocketConnect, _>(
+        let response = run_deniable_access::<_, _, Ctx, P3SocketsTypesTcpSocketConnect, _>(
             store,
             HostRequestP3SocketsConnect {
                 remote_address: request_address.into(),
             },
             DurableFunctionType::WriteRemote,
+            denial,
             || async {
-                if denied {
-                    return Ok(HostResponseP3SocketsConnect {
-                        result: Err(SerializableP3SocketErrorCode::AccessDenied),
-                    });
-                }
                 let sockets = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
                 let result = <WasiSockets as types::HostTcpSocketWithStore<U>>::connect(
                     &sockets,

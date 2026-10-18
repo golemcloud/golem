@@ -26,8 +26,10 @@ use crate::preview2::exports::golem::api1_5_0::save_snapshot as save_snapshot_ex
 use crate::preview2::oplog_processor_plugin::exports::golem::api1_5_0::oplog_processor as oplog_processor_exports;
 use crate::preview2::{golem_agent, golem_api_1_x};
 use crate::services::HasWorker;
+use crate::services::oplog::UnreadableOplog;
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use futures::FutureExt;
+use golem_common::model::AgentId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component_metadata::{AgentMethodStreamMetadata, ComponentMetadata};
 use golem_common::model::oplog::AgentError as OplogAgentError;
@@ -392,7 +394,12 @@ pub(crate) async fn materialize_streaming_result<Ctx: WorkerCtx>(
         None => future.await,
     };
     let interrupted = store.data().durable_ctx().is_interrupting();
-    let output = match classify_guest_call_settlement(materialized, None, interrupted) {
+    let output = match classify_guest_call_settlement(
+        store.data().agent_id(),
+        materialized,
+        None,
+        interrupted,
+    ) {
         Ok(Ok(result)) => result?,
         Ok(Err(interrupt_kind)) => {
             return Ok(InvokeResult::Interrupted {
@@ -516,7 +523,24 @@ fn is_guest_semantic_trap(error: &wasmtime::Error) -> bool {
     error.downcast_ref::<wasmtime::WasmBacktrace>().is_some()
 }
 
+/// The oplog that a host call could not read, in the chain of `error`, with the agent it belongs
+/// to: either already a `WorkerExecutorError`, or the read failure itself. The error is
+/// `OplogFailed` for good, or `RecoveryRequired` when a later read can pass.
+fn unreadable_oplog_in(error: &wasmtime::Error) -> Option<(AgentId, WorkerExecutorError)> {
+    error
+        .chain()
+        .find_map(|cause| match cause.downcast_ref::<WorkerExecutorError>() {
+            Some(error @ WorkerExecutorError::OplogFailed { agent_id, .. }) => {
+                Some((agent_id.clone(), error.clone()))
+            }
+            _ => cause
+                .downcast_ref::<UnreadableOplog>()
+                .map(|error| (error.agent_id.clone(), error.clone().into())),
+        })
+}
+
 fn classify_guest_call_settlement<R>(
+    own_agent_id: &AgentId,
     result: wasmtime::Result<R>,
     tail_timeout: Option<(std::time::Duration, usize)>,
     interrupted: bool,
@@ -537,6 +561,17 @@ fn classify_guest_call_settlement<R>(
             )
         {
             GuestCallSettlementError::Interrupted(error)
+        } else if let Some((agent_id, unreadable)) = unreadable_oplog_in(&error) {
+            // The oplog of this agent is a failure of the agent. The oplog of another agent that
+            // failed for good fails only the call that read it, as a trap that the retry policy
+            // of this agent handles; when a later read can pass, this agent recovers and retries.
+            if agent_id == *own_agent_id
+                || !matches!(unreadable, WorkerExecutorError::OplogFailed { .. })
+            {
+                GuestCallSettlementError::Infrastructure(unreadable)
+            } else {
+                GuestCallSettlementError::Trap(error)
+            }
         } else if let Some(recovery_failure) = error
             .chain()
             .find_map(|cause| cause.downcast_ref::<DurableRecoveryFailure>())
@@ -688,7 +723,7 @@ pub(crate) async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
     } else {
         None
     };
-    classify_guest_call_settlement(result, tail_timeout, interrupted)
+    classify_guest_call_settlement(store.data().agent_id(), result, tail_timeout, interrupted)
 }
 
 /// Dispatches a single lowered invocation to the matching typed guest export
@@ -752,7 +787,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                     .await;
                 let interrupted = store.data().durable_ctx().is_interrupting()
                     || store.data().durable_ctx().invocation_deadline_exceeded();
-                classify_guest_call_settlement(result, None, interrupted)
+                classify_guest_call_settlement(store.data().agent_id(), result, None, interrupted)
             } else {
                 run_guest_call_settled(store, async |accessor| {
                     guest
@@ -2521,6 +2556,7 @@ mod tests {
     fn wrapped_replay_jump_settles_as_interruption() {
         assert!(matches!(
             classify_guest_call_settlement::<()>(
+                &own_agent_id(),
                 Err(wasmtime::Error::from_anyhow(
                     anyhow::Error::new(WorkerExecutorError::Interrupted {
                         kind: InterruptKind::Jump,
@@ -2534,9 +2570,98 @@ mod tests {
         ));
     }
 
+    /// The agent whose guest calls the tests settle.
+    fn own_agent_id() -> AgentId {
+        AgentId {
+            component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
+            agent_id: "own".to_string(),
+        }
+    }
+
+    /// A host call whose oplog read failed fails the agent, not the guest call: the read failure,
+    /// raw or already a `WorkerExecutorError`, settles as an unreadable oplog of the agent.
+    #[test]
+    fn an_unreadable_oplog_settles_as_infrastructure() {
+        let unreadable = UnreadableOplog {
+            agent_id: own_agent_id(),
+            error: crate::services::oplog::OplogReadError::Gap {
+                start: OplogIndex::INITIAL,
+                end: OplogIndex::from_u64(2),
+            },
+        };
+        let expected = WorkerExecutorError::from(unreadable.clone());
+        for error in [
+            wasmtime::Error::from_anyhow(
+                anyhow::Error::from(unreadable.clone()).context("host call"),
+            ),
+            wasmtime::Error::from_anyhow(
+                anyhow::Error::from(expected.clone()).context("host call"),
+            ),
+        ] {
+            match classify_guest_call_settlement::<()>(&own_agent_id(), Err(error), None, false) {
+                Err(GuestCallSettlementError::Infrastructure(error)) => {
+                    assert_eq!(error, expected)
+                }
+                Err(_) => panic!("an unreadable oplog did not settle as infrastructure"),
+                Ok(()) => panic!("an unreadable oplog settled"),
+            }
+        }
+    }
+
+    /// The oplog of another agent that a host call could not read fails only the call, as a trap,
+    /// when it failed for good, and recovers this agent when a later read can pass. Neither fails
+    /// this agent with the cause of the other.
+    #[test]
+    fn an_unreadable_oplog_of_another_agent_fails_only_the_call() {
+        let other = AgentId {
+            component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
+            agent_id: "other".to_string(),
+        };
+        let unreadable = |error| UnreadableOplog {
+            agent_id: other.clone(),
+            error,
+        };
+        let corrupt = unreadable(crate::services::oplog::OplogReadError::Gap {
+            start: OplogIndex::INITIAL,
+            end: OplogIndex::from_u64(2),
+        });
+        for error in [
+            anyhow::Error::from(corrupt.clone()),
+            anyhow::Error::from(WorkerExecutorError::from(corrupt)),
+        ] {
+            assert!(matches!(
+                classify_guest_call_settlement::<()>(
+                    &own_agent_id(),
+                    Err(wasmtime::Error::from_anyhow(error.context("host call"))),
+                    None,
+                    false,
+                ),
+                Err(GuestCallSettlementError::Trap(_))
+            ));
+        }
+        let unavailable = unreadable(crate::services::oplog::OplogReadError::source_unavailable(
+            crate::services::oplog::OplogReadSource::Archive(1),
+            "outage",
+        ));
+        assert!(matches!(
+            classify_guest_call_settlement::<()>(
+                &own_agent_id(),
+                Err(wasmtime::Error::from_anyhow(
+                    anyhow::Error::from(unavailable).context("host call")
+                )),
+                None,
+                false,
+            ),
+            Err(GuestCallSettlementError::Infrastructure(
+                WorkerExecutorError::RecoveryRequired { .. }
+            ))
+        ));
+    }
+
     #[test]
     fn guest_trap_and_settlement_failures_keep_distinct_provenance() {
         let guest_trap = classify_guest_call_settlement(
+            &own_agent_id(),
             Ok::<_, wasmtime::Error>(Err::<(), _>(wasmtime::Error::msg("guest trapped"))),
             None,
             false,
@@ -2546,6 +2671,7 @@ mod tests {
 
         assert!(matches!(
             classify_guest_call_settlement::<()>(
+                &own_agent_id(),
                 Err(wasmtime::Error::from_anyhow(
                     wasmtime::Trap::UnreachableCodeReached.into(),
                 )),
@@ -2556,6 +2682,7 @@ mod tests {
         ));
         assert!(matches!(
             classify_guest_call_settlement::<()>(
+                &own_agent_id(),
                 Err(wasmtime::Error::from_anyhow(
                     GolemSpecificWasmTrap::WorkerOutOfMemory.into(),
                 )),
@@ -2566,6 +2693,7 @@ mod tests {
         ));
         assert!(matches!(
             classify_guest_call_settlement::<()>(
+                &own_agent_id(),
                 Err(wasmtime::Error::from_anyhow(
                     wasmtime::Trap::AsyncDeadlock.into(),
                 )),
@@ -2576,6 +2704,7 @@ mod tests {
         ));
         assert!(matches!(
             classify_guest_call_settlement::<()>(
+                &own_agent_id(),
                 Err(wasmtime::Error::msg("host task failed")),
                 None,
                 false,
@@ -2584,6 +2713,7 @@ mod tests {
         ));
         assert!(matches!(
             classify_guest_call_settlement::<()>(
+                &own_agent_id(),
                 Err(wasmtime::Error::msg("interrupted")),
                 None,
                 true,
@@ -2592,6 +2722,7 @@ mod tests {
         ));
         assert!(matches!(
             classify_guest_call_settlement::<()>(
+                &own_agent_id(),
                 Err(wasmtime::Error::from_anyhow(
                     InterruptKind::Suspend(golem_common::model::Timestamp::now_utc()).into(),
                 )),
@@ -2638,7 +2769,7 @@ mod tests {
                 "the reproducer must exercise Wasmtime's attached backtrace context"
             );
             let Err(GuestCallSettlementError::Infrastructure(classified)) =
-                classify_guest_call_settlement::<()>(Err(error), None, false)
+                classify_guest_call_settlement::<()>(&own_agent_id(), Err(error), None, false)
             else {
                 panic!("host failure must remain infrastructure");
             };
@@ -2662,6 +2793,7 @@ mod tests {
             },
         );
         let result = classify_guest_call_settlement::<()>(
+            &own_agent_id(),
             Err(wasmtime::Error::from_anyhow(error)),
             None,
             false,
@@ -2681,6 +2813,7 @@ mod tests {
     #[test]
     fn bare_recovery_required_preserves_its_retry_point() {
         let result = classify_guest_call_settlement::<()>(
+            &own_agent_id(),
             Err(wasmtime::Error::from_anyhow(anyhow::Error::new(
                 WorkerExecutorError::recovery_required_from(
                     "completed prefix payload unavailable",
@@ -2709,6 +2842,7 @@ mod tests {
         let inner = anyhow::anyhow!("payload 123 is missing")
             .context("failed to download incoming body chunk payload");
         let result = classify_guest_call_settlement::<()>(
+            &own_agent_id(),
             Err(wasmtime::Error::from_anyhow(anyhow::Error::new(
                 DurableRecoveryFailure::new(DurableRecoveryFailureKind::Permanent, inner),
             ))),
@@ -2730,6 +2864,7 @@ mod tests {
     #[test]
     fn settlement_timeout_is_infrastructure_even_after_root_return() {
         let result = classify_guest_call_settlement(
+            &own_agent_id(),
             Ok(()),
             Some((std::time::Duration::from_secs(2), 1)),
             false,

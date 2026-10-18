@@ -402,7 +402,7 @@ async fn waiting_start_restart_receipt_precedes_permit_release(
                 OplogIndex::INITIAL,
                 oplog.current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         assert!(!entries.values().any(|entry| matches!(
             entry,
             OplogEntry::Suspend { .. } | OplogEntry::AgentInvocationFinished { .. }
@@ -448,7 +448,7 @@ async fn waiting_start_restart_receipt_precedes_permit_release(
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         assert_eq!(
             entries
                 .values()
@@ -567,7 +567,7 @@ async fn closed_window_retains_late_stop_health_without_reacquiring_permit(
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         assert_eq!(
             entries
                 .values()
@@ -705,7 +705,7 @@ async fn released_window_late_stop_cancels_real_permit_reacquisition(
             OplogIndex::INITIAL,
             worker.oplog().current_oplog_index().await.as_u64(),
         )
-        .await;
+        .await?;
     assert_eq!(
         entries
             .values()

@@ -80,7 +80,7 @@ mod completed_history {
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         let original_raw = executor.stored_oplog(&id).await;
         let (started, finished, payload) = completed_invocation_payload(&original, &key)?;
         let (entered, release) = executor.gate_next_oplog_payload_read(&id, payload);
@@ -145,7 +145,7 @@ mod completed_history {
             worker
                 .oplog()
                 .read_exact(started, finished.as_u64() - started.as_u64() + 1)
-                .await,
+                .await?,
             original
                 .range(started..=finished)
                 .map(|(index, entry)| (*index, entry.clone()))
@@ -227,7 +227,7 @@ mod completed_history {
         let original = worker
             .oplog()
             .read_exact(OplogIndex::INITIAL, original_tip.as_u64())
-            .await;
+            .await?;
         let original_raw = executor.stored_oplog(&id).await;
         let started = |entries: &std::collections::BTreeMap<OplogIndex, OplogEntry>,
                        key: &IdempotencyKey| {
@@ -319,7 +319,7 @@ mod completed_history {
             worker
                 .oplog()
                 .read_exact(OplogIndex::INITIAL, original_tip.as_u64())
-                .await,
+                .await?,
             original
         );
         eprintln!(
@@ -359,12 +359,12 @@ mod completed_history {
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         assert_eq!(
             worker
                 .oplog()
                 .read_exact(OplogIndex::INITIAL, original_tip.as_u64())
-                .await,
+                .await?,
             original
         );
         assert_eq!(started(&stopped, &key), starts);
@@ -450,12 +450,12 @@ mod completed_history {
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         assert_eq!(
             worker
                 .oplog()
                 .read_exact(OplogIndex::INITIAL, original_tip.as_u64())
-                .await,
+                .await?,
             original
         );
         assert_eq!(started(&recovered, &key), starts);
@@ -746,7 +746,7 @@ mod post_export {
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         let stopped_raw = executor.stored_oplog(&id).await;
         assert!(stopped_raw.len() >= prefix.len());
         assert_eq!(&stopped_raw[..prefix.len()], prefix.as_slice());
@@ -817,7 +817,7 @@ mod post_export {
             let oplog = worker.oplog();
             let observed_tip = oplog.current_oplog_index().await;
             oplog.commit(CommitLevel::Always).await?;
-            let entries = oplog.read_exact(OplogIndex::INITIAL, observed_tip.as_u64()).await;
+            let entries = oplog.read_exact(OplogIndex::INITIAL, observed_tip.as_u64()).await?;
             let starts = entries.iter().filter_map(|(index, entry)| match entry {
                 OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == key => Some(*index),
                 _ => None,

@@ -281,7 +281,7 @@ async fn repeated_stop(
         ensure!(count_agent_invocation_pair_since(&stopped, OplogIndex::INITIAL) == (2, 1));
         let entries = worker.oplog().read_exact(
             OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64(),
-        ).await;
+        ).await?;
         let errors: Vec<_> = entries.values().filter_map(|entry| match entry {
             OplogEntry::Error { error, .. } => Some(error), _ => None,
         }).collect();

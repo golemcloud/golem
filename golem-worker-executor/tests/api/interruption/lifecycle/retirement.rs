@@ -159,10 +159,10 @@ async fn stop_order(
         AgentMode::Ephemeral
     };
     let source = worker.all().oplog_service();
-    let original_last = source.get_last_index(&owned, mode).await;
+    let original_last = source.get_last_index(&owned, mode).await?;
     let original_prefix = source
         .read_exact(&owned, mode, OplogIndex::INITIAL, original_last.as_u64())
-        .await;
+        .await?;
     assert!(
         !original_prefix.is_empty(),
         "the committed invocation prefix must be present in its actual storage mode"
@@ -288,10 +288,10 @@ async fn stop_order(
     worker.retained_cleanup_for_test().await?;
     // Deletion has closed the resident oplog by this storage boundary. Read its actual
     // mode through the service; the user-only case keeps its original resident read below.
-    let last = source.get_last_index(&owned, mode).await;
+    let last = source.get_last_index(&owned, mode).await?;
     let stored = source
         .read_exact(&owned, mode, OplogIndex::INITIAL, last.as_u64())
-        .await;
+        .await?;
     assert!(stored.len() >= original_prefix.len());
     assert_eq!(
         stored
@@ -307,7 +307,7 @@ async fn stop_order(
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await
+            .await?
     } else {
         stored
     };

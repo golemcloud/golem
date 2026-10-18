@@ -80,7 +80,7 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
     let original = worker
         .oplog()
         .read_exact(OplogIndex::INITIAL, original_tip.as_u64())
-        .await;
+        .await?;
     let original_raw = executor.stored_oplog(&id).await;
     let (_, _, payload) = completed_invocation_payload(&original, &key)?;
     let (old_replay, release_old_replay) =
@@ -291,7 +291,7 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
         worker
             .oplog()
             .read_exact(OplogIndex::INITIAL, original_tip.as_u64())
-            .await,
+            .await?,
         original
     );
     let stopped = worker
@@ -300,7 +300,7 @@ async fn same_cached_worker_replaces_monthly_window_and_accepts_current_quota(
             OplogIndex::INITIAL,
             worker.oplog().current_oplog_index().await.as_u64(),
         )
-        .await;
+        .await?;
     let stopped_raw = executor.stored_oplog(&id).await;
     assert!(stopped_raw.len() >= old_raw.len());
     assert_eq!(&stopped_raw[..old_raw.len()], old_raw.as_slice());
@@ -468,7 +468,7 @@ mod activation {
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         let suspends_before = before_resume
             .values()
             .filter(|e| matches!(e, OplogEntry::Suspend { .. }))
@@ -483,7 +483,7 @@ mod activation {
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         let suspends_after = entries
             .values()
             .filter(|e| matches!(e, OplogEntry::Suspend { .. }))
@@ -578,7 +578,7 @@ mod activation {
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         let constructor_key = initial
             .values()
             .find_map(|entry| match entry {
@@ -677,7 +677,7 @@ mod activation {
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         assert_eq!(blocked.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &completed_key)).count(), 1);
         assert_eq!(
             blocked
@@ -732,7 +732,7 @@ mod activation {
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         let interrupted = entries
             .values()
             .filter(|e| matches!(e, OplogEntry::Interrupted { .. }))
@@ -786,7 +786,7 @@ mod activation {
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         assert_eq!(recovered.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
         assert_eq!(recovered.values().filter(|e| matches!(e, OplogEntry::PendingAgentInvocation { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
         assert_eq!(recovered.values().filter(|e| matches!(e, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &completed_key)).count(), 1);

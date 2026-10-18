@@ -581,7 +581,7 @@ async fn pending_reader_lock(
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         let errors: Vec<_> = entries
             .values()
             .filter_map(|entry| match entry {

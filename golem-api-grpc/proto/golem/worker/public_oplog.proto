@@ -149,6 +149,7 @@ message StartParameters {
   optional DurableInvocationId invocation_id = 7;
   optional uint64 observational_owner = 8;
   optional SpanStarted span_started = 9;
+  optional string denial = 10;
 }
 
 message EndParameters {

@@ -162,7 +162,7 @@ async fn pending_stop(
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(terminal_count(&stopped, start) == 0);
         ensure!(!stopped.iter().any(|entry| matches!(entry.entry, PublicOplogEntry::Cancelled(_))));
-        let raw_entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await;
+        let raw_entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
         let errors: Vec<_> = raw_entries.values().filter_map(|entry| match entry { OplogEntry::Error { error, .. } => Some(error), _ => None }).collect();
         if durable {
             ensure!(errors.is_empty(), "{errors:?}");

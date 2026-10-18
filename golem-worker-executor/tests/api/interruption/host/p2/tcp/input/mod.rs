@@ -389,11 +389,11 @@ async fn pending_input(
         let connect_start = completed_setup(&entries)?;
         let stored = worker.all().oplog_service();
         let read_stored = async || {
-            let last = stored.get_last_index(&owned, mode).await;
+            let last = stored.get_last_index(&owned, mode).await?;
             stored.read_exact(&owned, mode, OplogIndex::INITIAL, last.as_u64()).await
         };
         let prefix = if matches!(operation, Operation::FileSplice) {
-            let prefix = read_stored().await;
+            let prefix = read_stored().await?;
             ensure!(!prefix.is_empty(), "the actual-mode committed splice prefix must exist");
             Some(prefix)
         } else { None };
@@ -508,7 +508,7 @@ async fn pending_input(
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         if let Some(prefix) = &prefix {
             let last = *prefix.last_key_value().unwrap().0;
-            ensure!(read_stored().await.range(..=last).eq(prefix.iter()), "stop changed the complete committed prefix");
+            ensure!(read_stored().await?.range(..=last).eq(prefix.iter()), "stop changed the complete committed prefix");
         }
         ensure!(
             completed_setup(&stopped)? == connect_start,
@@ -522,7 +522,7 @@ async fn pending_input(
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         let errors: Vec<_> = entries
             .values()
             .filter_map(|entry| match entry {
@@ -626,7 +626,7 @@ async fn pending_input(
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             if let Some(prefix) = &prefix {
                 let last = *prefix.last_key_value().unwrap().0;
-                ensure!(read_stored().await.range(..=last).eq(prefix.iter()), "reconstruction changed the complete committed prefix");
+                ensure!(read_stored().await?.range(..=last).eq(prefix.iter()), "reconstruction changed the complete committed prefix");
             }
             ensure!(
                 poll_starts(&recovered) == poll_starts(&stopped),

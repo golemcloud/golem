@@ -300,7 +300,7 @@ async fn pending_response_body(
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         for entry in entries.values() {
             match entry {
                 OplogEntry::Error { kind, entity_parent_start_index, .. } => {

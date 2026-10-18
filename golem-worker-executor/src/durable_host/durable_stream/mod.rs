@@ -54,8 +54,8 @@ use crate::durable_host::stream_bus::{
 };
 use crate::services::activity::{ActivityGate, spawn_with_activity};
 use crate::services::oplog::{
-    CommitLevel, DurableStreamOplogRecord, Oplog, OplogError, OplogFence, OplogOps, OplogService,
-    OplogServiceOps,
+    CommitLevel, DurableStreamOplogRecord, Oplog, OplogError, OplogFence, OplogOps, OplogRefusal,
+    OplogService, OplogServiceOps, UnreadableOplog,
 };
 use crate::services::rpc::{DurableStreamRemoteError, Rpc};
 use crate::services::worker::WorkerService;
@@ -405,7 +405,10 @@ pub enum StreamStoreError {
     FencedByTerminal(CommittedProducerStreamEventPayload),
     ClosedByOtherProducer,
     EventConflict,
-    SequenceGap { expected: u64, actual: u64 },
+    SequenceGap {
+        expected: u64,
+        actual: u64,
+    },
     CounterOverflow,
     ItemTooLarge,
     InvalidPackedU8Batch,
@@ -417,8 +420,14 @@ pub enum StreamStoreError {
     CursorUnavailable,
     SessionFinished(StreamSessionKey),
     AttachmentConflict,
-    StaleEpoch { current: u64, actual: u64 },
-    InvalidEpoch { current: u64, actual: u64 },
+    StaleEpoch {
+        current: u64,
+        actual: u64,
+    },
+    InvalidEpoch {
+        current: u64,
+        actual: u64,
+    },
     InvalidAttachmentState,
     ProducerDeleting,
     ConsumerDeleting,
@@ -427,6 +436,8 @@ pub enum StreamStoreError {
     CorruptHistory(String),
     Fenced(OplogFence),
     Oplog(String),
+    /// The oplog of the agent does not read: the agent fails, not the stream operation alone.
+    Unreadable(UnreadableOplog),
     RecoveryRequired,
     LiveBus(DurableLiveStreamBusError),
 }
@@ -438,9 +449,10 @@ impl From<OplogError> for StreamStoreError {
     fn from(error: OplogError) -> Self {
         match error {
             OplogError::Fenced(fence) => Self::Fenced(fence),
-            error @ (OplogError::Payload(_) | OplogError::Maintenance(_)) => {
-                Self::Oplog(error.to_string())
-            }
+            OplogError::Unreadable(unreadable) => Self::Unreadable(unreadable),
+            error @ (OplogError::Payload(_)
+            | OplogError::Maintenance(_)
+            | OplogError::ArchiveWrite(_)) => Self::Oplog(error.to_string()),
         }
     }
 }
@@ -459,6 +471,8 @@ impl std::error::Error for StreamStoreError {}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionError {
     Fenced(OplogFence),
+    /// The oplog of the agent does not read. It keeps its type, so the agent fails with it.
+    Unreadable(UnreadableOplog),
     Failed(String),
 }
 
@@ -481,19 +495,35 @@ impl SessionError {
     ) -> WorkerExecutorError {
         match self {
             Self::Fenced(fence) => WorkerExecutorError::from(OplogError::Fenced(fence)),
+            Self::Unreadable(unreadable) => WorkerExecutorError::from(unreadable),
             Self::Failed(text) => otherwise(text),
         }
     }
 
-    /// Converts for a host function: a fence traps as the lost shard it is, and every other
-    /// failure traps with its text.
+    /// Converts for a host function: a fence traps as the lost shard it is, an unreadable oplog
+    /// as the failure of the agent it is, and every other failure traps with its text.
     pub(crate) fn into_trap(self) -> anyhow::Error {
         match self {
             Self::Fenced(fence) => {
                 anyhow::Error::from(WorkerExecutorError::from(OplogError::Fenced(fence)))
             }
+            Self::Unreadable(unreadable) => {
+                anyhow::Error::from(WorkerExecutorError::from(unreadable))
+            }
             Self::Failed(text) => anyhow::Error::msg(text),
         }
+    }
+}
+
+impl From<UnreadableOplog> for StreamStoreError {
+    fn from(error: UnreadableOplog) -> Self {
+        Self::Unreadable(error)
+    }
+}
+
+impl From<UnreadableOplog> for SessionError {
+    fn from(error: UnreadableOplog) -> Self {
+        Self::Unreadable(error)
     }
 }
 
@@ -501,6 +531,7 @@ impl From<SessionError> for StreamStoreError {
     fn from(error: SessionError) -> Self {
         match error {
             SessionError::Fenced(fence) => Self::Fenced(fence),
+            SessionError::Unreadable(unreadable) => Self::Unreadable(unreadable),
             SessionError::Failed(text) => Self::Oplog(text),
         }
     }
@@ -510,6 +541,7 @@ impl From<StreamStoreError> for SessionError {
     fn from(error: StreamStoreError) -> Self {
         match error {
             StreamStoreError::Fenced(fence) => Self::Fenced(fence),
+            StreamStoreError::Unreadable(unreadable) => Self::Unreadable(unreadable),
             error => Self::Failed(error.to_string()),
         }
     }
@@ -519,9 +551,10 @@ impl From<OplogError> for SessionError {
     fn from(error: OplogError) -> Self {
         match error {
             OplogError::Fenced(fence) => Self::Fenced(fence),
-            error @ (OplogError::Payload(_) | OplogError::Maintenance(_)) => {
-                Self::Failed(error.to_string())
-            }
+            OplogError::Unreadable(unreadable) => Self::Unreadable(unreadable),
+            error @ (OplogError::Payload(_)
+            | OplogError::Maintenance(_)
+            | OplogError::ArchiveWrite(_)) => Self::Failed(error.to_string()),
         }
     }
 }
@@ -559,6 +592,7 @@ impl std::fmt::Display for SessionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Fenced(fence) => write!(formatter, "{}", OplogError::Fenced(fence.clone())),
+            Self::Unreadable(unreadable) => write!(formatter, "{unreadable}"),
             Self::Failed(text) => formatter.write_str(text),
         }
     }
@@ -567,14 +601,16 @@ impl std::fmt::Display for SessionError {
 impl std::error::Error for SessionError {}
 
 impl StreamStoreError {
-    /// Converts at a boundary that reports `WorkerExecutorError`: a fence keeps its type, and every
-    /// other error is rendered through `otherwise`, which says how that boundary classifies it.
+    /// Converts at a boundary that reports `WorkerExecutorError`: a fence and an unreadable oplog
+    /// keep their types, and every other error is rendered through `otherwise`, which says how that
+    /// boundary classifies it.
     pub(crate) fn into_worker_executor_error(
         self,
         otherwise: impl FnOnce(String) -> WorkerExecutorError,
     ) -> WorkerExecutorError {
         match self {
             Self::Fenced(fence) => WorkerExecutorError::from(OplogError::Fenced(fence)),
+            Self::Unreadable(unreadable) => WorkerExecutorError::from(unreadable),
             error => otherwise(error.to_string()),
         }
     }
@@ -755,7 +791,7 @@ pub struct IndexedExternalProducer {
 /// refused, ahead of whatever the commit does after that.
 pub(crate) type DurableStreamCommit = Arc<
     dyn Fn(
-            Option<oneshot::Sender<Result<(), OplogFence>>>,
+            Option<oneshot::Sender<Result<(), OplogRefusal>>>,
         ) -> Pin<Box<dyn Future<Output = ()> + Send>>
         + Send
         + Sync,
@@ -868,8 +904,10 @@ impl DurableStreamStore {
             Box::pin(async move {
                 let result = match oplog.commit(CommitLevel::Always).await {
                     Ok(_) => Ok(()),
-                    Err(OplogError::Fenced(fence)) => Err(fence),
-                    Err(error) => panic!("oplog write: {error}"),
+                    Err(error) => match error.into_refusal() {
+                        Ok(refusal) => Err(refusal),
+                        Err(error) => panic!("oplog write: {error}"),
+                    },
                 };
                 if let Some(committed) = committed {
                     let _ = committed.send(result);
@@ -933,7 +971,7 @@ impl DurableStreamStore {
         let mut covered = OplogIndex::NONE;
         while covered < current_index {
             let count = (current_index.as_u64() - covered.as_u64()).min(1024);
-            let entries = oplog.read_exact(covered.next(), count).await;
+            let entries = oplog.read_exact(covered.next(), count).await?;
             for (oplog_index, entry) in entries {
                 covered = oplog_index;
                 if lineage.deleted_regions().is_in_deleted_region(oplog_index) {

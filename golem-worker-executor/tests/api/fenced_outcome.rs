@@ -75,7 +75,7 @@ async fn selected_writer_fence(
     let prefix = worker
         .oplog()
         .read_exact(OplogIndex::INITIAL, entries)
-        .await;
+        .await?;
     assert_eq!(prefix.values().filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
     let finished = prefix
         .values()
@@ -124,7 +124,7 @@ async fn selected_writer_fence(
         worker
             .oplog()
             .read_exact(OplogIndex::INITIAL, entries)
-            .await,
+            .await?,
         prefix
     );
 
@@ -194,7 +194,7 @@ async fn selected_writer_fence(
             OplogIndex::INITIAL,
             replacement.oplog().current_oplog_index().await.as_u64(),
         )
-        .await;
+        .await?;
     assert_eq!(history.values().filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 1, "retry must continue the original durable invocation");
     assert_eq!(
         history

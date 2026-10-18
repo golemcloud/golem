@@ -232,7 +232,7 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
     let stopped_prefix = worker
         .oplog()
         .read_exact(OplogIndex::INITIAL, stopped_tip.as_u64())
-        .await;
+        .await?;
     eprintln!(
         "STDIN_STOPPED key={key:?} stream={stdin_id} durable_stream={durable_stream_id:?} epoch={} worker={} startup={:?} generation={}",
         accepted.epoch,
@@ -371,12 +371,12 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
         worker
             .oplog()
             .read_exact(OplogIndex::INITIAL, stopped_tip.as_u64())
-            .await
+            .await?
             == stopped_prefix
     );
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
     let service = worker.oplog_service();
-    let tip = service.get_last_index(&owned, AgentMode::Durable).await;
+    let tip = service.get_last_index(&owned, AgentMode::Durable).await?;
     let committed = service
         .read_exact(
             &owned,
@@ -384,7 +384,7 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
             OplogIndex::INITIAL,
             tip.as_u64(),
         )
-        .await;
+        .await?;
     let oplog = worker.oplog();
     for (index, entry) in committed {
         match entry {

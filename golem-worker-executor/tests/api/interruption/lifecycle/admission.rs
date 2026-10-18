@@ -201,7 +201,7 @@ mod initialization {
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         let errors: Vec<_> = entries
             .values()
             .filter_map(|e| match e {
@@ -338,19 +338,76 @@ mod loaded_compute_admission {
         let owned = OwnedAgentId::new(context.default_environment_id, &id);
         let active = executor.production_active_agent(&owned).await.unwrap();
         let worker = active.primary();
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            worker.await_ready_to_process_commands(),
+        )
+        .await
+        .context("constructor did not finish before the setup invocation")??;
         let setup_key = IdempotencyKey::fresh();
+        let mut finished = executor.gate_next_invocation_finished_append(&id).await;
+        let setup = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
+            let executor = executor.clone();
+            let component = component.clone();
+            let name = name.clone();
+            async move {
+                executor
+                    .invoke_and_await_agent_with_key(
+                        &component,
+                        &name,
+                        &setup_key,
+                        "increment",
+                        data_value!(),
+                    )
+                    .await
+            }
+        }));
+        tokio::time::timeout(Duration::from_secs(10), finished.entered()).await?;
+        assert!(matches!(
+            finished.entry(),
+            golem_common::model::oplog::OplogEntry::AgentInvocationFinished {
+                method_name: Some(method),
+                ..
+            } if method == "increment"
+        ));
+        let (closing, release_close) = worker.pause_idle_close_for_test();
+        drop(finished);
+        tokio::time::timeout(Duration::from_secs(10), closing)
+            .await
+            .context("setup did not reach idle close")??;
+        let acquisitions = worker.permit_acquisitions_for_test();
+        // Both real readiness requests queue a wake while the completed invocation still
+        // owns its window. One wake drains both requests; the other is then stale.
+        let mut first_ready = std::pin::pin!(worker.await_ready_to_process_commands());
+        let mut second_ready = std::pin::pin!(worker.await_ready_to_process_commands());
+        assert!(futures::poll!(&mut first_ready).is_pending());
+        assert!(futures::poll!(&mut second_ready).is_pending());
+        release_close.send(()).unwrap();
         assert_eq!(
-            executor
-                .invoke_and_await_agent_with_key(
-                    &component,
-                    &name,
-                    &setup_key,
-                    "increment",
-                    data_value!()
-                )
-                .await?
+            tokio::time::timeout(Duration::from_secs(10), setup)
+                .await
+                .context("setup result did not settle after idle close was released")???
                 .into_typed::<u32>()?,
             1
+        );
+        tokio::time::timeout(Duration::from_secs(10), async {
+            first_ready.await?;
+            second_ready.await
+        })
+        .await??;
+        let entry = limits.initialize_account(context.account_id).await?;
+        // The awaited physical update follows both wake notifications on the same
+        // command queue. Its reply proves they were handled, not merely enqueued.
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            entry.apply_agent_filesystem_limit(u64::MAX),
+        )
+        .await?
+        .map_err(|(owner, error)| anyhow::anyhow!("filesystem update for {owner}: {error}"))?;
+        assert_eq!(
+            worker.permit_acquisitions_for_test(),
+            acquisitions + 1,
+            "the stale work wake must not reopen an idle billing window"
         );
         tokio::time::timeout(Duration::from_secs(10), async {
             while worker.concurrent_agent_permit_is_held().await {
@@ -360,7 +417,6 @@ mod loaded_compute_admission {
         .await?;
         assert!(!worker.monthly_window_active_for_test());
         assert!(!worker.concurrent_agent_permit_is_held().await);
-        let entry = limits.initialize_account(context.account_id).await?;
         assert!(
             worker
                 .get_last_known_status()
@@ -412,7 +468,7 @@ mod loaded_compute_admission {
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         use golem_common::model::oplog::OplogEntry;
         let final_suspends: Vec<_> = entries
             .iter()
@@ -465,7 +521,7 @@ mod loaded_compute_admission {
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         assert_eq!(recovered.values().filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
         let recovered_raw = executor.stored_oplog(&id).await;
         assert!(recovered_raw.len() >= stopped_prefix.len());

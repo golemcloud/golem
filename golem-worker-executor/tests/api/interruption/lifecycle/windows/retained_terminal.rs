@@ -154,7 +154,7 @@ async fn pending_suspend_append_keeps_result_and_cleanup_ownership_through_a_lat
             OplogIndex::INITIAL,
             worker.oplog().current_oplog_index().await.as_u64(),
         )
-        .await;
+        .await?;
     assert!(!unwritten.values().any(|entry| matches!(
         entry,
         OplogEntry::Suspend { .. } | OplogEntry::Interrupted { .. } | OplogEntry::Error { .. }
@@ -205,7 +205,7 @@ async fn pending_suspend_append_keeps_result_and_cleanup_ownership_through_a_lat
             OplogIndex::INITIAL,
             worker.oplog().current_oplog_index().await.as_u64(),
         )
-        .await;
+        .await?;
     assert_eq!(
         entries
             .values()
@@ -335,7 +335,7 @@ async fn retained_terminal(
             OplogIndex::INITIAL,
             worker.oplog().current_oplog_index().await.as_u64(),
         )
-        .await;
+        .await?;
     assert_eq!(
         entries
             .values()
@@ -543,7 +543,7 @@ async fn retained_terminal(
             OplogIndex::INITIAL,
             worker.oplog().current_oplog_index().await.as_u64(),
         )
-        .await;
+        .await?;
     assert_eq!(
         entries
             .values()

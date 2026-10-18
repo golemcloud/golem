@@ -281,6 +281,52 @@ fn is_attachment_termination(error: &SessionError) -> bool {
     error.contains("response stream closed") || error.starts_with("StaleEpoch:")
 }
 
+/// Whether `error` ends only this attachment and leaves the session to a later one: the attachment
+/// terminated, or the storage did not answer a read of the session history. The history stays
+/// intact, so the client resumes from its durable cursors.
+fn ends_only_the_attachment(error: &SessionError) -> bool {
+    match error {
+        SessionError::Unreadable(unreadable) => unreadable.is_transient(),
+        SessionError::Fenced(_) => false,
+        SessionError::Failed(_) => is_attachment_termination(error),
+    }
+}
+
+/// Ends the attachment on a failed durable session operation. Only a violation of the session
+/// protocol records a failed session terminal. A refused write and an oplog that does not read
+/// are failures of the shard or of the agent, not of the session: they go out as the worker error
+/// they are and record nothing, so the session result stays with the history.
+async fn end_attachment_on_failure(
+    streams: &StreamSession,
+    responses: &mpsc::Sender<InvocationResponse>,
+    high_waters: &HashMap<u64, golem_common::base_model::durable_stream::InputStreamHighWater>,
+    error: SessionError,
+    drain_outputs: impl Future<Output = ()>,
+) {
+    if ends_only_the_attachment(&error) {
+        if matches!(error, SessionError::Unreadable(_)) {
+            tracing::warn!(
+                error = %error,
+                "Ending the invocation session attachment because the session history did not read"
+            );
+        }
+        return;
+    }
+    if !matches!(error, SessionError::Failed(_)) {
+        send_protocol_failure(responses, error).await;
+        return;
+    }
+    if let Err(finish_error) = streams.fail_protocol(error.to_string()).await {
+        send_protocol_failure(responses, finish_error).await;
+        return;
+    }
+    let _ = streams
+        .pump_input_cancellations(responses, high_waters)
+        .await;
+    drain_outputs.await;
+    send_protocol_failure(responses, error).await;
+}
+
 async fn send_attachment_revocation(
     responses: &mpsc::Sender<InvocationResponse>,
     revocation: Result<(), SessionError>,
@@ -1068,19 +1114,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         error = %error,
                         "Invocation session input high-water lookup failed"
                     );
-                    // A refused write is rejected as the worker error it is, which the worker
-                    // service reads as a routing miss.
-                    let worker_error = match &error {
-                        SessionError::Fenced(fence) => Some(
-                            WorkerExecutorError::from(OplogError::Fenced(fence.clone())).into(),
-                        ),
-                        SessionError::Failed(_) => None,
-                    };
                     send_rejection_with_worker_error(
                         &responses,
                         InvocationRejectionReason::Internal,
                         error.to_string(),
-                        worker_error,
+                        rejection_worker_error(&error),
                         &start,
                     )
                     .await;
@@ -1264,15 +1302,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             route_durable_request(durable_streams, &responses, &state, request)
                                 .await
                         {
-                            if let Err(finish_error) =
-                                durable_streams.fail_protocol(details.to_string()).await
-                            {
-                                send_protocol_failure(&responses, finish_error).await;
-                                return;
-                            }
-                            let _ = durable_streams.pump_input_cancellations(&responses, &high_waters).await;
-                            let _ = durable_streams.pump_output_streams(&responses).await;
-                            send_protocol_failure(&responses, details).await;
+                            end_attachment_on_failure(durable_streams, &responses, &high_waters, details, async {
+                                let _ = durable_streams.pump_output_streams(&responses).await;
+                            }).await;
                             return;
                         }
                     }
@@ -1318,7 +1350,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                     .map_err(|error| SessionError::from(format!("durable output pump task failed: {error}")))
                                     .and_then(|result| result);
                                 if let Err(error) = result {
-                                    if !is_attachment_termination(&error) {
+                                    if !ends_only_the_attachment(&error) {
                                         send_protocol_failure(&responses, error).await;
                                     }
                                     return;
@@ -1363,17 +1395,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                         &state,
                                         request,
                                     ).await {
-                                        if let Err(finish_error) =
-                                            durable_streams.fail_protocol(details.to_string()).await
-                                        {
-                                            send_protocol_failure(&responses, finish_error).await;
-                                            return;
-                                        }
-                                        let _ = durable_streams
-                                            .pump_input_cancellations(&responses, &high_waters)
-                                            .await;
-                                        while output_pump.join_next().await.is_some() {}
-                                        send_protocol_failure(&responses, details).await;
+                                        end_attachment_on_failure(durable_streams, &responses, &high_waters, details, async {
+                                            while output_pump.join_next().await.is_some() {}
+                                        }).await;
                                         return;
                                     }
                                 }
@@ -1486,22 +1510,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             Ok(()) => {
                                 output_pump_finished = output_pump.is_empty();
                             },
-                            Err(error) if is_attachment_termination(&error) => {
-                                return;
-                            }
                             Err(error) => {
-                                if let Err(finish_error) = durable_streams
-                                    .fail_protocol(error.to_string())
-                                    .await
-                                {
-                                    send_protocol_failure(&responses, finish_error).await;
-                                    return;
-                                }
-                                let _ = durable_streams
-                                    .pump_input_cancellations(&responses, &high_waters)
-                                    .await;
-                                while output_pump.join_next().await.is_some() {}
-                                send_protocol_failure(&responses, error).await;
+                                end_attachment_on_failure(durable_streams, &responses, &high_waters, error, async {
+                                    while output_pump.join_next().await.is_some() {}
+                                }).await;
                                 return;
                             }
                         }
@@ -1514,17 +1526,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 &state,
                                 request,
                             ).await {
-                                if let Err(finish_error) =
-                                    durable_streams.fail_protocol(details.to_string()).await
-                                {
-                                    send_protocol_failure(&responses, finish_error).await;
-                                    return;
-                                }
-                                let _ = durable_streams
-                                    .pump_input_cancellations(&responses, &high_waters)
-                                    .await;
-                                while output_pump.join_next().await.is_some() {}
-                                send_protocol_failure(&responses, details).await;
+                                end_attachment_on_failure(durable_streams, &responses, &high_waters, details, async {
+                                    while output_pump.join_next().await.is_some() {}
+                                }).await;
                                 return;
                             }
                         }
@@ -1570,16 +1574,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 &state,
                                 request,
                             ).await {
-                                if let Err(finish_error) =
-                                    durable_streams.fail_protocol(details.to_string()).await
-                                {
-                                    send_protocol_failure(&responses, finish_error).await;
-                                    return;
-                                }
-                                let _ = durable_streams
-                                    .pump_input_cancellations(&responses, &high_waters)
-                                    .await;
-                                send_protocol_failure(&responses, details).await;
+                                end_attachment_on_failure(durable_streams, &responses, &high_waters, details, async {}).await;
                                 return;
                             }
                         }
@@ -2049,7 +2044,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .map_err(|error| SessionError::from(format!("durable output pump task failed: {error}")))
                         .and_then(|result| result);
                     if let Err(error) = result {
-                        if !is_attachment_termination(&error) {
+                        if !ends_only_the_attachment(&error) {
                             send_protocol_failure(&responses, error).await;
                         }
                         return;
@@ -2058,10 +2053,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 request = inbound.message() => match request {
                     Ok(Some(request)) => {
                         if let Err(error) = route_durable_request(&streams, &responses, &state, request).await {
-                            if error.starts_with("StaleEpoch:") {
-                                return;
+                            if !ends_only_the_attachment(&error) {
+                                send_protocol_failure(&responses, error).await;
                             }
-                            send_protocol_failure(&responses, error).await;
                             return;
                         }
                     }
@@ -2134,21 +2128,24 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             ).into()),
                             None => Err("durable output pump task stopped unexpectedly".to_string().into()),
                         };
-                        if let Err(error) = result
-                            && !is_attachment_termination(&error)
-                        {
-                            send_protocol_failure(&responses, error).await;
-                            return;
+                        match result {
+                            Err(error) if is_attachment_termination(&error) => {}
+                            Err(error) => {
+                                if !ends_only_the_attachment(&error) {
+                                    send_protocol_failure(&responses, error).await;
+                                }
+                                return;
+                            }
+                            Ok(()) => {}
                         }
                         if output_pump.is_empty() { break; }
                     }
                     request = inbound.message() => match request {
                         Ok(Some(request)) => {
                             if let Err(error) = route_durable_request(&streams, &responses, &state, request).await {
-                                if error.starts_with("StaleEpoch:") {
-                                    return;
+                                if !ends_only_the_attachment(&error) {
+                                    send_protocol_failure(&responses, error).await;
                                 }
-                                send_protocol_failure(&responses, error).await;
                                 return;
                             }
                         }
@@ -2191,10 +2188,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 request = inbound.message() => match request {
                     Ok(Some(request)) => {
                         if let Err(error) = route_durable_request(&streams, &responses, &state, request).await {
-                            if error.starts_with("StaleEpoch:") {
-                                return;
+                            if !ends_only_the_attachment(&error) {
+                                send_protocol_failure(&responses, error).await;
                             }
-                            send_protocol_failure(&responses, error).await;
                             return;
                         }
                     }
@@ -3234,6 +3230,21 @@ async fn send_failure(
         .await;
 }
 
+/// The worker error a session rejection carries for `error`. A refused write is rejected as the
+/// worker error it is, which the worker service reads as a routing miss; an unreadable oplog is
+/// rejected as the failure of its agent.
+fn rejection_worker_error(error: &SessionError) -> Option<WorkerExecutionError> {
+    match error {
+        SessionError::Fenced(fence) => {
+            Some(WorkerExecutorError::from(OplogError::Fenced(fence.clone())).into())
+        }
+        SessionError::Unreadable(unreadable) => {
+            Some(WorkerExecutorError::from(unreadable.clone()).into())
+        }
+        SessionError::Failed(_) => None,
+    }
+}
+
 /// Finishes the session on a failure the protocol reports as text. A refused oplog write is not
 /// one: it goes out as the worker error it is, which the worker service reads as a routing miss
 /// and retries on the shard's new owner.
@@ -3248,6 +3259,9 @@ async fn send_protocol_failure(
                 WorkerExecutorError::from(OplogError::Fenced(fence)),
             )
             .await
+        }
+        SessionError::Unreadable(unreadable) => {
+            send_worker_failure(responses, WorkerExecutorError::from(unreadable)).await
         }
         SessionError::Failed(details) => {
             send_failure(
@@ -4704,5 +4718,175 @@ mod freshness_tests {
             race,
             AcceptanceRace::InvocationFinished("invocation output")
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::oplog::{OplogReadError, UnreadableOplog};
+    use golem_common::model::AgentId;
+    use golem_common::model::component::ComponentId;
+    use golem_common::model::oplog::OplogIndex;
+    use test_r::test;
+
+    fn unreadable() -> UnreadableOplog {
+        UnreadableOplog {
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "unreadable".to_string(),
+            },
+            error: OplogReadError::Gap {
+                start: OplogIndex::INITIAL,
+                end: OplogIndex::from_u64(2),
+            },
+        }
+    }
+
+    #[test]
+    fn a_rejection_for_an_unreadable_oplog_carries_the_agent_failure() {
+        let unreadable = unreadable();
+        let expected: WorkerExecutionError = WorkerExecutorError::from(unreadable.clone()).into();
+        assert_eq!(
+            rejection_worker_error(&SessionError::Unreadable(unreadable)),
+            Some(expected)
+        );
+        assert_eq!(
+            rejection_worker_error(&SessionError::Failed("boom".to_string())),
+            None
+        );
+    }
+
+    #[test]
+    async fn a_protocol_failure_for_an_unreadable_oplog_finishes_as_the_agent_failure() {
+        let unreadable = unreadable();
+        let (responses, mut received) = mpsc::channel(1);
+        send_protocol_failure(&responses, SessionError::Unreadable(unreadable.clone())).await;
+        drop(responses);
+
+        let expected = WorkerExecutorError::from(unreadable);
+        let Some(InvocationResponse {
+            response:
+                Some(invocation_response::Response::Finished(InvocationSessionCompletion {
+                    outcome: Some(invocation_session_completion::Outcome::Failure(failure)),
+                })),
+        }) = received.recv().await
+        else {
+            panic!("the session must finish with a failure");
+        };
+        assert_eq!(failure.kind, InvocationFailureKind::Execution as i32);
+        assert_eq!(failure.message, expected.to_string());
+        assert_eq!(failure.worker_error, Some(expected.into()));
+    }
+
+    async fn local_session() -> StreamSession {
+        use crate::durable_host::durable_stream::DurableStreamStore;
+        use crate::durable_host::durable_stream::tests::{TestOplog, identity};
+        use crate::services::oplog::Oplog;
+        use golem_common::base_model::durable_stream::StreamRegistrationInvocation;
+
+        let identity = identity();
+        let oplog: Arc<dyn Oplog> = Arc::new(TestOplog::default());
+        let producer = DurableStreamStore::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id,
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        StreamSession::new(
+            producer,
+            oplog,
+            StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
+            [],
+        )
+    }
+
+    /// Ends the attachment on `error` and returns the responses it sent, whether it drained the
+    /// outputs, and the session terminal it left in the history.
+    async fn end_attachment(
+        error: SessionError,
+    ) -> (Vec<InvocationResponse>, bool, Option<Result<(), Vec<u8>>>) {
+        let streams = local_session().await;
+        let (responses, mut received) = mpsc::channel(8);
+        let drained = std::sync::atomic::AtomicBool::new(false);
+        end_attachment_on_failure(&streams, &responses, &HashMap::new(), error, async {
+            drained.store(true, std::sync::atomic::Ordering::SeqCst);
+        })
+        .await;
+        drop(responses);
+        let mut sent = Vec::new();
+        while let Some(response) = received.recv().await {
+            sent.push(response);
+        }
+        (
+            sent,
+            drained.into_inner(),
+            streams.persisted_finished().await.unwrap(),
+        )
+    }
+
+    fn failure_of(responses: &[InvocationResponse]) -> &InvocationFailure {
+        let [
+            InvocationResponse {
+                response:
+                    Some(invocation_response::Response::Finished(InvocationSessionCompletion {
+                        outcome: Some(invocation_session_completion::Outcome::Failure(failure)),
+                    })),
+            },
+        ] = responses
+        else {
+            panic!("the attachment must finish with one failure, got {responses:?}");
+        };
+        failure
+    }
+
+    #[test]
+    async fn only_a_protocol_violation_records_a_failed_session_terminal() {
+        let transient = UnreadableOplog {
+            error: OplogReadError::source_unavailable(
+                crate::services::oplog::OplogReadSource::Archive(0),
+                "the archive did not answer",
+            ),
+            ..unreadable()
+        };
+        let (sent, drained, terminal) = end_attachment(SessionError::Unreadable(transient)).await;
+        assert!(
+            sent.is_empty(),
+            "the client reattaches on the closed stream"
+        );
+        assert!(!drained);
+        assert_eq!(terminal, None);
+
+        let permanent = unreadable();
+        let (sent, drained, terminal) =
+            end_attachment(SessionError::Unreadable(permanent.clone())).await;
+        let failure = failure_of(&sent);
+        assert_eq!(failure.kind, InvocationFailureKind::Execution as i32);
+        assert_eq!(
+            failure.worker_error,
+            Some(WorkerExecutorError::from(permanent).into())
+        );
+        assert!(!drained);
+        assert_eq!(terminal, None);
+
+        let fence = crate::durable_host::durable_stream::tests::test_fence();
+        let (sent, drained, terminal) = end_attachment(SessionError::Fenced(fence.clone())).await;
+        assert_eq!(
+            failure_of(&sent).worker_error,
+            Some(WorkerExecutorError::from(OplogError::Fenced(fence)).into())
+        );
+        assert!(!drained);
+        assert_eq!(terminal, None);
+
+        let violation = "input item arrived after its stream ended";
+        let (sent, drained, terminal) = end_attachment(SessionError::from(violation)).await;
+        let failure = failure_of(&sent);
+        assert_eq!(failure.kind, InvocationFailureKind::Protocol as i32);
+        assert_eq!(failure.message, violation);
+        assert!(drained);
+        assert_eq!(terminal, Some(Err(violation.as_bytes().to_vec())));
     }
 }

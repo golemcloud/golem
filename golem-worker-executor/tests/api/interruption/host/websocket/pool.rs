@@ -367,7 +367,7 @@ async fn pending_pool_acquire(
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(connect_start(&stopped, 0, 0)? == connect);
         assert_invocation(&stopped, &key, 0)?;
-        let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await;
+        let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
         let errors: Vec<_> = entries.values().filter_map(|entry| match entry { OplogEntry::Error { error, .. } => Some(error), _ => None }).collect();
         for entry in entries.values() {
             match entry {

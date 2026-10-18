@@ -274,7 +274,7 @@ async fn pending_receive(
     };
     let oplog = worker.all().oplog_service();
     let read_stored = async || {
-        let last = oplog.get_last_index(&owned, mode).await;
+        let last = oplog.get_last_index(&owned, mode).await?;
         oplog
             .read_exact(&owned, mode, OplogIndex::INITIAL, last.as_u64())
             .await
@@ -323,7 +323,7 @@ async fn pending_receive(
             tokio::time::timeout(Duration::from_secs(10), next_flush())
                 .await.context("initial monitor pre-wait flush")??;
         }
-        let prefix = read_stored().await;
+        let prefix = read_stored().await?;
         let prefix_last = *prefix.last_key_value().context("committed UDP invocation prefix is empty")?.0;
         let mut raw = worker.raw_interrupt_for_test();
         let acquisitions = worker.permit_acquisitions_for_test();
@@ -435,7 +435,7 @@ async fn pending_receive(
         ensure!(!worker.monthly_window_active_for_test());
         ensure!(account.monthly_observer_count_for_test() == 0);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        let stopped_raw = read_stored().await;
+        let stopped_raw = read_stored().await?;
         ensure!(stopped_raw.range(..=prefix_last).eq(prefix.iter()), "the full committed UDP prefix must survive stop");
         ensure!(stopped_raw.values().all(|entry| !matches!(entry, OplogEntry::Jump { .. })));
         assert_invocation(&stopped, &key, 0)?;
@@ -450,7 +450,7 @@ async fn pending_receive(
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         let errors: Vec<_> = entries
             .values()
             .filter_map(|entry| match entry {
@@ -549,7 +549,7 @@ async fn pending_receive(
             ensure!(resumed.into_typed::<Result<Vec<u8>, String>>()? == Ok(b"recovered".to_vec()));
             ensure!(reconstructed.state() == WaitState::Returned);
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-            let recovered_raw = read_stored().await;
+            let recovered_raw = read_stored().await?;
             let stopped_last = *stopped_raw.last_key_value().unwrap().0;
             ensure!(recovered_raw.range(..=stopped_last).eq(stopped_raw.iter()), "the full stopped prefix must survive UDP reconstruction");
             ensure!(self::receive_start(&recovered, 1)? == receive_start);
@@ -594,7 +594,7 @@ async fn pending_receive(
             ensure!(fresh_phase.state() == WaitState::Returned);
             ensure!(phases.try_recv().is_err(), "no extra native receive");
             let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-            let history_raw = read_stored().await;
+            let history_raw = read_stored().await?;
             let recovered_last = *recovered_raw.last_key_value().unwrap().0;
             ensure!(history_raw.range(..=recovered_last).eq(recovered_raw.iter()), "completed-history reconstruction must preserve the full recovered prefix");
             ensure!(count_agent_invocation_pair_since(&history, OplogIndex::INITIAL) == (3, 3));

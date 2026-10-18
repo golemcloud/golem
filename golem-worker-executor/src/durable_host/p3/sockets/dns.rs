@@ -18,7 +18,7 @@ use crate::durable_host::concurrent::{
 };
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::p3::{
-    DurableP3, DurableP3View, durable_worker_ctx, run_read_access_classified, wasi_sockets_view,
+    DurableP3, DurableP3View, durable_worker_ctx, run_deniable_access_classified, wasi_sockets_view,
 };
 use crate::workerctx::WorkerCtx;
 use golem_common::model::RetryContext;
@@ -43,21 +43,23 @@ impl<U: Send + 'static, Ctx: WorkerCtx> ip_name_lookup::HostWithStore<U> for Dur
                 .state
                 .is_live()
         });
-        let denied = if live {
+        let denial = if live {
             match dns_target(&name) {
-                Ok(target) => !matches!(
-                    authorize_live_permissions_at_serialized_access(
-                        store,
-                        durable_worker_ctx::<Ctx, U>,
-                        &[target],
-                    )
-                    .await,
-                    Ok(Ok(_))
-                ),
-                Err(_) => true,
+                Ok(target) => match authorize_live_permissions_at_serialized_access(
+                    store,
+                    durable_worker_ctx::<Ctx, U>,
+                    &[target],
+                )
+                .await
+                {
+                    Ok(Ok(_)) => None,
+                    Ok(Err(error)) => Some(error.to_string()),
+                    Err(error) => Some(error.to_string()),
+                },
+                Err(error) => Some(error.to_string()),
             }
         } else {
-            false
+            None
         };
 
         // Worker-level retry classification, mirroring the P2 `resolve_addresses` path: a
@@ -66,44 +68,45 @@ impl<U: Send + 'static, Ctx: WorkerCtx> ip_name_lookup::HostWithStore<U> for Dur
         // of surfacing as a guest-visible error value. Permanent failures — and transient ones
         // whose retry budget is exhausted — are recorded and returned to the guest, which is also
         // what a recorded error replays as.
-        let response =
-            run_read_access_classified::<_, _, Ctx, P3SocketsIpNameLookupResolveAddresses, _, _>(
-                store,
-                HostRequestP3SocketsResolveName { name: name.clone() },
-                DurableFunctionType::ReadRemote,
-                |response| {
-                    response
-                        .result
-                        .as_ref()
-                        .err()
-                        .map(|error| ClassifiedHostError {
-                            kind: classify_p3_ip_name_lookup_error(error),
-                            message: format!("DNS resolution of '{name}' failed: {error:?}"),
-                        })
-                },
-                RetryContext::dns(&name),
-                || async {
-                    if denied {
-                        return Ok(HostResponseP3SocketsResolveName {
-                            result: Err(SerializableP3IpNameLookupError::AccessDenied),
-                        });
-                    }
-                    let sockets = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
-                    let result =
-                        <WasiSockets as ip_name_lookup::HostWithStore<U>>::resolve_addresses(
-                            &sockets,
-                            name.clone(),
-                        )
-                        .await?;
-
-                    Ok(HostResponseP3SocketsResolveName {
-                        result: result
-                            .map(SerializableIpAddresses::from)
-                            .map_err(Into::into),
+        let response = run_deniable_access_classified::<
+            _,
+            _,
+            Ctx,
+            P3SocketsIpNameLookupResolveAddresses,
+            _,
+            _,
+        >(
+            store,
+            HostRequestP3SocketsResolveName { name: name.clone() },
+            DurableFunctionType::ReadRemote,
+            denial,
+            |response| {
+                response
+                    .result
+                    .as_ref()
+                    .err()
+                    .map(|error| ClassifiedHostError {
+                        kind: classify_p3_ip_name_lookup_error(error),
+                        message: format!("DNS resolution of '{name}' failed: {error:?}"),
                     })
-                },
-            )
-            .await?;
+            },
+            RetryContext::dns(&name),
+            || async {
+                let sockets = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
+                let result = <WasiSockets as ip_name_lookup::HostWithStore<U>>::resolve_addresses(
+                    &sockets,
+                    name.clone(),
+                )
+                .await?;
+
+                Ok(HostResponseP3SocketsResolveName {
+                    result: result
+                        .map(SerializableIpAddresses::from)
+                        .map_err(Into::into),
+                })
+            },
+        )
+        .await?;
 
         Ok(response
             .result

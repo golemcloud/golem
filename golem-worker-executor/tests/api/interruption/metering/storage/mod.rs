@@ -196,12 +196,12 @@ async fn pending_scripted_storage(
         .context("initial monitor pre-wait flush")??;
     let oplog = worker.all().oplog_service();
     let read_stored = async || {
-        let last = oplog.get_last_index(&owned, mode).await;
+        let last = oplog.get_last_index(&owned, mode).await?;
         oplog
             .read_exact(&owned, mode, OplogIndex::INITIAL, last.as_u64())
             .await
     };
-    let prefix = read_stored().await;
+    let prefix = read_stored().await?;
     let prefix_last = *prefix
         .last_key_value()
         .context("committed invocation prefix is empty")?
@@ -328,8 +328,8 @@ async fn pending_scripted_storage(
             OplogIndex::INITIAL,
             worker.oplog().current_oplog_index().await.as_u64(),
         )
-        .await;
-    let stopped_raw = read_stored().await;
+        .await?;
+    let stopped_raw = read_stored().await?;
     assert_eq!(
         stopped_raw.range(..=prefix_last).collect::<Vec<_>>(),
         prefix.iter().collect::<Vec<_>>()
@@ -378,7 +378,7 @@ async fn pending_scripted_storage(
             .into_typed::<Result<String, String>>()?;
         assert_eq!(result, Err("ErrorCode::ConnectionBroken".to_string()));
         let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        let recovered_raw = read_stored().await;
+        let recovered_raw = read_stored().await?;
         let stopped_last = *stopped_raw.last_key_value().unwrap().0;
         assert_eq!(
             recovered_raw.range(..=stopped_last).collect::<Vec<_>>(),

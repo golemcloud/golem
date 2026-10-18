@@ -552,7 +552,7 @@ impl WalletBaseline {
         initial_agent_config: Vec<TypedAgentConfigEntry>,
     ) -> Result<Self, WorkerExecutorError> {
         let (snapshot, through) = match snapshot_index {
-            Some(index) => match oplog.read(index).await {
+            Some(index) => match oplog.read(index).await? {
                 OplogEntry::Snapshot {
                     active_cards,
                     wallet_generation,

@@ -3755,7 +3755,7 @@ where
             let replay = accessor.with(|mut access| access.get().state.replay_state.clone());
             let (terminal_index, _) = replay
                 .visible_terminal_record(start)
-                .await
+                .await?
                 .ok_or_else(|| anyhow!("recorded tool terminal has no visible End"))?;
             operation.install_recorded_admission_refusal(refusal, terminal_index);
         }
@@ -5420,6 +5420,7 @@ pub(crate) async fn settle_tool_children<Ctx: WorkerCtx>(
 
     let execution = store.data().durable_ctx().owner_execution.clone();
     let operations = execution.tool_operations();
+    let entity_cancellation = store.data().durable_ctx().entity_cancellation();
     let primary = store
         .data()
         .durable_ctx()
@@ -5448,6 +5449,12 @@ pub(crate) async fn settle_tool_children<Ctx: WorkerCtx>(
             // A secondary task error must not strand a registered failure continuation,
             // even while election still waits for another terminal selection to settle.
             Err(_) if operations.has_owner_failure() => {}
+            // Cancelling an entity interrupts its guest; its accepted children still have to
+            // resolve their own cancellation inside this Store before the parent settles.
+            Err(_)
+                if entity_cancellation
+                    .as_ref()
+                    .is_some_and(|cancellation| cancellation.is_cancelled()) => {}
             Err(error) => return Err(WorkerExecutorError::runtime(error.to_string())),
         }
     }
@@ -5510,7 +5517,7 @@ where
                 accepted.durability.scope().invocation_id().start_index(),
             )
         });
-        replay.has_visible_scope_descendant(start).await
+        replay.has_visible_scope_descendant(start).await?
     } else {
         false
     };

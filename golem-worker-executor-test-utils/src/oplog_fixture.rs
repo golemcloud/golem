@@ -26,7 +26,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_worker_executor::model::ExecutionStatus;
 use golem_worker_executor::services::oplog::{
     Oplog, OplogError, OplogLifecycleGuard, OplogService, RawOplogPayloadDownloadError,
-    StagePublication,
+    StagePublication, UnreadableOplog,
 };
 use golem_worker_executor::services::stream_session_index::StreamSessionIndexService;
 use std::collections::BTreeMap;
@@ -121,15 +121,15 @@ impl OplogService for OplogFixtureService {
         status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog> {
-        self.handle(
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+        Ok(self.handle(
             id,
             self.inner
                 .create(
                     lifecycle, id, mode, initial, metadata, status, execution, epoch,
                 )
-                .await,
-        )
+                .await?,
+        ))
     }
 
     async fn create_fresh(
@@ -142,15 +142,15 @@ impl OplogService for OplogFixtureService {
         status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog> {
-        self.handle(
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+        Ok(self.handle(
             id,
             self.inner
                 .create_fresh(
                     lifecycle, id, mode, initial, metadata, status, execution, epoch,
                 )
-                .await,
-        )
+                .await?,
+        ))
     }
 
     async fn open(
@@ -163,18 +163,22 @@ impl OplogService for OplogFixtureService {
         status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog> {
-        self.handle(
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+        Ok(self.handle(
             id,
             self.inner
                 .open(
                     lifecycle, id, mode, last, metadata, status, execution, epoch,
                 )
-                .await,
-        )
+                .await?,
+        ))
     }
 
-    async fn get_last_index(&self, id: &OwnedAgentId, mode: AgentMode) -> OplogIndex {
+    async fn get_last_index(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+    ) -> Result<OplogIndex, UnreadableOplog> {
         self.inner.get_last_index(id, mode).await
     }
 
@@ -221,7 +225,7 @@ impl OplogService for OplogFixtureService {
         mode: AgentMode,
         index: OplogIndex,
         count: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         self.inner.read_exact(id, mode, index, count).await
     }
 
@@ -231,11 +235,11 @@ impl OplogService for OplogFixtureService {
         mode: AgentMode,
         index: OplogIndex,
         count: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         self.inner.read_source(id, mode, index, count).await
     }
 
-    async fn exists(&self, id: &OwnedAgentId, mode: AgentMode) -> bool {
+    async fn exists(&self, id: &OwnedAgentId, mode: AgentMode) -> Result<bool, UnreadableOplog> {
         self.inner.exists(id, mode).await
     }
 

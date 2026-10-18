@@ -193,12 +193,12 @@ async fn nonmatching_storage(
         .context("initial monitor pre-wait flush")??;
     let oplog = worker.all().oplog_service();
     let read_stored = async || {
-        let last = oplog.get_last_index(&owned, mode).await;
+        let last = oplog.get_last_index(&owned, mode).await?;
         oplog
             .read_exact(&owned, mode, OplogIndex::INITIAL, last.as_u64())
             .await
     };
-    let prefix = read_stored().await;
+    let prefix = read_stored().await?;
     let prefix_last = *prefix
         .last_key_value()
         .context("committed invocation prefix is empty")?
@@ -354,7 +354,7 @@ async fn nonmatching_storage(
     assert!(attempts.try_recv().is_err());
     assert!(!worker.monthly_window_active_for_test());
     assert_eq!(account.monthly_observer_count_for_test(), 0);
-    let stopped_raw = read_stored().await;
+    let stopped_raw = read_stored().await?;
     assert_eq!(
         stopped_raw.range(..=prefix_last).collect::<Vec<_>>(),
         prefix.iter().collect::<Vec<_>>()

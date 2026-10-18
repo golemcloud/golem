@@ -29,7 +29,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "0.4.12"
+  WASM_RQUICKJS_VERSION: "0.4.13"
   MOONBIT_INSTALL_VERSION: "0.10.11+6ff76a5f9"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
@@ -1794,7 +1794,8 @@ jobs:
 
   docker-image-checks:
     # Builds the linux/amd64 images without pushing them, and checks their user, writable
-    # directories, setuid and setgid files, and the file capability and startup of xfs-quotad.
+    # directories, setuid and setgid files, the file capability and startup of xfs-quotad, and the
+    # startup of the golem image with Litestream.
     runs-on: blacksmith-8vcpu-ubuntu-2204
     timeout-minutes: 30
     steps:
@@ -1887,6 +1888,112 @@ jobs:
         with:
           name: docker-targets-build-${{ env.PLATFORM_PAIR }}
           path: target/${{ matrix.platform.target }}.tar
+
+  docker-golem-build:
+    env:
+      CARGO_BUILD_JOBS: 10
+    runs-on: blacksmith-16vcpu-ubuntu-2204
+    if: github.event_name == 'release' && github.ref_type == 'tag'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - platform: linux/amd64
+            target: x86_64-unknown-linux-gnu
+            rustflags_env: CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS
+            rustflags: "-C target-cpu=x86-64-v3"
+          - platform: linux/arm64
+            target: aarch64-unknown-linux-gnu
+            cross: true
+            rustflags_env: CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS
+            rustflags: "-C target-feature=+neon,+crc,+lse,+aes,+sha2,+dotprod"
+    name: docker-golem-build (${{ matrix.platform.platform }})
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/prepare-builtin-release
+      - uses: ./.github/actions/setup-rust
+        with:
+          fetch-tag: 'true'
+          rust-targets: ${{ matrix.platform.target }}
+          install-protoc: 'true'
+
+      - name: Prepare
+        run: |
+          platform=${{ matrix.platform.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+          # The same instruction-set baseline as the images of the services.
+          echo "${{ matrix.platform.rustflags_env }}=${{ matrix.platform.rustflags }}" >> $GITHUB_ENV
+
+      - id: get_version
+        uses: battila7/get-version-action@v2
+      - name: Set version for all packages
+        env:
+          VERSION: ${{ steps.get_version.outputs.version-without-v }}
+        run: cargo make --profile ci set-version
+
+      - run: cargo install cross
+        if: ${{ matrix.platform.cross }}
+      - name: Build the golem executable
+        if: ${{ ! matrix.platform.cross }}
+        run: cargo build -p golem --release --target ${{ matrix.platform.target }}
+      - name: Build the golem executable
+        if: ${{ matrix.platform.cross }}
+        run: cross build -p golem --release --target ${{ matrix.platform.target }}
+
+      - name: Package the golem executable
+        run: tar -cvf target/golem-${{ matrix.platform.target }}.tar -C target ${{ matrix.platform.target }}/release/golem
+      - uses: actions/upload-artifact@v6
+        name: Upload the golem executable
+        with:
+          name: docker-golem-build-${{ env.PLATFORM_PAIR }}
+          path: target/golem-${{ matrix.platform.target }}.tar
+
+  docker-publish-golem:
+    runs-on: blacksmith
+    needs:
+      - docker-golem-build
+      - docker-image-checks
+      - builtin-artifacts-release-tests
+    if: github.event_name == 'release' && github.ref_type == 'tag'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/docker-publish-setup
+        with:
+          dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+          dockerhub-password: ${{ secrets.DOCKERHUB_PASSWORD }}
+          artifact-pattern: docker-golem-build-*
+
+      - uses: ./.github/actions/docker-build-push-service
+        with:
+          image-name: golemservices/golem
+          dockerfile: ./cli/golem/docker/Dockerfile
+          platforms: ${{ env.PLATFORMS }}
+
+  docker-publish-router:
+    runs-on: blacksmith
+    needs:
+      - docker-image-checks
+      - builtin-artifacts-release-tests
+    if: github.event_name == 'release' && github.ref_type == 'tag'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/docker-publish-setup
+        with:
+          dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+          dockerhub-password: ${{ secrets.DOCKERHUB_PASSWORD }}
+          artifact-pattern: ''
+
+      - uses: ./.github/actions/docker-build-push-service
+        with:
+          image-name: golemservices/golem-router
+          dockerfile: ./golem-router/docker/Dockerfile
+          platforms: ${{ env.PLATFORMS }}
 
   docker-publish-1:
     runs-on: blacksmith

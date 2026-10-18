@@ -183,7 +183,7 @@ async fn pending_block(
     };
     let oplog = worker.all().oplog_service();
     let read_stored = async || {
-        let last = oplog.get_last_index(&owned, mode).await;
+        let last = oplog.get_last_index(&owned, mode).await?;
         oplog
             .read_exact(&owned, mode, OplogIndex::INITIAL, last.as_u64())
             .await
@@ -255,7 +255,7 @@ async fn pending_block(
             tokio::time::timeout(Duration::from_secs(10), next_flush())
                 .await.context("initial monitor pre-wait flush")??;
         }
-        let prefix = read_stored().await;
+        let prefix = read_stored().await?;
         let prefix_last = *prefix.last_key_value().context("committed input-poll prefix is empty")?.0;
         let mut raw = worker.raw_interrupt_for_test();
         let acquisitions = worker.permit_acquisitions_for_test();
@@ -372,7 +372,7 @@ async fn pending_block(
         ensure!(!worker.monthly_window_active_for_test());
         ensure!(account.monthly_observer_count_for_test() == 0);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        let mut retained_raw = read_stored().await;
+        let mut retained_raw = read_stored().await?;
         ensure!(retained_raw.range(..=prefix_last).eq(prefix.iter()), "the complete committed input-poll prefix must survive stop");
         ensure!(retained_raw.values().all(|entry| !matches!(entry, OplogEntry::Jump { .. })));
         ensure!(
@@ -385,7 +385,7 @@ async fn pending_block(
                 OplogIndex::INITIAL,
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
-            .await;
+            .await?;
         let errors: Vec<_> = entries
             .values()
             .filter_map(|entry| match entry {
@@ -531,7 +531,7 @@ async fn pending_block(
                 ensure!(pending.window_closed(), "the reconstructed poll's own window must close");
                 ensure!(!invocation.is_finished());
                 let replay_stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-                let replay_raw = read_stored().await;
+                let replay_raw = read_stored().await?;
                 let retained_last = *retained_raw.last_key_value().unwrap().0;
                 ensure!(replay_raw.range(..=retained_last).eq(retained_raw.iter()), "the full first stopped prefix must survive the repeated stop");
                 retained_raw = replay_raw;
@@ -542,7 +542,7 @@ async fn pending_block(
                 ensure!(count_agent_invocation_pair_since(&replay_stopped, OplogIndex::INITIAL) == (2, 1));
                 let raw = worker.oplog().read_exact(
                     OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64(),
-                ).await;
+                ).await?;
                 ensure!(raw.values().filter(|entry| matches!(entry, OplogEntry::Suspend { .. })).count() == 2);
                 ensure!(raw.values().all(|entry| !matches!(entry, OplogEntry::Error { .. } | OplogEntry::Cancelled { .. })));
                 limits.run_batch_for_test().await;
@@ -571,7 +571,7 @@ async fn pending_block(
                 "reconstructed P2 block returned {resumed:?}"
             );
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-            let recovered_raw = read_stored().await;
+            let recovered_raw = read_stored().await?;
             let retained_last = *retained_raw.last_key_value().unwrap().0;
             ensure!(recovered_raw.range(..=retained_last).eq(retained_raw.iter()), "the full stopped prefix must survive ordinary P2 reconstruction");
             ensure!(

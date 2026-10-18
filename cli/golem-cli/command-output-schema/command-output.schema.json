@@ -5776,7 +5776,7 @@
     },
     "PublicOplogEntryStart": {
       "type": "object",
-      "required": ["type", "timestamp", "parentStartIndex", "functionName", "invocationId", "observationalOwner", "request", "durableFunctionType", "spanStarted"],
+      "required": ["type", "timestamp", "parentStartIndex", "functionName", "invocationId", "observationalOwner", "request", "durableFunctionType", "spanStarted", "denial"],
       "properties": {
         "type": { "const": "Start" },
         "timestamp": { "type": "string" },
@@ -5786,7 +5786,8 @@
         "observationalOwner": { "type": ["integer", "null"], "minimum": 0 },
         "request": { "oneOf": [{ "$ref": "#/definitions/TypedSchemaValue" }, { "type": "null" }] },
         "durableFunctionType": { "$ref": "#/definitions/PublicDurableFunctionType" },
-        "spanStarted": { "oneOf": [{ "$ref": "#/definitions/PublicSpanStarted" }, { "type": "null" }] }
+        "spanStarted": { "oneOf": [{ "$ref": "#/definitions/PublicSpanStarted" }, { "type": "null" }] },
+        "denial": { "type": ["string", "null"] }
       },
       "additionalProperties": false
     },
