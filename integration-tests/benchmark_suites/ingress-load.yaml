@@ -36,21 +36,19 @@ benchmarks:
   # size   = accounts, each one a client with its own connection and token
   # length = target requests per second from all accounts together
   #
-  # Two entries instead of the full grid of accounts and rates, which would take twice
-  # as long.
+  # The first run (2000 and 3000 req/s) stopped at about 1900 req/s with every number of
+  # accounts, already with 100. So the account sweep there measured an overloaded cluster.
   #
-  # What the number of clients costs, at a rate the cluster holds: cloud-perf-rust
-  # reached about 3000 req/s with 250 workers, at 75-80 ms average latency.
+  # Where latency starts to grow, with few clients.
   - name: ingress-load
     iterations: 1
     clusterSize: [2]
-    size: [100, 250, 500, 1000]
-    length: [2000]
+    size: [100]
+    length: [1000, 1500, 1800]
 
-  # Where the rate limit is with the most clients. 3000 req/s is about where
-  # cloud-perf-rust stopped scaling.
+  # The same with the most clients: below and at the limit of the first run.
   - name: ingress-load
     iterations: 1
     clusterSize: [2]
     size: [1000]
-    length: [1000, 3000]
+    length: [1500, 2000]

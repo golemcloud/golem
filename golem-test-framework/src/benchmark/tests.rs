@@ -178,11 +178,37 @@ fn rust_only_cloud_perf_suite_is_cloud_perf_without_ts_agents() {
 #[test]
 fn ingress_load_suite_has_its_settings() {
     let ingress = suite("ingress-load.yaml");
-    let settings = ingress.ingress.expect("the suite sets the ingress settings");
+    let settings = ingress
+        .ingress
+        .expect("the suite sets the ingress settings");
     assert_eq!(settings.step_secs, 720);
     assert_eq!(settings.http1_percent, 30);
     assert_eq!(ingress.benchmarks[0].name, "ingress-load");
 
     // A suite without the field gets no settings, so the benchmark uses the defaults.
     assert!(suite("cloud-perf-rust.yaml").ingress.is_none());
+    // Without a mix, every request calls echo.
+    assert_eq!(settings.mix, IngressSettings::default().mix);
+    assert_eq!(settings.mix[0].method, IngressMethod::Echo);
+}
+
+#[test]
+fn ingress_load_mix_suite_has_its_mix() {
+    let mix = suite("ingress-load-mix.yaml")
+        .ingress
+        .expect("the suite sets the ingress settings")
+        .mix;
+    let methods = mix
+        .iter()
+        .map(|entry| (entry.method, entry.weight, entry.millis, entry.length))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        methods,
+        vec![
+            (IngressMethod::Echo, 50, None, None),
+            (IngressMethod::Sleep, 20, Some(1000), None),
+            (IngressMethod::OplogHeavy, 20, None, Some(10)),
+            (IngressMethod::CpuIntensive, 10, None, Some(100)),
+        ]
+    );
 }
