@@ -1465,11 +1465,7 @@ async fn deserialize_oplog_payload<T: BinaryCodec + Send + 'static>(
     bytes: Vec<u8>,
 ) -> Result<T, anyhow::Error> {
     join_or_park_at_runtime_shutdown(tokio::task::spawn_blocking(move || {
-        golem_common::serialization::try_deserialize(&bytes)
-            .map_err(anyhow::Error::msg)?
-            .ok_or_else(|| {
-                anyhow::anyhow!("oplog payload has an unsupported or missing serialization version")
-            })
+        golem_common::serialization::decode(&bytes).map_err(anyhow::Error::new)
     }))
     .await
     .map_err(anyhow::Error::new)?

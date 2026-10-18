@@ -255,6 +255,12 @@ finalization, joins Store destruction and retained callbacks, then joins those c
 layers. These distinctions prevent an old owner from removing, reopening, or writing lifecycle
 state for its replacement without adding a second recovery path.
 
+On executor shutdown, the active-agent cache task removes its cached workers regardless of TTL.
+Each worker owns the service graph that owns the cache, so leaving the entries cached would
+retain the graph and its storage pools after task cancellation. This drops cache references only;
+it does not record an interruption or delete persisted agents. In-process replacement still waits
+for the previous executor's invocation loops and oplog generations to drain.
+
 Explicit interruption retires the cached owner and fences its replacement startup. Automatic
 shard-assignment recovery leaves `Interrupted` workers stopped, even with queued invocations or
 updates; an executor restart or shard move is not a request to resume them. If the worker
