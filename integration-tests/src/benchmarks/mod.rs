@@ -17,7 +17,7 @@ use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::schema::{SchemaValue, TypedSchemaValue};
-use golem_test_framework::benchmark::{BenchmarkRecorder, ResultKey};
+use golem_test_framework::benchmark::{BenchmarkRecorder, IngressSettings, ResultKey};
 use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::dsl::TestDsl;
@@ -26,6 +26,7 @@ use reqwest::header::{HeaderName, HeaderValue};
 use reqwest::{Client, Request};
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 use tracing::{Instrument, info, warn};
@@ -36,6 +37,7 @@ pub mod cold_start_unknown;
 pub mod density;
 pub mod durability_overhead;
 pub mod idempotency_key;
+pub mod ingress_load;
 pub mod latency;
 mod public_invocation;
 pub mod sleep;
@@ -57,6 +59,17 @@ pub fn set_skip_ts_agents(skip: bool) {
 
 pub fn skip_ts_agents() -> bool {
     SKIP_TS_AGENTS.load(Ordering::Relaxed)
+}
+
+static INGRESS_SETTINGS: RwLock<Option<IngressSettings>> = RwLock::new(None);
+
+/// Set from the `ingress` field of the suite before its benchmarks run.
+pub fn set_ingress_settings(settings: Option<IngressSettings>) {
+    *INGRESS_SETTINGS.write().unwrap() = settings;
+}
+
+pub fn ingress_settings() -> IngressSettings {
+    INGRESS_SETTINGS.read().unwrap().clone().unwrap_or_default()
 }
 
 /// Injects the current tracing span's OpenTelemetry trace context
