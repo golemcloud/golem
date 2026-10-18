@@ -444,9 +444,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             );
 
         let mut retry_was_live = false;
-        // Belongs to this start attempt, not the counter inherited from its predecessor.
-        // Keep it across disposal and outer-loop continuation until a real rollover replaces it.
-        let mut established_generation = None;
         'outer: loop {
             self.parent
                 .queue
@@ -460,12 +457,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 debug!(%agent_id, "Worker generation not started because its shard is not assigned");
                 self.parent.complete_startup(self.start_attempt, Err(error));
                 self.release_concurrent_agent_permit();
-                self.stop_unloaded(
-                    None,
-                    PendingLiveInvocationDisposition::Fail,
-                    established_generation,
-                )
-                .await;
+                self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
+                    .await;
                 break;
             }
             let retiring = self.parent.owner_retirement_requested.clone();
@@ -475,12 +468,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     Err(WorkerExecutorError::runtime("Worker owner is retiring")),
                 );
                 self.release_concurrent_agent_permit();
-                self.stop_unloaded(
-                    None,
-                    PendingLiveInvocationDisposition::Fail,
-                    established_generation,
-                )
-                .await;
+                self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
+                    .await;
                 break;
             }
             let pending_interrupt = self.pending_interrupt().await;
@@ -490,7 +479,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         interrupt.clone(),
                         retry_was_live,
                         interrupt.retry_decision(),
-                        established_generation,
                     )
                     .await
                 {
@@ -520,7 +508,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                 interrupt.clone(),
                                 retry_was_live,
                                 interrupt.retry_decision(),
-                                established_generation,
                             )
                             .await
                     {
@@ -530,7 +517,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         biased;
                         () = retiring.cancelled() => {
                             self.parent.complete_startup(self.start_attempt, Err(WorkerExecutorError::runtime("Worker owner is retiring")));
-                            self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail, established_generation).await;
+                            self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail).await;
                             break 'outer;
                         }
                         permit = &mut permit => {
@@ -546,7 +533,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     None,
                                     None,
                                     PendingLiveInvocationDisposition::Fail,
-                                    established_generation,
                                 )
                                 .await;
                                 break 'outer;
@@ -554,7 +540,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             let pending_interrupt = self.pending_interrupt().await;
                             if let Some(interrupt) = pending_interrupt
                                 && self
-                                    .handle_unloaded_interrupt(interrupt.clone(), retry_was_live, interrupt.retry_decision(), established_generation)
+                                    .handle_unloaded_interrupt(interrupt.clone(), retry_was_live, interrupt.retry_decision())
                                     .await
                             {
                                 break 'outer;
@@ -576,11 +562,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             // the start for an upload, is handled as an interrupt of the instantiation.
             if let Some(interrupt) = self.pending_interrupt().await {
                 match self
-                    .interrupted_before_instance(
-                        interrupt.kind,
-                        Some(interrupt),
-                        established_generation,
-                    )
+                    .interrupted_before_instance(interrupt.kind, Some(interrupt))
                     .await
                 {
                     StartupStep::Retry => continue,
@@ -591,10 +573,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 .permit_state
                 .take_permit()
                 .expect("startup must hold a concurrent-agent permit");
-            let (mut agent, window, recovery_decision) = match self
-                .create_instance(permit, &mut established_generation)
-                .await
-            {
+            let (mut agent, window, recovery_decision) = match self.create_instance(permit).await {
                 CreateInstanceResult::Created {
                     agent,
                     window,
@@ -603,11 +582,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 CreateInstanceResult::ReacquireMemory => {
                     if let Some(interrupt) = self.pending_interrupt().await {
                         match self
-                            .interrupted_before_instance(
-                                interrupt.kind,
-                                Some(interrupt),
-                                established_generation,
-                            )
+                            .interrupted_before_instance(interrupt.kind, Some(interrupt))
                             .await
                         {
                             StartupStep::Stop => break,
@@ -633,11 +608,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     self.release_concurrent_agent_permit();
                     let pending_interrupt = self.pending_interrupt().await;
                     match self
-                        .interrupted_before_instance(
-                            kind,
-                            pending_interrupt,
-                            established_generation,
-                        )
+                        .interrupted_before_instance(kind, pending_interrupt)
                         .await
                     {
                         StartupStep::Retry => continue,
@@ -657,7 +628,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                 interrupt.clone(),
                                 retry_was_live,
                                 interrupt.retry_decision(),
-                                established_generation,
                             )
                             .await
                         {
@@ -673,12 +643,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             _ = &mut sleep => continue 'outer,
                             command = self.receiver.recv() => {
                                 let Some(command) = command else {
-                                    self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail, established_generation).await;
+                                    self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail).await;
                                     break 'outer;
                                 };
                                 let pending_interrupt = self.pending_interrupt().await;
                                 if let Some(interrupt) = pending_interrupt {
-                                    if self.handle_unloaded_interrupt(interrupt.clone(), retry_was_live, interrupt.retry_decision(), established_generation).await {
+                                    if self.handle_unloaded_interrupt(interrupt.clone(), retry_was_live, interrupt.retry_decision()).await {
                                         break 'outer;
                                     }
                                     Self::defer_wakeup(&mut deferred_wakeups, command);
@@ -917,7 +887,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                         self.stop_unloaded(
                                             failure,
                                             PendingLiveInvocationDisposition::Fail,
-                                            established_generation,
                                         )
                                         .await
                                     }
@@ -1141,7 +1110,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         interrupt,
                         retry_was_live,
                         final_decision.expect("taken idle demand has a retry decision"),
-                        established_generation,
                     )
                     .await
                 {
@@ -1161,7 +1129,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             cleanup_ephemeral_worker.then(super::inactive_ephemeral_agent_error)
                         }),
                         PendingLiveInvocationDisposition::Fail,
-                        established_generation,
                     )
                     .await;
                     if cleanup_ephemeral_worker {
@@ -1185,7 +1152,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             None,
                             None,
                             resident_work_disposition(unload_request.reason),
-                            established_generation,
                         )
                         .await;
                         break;
@@ -1214,7 +1180,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     Some(command) => command,
                                     None => {
                                         debug!(%agent_id, "Invocation queue loop command channel closed during delayed retry");
-                                        self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail, established_generation).await;
+                                        self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail).await;
                                         break 'outer;
                                     }
                                 };
@@ -1270,7 +1236,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             continue 'outer;
                                         }
                                         RetryDecision::None => {
-                                            self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail, established_generation).await;
+                                            self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail).await;
                                             break 'outer;
                                         }
                                         RetryDecision::TryStop(timestamp) => {
@@ -1278,7 +1244,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                                 Self::defer_wakeup(&mut deferred_wakeups, command);
                                                 continue 'outer;
                                             }
-                                            self.stop_closed(None, None, resident_work_disposition(interrupt.unload_request.reason), established_generation).await;
+                                            self.stop_closed(None, None, resident_work_disposition(interrupt.unload_request.reason)).await;
                                             break 'outer;
                                         }
                                         RetryDecision::Delayed(_) | RetryDecision::ReacquirePermits => {
@@ -1362,7 +1328,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     /// recorded the retirement - `interrupt_and_retire` before it sends `ShardLost`, the write
     /// helper with the fence that refused it.
     async fn stop_startup_retired(&self) {
-        self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail, None)
+        self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
             .await;
     }
 
@@ -1374,7 +1340,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         &mut self,
         kind: InterruptKind,
         pending_interrupt: Option<PendingWorkerInterrupt>,
-        established_generation: Option<u64>,
     ) -> StartupStep {
         self.release_concurrent_agent_permit();
         let kind = pending_interrupt
@@ -1398,7 +1363,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             self.stop_unloaded(
                 Some(super::inactive_ephemeral_agent_error()),
                 PendingLiveInvocationDisposition::Fail,
-                established_generation,
             )
             .await;
             self.archive_ephemeral_oplog();
@@ -1438,7 +1402,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                 .map(|interrupt| interrupt.unload_request.reason)
                                 .unwrap_or(UnloadReason::Suspend),
                         ),
-                        established_generation,
                     )
                     .await;
                     StartupStep::Stop
@@ -1458,12 +1421,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     self.start_attempt,
                     Err(WorkerExecutorError::Interrupted { kind }),
                 );
-                self.stop_unloaded(
-                    None,
-                    PendingLiveInvocationDisposition::Fail,
-                    established_generation,
-                )
-                .await;
+                self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
+                    .await;
                 StartupStep::Stop
             }
             InterruptKind::ShardLost => {
@@ -1482,7 +1441,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         interrupt: PendingWorkerInterrupt,
         retry_was_live: bool,
         decision: RetryDecision,
-        established_generation: Option<u64>,
     ) -> bool {
         let kind = interrupt.kind;
         debug!(
@@ -1491,12 +1449,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         );
         if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
             let status = self.parent.get_last_known_status().await;
-            let marker = super::outcome::unloaded_lifecycle_marker(
-                kind,
-                status.status,
-                self.parent.resident_generation.load(Ordering::Acquire),
-                established_generation,
-            );
+            let marker = match kind {
+                InterruptKind::Suspend(_) => Some(OplogEntry::suspend()),
+                InterruptKind::Interrupt(_) => Some(OplogEntry::interrupted()),
+                InterruptKind::Restart | InterruptKind::Jump | InterruptKind::ShardLost => None,
+            };
             let recorded = match marker {
                 Some(entry) => self
                     .parent
@@ -1535,13 +1492,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 false
             }
             RetryDecision::None => {
-                self.stop_closed(
-                    None,
-                    None,
-                    PendingLiveInvocationDisposition::Fail,
-                    established_generation,
-                )
-                .await;
+                self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail)
+                    .await;
                 true
             }
             RetryDecision::TryStop(timestamp) => {
@@ -1553,7 +1505,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         None,
                         None,
                         resident_work_disposition(interrupt.unload_request.reason),
-                        established_generation,
                     )
                     .await;
                     true
@@ -1569,13 +1520,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         &self,
         startup_failure: Option<WorkerExecutorError>,
         pending_live_invocations: PendingLiveInvocationDisposition,
-        established_generation: Option<u64>,
     ) {
         if !self.parent.state_actor.lifecycle_is_closed()
-            && let Err(error) = self
-                .parent
-                .commit_pending_terminal_stop(established_generation)
-                .await
+            && let Err(error) = self.parent.commit_pending_terminal_stop().await
         {
             self.stop_cleanup_failed(error).await;
             return;
@@ -1639,19 +1586,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         cleanup_error: Option<WorkerExecutorError>,
         startup_failure: Option<WorkerExecutorError>,
         pending_live_invocations: PendingLiveInvocationDisposition,
-        established_generation: Option<u64>,
     ) {
         publish_unload_outcome(
             cleanup_error,
             startup_failure,
             |error| async move { self.stop_cleanup_failed(error).await },
             |startup_failure| async move {
-                self.stop_unloaded(
-                    startup_failure,
-                    pending_live_invocations,
-                    established_generation,
-                )
-                .await
+                self.stop_unloaded(startup_failure, pending_live_invocations)
+                    .await
             },
         )
         .await;
@@ -1825,12 +1767,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     async fn create_instance(
         &mut self,
         mut permit: crate::services::active_agents::ConcurrentAgentPermit,
-        established_generation: &mut Option<u64>,
     ) -> CreateInstanceResult<Ctx> {
         let phase = agent_phase_span!(self, "create_instance");
         async {
             debug!("Creating the worker instance");
-            *established_generation = None;
             self.parent
                 .resident_generation
                 .fetch_add(1, Ordering::AcqRel);
@@ -1857,7 +1797,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     self.stop_unloaded(
                         Some(MonthlyResourceCapacityError::unavailable_error()),
                         PendingLiveInvocationDisposition::Fail,
-                        *established_generation,
                     )
                     .await;
                     return CreateInstanceResult::Failed;
@@ -1872,12 +1811,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         &self.parent.config(),
                         exhaustion,
                     );
-                    self.stop_unloaded(
-                        Some(error),
-                        PendingLiveInvocationDisposition::Fail,
-                        *established_generation,
-                    )
-                    .await;
+                    self.stop_unloaded(Some(error), PendingLiveInvocationDisposition::Fail)
+                        .await;
                     return CreateInstanceResult::Failed;
                 }
             }
@@ -1887,7 +1822,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 permit,
                 self.start_attempt,
                 &self.filesystem_snapshot_slot,
-                established_generation,
             ))
             .await
             {

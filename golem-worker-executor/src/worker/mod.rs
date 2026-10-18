@@ -1818,19 +1818,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if let Some(interrupt) = interrupt {
             self.set_interrupting(interrupt).await?;
         }
-        let established_generation = if interrupt.is_some() {
-            let lifecycle = self.instance.lock().await;
-            match lifecycle.deletion_runtime() {
-                WorkerInstance::Running(running) => outcome::started_marker_generation(
-                    &lifecycle,
-                    running.start_attempt,
-                    self.resident_generation.load(Ordering::Acquire),
-                ),
-                _ => None,
-            }
-        } else {
-            None
-        };
         let unload_reason = interrupt.map_or(UnloadReason::Idle, UnloadReason::from_interrupt);
         self.stop_internal(
             false,
@@ -1858,8 +1845,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await;
         } else if interrupt.is_some() {
             self.join_interrupt_establishment().await?;
-            self.commit_pending_terminal_stop(established_generation)
-                .await?;
+            self.commit_pending_terminal_stop().await?;
         }
         self.join_interrupt_establishment().await?;
         self.durable_stream_attachment_reconciler.stop().await;
@@ -1885,10 +1871,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     /// Settles a published terminal left after the Store's selected outcome or physical unload.
     /// A claimed invocation terminal and a completed or failed result are never written again.
-    async fn commit_pending_terminal_stop(
-        &self,
-        established_generation: Option<u64>,
-    ) -> Result<(), WorkerExecutorError> {
+    async fn commit_pending_terminal_stop(&self) -> Result<(), WorkerExecutorError> {
         if self.retired_for_lost_shard() {
             return Ok(());
         }
@@ -1904,16 +1887,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         ) {
             return Ok(());
         }
-        let marker = outcome::unloaded_lifecycle_marker(
-            pending.kind,
-            status.status,
-            self.resident_generation.load(Ordering::Acquire),
-            established_generation,
-        );
-        let recorded = match marker {
-            Some(entry) => self.add_and_commit_oplog(entry).await.map(|_| ()),
-            None => return Ok(()),
+        let entry = match pending.kind {
+            InterruptKind::Suspend(_) => OplogEntry::suspend(),
+            InterruptKind::Interrupt(_) => OplogEntry::interrupted(),
+            InterruptKind::Restart | InterruptKind::Jump | InterruptKind::ShardLost => {
+                return Ok(());
+            }
         };
+        let recorded = self.add_and_commit_oplog(entry).await.map(|_| ());
         match recorded {
             Ok(_) => {
                 if matches!(pending.kind, InterruptKind::Interrupt(_))
@@ -12523,7 +12504,6 @@ impl RunningWorker {
         concurrent_agent_permit: crate::services::active_agents::ConcurrentAgentPermit,
         start_attempt: Uuid,
         filesystem_snapshot_slot: &filesystem_snapshots::SnapshotSlot,
-        established_generation: &mut Option<u64>,
     ) -> Result<
         (
             WorkerRunningAgent<Ctx>,
@@ -12532,7 +12512,6 @@ impl RunningWorker {
         ),
         CreateWorkerInstanceError,
     > {
-        *established_generation = None;
         let component_id = parent.owned_agent_id.component_id();
         let entity_generation = parent
             .active_agents()
@@ -12601,7 +12580,6 @@ impl RunningWorker {
                     concurrent_agent_permit,
                     start_attempt,
                     filesystem_snapshot_slot,
-                    established_generation,
                 ))
                 .await;
             }
@@ -12619,7 +12597,6 @@ impl RunningWorker {
                     concurrent_agent_permit,
                     start_attempt,
                     filesystem_snapshot_slot,
-                    established_generation,
                 ))
                 .await;
             }
@@ -12717,7 +12694,6 @@ impl RunningWorker {
                             concurrent_agent_permit,
                             start_attempt,
                             filesystem_snapshot_slot,
-                            established_generation,
                         ))
                         .await;
                     }
@@ -12763,7 +12739,6 @@ impl RunningWorker {
                             concurrent_agent_permit,
                             start_attempt,
                             filesystem_snapshot_slot,
-                            established_generation,
                         ))
                         .await;
                     }
@@ -12820,7 +12795,6 @@ impl RunningWorker {
                     concurrent_agent_permit,
                     start_attempt,
                     filesystem_snapshot_slot,
-                    established_generation,
                 ))
                 .await;
             }
@@ -13076,7 +13050,6 @@ impl RunningWorker {
                 cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await,
             );
         }
-        *established_generation = Some(parent.resident_generation.load(Ordering::Acquire));
         drop(wallet_installation_guard);
         {
             let mut lifecycle = parent.instance.lock().await;

@@ -1519,6 +1519,37 @@ async fn invocation_results() {
 }
 
 #[test]
+async fn repeated_lifecycle_hints_preserve_completed_and_suspended_invocations() {
+    let completed = IdempotencyKey::fresh();
+    let pending = IdempotencyKey::fresh();
+    let test_case = TestCase::builder(0)
+        .agent_invocation_started("completed", vec![], completed.clone())
+        .agent_invocation_finished(
+            AgentInvocationResult::AgentInitialization,
+            completed,
+            ComponentRevision::INITIAL,
+        )
+        .add(OplogEntry::suspend(), |mut status| {
+            status.status = AgentStatus::Suspended;
+            status
+        })
+        .add(OplogEntry::suspend(), |status| status)
+        .add(OplogEntry::interrupted(), |mut status| {
+            status.status = AgentStatus::Interrupted;
+            status
+        })
+        .agent_invocation_started("pending", vec![], pending)
+        .add(OplogEntry::suspend(), |mut status| {
+            status.status = AgentStatus::Suspended;
+            status
+        })
+        .add(OplogEntry::suspend(), |status| status)
+        .build();
+
+    run_test_case(test_case).await;
+}
+
+#[test]
 fn recovery_errors_are_not_invocation_results() {
     let key = IdempotencyKey::fresh();
     let retry_from = OplogIndex::from_u64(1);

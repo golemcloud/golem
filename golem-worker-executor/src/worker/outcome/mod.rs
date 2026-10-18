@@ -12,52 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::WorkerInstance;
 use crate::model::TrapType;
 use crate::services::golem_config::GolemConfig;
 use crate::services::resource_limits::MonthlyResourceExhaustion;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::AgentStatus;
 use golem_common::model::OplogIndex;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::oplog::OplogEntry;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use uuid::Uuid;
 
 #[cfg(test)]
 mod tests;
-
-/// Capture ownership before stopping consumes the Running metadata. An unchanged counter
-/// alone does not identify a pre-owner attempt as the previous generation's owner.
-pub(super) fn started_marker_generation(
-    lifecycle: &WorkerInstance,
-    expected_attempt: Uuid,
-    generation: u64,
-) -> Option<u64> {
-    matches!(lifecycle.deletion_runtime(), WorkerInstance::Running(running)
-        if running.owner_generation_started && running.start_attempt == expected_attempt)
-    .then_some(generation)
-}
-
-/// FIFO-folded Suspended status already contains the marker for an established owner.
-/// A pre-owner attempt cannot reuse a prior generation's status.
-pub(super) fn unloaded_lifecycle_marker(
-    kind: InterruptKind,
-    status: AgentStatus,
-    generation: u64,
-    established_generation: Option<u64>,
-) -> Option<OplogEntry> {
-    match kind {
-        InterruptKind::Suspend(_) => {
-            if status == AgentStatus::Suspended && established_generation == Some(generation) {
-                return None;
-            }
-            Some(OplogEntry::suspend())
-        }
-        InterruptKind::Interrupt(_) => Some(OplogEntry::interrupted()),
-        InterruptKind::Restart | InterruptKind::Jump | InterruptKind::ShardLost => None,
-    }
-}
 
 pub(super) fn monthly_failure<Ctx: WorkerCtx>(
     trap: &TrapType,
