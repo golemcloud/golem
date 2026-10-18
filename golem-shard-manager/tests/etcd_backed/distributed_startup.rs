@@ -2675,8 +2675,7 @@ async fn an_old_standby_moves_behind_a_newer_version(etcd: &Arc<DockerEtcd>) {
 }
 
 /// The client that executors and worker services use, pointed at `port`, with a retry budget that
-/// covers one lease TTL plus a startup: what the docs recommend for executors that must survive a
-/// failover.
+/// covers one lease TTL plus a startup.
 fn failover_client(port: u16) -> GrpcShardManager {
     GrpcShardManager::new(&GrpcShardManagerConfig {
         host: "127.0.0.1".to_string(),
@@ -2700,6 +2699,10 @@ fn failover_client(port: u16) -> GrpcShardManager {
 // An executor's client, pointed at a standby, must ride out a crash of the leader with its default
 // settings: the standby names the dead leader until its lease expires, then the promoted standby
 // starts and serves. No retry tuning is needed.
+//
+// The client is made only after the leader is gone: an aborted replica keeps serving the
+// connections that it had accepted until its lease belief lapses, so a client that had called it
+// before would be answered by the dead leader and see no failover at all.
 async fn the_client_rides_out_an_ungraceful_failover_without_any_tuning(etcd: &Arc<DockerEtcd>) {
     wipe_state(etcd).await;
     let config = distributed_config(etcd);
@@ -2709,18 +2712,8 @@ async fn the_client_rides_out_an_ungraceful_failover_without_any_tuning(etcd: &A
         .unwrap()
         .unwrap();
     let before = campaigner_keys(etcd).await;
-    let (standby, _standby_ports) = spawn_replica(config, CancellationToken::new());
+    let (standby, mut standby_ports) = spawn_replica(config, CancellationToken::new());
     let standby_address = await_new_campaigner(etcd, &before).await;
-
-    let client = GrpcShardManager::new(&GrpcShardManagerConfig {
-        host: "127.0.0.1".to_string(),
-        port: standby_address.port,
-        ..GrpcShardManagerConfig::default()
-    });
-    client
-        .get_routing_table()
-        .await
-        .expect("the standby names the leader");
 
     leader.abort();
     // An abort takes effect only after the task is polled again, and the leader keeps answering
@@ -2737,11 +2730,29 @@ async fn the_client_rides_out_an_ungraceful_failover_without_any_tuning(etcd: &A
         }
     })
     .await;
+    assert!(
+        matches!(
+            standby_ports.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ),
+        "the standby was elected before the call began, so no failover is left to ride out"
+    );
+
+    let client = GrpcShardManager::new(&GrpcShardManagerConfig {
+        host: "127.0.0.1".to_string(),
+        port: standby_address.port,
+        ..GrpcShardManagerConfig::default()
+    });
     let table = timeout(STARTUP_TIMEOUT, client.get_routing_table())
         .await
         .expect("the call must end within the startup timeout")
         .expect("the call rides out the failover");
     assert_eq!(table.number_of_shards.value, NUMBER_OF_SHARDS);
+    // The only replica left is the standby, and it serves only once it leads.
+    timeout(Duration::from_secs(1), standby_ports)
+        .await
+        .expect("the standby was elected by the time the call was answered")
+        .expect("the standby's startup reports its ports");
     standby.abort();
 }
 
