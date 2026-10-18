@@ -2790,11 +2790,17 @@ async fn a_leader_that_stops_answers_nothing_on_the_connections_it_had_accepted(
         .expect("The replica should not panic")
         .expect("A replica stopped by its shutdown token exits cleanly");
 
-    // Well inside the lease TTL, so a lease belief that still holds cannot be the reason.
-    let answer = client.get_routing_table(GetRoutingTableRequest {}).await;
+    // Well inside the lease TTL, so a lease belief that still holds cannot be the reason. The
+    // connection itself is closed, not just answered with a refusal.
+    let status = client
+        .get_routing_table(GetRoutingTableRequest {})
+        .await
+        .expect_err(
+            "a stopped replica answered a call on a connection that it had accepted before",
+        );
     assert!(
-        answer.is_err(),
-        "a stopped replica answered a call on a connection that it had accepted before"
+        !status.message().contains("stopping"),
+        "the connection was still open and the gate answered on it: {status:?}"
     );
 }
 

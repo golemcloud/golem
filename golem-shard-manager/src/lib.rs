@@ -35,7 +35,6 @@ use crate::sharding::worker_executor::WorkerExecutorServiceDefault;
 use anyhow::Context;
 use config::ShardManagerConfig;
 use etcd_client::Client;
-use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server::ShardManagerServiceServer;
 use golem_common::base_model::shard_lease;
@@ -549,12 +548,44 @@ pub struct RunDetails {
     pub stop: Option<ServerStop>,
 }
 
+/// How long a stopping replica waits for the calls that are running to finish before its server
+/// is dropped. A shard manager call is short; this bounds a stuck one so that it cannot hold the
+/// stop, and with it the pod's termination, for the grace period of the orchestrator.
+const SERVER_DRAIN_LIMIT: Duration = Duration::from_secs(5);
+
+struct ServerInner {
+    /// Asks the server to stop accepting and to close its connections once their calls finish.
+    shutdown: CancellationToken,
+    closed: tokio::sync::watch::Receiver<bool>,
+    abort: tokio::task::AbortHandle,
+    /// Set by a stop that closes the server itself, after the leadership is released.
+    closed_by_stop: std::sync::atomic::AtomicBool,
+}
+
+/// Closes the server when the task that holds it is dropped, unless a stop is in charge of
+/// that: whoever drops or aborts the task set of a replica ends its server too, as it did when the
+/// server ran in that set.
+struct CloseServerOnDrop(Arc<ServerInner>);
+
+impl Drop for CloseServerOnDrop {
+    fn drop(&mut self) {
+        if !self
+            .0
+            .closed_by_stop
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            self.0.shutdown.cancel();
+        }
+    }
+}
+
 /// The parts of a replica that its stop acts on, in the order it acts on them: the gate stops
-/// answering, then the leadership is released.
+/// answering, then the leadership is released, then the gRPC server closes its connections.
 #[derive(Clone)]
 pub struct ServerStop {
     gate: LeaderGate<ShardManagerGrpcService>,
     health_reporter: tonic_health::server::HealthReporter,
+    server: Arc<ServerInner>,
 }
 
 impl ServerStop {
@@ -567,10 +598,31 @@ impl ServerStop {
             .await;
         metrics::record_not_serving();
     }
+
+    fn close_after_release(&self) {
+        self.server
+            .closed_by_stop
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Closes the server: it stops accepting, and its connections close once the calls running on
+    /// them are done, at most [`SERVER_DRAIN_LIMIT`] from now.
+    async fn close(&self) {
+        self.server.shutdown.cancel();
+        let mut closed = self.server.closed.clone();
+        let drained = tokio::time::timeout(SERVER_DRAIN_LIMIT, closed.wait_for(|closed| *closed));
+        if drained.await.is_err() {
+            warn!(
+                limit = ?SERVER_DRAIN_LIMIT,
+                "Calls were still running when the shard manager's server was due to close; dropping it"
+            );
+            self.server.abort.abort();
+        }
+    }
 }
 
 /// Stops a replica in the order that keeps two replicas from serving: no more answers, the tasks
-/// finished, the leadership released.
+/// finished, the leadership released, the server closed.
 ///
 /// Every task is awaited before the lease is released, so no executor command can be in flight
 /// once another replica may be leading.
@@ -581,9 +633,13 @@ async fn stop_replica(
 ) {
     if let Some(stop) = stop {
         stop.refuse_calls().await;
+        stop.close_after_release();
     }
     join_set.shutdown().await;
     release_leadership(leadership).await;
+    if let Some(stop) = stop {
+        stop.close().await;
+    }
 }
 
 /// Startup's persistence wiring; the leadership handle is present only in distributed mode.
@@ -1147,25 +1203,54 @@ pub async fn run(
     let listener = golem_service_base::net::bind_tcp_listener(shard_manager_config.grpc_addr())?;
     let grpc_port = listener.local_addr()?.port();
 
+    let server_shutdown = CancellationToken::new();
+    let server_shutdown_signal = server_shutdown.clone();
+    let server_gate = gate.clone();
+    let (closed_tx, closed_rx) = tokio::sync::watch::channel(false);
+    let mut server = Server::builder();
+    if let GrpcServerTlsConfig::Enabled(tls) = &shard_manager_config.grpc.tls {
+        server = server.tls_config(tls.to_tonic())?;
+    }
+    // Its own task, outside the task set: the set is stopped before the leadership is released,
+    // and the server must still be answering for the gate then. It closes when the stop says so,
+    // or when the task that watches it below is dropped.
+    let server_task = tokio::spawn(
+        async move {
+            let served = server
+                .layer(
+                    middleware::server::OtelGrpcLayer::default()
+                        .filter(filters::reject_healthcheck),
+                )
+                .add_service(reflection_service)
+                .add_service(GatedService::new(server_gate))
+                .add_service(health_service)
+                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), {
+                    let shutdown = server_shutdown_signal;
+                    async move { shutdown.cancelled().await }
+                })
+                .await;
+            let _ = closed_tx.send(true);
+            served.map_err(anyhow::Error::from)
+        }
+        .in_current_span(),
+    );
+    let server_inner = Arc::new(ServerInner {
+        shutdown: server_shutdown,
+        closed: closed_rx,
+        abort: server_task.abort_handle(),
+        closed_by_stop: std::sync::atomic::AtomicBool::new(false),
+    });
     let stop = ServerStop {
         gate: gate.clone(),
         health_reporter: health_reporter.clone(),
+        server: server_inner.clone(),
     };
     join_set.spawn({
-        let mut server = Server::builder();
-
-        if let GrpcServerTlsConfig::Enabled(tls) = &shard_manager_config.grpc.tls {
-            server = server.tls_config(tls.to_tonic())?;
+        let close_on_drop = CloseServerOnDrop(server_inner.clone());
+        async move {
+            let _close_on_drop = close_on_drop;
+            server_task.await?
         }
-
-        server
-            .layer(middleware::server::OtelGrpcLayer::default().filter(filters::reject_healthcheck))
-            .add_service(reflection_service)
-            .add_service(GatedService::new(gate.clone()))
-            .add_service(health_service)
-            .serve_with_incoming(TcpListenerStream::new(listener))
-            .map_err(anyhow::Error::from)
-            .in_current_span()
     });
 
     let (persistence_service, quota_repo, leadership, lease_belief): Persistence = {
