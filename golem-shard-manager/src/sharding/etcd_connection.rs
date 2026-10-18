@@ -44,8 +44,8 @@ fn check_endpoints(config: &EtcdConfig) -> Result<(), ShardManagerError> {
 
     // Strict both ways, so that a mistake stops the startup with the setting's name. etcd-client
     // refuses an `http://` endpoint with TLS options only when it connects, without naming a
-    // setting; an `https://` endpoint without them fails only at its first handshake; and a
-    // scheme-less `host:port` fails at connect time with an opaque error.
+    // setting; an `https://` endpoint without them fails only at its first handshake; and for a
+    // scheme-less `host:port` it picks the scheme itself, from whether TLS options are set.
     let tls = config.tls.is_some();
     for endpoint in &config.endpoints {
         let message = match (tls, endpoint.starts_with("https://")) {

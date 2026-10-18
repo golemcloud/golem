@@ -359,7 +359,6 @@ pub(crate) fn ensure_shard_count_matches(
     Ok(())
 }
 
-/// Blocks until elected, returning the etcd client and the fence every state write is guarded on.
 /// Before the campaign, a refused certificate ends the startup with the reason: the files were just
 /// read, so a retry would present the same ones and could only wait.
 fn stop_on_refused_certificate(err: ShardManagerError) -> ShardManagerError {
@@ -379,6 +378,7 @@ fn count_retriable_failure(err: &ShardManagerError) {
     }
 }
 
+/// Blocks until elected, returning the etcd client and the fence every state write is guarded on.
 async fn start_distributed_mode(
     etcd: &EtcdConfig,
     deployment: &Deployment,

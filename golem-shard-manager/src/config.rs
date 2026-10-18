@@ -294,7 +294,8 @@ pub struct EtcdConfig {
     /// TLS to etcd; see [`EtcdTlsConfig`].
     #[serde(default)]
     pub tls: Option<EtcdTlsConfig>,
-    /// etcd user, for an etcd with authentication enabled. Set together with `password`.
+    /// etcd user, for an etcd with authentication enabled. Set together with `password` or
+    /// `password_file`.
     #[serde(default)]
     pub username: Option<String>,
     /// The password of `username`; usually set from a secret through
@@ -310,7 +311,8 @@ pub struct EtcdConfig {
 
 /// TLS to etcd. Set, every endpoint must be `https://`; unset, every endpoint must be `http://`.
 ///
-/// Each item comes from a PEM file or from an inline value (the PEM, Base64-encoded), not both.
+/// Each item comes from a PEM file or from an inline value (the PEM, Base64-encoded on one line),
+/// not both.
 /// Files and values are read once, at startup, so a renewed certificate takes effect on a
 /// restart; a running replica stops by itself when etcd refuses its certificates and the files have
 /// changed since startup.
@@ -332,7 +334,8 @@ pub struct EtcdTlsConfig {
     /// PEM file with the private key of the client certificate.
     #[serde(default)]
     pub client_key_file: Option<PathBuf>,
-    /// `client_key_file` as an inline value; never shown or serialized.
+    /// `client_key_file` as an inline value. The startup display names only its source; `Debug`
+    /// and a serialized configuration show `****`.
     #[serde(default)]
     pub client_key: Option<EtcdTlsKey>,
     /// The name to check etcd's certificate against, when the endpoint host is an IP address or
