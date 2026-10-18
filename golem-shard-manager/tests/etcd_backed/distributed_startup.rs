@@ -2229,7 +2229,11 @@ async fn a_just_elected_leader_stays_ready_during_its_startup(etcd: &Arc<DockerE
     await_election_idle(etcd).await;
 
     // Accepts and then says nothing, and its lease was granted long ago, so the initial health
-    // check cannot be skipped and holds the startup for its whole timeout.
+    // check cannot be skipped. Each attempt against the executor waits out its own timeout; that
+    // timeout is raised to 10 s here so that the five attempts of the default retry schedule would
+    // take longer than the 30 s limit of the initial check, which then holds the startup for the
+    // full 30 s. With the default 2 s the retries would end the check after about 11 s, which a
+    // slow run could use up before the assertions below are done.
     let silent_executor = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .await
         .expect("Cannot bind the stand-in executor");
@@ -2249,6 +2253,7 @@ async fn a_just_elected_leader_stays_ready_during_its_startup(etcd: &Arc<DockerE
         initial_health_check_timeout: Duration::from_secs(30),
         ..distributed_config(etcd)
     };
+    config.worker_executors.health_check_timeout = Duration::from_secs(10);
     config.http_port = free_port();
     config.grpc.port = free_port();
     let http_port = config.http_port;
@@ -2280,13 +2285,19 @@ async fn a_just_elected_leader_stays_ready_during_its_startup(etcd: &Arc<DockerE
     // The reach to its own address is retried every second, so the replica may need a moment to
     // report ready; that wait is bounded and happens while the startup is still held.
     await_until(STARTUP_TIMEOUT, || readyz(http_port)).await;
+    assert!(
+        !replica.is_finished(),
+        "the leader became ready only after its startup finished"
+    );
 
     // From here the replica is ready and its startup is held. It must stay ready for a while: a
     // gate that went unready for the leader's startup would answer 503 on one of these polls.
     let held_until = Instant::now() + Duration::from_secs(2);
     while Instant::now() < held_until {
         assert!(
-            readyz(http_port).await,
+            timeout(Duration::from_secs(1), readyz(http_port))
+                .await
+                .expect("the readiness probe should answer within a second"),
             "the leader turned unready while it was starting"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -2298,7 +2309,9 @@ async fn a_just_elected_leader_stays_ready_during_its_startup(etcd: &Arc<DockerE
         !replica.is_finished(),
         "the startup finished early, so the polls above did not cover it"
     );
-    let values = campaigner_values(etcd).await;
+    let values = timeout(Duration::from_secs(1), campaigner_values(etcd))
+        .await
+        .expect("etcd should answer the election read within a second");
     assert_eq!(values.len(), 1, "exactly this replica is in the election");
     assert!(
         values.values().all(|value| !value.ready),
