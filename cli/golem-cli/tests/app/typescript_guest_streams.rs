@@ -201,7 +201,7 @@ async fn native_stream_guest_bridge_e2e(method_name: &str, expected: Result<&str
               const provider = StreamProvider.get('recoverable');
               const observed: string[] = [];
               for await (const value of await provider.results()) {
-                observed.push('ok' in value ? `ok:${value.ok}` : `err:${value.err}`);
+                observed.push(value.tag === 'ok' ? `ok:${value.val}` : `err:${value.val}`);
               }
               return `${observed.join(',')}:${await provider.status()}`;
             },

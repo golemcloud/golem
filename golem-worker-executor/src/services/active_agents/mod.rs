@@ -878,6 +878,12 @@ impl UnloadedWorkerEvictionTask {
                 }
                 evict_expired_unloaded_agents(&agents, &card_interest_index, ttl).await;
             }
+
+            // Cached workers own the service graph, which owns this cache. Shutdown must
+            // break that cycle even for workers that have not reached their idle TTL.
+            for agent_id in agents.keys().await {
+                agents.remove(&agent_id).await;
+            }
         }))
     }
 }

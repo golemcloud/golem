@@ -22,6 +22,7 @@ export {
   typedSchemaValueToWit,
 } from '../internal/schema-model/wit';
 export { Uuid } from '../uuid';
+export { Result } from '../host/result';
 export { UnstructuredText } from '../newTypes/textInput';
 export { UnstructuredBinary } from '../newTypes/binaryInput';
 export type UnstructuredTextType<LC extends string[] = []> = SdkUnstructuredText<LC>;

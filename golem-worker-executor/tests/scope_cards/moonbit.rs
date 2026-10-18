@@ -729,7 +729,10 @@ async fn moonbit_sdk_derive_from_wallet_reports_permission_errors(
         .await?
         .into_typed::<Result<u32, String>>()?
         .map_err(|error| anyhow::anyhow!("revoke_root failed: {error}"))?;
-    assert_eq!(revoked, 1);
+    assert_eq!(
+        revoked, 2,
+        "revoking the root also revokes the card derived from the wallet"
+    );
     let after_revoke = invoke(
         &executor,
         &component,

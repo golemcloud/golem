@@ -122,6 +122,7 @@ tag_suite!(active_agents, group2);
 tag_suite!(transactions, group2);
 tag_suite!(observability, group2);
 tag_suite!(retry_policies, group2);
+tag_suite!(scope_cards, group2);
 
 tag_suite!(rpc, group3);
 tag_suite!(wasi, group3);
@@ -134,7 +135,6 @@ tag_suite!(agent, group4);
 tag_suite!(agent_sdk_ts, group4);
 tag_suite!(agent_sdk_go, group4);
 tag_suite!(durability, group4);
-tag_suite!(scope_cards, group4);
 tag_suite!(effect_permissions, group4);
 tag_suite!(permission_cards_scala, group4);
 tag_suite!(scalability, group4);

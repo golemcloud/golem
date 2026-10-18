@@ -29,7 +29,7 @@ pub struct McpDeploymentDeployProperties {
     pub tools: BTreeMap<ToolName, McpDeploymentToolOptions>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct McpDeploymentToolOptions {
     pub owner_component: ComponentName,
     pub security_scheme: Option<String>,
@@ -283,7 +283,7 @@ mcp_import_status_view!(
     "MCP import authorization disconnected"
 );
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct McpDeploymentAgentOptions {
     pub security_scheme: Option<String>,
 }

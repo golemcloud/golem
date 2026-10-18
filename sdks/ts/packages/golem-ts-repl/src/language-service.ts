@@ -1633,13 +1633,18 @@ function formatRemoteMethodArgs(
   if (tupleType) {
     const tupleElements = tupleType.getTupleElements();
     if (!tupleElements.length) return '';
+    const elementFlags =
+      (tupleType.compilerType as ts.TupleTypeReference).target?.elementFlags ?? [];
     return tupleElements
       .map((elementType, index) => {
         const name = parameterNames?.[index] ?? parameterNameForIndex(index);
+        const optional = ((elementFlags[index] ?? 0) & ts.ElementFlags.Optional) !== 0;
         const typeText = stripImportTypePrefix(
           checker.getTypeText(elementType, location, ts.TypeFormatFlags.NoTruncation),
         );
-        return `${name}: ${typeText}`;
+        return optional
+          ? `${name}?: ${typeText.replace(/ \| undefined$/, '')}`
+          : `${name}: ${typeText}`;
       })
       .join(', ');
   }

@@ -98,7 +98,15 @@ const cancellation = counter.increment.scheduleCancelable(runAt);
 Every stream-free generated method supports an awaited call plus `.trigger`,
 `.schedule`, and `.scheduleCancelable`. A method whose input or output schema
 recursively contains a stream is awaited only; use `AgentStream` values as
-described by the [`golem-streaming-agent-ts`](/next/how-to-guides/ts/golem-streaming-agent-ts) guide. No npm install, package path
+described by the [`golem-streaming-agent-ts`](/next/how-to-guides/ts/golem-streaming-agent-ts) guide.
+
+Optional parameters at the end of a constructor or method parameter list can be
+omitted; an optional parameter followed by a required one must be passed
+explicitly, as `undefined` when absent. A `result<ok, err>` value is the SDK
+`Result` in both directions: check `value.tag === 'ok'` (or `value.isOk()`) and
+read `value.val`, and pass arguments as `Result.ok(...)` / `Result.err(...)`.
+
+No npm install, package path
 dependency, manual bridge-generation command, or REST client `configure()` call
 is needed: `golem build` regenerates the bridge before the consumer compiles.
 

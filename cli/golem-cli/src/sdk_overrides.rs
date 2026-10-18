@@ -321,15 +321,6 @@ impl SdkOverrides {
         }
     }
 
-    pub fn golem_client_dep(&self) -> anyhow::Result<String> {
-        if let Some(repo_root) = self.golem_repo_root()? {
-            let repo_root = fs::path_to_str(&repo_root)?;
-            return Ok(format!(r#"path = "{}/golem-client""#, repo_root));
-        }
-
-        todo!("No published version yet")
-    }
-
     pub fn golem_repo_root(&self) -> anyhow::Result<Option<PathBuf>> {
         if let Some(golem_path) = &self.golem_path {
             return Ok(Some(PathBuf::from(golem_path)));
