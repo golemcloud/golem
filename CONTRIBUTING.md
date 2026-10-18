@@ -190,16 +190,28 @@ Go module requirements must contain their release versions before you tag them.
 
 ### Complete release order
 
+At release start, record the current public `main` commit and create a preparation
+branch from it. Keep release fixes and version pins on that branch. Do not merge
+or rebase later `main` changes into the release source. Development on `main`
+can continue. Release authorization does not authorize direct pushes or merges
+to `main`.
+
 1. **Freeze and publish the shared crates.** Choose an unused crates.io version
    and commit the shared crate sources.
-   The version can equal the planned Golem version. Wait for branch CI to pass.
+   The version can equal the planned Golem version. The publication workflow
+   gates uploads on the release-tooling checks and shared-library tests. Full
+   platform CI is not a prerequisite for publishing the shared crates.
    Push `golem-shared-v<version>` at that commit and publish its GitHub release.
    The release-published event starts the workflow, which tests the libraries
    and publishes `golem-schema-derive`, then `golem-schema`, then
-   `golem-tool-metadata`. Do not create a Golem GitHub release for this step.
+   `golem-tool-metadata`. Mark an RC as a prerelease, not the latest release.
+   Do not create a Golem GitHub release for this step.
 2. **Publish the six SDKs.** The Rust SDK selects the shared tag from first-parent history.
    It requires the shared tag, unchanged sources, and published crates whose
    embedded source commit matches the tag. The other SDKs can publish in parallel.
+   Push each workflow-driven SDK tag separately and confirm its workflow starts.
+   GitHub does not create tag-push events for pushes with more than three tags.
+   Do not combine the five SDK tag pushes with the Go tags or use `git push --tags`.
    For Go, replace the core requirements with the release version. Keep the local
    replacements for in-repo builds. Push all three Go tags at the
    same commit. See the `golem-go-development` skill for the module release steps.
@@ -213,8 +225,12 @@ Go module requirements must contain their release versions before you tag them.
    does not restore locally published Scala SDKs. Manual CI does not publish
    crates, binaries, or Docker images.
 4. **Prepare Golem.** Push the immutable Golem tag after all pins and exported
-   built-in tool versions are committed. Run the preparation workflow on that
-   exact public tag (there is no separate tag input):
+   built-in tool versions are committed. First use a reviewed PR and obtain
+   explicit approval to merge the preparation branch into `main`. Use a merge
+   commit, not a squash or rebase, to preserve the release commit's ancestry.
+   Tag the preparation-branch commit, not the newer `main` merge commit. Run
+   the preparation workflow on that exact public tag (there is no separate
+   tag input):
 
    ```shell
    gh workflow run prepare-golem-release.yaml --repo golemcloud/golem --ref v1.6.0
@@ -236,12 +252,19 @@ and Golem. These files define the shared source and dependency snapshot. CLI pin
 changes do not alter that snapshot. If the snapshot must change, use a new shared
 version and tag, then release the Rust SDK against that version.
 
-Never move release tags or replace published crate versions. If a shared release
-fails after publishing some crates, rerun its workflow at the same tag. It verifies
+Never replace published crate versions. Keep release tags immutable except for
+the failed pipeline-test case below. If a shared release fails after publishing
+some crates, rerun its workflow at the same tag. It verifies
 existing packages against their registry checksums and embedded source commits,
 then publishes only missing packages. A conflicting package stops the release.
 Version stamping changes manifests during packaging, so Cargo marks packages as
 dirty; the publisher requires a clean tagged checkout before that stamping step.
+
+During an explicitly identified pipeline test, a human can approve deleting and
+recreating a failed shared tag and GitHub release at a fixed commit. First verify
+that all three crate versions are absent from crates.io, the release has no assets,
+and no SDK or Golem release consumes the failed tag. General release authorization
+does not cover this exception. Once any crate is published, preserve the tag.
 
 Configure the GitHub Environment `golem-release` to permit only release tags;
 required reviewers are recommended. Set its variable `RELEASE_APP_ID` and secret
