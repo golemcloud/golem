@@ -54,9 +54,9 @@ async fn filesystem_artifact_exports_five_closed_world_tools_requiring_filesyste
         .await
         .unwrap();
     let expected = [
-        ("read-file", "0.4.1"),
-        ("write-file", "0.4.1"),
-        ("edit-file", "0.4.1"),
+        ("read-file", "0.4.2"),
+        ("write-file", "0.4.2"),
+        ("edit-file", "0.4.2"),
         ("ls", "0.1.2"),
         ("grep", "0.1.2"),
     ];
@@ -89,7 +89,7 @@ async fn filesystem_artifact_exports_five_closed_world_tools_requiring_filesyste
         .iter()
         .find(|middleware| middleware.name == "path-policy")
         .expect("missing path-policy middleware");
-    assert_eq!(middleware.version, "0.1.1");
+    assert_eq!(middleware.version, "0.1.2");
 }
 
 #[test]
@@ -179,7 +179,7 @@ async fn metadata_cache_reuses_content_across_resolvers_and_recovers_invalid_ent
     let mut changed = filesystem.as_ref().clone();
     replace_unique_version_marker(
         &mut changed,
-        b"path-policy0.1.1",
+        b"path-policy0.1.2",
         b"path-policy".len(),
         b"9.9.9",
     );
@@ -192,7 +192,7 @@ async fn metadata_cache_reuses_content_across_resolvers_and_recovers_invalid_ent
             .unwrap()
             .tool_middlewares[0]
             .version,
-        "0.1.1"
+        "0.1.2"
     );
     assert!(
         resolver
@@ -404,11 +404,11 @@ async fn changed_component_creates_a_revision_without_repointing_the_old_release
     let mut first_wasm = wasm;
     replace_unique_version_marker(
         &mut first_wasm,
-        b"path-policy0.1.1",
+        b"path-policy0.1.2",
         b"path-policy".len(),
         b"6.1.0",
     );
-    let existing_replacements = replace_embedded_tool_versions(&mut first_wasm, b"0.4.1", b"7.2.0");
+    let existing_replacements = replace_embedded_tool_versions(&mut first_wasm, b"0.4.2", b"7.2.0");
     let new_replacements = replace_embedded_tool_versions(&mut first_wasm, b"0.1.2", b"7.2.0");
     assert!(existing_replacements > 0);
     assert!(new_replacements > 0);
@@ -494,11 +494,11 @@ async fn same_artifact_adds_missing_middleware_with_complete_metadata_and_is_ret
     .expect("build the filesystem tool component before running this test");
     replace_unique_version_marker(
         &mut wasm,
-        b"path-policy0.1.1",
+        b"path-policy0.1.2",
         b"path-policy".len(),
         b"8.1.0",
     );
-    let existing_replacements = replace_embedded_tool_versions(&mut wasm, b"0.4.1", b"8.2.0");
+    let existing_replacements = replace_embedded_tool_versions(&mut wasm, b"0.4.2", b"8.2.0");
     let new_replacements = replace_embedded_tool_versions(&mut wasm, b"0.1.2", b"8.2.0");
     assert!(existing_replacements > 0);
     assert!(new_replacements > 0);
@@ -699,7 +699,7 @@ async fn shared_and_distinct_artifacts_preserve_export_validation() {
         component_name: "filesystem-tools",
         artifact_id: "filesystem",
         export_name: "read-file",
-        release_version: "0.4.1",
+        release_version: "0.4.2",
         kind: BuiltinExportKind::Tool,
     };
     let write = BuiltinExportDescriptor {
@@ -708,7 +708,7 @@ async fn shared_and_distinct_artifacts_preserve_export_validation() {
     };
     let middleware = BuiltinExportDescriptor {
         export_name: "path-policy",
-        release_version: "0.1.1",
+        release_version: "0.1.2",
         kind: BuiltinExportKind::Middleware,
         ..read
     };
@@ -716,7 +716,7 @@ async fn shared_and_distinct_artifacts_preserve_export_validation() {
         component_name: "web-fetch",
         artifact_id: "web",
         export_name: "web-fetch",
-        release_version: "0.1.2",
+        release_version: "0.1.3",
         kind: BuiltinExportKind::Tool,
     };
     let initial_tools = services
