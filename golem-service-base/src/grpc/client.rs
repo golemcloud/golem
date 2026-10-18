@@ -1138,8 +1138,10 @@ impl<'a> CallAttempts<'a> {
 /// Whether a status is an `UNAVAILABLE` with no transport failure under it, as a service gives
 /// that refuses work for now.
 ///
-/// This does not tell a peer's answer from the client's own failure to connect: those are built
-/// here as a plain `Status::unavailable` with no source and pass as well. Only a caller that knows
+/// This does not tell a peer's answer from the client's own failures: a connect that fails or
+/// times out, a connection that was retired before it could be used, and one that was retired while
+/// the request waited on it are all built here as a plain `Status::unavailable` with no source and
+/// pass as well. Only a caller that knows
 /// the call itself ran, as the shard manager router does by watching the call's own result, can
 /// take it for an answer.
 pub(crate) fn peer_answered_unavailable(e: &Status) -> bool {
