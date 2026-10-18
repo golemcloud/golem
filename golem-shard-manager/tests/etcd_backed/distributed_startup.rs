@@ -2684,12 +2684,10 @@ fn failover_client(port: u16) -> GrpcShardManager {
 
 #[test]
 #[tracing::instrument(skip_all)]
-// An executor's client, pointed at a standby, must ride out a crash of the leader: the standby
-// names the dead leader until its lease expires, then the promoted standby starts and serves. The
-// docs promise this with the recommended retry budget.
-async fn the_client_rides_out_an_ungraceful_failover_with_the_recommended_budget(
-    etcd: &Arc<DockerEtcd>,
-) {
+// An executor's client, pointed at a standby, must ride out a crash of the leader with its default
+// settings: the standby names the dead leader until its lease expires, then the promoted standby
+// starts and serves. No retry tuning is needed.
+async fn the_client_rides_out_an_ungraceful_failover_without_any_tuning(etcd: &Arc<DockerEtcd>) {
     wipe_state(etcd).await;
     let config = distributed_config(etcd);
     let (leader, leader_ports) = spawn_replica(config.clone(), CancellationToken::new());
@@ -2701,7 +2699,11 @@ async fn the_client_rides_out_an_ungraceful_failover_with_the_recommended_budget
     let (standby, _standby_ports) = spawn_replica(config, CancellationToken::new());
     let standby_address = await_new_campaigner(etcd, &before).await;
 
-    let client = failover_client(standby_address.port);
+    let client = GrpcShardManager::new(&GrpcShardManagerConfig {
+        host: "127.0.0.1".to_string(),
+        port: standby_address.port,
+        ..GrpcShardManagerConfig::default()
+    });
     client
         .get_routing_table()
         .await

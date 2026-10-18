@@ -805,8 +805,9 @@ async fn a_retried_call_waits_out_a_failover_longer_than_the_default_retries() {
 async fn a_retried_call_waits_out_replicas_that_know_no_leader_yet() {
     let leader = run_replica(Mode::Leader).await;
     let standby = run_replica(Mode::Standby(None)).await;
-    // The client's own retries ask the standby several times per pass; ten answers last about five
-    // seconds, and the one after names the leader.
+    // The first pass runs the client's default schedule, five asks over about two and a half
+    // seconds; each later pass asks once, at the failover backoff. The first ten answers last
+    // about four and a half seconds in all, and the one after names the leader.
     standby.script(
         std::iter::repeat_n(Mode::Standby(None), 10)
             .chain(std::iter::once(Mode::Standby(Some(leader.address())))),
