@@ -23,7 +23,7 @@ use crate::durable_host::tool::operation::{DeferredAdmissionTable, OwnerToolOper
 use crate::model::ExecutionStatus;
 use crate::services::active_agents::WorkerComponentCharge;
 use crate::services::agent_filesystem::FilesystemGenerationHandle;
-use crate::services::oplog::{CommitLevel, Oplog, OplogFence};
+use crate::services::oplog::{CommitLevel, Oplog, OplogRefusal};
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::{HasActiveAgents, HasComponentService, HasWasmtimeEngine};
 use crate::workerctx::WorkerCtx;
@@ -249,9 +249,7 @@ impl OwnerExecution {
         let old_append_tasks = self.append_tasks.lock().unwrap().clone();
         old_append_tasks.seal_and_wait().await;
         let boundary = self.card_boundary.clone().lock_owned().await;
-        self.commit(CommitLevel::Always)
-            .await
-            .map_err(crate::services::oplog::OplogError::Fenced)?;
+        self.commit(CommitLevel::Always).await?;
         let baseline = self
             .wallet()
             .await?
@@ -485,7 +483,7 @@ impl OwnerExecution {
         Ok(())
     }
 
-    pub async fn commit(&self, level: CommitLevel) -> Result<OplogIndex, OplogFence> {
+    pub async fn commit(&self, level: CommitLevel) -> Result<OplogIndex, OplogRefusal> {
         self.commit
             .commit_and_update_state(level)
             .await

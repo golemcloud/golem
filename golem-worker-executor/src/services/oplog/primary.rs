@@ -21,7 +21,7 @@ use crate::metrics::storage::{
 };
 use crate::model::ExecutionStatus;
 use crate::services::oplog::reader::{
-    OplogReadSource, checked_range_end, exact_from_source, fail_stop,
+    OplogReadSource, UnreadableOplog, checked_range_end, exact_from_source,
 };
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
@@ -529,7 +529,7 @@ impl PrimaryOplogService {
         shard_epoch: Option<ShardEpoch>,
         epoch_record: EpochRecord,
         reconcile_last_index: bool,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         record_oplog_call("open");
 
         let key = Self::oplog_key(&owned_agent_id.agent_id);
@@ -831,7 +831,7 @@ impl OplogService for PrimaryOplogService {
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         record_oplog_call("create");
         lifecycle.assert_agent(&owned_agent_id.agent_id);
 
@@ -913,7 +913,7 @@ impl OplogService for PrimaryOplogService {
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         record_oplog_call("create_fresh");
         lifecycle.assert_agent(&owned_agent_id.agent_id);
 
@@ -974,7 +974,7 @@ impl OplogService for PrimaryOplogService {
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         // An index handed in by a caller was read before this open claims the epoch.
         let reconcile_last_index = last_oplog_index.is_some();
         self.open_with(
@@ -994,15 +994,15 @@ impl OplogService for PrimaryOplogService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> OplogIndex {
+    ) -> Result<OplogIndex, UnreadableOplog> {
         record_oplog_call("get_last_index");
-        Self::get_last_index_from_storage(
+        Ok(Self::get_last_index_from_storage(
             &*self.indexed_storage,
             owned_agent_id,
             agent_mode,
             &self.retry_config,
         )
-        .await
+        .await)
     }
 
     async fn try_get_last_index(
@@ -1096,12 +1096,13 @@ impl OplogService for PrimaryOplogService {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         if n == 0 {
-            return BTreeMap::new();
+            return Ok(BTreeMap::new());
         }
-        let entries = self.read_source(owned_agent_id, agent_mode, idx, n).await;
-        fail_stop(exact_from_source(OplogReadSource::Primary, idx, n, entries))
+        let entries = self.read_source(owned_agent_id, agent_mode, idx, n).await?;
+        exact_from_source(OplogReadSource::Primary, idx, n, entries)
+            .map_err(|error| UnreadableOplog::new(&owned_agent_id.agent_id, error))
     }
 
     async fn read_source(
@@ -1110,13 +1111,15 @@ impl OplogService for PrimaryOplogService {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         record_oplog_call("read");
-        let Some(end) = fail_stop(checked_range_end(idx, n)) else {
-            return BTreeMap::new();
+        let Some(end) = checked_range_end(idx, n)
+            .map_err(|error| UnreadableOplog::new(&owned_agent_id.agent_id, error))?
+        else {
+            return Ok(BTreeMap::new());
         };
 
-        {
+        Ok({
             let is = self.indexed_storage.clone();
             let agent_id = owned_agent_id.agent_id();
             let key = Self::oplog_key(&owned_agent_id.agent_id);
@@ -1135,13 +1138,18 @@ impl OplogService for PrimaryOplogService {
             .into_iter()
             .map(|(k, v): (u64, OplogEntry)| (OplogIndex::from_u64(k), v))
             .collect()
-        }
+        })
     }
 
-    async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
-        self.try_exists(owned_agent_id, agent_mode)
+    async fn exists(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<bool, UnreadableOplog> {
+        Ok(self
+            .try_exists(owned_agent_id, agent_mode)
             .await
-            .unwrap_or_else(|error| panic!("{error}"))
+            .unwrap_or_else(|error| panic!("{error}")))
     }
 
     async fn try_exists(
@@ -1346,7 +1354,7 @@ impl OplogConstructor for CreateOplogConstructor {
         self,
         _lifecycle: &mut OplogLifecycleGuard,
         close: Box<dyn FnOnce() + Send + Sync>,
-    ) -> Arc<dyn Oplog> {
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         // Recorded before the oplog is usable, so an executor whose shard has moved is refused
         // at its very first write rather than after replaying the new owner's entries.
         let fence = match (self.epoch_record, self.shard_epoch) {
@@ -1389,7 +1397,7 @@ impl OplogConstructor for CreateOplogConstructor {
             Some(idx) => idx,
         };
 
-        Arc::new(PrimaryOplog::new(
+        Ok(Arc::new(PrimaryOplog::new(
             self.shard_epoch,
             fence,
             self.indexed_storage,
@@ -1407,7 +1415,7 @@ impl OplogConstructor for CreateOplogConstructor {
             self.fingerprint,
             self.stream_session_index,
             close,
-        ))
+        )))
     }
 }
 
@@ -2394,12 +2402,8 @@ impl PrimaryOplogState {
             let count =
                 u64::from(previously_committed_through) - u64::from(self.last_reported_commit_idx);
             let entries = self.reader().read_source(start, count).await;
-            fail_stop(exact_from_source(
-                OplogReadSource::Primary,
-                start,
-                count,
-                entries,
-            ))
+            exact_from_source(OplogReadSource::Primary, start, count, entries)
+                .unwrap_or_else(|error| panic!("Oplog read failed: {error}"))
         } else {
             BTreeMap::new()
         };
@@ -2652,24 +2656,21 @@ impl Oplog for PrimaryOplog {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        let unreadable = |error| UnreadableOplog::new(&self.owned_agent_id.agent_id, error);
+        checked_range_end(oplog_index, n).map_err(unreadable)?;
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
         let entries = reader.read_source(oplog_index, n).await;
-        fail_stop(exact_from_source(
-            OplogReadSource::Primary,
-            oplog_index,
-            n,
-            entries,
-        ))
+        exact_from_source(OplogReadSource::Primary, oplog_index, n, entries).map_err(unreadable)
     }
 
     async fn read_source(
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
-        reader.read_source(oplog_index, n).await
+        Ok(reader.read_source(oplog_index, n).await)
     }
 
     async fn try_read_source(
@@ -2681,14 +2682,14 @@ impl Oplog for PrimaryOplog {
         reader.try_read_source(oplog_index, n).await
     }
 
-    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+    async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, UnreadableOplog> {
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
-        reader.read(oplog_index).await
+        Ok(reader.read(oplog_index).await)
     }
 
-    async fn length(&self) -> u64 {
+    async fn length(&self) -> Result<u64, UnreadableOplog> {
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
-        reader.length().await
+        Ok(reader.length().await)
     }
 
     async fn try_length(&self) -> Result<u64, String> {

@@ -27,14 +27,15 @@ use golem_common::model::card::{
     StoredCard, parse_permission_fields, parse_polymorphic_permission,
 };
 use golem_common::model::component::ComponentId;
+use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::types::{SerializableP3SocketErrorCode, SerializableRpcError};
 use golem_common::model::oplog::{
     HostRequestGolemRpcActivate, HostResponse, HostResponseFileSystemStat,
-    HostResponseGolemRpcActivate, HostResponseP3FileSystemStat,
+    HostResponseGolemRpcActivate, HostResponseKVUnit, HostResponseP3FileSystemStat,
     HostResponseP3FileSystemWriteAdmission, HostResponseP3SocketsConnect,
-    HostResponsePermissionCheck, OplogIndex, PublicOplogEntry, PublicQueuedCardEvent,
+    HostResponsePermissionCheck, OplogEntry, OplogIndex, PublicOplogEntry, PublicQueuedCardEvent,
 };
-use golem_common::model::worker::AgentConfigEntryDto;
+use golem_common::model::worker::{AgentConfigEntryDto, RevertToOplogIndex, RevertWorkerTarget};
 use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, PendingCardEventRef, PromiseId};
 use golem_common::schema::{FromSchema, SchemaGraph, SchemaType, SchemaValue};
 use golem_common::{agent_id, data_value};
@@ -162,6 +163,7 @@ struct ScopeCardAuthority {
     revoke_card_gate: std::sync::Mutex<Option<CardServiceGate>>,
     record_revoked_cards_gate: std::sync::Mutex<Option<CardServiceGate>>,
     check_cards_gate: std::sync::Mutex<Option<CheckCardsGate>>,
+    fail_gated_check_cards: AtomicBool,
 }
 
 /// Pauses the first `check_cards` call that names all of `card_ids`.
@@ -293,7 +295,13 @@ impl ScopeCardAuthority {
         handle
     }
 
-    async fn pass_check_cards_gate(&self, card_ids: &[CardId]) {
+    /// Fails the `check_cards` call that the installed gate pauses once the test releases it.
+    fn fail_gated_check_cards(&self) {
+        self.fail_gated_check_cards.store(true, Ordering::SeqCst);
+    }
+
+    /// Returns whether the installed gate paused this call.
+    async fn pass_check_cards_gate(&self, card_ids: &[CardId]) -> bool {
         let gate = {
             let mut slot = self
                 .check_cards_gate
@@ -308,10 +316,12 @@ impl ScopeCardAuthority {
                 None
             }
         };
-        if let Some(gate) = gate {
-            let _ = gate.entered.send(());
-            let _ = gate.release.await;
-        }
+        let Some(gate) = gate else {
+            return false;
+        };
+        let _ = gate.entered.send(());
+        let _ = gate.release.await;
+        true
     }
 }
 
@@ -368,7 +378,16 @@ impl CardService for ScopeCardService {
         self.authority
             .check_cards_count
             .fetch_add(1, Ordering::SeqCst);
-        self.authority.pass_check_cards_gate(&card_ids).await;
+        if self.authority.pass_check_cards_gate(&card_ids).await
+            && self
+                .authority
+                .fail_gated_check_cards
+                .swap(false, Ordering::SeqCst)
+        {
+            return Err(WorkerExecutorError::runtime(
+                "injected card service failure",
+            ));
+        }
         let root_card = self.authority.root_card().ok_or_else(|| {
             WorkerExecutorError::runtime("scope-card test root was not configured")
         })?;
@@ -681,6 +700,404 @@ async fn scope_card_revoked_at_the_wallet_boundary_is_not_listed_to_an_inspectin
         "a revoked scope card must not be usable as a scope parent"
     );
     Ok(())
+}
+
+/// The wallet observation that the guest makes in each read of a `remember_wallet_*` call.
+#[derive(Clone, Copy, Debug)]
+enum WalletRead {
+    /// `self-wallet`, kept as the number of listed cards.
+    CardCount,
+    /// `self-version`, kept as the wallet generation.
+    Generation,
+}
+
+impl WalletRead {
+    fn method(self) -> &'static str {
+        match self {
+            WalletRead::CardCount => "remember_wallet_card_counts",
+            WalletRead::Generation => "remember_wallet_generations",
+        }
+    }
+
+    fn host_function(self) -> HostFunctionName {
+        match self {
+            WalletRead::CardCount => HostFunctionName::GolemPermissionsSelfWallet,
+            WalletRead::Generation => HostFunctionName::GolemPermissionsSelfVersion,
+        }
+    }
+}
+
+/// How the card service call that the gate pauses inside a wallet read ends.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PausedRead {
+    /// The read lists the wallet it observed.
+    Completes,
+    /// The read fails, so its invocation traps and is retried by reconstruction.
+    Fails,
+}
+
+/// The oplog indices of the wallet reads of `read` in the invocation that `key` started: the
+/// `Start` of each read in guest order, its `End`, and the invocation's `AgentInvocationStarted`
+/// and `AgentInvocationFinished`.
+struct RecordedWalletReads {
+    started: OplogIndex,
+    finished: Option<OplogIndex>,
+    reads: Vec<(OplogIndex, Option<OplogIndex>)>,
+}
+
+impl RecordedWalletReads {
+    fn find(
+        entries: &std::collections::BTreeMap<OplogIndex, OplogEntry>,
+        key: &IdempotencyKey,
+        read: WalletRead,
+    ) -> Option<Self> {
+        let started = entries.iter().find_map(|(index, entry)| {
+            matches!(entry,
+                OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == key
+            )
+            .then_some(*index)
+        })?;
+        let finished = entries.range(started.next()..).find_map(|(index, entry)| {
+            matches!(entry, OplogEntry::AgentInvocationFinished { .. }).then_some(*index)
+        });
+        let after_start = entries.range(started.next()..);
+        let reads = after_start
+            .clone()
+            .filter(|(index, _)| finished.is_none_or(|finished| **index < finished))
+            .filter_map(|(index, entry)| match entry {
+                OplogEntry::Start { function_name, .. }
+                    if *function_name == read.host_function() =>
+                {
+                    let end = after_start.clone().find_map(|(end_index, entry)| {
+                        matches!(entry,
+                            OplogEntry::End { start_index, .. } if start_index == index
+                        )
+                        .then_some(*end_index)
+                    });
+                    Some((*index, end))
+                }
+                _ => None,
+            })
+            .collect();
+        Some(Self {
+            started,
+            finished,
+            reads,
+        })
+    }
+
+    fn completed_reads(&self) -> usize {
+        self.reads.iter().filter(|(_, end)| end.is_some()).count()
+    }
+}
+
+async fn read_whole_oplog(
+    owner: &golem_worker_executor::services::active_agents::ActiveAgent<
+        golem_worker_executor_test_utils::TestWorkerCtx,
+    >,
+) -> std::collections::BTreeMap<OplogIndex, OplogEntry> {
+    let oplog = owner.execution().oplog();
+    let tip = oplog.current_oplog_index().await;
+    oplog
+        .read_exact(OplogIndex::INITIAL, u64::from(tip))
+        .await
+        .unwrap()
+}
+
+/// Makes `reads` adjacent wallet reads of `read` in one invocation and revokes one of the two
+/// wallet cards while read `paused_read` (1-based) holds the card-event boundary. The revocation
+/// waits on the boundary's fair mutex before the paused read continues, so it applies at the
+/// boundary of the next read: no sleep or runtime hook places it. Then the executor is dropped
+/// and a new executor over the same storage reconstructs the agent, which must keep the
+/// observations of the live run.
+///
+/// When `paused` is [`PausedRead::Fails`], the paused read fails after its `Start` is committed.
+/// The retry reconstructs the agent, replays the completed reads from their records and completes
+/// the incomplete read live, so that read and the later ones observe the revocation.
+async fn wallet_reads_survive_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    host_api_tests: &PrecompiledComponent,
+    agent_name: &str,
+    read: WalletRead,
+    reads: u32,
+    paused_read: usize,
+    paused: PausedRead,
+) -> anyhow::Result<()> {
+    use golem_common::model::OwnedAgentId;
+
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let caller = agent_id!("ScopeCardAgent", agent_name);
+    let root_card_id = configure_scope_card_root(&authority, &component, &caller)?;
+    let worker = executor.start_agent(&component.id, caller.clone()).await?;
+    let extra = registry_test_card();
+    let extra_id = extra.card_id();
+    authority.add_card(extra.clone());
+    executor.queue_card_install(&worker, extra).await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &caller, "wallet_card_count", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        2
+    );
+
+    let unchanged = executor
+        .invoke_and_await_agent(&component, &caller, read.method(), data_value!(reads))
+        .await?
+        .into_typed::<Vec<u64>>()?;
+    assert_eq!(unchanged.len(), reads as usize);
+    assert!(
+        unchanged.iter().all(|observed| *observed == unchanged[0]),
+        "reads of an unchanged wallet must agree: {unchanged:?}"
+    );
+    if matches!(read, WalletRead::CardCount) {
+        assert_eq!(unchanged[0], 2);
+    }
+    drop(executor);
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &caller,
+                "remembered_wallet_observations",
+                data_value!()
+            )
+            .await?
+            .into_typed::<Vec<u64>>()?,
+        unchanged,
+        "the unchanged-wallet reconstruction control must keep every observation"
+    );
+
+    let owner = executor
+        .active_agent(&OwnedAgentId::new(context.default_environment_id, &worker))
+        .await
+        .ok_or_else(|| anyhow::anyhow!("the reconstructed agent is not active"))?;
+    let key = IdempotencyKey::fresh();
+    let wallet_ids = vec![root_card_id, extra_id];
+    let mut gate = authority.gate_check_cards(wallet_ids.clone());
+    let live_call = executor.invoke_and_await_agent_with_key(
+        &component,
+        &caller,
+        &key,
+        read.method(),
+        data_value!(reads),
+    );
+    let revoke_during_read = async {
+        let mut in_paused_read = false;
+        for _ in 0..64 {
+            gate.entered().await?;
+            let entries = read_whole_oplog(&owner).await;
+            in_paused_read = RecordedWalletReads::find(&entries, &key, read)
+                .is_some_and(|recorded| recorded.completed_reads() == paused_read - 1);
+            if in_paused_read {
+                break;
+            }
+            let next = authority.gate_check_cards(wallet_ids.clone());
+            gate.release();
+            gate = next;
+        }
+        assert!(
+            in_paused_read,
+            "the gate must pause wallet read {paused_read} of the guest invocation"
+        );
+        if paused == PausedRead::Fails {
+            authority.fail_gated_check_cards();
+        }
+        // Register the revocation's waiter while the paused read still holds the boundary. The
+        // fair mutex hands it the boundary before the guest's next wallet read.
+        let primary = owner.primary();
+        let card_ids = [extra_id];
+        let revoke = primary.queue_card_revocations(&card_ids);
+        tokio::pin!(revoke);
+        assert!(futures::poll!(&mut revoke).is_pending());
+        gate.release();
+        revoke.await?;
+        Ok::<_, anyhow::Error>(())
+    };
+    let (live, ()) = tokio::try_join!(live_call, revoke_during_read)?;
+    let live = live.into_typed::<Vec<u64>>()?;
+
+    let first_changed = match paused {
+        PausedRead::Completes => paused_read,
+        PausedRead::Fails => paused_read - 1,
+    };
+    assert_eq!(live.len(), reads as usize);
+    assert_eq!(
+        live[..first_changed],
+        unchanged[..first_changed],
+        "reads before the revocation must observe the unchanged wallet: {live:?}"
+    );
+    assert!(
+        live[first_changed..]
+            .iter()
+            .all(|observed| *observed == live[first_changed]),
+        "reads after the revocation must agree: {live:?}"
+    );
+    match read {
+        WalletRead::CardCount => assert_eq!(live[first_changed], 1, "{live:?}"),
+        WalletRead::Generation => assert!(live[first_changed] > unchanged[0], "{live:?}"),
+    }
+
+    let entries = read_whole_oplog(&owner).await;
+    drop(owner);
+    drop(executor);
+
+    let executor = start_scope_card_executor(deps, &context, authority).await?;
+    let reconstructed = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "remembered_wallet_observations",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Vec<u64>>()?;
+    assert_eq!(
+        reconstructed, live,
+        "reconstruction must keep the guest's observations"
+    );
+
+    let recorded = RecordedWalletReads::find(&entries, &key, read)
+        .ok_or_else(|| anyhow::anyhow!("the invocation was not started"))?;
+    let finished = recorded
+        .finished
+        .ok_or_else(|| anyhow::anyhow!("the invocation did not finish"))?;
+    assert!(
+        entries
+            .range(recorded.started.next()..finished)
+            .all(|(_, entry)| match entry {
+                OplogEntry::Start { function_name, .. } => *function_name == read.host_function(),
+                _ => true,
+            }),
+        "no other host call may separate the wallet reads"
+    );
+    assert_eq!(
+        recorded.reads.len(),
+        reads as usize,
+        "each read must have exactly one recorded call, also the repaired one"
+    );
+    let ends = recorded
+        .reads
+        .iter()
+        .map(|(_, end)| end.ok_or_else(|| anyhow::anyhow!("a wallet read has no End")))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let cascade = entries
+        .range(recorded.started.next()..finished)
+        .find_map(|(index, entry)| match entry {
+            OplogEntry::CardRevokedCascade {
+                revoked_card_ids, ..
+            } if revoked_card_ids.contains(&extra_id) => Some(*index),
+            _ => None,
+        })
+        .ok_or_else(|| anyhow::anyhow!("the revocation was not applied in the invocation"))?;
+    // The paused read's next boundary applies the revocation: in a completing `self-wallet` read
+    // that is the boundary that decides the lent scope card, after the read listed its cards.
+    let after = recorded.reads[paused_read - 1].0;
+    let before = match paused {
+        PausedRead::Completes => ends[paused_read],
+        PausedRead::Fails => ends[paused_read - 1],
+    };
+    assert!(
+        after < cascade && cascade < before,
+        "the revocation {cascade} must be recorded between {after} and {before}"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn adjacent_wallet_reads_keep_their_observations_after_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    wallet_reads_survive_reconstruction(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        "adjacent-wallet-reads",
+        WalletRead::CardCount,
+        2,
+        1,
+        PausedRead::Completes,
+    )
+    .await
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn a_revocation_after_a_later_wallet_read_keeps_every_observation_after_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    wallet_reads_survive_reconstruction(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        "later-wallet-read",
+        WalletRead::CardCount,
+        4,
+        3,
+        PausedRead::Completes,
+    )
+    .await
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn adjacent_wallet_version_reads_keep_their_generations_after_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    wallet_reads_survive_reconstruction(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        "adjacent-wallet-versions",
+        WalletRead::Generation,
+        3,
+        2,
+        PausedRead::Completes,
+    )
+    .await
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn an_incomplete_wallet_read_observes_the_live_wallet_when_repaired(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    wallet_reads_survive_reconstruction(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        "incomplete-wallet-read",
+        WalletRead::CardCount,
+        3,
+        2,
+        PausedRead::Fails,
+    )
+    .await
 }
 
 /// A concrete card derived from `parent` that grants card inspection.
@@ -3312,6 +3729,112 @@ async fn denied_filesystem_imports_are_recorded_and_replayed_after_restart(
         root_before_restart,
         "the replay must not apply a denied mutation of the root directory"
     );
+    Ok(())
+}
+
+/// A `Start` of a denied call without its `End` is a crash between the two. Recovery must
+/// complete the call with the recorded denial instead of running the denied operation.
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn recovery_completes_a_denied_call_without_its_end_as_denied(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let cache_bucket = "__golem_wasi_keyvalue_cache";
+    let key = "probe-key";
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("KeyValue")
+        .update_agent_provision_config("KeyValue", |config| {
+            config.initial_permissions.lower_bound.positive.extend([
+                kv_permission("read", "probe-store", key),
+                kv_permission("read", cache_bucket, key),
+            ]);
+        })
+        .store()
+        .await?;
+    let agent = agent_id!("KeyValue", "denied-call-without-end");
+    configure_scope_card_root(&authority, &component, &agent)?;
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+
+    for (method, function_name, bucket, params) in [
+        (
+            "eventual_probe",
+            "keyvalue::eventual::set",
+            "probe-store",
+            data_value!("set", "probe-store", key, vec![1u8]),
+        ),
+        (
+            "cache_probe",
+            "keyvalue::cache::set",
+            cache_bucket,
+            data_value!("set", key, vec![1u8]),
+        ),
+    ] {
+        let denied = executor
+            .invoke_and_await_agent(&component, &agent, method, params)
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert!(denied.is_err(), "{function_name} must be denied");
+
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let (start_index, denial) = oplog
+            .iter()
+            .rev()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start) if start.function_name == function_name => {
+                    Some((entry.oplog_index, start.denial.clone()))
+                }
+                _ => None,
+            })
+            .ok_or_else(|| anyhow::anyhow!("no Start of {function_name} was recorded"))?;
+        assert!(
+            denial.is_some(),
+            "the Start of {function_name} must record its denial"
+        );
+
+        executor
+            .revert(
+                &worker_id,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: start_index,
+                }),
+            )
+            .await?;
+        // The revert unloads the agent, so this invocation first recovers the reverted call.
+        let stored = executor
+            .invoke_and_await_agent(&component, &agent, "get_result", data_value!(bucket, key))
+            .await?
+            .into_typed::<Result<Option<Vec<u8>>, String>>()?;
+        assert_eq!(
+            stored,
+            Ok(None),
+            "recovery must not run the denied {function_name}"
+        );
+
+        let oplog = executor.get_oplog(&worker_id, start_index).await?;
+        let response = oplog
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::End(end) if end.start_index == start_index => {
+                    end.response.clone()
+                }
+                _ => None,
+            })
+            .ok_or_else(|| anyhow::anyhow!("recovery did not complete {function_name}"))?;
+        let response = HostResponseKVUnit::from_value(response.value())?;
+        assert!(
+            response.result.is_err(),
+            "recovery must complete {function_name} with its denial, got {:?}",
+            response.result
+        );
+    }
     Ok(())
 }
 

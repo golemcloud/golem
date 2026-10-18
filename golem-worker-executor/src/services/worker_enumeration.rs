@@ -19,7 +19,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentFilter, AgentMetadata, AgentStatus, ScanCursor};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
-use tracing::{Instrument, info};
+use tracing::{Instrument, info, warn};
 
 /// Returns `true` if `filter` contains any `Mode(...)` reference at any depth.
 fn contains_mode(filter: &AgentFilter) -> bool {
@@ -241,16 +241,27 @@ impl DefaultWorkerEnumerationService {
             .await?;
 
         for owned_agent_id in keys {
-            let worker_metadata = self
+            // An agent whose oplog failed for good has no metadata to list: it is left out, and
+            // every other agent is listed. A storage that did not answer fails the listing, which
+            // the caller can retry.
+            let worker_metadata = match self
                 .worker_service
                 .get(&owned_agent_id)
                 .instrument(tracing::info_span!("get_worker_metadata"))
-                .await?;
+                .await
+            {
+                Err(error @ WorkerExecutorError::OplogFailed { .. }) => {
+                    warn!(agent_id = %owned_agent_id, error = %error, "Leaving an agent with an unreadable oplog out of the listing");
+                    continue;
+                }
+                result => result?,
+            };
 
             if let Some(worker_metadata) = worker_metadata {
                 let metadata = if precise {
                     let agent_mode = worker_metadata.initial_worker_metadata.agent_mode;
-                    let last_known_status = calculate_last_known_status_with_checkpoint(
+                    let cached_status = worker_metadata.last_known_status.clone();
+                    let last_known_status = match calculate_last_known_status_with_checkpoint(
                         self,
                         &owned_agent_id,
                         worker_metadata.initial_worker_metadata.fingerprint,
@@ -259,12 +270,22 @@ impl DefaultWorkerEnumerationService {
                     )
                     .instrument(tracing::info_span!("calculate_last_known_status"))
                     .await
-                    .map_err(WorkerExecutorError::runtime)?
-                    .ok_or_else(|| {
-                        WorkerExecutorError::runtime(
-                            "worker oplog disappeared during precise enumeration",
-                        )
-                    })?;
+                    .map_err(WorkerExecutorError::from)
+                    {
+                        // The oplog failed for good: the agent fails with it when it next runs,
+                        // so it is listed as failed.
+                        Err(error @ WorkerExecutorError::OplogFailed { .. }) => {
+                            warn!(agent_id = %owned_agent_id, error = %error, "Listing an agent with an unreadable oplog as failed");
+                            let mut status = cached_status.unwrap_or_default();
+                            status.status = AgentStatus::Failed;
+                            status
+                        }
+                        result => result?.ok_or_else(|| {
+                            WorkerExecutorError::runtime(
+                                "worker oplog disappeared during precise enumeration",
+                            )
+                        })?,
+                    };
 
                     AgentMetadata {
                         last_known_status,

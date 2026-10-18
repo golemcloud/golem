@@ -264,7 +264,7 @@ impl ReplayState {
         start_index: OplogIndex,
     ) -> Result<bool, WorkerExecutorError> {
         self.run_owned_cursor_op(move |state| async move {
-            if state.has_visible_terminal(start_index).await {
+            if state.has_visible_terminal(start_index).await? {
                 return Ok(false);
             }
             let mut st = state.cursor.state.lock().await;

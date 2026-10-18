@@ -118,22 +118,23 @@ impl Display for SpanningConstruct {
 ///
 /// Entries inside `skipped_regions` are ignored on both sides: a terminal inside an
 /// already-deleted region is dead, and a terminal whose referenced opening entry lies in a
-/// deleted region is an orphan that replay drains without effect.
-pub async fn find_construct_spanning_cut_point<Read, ReadFut>(
+/// deleted region is an orphan that replay drains without effect. A failed `read` ends the scan
+/// with its error.
+pub async fn find_construct_spanning_cut_point<Read, ReadFut, E>(
     read: Read,
     cut_point: OplogIndex,
     scan_end: OplogIndex,
     skipped_regions: &DeletedRegions,
-) -> Option<SpanningConstruct>
+) -> Result<Option<SpanningConstruct>, E>
 where
     Read: Fn(OplogIndex) -> ReadFut,
-    ReadFut: Future<Output = OplogEntry>,
+    ReadFut: Future<Output = Result<OplogEntry, E>>,
 {
     for idx in OplogIndexRange::new(cut_point.next(), scan_end) {
         if skipped_regions.is_in_deleted_region(idx) {
             continue;
         }
-        let entry = read(idx).await;
+        let entry = read(idx).await?;
         let spanning = match &entry {
             OplogEntry::PreCommitRemoteTransaction { begin_index, .. }
             | OplogEntry::PreRollbackRemoteTransaction { begin_index, .. }
@@ -214,10 +215,10 @@ where
             && opening_index <= cut_point
             && !skipped_regions.is_in_deleted_region(opening_index)
         {
-            return Some(construct);
+            return Ok(Some(construct));
         }
     }
-    None
+    Ok(None)
 }
 
 /// A streaming acceptance owns its input registrations, preparation, queued invocation and
@@ -233,12 +234,15 @@ pub(crate) async fn streaming_acceptance_spans_cut(
     if cut >= horizon {
         return Ok(false);
     }
-    let left = oplog.read(cut).await;
-    let right = oplog.read(cut.next()).await;
+    let left = oplog.read(cut).await.map_err(|error| error.to_string())?;
+    let right = oplog
+        .read(cut.next())
+        .await
+        .map_err(|error| error.to_string())?;
     match (left, right) {
         (OplogEntry::StreamRegistered { .. }, _) => {
             for index in OplogIndexRange::new(cut.next(), horizon) {
-                match oplog.read(index).await {
+                match oplog.read(index).await.map_err(|error| error.to_string())? {
                     OplogEntry::StreamRegistered { .. } => continue,
                     OplogEntry::StreamSession { record, .. } => {
                         return Ok(matches!(oplog.download_payload(record).await?,
@@ -359,13 +363,14 @@ mod tests {
                     .get(&u64::from(i))
                     .cloned()
                     .unwrap_or_else(|| OplogEntry::grow_memory(0));
-                async move { entry }
+                async move { Ok::<_, std::convert::Infallible>(entry) }
             },
             idx(cut),
             idx(end),
             skipped,
         )
         .await
+        .unwrap()
     }
 
     async fn scan_stream_history(

@@ -1685,7 +1685,7 @@ async fn guest_owned_u8_output_uses_the_packed_durable_path() {
         .await
         .unwrap()
         .value;
-    let entries_before_output = oplog.length().await;
+    let entries_before_output = oplog.length().await.unwrap();
     let streams = StreamSession::new(
         producer.clone(),
         oplog.clone(),
@@ -1716,7 +1716,7 @@ async fn guest_owned_u8_output_uses_the_packed_durable_path() {
     publisher.publish_end().await.unwrap();
     drain_task.await.unwrap().unwrap();
     assert_eq!(
-        oplog.length().await,
+        oplog.length().await.unwrap(),
         entries_before_output + 2,
         "consecutive guest u8 values must share one durable item batch"
     );
@@ -1848,6 +1848,7 @@ async fn guest_byte_drain_after_partial_fork_replays_prefix_and_resumes_suffix()
             cut_index.as_u64() - OplogIndex::INITIAL.as_u64() + 1,
         )
         .await
+        .unwrap()
     {
         fork_oplog.add(entry).await.unwrap();
     }
@@ -3474,7 +3475,8 @@ async fn foreign_cancellation_recovery_applies_persisted_intent_without_delete_r
             .unwrap();
         let after = remote_oplog.current_oplog_index().await;
         assert_eq!(after, before.next());
-        let OplogEntry::StreamCancel { record, .. } = remote_oplog.read(after).await else {
+        let OplogEntry::StreamCancel { record, .. } = remote_oplog.read(after).await.unwrap()
+        else {
             panic!("remote cancellation was not committed");
         };
         let record = remote_oplog.download_payload(record).await.unwrap();
@@ -4127,7 +4129,7 @@ async fn local_cancellation_intent_recovers_without_retry_and_preserves_terminal
             after.as_u64(),
             before.as_u64() + u64::from(!already_ended) + 1
         );
-        let OplogEntry::StreamSession { record, .. } = oplog.read(after).await else {
+        let OplogEntry::StreamSession { record, .. } = oplog.read(after).await.unwrap() else {
             panic!("missing cancellation applied receipt");
         };
         let StreamSessionRecord::ConsumerCancelApplied(receipt) =
@@ -4144,7 +4146,8 @@ async fn local_cancellation_intent_recovers_without_retry_and_preserves_terminal
                 .has_cancellation_intents()
         );
         if !already_ended {
-            let OplogEntry::StreamCancel { record, .. } = oplog.read(before.next()).await else {
+            let OplogEntry::StreamCancel { record, .. } = oplog.read(before.next()).await.unwrap()
+            else {
                 panic!("missing recovered cancellation terminal");
             };
             let record = oplog.download_payload(record).await.unwrap();
@@ -6373,6 +6376,7 @@ async fn check_dropped_input_cancellation(unread_resource: bool) {
     for (_, entry) in oplog
         .read_exact(OplogIndex::INITIAL, current.as_u64())
         .await
+        .unwrap()
     {
         match entry {
             OplogEntry::StreamSession { record, .. } => {
@@ -6640,6 +6644,7 @@ async fn guest_authored_input_cancellation_targets_the_current_attachment_epoch(
     for (_, entry) in oplog
         .read_exact(OplogIndex::INITIAL, current.as_u64())
         .await
+        .unwrap()
     {
         if let OplogEntry::StreamSession { record, .. } = entry
             && let StreamSessionRecord::ConsumerCancelIntent(record) =
@@ -8446,6 +8451,7 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
     for (index, entry) in oplog
         .read_exact(OplogIndex::INITIAL, current.as_u64())
         .await
+        .unwrap()
     {
         match entry {
             OplogEntry::StreamSession { record, .. } => {
@@ -8617,6 +8623,7 @@ async fn nested_consumer_mappings_preserve_the_parent_input_or_output_role() {
     for (index, entry) in oplog
         .read_exact(OplogIndex::INITIAL, current.as_u64())
         .await
+        .unwrap()
     {
         let OplogEntry::StreamSession { record, .. } = entry else {
             continue;
@@ -9670,6 +9677,212 @@ async fn remote_result_schema_validation_accepts_a_stream_in_union_branch_one() 
         streams.binding(foreign.transport_stream_id).unwrap().source,
         StreamRecordReference::Foreign(handle)
     );
+}
+
+/// A read of a committed output batch that the storage did not answer stays a transient
+/// `Unreadable` through the packed-byte coalescing, so the attachment ends without a session
+/// terminal, and a later pump delivers every byte exactly once after the storage answers again.
+#[test]
+async fn packed_output_keeps_an_unanswered_batch_read_transient_and_resumes_without_loss() {
+    let identity = identity();
+    let attachment_id = AttachmentId::primary(
+        identity.environment_id,
+        &identity.agent_id,
+        &identity.invocation.idempotency_key,
+    )
+    .unwrap();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        identity.environment_id,
+        identity.agent_id.clone(),
+        identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let session_key = identity.invocation.clone();
+    let mut request = registration(
+        &identity,
+        StreamRegistrationCoordinate::Root {
+            invocation_id: session_key.clone(),
+            root_kind: StreamRootKind::MethodResult,
+            recursive_value_path: Vec::new(),
+        },
+        StreamSourceKind::InvocationOutput,
+    );
+    request.session_mapping = Some(StreamSessionMapping {
+        session_key: session_key.clone(),
+        attachment_id,
+        role: SessionStreamRole::Output,
+    });
+    let handle = producer.register(None, request).await.unwrap().value;
+    let binding = producer
+        .local_binding(5, &handle, SessionStreamRole::Output)
+        .await
+        .unwrap();
+    // The first batch fills a whole read segment, so the second batch is read while the first
+    // bytes are still being coalesced into one output item.
+    let first_batch = (0..=255u8).collect::<Vec<_>>();
+    let second_batch = vec![7u8, 8, 9];
+    producer
+        .write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(first_batch.clone()),
+        )
+        .await
+        .unwrap();
+    let second_written = producer
+        .write_items(
+            None,
+            handle.stream_id,
+            first_batch.len() as u64,
+            StreamItemsPayload::PackedU8(second_batch.clone()),
+        )
+        .await
+        .unwrap();
+    producer
+        .end(
+            None,
+            handle.stream_id,
+            (first_batch.len() + second_batch.len()) as u64,
+            StreamEndResult::Ok,
+        )
+        .await
+        .unwrap();
+    let attempt_id = AttemptId::fresh();
+    producer
+        .append_session_record(
+            None,
+            StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                public_session_id: session_key.idempotency_key.value.clone(),
+                session_key: session_key.idempotency_key.clone(),
+                expiry_policy: StreamSessionExpiryPolicy::None,
+                expiry_deadline_millis: None,
+                attempt: StartAttemptDescriptor {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key: session_key.clone(),
+                    attachment_id,
+                    expected_callee_fingerprint: identity.fingerprint,
+                    attempt_id,
+                    invocation: PersistedStreamInvocationDescriptor {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: session_key.clone(),
+                        target_component_revision: ComponentRevision::INITIAL,
+                        target: PersistedInvocationTarget::AgentMethod {
+                            method_name: "produce".to_string(),
+                        },
+                        invocation_value: vec![1],
+                        stream_handles: Vec::new(),
+                        execution_config: vec![2],
+                        effective_identity: vec![3],
+                    },
+                    effective_identity: vec![3],
+                    live_join_buffer_events: 8,
+                },
+                stream_mappings: Vec::new(),
+            }),
+        )
+        .await
+        .unwrap();
+    let pending_invocation_oplog_index = oplog
+        .add(OplogEntry::pending_agent_invocation(
+            session_key.idempotency_key.clone(),
+            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            TraceId::generate(),
+            Vec::new(),
+            Vec::new(),
+        ))
+        .await
+        .unwrap();
+    StreamSession::open(
+        producer,
+        oplog.clone(),
+        StreamRegistrationInvocation::Remote(session_key.clone()),
+        [binding.clone()],
+    )
+    .await
+    .unwrap()
+    .append_record(
+        None,
+        StreamSessionRecord::Attached(StreamSessionAttachedRecord {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            session_key: session_key.idempotency_key.clone(),
+            attachment_id,
+            attempt_id,
+            epoch: 1,
+            pending_invocation_oplog_index,
+        }),
+    )
+    .await
+    .unwrap();
+
+    // A reloaded producer holds no committed batch in memory, so the output reads the oplog.
+    let reloaded = DurableStreamStore::load(
+        oplog.clone(),
+        identity.environment_id,
+        identity.agent_id.clone(),
+        identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let streams = StreamSession::open(
+        reloaded,
+        oplog.clone(),
+        StreamRegistrationInvocation::Remote(session_key),
+        [binding],
+    )
+    .await
+    .unwrap()
+    .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())))
+    .with_attachment(1, attempt_id);
+    oplog.make_reads_unavailable([second_written.value[0].producer_oplog_index()]);
+
+    let (responses, mut receiver) = mpsc::channel(8);
+    let error = streams
+        .pump_output_streams_from(&HashMap::new(), &[5], &[5], &responses)
+        .await
+        .unwrap_err();
+    drop(responses);
+    assert!(
+        matches!(&error, SessionError::Unreadable(unreadable) if unreadable.is_transient()),
+        "the unanswered read must keep its kind, got {error:?}"
+    );
+    assert!(
+        receiver.recv().await.is_none(),
+        "no partial item reaches the client"
+    );
+    assert_eq!(streams.persisted_finished().await.unwrap(), None);
+
+    oplog.make_reads_unavailable([]);
+    let (responses, mut receiver) = mpsc::channel(8);
+    streams
+        .pump_output_streams_from(&HashMap::new(), &[5], &[5], &responses)
+        .await
+        .unwrap();
+    drop(responses);
+    let mut delivered = Vec::new();
+    let mut ends = 0;
+    while let Some(response) = receiver.recv().await {
+        match response.response {
+            Some(invocation_response::Response::OutputItem(item)) => {
+                assert_eq!(item.transport_stream_id, 5);
+                assert_eq!(item.producer_sequence, delivered.len() as u64);
+                delivered.extend(item.packed_u8);
+            }
+            Some(invocation_response::Response::OutputEnd(end)) => {
+                assert_eq!(end.transport_stream_id, 5);
+                ends += 1;
+            }
+            other => panic!("unexpected resumed output response: {other:?}"),
+        }
+    }
+    assert_eq!(delivered, [first_batch, second_batch].concat());
+    assert_eq!(ends, 1);
 }
 
 #[test]
@@ -11251,6 +11464,7 @@ async fn local_reader_forwarding_reuses_only_retained_destinations_after_fork_an
                     for (_, entry) in oplog
                         .read_exact(OplogIndex::INITIAL, cut_index.as_u64())
                         .await
+                        .unwrap()
                     {
                         copied.add(entry).await.unwrap();
                     }
@@ -11608,6 +11822,7 @@ async fn forwarded_output_intents_survive_result_and_nested_publication_cuts() {
                     for (_, entry) in oplog
                         .read_exact(OplogIndex::INITIAL, cut_index.as_u64())
                         .await
+                        .unwrap()
                     {
                         copied.add(entry).await.unwrap();
                     }
