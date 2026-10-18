@@ -51,6 +51,7 @@ use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use indoc::indoc;
 use reqwest::Url;
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -98,15 +99,18 @@ struct Account {
 struct AccountClient {
     http1: bool,
     requests_per_connection: usize,
+    /// The address each host name of the account connects to. See `pinned_addresses`.
+    pins: Vec<(String, SocketAddr)>,
     state: Mutex<(reqwest::Client, usize)>,
 }
 
 impl AccountClient {
-    fn new(http1: bool, requests_per_connection: usize) -> Self {
+    fn new(http1: bool, requests_per_connection: usize, pins: Vec<(String, SocketAddr)>) -> Self {
         Self {
             http1,
             requests_per_connection,
-            state: Mutex::new((build_client(http1), 0)),
+            state: Mutex::new((build_client(http1, &pins), 0)),
+            pins,
         }
     }
 
@@ -115,7 +119,7 @@ impl AccountClient {
     fn next(&self, clients_created: &AtomicU64) -> reqwest::Client {
         let mut state = self.state.lock().unwrap();
         if self.requests_per_connection > 0 && state.1 >= self.requests_per_connection {
-            *state = (build_client(self.http1), 0);
+            *state = (build_client(self.http1, &self.pins), 0);
             clients_created.fetch_add(1, Ordering::Relaxed);
         }
         state.1 += 1;
@@ -123,11 +127,15 @@ impl AccountClient {
     }
 }
 
-fn build_client(http1: bool) -> reqwest::Client {
-    let builder = reqwest::Client::builder()
+fn build_client(http1: bool, pins: &[(String, SocketAddr)]) -> reqwest::Client {
+    let mut builder = reqwest::Client::builder()
         .tcp_nodelay(true)
         .timeout(REQUEST_TIMEOUT)
         .pool_idle_timeout(Duration::from_secs(90));
+    for (host, address) in pins {
+        // TLS and SNI still use the host name; only the address to connect to is fixed.
+        builder = builder.resolve(host, *address);
+    }
     let builder = if http1 { builder.http1_only() } else { builder };
     builder
         .build()
@@ -180,6 +188,43 @@ impl StepStats {
             Path::Rest => &self.rest,
             Path::HttpApi => &self.http_api,
         }
+    }
+}
+
+/// The addresses of each host, resolved once at setup and sorted.
+///
+/// A golem-dev NLB has one address per zone, and each address sends only to the proxy
+/// pods in its zone. Left to the resolver, the clients could all take the same first
+/// address and load one zone. Account `index` connects to address `index` mod the number
+/// of addresses instead, so the accounts spread evenly over the zones in every run.
+struct HostAddresses(Vec<(String, Vec<SocketAddr>)>);
+
+impl HostAddresses {
+    async fn resolve(hosts: impl IntoIterator<Item = String>) -> anyhow::Result<Self> {
+        let mut resolved = Vec::new();
+        for host in hosts {
+            let mut addresses = tokio::net::lookup_host((host.as_str(), 443))
+                .await
+                .map_err(|err| anyhow::anyhow!("Cannot resolve {host}: {err}"))?
+                .collect::<Vec<_>>();
+            addresses.sort();
+            addresses.dedup();
+            if addresses.is_empty() {
+                anyhow::bail!("{host} has no addresses");
+            }
+            info!("{host} resolves to {addresses:?}");
+            resolved.push((host, addresses));
+        }
+        Ok(Self(resolved))
+    }
+
+    /// The addresses of `hosts` for account `index`.
+    fn pinned_addresses(&self, hosts: &[&str], index: usize) -> Vec<(String, SocketAddr)> {
+        self.0
+            .iter()
+            .filter(|(host, _)| hosts.contains(&host.as_str()))
+            .map(|(host, addresses)| (host.clone(), addresses[index % addresses.len()]))
+            .collect()
     }
 }
 
@@ -570,6 +615,21 @@ impl Benchmark for IngressLoad {
             .map(|(_, _, domain)| Self::http_api_base(deps, domain))
             .collect::<Vec<_>>();
 
+        // In the cloud the hosts are NLB names with one address per zone; see HostAddresses.
+        let rest_url = Self::rest_url(deps);
+        let rest_host = rest_url.host_str().unwrap_or_default().to_string();
+        let addresses = if deps.apps_base_domain().is_some() {
+            HostAddresses::resolve(
+                std::iter::once(rest_host.clone())
+                    .chain(domains.iter().map(|(_, _, domain)| domain.0.clone()))
+                    .collect::<Vec<_>>(),
+            )
+            .await
+            .map_err(setup_error)?
+        } else {
+            HostAddresses(Vec::new())
+        };
+
         info!("Setting up {} accounts", self.config.size);
         let http1_accounts = self.config.size * settings.http1_percent.min(100) / 100;
         let owner_ref = &owner;
@@ -577,6 +637,7 @@ impl Benchmark for IngressLoad {
             .map(|index| {
                 let (app_name, env_name, component_name) = (&app_name, &env_name, &component_name);
                 let domain_bases = &domain_bases;
+                let (domains, addresses, rest_host) = (&domains, &addresses, &rest_host);
                 async move {
                     let user = deps.user().await?;
                     Self::share_environment(
@@ -608,6 +669,13 @@ impl Benchmark for IngressLoad {
                         client: AccountClient::new(
                             index < http1_accounts,
                             settings.requests_per_connection,
+                            addresses.pinned_addresses(
+                                &[
+                                    rest_host.as_str(),
+                                    domains[index % domains.len()].2.0.as_str(),
+                                ],
+                                index,
+                            ),
                         ),
                         rest_bodies,
                         http_api_targets,
@@ -627,7 +695,7 @@ impl Benchmark for IngressLoad {
                 .map(|(user, env_id, _)| (user, env_id))
                 .collect(),
             accounts: Arc::new(accounts),
-            rest_url: Self::rest_url(deps),
+            rest_url,
         })
     }
 
@@ -774,6 +842,46 @@ impl Benchmark for IngressLoad {
 mod tests {
     use super::*;
     use test_r::test;
+
+    #[test]
+    fn pinned_addresses_spread_the_accounts_evenly() {
+        let zones = ["10.0.1.5:443", "10.0.2.5:443", "10.0.3.5:443"]
+            .map(|address| address.parse::<SocketAddr>().unwrap());
+        let addresses = HostAddresses(vec![
+            ("api.example".to_string(), zones.to_vec()),
+            ("apps.example".to_string(), zones.to_vec()),
+        ]);
+        let mut per_zone = [0; 3];
+        for index in 0..300 {
+            let pins = addresses.pinned_addresses(&["api.example"], index);
+            assert_eq!(pins.len(), 1, "only the hosts the account uses");
+            per_zone[zones.iter().position(|zone| *zone == pins[0].1).unwrap()] += 1;
+        }
+        assert_eq!(per_zone, [100, 100, 100]);
+    }
+
+    #[test]
+    async fn a_pinned_client_connects_to_the_pinned_address() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let client = build_client(
+            true,
+            &[("pinned.invalid".to_string(), listener.local_addr().unwrap())],
+        );
+        // The name does not resolve, so the request reaches the listener only through the pin.
+        let request = tokio::spawn(async move {
+            let _ = client
+                .get(format!("http://pinned.invalid:{port}/"))
+                .send()
+                .await;
+        });
+        let accepted = tokio::time::timeout(Duration::from_secs(10), listener.accept()).await;
+        request.abort();
+        assert!(
+            accepted.is_ok(),
+            "the client did not connect to the pinned address"
+        );
+    }
 
     #[test]
     fn path_of_spreads_the_http_api_share_evenly() {
