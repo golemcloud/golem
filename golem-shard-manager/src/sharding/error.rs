@@ -322,29 +322,46 @@ mod tests {
     fn only_a_refused_certificate_counts_as_a_certificate_failure() {
         use rustls::{AlertDescription, CertificateError};
 
+        // Listed here rather than taken from the rule, so that an alert dropped from it fails.
+        let alerts = [
+            AlertDescription::BadCertificate,
+            AlertDescription::UnsupportedCertificate,
+            AlertDescription::CertificateRevoked,
+            AlertDescription::CertificateExpired,
+            AlertDescription::CertificateUnknown,
+            AlertDescription::UnknownCA,
+            AlertDescription::CertificateRequired,
+        ]
+        .into_iter()
+        .flat_map(|alert| {
+            [
+                tls(rustls::Error::AlertReceived(alert)),
+                // The same alert after the handshake, as h2 passes it on: the text only.
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    rustls::Error::AlertReceived(alert).to_string(),
+                ),
+            ]
+        });
         for refused in [
             tls(rustls::Error::InvalidCertificate(
                 CertificateError::UnknownIssuer,
             )),
             tls(rustls::Error::InvalidCertificate(CertificateError::Expired)),
             tls(rustls::Error::NoCertificatesPresented),
-            tls(rustls::Error::AlertReceived(
-                AlertDescription::CertificateRequired,
-            )),
-            tls(rustls::Error::AlertReceived(
-                AlertDescription::BadCertificate,
-            )),
-            // The same alert after the handshake, as h2 passes it on: the text only.
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                rustls::Error::AlertReceived(AlertDescription::CertificateRequired).to_string(),
-            ),
-        ] {
+        ]
+        .into_iter()
+        .chain(alerts)
+        {
             let failure = connect_failure(refused);
             assert!(is_certificate_failure(&failure), "{failure}");
         }
         for fault in [
             tls(rustls::Error::DecryptError),
+            // An alert that is not about a certificate.
+            tls(rustls::Error::AlertReceived(
+                AlertDescription::HandshakeFailure,
+            )),
             tls(rustls::Error::InvalidMessage(
                 rustls::InvalidMessage::InvalidContentType,
             )),

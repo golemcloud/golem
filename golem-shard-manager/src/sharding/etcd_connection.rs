@@ -617,7 +617,13 @@ mod tests {
             ..files.mtls()
         };
         let message = refusal(&config("https://etcd:2379", Some(tls)));
-        assert!(message.contains("ca_cert_file"), "{message}");
+        assert!(
+            message.contains(&format!(
+                "persistence.config.tls.ca_cert_file {} holds no PEM certificate",
+                files.path("key.pem").display()
+            )),
+            "{message}"
+        );
     }
 
     #[test]
@@ -628,7 +634,13 @@ mod tests {
             ..files.mtls()
         };
         let message = refusal(&config("https://etcd:2379", Some(tls)));
-        assert!(message.contains("client_key_file"), "{message}");
+        assert!(
+            message.contains(&format!(
+                "persistence.config.tls.client_key_file {} holds no PEM private key",
+                files.path("cert.pem").display()
+            )),
+            "{message}"
+        );
     }
 
     #[test]
