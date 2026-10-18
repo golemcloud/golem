@@ -1440,8 +1440,11 @@ async fn immutable_files_over_http1_and_http2_do_not_cache_contents() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let acceptor = poem::listener::TcpAcceptor::from_tokio(listener).unwrap();
-        let _server =
-            AbortOnDropHandle::new(tokio::spawn(crate::gateway_server::run(acceptor, endpoint)));
+        let _server = AbortOnDropHandle::new(tokio::spawn(golem_service_base::http_server::run(
+            acceptor,
+            endpoint,
+            Default::default(),
+        )));
         let builder = reqwest::Client::builder().timeout(Duration::from_secs(5));
         let client = if http2 {
             builder.http2_prior_knowledge()

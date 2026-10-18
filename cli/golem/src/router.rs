@@ -18,6 +18,7 @@ use golem_common::base_model::api;
 use golem_common::model::domain_registration::Domain;
 use golem_common::poem::{CliClientInfoMiddleware, OpenTelemetryMetrics, PrometheusExporter};
 use golem_registry_service::startup::{StartupPhase, StartupProgress};
+use golem_service_base::http_server::{self, HttpServerConfig};
 use golem_worker_service::ingress::TrustedIngress;
 use poem::endpoint::BoxEndpoint;
 use poem::http::{StatusCode, header};
@@ -89,6 +90,7 @@ pub async fn bind_router(
     listener_addr: &str,
     listener_port: u16,
     management_host: Option<&str>,
+    http_server_config: &HttpServerConfig,
     startup_progress: StartupProgress,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<StartingRouter, anyhow::Error> {
@@ -107,15 +109,21 @@ pub async fn bind_router(
         .expect("socket address")
         .port();
 
+    http_server_config
+        .validate()
+        .map_err(anyhow::Error::msg)
+        .context("Invalid router HTTP server config")?;
+
     let ready = Arc::new(OnceLock::new());
     let gate = StartupGate {
         ready: ready.clone(),
         startup_progress,
     };
 
+    let http_server_config = http_server_config.clone();
     join_set.spawn(
         async move {
-            golem_worker_service::gateway_server::run(acceptor, gate)
+            http_server::run(acceptor, gate, http_server_config)
                 .await
                 .map_err(|e| e.into())
         }

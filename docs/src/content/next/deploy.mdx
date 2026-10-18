@@ -174,6 +174,31 @@ The worker service accepts `X-Forwarded-Host` and `X-Forwarded-Proto` only from 
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-router/docker/golem-router-entrypoint.sh), [docker image](https://hub.docker.com/r/golemservices/golem-router)
 
+## Request Limits
+
+Every path into an agent has the same payload limit of 32 MiB: the gRPC message from the worker service to the worker executor, the invocation session WebSocket message, and the REST and MCP request body.
+
+| Setting | Service | Default | Description |
+|---------|---------|---------|-------------|
+| `body_limits.api` | worker service, registry service | `33554432` (32 MiB) | Largest REST request body. A larger body gets `413 Payload Too Large` |
+| `body_limits.mcp` | worker service | `33554432` (32 MiB) | Largest MCP request body |
+| `body_limits.upload` | registry service | `2147483648` (2 GiB) | Largest `multipart/form-data` request body: component and plugin uploads with their initial file archives, and initial agent file uploads |
+| `http_server.http2_max_header_list_size` | worker service, registry service | `65536` (64 KiB) | Largest HTTP/2 header list. A larger header list gets `431 Request Header Fields Too Large` |
+| `http_server.http2_initial_stream_window_size` | worker service, registry service | `1048576` (1 MiB) | HTTP/2 flow-control window of each request stream |
+| `http_server.http2_initial_connection_window_size` | worker service, registry service | `1048576` (1 MiB) | HTTP/2 flow-control window of each connection |
+| `http_server.http2_adaptive_window` | worker service, registry service | `false` | Sizes the HTTP/2 windows from the measured bandwidth-delay product, instead of the initial window sizes |
+| `invocation_session.websocket.max_message_size`, `max_frame_size` | worker service | `33554432` (32 MiB) | Largest WebSocket message and frame of the invocation session. A larger message or frame closes the session with close code 1009 |
+| `invocation_session.websocket.max_write_buffer_size` | worker service | `67108864` (64 MiB) | Outbound bytes that may wait for the client |
+| `connect_websocket.*` | worker service | same as `invocation_session.websocket` | The same limits for the agent event stream (`connect`) |
+
+A request that declares a larger `Content-Length` gets 413 before the service reads its body. A request without `Content-Length` gets 413 when its body passes the limit.
+
+The invocation session and the agent event stream (`connect`) answer a message or frame above their limit with close code 1009. They do not read the payload of a frame whose header declares a larger size.
+
+The HTTP/2 header list limit is above the 60 KiB that Envoy accepts by default, so a gateway in front of Golem decides first. The HTTP/2 settings apply to every HTTP port of the service: for the worker service, `port`, `custom_request_port` and `mcp_port`.
+
+For environment variables, add the path to `GOLEM__`, for example `GOLEM__BODY_LIMITS__API`. For `golem server run`, nest the settings under `worker_service` or `registry_service`, for example `GOLEM__WORKER_SERVICE__BODY_LIMITS__MCP`. The HTTP/2 settings of the `golem server run` listener are `router.http_server`, for example `GOLEM__ROUTER__HTTP_SERVER__HTTP2_MAX_HEADER_LIST_SIZE`.
+
 ## Network Addresses
 
 Every service binds all of its listeners to `bind_address` (`GOLEM__BIND_ADDRESS`). The default `0.0.0.0` accepts IPv4 connections only. Set it to `::` on a network that needs IPv6, such as a Fly.io private network or an IPv6-only Railway environment: the service then accepts both IPv6 and IPv4 connections, whatever the operating system's default for IPv6 sockets is. On a host whose kernel has no IPv6 support, binding `::` fails, and the service stops at startup with the address in the error.

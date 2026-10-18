@@ -332,6 +332,12 @@ async fn http2_request_routes_by_its_authority() {
 }
 
 async fn real_mcp_endpoint() -> (BoxEndpoint<'static>, tempfile::NamedTempFile) {
+    real_mcp_endpoint_with_body_limit(crate::config::RequestBodyLimits::default().mcp).await
+}
+
+async fn real_mcp_endpoint_with_body_limit(
+    max_body_size: usize,
+) -> (BoxEndpoint<'static>, tempfile::NamedTempFile) {
     let db = tempfile::NamedTempFile::new().unwrap();
     let harness = crate::mcp::InvocationHarness::new(
         AgentInvocationOutput {
@@ -374,6 +380,7 @@ async fn real_mcp_endpoint() -> (BoxEndpoint<'static>, tempfile::NamedTempFile) 
             .unwrap(),
         ),
         &Default::default(),
+        max_body_size,
     );
     (endpoint, db)
 }
@@ -417,6 +424,41 @@ async fn mcp_domain_serves_only_the_mcp_routes() {
         .get_response(request("10.0.0.2", TOOLS, "/.well-known/oauth-protected-resource").finish())
         .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn mcp_body_above_the_limit_gets_413_with_cors_headers() {
+    const LIMIT: usize = 4096;
+    let (mcp, _db) = real_mcp_endpoint_with_body_limit(LIMIT).await;
+    let (endpoint, _) = dispatcher(mcp);
+    let oversized_post = || {
+        request("10.0.0.2", TOOLS, "/mcp")
+            .method(Method::POST)
+            .header("Origin", "https://app.example.com")
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, text/event-stream")
+    };
+
+    let declared = oversized_post()
+        .header("Content-Length", &(LIMIT + 1).to_string())
+        .body(Body::from(vec![b' '; LIMIT + 1]))
+        .finish();
+    let streamed = oversized_post()
+        .body(Body::from_bytes_stream(futures::stream::iter(
+            [vec![b' '; LIMIT], vec![b' '; 1]]
+                .map(|chunk| Ok::<_, std::io::Error>(bytes::Bytes::from(chunk))),
+        )))
+        .finish();
+
+    for request in [declared, streamed] {
+        let response = endpoint.get_response(request).await;
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(
+            response.headers()["Access-Control-Allow-Origin"],
+            "https://app.example.com"
+        );
+    }
 }
 
 #[test]
