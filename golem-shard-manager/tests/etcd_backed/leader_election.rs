@@ -1871,7 +1871,7 @@ async fn the_election_watch_follows_campaigners_and_the_ready_mark(etcd: &Arc<Do
     assert_eq!(
         view.leader()
             .and_then(|leader| leader.value.clone())
-            .and_then(|value| Some(value.grpc_address)),
+            .map(|value| value.grpc_address),
         Some(address(4101))
     );
 
