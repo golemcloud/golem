@@ -8,6 +8,72 @@ import { PassThrough, Writable } from "node:stream";
 import { nextTick } from "node:process";
 
 const DEFAULT_MAX_BUFFER = 1024 * 1024;
+const PIPE_STDIO = ["pipe", "pipe", "pipe"];
+
+function stdioModes(runtimeProcess, options) {
+  const values = options.stdio ?? "pipe";
+  if (Array.isArray(values) && values.length > 3) {
+    throw new TypeError(
+      "Golem tool processes have only stdin, stdout and stderr",
+    );
+  }
+  if (!Array.isArray(values) && typeof values !== "string") {
+    throw new TypeError("stdio must be pipe, ignore, inherit or an array");
+  }
+  return PIPE_STDIO.map((_, index) => {
+    const value = Array.isArray(values) ? values[index] : values;
+    const mode = value == null ? "pipe" : value === index ? "inherit" : value;
+    if (!["pipe", "ignore", "inherit"].includes(mode))
+      throw new TypeError("Unsupported stdio mode");
+    if (
+      mode === "inherit" &&
+      index > 0 &&
+      typeof runtimeProcess[index === 1 ? "stdout" : "stderr"]?.write !==
+        "function"
+    ) {
+      throw new TypeError("Inherited output must be a writable process stream");
+    }
+    return mode;
+  });
+}
+
+function routeOutput(runtimeProcess, result, modes, command) {
+  for (const [index, channel] of [
+    [1, "stdout"],
+    [2, "stderr"],
+  ]) {
+    try {
+      if (modes[index] === "inherit" && result[channel].length)
+        runtimeProcess[channel].write(result[channel]);
+    } catch (error) {
+      result.error ??= processError("EIO", command, "inherited output failed");
+      result.error.cause ??= error;
+      result.status = null;
+    }
+    if (modes[index] !== "pipe") result[channel] = null;
+  }
+  return result;
+}
+
+async function routeOutputAsync(runtimeProcess, result, modes) {
+  const routed = await Promise.allSettled(
+    [
+      [1, "stdout"],
+      [2, "stderr"],
+    ].map(async ([index, channel]) => {
+      if (modes[index] === "inherit" && result[channel].length) {
+        await new Promise((resolve, reject) =>
+          runtimeProcess[channel].write(result[channel], (error) =>
+            error ? reject(error) : resolve(),
+          ),
+        );
+      }
+      if (modes[index] !== "pipe") result[channel] = null;
+    }),
+  );
+  const failure = routed.find((result) => result.status === "rejected");
+  if (failure) throw failure.reason;
+}
 
 function finiteInput(input, encoding) {
   if (input === undefined) return Buffer.alloc(0);
@@ -48,9 +114,21 @@ function dispose(resource) {
   resource?.[Symbol.dispose]?.();
 }
 
-function bounded(command, result, maxBuffer, method = "spawnSync") {
-  for (const channel of ["stdout", "stderr"]) {
-    result[channel] = Buffer.from(result[channel] ?? []);
+function bounded(
+  command,
+  result,
+  maxBuffer,
+  method = "spawnSync",
+  modes = PIPE_STDIO,
+) {
+  for (const [index, channel] of [
+    [1, "stdout"],
+    [2, "stderr"],
+  ]) {
+    result[channel] =
+      modes[index] === "ignore"
+        ? Buffer.alloc(0)
+        : Buffer.from(result[channel] ?? []);
     if (result[channel].length > maxBuffer) {
       result[channel] = result[channel].subarray(0, maxBuffer);
       result.error ??= processError(
@@ -73,25 +151,125 @@ function variables(runtimeProcess, options) {
   return values;
 }
 
-function project(command, request, collected, maxBuffer, method = "spawnSync") {
-  const rendered = request.renderResult(collected.result);
+function shellWord(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`;
+}
+
+function invocation(runtimeProcess, command, args, options) {
+  if (
+    options.shell != null &&
+    typeof options.shell !== "boolean" &&
+    typeof options.shell !== "string"
+  ) {
+    throw new TypeError("shell must be a boolean or string");
+  }
+  const argv = args.map(String);
+  const conventionalShell = [
+    "sh",
+    "bash",
+    "/bin/sh",
+    "/bin/bash",
+    "/usr/bin/sh",
+    "/usr/bin/bash",
+  ].includes(command);
+  let script;
+  if (options.shell) {
+    // Node passes shell arguments as one space-separated command, not argv.
+    script = [command, ...argv].join(" ");
+    if (typeof options.shell === "string") {
+      script = `${shellWord(options.shell)} -c ${shellWord(script)}`;
+    }
+  } else if (conventionalShell && !(command === "bash" && argv[0] === "run")) {
+    // Bash's own sh/bash command implements option and positional-argument
+    // semantics. Preserve argv as shell words instead of parsing its flags here.
+    script = [command, ...argv].map(shellWord).join(" ");
+  }
+  return script === undefined
+    ? { name: command, args: argv, shell: false }
+    : {
+        name: "bash",
+        args: [
+          "run",
+          "--cwd",
+          resolve(runtimeProcess.cwd(), options.cwd ?? "."),
+          "--",
+          script,
+        ],
+        shell: true,
+      };
+}
+
+function shellOutput(rendered, terminal, modes) {
+  if (terminal.tag !== "ok" || rendered.exitCode !== 0) return rendered;
+  try {
+    // The host renders typed results with capability redaction. Bash has no
+    // output streams: its four-field result carries both channels and status.
+    const result = JSON.parse(Buffer.from(rendered.stdout).toString("utf8"));
+    if (
+      !result ||
+      Object.keys(result).length !== 4 ||
+      typeof result.stdout !== "string" ||
+      typeof result.stderr !== "string" ||
+      typeof result.cwd !== "string" ||
+      !Number.isInteger(result.exit_code) ||
+      result.exit_code < 0 ||
+      result.exit_code > 255
+    )
+      throw new TypeError("Invalid BashResult");
+    return {
+      exitCode: result.exit_code,
+      stdout:
+        modes[1] === "ignore" ? Buffer.alloc(0) : Buffer.from(result.stdout),
+      stderr:
+        modes[2] === "ignore" ? Buffer.alloc(0) : Buffer.from(result.stderr),
+    };
+  } catch {
+    // A malformed command result is a command failure, not a failed spawn.
+    return {
+      exitCode: 1,
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.from("bash: invalid shell result\n"),
+    };
+  }
+}
+
+function project(
+  command,
+  request,
+  collected,
+  maxBuffer,
+  method = "spawnSync",
+  shell = false,
+  modes = PIPE_STDIO,
+) {
+  const output = request.renderResult(collected.result);
+  const rendered = shell
+    ? shellOutput(output, collected.result, modes)
+    : output;
   const result = bounded(
     command,
     {
       pid: 1,
       status: rendered.exitCode,
       signal: null,
-      stdout: Buffer.concat([
-        Buffer.from(collected.stdout?.bytes ?? []),
-        Buffer.from(rendered.stdout),
-      ]),
-      stderr: Buffer.concat([
-        Buffer.from(collected.stderr?.bytes ?? []),
-        Buffer.from(rendered.stderr),
-      ]),
+      stdout:
+        modes[1] === "ignore"
+          ? Buffer.alloc(0)
+          : Buffer.concat([
+              Buffer.from(collected.stdout?.bytes ?? []),
+              Buffer.from(rendered.stdout),
+            ]),
+      stderr:
+        modes[2] === "ignore"
+          ? Buffer.alloc(0)
+          : Buffer.concat([
+              Buffer.from(collected.stderr?.bytes ?? []),
+              Buffer.from(rendered.stderr),
+            ]),
     },
     maxBuffer,
     method,
+    modes,
   );
   if (collected.bodyExecuted === false && collected.result.tag === "err") {
     const code = {
@@ -110,7 +288,11 @@ function project(command, request, collected, maxBuffer, method = "spawnSync") {
       result.status = null;
     }
   }
-  for (const channel of ["stdout", "stderr"]) {
+  for (const [index, channel] of [
+    [1, "stdout"],
+    [2, "stderr"],
+  ]) {
+    if (modes[index] === "ignore") continue;
     if (collected[channel]?.overflow) {
       result.error ??= processError(
         "ENOBUFS",
@@ -237,6 +419,7 @@ function spawnTool(host, runtimeProcess, command, args, options) {
     throw new RangeError("timeout must be a non-negative safe integer");
   }
   const defaultSignal = killSignal(options.killSignal ?? "SIGTERM");
+  const modes = stdioModes(runtimeProcess, options);
   if (
     options.signal !== undefined &&
     (typeof options.signal?.aborted !== "boolean" ||
@@ -245,9 +428,10 @@ function spawnTool(host, runtimeProcess, command, args, options) {
   ) {
     throw new TypeError("signal must be an AbortSignal");
   }
+  const target = invocation(runtimeProcess, command, args, options);
   const prepared = host.prepareCommand(
-    command,
-    args.map(String),
+    target.name,
+    target.args,
     variables(runtimeProcess, options),
   );
   if (prepared === undefined) return undefined;
@@ -258,8 +442,8 @@ function spawnTool(host, runtimeProcess, command, args, options) {
   child.signalCode = null;
   child.spawnfile = command;
   child.spawnargs = [command, ...args.map(String)];
-  child.stdout = new PassThrough();
-  child.stderr = new PassThrough();
+  child.stdout = modes[1] === "pipe" ? new PassThrough() : null;
+  child.stderr = modes[2] === "pipe" ? new PassThrough() : null;
   child.stdin = null;
   const resources = new Set();
   const transfer = (resource) => {
@@ -268,6 +452,7 @@ function spawnTool(host, runtimeProcess, command, args, options) {
   };
   let future;
   let input;
+  let parentInput;
   let completed = false;
   let terminal;
   let signal;
@@ -318,14 +503,6 @@ function spawnTool(host, runtimeProcess, command, args, options) {
   let collection;
   try {
     if (prepared.tag === "invoke") resources.add(prepared.val);
-    if (options.shell || (options.stdio && options.stdio !== "pipe")) {
-      throw processError(
-        "ENOTSUP",
-        command,
-        "shell and non-pipe stdio are not implemented yet",
-        "spawn",
-      );
-    }
     if (options.signal?.aborted) {
       abortError = Object.assign(
         new Error("The operation was aborted", {
@@ -347,28 +524,59 @@ function spawnTool(host, runtimeProcess, command, args, options) {
         },
         maxBuffer,
         "spawn",
+        modes,
       );
     } else {
       const request = prepared.val;
       const spec = request.input();
+      let source;
       if (spec.stdin) {
-        input = createInput(host, command, resources, inputFailed);
-        child.stdin = input.stream;
+        if (modes[0] === "ignore") {
+          source = host.createStdinFromBytes(Buffer.alloc(0));
+          resources.add(source);
+        } else {
+          if (
+            modes[0] === "inherit" &&
+            (typeof runtimeProcess.stdin?.pipe !== "function" ||
+              typeof runtimeProcess.stdin?.unpipe !== "function")
+          ) {
+            throw processError(
+              "ENOTSUP",
+              command,
+              "inherited stdin must be a readable process stream",
+              "spawn",
+            );
+          }
+          input = createInput(host, command, resources, inputFailed);
+          source = input.source;
+          if (modes[0] === "pipe") child.stdin = input.stream;
+          else {
+            parentInput = runtimeProcess.stdin;
+            parentInput.on("error", inputFailed);
+            parentInput.pipe(input.stream);
+            if (stdinError) throw stdinError;
+          }
+        }
       }
-      const output = (wanted) => {
+      const output = (wanted, mode) => {
         if (!wanted) return undefined;
+        if (mode === "ignore") {
+          const target = host.createDiscardedOutput();
+          resources.add(target);
+          return [target];
+        }
         const pair = host.createCollectedOutput(BigInt(maxBuffer));
         for (const resource of pair) resources.add(resource);
         return pair;
       };
-      const stdout = output(spec.stdout);
-      const stderr = output(spec.stderr);
-      const rpc = new host.ToolRpc(command);
+      const stdout = output(spec.stdout, modes[1]);
+      const stderr = output(spec.stderr, modes[2]);
+      const rpc = new host.ToolRpc(target.name);
       resources.add(rpc);
       future = rpc.asyncInvokeAndAwait(
         spec.commandPath,
         spec.input,
-        transfer(input?.source),
+        transfer(source),
         transfer(stdout?.[0]),
         transfer(stderr?.[0]),
       );
@@ -423,6 +631,8 @@ function spawnTool(host, runtimeProcess, command, args, options) {
           collected,
           maxBuffer,
           "spawn",
+          target.shell,
+          modes,
         );
         if (
           signal &&
@@ -464,12 +674,20 @@ function spawnTool(host, runtimeProcess, command, args, options) {
         terminal.error.cause ??= error;
         terminal.status = null;
       };
-      try {
-        options.signal?.removeEventListener("abort", abort);
-        if (input && resources.has(input.source))
-          dispose(transfer(input.source));
-      } catch (error) {
-        cleanupFailed(error);
+      for (const cleanup of [
+        () => options.signal?.removeEventListener("abort", abort),
+        () => parentInput?.unpipe(input.stream),
+        () => parentInput?.removeListener("error", inputFailed),
+        () => {
+          if (input && resources.has(input.source))
+            dispose(transfer(input.source));
+        },
+      ]) {
+        try {
+          cleanup();
+        } catch (error) {
+          cleanupFailed(error);
+        }
       }
       try {
         await input?.stop();
@@ -486,10 +704,22 @@ function spawnTool(host, runtimeProcess, command, args, options) {
     }
     terminal.error = abortError ?? stdinError ?? terminal.error;
     if (terminal.error) terminal.status = null;
+    try {
+      await routeOutputAsync(runtimeProcess, terminal, modes);
+    } catch (error) {
+      terminal.error ??= processError(
+        "EIO",
+        command,
+        "inherited output failed",
+        "spawn",
+      );
+      terminal.error.cause ??= error;
+      terminal.status = null;
+    }
     child.exitCode = terminal.status;
     child.signalCode = terminal.signal;
-    child.stdout.end(terminal.stdout);
-    child.stderr.end(terminal.stderr);
+    child.stdout?.end(terminal.stdout);
+    child.stderr?.end(terminal.stderr);
     if (terminal.error) child.emit("error", terminal.error);
     else child.emit("exit", terminal.status, terminal.signal);
     nextTick(() => child.emit("close", terminal.status, terminal.signal));
@@ -509,15 +739,11 @@ export function createToolProcessBackend(host, runtimeProcess) {
       if (enabled === "0" || enabled === "false") return undefined;
       // These cases need the asynchronous/cancellation adapter. Do not silently
       // run a command with an ignored option while that adapter is unavailable.
-      if (
-        options.shell ||
-        options.timeout > 0 ||
-        (options.stdio && options.stdio !== "pipe")
-      ) {
+      if (options.timeout > 0) {
         return failed(
           command,
           "ENOTSUP",
-          "shell, timeout and non-pipe stdio are not implemented yet",
+          "synchronous deadlines are not implemented yet",
         );
       }
       const maxBuffer = options.maxBuffer ?? DEFAULT_MAX_BUFFER;
@@ -525,23 +751,32 @@ export function createToolProcessBackend(host, runtimeProcess) {
         throw new RangeError("maxBuffer must be a non-negative safe integer");
       }
       const inputBytes = finiteInput(options.input, options.encoding);
+      const modes = stdioModes(runtimeProcess, options);
+      const target = invocation(runtimeProcess, command, args, options);
       const prepared = host.prepareCommand(
-        command,
-        args.map(String),
+        target.name,
+        target.args,
         variables(runtimeProcess, options),
       );
       if (prepared === undefined) return undefined;
       if (prepared.tag === "output") {
-        return bounded(
+        return routeOutput(
+          runtimeProcess,
+          bounded(
+            command,
+            {
+              pid: 1,
+              status: prepared.val.exitCode,
+              signal: null,
+              stdout: prepared.val.stdout,
+              stderr: prepared.val.stderr,
+            },
+            maxBuffer,
+            "spawnSync",
+            modes,
+          ),
+          modes,
           command,
-          {
-            pid: 1,
-            status: prepared.val.exitCode,
-            signal: null,
-            stdout: prepared.val.stdout,
-            stderr: prepared.val.stderr,
-          },
-          maxBuffer,
         );
       }
 
@@ -555,19 +790,31 @@ export function createToolProcessBackend(host, runtimeProcess) {
       let completed = false;
       try {
         const spec = request.input();
+        if (spec.stdin && modes[0] === "inherit") {
+          throw processError(
+            "ENOTSUP",
+            command,
+            "synchronous inherited stdin needs a host-owned source",
+          );
+        }
         const input = spec.stdin
-          ? host.createStdinFromBytes(inputBytes)
+          ? host.createStdinFromBytes(
+              modes[0] === "ignore" ? Buffer.alloc(0) : inputBytes,
+            )
           : undefined;
         if (input) resources.add(input);
-        const stdout = spec.stdout
-          ? host.createCollectedOutput(BigInt(maxBuffer))
-          : undefined;
-        if (stdout) for (const resource of stdout) resources.add(resource);
-        const stderr = spec.stderr
-          ? host.createCollectedOutput(BigInt(maxBuffer))
-          : undefined;
-        if (stderr) for (const resource of stderr) resources.add(resource);
-        const rpc = new host.ToolRpc(command);
+        const output = (wanted, mode) => {
+          if (!wanted) return undefined;
+          const pair =
+            mode === "ignore"
+              ? [host.createDiscardedOutput()]
+              : host.createCollectedOutput(BigInt(maxBuffer));
+          for (const resource of pair) resources.add(resource);
+          return pair;
+        };
+        const stdout = output(spec.stdout, modes[1]);
+        const stderr = output(spec.stderr, modes[2]);
+        const rpc = new host.ToolRpc(target.name);
         resources.add(rpc);
         future = rpc.asyncInvokeAndAwait(
           spec.commandPath,
@@ -582,13 +829,33 @@ export function createToolProcessBackend(host, runtimeProcess) {
           transfer(stderr?.[1]),
         );
         completed = true;
-        return project(command, request, collected, maxBuffer);
-      } catch (error) {
-        const code = error?.tag === "resource-exhausted" ? "ENOMEM" : "EIO";
-        return failed(
+        return routeOutput(
+          runtimeProcess,
+          project(
+            command,
+            request,
+            collected,
+            maxBuffer,
+            "spawnSync",
+            target.shell,
+            modes,
+          ),
+          modes,
           command,
-          code,
-          error instanceof Error ? error.message : "tool process failed",
+        );
+      } catch (error) {
+        const code =
+          error?.code ??
+          (error?.tag === "resource-exhausted" ? "ENOMEM" : "EIO");
+        return routeOutput(
+          runtimeProcess,
+          failed(
+            command,
+            code,
+            error instanceof Error ? error.message : "tool process failed",
+          ),
+          modes,
+          command,
         );
       } finally {
         if (future && !completed) {

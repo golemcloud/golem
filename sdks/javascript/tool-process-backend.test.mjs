@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { Readable, PassThrough } from "node:stream";
 import { createToolProcessBackend } from "./tool-process-backend.js";
 
 function fixture(overrides = {}) {
@@ -39,6 +40,10 @@ function fixture(overrides = {}) {
       calls.push(["output", limit]);
       return [resource("target"), resource("collection")];
     },
+    createDiscardedOutput() {
+      calls.push(["discard"]);
+      return resource("discard-target");
+    },
     ToolRpc: class {
       constructor(name) {
         calls.push(["rpc", name]);
@@ -50,8 +55,8 @@ function fixture(overrides = {}) {
         calls.push(["invoke", ...args]);
         return {
           ...resource("future"),
-          collect() {
-            calls.push(["collect"]);
+          collect(...args) {
+            calls.push(["collect", ...args]);
             return {
               bodyExecuted: true,
               result: { tag: "ok", val: {} },
@@ -310,6 +315,202 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+test("synchronous inherited output failure preserves a started command and the other channel", () => {
+  const f = fixture();
+  const stderr = [];
+  f.process.stdout = {
+    write() {
+      throw new Error("output failed");
+    },
+  };
+  f.process.stderr = {
+    write(bytes) {
+      stderr.push(...bytes);
+    },
+  };
+  const result = f.backend.spawnSync("tsc", [], {
+    stdio: ["ignore", "inherit", "inherit"],
+  });
+  assert.equal(result.error.code, "EIO");
+  assert.equal(result.error.path, "tsc");
+  assert.equal(result.error.cause.message, "output failed");
+  assert.equal(result.pid, 1);
+  assert.equal(result.status, null);
+  assert.deepEqual(stderr, [128]);
+  assert.equal(f.calls.filter(([name]) => name === "invoke").length, 1);
+});
+
+function bashFixture(
+  result = {
+    stdout: "shell output\n",
+    stderr: "diagnostic\n",
+    exit_code: 7,
+    cwd: "/workspace",
+  },
+) {
+  const f = fixture();
+  f.prepared.input = () => ({
+    commandPath: ["run"],
+    input: { canonical: true },
+    stdin: false,
+    stdout: false,
+    stderr: false,
+  });
+  f.prepared.renderResult = () => ({
+    exitCode: 0,
+    stdout: Buffer.from(JSON.stringify(result) + "\n"),
+    stderr: [],
+  });
+  f.host.ToolRpc.prototype.asyncInvokeAndAwait = (...args) => {
+    f.calls.push(["invoke", ...args]);
+    return {
+      collect: () => ({ bodyExecuted: true, result: { tag: "ok", val: {} } }),
+      [Symbol.dispose]() {
+        f.closed.push("future");
+      },
+    };
+  };
+  return f;
+}
+
+test("shell execution uses bound Bash's canonical CLI and projects both channels and status", () => {
+  const f = bashFixture();
+  const result = f.backend.spawnSync("printf", ["'%s'", "'a b'", "; exit 7"], {
+    shell: true,
+    cwd: "src",
+  });
+  assert.deepEqual(f.calls[0].slice(0, 4), [
+    "prepare",
+    "bash",
+    ["run", "--cwd", "/workspace/src", "--", "printf '%s' 'a b' ; exit 7"],
+    [["PWD", "/workspace/src"]],
+  ]);
+  assert.deepEqual(
+    f.calls.find(([name]) => name === "rpc"),
+    ["rpc", "bash"],
+  );
+  assert.equal(result.status, 7);
+  assert.equal(result.stdout.toString(), "shell output\n");
+  assert.equal(result.stderr.toString(), "diagnostic\n");
+  assert.equal(result.error, undefined);
+  assert.equal(
+    f.calls.some(([name]) => name === "output" || name === "stdin"),
+    false,
+  );
+});
+
+test("conventional shell argv is quoted and its grammar stays in Bash", () => {
+  const f = bashFixture();
+  f.backend.spawnSync(
+    "sh",
+    ["-c", "printf '%s' \"$1\"", "label", "a'b;$(not-run)"],
+    {},
+  );
+  assert.equal(f.calls[0][1], "bash");
+  assert.equal(
+    f.calls[0][2].at(-1),
+    String.raw`'sh' '-c' 'printf '\''%s'\'' "$1"' 'label' 'a'\''b;$(not-run)'`,
+  );
+});
+
+test("an explicitly selected shell is a quoted Bash command, never a host subprocess", () => {
+  const f = bashFixture();
+  f.backend.spawnSync("echo", ["'it is fine'"], { shell: "/bin/sh" });
+  assert.equal(
+    f.calls[0][2].at(-1),
+    String.raw`'/bin/sh' -c 'echo '\''it is fine'\'''`,
+  );
+});
+
+test("Bash's explicit tool CLI is not mistaken for a shell command", () => {
+  const f = fixture();
+  f.backend.spawnSync("bash", ["run", "--", "true"], {});
+  assert.deepEqual(f.calls[0].slice(1, 3), ["bash", ["run", "--", "true"]]);
+});
+
+test("shell routing preserves per-component disabling and unavailable bindings", () => {
+  const f = bashFixture();
+  f.process.env.GOLEM_NODE_TOOL_PROCESSES = "0";
+  assert.equal(f.backend.spawnSync("echo ok", [], { shell: true }), undefined);
+  assert.deepEqual(f.calls, []);
+  delete f.process.env.GOLEM_NODE_TOOL_PROCESSES;
+  f.host.prepareCommand = (name) => {
+    assert.equal(name, "bash");
+    return undefined;
+  };
+  assert.equal(f.backend.spawnSync("echo ok", [], { shell: true }), undefined);
+  assert.deepEqual(f.calls, []);
+});
+
+test("malformed Bash results are command failures and do not print their payloads", () => {
+  for (const result of [
+    null,
+    { stdout: "private", stderr: "", cwd: "/", exitCode: 7 },
+    { stdout: "private", stderr: "", cwd: "/", exit_code: 256 },
+    { stdout: { secret: "private" }, stderr: "", cwd: "/", exit_code: 0 },
+    { stdout: "private", stderr: "", cwd: "/", exit_code: 0, extra: "private" },
+  ]) {
+    const f = bashFixture(result);
+    const output = f.backend.spawnSync("echo ok", [], { shell: true });
+    assert.equal(output.status, 1);
+    assert.equal(output.error, undefined);
+    assert.equal(output.stdout.length, 0);
+    assert.equal(output.stderr.toString(), "bash: invalid shell result\n");
+  }
+});
+
+test("Bash output obeys independent byte limits, including UTF-8 and nonzero status", () => {
+  const f = bashFixture({
+    stdout: "éé",
+    stderr: "12345",
+    cwd: "/",
+    exit_code: 9,
+  });
+  const output = f.backend.spawnSync("echo ok", [], {
+    shell: true,
+    maxBuffer: 3,
+  });
+  assert.equal(output.status, null);
+  assert.equal(output.error.code, "ENOBUFS");
+  assert.deepEqual([...output.stdout], [195, 169, 195]);
+  assert.equal(output.stderr.toString(), "123");
+});
+
+test("host projection and tool admission failures keep their original shell outcome", () => {
+  const f = bashFixture();
+  f.prepared.renderResult = () => ({
+    exitCode: 1,
+    stdout: [],
+    stderr: Buffer.from("invalid typed result\n"),
+  });
+  let output = f.backend.spawnSync("echo ok", [], { shell: true });
+  assert.equal(output.status, 1);
+  assert.equal(output.stderr.toString(), "invalid typed result\n");
+  f.host.ToolRpc.prototype.asyncInvokeAndAwait = () => ({
+    collect: () => ({
+      bodyExecuted: false,
+      result: { tag: "err", val: { tag: "denied" } },
+    }),
+  });
+  f.prepared.renderResult = () => ({
+    exitCode: 3,
+    stdout: [],
+    stderr: Buffer.from("denied\n"),
+  });
+  output = f.backend.spawnSync("echo ok", [], { shell: true });
+  assert.equal(output.status, null);
+  assert.equal(output.error.code, "EACCES");
+  assert.equal(output.error.path, "echo ok");
+  assert.equal(output.stderr.toString(), "denied\n");
+});
+
+test("invalid shell options cannot discover or dispatch tools", () => {
+  const f = fixture();
+  assert.throws(() => f.backend.spawnSync("echo", [], { shell: 7 }), TypeError);
+  assert.throws(() => f.backend.spawn("echo", [], { shell: {} }), TypeError);
+  assert.deepEqual(f.calls, []);
+});
+
 function asyncFixture({
   admitted = true,
   completeOnEof = false,
@@ -446,10 +647,10 @@ function observe(child) {
   const errors = [];
   const stdout = [];
   const stderr = [];
-  child.stdout.on("data", (chunk) => stdout.push(...chunk));
-  child.stderr.on("data", (chunk) => stderr.push(...chunk));
-  child.stdout.on("end", () => events.push(["stdout-end"]));
-  child.stderr.on("end", () => events.push(["stderr-end"]));
+  child.stdout?.on("data", (chunk) => stdout.push(...chunk));
+  child.stderr?.on("data", (chunk) => stderr.push(...chunk));
+  child.stdout?.on("end", () => events.push(["stdout-end"]));
+  child.stderr?.on("end", () => events.push(["stderr-end"]));
   child.on("spawn", () => events.push(["spawn"]));
   child.on("error", (error) => {
     errors.push(error);
@@ -464,6 +665,326 @@ function observe(child) {
   );
   return { events, errors, stdout, stderr, closed };
 }
+
+test("ignored stdio supplies EOF and discard targets, never zero-limit collectors", () => {
+  const f = fixture();
+  const result = f.backend.spawnSync("tsc", [], {
+    stdio: "ignore",
+    input: "unused",
+    maxBuffer: 0,
+  });
+  assert.equal(result.status, 7);
+  assert.equal(result.error, undefined);
+  assert.equal(result.stdout, null);
+  assert.equal(result.stderr, null);
+  assert.deepEqual(
+    f.calls.find(([name]) => name === "stdin"),
+    ["stdin", []],
+  );
+  assert.equal(f.calls.filter(([name]) => name === "discard").length, 2);
+  assert.equal(
+    f.calls.some(([name]) => name === "output" || name === "cancel"),
+    false,
+  );
+  assert.deepEqual(
+    f.calls.find(([name]) => name === "collect"),
+    ["collect", undefined, undefined],
+  );
+  assert.deepEqual(f.closed, ["future", "rpc", "prepared"]);
+});
+
+test("mixed stdio collects only the piped channel", () => {
+  const f = fixture();
+  const result = f.backend.spawnSync("tsc", [], {
+    stdio: ["ignore", "pipe", "ignore"],
+    maxBuffer: 2,
+  });
+  assert.equal(result.status, 7);
+  assert.equal(result.error, undefined);
+  assert.deepEqual([...result.stdout], [0, 255]);
+  assert.equal(result.stderr, null);
+  assert.equal(f.calls.filter(([name]) => name === "output").length, 1);
+  assert.equal(f.calls.filter(([name]) => name === "discard").length, 1);
+  assert.equal(f.calls.find(([name]) => name === "collect")[2], undefined);
+});
+
+test("ignored structured Bash output does not overflow or print JSON", () => {
+  const f = bashFixture();
+  const result = f.backend.spawnSync("echo ok", [], {
+    shell: true,
+    stdio: "ignore",
+    maxBuffer: 0,
+  });
+  assert.equal(result.status, 7);
+  assert.equal(result.error, undefined);
+  assert.equal(result.stdout, null);
+  assert.equal(result.stderr, null);
+});
+
+test("synchronous inherited output uses the caller's current streams and is not returned", () => {
+  const f = fixture();
+  const stdout = [];
+  const stderr = [];
+  f.process.stdout = { write: (bytes) => stdout.push(...bytes) };
+  f.process.stderr = { write: (bytes) => stderr.push(...bytes) };
+  const result = f.backend.spawnSync("tsc", [], { stdio: ["ignore", 1, 2] });
+  assert.equal(result.status, 7);
+  assert.equal(result.error, undefined);
+  assert.equal(result.stdout, null);
+  assert.equal(result.stderr, null);
+  assert.deepEqual(stdout, [0, 255]);
+  assert.deepEqual(stderr, [128]);
+});
+
+test("a command with no stdin can use synchronous inherited stdio", () => {
+  const f = bashFixture();
+  const stdout = [];
+  const stderr = [];
+  f.process.stdout = { write: (bytes) => stdout.push(...bytes) };
+  f.process.stderr = { write: (bytes) => stderr.push(...bytes) };
+  const result = f.backend.spawnSync("echo ok", [], {
+    shell: true,
+    stdio: "inherit",
+  });
+  assert.equal(result.status, 7);
+  assert.equal(Buffer.from(stdout).toString(), "shell output\n");
+  assert.equal(Buffer.from(stderr).toString(), "diagnostic\n");
+  assert.equal(result.stdout, null);
+});
+
+test("synchronous inherited stdin is explicitly rejected before dispatch when declared", () => {
+  const f = fixture();
+  const result = f.backend.spawnSync("tsc", [], {
+    stdio: ["inherit", "pipe", "pipe"],
+  });
+  assert.equal(result.error.code, "ENOTSUP");
+  assert.equal(result.status, null);
+  assert.equal(
+    f.calls.some(([name]) => name === "invoke" || name === "stdin"),
+    false,
+  );
+  assert.deepEqual(f.closed, ["prepared"]);
+});
+
+test("invalid stdio fails before discovery", () => {
+  const f = fixture();
+  for (const stdio of [
+    false,
+    {},
+    "ipc",
+    ["pipe", 0, "pipe"],
+    ["pipe", "pipe", "pipe", "pipe"],
+    "inherit",
+  ]) {
+    assert.throws(() => f.backend.spawnSync("tsc", [], { stdio }), TypeError);
+    assert.throws(() => f.backend.spawn("tsc", [], { stdio }), TypeError);
+    assert.deepEqual(f.calls, []);
+  }
+});
+
+test(
+  "async ignored streams have no exposed child endpoints or collected prefixes",
+  { timeout: 2000 },
+  async () => {
+    const f = asyncFixture();
+    const child = f.backend.spawn("tsc", [], { stdio: "ignore", maxBuffer: 0 });
+    const observed = observe(child);
+    assert.deepEqual(child.stdio, [null, null, null]);
+    assert.equal(
+      f.calls.some(([name]) => name === "create-stdin" || name === "output"),
+      false,
+    );
+    assert.equal(f.calls.filter(([name]) => name === "discard").length, 2);
+    f.complete();
+    await observed.closed;
+    assert.equal(child.exitCode, 7);
+    assert.deepEqual(observed.errors, []);
+    assert.equal(f.cancelled, false);
+  },
+);
+
+test(
+  "async inherited output flushes before close and preserves the other piped channel",
+  { timeout: 2000 },
+  async () => {
+    const f = asyncFixture({ completeOnEof: true });
+    const stdout = [];
+    let delivered = false;
+    f.process.stdout = {
+      write(bytes, callback) {
+        setTimeout(() => {
+          stdout.push(...bytes);
+          delivered = true;
+          callback();
+        }, 5);
+      },
+    };
+    const child = f.backend.spawn("tsc", [], {
+      stdio: ["pipe", "inherit", "pipe"],
+    });
+    const observed = observe(child);
+    child.stdin.end();
+    await observed.closed;
+    assert.equal(delivered, true);
+    assert.equal(child.stdout, null);
+    assert.deepEqual(stdout, [0, 255]);
+    assert.deepEqual(observed.stderr, [128]);
+    assert.deepEqual(observed.errors, []);
+  },
+);
+
+test(
+  "async inherited input forwards binary bytes, ends stdin and releases the parent pipe",
+  { timeout: 2000 },
+  async () => {
+    const f = asyncFixture({ completeOnEof: true });
+    f.process.stdin = Readable.from([
+      Buffer.from([0, 255]),
+      Buffer.from([128]),
+    ]);
+    const child = f.backend.spawn("tsc", [], {
+      stdio: ["inherit", "pipe", "pipe"],
+    });
+    const observed = observe(child);
+    assert.equal(child.stdin, null);
+    await observed.closed;
+    assert.deepEqual(f.bytes, [0, 255, 128]);
+    assert.equal(f.ended, true);
+    assert.equal(f.process.stdin.listenerCount("error"), 0);
+    assert.deepEqual(observed.errors, []);
+  },
+);
+
+test(
+  "cancelling async inherited input joins a blocked write and unpipes without destroying the parent",
+  { timeout: 2000 },
+  async () => {
+    const f = asyncFixture({ blockedWrite: true });
+    f.process.stdin = new PassThrough();
+    const child = f.backend.spawn("tsc", [], {
+      stdio: ["inherit", "pipe", "pipe"],
+    });
+    const observed = observe(child);
+    f.process.stdin.write(Buffer.of(1));
+    await Promise.resolve();
+    child.kill();
+    await observed.closed;
+    assert.equal(f.process.stdin.destroyed, false);
+    assert.equal(f.process.stdin.listenerCount("error"), 0);
+    assert.equal(f.process.stdin.readableFlowing, false);
+    assert.deepEqual(observed.errors, []);
+    assert.equal(child.signalCode, "SIGTERM");
+    f.process.stdin.destroy();
+  },
+);
+
+test(
+  "inherited output failure still joins the other channel before close",
+  { timeout: 2000 },
+  async () => {
+    const f = asyncFixture();
+    let stderrDone = false;
+    f.process.stdout = {
+      write(_bytes, callback) {
+        callback(new Error("stdout failed"));
+      },
+    };
+    f.process.stderr = {
+      write(_bytes, callback) {
+        setTimeout(() => {
+          stderrDone = true;
+          callback();
+        }, 5);
+      },
+    };
+    const child = f.backend.spawn("tsc", [], {
+      stdio: ["pipe", "inherit", "inherit"],
+    });
+    const observed = observe(child);
+    f.complete();
+    await observed.closed;
+    assert.equal(stderrDone, true);
+    assert.equal(observed.errors[0].code, "EIO");
+    assert.equal(observed.errors[0].cause.message, "stdout failed");
+    assert.equal(child.exitCode, null);
+  },
+);
+
+test(
+  "a broken abort-listener cleanup cannot strand an unused stdin source",
+  { timeout: 2000 },
+  async () => {
+    const f = asyncFixture();
+    f.host.createCollectedOutput = () => {
+      throw { tag: "resource-exhausted" };
+    };
+    const signal = {
+      aborted: false,
+      addEventListener() {},
+      removeEventListener() {
+        throw new Error("cleanup failed");
+      },
+    };
+    const child = f.backend.spawn("tsc", [], { signal });
+    const observed = observe(child);
+    await observed.closed;
+    assert.equal(observed.errors[0].code, "ENOMEM");
+    assert.equal(
+      f.calls.some(([name]) => name === "invoke"),
+      false,
+    );
+    assert.deepEqual(f.closed, ["source", "closed", "writer", "prepared"]);
+  },
+);
+
+test(
+  "async shell execution uses the same Bash result projection",
+  { timeout: 2000 },
+  async () => {
+    const f = asyncFixture();
+    f.prepared.input = () => ({
+      commandPath: ["run"],
+      input: { canonical: true },
+      stdin: false,
+      stdout: false,
+      stderr: false,
+    });
+    f.prepared.renderResult = () => ({
+      exitCode: 0,
+      stdout: Buffer.from(
+        JSON.stringify({
+          stdout: "async shell\n",
+          stderr: "shell diagnostic\n",
+          exit_code: 9,
+          cwd: "/workspace/src",
+        }),
+      ),
+      stderr: [],
+    });
+    const child = f.backend.spawn("echo async; exit 9", [], {
+      shell: true,
+      cwd: "src",
+    });
+    const observed = observe(child);
+    f.complete({ stdout: undefined, stderr: undefined });
+    await observed.closed;
+    assert.deepEqual(f.calls[0].slice(0, 3), [
+      "prepare",
+      "bash",
+      ["run", "--cwd", "/workspace/src", "--", "echo async; exit 9"],
+    ]);
+    assert.deepEqual(
+      f.calls.find(([name]) => name === "rpc"),
+      ["rpc", "bash"],
+    );
+    assert.equal(child.stdin, null);
+    assert.deepEqual(observed.events[0], ["spawn"]);
+    assert.deepEqual(observed.events.at(-1), ["close", 9, null]);
+    assert.equal(Buffer.from(observed.stdout).toString(), "async shell\n");
+    assert.equal(Buffer.from(observed.stderr).toString(), "shell diagnostic\n");
+    assert.deepEqual(observed.errors, []);
+  },
+);
 
 test(
   "async startup returns before completion and stdin can wait for spawn",

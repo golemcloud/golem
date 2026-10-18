@@ -502,8 +502,46 @@ Before acceptance, compile and run the new native admission assertions and commo
 host-contract test, regenerate the remaining MoonBit bindings, build all three
 SDK templates, and exercise the async adapter in main and fresh runtimes. The
 earlier completion WASM predates `admitted` and must not stand in for that test.
-Shell routing, non-pipe stdio, synchronous deadlines, mid-call recovery, memory
-pressure and controlled tool-performance comparisons remain required gates.
+Shell and stdio runtime acceptance, synchronous deadlines, synchronous inherited
+stdin for commands that declare it, mid-call recovery, memory pressure and
+controlled tool-performance comparisons remain required gates.
+
+### Shell and stdio adapter checkpoint
+
+The shared adapter routes the shell option and conventional `sh`/`bash` execution
+through the bound `bash` tool's `run` command. It supplies cwd explicitly and uses
+the canonical CLI parser. Bash's own shell commands interpret shell flags and
+positional arguments; the adapter quotes argv rather than implementing that grammar
+again. The explicit `bash run` tool CLI remains an ordinary tool call.
+
+For the shell option, command and args form the same space-separated command string
+described by [Node's shell-option contract](https://nodejs.org/api/deprecations.html#dep0190-passing-args-to-nodechild_process-execfilespawn-with-shell-option).
+No host subprocess is started. Bash's redacted `BashResult` JSON is validated and
+projected into its two text channels and u8 exit status. Malformed results become
+command failures without printing their payload. Permission and tool errors retain
+their normal projection. The existing Bash `run` contract has no stdin attachment;
+this does not establish shell stdin forwarding.
+
+`pipe`, `ignore`, `inherit` and standard three-entry stdio arrays select endpoints
+independently. Ignored stdin supplies EOF. Ignored output uses the new
+`create-discarded-output` constructor, not a zero-byte collector: writes in the
+existing discard mode retain no bytes and do not cancel on overflow. The constructor
+creates a deterministic owned resource, with no new pressure or durable decision.
+Inherited output is bounded and then passed through the caller's current process
+streams. Async completion joins both inherited writes even when one fails.
+Inherited async stdin pipes the current readable stream, unpipes on completion or
+cancellation, and joins pending writes before resource cleanup. A synchronous call
+with declared inherited stdin currently refuses before dispatch instead of ignoring
+the option or starting a guest pump that cannot progress.
+
+The host-facade suite passes shell projection, byte-prefix limits, mixed endpoints,
+discard selection, inherited binary stdin, blocked-write cancellation, joined output
+failure and independent cleanup regressions. These are host-Node tests, not native
+executor acceptance. The new native discard-target test and host-interface inventory
+have not yet been compiled or run. Earlier WASMs cannot prove this new host API.
+The WRQJS runtime fixture also asserts null output channels; its new P2/P3 reruns
+remain pending. A separate host-Node check executed the actual WRQJS JS wrapper with
+inert native/FS facades and confirmed null channel/encoding/error projection only.
 
 ### Unconfigured backend cost
 

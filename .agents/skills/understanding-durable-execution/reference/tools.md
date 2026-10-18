@@ -570,12 +570,31 @@ retains each memory reservation through result assembly. Overflow retains the pr
 explicitly cancels the invocation. Final secret-result admission follows all stream
 observations; nothing may arm another delivery receipt after that admission.
 
+`create-discarded-output` creates a deterministic target in the existing `Discard`
+attachment mode. It has no reader, retained prefix or pressure decision. Writers
+still use normal tool ownership and finalization. Use it for ignored output;
+a zero-byte collected prefix instead cancels on the first nonempty write.
+
+`future-invoke-result.admitted` reads the immutable dispatch decision from the
+resource reconstructed by ordinary dispatch. It is not readiness or a body terminal,
+and it does not move the owner lane or create another durable decision. Accepted
+dispatch remains accepted after a skipped body. An asynchronous adapter can emit
+`spawn` before its caller supplies stdin without waiting for that body to finish.
+
 `CollectedInvocation.body_executed` comes from the selected durable terminal, through
 `ToolInvokeCompletion`, or is false for a dispatch rejection. It is not a scheduling
 observation. Both `Skipped` and `Executed` terminals can contain `ResourceExhausted` or
 `Denied`; an error tag alone cannot prove the body never ran. Completed reconstruction and
 repeated result observation must retain the same classification. Middleware execution
 counts as execution even if its underlying command is refused.
+
+The shared JavaScript adapter in `sdks/javascript` keeps host policy out of WRQJS.
+Shell calls use the bound Bash tool and canonical CLI parsing. It projects Bash's
+redacted structured result into separate output channels and its exit status.
+Inherited output uses bounded collection and the caller's current streams;
+asynchronous completion joins both output writes even if one fails. Inherited
+asynchronous stdin uses an owned pump that unpipes and joins borrowed I/O on exit.
+Synchronous declared stdin cannot use that pump while QuickJS is blocked.
 
 ### Scheduling
 
