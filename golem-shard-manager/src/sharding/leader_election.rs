@@ -1286,19 +1286,23 @@ impl LeaderLocator {
 
 /// The version of a campaigner queued behind this replica that is newer than this replica's own,
 /// if any (the newest of them). The head of the queue never moves: it is about to lead. A version
-/// is newer only when both parse as semantic versions, and then by semantic-version precedence
-/// (build metadata is ignored). A development build announces the `git describe` text of its
-/// last tag, such as `1.6.0-rc2-156-g2917a80d2`, which compares as a pre-release of the release
-/// that tag belongs to: newer than `1.6.0-rc2` and older than `1.6.0`. A build made after a
-/// release tag (`1.6.0-12-g2917a80d2`) is older than `1.6.0`. Two builds of one tag compare by
-/// their text, so a count of commits that gains a digit does not order as a number. A replica that
-/// announces nothing, or a text that is no semantic version, is never newer and never moves.
+/// is newer only when both parse (see [`version_order`]), and then by semantic-version precedence
+/// (build metadata is ignored).
+///
+/// Golem's own tags are `X.Y.Z-rcN`, and `rc10` follows `rc9`: the number of a candidate is
+/// compared as a number, not as text. A development build announces the `git describe` text of
+/// its last tag, such as `1.6.0-rc2-156-g2917a80d2`, which compares as a pre-release of the
+/// release that tag belongs to: newer than `1.6.0-rc2` (and than a build with fewer commits after
+/// it), older than `1.6.0-rc3` and than `1.6.0`. A build made after a release tag
+/// (`1.6.0-12-g2917a80d2`) is newer than every candidate of that release and older than the
+/// release itself. A replica that announces nothing, or a text that is no semantic version, is
+/// never newer and never moves.
 pub(crate) fn newer_version_behind(
     view: &CampaignView,
     own_lease: i64,
     own_version: &str,
 ) -> Option<String> {
-    let own_version = semver::Version::parse(own_version).ok()?;
+    let own_version = version_order(own_version)?;
     let position = view
         .campaigners
         .iter()
@@ -1310,12 +1314,64 @@ pub(crate) fn newer_version_behind(
         .iter()
         .filter_map(|campaigner| {
             let version = &campaigner.value.as_ref()?.version;
-            let parsed = semver::Version::parse(version).ok()?;
+            let parsed = version_order(version)?;
             (parsed.cmp_precedence(&own_version) == std::cmp::Ordering::Greater)
                 .then_some((parsed, version))
         })
         .max_by(|(left, _), (right, _)| left.cmp_precedence(right))
         .map(|(_, version)| version.clone())
+}
+
+/// The version in the form that orders as Golem's releases do, or `None` for a text that is no
+/// semantic version.
+///
+/// Semantic-version precedence compares an identifier with letters as text, so `rc10` would come
+/// before `rc9`. Two shapes that Golem produces are therefore rewritten into numeric identifiers
+/// first: a candidate `rcN` becomes `rc.N` (so `rc2.2` becomes `rc.2.2`), and the commit count of
+/// a `git describe` suffix `-K-gHASH` becomes the numeric identifier `K`, with the hash dropped.
+/// A suffix that follows a release tag directly has no candidate before it and gets the identifier
+/// `release` in front, which sorts after `rc`: such a build is newer than every candidate and,
+/// as a pre-release, still older than the release. Anything else is compared as it is written.
+fn version_order(text: &str) -> Option<semver::Version> {
+    let mut version = semver::Version::parse(text).ok()?;
+    let pre = version.pre.as_str().to_string();
+    let (base, commits) = match describe_suffix(&pre) {
+        Some((base, commits)) => (base, Some(commits)),
+        None => (pre.as_str(), None),
+    };
+    let mut identifiers: Vec<String> = Vec::new();
+    if commits.is_some() && base.is_empty() {
+        identifiers.push("release".to_string());
+    }
+    for identifier in base.split('.').filter(|identifier| !identifier.is_empty()) {
+        match identifier.strip_prefix("rc") {
+            Some(number)
+                if !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()) =>
+            {
+                identifiers.push("rc".to_string());
+                identifiers.push(number.to_string());
+            }
+            _ => identifiers.push(identifier.to_string()),
+        }
+    }
+    if let Some(commits) = commits {
+        identifiers.push(commits.to_string());
+    }
+    version.pre = semver::Prerelease::new(&identifiers.join(".")).ok()?;
+    Some(version)
+}
+
+/// Splits `BASE-K-gHASH` (or `K-gHASH`, with an empty base) into the base and the count `K`.
+fn describe_suffix(pre: &str) -> Option<(&str, u64)> {
+    let (before_hash, hash) = pre.rsplit_once("-g")?;
+    if hash.is_empty() || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let (base, commits) = before_hash.rsplit_once('-').unwrap_or(("", before_hash));
+    if commits.is_empty() || !commits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    Some((base, commits.parse().ok()?))
 }
 
 /// The key of another campaigner that advertises this replica's address, what has been seen of
@@ -1530,6 +1586,61 @@ mod tests {
         assert_eq!(
             newer_version_behind(&queue_ending_in("1.5.1-rc.1"), 2, "1.5.0"),
             Some("1.5.1-rc.1".to_string())
+        );
+    }
+
+    /// Whether the version `older` orders strictly before `newer` in the replica queue.
+    fn orders_before(older: &str, newer: &str) -> bool {
+        newer_version_behind(&queue_ending_in(newer), 2, older) == Some(newer.to_string())
+            && newer_version_behind(&queue_ending_in(older), 2, newer).is_none()
+    }
+
+    #[test]
+    fn a_candidate_number_is_compared_as_a_number() {
+        assert!(orders_before("1.6.0-rc9", "1.6.0-rc10"));
+        assert!(orders_before("1.6.0-rc10", "1.6.0-rc11"));
+        assert!(orders_before("1.6.0-rc2.2", "1.6.0-rc10"));
+        assert!(orders_before("1.6.0-rc2", "1.6.0-rc2.2"));
+    }
+
+    #[test]
+    fn builds_after_a_candidate_order_by_their_commit_count() {
+        let order = [
+            "1.6.0-rc2",
+            "1.6.0-rc2-1-g0123abcde",
+            "1.6.0-rc2-99-gfedcba987",
+            "1.6.0-rc2-156-g2917a80d2",
+            "1.6.0-rc3",
+            "1.6.0",
+        ];
+        for (index, older) in order.iter().enumerate() {
+            for newer in &order[index + 1..] {
+                assert!(orders_before(older, newer), "{older} before {newer}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_build_after_a_release_tag_is_between_its_last_candidate_and_the_release() {
+        assert!(orders_before("1.6.0-rc11", "1.6.0-12-g2917a80d2"));
+        assert!(orders_before("1.6.0-12-g2917a80d2", "1.6.0"));
+        assert!(orders_before("1.6.0-9-g2917a80d2", "1.6.0-12-g2917a80d2"));
+        assert!(orders_before(
+            "1.6.0-rc2-156-g2917a80d2",
+            "1.6.0-12-g0123abcde"
+        ));
+        assert!(orders_before("1.6.0", "1.6.1-rc1"));
+    }
+
+    #[test]
+    fn text_in_no_golem_shape_compares_as_before() {
+        assert!(orders_before("1.5.0-alpha", "1.5.0-beta"));
+        assert!(orders_before("1.5.1-rc.1", "1.5.1-rc.2"));
+        assert!(orders_before("1.5.0", "1.5.1-rc.1"));
+        assert!(orders_before("1.5.0-rcx", "1.5.0-rcy"));
+        assert_eq!(
+            newer_version_behind(&queue_ending_in("1.6.0-12-gnothex"), 2, "1.5.0"),
+            Some("1.6.0-12-gnothex".to_string())
         );
     }
 
