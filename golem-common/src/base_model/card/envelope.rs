@@ -486,7 +486,8 @@ mod tests {
                 context.environment = EnvironmentName("prod".to_string());
                 context.component = ComponentName("component".to_string());
                 context.agent_name = "Cart(alice)".to_string();
-                let actual = resolve_permissions_for_agent_context(&[slot.clone()], &context);
+                let actual =
+                    resolve_permissions_for_agent_context(std::slice::from_ref(&slot), &context);
                 let envelope = permission_card_envelope(&[slot], &[], &[], &[]).unwrap();
                 assert!(
                     envelope.lower_positive[0].subsumes(&actual[0]),
@@ -504,7 +505,8 @@ mod tests {
         let slot =
             parse_polymorphic_permission(&format!("filesystem(?agent) @ {recipient} : read : /**"))
                 .unwrap();
-        let envelope = permission_card_envelope(&[slot.clone()], &[], &[], &[]).unwrap();
+        let envelope =
+            permission_card_envelope(std::slice::from_ref(&slot), &[], &[], &[]).unwrap();
         let literal = parse_permission(&format!(
             "filesystem(owner@example.com/app/prod/component/Cart%28%2A%29) @ {recipient} : read : /**"
         )).unwrap();
@@ -521,7 +523,8 @@ mod tests {
         for name in ["Cart(alice)", "Cart(bob)", "Cart(*)"] {
             let mut context = recipient_envelope_context(slot.recipient());
             context.agent_name = name.to_string();
-            let actual = resolve_permissions_for_agent_context(&[slot.clone()], &context);
+            let actual =
+                resolve_permissions_for_agent_context(std::slice::from_ref(&slot), &context);
             assert!(envelope.lower_positive[0].subsumes(&actual[0]));
             if name != "Cart(*)" {
                 assert!(!literal.subsumes(&actual[0]));
@@ -544,17 +547,17 @@ mod tests {
         )
         .unwrap();
         let envelope = permission_card_envelope(
-            &[first.clone()],
-            &[first.clone()],
-            &[second.clone()],
-            &[first.clone()],
+            std::slice::from_ref(&first),
+            std::slice::from_ref(&first),
+            std::slice::from_ref(&second),
+            std::slice::from_ref(&first),
         )
         .unwrap();
         assert!(envelope.lower_negative.is_empty());
         assert!(envelope.upper_negative.is_empty());
         let mut context = recipient_envelope_context(first.recipient());
         context.agent_name = "Cart(alice)".to_string();
-        let actual = resolve_permissions_for_agent_context(&[second.clone()], &context);
+        let actual = resolve_permissions_for_agent_context(std::slice::from_ref(&second), &context);
         assert!(
             envelope
                 .upper_positive
@@ -568,9 +571,19 @@ mod tests {
                 .all(|p| p.recipient() == second.recipient())
         );
         for bounds in [
-            permission_card_envelope(&[first.clone()], &[], &[second.clone()], &[]),
+            permission_card_envelope(
+                std::slice::from_ref(&first),
+                &[],
+                std::slice::from_ref(&second),
+                &[],
+            ),
             permission_card_envelope(&[], &[], &[first.clone(), second.clone()], &[]),
-            permission_card_envelope(&[], &[], &[second.clone()], &[first.clone()]),
+            permission_card_envelope(
+                &[],
+                &[],
+                std::slice::from_ref(&second),
+                std::slice::from_ref(&first),
+            ),
         ] {
             assert!(
                 bounds

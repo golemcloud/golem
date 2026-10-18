@@ -6,7 +6,8 @@
  * upper-positive grants to retain and which lower-negative and
  * upper-negative grants to add, plus an optional lifespan.
  * Persistent derivation returns a template if any requested grant contains
- * a slot variable (`?agent`, `?env`, ...), otherwise a concrete card. Slots
+ * an owner slot variable (`?agent`, `?env`, ...), otherwise a concrete card.
+ * Resource-ID slots are not supported and return `invalid-pattern`. Slots
  * name the eventual holder, not the caller. Every possible instantiation
  * must be bounded by the parent. A template parent in the caller's wallet
  * is resolved for the caller before validation.
