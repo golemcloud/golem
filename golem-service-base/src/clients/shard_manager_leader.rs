@@ -36,6 +36,26 @@ impl LeaderAddress {
     }
 }
 
+/// Whether `host` and `port` form an address that a client can dial: the host becomes the
+/// authority of a URI, so a space, a second colon outside an IPv6 literal, a zone such as `%eth0`
+/// or a user part would make it a different address or none at all.
+///
+/// A replica checks the host it advertises with this at startup, and a client names no leader for
+/// an answer that fails it. [`LeaderAddress::uri`] cannot be built from a host that fails it.
+pub fn valid_leader_address(host: &str, port: u16) -> bool {
+    let authority = if host.parse::<std::net::Ipv6Addr>().is_ok() {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    };
+    Uri::builder()
+        .scheme("http")
+        .authority(format!("{authority}:{port}"))
+        .path_and_query("/")
+        .build()
+        .is_ok_and(|uri| uri.host() == Some(authority.as_str()) && uri.port_u16() == Some(port))
+}
+
 impl fmt::Display for LeaderAddress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.host.parse::<std::net::Ipv6Addr>().is_ok() {
@@ -99,7 +119,9 @@ pub fn leader_of(status: &Status) -> Option<LeaderAddress> {
         .ok()
         .filter(|port| *port != 0)?;
     let host = detail.leader_host.trim();
-    (!host.is_empty()).then(|| LeaderAddress {
+    // A host that is no URI authority names nobody a client could call, and building the leader's
+    // URI from it would panic.
+    (!host.is_empty() && valid_leader_address(host, port)).then(|| LeaderAddress {
         host: host.to_string(),
         port,
     })
@@ -187,5 +209,46 @@ mod tests {
         assert_eq!(leader_of(&status("10.0.3.7", 0)), None);
         assert_eq!(leader_of(&status(" ", 9002)), None);
         assert_eq!(leader_of(&status("h", 70_000)), None);
+    }
+
+    #[test]
+    fn a_host_that_is_no_uri_authority_names_no_leader() {
+        for host in [
+            "x # c",
+            "shard manager",
+            "fe80::1%eth0",
+            "fe80::1%25eth0",
+            "a:b:c",
+            "host:9002",
+            "user@host",
+            "a/b",
+            "a?b",
+            "[::1",
+        ] {
+            let bad = LeaderAddress {
+                host: host.to_string(),
+                port: 9002,
+            };
+            assert_eq!(leader_of(&not_leader_status(&bad)), None, "{host:?}");
+            assert!(!valid_leader_address(host, 9002), "{host:?}");
+        }
+    }
+
+    #[test]
+    fn usable_hosts_are_valid_leader_addresses() {
+        for host in [
+            "10.0.3.7",
+            "shard-manager-1.golem.svc",
+            "fd00::7",
+            "::1",
+            "localhost",
+        ] {
+            assert!(valid_leader_address(host, 9002), "{host:?}");
+            let address = LeaderAddress {
+                host: host.to_string(),
+                port: 9002,
+            };
+            assert_eq!(leader_of(&not_leader_status(&address)), Some(address));
+        }
     }
 }

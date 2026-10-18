@@ -1129,3 +1129,30 @@ async fn a_cached_leader_that_failed_starts_the_wait_when_the_configured_address
     second.stop().await;
     standby.stop().await;
 }
+
+#[test]
+// An advertised host that is no URI authority names nobody a client could call. The answer counts
+// as one that names no leader, and the call asks again; it must not take the process down, which
+// building a URI from the host would.
+async fn a_named_leader_whose_host_is_no_uri_authority_is_treated_as_no_leader() {
+    let leader = run_replica(Mode::Leader).await;
+    let standby = run_replica(Mode::Standby(Some(leader.address()))).await;
+    let malformed = ["shard manager", "x # c", "fe80::1%eth0", "a:b:c"].map(|host| {
+        Mode::Standby(Some(LeaderAddress {
+            host: host.to_string(),
+            port: 9002,
+        }))
+    });
+    standby.script(malformed);
+    let client = client_for(&standby);
+
+    client
+        .get_routing_table()
+        .await
+        .expect("the malformed answers are waited out and the next one names the leader");
+
+    assert_eq!(leader.calls(), 1);
+    assert_eq!(standby.refusals(), 5);
+    leader.stop().await;
+    standby.stop().await;
+}
