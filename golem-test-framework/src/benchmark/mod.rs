@@ -27,7 +27,7 @@ pub use config::{
 };
 pub use results::{
     BenchmarkArtifact, BenchmarkArtifacts, BenchmarkResult, BenchmarkRunResult, BenchmarkRunner,
-    BenchmarkSource, BenchmarkSuiteResult, ResultKey, RunMetadata,
+    BenchmarkSource, BenchmarkSuiteResult, ResultKey, RunMetadata, RunWindow,
 };
 
 use crate::config::benchmark::TestMode;
@@ -338,6 +338,7 @@ async fn run_benchmark<B: Benchmark>(
             .await
             .is_some()
             {
+                let started_at = chrono::Utc::now();
                 phase(
                     &recorder,
                     "run",
@@ -345,6 +346,10 @@ async fn run_benchmark<B: Benchmark>(
                     benchmark.run(benchmark_context, &context, recorder.clone()),
                 )
                 .await;
+                aggregated_results.run_windows.push(RunWindow {
+                    started_at,
+                    finished_at: chrono::Utc::now(),
+                });
             }
             phase(
                 &recorder,
