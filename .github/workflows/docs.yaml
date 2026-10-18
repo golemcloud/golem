@@ -58,13 +58,13 @@ jobs:
         with:
           node-version: '22'
 
-      # Build only the TypeScript SDK package and Effect declarations. No guest
-      # templates, WASM toolchains, or other language SDKs are required.
+      # Use the checked-in WIT declarations. Regenerating them needs wasm-rquickjs;
+      # the docs checks need only the SDK bundles and their public declarations.
       - name: Prepare in-tree TypeScript SDK
         working-directory: sdks/ts
         run: |
           npx --yes pnpm@10.17.1 install --frozen-lockfile --ignore-scripts
-          npx --yes pnpm@10.17.1 --filter @golemcloud/golem-ts-sdk run build
+          npx --yes pnpm@10.17.1 --filter @golemcloud/golem-ts-sdk exec rollup --failAfterWarnings -c
 
       - name: Prepare in-tree Effect SDK
         working-directory: sdks/effect
