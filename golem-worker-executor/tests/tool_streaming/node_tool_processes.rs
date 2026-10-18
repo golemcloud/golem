@@ -25,6 +25,14 @@ async fn node_native_tool_stream_scheduling_probe(
             .canonicalize()?;
     let cases = std::env::var("GOLEM_NODE_TOOL_STREAM_PROBE_CASES")?;
     let replay_probe = std::env::var_os("GOLEM_NODE_TOOL_STREAM_REPLAY_PROBE").is_some();
+    let crash_stage = std::env::var("GOLEM_NODE_TOOL_STREAM_CRASH_STAGE").ok();
+    if let Some(stage) = &crash_stage {
+        anyhow::ensure!(cases == "streams-deadline-collect");
+        anyhow::ensure!(matches!(
+            stage.as_str(),
+            "before-race" | "race-started" | "race-selected"
+        ));
+    }
     let context = TestContext::new(last_unique_id);
     let environment = Arc::new(TestEnvironmentStateService::default());
     let overrides = TestExecutorOverrides {
@@ -37,7 +45,7 @@ async fn node_native_tool_stream_scheduling_probe(
         })),
         ..Default::default()
     };
-    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let mut executor = start_with_overrides(deps, &context, overrides.clone()).await?;
     let caller_component = executor
         .component_dep(&context.default_environment_id, caller)
         .store()
@@ -113,6 +121,7 @@ async fn node_native_tool_stream_scheduling_probe(
                 | "streams-echo-collect"
                 | "streams-pressure-collect"
                 | "streams-finite-stdin"
+                | "streams-deadline-collect"
         )));
         Some(middleware_acceptance::start_probe_effect_server().await)
     } else {
@@ -135,6 +144,7 @@ async fn node_native_tool_stream_scheduling_probe(
                 | "streams-echo-collect"
                 | "streams-pressure-collect"
                 | "streams-finite-stdin"
+                | "streams-deadline-collect"
         ));
         println!("node-tool-stream starting mode={mode}");
         let started = Instant::now();
@@ -142,21 +152,118 @@ async fn node_native_tool_stream_scheduling_probe(
         if let Some(url) = &effect_url {
             args.push(url);
         }
-        let result = tokio::time::timeout(
-            Duration::from_secs(30),
-            invoke_cli_tool(
-                &executor,
-                &caller_component,
-                "node-stream-scheduling",
-                "node-tool-probe",
-                "/workspace",
-                args,
-            ),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("stream scheduling probe timed out: {mode}"))??;
+        let result = if let Some(stage) = &crash_stage {
+            let stage = match stage.as_str() {
+                "before-race" => ReplayAdmissionStage::BeforeLiveStart,
+                "race-started" => ReplayAdmissionStage::AfterDeferredStart,
+                "race-selected" => ReplayAdmissionStage::AfterHostInternalTerminal,
+                _ => unreachable!(),
+            };
+            let mut gate =
+                executor.gate_next_replay_access_admission(&worker, "collection-race", stage);
+            let key = IdempotencyKey::fresh();
+            let params = data_value!("node-tool-probe", "/workspace", args.clone());
+            executor
+                .invoke_agent_with_key(
+                    &caller_component,
+                    &agent,
+                    &key,
+                    "builtin_cli",
+                    params.clone(),
+                )
+                .await?;
+            tokio::time::timeout(Duration::from_secs(30), gate.entered()).await?;
+            executor.commit_oplog(&worker).await?;
+            let before = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+            let collection = before
+                .iter()
+                .find_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Start(start)
+                        if start.function_name.ends_with("collection-wait") =>
+                    {
+                        Some(entry.oplog_index)
+                    }
+                    _ => None,
+                })
+                .expect("the collection boundary precedes the race");
+            assert!(!before.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == collection)));
+            let race = before.iter().find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if start.function_name.ends_with("collection-race") =>
+                {
+                    assert_eq!(start.parent_start_index, Some(collection));
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            });
+            assert_eq!(
+                race.is_some(),
+                stage != ReplayAdmissionStage::BeforeLiveStart
+            );
+            let selected = race.is_some_and(|race| {
+                before.iter().any(|entry|
+                matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == race))
+            });
+            assert_eq!(
+                selected,
+                stage == ReplayAdmissionStage::AfterHostInternalTerminal
+            );
+            let recorded_before = executor.stored_oplog(&worker).await;
+            drop(executor);
+            drop(gate);
+            executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+            let result: CliToolEvidence = tokio::time::timeout(
+                Duration::from_secs(30),
+                executor.invoke_and_await_agent_with_key(
+                    &caller_component,
+                    &agent,
+                    &key,
+                    "builtin_cli",
+                    params,
+                ),
+            )
+            .await??
+            .into_typed()?;
+            let after = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+            assert_eq!(after.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == collection)).count(), 1);
+            if let Some(race) = race {
+                assert_eq!(after.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == race)).count(), 1);
+            }
+            let recorded_after = executor.stored_oplog(&worker).await;
+            assert!(recorded_after.len() >= recorded_before.len());
+            for (before, after) in recorded_before.iter().zip(&recorded_after) {
+                assert_eq!(before, after, "reconstruction changed the recorded prefix");
+            }
+            assert_collector_history_settled(&after);
+            result
+        } else {
+            tokio::time::timeout(
+                Duration::from_secs(30),
+                invoke_cli_tool(
+                    &executor,
+                    &caller_component,
+                    "node-stream-scheduling",
+                    "node-tool-probe",
+                    "/workspace",
+                    args,
+                ),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("stream scheduling probe timed out: {mode}"))??
+        };
         assert_eq!(result.exit_code, 0, "{mode}: {result:?}");
         assert!(result.stderr.is_empty(), "{mode}: {result:?}");
+        if mode == "streams-deadline-collect" {
+            assert_eq!(
+                result.stdout,
+                b"streams-deadline-collect:cancelled:followup-ok\n"
+            );
+            println!(
+                "node-tool-stream completed mode={mode} elapsed_us={}",
+                started.elapsed().as_micros()
+            );
+            continue;
+        }
         if mode == "streams-finite-stdin" {
             assert_eq!(result.stdout, b"streams-finite-stdin:262161:5\n");
             println!(
@@ -300,26 +407,32 @@ fn assert_collector_history_settled(history: &[PublicOplogEntryWithIndex]) {
                     })
                     .count();
                 if terminals == 0 {
-                    // Cancelling an entity tears down its pending write. That
-                    // write stays incomplete; the entity's Cancelled terminal
-                    // owns the abandoned subtree during reconstruction.
-                    assert_eq!(
+                    assert!(
+                        collector_call_abandoned_by_entity(history, entry),
+                        "unsettled Start {} ({}) has no owning entity cancellation; parent={:?}",
+                        entry.oplog_index,
                         start.function_name,
-                        "golem::tool::streams::tool-output-writer::write"
+                        start.parent_start_index,
                     );
-                    let parent = start
-                        .parent_start_index
-                        .expect("an abandoned write belongs to a body");
-                    assert!(history.iter().any(|entry| entry.oplog_index == parent &&
-                        matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "golem::entity::invoke")));
-                    assert!(history.iter().any(|terminal| terminal.oplog_index > entry.oplog_index &&
-                        matches!(&terminal.entry, PublicOplogEntry::Cancelled(cancelled) if cancelled.start_index == parent)),
-                        "an incomplete write requires its enclosing entity's cancellation");
                 } else {
                     assert_eq!(
-                        terminals, 1,
-                        "duplicated terminal for Start {}",
-                        entry.oplog_index
+                        terminals,
+                        1,
+                        "duplicated terminal for Start {} ({}): {:?}",
+                        entry.oplog_index,
+                        start.function_name,
+                        history
+                            .iter()
+                            .filter_map(|terminal| match &terminal.entry {
+                                PublicOplogEntry::End(end)
+                                    if end.start_index == entry.oplog_index =>
+                                    Some((terminal.oplog_index, "End")),
+                                PublicOplogEntry::Cancelled(cancelled)
+                                    if cancelled.start_index == entry.oplog_index =>
+                                    Some((terminal.oplog_index, "Cancelled")),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
                     );
                 }
                 assert!(entry.oplog_index < last_finished);
@@ -331,6 +444,142 @@ fn assert_collector_history_settled(history: &[PublicOplogEntryWithIndex]) {
         }
     }
     assert!(open_invocation.is_none());
+}
+
+fn collector_call_abandoned_by_entity(
+    history: &[PublicOplogEntryWithIndex],
+    call: &PublicOplogEntryWithIndex,
+) -> bool {
+    let PublicOplogEntry::Start(start) = &call.entry else {
+        return false;
+    };
+    if !matches!(
+        start.function_name.as_str(),
+        "golem::tool::streams::tool-output-writer::write" | "clocks::monotonic-clock::wait-for"
+    ) || history.iter().any(|entry| match &entry.entry {
+        PublicOplogEntry::End(end) => end.start_index == call.oplog_index,
+        PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == call.oplog_index,
+        _ => false,
+    }) {
+        return false;
+    }
+    let Some(parent) = start
+        .parent_start_index
+        .filter(|parent| *parent < call.oplog_index)
+    else {
+        return false;
+    };
+    if !history.iter().any(|entry| entry.oplog_index == parent &&
+        matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "golem::entity::invoke"))
+    {
+        return false;
+    }
+    // A cancelled body owns its abandoned subtree, including a write or timer
+    // whose future was destroyed with the body. A normal End cannot own it.
+    let mut terminals = history.iter().filter(|entry| match &entry.entry {
+        PublicOplogEntry::End(end) => end.start_index == parent,
+        PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == parent,
+        _ => false,
+    });
+    matches!(terminals.next(), Some(entry) if entry.oplog_index > call.oplog_index &&
+        matches!(&entry.entry, PublicOplogEntry::Cancelled(cancelled) if cancelled.start_index == parent))
+        && terminals.next().is_none()
+}
+
+#[test]
+fn collector_abandonment_requires_the_owning_entity_cancellation() {
+    use golem_common::model::oplog::PublicDurableFunctionType;
+    use golem_common::model::oplog::public_oplog_entry::{CancelledParams, EndParams, StartParams};
+    use golem_common::model::{Empty, Timestamp};
+
+    let entry = |index, entry| PublicOplogEntryWithIndex {
+        oplog_index: OplogIndex::from_u64(index),
+        attribution: PublicOplogEntryAttribution::agent(),
+        entry,
+    };
+    let start = |index, parent: Option<u64>, function: &str| {
+        entry(
+            index,
+            PublicOplogEntry::Start(StartParams {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: parent.map(OplogIndex::from_u64),
+                function_name: function.to_string(),
+                invocation_id: None,
+                observational_owner: None,
+                request: None,
+                durable_function_type: PublicDurableFunctionType::ReadLocal(Empty {}),
+                span_started: None,
+                denial: None,
+            }),
+        )
+    };
+    let cancel = |index, start| {
+        entry(
+            index,
+            PublicOplogEntry::Cancelled(CancelledParams {
+                timestamp: Timestamp::now_utc(),
+                start_index: OplogIndex::from_u64(start),
+                partial: None,
+                span_finished: None,
+            }),
+        )
+    };
+    let end = |index, start| {
+        entry(
+            index,
+            PublicOplogEntry::End(EndParams {
+                timestamp: Timestamp::now_utc(),
+                start_index: OplogIndex::from_u64(start),
+                response: None,
+                forced_commit: false,
+                span_finished: None,
+                span_attributes: None,
+            }),
+        )
+    };
+    for function in [
+        "golem::tool::streams::tool-output-writer::write",
+        "clocks::monotonic-clock::wait-for",
+    ] {
+        let parent = start(1, None, "golem::entity::invoke");
+        let call = start(2, Some(1), function);
+        let history = vec![parent.clone(), call.clone(), cancel(3, 1)];
+        assert!(collector_call_abandoned_by_entity(&history, &call));
+        assert!(!collector_call_abandoned_by_entity(&history[..2], &call));
+        assert!(!collector_call_abandoned_by_entity(&history[1..], &call));
+        assert!(!collector_call_abandoned_by_entity(
+            &[parent.clone(), call.clone(), end(3, 1)],
+            &call
+        ));
+        assert!(!collector_call_abandoned_by_entity(
+            &[parent.clone(), call.clone(), cancel(3, 99)],
+            &call
+        ));
+        assert!(!collector_call_abandoned_by_entity(
+            &[parent.clone(), call.clone(), cancel(3, 1), cancel(4, 1)],
+            &call
+        ));
+        assert!(!collector_call_abandoned_by_entity(
+            &[parent.clone(), call.clone(), cancel(3, 1), end(4, 2)],
+            &call
+        ));
+        assert!(!collector_call_abandoned_by_entity(
+            &[start(1, None, "unrelated"), call.clone(), cancel(3, 1)],
+            &call
+        ));
+        assert!(!collector_call_abandoned_by_entity(
+            &history,
+            &start(2, None, function)
+        ));
+        assert!(!collector_call_abandoned_by_entity(
+            &history,
+            &start(4, Some(1), function)
+        ));
+        assert!(!collector_call_abandoned_by_entity(
+            &history,
+            &start(2, Some(1), "unrelated")
+        ));
+    }
 }
 
 /// Opt-in feasibility probe, built before the test. There are no linker overrides or

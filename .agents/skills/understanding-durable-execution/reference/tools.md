@@ -579,7 +579,22 @@ guest boundary. Neither starts a second dispatcher. The collector uses the exist
 `AttachmentInputProducer` journal, preserves the reader's introducing invocation, and
 retains each memory reservation through result assembly. Overflow retains the prefix and
 explicitly cancels the invocation. Final secret-result admission follows all stream
-observations; nothing may arm another delivery receipt after that admission.
+observations. In the untimed path that admission can arm the guest receipt, and
+nothing may arm another delivery receipt after it.
+
+Positive collection timeouts use `tool/deadline.rs`: the owning collection call's
+recorded Start timestamp plus its requested duration anchors the deadline, even
+when only that Start survived a crash. An internal race records deadline versus
+tool-result readiness; reconstruction consumes that decision without racing
+current readiness. Commit a selected timeout before cancelling the tool. Keep
+result/stream waits progressing so filesystem-capable children become eligible.
+Join the internal race on sibling failure rather than dropping it as error
+cleanup, which would misclassify a trap as cancellation. Secret admission is
+host-internal under this owner; the final collection delivery is the only guest
+receipt. Retain output reservations through that boundary. None/zero keeps the
+untimed path. `timed-out` does not override a competing ordinary tool terminal
+or output overflow. Native crash-cut and runtime acceptance remain required;
+host-facade projection tests alone do not prove this protocol.
 
 `create-discarded-output` creates a deterministic target in the existing `Discard`
 attachment mode. It has no reader, retained prefix or pressure decision. Writers

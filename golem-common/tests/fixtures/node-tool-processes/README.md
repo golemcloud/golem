@@ -498,13 +498,45 @@ runtime acceptance result. The Effect runtime bundles also build. The Go binding
 were regenerated through the official task; their WASI package check and the Go
 guest SDK's native tests pass.
 
-Before acceptance, compile and run the new native admission assertions and common
-host-contract test, regenerate the remaining MoonBit bindings, build all three
-SDK templates, and exercise the async adapter in main and fresh runtimes. The
-earlier completion WASM predates `admitted` and must not stand in for that test.
-Shell and stdio runtime acceptance, synchronous deadlines, synchronous inherited
-stdin for commands that declare it, mid-call recovery, memory pressure and
-controlled tool-performance comparisons remain required gates.
+The later [production acceptance checkpoint](observations-2026-10-18-process-acceptance.json)
+uses the actual shared backend and initializer in both main and fresh runtimes.
+It covers async spawn, execFile callbacks, binary stdin, ignored and inherited
+output, cancellation and host deadlines. One-invocation offline replay passes;
+the larger repeated-replay run and one crash cut remain red. This does not replace
+the remaining MoonBit regeneration, SDK-template/Wizer builds, native shell and
+admission-pressure coverage, or controlled performance comparisons. Synchronous
+inherited stdin for commands declaring it remains explicitly unsupported.
+
+### Host deadline checkpoint
+
+The collection contract now accepts an optional timeout in milliseconds and
+returns `timed-out`. None or zero keeps the untimed path. A positive timeout
+owns a durable collection call whose existing Start timestamp anchors the
+deadline across reconstruction. Its race result is host-internal, and a selected
+timeout is committed before requesting ordinary tool cancellation. The host
+joins both outputs and the selected tool terminal; permission admission stays
+inside the owning call, with one final guest-delivery boundary. Retained output
+memory remains charged through that boundary.
+
+The sync adapter passes its timeout to this host wait rather than scheduling a
+JavaScript timer. A timeout that actually wins tool cancellation becomes
+`ETIMEDOUT` with the selected signal and captured output. Overflow and other
+stream failures retain precedence; an ordinary tool terminal is not rewritten
+merely because the deadline fired concurrently.
+
+The host-facade projection, native payload round-trip and commit-before-cancel
+regressions pass. The raw `streams-deadline-collect` fixture also passes: it cancels
+a ten-minute clock tool, requires a successful follow-up, repeats in a fresh
+runtime, and reconstructs offline with unchanged stored history and exact effect
+counts. All three named raw crash cuts pass. The larger production Node adapter
+passes its baseline and the first two cuts; its post-selection cut exposes a
+separate incomplete-child cancellation/reconstruction failure. Keep that failure
+visible rather than treating the raw transport result as complete acceptance.
+
+Select the mode through `GOLEM_NODE_TOOL_STREAM_PROBE_CASES` after rebuilding
+against current WIT. `GOLEM_NODE_TOOL_STREAM_REPLAY_PROBE=1` enables offline replay;
+`GOLEM_NODE_TOOL_STREAM_CRASH_STAGE` selects `before-race`, `race-started` or
+`race-selected`. These are correctness gates, not controlled performance results.
 
 ### Shell and stdio adapter checkpoint
 
@@ -536,12 +568,52 @@ the option or starting a guest pump that cannot progress.
 
 The host-facade suite passes shell projection, byte-prefix limits, mixed endpoints,
 discard selection, inherited binary stdin, blocked-write cancellation, joined output
-failure and independent cleanup regressions. These are host-Node tests, not native
-executor acceptance. The new native discard-target test and host-interface inventory
-have not yet been compiled or run. Earlier WASMs cannot prove this new host API.
-The WRQJS runtime fixture also asserts null output channels; its new P2/P3 reruns
-remain pending. A separate host-Node check executed the actual WRQJS JS wrapper with
-inert native/FS facades and confirmed null channel/encoding/error projection only.
+failure and independent cleanup regressions. Native units and the production
+component now also exercise the discard target, mixed output modes and joined
+inherited output. Shell delegation and inherited async stdin still have only
+host-facade coverage. The WRQJS options fixture passes in optimized/Wizer P2 and
+P3 components, including null output channels; the complete formal runtime and
+feature-matrix checks remain separate gates. Earlier WASMs with the old collector
+signature cannot establish the current host contract.
+
+### Production process adapter acceptance
+
+[`production-process-probe.js`](production-process-probe.js) bundles against the
+same SDK runtime as the CLI fixture. Bundle the canonical
+`sdks/javascript/runtime-init.js`, resolving its `golem-tool-process-backend`
+import to the shared backend, and use the feature compiler's runtime-initializer
+hook. Generate the tool-world wrapper against current canonical WIT, compile for
+P3, then Wizer-initialize it. The test never invokes a compiler.
+
+Use the existing `node_native_tool_stream_scheduling_probe` harness, with the
+WASM path in `GOLEM_NODE_TOOL_EXECUTOR_PROBE_WASM`, case
+`streams-deadline-collect`, and replay enabled. Its `streams-collect` mode is the
+fresh-invocation follow-up control. Unlike the raw collector fixture, this source
+uses canonical tool CLI argv and the real Node adapter rather than prepared wire
+inputs. It exercises both main and fresh execution runtimes.
+
+The [checkpoint](observations-2026-10-18-process-acceptance.json) records the exact
+artifacts and distinguishes passing gates from findings:
+
+- The baseline passes strict live terminal uniqueness, executor teardown, offline
+  replay with the effect server stopped, exact stored-prefix equality, and a
+  successful subsequent invocation. Five interleaved full runs and five stream
+  controls also pass live execution and history checks, but their combined offline
+  replay reaches the existing 30-second failure bound; that run is not a pass.
+- The production `before-race` and `race-started` cuts pass. `race-selected` fails
+  during incomplete repair: cancellation leaves a recorded initialization call
+  of the child unclaimed, and the parent correctly rejects the leftover history.
+- The probe exposed a missing no-body startup acknowledgement and a same-poll
+  readiness-forwarding race. It also exposed duplicate clock cancellations when
+  a cleanup drain was torn after submitting its append. The saved fixes preserve
+  strict replay checks and use existing reconstruction/cleanup ownership.
+- The expanded native unit suite passes 521 tests, including gated cancellation
+  receipt cuts. The shared host-Node adapter suite passes 53 tests. These counts
+  do not make the remaining end-to-end failures acceptable.
+
+The [shared adapter contract](../../../../sdks/javascript/README.md) documents
+configuration and limitations. In particular, async output is currently buffered
+until collection finishes; this is not an interactive subprocess transport.
 
 ### Unconfigured backend cost
 

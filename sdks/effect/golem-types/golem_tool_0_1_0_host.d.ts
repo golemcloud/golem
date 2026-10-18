@@ -170,13 +170,16 @@ declare module 'golem:tool/host@0.1.0' {
      * retains at most the limit reserved at creation. Exceeding that limit
      * cancels the invocation and reports overflow on that channel.
      * Dropping the wait does not itself cancel the invocation.
+     * A positive timeout bounds the result wait, in milliseconds. The host
+     * records its deadline and winner before requesting cancellation, then
+     * joins the terminal and both streams. None or zero disables the deadline.
      */
-    collect(stdout: OutputCollection | undefined, stderr: OutputCollection | undefined): CollectedInvocation;
+    collect(stdout: OutputCollection | undefined, stderr: OutputCollection | undefined, timeoutMillis: bigint | undefined): CollectedInvocation;
     /**
      * The same collection with an asynchronous guest boundary, so the
      * calling runtime can continue to drive timers and explicit cancellation.
      */
-    collectAsync(stdout: OutputCollection | undefined, stderr: OutputCollection | undefined): Promise<CollectedInvocation>;
+    collectAsync(stdout: OutputCollection | undefined, stderr: OutputCollection | undefined, timeoutMillis: bigint | undefined): Promise<CollectedInvocation>;
     /**
      * Explicitly cancels the operation. Dropping this resource only detaches
      * result observation and does not cancel accepted work.
@@ -247,6 +250,11 @@ declare module 'golem:tool/host@0.1.0' {
      * failure after execution. Middleware counts as part of the invocation.
      */
     bodyExecuted: boolean;
+    /**
+     * The recorded deadline fired before the structured terminal was ready.
+     * Cancellation still follows the ordinary tool terminal-winner protocol.
+     */
+    timedOut: boolean;
     stdout?: CollectedOutput;
     stderr?: CollectedOutput;
   };

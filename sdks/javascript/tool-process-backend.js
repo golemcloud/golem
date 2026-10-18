@@ -314,6 +314,19 @@ function project(
   return result;
 }
 
+function deadlineCancelled(collected) {
+  return (
+    collected.timedOut &&
+    collected.result.tag === "err" &&
+    collected.result.val.tag === "cancelled" &&
+    [collected.stdout, collected.stderr].every(
+      (value) =>
+        !value?.overflow &&
+        (!value?.failure || value.failure.tag === "cancelled"),
+    )
+  );
+}
+
 function createInput(host, command, resources, onFailure) {
   const [writer, source, closed] = host.createStdin();
   for (const resource of [writer, source, closed]) resources.add(resource);
@@ -589,6 +602,7 @@ function spawnTool(host, runtimeProcess, command, args, options) {
       collection = future.collectAsync(
         transfer(stdout?.[1]),
         transfer(stderr?.[1]),
+        undefined,
       );
     }
     if (future && admitted && options.signal) {
@@ -742,15 +756,7 @@ export function createToolProcessBackend(host, runtimeProcess) {
       const enabled = runtimeProcess.env.GOLEM_NODE_TOOL_PROCESSES;
       if (enabled === "0" || enabled === "false") return undefined;
       validateTimeout(options.timeout);
-      // These cases need the asynchronous/cancellation adapter. Do not silently
-      // run a command with an ignored option while that adapter is unavailable.
-      if (options.timeout > 0) {
-        return failed(
-          command,
-          "ENOTSUP",
-          "synchronous deadlines are not implemented yet",
-        );
-      }
+      const timeoutSignal = killSignal(options.killSignal ?? "SIGTERM");
       const maxBuffer = options.maxBuffer ?? DEFAULT_MAX_BUFFER;
       if (!Number.isSafeInteger(maxBuffer) || maxBuffer < 0) {
         throw new RangeError("maxBuffer must be a non-negative safe integer");
@@ -832,22 +838,29 @@ export function createToolProcessBackend(host, runtimeProcess) {
         const collected = future.collect(
           transfer(stdout?.[1]),
           transfer(stderr?.[1]),
+          options.timeout > 0 ? BigInt(options.timeout) : undefined,
         );
         completed = true;
-        return routeOutput(
-          runtimeProcess,
-          project(
-            command,
-            request,
-            collected,
-            maxBuffer,
-            "spawnSync",
-            target.shell,
-            modes,
-          ),
-          modes,
+        const result = project(
           command,
+          request,
+          collected,
+          maxBuffer,
+          "spawnSync",
+          target.shell,
+          modes,
         );
+        if (deadlineCancelled(collected) && result.error?.code !== "ENOBUFS") {
+          result.pid = 1;
+          result.status = null;
+          result.signal = timeoutSignal;
+          result.error = processError(
+            "ETIMEDOUT",
+            command,
+            "deadline exceeded",
+          );
+        }
+        return routeOutput(runtimeProcess, result, modes, command);
       } catch (error) {
         const code =
           error?.code ??

@@ -24,6 +24,7 @@ pub(crate) mod attachment;
 pub(crate) mod boundary;
 mod cli;
 mod collect;
+mod deadline;
 pub(crate) mod durability;
 pub(crate) mod input;
 mod mcp;
@@ -591,6 +592,18 @@ where
     U: Send + 'static,
     Ctx: WorkerCtx,
 {
+    admit_tool_response_secret_holds_with_owner(accessor, response, None).await
+}
+
+async fn admit_tool_response_secret_holds_with_owner<U, Ctx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    response: ToolInvokeResponse,
+    owner: Option<(crate::durable_host::concurrent::HostInternalCallOwner, bool)>,
+) -> anyhow::Result<ToolInvokeResponse>
+where
+    U: Send + 'static,
+    Ctx: WorkerCtx,
+{
     let (value, targets) = accessor.with(|mut access| {
         let ctx = access.get();
         let value = match &response {
@@ -617,25 +630,42 @@ where
         value: value.expect("secret hold targets require a response value"),
         targets: targets.clone(),
     };
-    let admission =
-        DurableCallSession::<GolemToolResponseSecretHoldAdmission, Cancellable>::invoke_access(
+    let live_action = async || {
+        Ok::<_, anyhow::Error>(HostResponseGolemToolResponseSecretHoldAdmission {
+            admitted: authorize_live_permissions_at_serialized_access(
+                accessor,
+                accessor.getter(),
+                &targets,
+            )
+            .await?
+            .is_ok(),
+        })
+    };
+    let admission = match owner {
+        Some((owner, completed_parent)) => DurableCallSession::<
+            GolemToolResponseSecretHoldAdmission,
+            Cancellable,
+        >::invoke_host_internal_access(
             accessor,
             accessor.getter(),
+            owner,
+            completed_parent,
             request,
             DurableFunctionType::ReadLocal,
-            async || {
-                Ok::<_, anyhow::Error>(HostResponseGolemToolResponseSecretHoldAdmission {
-                    admitted: authorize_live_permissions_at_serialized_access(
-                        accessor,
-                        accessor.getter(),
-                        &targets,
-                    )
-                    .await?
-                    .is_ok(),
-                })
-            },
+            live_action,
         )
-        .await?;
+        .await?,
+        None => {
+            DurableCallSession::<GolemToolResponseSecretHoldAdmission, Cancellable>::invoke_access(
+                accessor,
+                accessor.getter(),
+                request,
+                DurableFunctionType::ReadLocal,
+                live_action,
+            )
+            .await?
+        }
+    };
     if admission.admitted {
         Ok(response)
     } else {
@@ -7082,8 +7112,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
         self_: Resource<FutureInvokeResultEntry>,
         stdout: Option<Resource<OutputCollectionEntry>>,
         stderr: Option<Resource<OutputCollectionEntry>>,
+        timeout_millis: Option<u64>,
     ) -> anyhow::Result<CollectedInvocation> {
-        Self::collect(accessor, self_, stdout, stderr).await
+        Self::collect(accessor, self_, stdout, stderr, timeout_millis).await
     }
 
     async fn collect(
@@ -7091,6 +7122,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
         self_: Resource<FutureInvokeResultEntry>,
         stdout: Option<Resource<OutputCollectionEntry>>,
         stderr: Option<Resource<OutputCollectionEntry>>,
+        timeout_millis: Option<u64>,
     ) -> anyhow::Result<CollectedInvocation> {
         reserve_invocation_id_before_await(accessor, accessor.getter())?;
         let (plan, execution, stdout, stderr) =
@@ -7149,34 +7181,91 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
             )),
             None => Ok(None),
         };
-        let (mut results, stdout, stderr) = futures::try_join!(
-            await_tool_invoke_plans(accessor, vec![plan]),
-            receive(stdout),
-            receive(stderr),
-        )?;
-        let body_executed = execution
-            .map(|execution| execution.body_executed())
-            .transpose()?
-            .unwrap_or(false);
-        // Secret admission can arm a guest-terminal delivery receipt. No more
-        // stream observations may follow that final admission boundary.
-        let response = admit_tool_response_secret_holds(
-            accessor,
-            results.pop().expect("one tool invocation has one result"),
-        )
-        .await?;
-        let (stdout, _stdout_memory) = stdout
-            .map(collect::CollectedOutputBuffer::into_parts)
-            .unzip();
-        let (stderr, _stderr_memory) = stderr
-            .map(collect::CollectedOutputBuffer::into_parts)
-            .unzip();
-        Ok(CollectedInvocation {
-            result: project_tool_response(accessor, response),
-            body_executed,
-            stdout,
-            stderr,
-        })
+        let mut deadline = match (
+            timeout_millis.filter(|timeout| *timeout > 0),
+            execution.as_ref(),
+        ) {
+            (Some(timeout), Some(execution)) => {
+                Some(deadline::CollectionDeadline::start(accessor, execution, timeout).await?)
+            }
+            _ => None,
+        };
+        let collected = async {
+            let has_deadline = deadline.is_some();
+            let wait_deadline = async {
+                match (&mut deadline, &execution) {
+                    (Some(deadline), Some(execution)) => deadline.wait(accessor, execution).await,
+                    _ => Ok(false),
+                }
+            };
+            let (mut results, stdout, stderr, timed_out) = if has_deadline {
+                // Join the internal race even if a sibling reader/result
+                // fails. Dropping it as try_join's error cleanup would record
+                // a cancelled internal call for a host trap.
+                let (results, stdout, stderr, timed_out) = futures::join!(
+                    await_tool_invoke_plans(accessor, vec![plan]),
+                    receive(stdout),
+                    receive(stderr),
+                    wait_deadline,
+                );
+                (results?, stdout?, stderr?, timed_out?)
+            } else {
+                futures::try_join!(
+                    await_tool_invoke_plans(accessor, vec![plan]),
+                    receive(stdout),
+                    receive(stderr),
+                    wait_deadline,
+                )?
+            };
+            let body_executed = execution
+                .as_ref()
+                .map(|execution| execution.body_executed())
+                .transpose()?
+                .unwrap_or(false);
+            // Secret admission can arm a guest-terminal delivery receipt. No more
+            // stream observations may follow that final admission boundary.
+            // A deadline-enabled collection owns the guest completion; permission
+            // admission is then host-internal, rather than arming a second receipt.
+            let owner = deadline
+                .as_mut()
+                .map(deadline::CollectionDeadline::secret_owner);
+            let response = admit_tool_response_secret_holds_with_owner(
+                accessor,
+                results.pop().expect("one tool invocation has one result"),
+                owner,
+            )
+            .await?;
+            let (stdout, _stdout_memory) = stdout
+                .map(collect::CollectedOutputBuffer::into_parts)
+                .unzip();
+            let (stderr, _stderr_memory) = stderr
+                .map(collect::CollectedOutputBuffer::into_parts)
+                .unzip();
+            Ok((
+                CollectedInvocation {
+                    result: project_tool_response(accessor, response),
+                    body_executed,
+                    timed_out,
+                    stdout,
+                    stderr,
+                },
+                _stdout_memory,
+                _stderr_memory,
+            ))
+        }
+        .await;
+        match collected {
+            Ok((collected, _stdout_memory, _stderr_memory)) => {
+                if let Some(deadline) = deadline {
+                    deadline.finish(accessor, collected.timed_out).await?;
+                }
+                Ok(collected)
+            }
+            Err(error) => Err(match deadline {
+                Some(deadline) => deadline.trap(error),
+                None => error,
+            }),
+        }
     }
 
     async fn get(

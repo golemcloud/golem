@@ -299,6 +299,57 @@ test("finite input preserves a view slice and the requested string encoding", ()
   );
 });
 
+test("sync deadlines reach the host and preserve bounded output and the selected signal", () => {
+  const f = fixture();
+  let timeout;
+  f.host.ToolRpc.prototype.asyncInvokeAndAwait = () => ({
+    collect(_stdout, _stderr, deadline) {
+      timeout = deadline;
+      return {
+        result: { tag: "err", val: { tag: "cancelled" } },
+        bodyExecuted: false,
+        timedOut: true,
+        stdout: { bytes: [0, 255], failure: { tag: "cancelled" } },
+        stderr: { bytes: [128], failure: { tag: "cancelled" } },
+      };
+    },
+  });
+  const result = f.backend.spawnSync("tsc", [], { timeout: 25, killSignal: 2 });
+  assert.equal(timeout, 25n);
+  assert.equal(result.error.code, "ETIMEDOUT");
+  assert.equal(result.pid, 1);
+  assert.equal(result.status, null);
+  assert.equal(result.signal, "SIGINT");
+  assert.deepEqual([...result.stdout], [0, 255]);
+  assert.deepEqual([...result.stderr], [128]);
+  assert.equal(
+    f.calls.some((call) => call[0] === "cancel"),
+    false,
+  );
+});
+
+test("a deadline cannot replace overflow or an ordinary terminal winner", () => {
+  for (const overflow of [false, true]) {
+    const f = fixture();
+    f.host.ToolRpc.prototype.asyncInvokeAndAwait = () => ({
+      collect() {
+        return {
+          result: overflow
+            ? { tag: "err", val: { tag: "cancelled" } }
+            : { tag: "ok", val: {} },
+          bodyExecuted: true,
+          timedOut: true,
+          stdout: { bytes: [1], overflow },
+        };
+      },
+    });
+    const result = f.backend.spawnSync("tsc", [], { timeout: 1 });
+    assert.equal(result.error?.code, overflow ? "ENOBUFS" : undefined);
+    assert.equal(result.status, overflow ? null : 7);
+    assert.equal(result.signal, null);
+  }
+});
+
 test("invalid sync deadlines are rejected before tool discovery or admission", () => {
   const f = fixture();
   for (const timeout of [-1, 0.5, NaN, Infinity, "1", null, 2 ** 53]) {
@@ -700,7 +751,7 @@ test("ignored stdio supplies EOF and discard targets, never zero-limit collector
   );
   assert.deepEqual(
     f.calls.find(([name]) => name === "collect"),
-    ["collect", undefined, undefined],
+    ["collect", undefined, undefined, undefined],
   );
   assert.deepEqual(f.closed, ["future", "rpc", "prepared"]);
 });

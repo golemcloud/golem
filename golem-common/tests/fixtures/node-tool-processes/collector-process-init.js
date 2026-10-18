@@ -18,7 +18,7 @@ setProcessBackend({
         }
         const rpc = new ToolRpc(command);
         const future = rpc.asyncInvokeAndAwait(request.path, request.input, stdin, target, stderr?.[0]);
-        const collected = future.collect(stdout, stderr?.[1]);
+        const collected = future.collect(stdout, stderr?.[1], undefined);
         future[Symbol.dispose]?.();
         return {
             pid: 1,

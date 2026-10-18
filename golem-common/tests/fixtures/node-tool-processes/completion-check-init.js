@@ -13,7 +13,7 @@ function CheckedToolRpc(name) {
                 ['command-that-does-not-exist'], input, undefined, undefined, undefined,
             );
             try {
-                const result = rejected.collect(undefined, undefined);
+                const result = rejected.collect(undefined, undefined, undefined);
                 if (result.bodyExecuted !== false || result.result.tag !== 'err') {
                     throw new Error('Rejected command did not retain its skipped classification');
                 }
@@ -23,7 +23,7 @@ function CheckedToolRpc(name) {
             const future = rpc.asyncInvokeAndAwait(path, input, stdin, stdout, stderr);
             return {
                 collect(out, err) {
-                    const result = future.collect(out, err);
+                    const result = future.collect(out, err, undefined);
                     if (result.bodyExecuted !== true || result.result.tag !== 'ok') {
                         throw new Error('Filesystem command did not retain its executed classification');
                     }

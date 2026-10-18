@@ -32,7 +32,69 @@ function summarize(output) {
     }, (_key, value) => typeof value === 'bigint' ? value.toString() : value);
 }
 
+// Real host collection, with no JS timer or forwarding pump. The first tool
+// would sleep for ten minutes; the second verifies successful work after cancel.
+function deadlineSequence(inputs) {
+    for (let index = 0; index < inputs.length; index++) {
+        const rpc = new ToolRpc('clock-race');
+        const future = rpc.asyncInvokeAndAwait(['race-p3-sleeps'], inputs[index], undefined, undefined, undefined);
+        try {
+            const result = future.collect(undefined, undefined, index === 0 ? 100n : 5000n);
+            if (typeof result?.then === 'function') throw new Error('Deadline collect was asynchronous');
+            if (index === 0) {
+                if (!result.timedOut || result.result.tag !== 'err' || result.result.val.tag !== 'cancelled') {
+                    throw new Error('Host deadline did not select cancellation');
+                }
+            } else if (result.timedOut || result.result.tag !== 'ok' || !result.bodyExecuted) {
+                throw new Error('Successful follow-up failed after host deadline');
+            }
+        } finally {
+            future[Symbol.dispose]?.();
+            rpc[Symbol.dispose]?.();
+        }
+    }
+    return 'cancelled:followup-ok';
+}
+
+async function probeDeadlines(effectUrl) {
+    const command = getToolType('clock-race').command(['race-p3-sleeps']);
+    const inputs = [600, 0].map(seconds => typedSchemaValueToWit({
+        graph: command.inputSchema.graph,
+        value: command.packJson({ secs: [String(seconds)] }),
+    }));
+    if (effectUrl) {
+        const response = await fetch(`${effectUrl}/streams-deadline-collect-main`, { method: 'POST' });
+        if (response.status !== 204) throw new Error('Unexpected deadline effect status');
+        await response.arrayBuffer();
+    }
+    const main = deadlineSequence(inputs);
+    const encodedInputs = JSON.stringify(inputs, (_key, value) =>
+        typeof value === 'bigint' ? { probeU64: value.toString() } : value);
+    const job = await runJavaScript({
+        source: `
+            if ('nodeToolProbeInvoked' in globalThis) throw new Error('Fresh job inherited parent globals');
+            const { ToolRpc } = await import('golem:tool/host@0.1.0');
+            const effectUrl = ${JSON.stringify(effectUrl)};
+            if (effectUrl) {
+                const response = await fetch(effectUrl + '/streams-deadline-collect-job', { method: 'POST' });
+                if (response.status !== 204) throw new Error('Unexpected deadline job effect status');
+                await response.arrayBuffer();
+            }
+            const inputs = JSON.parse(${JSON.stringify(encodedInputs)}, (_key, value) =>
+                value && typeof value === 'object' && Object.keys(value).length === 1 &&
+                typeof value.probeU64 === 'string' ? BigInt(value.probeU64) : value);
+            return (${deadlineSequence.toString()})(inputs);
+        `,
+        cwd: '/', timeoutMs: 10000, maxBytes: 65536,
+    });
+    if (job.value !== main || job.stdout || job.stderr || job.overflowed) {
+        throw new Error('Fresh-job deadline result differs');
+    }
+    return `streams-deadline-collect:${main}\n`;
+}
+
 async function collect(mode, effectUrl) {
+    if (mode === 'streams-deadline-collect') return probeDeadlines(effectUrl);
     const echo = mode === 'streams-echo-collect';
     const pressure = mode === 'streams-pressure-collect';
     const finite = mode === 'streams-finite-stdin';
@@ -61,7 +123,7 @@ async function collect(mode, effectUrl) {
         closed[Symbol.dispose]?.();
         const [target, stdout] = createCollectedOutput(65536n);
         const future = new ToolRpc('streaming').asyncInvokeAndAwait(path, wireInput, stdin, target, undefined);
-        collected = future.collect(stdout, undefined);
+        collected = future.collect(stdout, undefined, undefined);
         future[Symbol.dispose]?.();
     } else {
         const request = JSON.stringify({ path, input: wireInput, stderr: !pressure && !finite });
@@ -135,7 +197,7 @@ probe.implement({
         globalThis.nodeToolProbeInvoked = true;
         process.env.GOLEM_NODE_TOOL_PROBE_INVOCATION = 'active';
         const [mode, effectUrl] = input.args;
-        if (!['streams-collect', 'streams-echo-collect', 'streams-pressure-collect', 'streams-finite-stdin'].includes(mode)) {
+        if (!['streams-collect', 'streams-echo-collect', 'streams-pressure-collect', 'streams-finite-stdin', 'streams-deadline-collect'].includes(mode)) {
             throw new Error(`Unexpected probe mode: ${mode}`);
         }
         const writer = context.stdout.getWriter();

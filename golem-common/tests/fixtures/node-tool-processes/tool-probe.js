@@ -140,7 +140,7 @@ async function probeCollectedStreams(mode) {
     const future = rpc.asyncInvokeAndAwait(path, wireInput, stdin, stdoutTarget, stderr?.[0]);
     // A regular synchronous WIT import: no experimental lowering override,
     // Promise continuation or JavaScript output pump participates in this wait.
-    const collected = future.collect(stdout, stderr?.[1]);
+    const collected = future.collect(stdout, stderr?.[1], undefined);
     if (collected && typeof collected.then === 'function') {
         throw new Error('Expected synchronous native output collection');
     }

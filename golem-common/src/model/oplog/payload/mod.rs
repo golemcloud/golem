@@ -438,6 +438,8 @@ oplog_payload! {
             /// The remote socket address of the connect.
             address: String
         },
+        ToolCollectionWait { invocation_start: OplogIndex, timeout_millis: u64 },
+        ToolCollectionRace { invocation_start: OplogIndex, deadline_epoch_millis: u64 },
     }
 }
 
@@ -789,6 +791,7 @@ oplog_payload! {
             wallet_id_hash: Vec<u8>,
             generation: u64,
         },
+        ToolCollectionWaitResult { timed_out: bool },
     }
 }
 
@@ -1061,7 +1064,9 @@ pub mod host_functions {
         (FilesystemPermissionCheck => "filesystem::permissions", "check", FileSystemPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
         (SocketsTcpConnectPermissionCheck => "sockets::tcp::permissions", "check-connect", SocketsTcpConnectPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
         (GolemPermissionsSelfWallet => "golem::permissions::wallet", "self-wallet", NoInput, PermissionWallet),
-        (GolemPermissionsSelfVersion => "golem::permissions::wallet", "self-version", NoInput, PermissionWalletVersion)
+        (GolemPermissionsSelfVersion => "golem::permissions::wallet", "self-version", NoInput, PermissionWalletVersion),
+        (GolemToolCollectionWait => "golem::tool::internal", "collection-wait", ToolCollectionWait, ToolCollectionWaitResult),
+        (GolemToolCollectionRace => "golem::tool::internal", "collection-race", ToolCollectionRace, ToolCollectionWaitResult)
     }
 }
 
