@@ -554,9 +554,6 @@ async fn quota_monitor_cleanup_health_keeps_results_and_startup_refusal(
         } else {
             None
         };
-        // Actor loss can fail an uncommitted caller. Keep the existing narrow barrier
-        // only where this proof requires an already-published result and an active monitor.
-        let idle = (failure == "actor").then(|| worker.pause_idle_close_for_test());
         let key = IdempotencyKey::fresh();
         let mut invoke = None;
         let mut initial_failure_source = None;
@@ -599,14 +596,10 @@ async fn quota_monitor_cleanup_health_keeps_results_and_startup_refusal(
                 .await
                 .context("initial monitor did not unwind while closing its real window")??;
         }
-        let mut release_idle = None;
-        let prefix = if let Some((entered, release)) = idle {
-            tokio::time::timeout(Duration::from_secs(10), entered)
-                .await
-                .context(
-                    "completed actor-case invocation did not reach the existing idle barrier",
-                )??;
-            assert!(directory.is_dir());
+        let mut rpc_commit = None;
+        let mut actor_probe = None;
+        let probe_key = IdempotencyKey::fresh();
+        let prefix = if failure == "actor" {
             let completed = tokio::time::timeout(
                 Duration::from_secs(10),
                 invoke
@@ -615,7 +608,40 @@ async fn quota_monitor_cleanup_health_keeps_results_and_startup_refusal(
             )
             .await???;
             assert_eq!(completed.into_typed::<u32>()?, 1);
-            release_idle = Some(release);
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while worker.concurrent_agent_permit_is_held().await {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .context("completed allocation did not release its real execution window")?;
+            // Keep the live monitor active on a subsequent real RPC. The earlier allocation
+            // result is already published; neither idle teardown nor replay is paused.
+            let mut commit = executor
+                .gate_next_rpc_commit(&id, golem_worker_executor_test_utils::RpcCheckpoint::Start)
+                .await;
+            actor_probe = Some(tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
+                let executor = executor.clone();
+                let component = component.clone();
+                let name = name.clone();
+                let probe_key = probe_key.clone();
+                async move {
+                    executor
+                        .invoke_and_await_agent_with_key(
+                            &component,
+                            &name,
+                            &probe_key,
+                            "increment_through_rpc",
+                            data_value!(),
+                        )
+                        .await
+                }
+            })));
+            tokio::time::timeout(Duration::from_secs(10), commit.committed())
+                .await
+                .context("live RPC did not reach its actual Start commit")?;
+            rpc_commit = Some(commit);
+            assert!(directory.is_dir());
             executor.stored_oplog(&id).await
         } else if let Some(finished) = &mut finished {
             tokio::time::timeout(Duration::from_secs(10), finished.entered())
@@ -635,11 +661,15 @@ async fn quota_monitor_cleanup_health_keeps_results_and_startup_refusal(
         };
         let generation = worker.resident_generation_for_test();
         let acquisitions = worker.permit_acquisitions_for_test();
-        assert_eq!(acquisitions, prior_acquisitions + 1);
+        assert_eq!(
+            acquisitions,
+            prior_acquisitions + 1 + usize::from(failure == "actor")
+        );
         assert_eq!(generation, prior_generation + u64::from(!later));
         if later {
             assert!(worker.concurrent_agent_permit_is_held().await);
         }
+        let actor_interrupt = (failure == "actor").then(|| worker.await_interrupt_for_test());
         let mut failure_source = None;
         let expected = match failure {
             "monitor" if !later => "Monthly monitor panicked: injected monthly monitor panic",
@@ -657,23 +687,17 @@ async fn quota_monitor_cleanup_health_keeps_results_and_startup_refusal(
             }
             "actor" => {
                 fail_entered_growing_actor(actor_growth.take().unwrap(), &owned).await?;
-                assert!(
-                    worker
-                        .submit_monthly_capacity_for_test()
-                        .unwrap_err()
-                        .to_string()
-                        .contains("Monthly monitor lost the lifecycle actor")
-                );
+                assert!(matches!(
+                    tokio::time::timeout(Duration::from_secs(10), actor_interrupt.unwrap()).await?,
+                    InterruptKind::Suspend(_)
+                ));
                 "Monthly monitor lost the lifecycle actor"
             }
             _ => unreachable!(),
         };
-        // Release the monitor case's selected result writer. The actor case has already
-        // returned its committed result and now releases its remaining idle barrier.
+        // Release actual dependency calls only after the monitor selected its failure.
         drop(finished);
-        if let Some(release) = release_idle {
-            release.send(()).unwrap();
-        }
+        drop(rpc_commit);
         let error = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 if let Some(error) = worker.cleanup_failure_for_test().await {
@@ -703,9 +727,9 @@ async fn quota_monitor_cleanup_health_keeps_results_and_startup_refusal(
             std::io::ErrorKind::NotFound,
             "physical deletion must succeed independently of retained health"
         );
-        if !later || failure == "actor" {
-            assert!(worker.unload_succeeded_for_test());
-        }
+        // Later failures close their live monitor during unload, so its aggregate result
+        // includes the monitor failure even though physical deletion above succeeded.
+        assert_eq!(worker.unload_succeeded_for_test(), !later);
         assert!(!worker.concurrent_agent_permit_is_held().await);
         assert!(worker.eviction_class().await.is_none());
         assert_eq!(worker.resident_generation_for_test(), generation);
@@ -732,6 +756,13 @@ async fn quota_monitor_cleanup_health_keeps_results_and_startup_refusal(
         if let Some(invoke) = invoke {
             assert_eq!(invoke.await??.into_typed::<u32>()?, 1);
         }
+        if let Some(probe) = actor_probe {
+            assert!(
+                tokio::time::timeout(Duration::from_secs(10), probe)
+                    .await??
+                    .is_err()
+            );
+        }
         if let Some((source, refresh)) = failure_source {
             refresh.await?;
             drop(source);
@@ -745,7 +776,7 @@ async fn quota_monitor_cleanup_health_keeps_results_and_startup_refusal(
                 .iter()
                 .filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { .. }))
                 .count(),
-            2 * usize::from(later)
+            2 * usize::from(later) + usize::from(failure == "actor")
         );
         assert_eq!(
             recorded
@@ -763,6 +794,9 @@ async fn quota_monitor_cleanup_health_keeps_results_and_startup_refusal(
         )));
         if later {
             assert_eq!(recorded.iter().filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &key)).count(), 1);
+        }
+        if failure == "actor" {
+            assert_eq!(recorded.iter().filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == &probe_key)).count(), 1);
         }
         shutdown.cancel();
     }

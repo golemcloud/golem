@@ -370,23 +370,18 @@ mod loaded_compute_admission {
                 ..
             } if method == "increment"
         ));
-        let (closing, release_close) = worker.pause_idle_close_for_test();
-        drop(finished);
-        tokio::time::timeout(Duration::from_secs(10), closing)
-            .await
-            .context("setup did not reach idle close")??;
         let acquisitions = worker.permit_acquisitions_for_test();
-        // Both real readiness requests queue a wake while the completed invocation still
-        // owns its window. One wake drains both requests; the other is then stale.
+        // Both requests queue a wake while the real Finished append holds the invocation.
+        // The invocation drains both markers in its existing window, leaving stale wakes.
         let mut first_ready = std::pin::pin!(worker.await_ready_to_process_commands());
         let mut second_ready = std::pin::pin!(worker.await_ready_to_process_commands());
         assert!(futures::poll!(&mut first_ready).is_pending());
         assert!(futures::poll!(&mut second_ready).is_pending());
-        release_close.send(()).unwrap();
+        drop(finished);
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(10), setup)
                 .await
-                .context("setup result did not settle after idle close was released")???
+                .context("setup result did not settle after its Finished append was released")???
                 .into_typed::<u32>()?,
             1
         );
@@ -406,7 +401,7 @@ mod loaded_compute_admission {
         .map_err(|(owner, error)| anyhow::anyhow!("filesystem update for {owner}: {error}"))?;
         assert_eq!(
             worker.permit_acquisitions_for_test(),
-            acquisitions + 1,
+            acquisitions,
             "the stale work wake must not reopen an idle billing window"
         );
         tokio::time::timeout(Duration::from_secs(10), async {

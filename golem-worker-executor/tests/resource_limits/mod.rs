@@ -17,6 +17,7 @@ test_r::tag_suite!(stop_cause, group5);
 mod stop_cause;
 
 use crate::Tracing;
+use crate::execution_observations::WorkerObservations;
 use axum::Router;
 use axum::routing::get;
 use futures::FutureExt;

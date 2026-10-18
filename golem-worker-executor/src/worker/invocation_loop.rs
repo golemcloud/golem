@@ -521,8 +521,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             break 'outer;
                         }
                         permit = &mut permit => {
-                            #[cfg(feature = "test-utils")]
-                            { self.parent.test_support.lock().unwrap().permit_acquisitions += 1; }
+                            debug!(fingerprint = %self.parent.initial_worker_metadata.fingerprint,
+                                worker_shell = Arc::as_ptr(&self.parent) as usize as u64,
+                                execution_event = "permit_acquired", "Worker acquired a concurrent-agent permit");
                             self.permit_state.install_tracked(permit);
                             continue 'outer;
                         }
@@ -1067,11 +1068,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 None => unloading.cleanup.clone(),
             });
             let unload_failure = unloading.await;
-            #[cfg(feature = "test-utils")]
-            {
-                self.parent.test_support.lock().unwrap().unload_succeeded =
-                    unload_failure.is_none();
-            }
+            debug!(fingerprint = %self.parent.initial_worker_metadata.fingerprint,
+                worker_shell = Arc::as_ptr(&self.parent) as usize as u64,
+                execution_event = "unload_completed", unload_succeeded = unload_failure.is_none(),
+                "Worker runtime unload completed");
             if let Some(error) = cleanup_failure.or(unload_failure) {
                 self.stop_cleanup_failed(error).await;
                 break;
@@ -2558,8 +2558,6 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// Called when the agent enters idle state. No-op if already released.
     async fn release_concurrent_agent_permit(&mut self) -> Result<(), WorkerExecutorError> {
         if self.permit_state.is_some() {
-            #[cfg(feature = "test-utils")]
-            self.parent.wait_idle_close_for_test().await;
             debug!(agent_id = %self.owned_agent_id.agent_id, "Releasing concurrent-agent permit (entering idle)");
             if let Some(window) = self.permit_state.take_window() {
                 let result = window
@@ -2611,10 +2609,9 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     return Ok(PermitAcquisition::CommandChannelClosed);
                 }
             };
-            #[cfg(feature = "test-utils")]
-            {
-                self.parent.test_support.lock().unwrap().permit_acquisitions += 1;
-            }
+            debug!(fingerprint = %self.parent.initial_worker_metadata.fingerprint,
+                worker_shell = Arc::as_ptr(&self.parent) as usize as u64,
+                execution_event = "permit_acquired", "Worker acquired a concurrent-agent permit");
             let permit = self.permit_state.track(permit);
             match crate::services::agent_filesystem::open_resource_usage_window(
                 self.filesystem,

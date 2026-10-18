@@ -171,10 +171,6 @@ async fn stop_order(
     let helper = worker.await_interrupt_for_test();
     let (mut selected, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
     let mut deleting = None;
-    // This one native proof isolates the outer Deleting guard before any terminal is queued.
-    // Interrupt-mutex contention would mask a missing outer guard rather than replace it.
-    let mut fence =
-        (first == FirstStop::Deletion).then(|| worker.pause_next_deletion_fence_for_test());
     let mut before_remove =
         (first != FirstStop::User).then(|| executor.gate_next_oplog_delete(&owned, mode));
     let delete = || {
@@ -186,9 +182,11 @@ async fn stop_order(
     };
     if first == FirstStop::Deletion {
         deleting = Some(delete());
-        tokio::time::timeout(Duration::from_secs(10), &mut fence.as_mut().unwrap().0)
+        // Hold the actual terminal write after deletion fences execution. The separate
+        // monthly_running_owner_guard tests cover Deleting before any interrupt exists.
+        tokio::time::timeout(Duration::from_secs(10), &mut selected)
             .await
-            .context("deletion claim")??;
+            .context("deletion selected its terminal before the quota update")??;
     }
     let user = InterruptKind::Interrupt(Timestamp::now_utc());
     if first == FirstStop::User {
@@ -234,10 +232,7 @@ async fn stop_order(
     if first == FirstStop::Quota {
         deleting = Some(delete());
     }
-    if let Some((_, release_fence)) = fence.take() {
-        release_fence.send(()).unwrap();
-    }
-    if first != FirstStop::Quota {
+    if first == FirstStop::User {
         tokio::time::timeout(Duration::from_secs(10), selected)
             .await
             .context("selected first-stop terminal append")??;

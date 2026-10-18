@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
+use crate::execution_observations::WorkerObservations;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use golem_common::model::agent::ParsedAgentId;

@@ -689,9 +689,9 @@ async fn unmetered_window() -> (
 #[timeout("5s")]
 async fn all_off_ready_close_spawns_no_task_and_releases_its_permit() {
     let (window, held, metrics) = unmetered_window().await;
-    let support = window.test_support.clone();
+    let close_tasks = window.close_tasks.clone();
     let closing = window.close(Instant::now() + Duration::from_secs(1));
-    assert_eq!(support.lock().unwrap().window_close_tasks, 0);
+    assert_eq!(close_tasks.load(Ordering::Relaxed), 0);
     assert!(!held.load(Ordering::Acquire));
     assert!(closing.now_or_never().unwrap().is_ok());
     metrics.assert_finished("accepted_stop", "released");

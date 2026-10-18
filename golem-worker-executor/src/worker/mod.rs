@@ -758,12 +758,8 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     interrupt_signal: Arc<Interrupts>,
     interrupt_establishment_tail: StdMutex<Arc<InterruptEstablishment>>,
     release_scope: StdMutex<crate::metrics::resource_release::ReleaseScope>,
-    #[cfg(any(test, feature = "test-utils"))]
-    test_support: Arc<StdMutex<ExecutionTestSupport>>,
     monthly_window: StdMutex<Option<Arc<monthly_limits::MonthlyWindowTarget>>>,
     resident_generation: AtomicU64,
-    #[cfg(feature = "test-utils")]
-    deletion_stage_gate: StdMutex<Option<DeletionStageTestGate>>,
     monthly_stop: StdMutex<
         Option<(
             InterruptKind,
@@ -815,31 +811,6 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     durable_stream_attachment_reconciler: DurableStreamAttachmentReconciler,
     durable_topology_recovery: Arc<Mutex<DurableTopologyRecoveryCache>>,
 }
-
-#[cfg(feature = "test-utils")]
-struct DeletionStageTestGate {
-    entered: tokio::sync::oneshot::Sender<()>,
-    release: tokio::sync::oneshot::Receiver<()>,
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-#[derive(Default)]
-struct ExecutionTestSupport {
-    #[cfg(feature = "test-utils")]
-    idle_close_gate: Option<StopTestGate>,
-    #[cfg(feature = "test-utils")]
-    unload_succeeded: bool,
-    #[cfg(feature = "test-utils")]
-    permit_acquisitions: usize,
-    #[cfg(test)]
-    window_close_tasks: usize,
-}
-
-#[cfg(feature = "test-utils")]
-type StopTestGate = (
-    tokio::sync::oneshot::Sender<()>,
-    tokio::sync::oneshot::Receiver<()>,
-);
 
 #[derive(Default, PartialEq, Eq)]
 enum OwnerCleanupState {
@@ -2780,12 +2751,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             interrupt_signal: Arc::default(),
             interrupt_establishment_tail: StdMutex::new(InterruptEstablishment::ready()),
             release_scope: StdMutex::default(),
-            #[cfg(any(test, feature = "test-utils"))]
-            test_support: Arc::default(),
             monthly_window: StdMutex::new(None),
             resident_generation: AtomicU64::new(0),
-            #[cfg(feature = "test-utils")]
-            deletion_stage_gate: StdMutex::new(None),
             monthly_stop: StdMutex::new(None),
             runtime_append_tasks,
             infrastructure_recovery_retry_config: deps.config().retry.clone(),
@@ -2882,6 +2849,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .reconcile_durable_stream_attachments_for(&worker)
                 .await?;
         }
+        debug!(fingerprint = %worker.initial_worker_metadata.fingerprint,
+            worker_shell = Arc::as_ptr(self) as usize as u64,
+            execution_event = "metadata_resolved", "Worker metadata resolved");
         Ok((worker, reconstructed_ephemeral))
     }
 
@@ -3716,29 +3686,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(())
     }
 
-    /// Holds deletion after its resident claim, before ordinary execution fencing.
-    #[cfg(feature = "test-utils")]
-    pub fn pause_next_deletion_fence_for_test(
-        &self,
-    ) -> (
-        tokio::sync::oneshot::Receiver<()>,
-        tokio::sync::oneshot::Sender<()>,
-    ) {
-        let (entered, observe) = tokio::sync::oneshot::channel();
-        let (release, wait) = tokio::sync::oneshot::channel();
-        assert!(
-            self.deletion_stage_gate
-                .lock()
-                .unwrap()
-                .replace(DeletionStageTestGate {
-                    entered,
-                    release: wait,
-                })
-                .is_none()
-        );
-        (observe, release)
-    }
-
     /// The error a failed deletion step ends the attempt with. A step refused because the shard
     /// has a new owner retires the worker for a lost shard and answers with the routing miss that
     /// sends the delete there. The generation stays cached in `Deleting` with the stages it
@@ -3785,14 +3732,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         stage: WorkerDeletionStage,
     ) -> Result<(), WorkerExecutorError> {
-        #[cfg(feature = "test-utils")]
-        if stage == WorkerDeletionStage::ExecutionFenced {
-            let gate = self.deletion_stage_gate.lock().unwrap().take();
-            if let Some(gate) = gate {
-                let _ = gate.entered.send(());
-                let _ = gate.release.await;
-            }
-        }
         if let Some(hook) = Ctx::worker_deletion_hook(&self.extra_deps()) {
             hook.before_stage(&self.owned_agent_id, stage).await?;
         }
@@ -13096,10 +13035,9 @@ impl RunningWorker {
         start_attempt: Uuid,
         worker_trace: WorkerTrace,
     ) {
-        #[cfg(feature = "test-utils")]
-        {
-            parent.test_support.lock().unwrap().permit_acquisitions += 1;
-        }
+        debug!(fingerprint = %parent.initial_worker_metadata.fingerprint,
+            worker_shell = Arc::as_ptr(&parent) as usize as u64,
+            execution_event = "permit_acquired", "Worker acquired a concurrent-agent permit");
         let release_scope = parent.release_scope();
         let mut invocation_loop = InvocationLoop {
             receiver,

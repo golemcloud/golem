@@ -253,7 +253,7 @@ pub(super) struct ExecutionWindow {
     window: Option<ResourceUsageMeteringWindow>,
     monitor: Option<MonthlyMonitor>,
     #[cfg(test)]
-    test_support: Arc<Mutex<super::ExecutionTestSupport>>,
+    close_tasks: Arc<std::sync::atomic::AtomicUsize>,
     pub(super) release_scope: crate::metrics::resource_release::ReleaseScope,
 }
 
@@ -291,7 +291,7 @@ impl ExecutionWindow {
             window: Some(window),
             monitor: None,
             #[cfg(test)]
-            test_support: Arc::default(),
+            close_tasks: Arc::default(),
             release_scope,
         }
     }
@@ -326,7 +326,7 @@ impl ExecutionWindow {
                 window: Some(window),
                 monitor: None,
                 #[cfg(test)]
-                test_support: worker.test_support.clone(),
+                close_tasks: Arc::default(),
                 release_scope,
             };
         }
@@ -440,7 +440,7 @@ impl ExecutionWindow {
             window: Some(window),
             monitor,
             #[cfg(test)]
-            test_support: worker.test_support.clone(),
+            close_tasks: Arc::default(),
             release_scope,
         }
     }
@@ -472,7 +472,7 @@ impl ExecutionWindow {
             self.window.take().unwrap(),
             self.monitor.take(),
             #[cfg(test)]
-            self.test_support.clone(),
+            self.close_tasks.clone(),
             self.release_scope.clone(),
             deadline,
         )
@@ -486,7 +486,7 @@ impl Drop for ExecutionWindow {
                 window,
                 self.monitor.take(),
                 #[cfg(test)]
-                self.test_support.clone(),
+                self.close_tasks.clone(),
                 self.release_scope.clone(),
                 Instant::now() + Duration::from_secs(30),
             ));
@@ -497,7 +497,7 @@ impl Drop for ExecutionWindow {
 fn close_owned_window(
     window: ResourceUsageMeteringWindow,
     monitor: Option<MonthlyMonitor>,
-    #[cfg(test)] test_support: Arc<Mutex<super::ExecutionTestSupport>>,
+    #[cfg(test)] close_tasks: Arc<std::sync::atomic::AtomicUsize>,
     release_scope: crate::metrics::resource_release::ReleaseScope,
     deadline: Instant,
 ) -> impl Future<Output = Result<ResourceUsageSettlement, WorkerExecutorError>> + Send + 'static {
@@ -556,9 +556,7 @@ fn close_owned_window(
         }
     }
     #[cfg(test)]
-    {
-        test_support.lock().unwrap().window_close_tasks += 1;
-    }
+    close_tasks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let task = tokio::spawn(closing);
     futures::future::Either::Right(async move {
         task.await.unwrap_or_else(|error| {
@@ -677,45 +675,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     #[cfg(feature = "test-utils")]
-    pub fn pause_idle_close_for_test(
-        &self,
-    ) -> (
-        tokio::sync::oneshot::Receiver<()>,
-        tokio::sync::oneshot::Sender<()>,
-    ) {
-        let (entered, observe) = tokio::sync::oneshot::channel();
-        let (release, wait) = tokio::sync::oneshot::channel();
-        assert!(
-            self.test_support
-                .lock()
-                .unwrap()
-                .idle_close_gate
-                .replace((entered, wait))
-                .is_none()
-        );
-        (observe, release)
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub(super) async fn wait_idle_close_for_test(&self) {
-        let gate = self.test_support.lock().unwrap().idle_close_gate.take();
-        if let Some((entered, release)) = gate {
-            let _ = entered.send(());
-            let _ = release.await;
-        }
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn unload_succeeded_for_test(&self) -> bool {
-        self.test_support.lock().unwrap().unload_succeeded
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn permit_acquisitions_for_test(&self) -> usize {
-        self.test_support.lock().unwrap().permit_acquisitions
-    }
-
-    #[cfg(feature = "test-utils")]
     pub fn current_monthly_proposal_for_test(&self) -> MonthlyProposalForTest {
         let target = self
             .monthly_window
@@ -727,21 +686,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .with_monthly_capacity(self.agent_mode(), |capacity| {
                 MonthlyProposalForTest::new(&target, capacity)
             })
-    }
-
-    #[cfg(feature = "test-utils")]
-    pub fn submit_monthly_capacity_for_test(self: &Arc<Self>) -> Result<(), WorkerExecutorError> {
-        let target = self
-            .monthly_window
-            .lock()
-            .unwrap()
-            .clone()
-            .expect("monthly window");
-        let capacity = self
-            .owner_runtime_resources
-            .with_monthly_capacity(self.agent_mode(), |capacity| capacity);
-        self.state_actor
-            .monthly_capacity_exhausted(self.clone(), target, capacity)
     }
 
     #[cfg(feature = "test-utils")]
