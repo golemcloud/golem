@@ -5429,11 +5429,12 @@ async fn test_previous_invocation_failed_revert_workflow() {
         ctx.cwd_path_join("src/counter-agent.ts"),
         indoc! { r#"
             import { z } from 'zod';
-            import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
+            import { defineAgent, method, http } from '@golemcloud/golem-ts-sdk';
 
             export const CounterAgent = defineAgent({
               name: 'CounterAgent',
               id: { name: z.string() },
+              http: http.mount('/counters/{name}'),
               methods: {
                 value: method({ input: {}, returns: z.number() }),
                 increment: method({ input: {}, returns: z.number() }),
