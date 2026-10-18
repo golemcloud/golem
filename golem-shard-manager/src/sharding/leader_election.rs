@@ -1600,6 +1600,46 @@ mod tests {
         })
     }
 
+    /// Like [`proven_at`], for reads of `(sent, received, answer)`, in seconds since the start.
+    fn proven_by_brackets(reads: &[(f64, f64, i64)]) -> Option<f64> {
+        let start = Instant::now();
+        let mut evidence = RenewalEvidence::default();
+        reads.iter().find_map(|(sent, received, ttl)| {
+            evidence
+                .observe(
+                    start + Duration::from_secs_f64(*sent),
+                    start + Duration::from_secs_f64(*received),
+                    *ttl,
+                )
+                .then_some(*received)
+        })
+    }
+
+    #[test]
+    fn an_abandoned_lease_with_a_fractional_end_is_never_counted() {
+        // The lease ends 9.7 s after the start; etcd truncates what is left to whole seconds.
+        let end = 9.7;
+        let reads: Vec<(f64, i64)> = (0..32)
+            .map(|i| i as f64 * 0.3)
+            .take_while(|at| *at < end)
+            .map(|at| (at, (end - at).trunc() as i64))
+            .collect();
+        assert_eq!(proven_at(&reads), None);
+    }
+
+    #[test]
+    fn the_bracket_of_a_read_is_its_send_and_its_answer() {
+        // The lease ends 9.5 s after the start. Each read takes 0.9 s and etcd answers at its end,
+        // so the answer is truncated from what is left at the answer. A bracket with the two
+        // instants swapped would count extensions that never happened.
+        let end = 9.5;
+        let reads: Vec<(f64, f64, i64)> = (0..10)
+            .map(|i| i as f64 * 0.2)
+            .map(|sent| (sent, sent + 0.9, (end - (sent + 0.9)).trunc() as i64))
+            .collect();
+        assert_eq!(proven_by_brackets(&reads), None);
+    }
+
     #[test]
     fn a_lease_renewed_to_a_constant_truncated_answer_is_proven_within_a_few_seconds() {
         // A two second lease renewed every third of it always reads one: no answer ever rises.
