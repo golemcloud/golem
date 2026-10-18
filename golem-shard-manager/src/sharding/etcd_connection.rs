@@ -216,8 +216,9 @@ pub(crate) fn sha256_hex(der: &[u8]) -> String {
 /// Logs each certificate of `item` - subject, end of validity and SHA-256 fingerprint - so that an
 /// operator can see which certificate a replica loaded and when it expires, and returns them.
 ///
-/// For this replica's own certificate (`own`), the first one must not have expired: etcd would
-/// refuse it with a generic alert that looks like a wrong CA. A CA item must hold at least one
+/// For this replica's own certificate (`own`), the first one must be valid now - not expired, and
+/// not dated ahead of this node's clock: etcd would refuse it with a generic alert that looks like
+/// a wrong CA. A CA item must hold at least one
 /// certificate that has not expired; an expired one beside it is only reported, because a CA
 /// bundle holds the old CA for a while during a rotation.
 fn check_certificates(
@@ -237,6 +238,7 @@ fn check_certificates(
             ))
         })?;
         let subject = certificate.subject().to_string();
+        let not_before = certificate.validity().not_before;
         let not_after = certificate.validity().not_after;
         let expired = not_after.timestamp() < now;
         let sha256 = sha256_hex(der);
@@ -249,6 +251,13 @@ fn check_certificates(
         if own && index == 0 && expired {
             return Err(invalid_config(format!(
                 "{}: the certificate of {subject} expired at {not_after}",
+                item.source
+            )));
+        }
+        if own && index == 0 && not_before.timestamp() > now {
+            return Err(invalid_config(format!(
+                "{}: the certificate of {subject} is valid only from {not_before}; check this \
+                 node's clock",
                 item.source
             )));
         }
@@ -1037,14 +1046,19 @@ mod tests {
 
     /// A self-signed certificate that expired in 2002, and its key.
     fn expired_certificate() -> (String, String) {
+        certificate_valid_in(2001, 2002)
+    }
+
+    /// A self-signed certificate valid from 1 January of `from` to 1 January of `to`, and its key.
+    fn certificate_valid_in(from: i32, to: i32) -> (String, String) {
         let key = rcgen::KeyPair::generate().unwrap();
         let mut params =
             rcgen::CertificateParams::new(vec!["golem-shard-manager".to_string()]).unwrap();
         params
             .distinguished_name
             .push(rcgen::DnType::CommonName, "golem-shard-manager");
-        params.not_before = rcgen::date_time_ymd(2001, 1, 1);
-        params.not_after = rcgen::date_time_ymd(2002, 1, 1);
+        params.not_before = rcgen::date_time_ymd(from, 1, 1);
+        params.not_after = rcgen::date_time_ymd(to, 1, 1);
         (params.self_signed(&key).unwrap().pem(), key.serialize_pem())
     }
 
@@ -1068,6 +1082,32 @@ mod tests {
         );
         assert!(
             message.contains("the certificate of CN=golem-shard-manager expired at"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    // A node clock that is behind, or a certificate dated ahead: etcd would refuse it with the same
+    // generic alert as an expired one.
+    fn a_client_certificate_that_is_not_valid_yet_is_refused() {
+        let files = PemFiles::new();
+        let (cert, key) = certificate_valid_in(2120, 2121);
+        std::fs::write(files.path("future.pem"), cert).unwrap();
+        std::fs::write(files.path("future-key.pem"), key).unwrap();
+        let message = refusal(&config(
+            "https://etcd:2379",
+            Some(EtcdTlsConfig {
+                client_cert_file: Some(files.path("future.pem")),
+                client_key_file: Some(files.path("future-key.pem")),
+                ..files.mtls()
+            }),
+        ));
+        assert!(
+            message.contains("persistence.config.tls.client_cert_file"),
+            "{message}"
+        );
+        assert!(
+            message.contains("the certificate of CN=golem-shard-manager is valid only from"),
             "{message}"
         );
     }
