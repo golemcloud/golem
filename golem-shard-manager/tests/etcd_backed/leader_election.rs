@@ -62,7 +62,7 @@ fn election_config(etcd: &DockerEtcd) -> EtcdConfig {
         retry_max_delay: Duration::from_secs(5),
         leader_lease_ttl: TEST_LEASE_TTL,
         compaction_retention_revisions: 0,
-        rollout_generation: None,
+        test_version: None,
     }
 }
 
@@ -1783,7 +1783,7 @@ fn an_election_value_reads_back() {
         identity: "sm-1/pid-7/1792000000".to_string(),
         grpc_address: address(9002),
         ready: true,
-        rollout_generation: None,
+        version: golem_common::golem_version().to_string(),
     };
     assert_eq!(ElectionValue::decode(&value.encode()), Some(value));
     assert_eq!(ElectionValue::decode(b"sm-1/pid-7/1792000000"), None);

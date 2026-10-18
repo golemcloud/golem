@@ -281,7 +281,7 @@ mod tests {
             identity: "sm".to_string(),
             grpc_address: address(port),
             ready,
-            rollout_generation: None,
+            version: String::new(),
         }
     }
 

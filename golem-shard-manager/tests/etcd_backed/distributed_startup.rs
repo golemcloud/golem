@@ -1975,7 +1975,7 @@ async fn a_standby_that_cannot_reach_etcd_does_not_export_itself_as_the_leader(
         retry_max_delay: Duration::from_secs(5),
         leader_lease_ttl: LEASE_TTL,
         compaction_retention_revisions: 0,
-        rollout_generation: None,
+        test_version: None,
     });
 
     let shutdown = CancellationToken::new();
@@ -2370,7 +2370,7 @@ async fn wait_out_an_earlier_process_key(etcd: &Arc<DockerEtcd>, earlier_ttl: Du
             port: reserved_port,
         },
         ready: true,
-        rollout_generation: None,
+        version: String::new(),
     };
     client
         .put(
@@ -2389,9 +2389,9 @@ async fn wait_out_an_earlier_process_key(etcd: &Arc<DockerEtcd>, earlier_ttl: Du
     replica.abort();
 }
 
-fn with_generation(mut config: ShardManagerConfig, generation: u64) -> ShardManagerConfig {
+fn with_version(mut config: ShardManagerConfig, version: &str) -> ShardManagerConfig {
     if let PersistenceConfig::Etcd(etcd) = &mut config.persistence {
-        etcd.rollout_generation = Some(generation);
+        etcd.test_version = Some(version.to_string());
     }
     config
 }
@@ -2401,27 +2401,31 @@ fn with_generation(mut config: ShardManagerConfig, generation: u64) -> ShardMana
 // In a rolling update, a new replica queues behind old standbys, and each old one that leads next
 // is replaced next: one handover per old pod. An old standby must step back behind a newer
 // replica, so that the old leader hands over to a new replica, once.
-async fn an_old_standby_moves_behind_a_newer_rollout_generation(etcd: &Arc<DockerEtcd>) {
+async fn an_old_standby_moves_behind_a_newer_version(etcd: &Arc<DockerEtcd>) {
     wipe_state(etcd).await;
     await_election_idle(etcd).await;
     let config = distributed_config(etcd);
 
     let old_leader = CancellationToken::new();
     let (old_leader_task, old_leader_started) =
-        spawn_serving_replica(with_generation(config.clone(), 1), old_leader.clone());
+        spawn_serving_replica(with_version(config.clone(), "1.0.0"), old_leader.clone());
     timeout(STARTUP_TIMEOUT, old_leader_started)
         .await
         .unwrap()
         .unwrap();
 
     let before = campaigner_keys(etcd).await;
-    let (old_standby, mut old_standby_started) =
-        spawn_serving_replica(with_generation(config.clone(), 1), CancellationToken::new());
+    let (old_standby, mut old_standby_started) = spawn_serving_replica(
+        with_version(config.clone(), "1.0.0"),
+        CancellationToken::new(),
+    );
     let old_standby_address = await_new_campaigner(etcd, &before).await;
 
     let before = campaigner_keys(etcd).await;
-    let (new_replica, new_started) =
-        spawn_serving_replica(with_generation(config.clone(), 2), CancellationToken::new());
+    let (new_replica, new_started) = spawn_serving_replica(
+        with_version(config.clone(), "2.0.0"),
+        CancellationToken::new(),
+    );
     let new_address = await_new_campaigner(etcd, &before).await;
 
     // The old standby leaves and queues again, behind the new replica.
@@ -2440,7 +2444,7 @@ async fn an_old_standby_moves_behind_a_newer_rollout_generation(etcd: &Arc<Docke
         }
     })
     .await
-    .expect("the old standby should move behind the newer generation");
+    .expect("the old standby should move behind the newer version");
 
     old_leader.cancel();
     let new_port = timeout(STARTUP_TIMEOUT, new_started)

@@ -535,12 +535,10 @@ type ConfirmHook = Arc<dyn Fn(u32) -> Option<ShardManagerError> + Send + Sync>;
 /// what each one means: see [`LeaderElection::campaign_until_elected`].
 #[derive(Debug, thiserror::Error)]
 enum CampaignInterrupt {
-    /// A campaigner of a newer rollout generation queues behind this replica, so this one gives
-    /// way and queues again at the end.
-    #[error(
-        "moved to the end of the election queue behind rollout generation {newer} (own: {own})"
-    )]
-    YieldToNewer { own: u64, newer: u64 },
+    /// A campaigner of a newer version queues behind this replica, so this one gives way and
+    /// queues again at the end.
+    #[error("moved to the end of the election queue behind version {newer} (own: {own})")]
+    YieldToNewer { own: String, newer: String },
     /// Another live replica advertises this replica's gRPC address; only a change of
     /// configuration helps.
     #[error(
@@ -606,7 +604,7 @@ impl LeaderElection {
                 identity: identity(),
                 grpc_address,
                 ready: false,
-                rollout_generation: None,
+                version: golem_common::golem_version().to_string(),
             },
             shutdown: CancellationToken::new(),
             confirm_hook: None,
@@ -624,10 +622,12 @@ impl LeaderElection {
         self
     }
 
-    /// Sets the rollout generation that this replica announces in its election value: see
-    /// [`newer_generation_behind`].
-    pub fn with_rollout_generation(mut self, generation: Option<u64>) -> Self {
-        self.value.rollout_generation = generation;
+    /// Replaces the build version that this replica announces in its election value. **Tests
+    /// only**: the replicas of one test process share one build, so only this lets a test queue
+    /// an old and a new version together.
+    #[doc(hidden)]
+    pub fn with_version(mut self, version: impl Into<String>) -> Self {
+        self.value.version = version.into();
         self
     }
 
@@ -686,7 +686,7 @@ impl LeaderElection {
                 Err(CampaignExit::Interrupted(CampaignInterrupt::YieldToNewer { own, newer })) => {
                     info!(
                         own,
-                        newer, "Moved behind a newer rollout generation in the election queue"
+                        newer, "Moved behind a newer version in the election queue"
                     );
                 }
                 // The other replica keeps renewing its key, so a new campaign would meet it
@@ -915,7 +915,7 @@ impl LeaderElection {
     }
 
     /// Ends a waiting campaign when the watched view shows that it must not go on: a campaigner
-    /// of a newer rollout generation queues behind this replica (see [`newer_generation_behind`]),
+    /// of a newer version queues behind this replica (see [`newer_version_behind`]),
     /// or another live campaigner advertises this replica's address. Never returns without a
     /// watch.
     ///
@@ -941,11 +941,9 @@ impl LeaderElection {
         recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             if let Some(view) = watch.view() {
-                if let Some(newer) =
-                    newer_generation_behind(&view, own_lease, self.value.rollout_generation)
-                {
+                if let Some(newer) = newer_version_behind(&view, own_lease, &self.value.version) {
                     return CampaignInterrupt::YieldToNewer {
-                        own: self.value.rollout_generation.unwrap_or_default(),
+                        own: self.value.version.clone(),
                         newer,
                     };
                 }
@@ -1119,11 +1117,11 @@ pub struct ElectionValue {
     /// `ElectionValue`: see [`Self::decode`].
     pub grpc_address: LeaderAddress,
     pub ready: bool,
-    /// The operator's rollout generation of this replica, if set. A standby moves behind a
-    /// campaigner of a higher generation, so that a rolling update hands the leadership to a new
-    /// replica. Absent from values of replicas that have none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rollout_generation: Option<u64>,
+    /// The build version of this replica. A standby moves behind a campaigner of a newer version,
+    /// so that a rolling update hands the leadership to a new replica. A value written by a build
+    /// that announced none reads as an empty text, which is never newer.
+    #[serde(default)]
+    pub version: String,
 }
 
 impl ElectionValue {
@@ -1186,15 +1184,16 @@ impl LeaderLocator {
     }
 }
 
-/// The generation of a campaigner queued behind this replica that is higher than this replica's
-/// own, if any. The head of the queue never moves: it is about to lead. Unknown generations move
-/// nothing.
-pub(crate) fn newer_generation_behind(
+/// The version of a campaigner queued behind this replica that is newer than this replica's own,
+/// if any (the newest of them). The head of the queue never moves: it is about to lead. A version
+/// is newer only when both parse as semantic versions: a development build, whose version is a
+/// `git describe` text, keeps today's order, and so does a replica that announces no version.
+pub(crate) fn newer_version_behind(
     view: &CampaignView,
     own_lease: i64,
-    own_generation: Option<u64>,
-) -> Option<u64> {
-    let own_generation = own_generation?;
+    own_version: &str,
+) -> Option<String> {
+    let own_version = semver::Version::parse(own_version).ok()?;
     let position = view
         .campaigners
         .iter()
@@ -1204,9 +1203,13 @@ pub(crate) fn newer_generation_behind(
     }
     view.campaigners[position + 1..]
         .iter()
-        .filter_map(|campaigner| campaigner.value.as_ref()?.rollout_generation)
-        .filter(|generation| *generation > own_generation)
-        .max()
+        .filter_map(|campaigner| {
+            let version = &campaigner.value.as_ref()?.version;
+            let parsed = semver::Version::parse(version).ok()?;
+            (parsed > own_version).then_some((parsed, version))
+        })
+        .max_by(|(left, _), (right, _)| left.cmp(right))
+        .map(|(_, version)| version.clone())
 }
 
 /// The key of another campaigner that advertises this replica's address, when it was first seen,
@@ -1269,7 +1272,7 @@ mod tests {
                     port,
                 },
                 ready: false,
-                rollout_generation: None,
+                version: String::new(),
             }),
         }
     }
@@ -1281,85 +1284,98 @@ mod tests {
         }
     }
 
-    fn with_generation(mut campaigner: Campaigner, generation: Option<u64>) -> Campaigner {
+    fn with_version(mut campaigner: Campaigner, version: &str) -> Campaigner {
         if let Some(value) = campaigner.value.as_mut() {
-            value.rollout_generation = generation;
+            value.version = version.to_string();
         }
         campaigner
     }
 
-    #[test]
-    fn a_standby_moves_for_a_newer_generation_behind_it() {
-        let view = CampaignView {
+    /// A queue of three: the head, the replica under test (lease 2) and a last one of `last`.
+    fn queue_ending_in(last: &str) -> CampaignView {
+        CampaignView {
             campaigners: vec![
-                with_generation(campaigner(1, 10, 9001), Some(1)),
-                with_generation(campaigner(2, 20, 9002), Some(1)),
-                with_generation(campaigner(3, 30, 9003), Some(2)),
+                with_version(campaigner(1, 10, 9001), "1.5.0"),
+                with_version(campaigner(2, 20, 9002), "1.5.0"),
+                with_version(campaigner(3, 30, 9003), last),
             ],
-        };
-        assert_eq!(newer_generation_behind(&view, 2, Some(1)), Some(2));
+        }
+    }
+
+    #[test]
+    fn a_standby_moves_for_a_newer_version_behind_it() {
+        assert_eq!(
+            newer_version_behind(&queue_ending_in("1.6.0"), 2, "1.5.0"),
+            Some("1.6.0".to_string())
+        );
+        assert_eq!(
+            newer_version_behind(&queue_ending_in("1.5.1-rc.1"), 2, "1.5.0"),
+            Some("1.5.1-rc.1".to_string())
+        );
+    }
+
+    #[test]
+    fn the_same_version_behind_moves_nothing() {
+        assert_eq!(
+            newer_version_behind(&queue_ending_in("1.5.0"), 2, "1.5.0"),
+            None
+        );
+    }
+
+    #[test]
+    fn an_older_version_behind_moves_nothing() {
+        assert_eq!(
+            newer_version_behind(&queue_ending_in("1.4.9"), 2, "1.5.0"),
+            None,
+            "a rollback queues behind the replicas that are already there"
+        );
+    }
+
+    #[test]
+    fn a_version_that_does_not_parse_never_moves_anything() {
+        assert_eq!(
+            newer_version_behind(&queue_ending_in("v1.6.0-12-gabcdef"), 2, "1.5.0"),
+            None,
+            "a development build is never newer"
+        );
+        assert_eq!(
+            newer_version_behind(&queue_ending_in(""), 2, "1.5.0"),
+            None,
+            "a replica that announces no version is never newer"
+        );
+        assert_eq!(
+            newer_version_behind(&queue_ending_in("1.6.0"), 2, "v1.5.0-3-gabcdef"),
+            None,
+            "a replica that is a development build never moves"
+        );
     }
 
     #[test]
     fn the_head_of_the_queue_never_moves() {
-        let view = CampaignView {
-            campaigners: vec![
-                with_generation(campaigner(1, 10, 9001), Some(1)),
-                with_generation(campaigner(3, 30, 9003), Some(2)),
-            ],
-        };
-        assert_eq!(newer_generation_behind(&view, 1, Some(1)), None);
+        assert_eq!(
+            newer_version_behind(&queue_ending_in("1.6.0"), 1, "1.5.0"),
+            None
+        );
     }
 
     #[test]
-    fn a_newer_generation_ahead_is_no_reason_to_move() {
+    fn a_newer_version_ahead_is_no_reason_to_move() {
         let view = CampaignView {
             campaigners: vec![
-                with_generation(campaigner(1, 10, 9001), Some(1)),
-                with_generation(campaigner(3, 30, 9003), Some(2)),
-                with_generation(campaigner(2, 40, 9002), Some(1)),
+                with_version(campaigner(1, 10, 9001), "1.5.0"),
+                with_version(campaigner(3, 30, 9003), "1.6.0"),
+                with_version(campaigner(2, 40, 9002), "1.5.0"),
             ],
         };
-        assert_eq!(newer_generation_behind(&view, 2, Some(1)), None);
-    }
-
-    #[test]
-    fn without_generations_nothing_moves() {
-        let view = CampaignView {
-            campaigners: vec![
-                with_generation(campaigner(1, 10, 9001), None),
-                with_generation(campaigner(2, 20, 9002), None),
-                with_generation(campaigner(3, 30, 9003), Some(2)),
-            ],
-        };
-        assert_eq!(
-            newer_generation_behind(&view, 2, None),
-            None,
-            "a replica without a generation never moves"
-        );
-        let view = CampaignView {
-            campaigners: vec![
-                with_generation(campaigner(1, 10, 9001), Some(1)),
-                with_generation(campaigner(2, 20, 9002), Some(1)),
-                with_generation(campaigner(3, 30, 9003), None),
-            ],
-        };
-        assert_eq!(
-            newer_generation_behind(&view, 2, Some(1)),
-            None,
-            "a campaigner without one is never newer"
-        );
+        assert_eq!(newer_version_behind(&view, 2, "1.5.0"), None);
     }
 
     #[test]
     fn a_view_without_the_own_key_moves_nothing() {
-        let view = CampaignView {
-            campaigners: vec![
-                with_generation(campaigner(1, 10, 9001), Some(1)),
-                with_generation(campaigner(3, 30, 9003), Some(2)),
-            ],
-        };
-        assert_eq!(newer_generation_behind(&view, 2, Some(1)), None);
+        assert_eq!(
+            newer_version_behind(&queue_ending_in("1.6.0"), 9, "1.5.0"),
+            None
+        );
     }
 
     #[test]

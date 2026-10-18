@@ -18,7 +18,7 @@
 //! that an etcd outage does not stall every call that reaches a standby. A stale view is
 //! harmless there: the client follows the named leader and comes back if it is gone. The
 //! campaign uses the view to find a duplicate advertised address and a campaigner of a newer
-//! rollout generation, and the readiness check uses the time of etcd's last answer.
+//! version, and the readiness check uses the time of etcd's last answer.
 
 use crate::sharding::error::ShardManagerError;
 use crate::sharding::leader_election::{ElectionValue, RetryDelays, bounded};
@@ -321,7 +321,7 @@ mod tests {
                 port,
             },
             ready,
-            rollout_generation: None,
+            version: String::new(),
         }
         .encode()
     }

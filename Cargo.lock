@@ -4512,6 +4512,7 @@ dependencies = [
  "prost-types",
  "rustls",
  "scc",
+ "semver",
  "serde",
  "serde_json",
  "sqlx",
