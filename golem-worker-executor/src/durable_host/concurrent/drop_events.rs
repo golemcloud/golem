@@ -372,6 +372,15 @@ impl DroppedCall {
         oplog: std::sync::Arc<dyn crate::services::oplog::Oplog>,
         partial: Option<OplogPayload<HostResponse>>,
     ) -> Result<(), WorkerExecutorError> {
+        self.enqueue_cancelled_with_oplog(oplog, partial).await?;
+        Ok(())
+    }
+
+    fn enqueue_cancelled_with_oplog(
+        &self,
+        oplog: Arc<dyn Oplog>,
+        partial: Option<OplogPayload<HostResponse>>,
+    ) -> crate::services::oplog::OplogAddReceipt {
         let cancelled = OplogEntry::Cancelled {
             timestamp: Timestamp::now_utc(),
             start_index: self.start_idx,
@@ -379,8 +388,7 @@ impl DroppedCall {
             span_finished: self.span_finished.clone(),
         };
         self.notify_span_closed();
-        oplog.add(cancelled).await?;
-        Ok(())
+        oplog.enqueue_add(cancelled)
     }
 }
 
@@ -486,6 +494,35 @@ impl AccessDropEventDrainGuard {
 
     fn replace_current(&mut self, event: DropEvent) {
         self.current = Some(event);
+    }
+
+    async fn prepare_current_cancellation(
+        &mut self,
+        oplog: Arc<dyn Oplog>,
+    ) -> Result<(), TerminalCallError> {
+        let DropEvent::UnfinishedCancellable { call } = self.current_mut() else {
+            return Ok(());
+        };
+        let trap_context = call.trap_context();
+        call.wait_request_upload()
+            .await
+            .map_err(|error| TerminalCallError::new(error, trap_context))?;
+        // Acceptance and replacement have no await between them. A torn drain
+        // must retain this receipt, never the instruction to append again.
+        let receipt = call.enqueue_cancelled_with_oplog(oplog, None);
+        let terminal = tokio::spawn(async move {
+            receipt.await?;
+            Ok(())
+        });
+        let event = DropEvent::CleanupAfterTerminal {
+            function_type: call.function_type().clone(),
+            durable_begin_index: call.begin_index(),
+            terminal: Some(terminal),
+            trap_context,
+            live_call_permit: call.live_call_permit.take(),
+        };
+        self.replace_current(event);
+        Ok(())
     }
 
     fn finish_current(&mut self) {
@@ -796,48 +833,15 @@ where
     let mut recorded = 0;
     let mut first_error = None;
     while drain.start_next() {
+        if let Err(error) = drain.prepare_current_cancellation(oplog.clone()).await {
+            first_error.get_or_insert(error);
+            drain.finish_current();
+            continue;
+        }
         match drain.current_mut() {
-            DropEvent::UnfinishedCancellable { call } => {
-                let context = call.trap_context();
-                let function_type = call.function_type().clone();
-                let durable_begin_index = call.begin_index();
-                let result = async {
-                    call.wait_request_upload().await?;
-                    call.append_cancelled_with_oplog(oplog.clone(), None).await
-                }
-                .await;
-                match result {
-                    Ok(()) => {
-                        // The `Cancelled` entry is durable, so neutralize the event before the remaining fallible
-                        // work: a torn drain from here re-queues only a permit-holding no-op
-                        // instead of re-appending a second `Cancelled`.
-                        let live_call_permit = call.live_call_permit.take();
-                        drain.replace_current(DropEvent::AwaitCompletionMarker {
-                            receipt: None,
-                            trap_context: context,
-                            live_call_permit,
-                        });
-                        if let Err(err) = end_durable_function_access(
-                            store,
-                            get_ctx,
-                            function_type,
-                            durable_begin_index,
-                            false,
-                        )
-                        .await
-                            && first_error.is_none()
-                        {
-                            first_error = Some(TerminalCallError::new(err, context));
-                        }
-                        recorded += 1;
-                    }
-                    Err(err) => {
-                        if first_error.is_none() {
-                            first_error = Some(TerminalCallError::new(err, context));
-                        }
-                    }
-                }
-            }
+            DropEvent::UnfinishedCancellable { .. } => unreachable!(
+                "unfinished cancellations are handed to terminal cleanup before waiting"
+            ),
             DropEvent::UnfinishedNotCancellable { call } => {
                 let context = call.trap_context();
                 let start_idx = call.start_idx();
@@ -1078,7 +1082,7 @@ where
 
 #[cfg(test)]
 pub(super) mod tests {
-    use super::super::tests::InMemoryOplog;
+    use super::super::tests::{InMemoryOplog, live_unfinished_handle};
     use super::*;
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
@@ -1100,6 +1104,111 @@ pub(super) mod tests {
             span_id: SpanId::generate(),
             finished_at: "2025-03-12T13:14:15.123Z".parse().unwrap(),
             outcome: SpanOutcome::Abandoned,
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn cancelled_append_receipt_survives_a_torn_drain_without_another_terminal() {
+        for cancel_before_actor_finishes in [true, false] {
+            let (reached, mut reached_rx) = tokio::sync::mpsc::unbounded_channel();
+            let gate = Arc::new(tokio::sync::Semaphore::new(0));
+            let oplog = Arc::new(InMemoryOplog::with_cancel_gate(reached, gate.clone()));
+            let start = oplog
+                .add(OplogEntry::Start {
+                    timestamp: Timestamp::now_utc(),
+                    parent_start_index: None,
+                    function_name: HostFunctionName::MonotonicClockNow,
+                    invocation_id: None,
+                    observational_owner: None,
+                    request: None,
+                    durable_function_type: DurableFunctionType::ReadLocal,
+                    span_started: None,
+                    denial: None,
+                })
+                .await
+                .unwrap();
+            let (sink, mut events) = tokio::sync::mpsc::unbounded_channel();
+            let permits = Arc::new(AtomicUsize::new(0));
+            let mut session = live_unfinished_handle::<Cancellable>(start, sink.clone());
+            session.live_call_permit = Some(LiveCallPermit::new(permits.clone()));
+            session.close_span_on_cancellation(SpanId::generate());
+            drop(session);
+            let event = events.try_recv().unwrap();
+            let DropEvent::UnfinishedCancellable { call } = &event else {
+                panic!("guest drop must enqueue cancellation");
+            };
+            let close = call.span_finished.clone();
+            let mut drain = AccessDropEventDrainGuard::new(sink.clone(), vec![event]);
+            assert!(drain.start_next());
+            drain
+                .prepare_current_cancellation(oplog.clone())
+                .await
+                .unwrap();
+            reached_rx.recv().await.unwrap();
+            assert_eq!(permits.load(Ordering::Acquire), 1);
+            if cancel_before_actor_finishes {
+                assert_eq!(oplog.length().await.unwrap(), 1);
+                let DropEvent::CleanupAfterTerminal {
+                    terminal: Some(terminal),
+                    ..
+                } = drain.current_mut()
+                else {
+                    panic!("accepted append must already be owned by terminal cleanup");
+                };
+                assert!(futures::poll!(terminal).is_pending());
+            } else {
+                gate.add_permits(1);
+                // An ordered later append proves the cancellation has landed,
+                // without consuming the receipt retained by the torn drain.
+                oplog.add(noop()).await.unwrap();
+            }
+            drop(drain);
+            assert_eq!(permits.load(Ordering::Acquire), 1);
+            let event = events.try_recv().unwrap();
+            assert!(matches!(&event, DropEvent::CleanupAfterTerminal { .. }));
+            let mut resumed = AccessDropEventDrainGuard::new(sink, vec![event]);
+            assert!(resumed.start_next());
+            resumed
+                .prepare_current_cancellation(oplog.clone())
+                .await
+                .unwrap();
+            if cancel_before_actor_finishes {
+                gate.add_permits(1);
+            }
+            let DropEvent::CleanupAfterTerminal {
+                terminal: Some(terminal),
+                ..
+            } = resumed.current_mut()
+            else {
+                panic!("resumed drain must join the original append");
+            };
+            terminal.await.unwrap().unwrap();
+            assert_eq!(permits.load(Ordering::Acquire), 1);
+            resumed.finish_current();
+            resumed.disarm();
+            assert_eq!(permits.load(Ordering::Acquire), 0);
+            let history = oplog
+                .read_exact(OplogIndex::INITIAL, oplog.length().await.unwrap())
+                .await
+                .unwrap();
+            let cancellations = history
+                .iter()
+                .filter_map(|(_, entry)| match entry {
+                    OplogEntry::Cancelled {
+                        start_index,
+                        span_finished,
+                        ..
+                    } => Some((*start_index, span_finished.clone())),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(cancellations, vec![(start, close)]);
+            assert!(
+                reached_rx.try_recv().is_err(),
+                "no second append may reach the gate"
+            );
+            assert!(events.try_recv().is_err());
         }
     }
 

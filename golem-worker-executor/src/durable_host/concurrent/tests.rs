@@ -161,7 +161,7 @@ fn resolver_duplicate_resolution_is_ignored() {
 
 // ---- DurableCallSession drop policy ----
 
-fn live_unfinished_handle<P: DropPolicy>(
+pub(super) fn live_unfinished_handle<P: DropPolicy>(
     start_idx: OplogIndex,
     sink: mpsc::UnboundedSender<DropEvent>,
 ) -> DurableCallSession<host_functions::MonotonicClockNow, P> {
@@ -1229,11 +1229,13 @@ async fn marker_gated_preparation_keeps_tail_activity_until_delivery() {
 /// drained drop event writes durably. With an `end_gate` installed, appending an `End` or
 /// completion marker first signals `reached` and then blocks until the gate semaphore yields a
 /// permit, so a test can hold the terminal or marker append open and observe what is (not) visible
-/// meanwhile.
+/// meanwhile. A separate cancellation gate exercises the same accepted-append window for
+/// `Cancelled` without changing the behavior of existing End/marker-gated tests.
 #[derive(Debug)]
 pub(super) struct InMemoryOplog {
     entries: Arc<tokio::sync::Mutex<Vec<OplogEntry>>>,
     end_gate: Option<(mpsc::UnboundedSender<()>, Arc<tokio::sync::Semaphore>)>,
+    cancel_gate: Option<(mpsc::UnboundedSender<()>, Arc<tokio::sync::Semaphore>)>,
     next_reserved: Arc<std::sync::atomic::AtomicU64>,
     next_commit: Arc<tokio::sync::Mutex<u64>>,
     append_progress: Arc<tokio::sync::Notify>,
@@ -1247,6 +1249,7 @@ impl InMemoryOplog {
         Self {
             entries: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             end_gate: None,
+            cancel_gate: None,
             next_reserved: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             next_commit: Arc::new(tokio::sync::Mutex::new(1)),
             append_progress: Arc::new(tokio::sync::Notify::new()),
@@ -1269,10 +1272,21 @@ impl InMemoryOplog {
         Self {
             entries: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             end_gate: Some((reached, gate)),
+            cancel_gate: None,
             next_reserved: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             next_commit: Arc::new(tokio::sync::Mutex::new(1)),
             append_progress: Arc::new(tokio::sync::Notify::new()),
             fence: None,
+        }
+    }
+
+    pub(super) fn with_cancel_gate(
+        reached: mpsc::UnboundedSender<()>,
+        gate: Arc<tokio::sync::Semaphore>,
+    ) -> Self {
+        Self {
+            cancel_gate: Some((reached, gate)),
+            ..Self::new()
         }
     }
 }
@@ -1295,6 +1309,7 @@ impl Oplog for InMemoryOplog {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let entries = self.entries.clone();
         let end_gate = self.end_gate.clone();
+        let cancel_gate = self.cancel_gate.clone();
         let next_commit = self.next_commit.clone();
         let append_progress = self.append_progress.clone();
         let (done, receipt) = tokio::sync::oneshot::channel();
@@ -1305,6 +1320,15 @@ impl Oplog for InMemoryOplog {
                 progress.as_mut().enable();
                 let mut next = next_commit.lock().await;
                 if *next == index {
+                    if matches!(&entry, OplogEntry::Cancelled { .. })
+                        && let Some((reached, gate)) = &cancel_gate
+                    {
+                        let _ = reached.send(());
+                        gate.acquire()
+                            .await
+                            .expect("cancel gate semaphore is never closed")
+                            .forget();
+                    }
                     if matches!(
                         &entry,
                         OplogEntry::End { .. }

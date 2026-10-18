@@ -1278,6 +1278,8 @@ mark { background: var(--warn-soft); color: inherit; padding: 0 .15em; border-ra
 </table>
 </div>
 
+<p id="cancelled-call-receipt"><strong>A cancelled cleanup drain retains the accepted append.</strong> <code>AccessDropEventDrainGuard::prepare_current_cancellation</code> waits for request upload, submits <code>Cancelled</code>, then transfers its receipt and live-call permit into the existing <code>CleanupAfterTerminal</code> event before awaiting anything else. If the drain is cancelled, the next drain joins that same receipt and closes the scope; it does not submit another terminal. This holds both while the actor is still appending and after the record exists but its receipt has not been consumed.</p>
+
 <h3 id="incomplete-call-types">Incomplete calls: four types, explicit protocol ownership</h3>
 <p>When replay finds a <code>Start</code> without a terminal, <code>prepare_incomplete_live_repair</code> switches the handle to <em>live completion of the existing <code>Start</code></em> — no second <code>Start</code> is appended. The four <code>DurableFunctionType</code> cases classify the effect, not transaction membership or parentage:</p>
 
