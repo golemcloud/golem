@@ -2218,6 +2218,111 @@ async fn a_standby_whose_advertised_address_does_not_reach_it_stays_unready(
 
 #[test]
 #[tracing::instrument(skip_all)]
+// A just-elected leader runs its startup, here held in the executors' initial health check, and a
+// rollout counts its readiness: a leader that turned unready for the length of its startup would
+// stall the rollout, which waits for every new pod to be ready before it stops the next old one.
+// The replica advertises its real gRPC address, because a replica is ready only once it reaches
+// the address it advertises; a replica that never became ready would fail the wait below instead
+// of passing the assertion that follows it.
+async fn a_just_elected_leader_stays_ready_during_its_startup(etcd: &Arc<DockerEtcd>) {
+    wipe_state(etcd).await;
+    await_election_idle(etcd).await;
+
+    // Accepts and then says nothing, and its lease was granted long ago, so the initial health
+    // check cannot be skipped and holds the startup for its whole timeout.
+    let silent_executor = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("Cannot bind the stand-in executor");
+    let silent_addr = silent_executor
+        .local_addr()
+        .expect("The stand-in executor should report its address");
+    write_state_with_executor(
+        etcd,
+        ExecutorAddr {
+            ip: silent_addr.ip(),
+            port: silent_addr.port(),
+        },
+    )
+    .await;
+
+    let mut config = ShardManagerConfig {
+        initial_health_check_timeout: Duration::from_secs(30),
+        ..distributed_config(etcd)
+    };
+    config.http_port = free_port();
+    config.grpc.port = free_port();
+    let http_port = config.http_port;
+
+    let shutdown = CancellationToken::new();
+    let replica = tokio::spawn({
+        let shutdown = shutdown.clone();
+        async move {
+            let mut join_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
+            let result = golem_shard_manager::run(
+                &config,
+                Deployment::Standalone { shutdown },
+                prometheus::Registry::new(),
+                &mut join_set,
+            )
+            .await;
+            join_set.abort_all();
+            result.map(|_| ())
+        }
+    });
+
+    // The health check reaching the stand-in executor proves that the replica won the election and
+    // is inside its startup. The connection is kept, so the check stays stuck.
+    let _dialled = timeout(STARTUP_TIMEOUT, silent_executor.accept())
+        .await
+        .expect("The elected replica should reach its initial health check")
+        .expect("Cannot accept the health check connection");
+
+    // The reach to its own address is retried every second, so the replica may need a moment to
+    // report ready; that wait is bounded and happens while the startup is still held.
+    await_until(STARTUP_TIMEOUT, || readyz(http_port)).await;
+
+    // From here the replica is ready and its startup is held. It must stay ready for a while: a
+    // gate that went unready for the leader's startup would answer 503 on one of these polls.
+    let held_until = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < held_until {
+        assert!(
+            readyz(http_port).await,
+            "the leader turned unready while it was starting"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // Those answers came from a leader that was still starting: it has not returned from `run()`,
+    // and its election value does not yet say that it is ready.
+    assert!(
+        !replica.is_finished(),
+        "the startup finished early, so the polls above did not cover it"
+    );
+    let values = campaigner_values(etcd).await;
+    assert_eq!(values.len(), 1, "exactly this replica is in the election");
+    assert!(
+        values.values().all(|value| !value.ready),
+        "the leader already published itself as ready, so its startup was not held"
+    );
+
+    shutdown.cancel();
+    let result = timeout(Duration::from_secs(5), replica)
+        .await
+        .expect("the replica should stop within five seconds of being asked to")
+        .expect("the replica task should not panic");
+    assert!(
+        matches!(
+            result
+                .expect_err("a replica asked to stop mid-startup does not finish starting")
+                .downcast_ref::<ShardManagerError>(),
+            Some(ShardManagerError::ShutdownRequested)
+        ),
+        "the replica should end on the requested shutdown"
+    );
+}
+
+#[test]
+#[tracing::instrument(skip_all)]
 // A leader cut off from etcd must stop serving within one lease TTL: from then on another replica
 // may lead.
 async fn a_leader_cut_off_from_etcd_stops_serving_within_one_lease_ttl(etcd: &Arc<DockerEtcd>) {
