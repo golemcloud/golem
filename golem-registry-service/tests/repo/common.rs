@@ -7058,7 +7058,6 @@ async fn create_disk_override_plan(deps: &Deps, account_id: Uuid, user_configura
             total_worker_connection_count: 25.into(),
             total_component_storage_bytes: 1000.into(),
             total_blob_storage_bytes: 1_000_000_000_000_000_000u64.into(),
-            monthly_gas_limit: 2000.into(),
             monthly_component_upload_limit_bytes: 3000.into(),
             max_memory_per_worker: 1024.into(),
             max_memory_per_worker_ceiling: 2048.into(),
@@ -7212,11 +7211,11 @@ pub async fn test_account_usage(deps: &Deps) {
             UsageType::TotalWorkerConnectionCount => 25,
             UsageType::TotalComponentStorageBytes => 1000,
             UsageType::TotalBlobStorageBytes => 1_000_000_000_000_000_000,
-            UsageType::MonthlyGasLimit => 2000,
             UsageType::MonthlyComponentUploadLimitBytes => 3000,
             UsageType::MonthlyHttpCalls => 5000,
             UsageType::MonthlyRpcCalls => 5000,
-            UsageType::MonthlyDurableAgentStorageByteSeconds
+            UsageType::MonthlyGasLimit
+            | UsageType::MonthlyDurableAgentStorageByteSeconds
             | UsageType::MonthlyEphemeralStorageByteSeconds => u64::MAX,
             UsageType::MonthlyMemoryGbSeconds => 6000,
         };
@@ -7279,12 +7278,38 @@ pub async fn test_account_usage(deps: &Deps) {
         for usage_type in UsageType::iter() {
             let within_limit = matches!(
                 usage_type,
-                UsageType::MonthlyDurableAgentStorageByteSeconds
+                UsageType::MonthlyGasLimit
+                    | UsageType::MonthlyDurableAgentStorageByteSeconds
                     | UsageType::MonthlyEphemeralStorageByteSeconds
                     | UsageType::TotalBlobStorageBytes
             );
             check!(usage.add_change(usage_type, 1000000) == within_limit);
         }
+        // Fuel statistics retain overshoot; the resolved GCU allowance still limits admission.
+        let metering = golem_service_base::clients::registry::ResourceUsageMetering::all_enabled();
+        let remaining = usage
+            .resource_limits(metering)
+            .unwrap()
+            .monthly_policy
+            .available_fuel;
+        assert_eq!(usage.plan.monthly_compute_gcu.get(), 2);
+        assert_eq!(remaining, 2 * FUEL_PER_GCU - 1_000_003);
+        assert!(usage.add_change(
+            UsageType::MonthlyGasLimit,
+            i64::try_from(remaining + 1).unwrap()
+        ));
+        assert_eq!(
+            usage.final_value(UsageType::MonthlyGasLimit),
+            2 * FUEL_PER_GCU + 1
+        );
+        assert_eq!(
+            usage
+                .resource_limits(metering)
+                .unwrap()
+                .monthly_policy
+                .available_fuel,
+            0
+        );
     }
 
     {

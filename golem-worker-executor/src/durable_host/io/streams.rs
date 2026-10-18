@@ -389,12 +389,14 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
     ) -> Result<u64, StreamError> {
         self.observe_function_call("io::streams::output_stream", "blocking_splice");
         let rep = self_.rep();
-        if self.state.open_filesystem_output_streams.contains_key(&rep) {
-            let file_pair = self
+        let tcp_input = self.state.open_tcp_input_streams.contains(&src.rep());
+        let file_output = self.state.open_filesystem_output_streams.contains_key(&rep);
+        if file_output {
+            let file_input = self
                 .state
                 .open_filesystem_input_streams
                 .contains(&src.rep());
-            let readiness = if file_pair {
+            let readiness = if file_input || tcp_input {
                 let interrupt = self.create_interrupt_signal();
                 observe_file_stream(interrupt, self.table().get_mut(&self_)?.write_ready()).await
             } else {
@@ -402,9 +404,8 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             };
             readiness?;
         }
-        let tcp_input = self.state.open_tcp_input_streams.contains(&src.rep());
         let raw_tcp_output = self.state.open_tcp_output_streams.contains(&rep);
-        let diagnostic = (tcp_input && raw_tcp_output)
+        let diagnostic = (tcp_input && (raw_tcp_output || file_output))
             .then(|| {
                 self.native_wait_diagnostic(
                     "blocking_splice",
@@ -414,12 +415,14 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                 )
             })
             .flatten();
-        let file_pair = self
-            .state
-            .open_filesystem_input_streams
-            .contains(&src.rep())
-            && self.state.open_filesystem_output_streams.contains_key(&rep);
-        let file_interrupt = file_pair.then(|| self.create_interrupt_signal());
+        // Dropping observation retains any entered file work under the filesystem owner.
+        let file_splice = file_output
+            && (tcp_input
+                || self
+                    .state
+                    .open_filesystem_input_streams
+                    .contains(&src.rep()));
+        let file_interrupt = file_splice.then(|| self.create_interrupt_signal());
         let interrupt =
             (tcp_input && raw_tcp_output).then(|| NativeIoWait::new(self.interrupt_sources()));
         let native = WaitDiagnostic::observe(

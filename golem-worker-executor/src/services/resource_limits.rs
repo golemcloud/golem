@@ -660,7 +660,7 @@ impl AtomicResourceEntry {
     /// Sentinel value used in the database and service config to represent
     /// "unlimited" for the concurrent agents per executor limit.
     /// `1_000_000_000_000_000_000` (10^18) — fits in i64 (TOML max) and
-    /// is safe for SQLite REAL, consistent with `monthly_gas_limit` and the
+    /// is safe for SQLite REAL, consistent with the Registry's
     /// `default_unlimited()` convention from PR #3068.
     pub const UNLIMITED_CONCURRENT_AGENTS: u64 = 1_000_000_000_000_000_000;
 

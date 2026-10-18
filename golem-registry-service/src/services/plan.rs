@@ -201,7 +201,6 @@ fn plan_record(plan: &PrecreatedPlan) -> PlanRecord {
         total_blob_storage_bytes: plan.blob_storage_limit.into(),
         total_worker_connection_count: plan.worker_connection_limit.into(),
         monthly_component_upload_limit_bytes: plan.monthly_upload_limit.into(),
-        monthly_gas_limit: plan.monthly_gas_limit.into(),
         per_invocation_http_call_limit: plan.per_invocation_http_call_limit.into(),
         per_invocation_rpc_call_limit: plan.per_invocation_rpc_call_limit.into(),
         monthly_http_call_limit: plan.monthly_http_call_limit.into(),

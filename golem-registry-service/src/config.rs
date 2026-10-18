@@ -454,7 +454,6 @@ impl Default for RegistryServiceConfig {
                 worker_connection_limit: 100,
                 storage_limit: 500000000,
                 blob_storage_limit: default_unlimited(),
-                monthly_gas_limit: 1000000000000000000,
                 monthly_upload_limit: 1000000000,
                 monthly_compute_gcu: 0,
                 monthly_memory_gb_seconds: 0,
@@ -825,8 +824,6 @@ pub struct PrecreatedPlan {
     pub worker_connection_limit: u64,
     pub storage_limit: u64,
     pub blob_storage_limit: u64,
-    /// Executor fuel allowance. Monthly account policy uses `monthly_compute_gcu`.
-    pub monthly_gas_limit: u64,
     pub monthly_upload_limit: u64,
     pub monthly_compute_gcu: u64,
     pub monthly_memory_gb_seconds: u64,
@@ -920,6 +917,24 @@ mod tests {
         };
 
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn precreated_plan_exposes_only_current_monthly_compute_amount() {
+        let config = RegistryServiceConfig::default();
+        let plan = config.initial_plans.get("default").unwrap();
+        let serialized = serde_json::to_value(plan).unwrap();
+        assert_eq!(
+            serialized.get("monthly_compute_gcu"),
+            Some(&serde_json::json!(0))
+        );
+        assert!(serialized.get("monthly_gas_limit").is_none());
+        let decoded: crate::config::PrecreatedPlan = serde_json::from_value(serialized).unwrap();
+        assert_eq!(decoded.monthly_compute_gcu, plan.monthly_compute_gcu);
+        assert_eq!(
+            decoded.monthly_memory_gb_seconds,
+            plan.monthly_memory_gb_seconds
+        );
     }
 
     #[test]

@@ -181,7 +181,6 @@ impl Deps {
                 total_worker_connection_count: 25.into(),
                 total_component_storage_bytes: 1000.into(),
                 total_blob_storage_bytes: 1_000_000_000_000_000_000u64.into(),
-                monthly_gas_limit: 2000.into(),
                 monthly_component_upload_limit_bytes: 3000.into(),
                 max_memory_per_worker: 4000.into(),
                 max_memory_per_worker_ceiling: u64::MAX.into(),

@@ -11,7 +11,7 @@ use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::resource_usage_metering::{
     FilesystemUsage, ScriptedFilesystemUsageForTest,
 };
-use golem_worker_executor::services::{HasOplog, UsesAllDeps};
+use golem_worker_executor::services::{HasOplog, HasOplogService, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
 use request_tasks::{finish_input_test, join_request, request_is_finished, start_refresh};
 use test_r::test;
@@ -143,11 +143,25 @@ pending_case!(
     Ephemeral
 );
 
+pending_case!(
+    durable_p2_tcp_to_file_splice_memory_quota,
+    FileSplice,
+    Memory,
+    Durable
+);
+pending_case!(
+    ephemeral_p2_tcp_to_file_splice_memory_quota,
+    FileSplice,
+    Memory,
+    Ephemeral
+);
+
 #[derive(Clone, Copy, Debug)]
 enum Operation {
     Read,
     Skip,
     Splice,
+    FileSplice,
 }
 
 impl Operation {
@@ -156,13 +170,14 @@ impl Operation {
             Self::Read => "tcp_blocking_read_p2",
             Self::Skip => "tcp_blocking_skip_p2",
             Self::Splice => "tcp_blocking_splice_p2",
+            Self::FileSplice => "tcp_file_blocking_splice_p2",
         }
     }
     fn export(self) -> &'static str {
         match self {
             Self::Read => "blocking_read",
             Self::Skip => "blocking_skip",
-            Self::Splice => "blocking_splice",
+            Self::Splice | Self::FileSplice => "blocking_splice",
         }
     }
     fn assert_result(self, result: golem_test_framework::dsl::AgentResult) -> anyhow::Result<()> {
@@ -172,6 +187,12 @@ impl Operation {
             }
             Self::Skip | Self::Splice => {
                 ensure!(result.into_typed::<Result<u64, String>>()? == Ok(1))
+            }
+            Self::FileSplice => {
+                ensure!(
+                    result.into_typed::<Result<(u64, Vec<u8>), String>>()? == Ok((1, vec![b'x'])),
+                    "the actual file must contain exactly the one spliced byte"
+                );
             }
         }
         Ok(())
@@ -286,7 +307,9 @@ async fn pending_input(
     if resource == Resource::Compute {
         limits.run_batch_for_test().await;
     }
-    if resource == Resource::Memory && matches!(operation, Operation::Splice) {
+    if resource == Resource::Memory
+        && matches!(operation, Operation::Splice | Operation::FileSplice)
+    {
         // Flush the seed's fractional memory charge under an earlier revision.
         limits.run_batch_for_test().await;
         registry.set_policy(policy.clone());
@@ -363,6 +386,16 @@ async fn pending_input(
         executor.commit_oplog(&id).await?;
         let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         let connect_start = completed_setup(&entries)?;
+        let stored = worker.all().oplog_service();
+        let read_stored = async || {
+            let last = stored.get_last_index(&owned, mode).await;
+            stored.read_exact(&owned, mode, OplogIndex::INITIAL, last.as_u64()).await
+        };
+        let prefix = if matches!(operation, Operation::FileSplice) {
+            let prefix = read_stored().await;
+            ensure!(!prefix.is_empty(), "the actual-mode committed splice prefix must exist");
+            Some(prefix)
+        } else { None };
         ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
         let initial = worker.current_monthly_proposal_for_test();
         let mut raw = worker.raw_interrupt_for_test();
@@ -472,6 +505,10 @@ async fn pending_input(
         ensure!(worker.permit_acquisitions_for_test() == acquisitions);
         ensure!(account.monthly_observer_count_for_test() == 0);
         let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        if let Some(prefix) = &prefix {
+            let last = *prefix.last_key_value().unwrap().0;
+            ensure!(read_stored().await.range(..=last).eq(prefix.iter()), "stop changed the complete committed prefix");
+        }
         ensure!(
             completed_setup(&stopped)? == connect_start,
             "interruption must preserve completed setup and NoHostStart"
@@ -586,6 +623,10 @@ async fn pending_input(
             operation.assert_result(resumed)?;
             ensure!(reconstructed.state() == WaitState::Returned);
             let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            if let Some(prefix) = &prefix {
+                let last = *prefix.last_key_value().unwrap().0;
+                ensure!(read_stored().await.range(..=last).eq(prefix.iter()), "reconstruction changed the complete committed prefix");
+            }
             ensure!(
                 poll_starts(&recovered) == poll_starts(&stopped),
                 "reconstruction cannot add a raw TCP Start"
@@ -645,7 +686,7 @@ async fn pending_input(
                 ?resource, ?operation, %connect_start, connections,
                 "Native input re-executed; cached lookup did not connect; fresh invocation succeeded"
             );
-        } else if matches!(operation, Operation::Splice) {
+        } else if matches!(operation, Operation::Splice | Operation::FileSplice) {
             let mut grant = policy;
             if resource == Resource::Storage {
                 grant.available_ephemeral_storage_byte_seconds = u64::MAX;
@@ -685,8 +726,10 @@ async fn pending_input(
                 let (mut peer, _) = listener.accept().await?;
                 peer.write_all(b"x").await?;
                 let mut echoed = [0];
-                peer.read_exact(&mut echoed).await?;
-                ensure!(echoed == *b"x", "fresh ephemeral splice output");
+                if matches!(operation, Operation::Splice) {
+                    peer.read_exact(&mut echoed).await?;
+                    ensure!(echoed == *b"x", "fresh ephemeral splice output");
+                }
                 ensure!(peer.read(&mut echoed).await? == 0);
                 Ok::<_, anyhow::Error>(())
             };

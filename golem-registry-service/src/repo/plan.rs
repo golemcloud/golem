@@ -143,12 +143,12 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                             max_concurrent_agents_per_executor,
                             total_app_count, total_env_count, total_component_count,
                             total_worker_connection_count, total_component_storage_bytes, total_blob_storage_bytes,
-                            monthly_gas_limit, monthly_component_upload_limit_bytes,
+                            monthly_component_upload_limit_bytes,
                             per_invocation_http_call_limit, per_invocation_rpc_call_limit,
                             monthly_http_call_limit, monthly_rpc_call_limit,
                             oplog_writes_per_second
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
                         ON CONFLICT (plan_id) DO UPDATE SET
                             name = $2,
                             max_memory_per_worker = $3,
@@ -171,13 +171,12 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                             total_worker_connection_count = $20,
                             total_component_storage_bytes = $21,
                             total_blob_storage_bytes = $22,
-                            monthly_gas_limit = $23,
-                            monthly_component_upload_limit_bytes = $24,
-                            per_invocation_http_call_limit = $25,
-                            per_invocation_rpc_call_limit = $26,
-                            monthly_http_call_limit = $27,
-                            monthly_rpc_call_limit = $28,
-                            oplog_writes_per_second = $29
+                            monthly_component_upload_limit_bytes = $23,
+                            per_invocation_http_call_limit = $24,
+                            per_invocation_rpc_call_limit = $25,
+                            monthly_http_call_limit = $26,
+                            monthly_rpc_call_limit = $27,
+                            oplog_writes_per_second = $28
                     "#})
                     .bind(plan.plan_id)
                     .bind(plan.name)
@@ -201,7 +200,6 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                     .bind(plan.total_worker_connection_count)
                     .bind(plan.total_component_storage_bytes)
                     .bind(plan.total_blob_storage_bytes)
-                    .bind(plan.monthly_gas_limit)
                     .bind(plan.monthly_component_upload_limit_bytes)
                     .bind(plan.per_invocation_http_call_limit)
                     .bind(plan.per_invocation_rpc_call_limit)
@@ -281,7 +279,7 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                         max_concurrent_agents_per_executor,
                         total_app_count, total_env_count, total_component_count,
                         total_worker_connection_count, total_component_storage_bytes, total_blob_storage_bytes,
-                        monthly_gas_limit, monthly_component_upload_limit_bytes,
+                        monthly_component_upload_limit_bytes,
                         per_invocation_http_call_limit, per_invocation_rpc_call_limit,
                         monthly_http_call_limit, monthly_rpc_call_limit,
                         oplog_writes_per_second
@@ -313,7 +311,7 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                     max_concurrent_agents_per_executor,
                     total_app_count, total_env_count, total_component_count,
                     total_worker_connection_count, total_component_storage_bytes, total_blob_storage_bytes,
-                    monthly_gas_limit, monthly_component_upload_limit_bytes,
+                    monthly_component_upload_limit_bytes,
                     per_invocation_http_call_limit, per_invocation_rpc_call_limit,
                     monthly_http_call_limit, monthly_rpc_call_limit,
                     oplog_writes_per_second

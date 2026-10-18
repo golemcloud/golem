@@ -54,6 +54,36 @@ earlier progress notes below. Local completion is not reviewer acceptance or Git
 The detailed proof boundaries are in the durable-execution
 [testing patterns](.agents/skills/understanding-durable-execution/reference/testing-patterns.md).
 
+## Whole-PR self-review corrections
+
+The independent standards/spec review found the finite corrections below. The user explicitly
+declined the optional duplicated usage-drain refactor. Leave that accounting code unchanged.
+
+- [x] **R1. Interrupt a mixed raw TCP-input to file-output splice.** The previous dispatcher covered
+  TCP/TCP and file/file pairs but otherwise awaited the native call. A supported guest with a silent
+  TCP peer could therefore remain parked before a write started after monthly suspension was accepted.
+  The regression uses the actual public WASI pairing through the existing host fixture and native
+  wait tracing, then checks typed outcome, ordinary cleanup/reconstruction, exact file bytes and
+  committed history. No new runtime test gate or general lifecycle protocol is needed.
+  Both modes reproduced the actual accepted-Suspend/live-socket/live-permit failure before the
+  fix. The identical regression now passes through existing filesystem observation, including
+  ordinary recovery, exact byte count/file size/contents and actual-mode committed prefixes.
+  Surrounding same/cross-socket splice, completion and custom-finish cases and actual entered-file
+  observation/drain body checks pass. TCP/TCP selection and entered-work ownership are unchanged.
+- [x] **R2. Repair the monthly CI cohort prerequisite.** Group5 now uses the existing defined
+  `ensure-builtin-artifacts` task like the other cohorts. The static prerequisite check fails on
+  the old undefined task and passes on the correction. Group selection, exclusion and thread
+  options are unchanged. This does not claim that the full CI job ran locally.
+- [x] **R3. Retire the obsolete configured fuel cap.** `monthly_gas_limit` was accepted and
+  persisted even though `monthly_compute_gcu` supplied the actual monthly allowance. The obsolete
+  config/model/SQL/proto/reference wiring and Plan column are removed. Both database migrations
+  drop only that column. The independent fuel usage counter and historical usage data remain.
+  Fresh SQLite and PostgreSQL, with and without TLS, pass the affected Plan, usage and grant cases.
+  Exact assertions retain fuel overshoot and require the actual finite GCU allowance to reach zero.
+  The config regression exposes only the current compute amount. Fresh Registry and Golem binaries
+  regenerated the affected TOML and environment references; their only changes remove the old key.
+  This is contract cleanup, not another suspension mechanism or a new unknown-key validation policy.
+
 Before upstream integration, the completed executor scope passed the selected body/native checks, 593 affected library checks,
 278 integration checks, strict Clippy and the normal build without `test-utils`. The aligned
 walkthrough passed offline browser checks. The later CLI handler reorganization passes the same

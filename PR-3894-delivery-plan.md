@@ -123,6 +123,23 @@ not close A1 or the remaining F10/F11 requests.
 
 ## Scope decisions
 
+### Whole-PR review corrections
+
+The completed independent review left three concrete corrections: the mixed TCP-input/file-output
+blocking-splice wait, the monthly CI cohort's undefined prerequisite and the obsolete configured
+fuel cap. Keep this correction batch finite. The user declined the optional usage-drain duplication
+refactor, so that accounting code stays unchanged.
+
+Use existing filesystem observation for the mixed splice. An accepted stop must release a silent
+input wait, while entered file work keeps its owner and generation lease through ordinary drain.
+Keep the invocation key, committed history, exact outcomes, file effects and reconstruction.
+
+Use the existing built-in artifact task for the CI cohort. Remove the old `monthly_gas_limit`
+configuration, Plan column and directly affected wiring. Keep the fuel usage counter and its history.
+The resolved `monthly_compute_gcu` allowance remains the only monthly compute admission source.
+This does not authorize a new lifecycle, timer, test gate, compatibility path or config-validation
+policy. The local feedback checklist records completion and verification limits.
+
 ### Approved grant rule
 
 After the code-review closeout, the user approved grants that can increase the permitted amount but

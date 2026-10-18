@@ -134,6 +134,47 @@ fn tcp_cross_socket_blocking_splice(input_port: u16, output_port: u16) -> Result
         .map_err(|error| format!("{error:?}"))
 }
 
+fn tcp_file_blocking_splice(port: u16) -> Result<(u64, Vec<u8>), String> {
+    use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
+
+    let (_socket, input, _output) = tcp_input_connection(port)?;
+    let (root, _) = wasi::filesystem::preopens::get_directories()
+        .into_iter()
+        .next()
+        .ok_or("no preopened directory")?;
+    let file = root
+        .open_at(
+            PathFlags::empty(),
+            "tcp-splice-output",
+            OpenFlags::CREATE | OpenFlags::TRUNCATE,
+            DescriptorFlags::READ | DescriptorFlags::WRITE,
+        )
+        .map_err(|error| format!("open splice destination: {error:?}"))?;
+    let output = file
+        .write_via_stream(0)
+        .map_err(|error| format!("open output stream: {error:?}"))?;
+    let written = output
+        .blocking_splice(&input, 1)
+        .map_err(|error| format!("splice: {error:?}"))?;
+    output
+        .blocking_flush()
+        .map_err(|error| format!("flush: {error:?}"))?;
+    drop(output);
+    let size = file
+        .stat()
+        .map_err(|error| format!("stat: {error:?}"))?
+        .size;
+    if size != written {
+        return Err(format!(
+            "file size {size} does not match spliced bytes {written}"
+        ));
+    }
+    let (contents, _) = file
+        .read(written, 0)
+        .map_err(|error| format!("read: {error:?}"))?;
+    Ok((written, contents))
+}
+
 async fn udp_receive() -> Result<Vec<u8>, String> {
     use golem_rust::wasip3::sockets::types::{
         IpAddressFamily, IpSocketAddress, Ipv4SocketAddress, UdpSocket,
@@ -162,6 +203,7 @@ pub trait EphemeralNetworking {
     fn tcp_blocking_read_p2(&self, port: u16) -> Result<Vec<u8>, String>;
     fn tcp_blocking_skip_p2(&self, port: u16) -> Result<u64, String>;
     fn tcp_blocking_splice_p2(&self, port: u16) -> Result<u64, String>;
+    fn tcp_file_blocking_splice_p2(&self, port: u16) -> Result<(u64, Vec<u8>), String>;
     fn tcp_cross_socket_blocking_splice_p2(
         &self,
         input_port: u16,
@@ -206,6 +248,10 @@ impl EphemeralNetworking for EphemeralNetworkingImpl {
         tcp_blocking_splice(port)
     }
 
+    fn tcp_file_blocking_splice_p2(&self, port: u16) -> Result<(u64, Vec<u8>), String> {
+        tcp_file_blocking_splice(port)
+    }
+
     fn tcp_cross_socket_blocking_splice_p2(
         &self,
         input_port: u16,
@@ -223,6 +269,7 @@ impl EphemeralNetworking for EphemeralNetworkingImpl {
 pub trait Networking {
     fn new(name: String) -> Self;
     fn tcp_blocking_splice_p2(&self, port: u16) -> Result<u64, String>;
+    fn tcp_file_blocking_splice_p2(&self, port: u16) -> Result<(u64, Vec<u8>), String>;
     fn tcp_cross_socket_blocking_splice_p2(
         &self,
         input_port: u16,
@@ -322,6 +369,10 @@ impl Networking for NetworkingImpl {
 
     fn tcp_blocking_splice_p2(&self, port: u16) -> Result<u64, String> {
         tcp_blocking_splice(port)
+    }
+
+    fn tcp_file_blocking_splice_p2(&self, port: u16) -> Result<(u64, Vec<u8>), String> {
+        tcp_file_blocking_splice(port)
     }
 
     fn tcp_cross_socket_blocking_splice_p2(

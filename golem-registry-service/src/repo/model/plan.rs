@@ -44,7 +44,6 @@ pub struct PlanRecord {
     pub total_worker_connection_count: NumericU64,
     pub total_component_storage_bytes: NumericU64,
     pub total_blob_storage_bytes: NumericU64,
-    pub monthly_gas_limit: NumericU64,
     pub monthly_component_upload_limit_bytes: NumericU64,
     pub per_invocation_http_call_limit: NumericU64,
     pub per_invocation_rpc_call_limit: NumericU64,
@@ -59,7 +58,6 @@ impl PlanRecord {
             UsageType::MonthlyComponentUploadLimitBytes => {
                 self.monthly_component_upload_limit_bytes.get()
             }
-            UsageType::MonthlyGasLimit => self.monthly_gas_limit.get(),
             UsageType::TotalAppCount => self.total_app_count.get(),
             UsageType::TotalEnvCount => self.total_env_count.get(),
             UsageType::TotalComponentCount => self.total_component_count.get(),
@@ -69,7 +67,9 @@ impl PlanRecord {
             UsageType::MonthlyHttpCalls => self.monthly_http_call_limit.get(),
             UsageType::MonthlyRpcCalls => self.monthly_rpc_call_limit.get(),
             UsageType::MonthlyMemoryGbSeconds => self.monthly_memory_gb_seconds.get(),
-            UsageType::MonthlyDurableAgentStorageByteSeconds
+            // Fuel and storage counters retain overshoot; resolved monthly policy owns admission.
+            UsageType::MonthlyGasLimit
+            | UsageType::MonthlyDurableAgentStorageByteSeconds
             | UsageType::MonthlyEphemeralStorageByteSeconds => u64::MAX,
         }
     }

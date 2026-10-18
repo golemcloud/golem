@@ -410,6 +410,21 @@ All original non-clock assertions remain, with full actual-mode prefixes through
 completed-history replay. Virtual retry delays and receiver projections are gone. Both UDP native
 batches, unchanged completion-first/tail collateral, scoped strict lint, format and source audits pass.
 
+### Mixed TCP input and filesystem output
+
+Use the existing native input fixture with a real TCP stream and a file output stream. Keep the
+peer silent after actual native Pending, apply the monthly memory policy and require the typed stop,
+socket closure and joined Store/permit/window cleanup. The regression must fail on an accepted
+Suspend that leaves the socket and permit live, not merely on missing diagnostics. The passive
+existing splice tracing observes this pairing without a new event or scheduling gate.
+
+Keep the original invocation key, exact terminals, actual-mode full committed prefix and ordinary
+reconstruction. After capacity returns, send one byte and require the returned splice count, actual
+file size and contents to agree. The ephemeral key stays terminal; only a fresh invocation may write
+its new file. Existing filesystem observation/drain body tests separately prove entered-work and
+generation-lease retention. This does not claim byte-transaction atomicity, output-backpressure
+coverage or native managed-XFS measurement.
+
 ### Native host waits without virtual clocks
 
 The monitor has no alternate test clock, Worker clock field or clock setter. Both builds use the same

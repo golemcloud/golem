@@ -1350,7 +1350,6 @@ mod tests {
             total_worker_connection_count: NumericU64::new(u64::MAX),
             total_component_storage_bytes: NumericU64::new(storage_limit),
             total_blob_storage_bytes: NumericU64::new(u64::MAX),
-            monthly_gas_limit: NumericU64::new(u64::MAX),
             monthly_component_upload_limit_bytes: NumericU64::new(u64::MAX),
             per_invocation_http_call_limit: NumericU64::new(u64::MAX),
             per_invocation_rpc_call_limit: NumericU64::new(u64::MAX),

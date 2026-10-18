@@ -753,9 +753,9 @@ object names add no backend wait.
 P2/P3 filesystem descriptor calls select guest observation of each admitted operation. Open selects
 its attributes and open calls separately. Stat interruption escapes as a typed trap before error
 serialization; completed stat history and replay timestamp restoration remain authoritative. Direct
-P2 file read/skip, flush readiness, file-only blocking splice and completed-record file readiness/read
-revalidation use the existing file maps. Live multi-poll retains its existing Worker subscriber.
-Mixed network/unknown streams keep their own paths.
+P2 file read/skip, flush readiness and completed-record file readiness/read revalidation use the
+existing file maps. Blocking splice observes known file outputs with file or TCP inputs, as described
+below. Live multi-poll retains its existing Worker subscriber. Unknown stream pairs keep their paths.
 
 P3 file prefetch, subsequent producer demand and result-future observation use the composed signal.
 An interrupted read traps instead of reporting EOF. Streaming chunk effects and task completion are
@@ -874,6 +874,20 @@ the native splice selects the existing composed `create_interrupt_signal()` thro
 unknown outputs, durable settlement and resource deletion stay outside
 this select. Raw read/skip use the same composed subscription.
 
+A registered TCP input can also feed a known filesystem output. That pairing uses the existing
+filesystem observation helper for output readiness and the native splice. Cancellation stops guest
+observation; any entered file operation keeps its filesystem owner and generation lease until
+ordinary drain completes. File completion keeps its existing ready-first behavior, while TCP/TCP
+selection remains unbiased. Unknown or unclassified pairs keep their existing paths.
+
+The mixed-pair regression uses actual guest TCP and file streams with a silent peer, not a Worker
+gate. Both modes reproduced accepted Suspend with the socket, Store and permit still live before
+the missing classification was fixed. It retains exact stopped history and the complete committed
+prefix in the actual agent mode. Durable continuation and the fresh ephemeral probe must produce
+exactly the spliced byte in the file, with matching byte count and file size. The native splice
+itself still has no durable Start; surrounding filesystem calls keep their ordinary records. This
+does not add transactional byte effects or an external exactly-once guarantee.
+
 `tests/api/interruption/host/p2/tcp/input/mod.rs` and `api/interruption/host/p2/tcp/input/cross_socket/mod.rs` observe the actual splice
 future's first Pending through standard tracing for same-socket and cross-socket pairs. Production
 tracing adds no `check_write` preflight. The precise writable-output/blocked-input proof belongs to
@@ -886,7 +900,7 @@ cross-socket tests require both sockets to close and later count a byte consumed
 on B. Memory accounting uses a drained seed and isolated target account interval, not a per-worker
 billing key or an exact parked-duration charge. Scripted storage is not native managed-XFS evidence.
 
-Raw splice constructs the same `NativeIoWait` as raw read/skip. Colocated tests call the actual
+TCP/TCP splice constructs the same `NativeIoWait` as raw read/skip. Colocated tests call the actual
 WASI `HostOutputStream::blocking_splice` on separate input/output resources. Writable memory output
 and quiet native input establish actual Pending without a Worker gate.
 `native_splice_interrupts_actual_pending_without_output_effect` checks actual output capacity in

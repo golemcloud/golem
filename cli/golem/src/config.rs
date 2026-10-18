@@ -633,7 +633,6 @@ fn local_initial_plans() -> HashMap<String, PrecreatedPlan> {
         worker_connection_limit: UNLIMITED,
         storage_limit: UNLIMITED,
         blob_storage_limit: UNLIMITED,
-        monthly_gas_limit: UNLIMITED,
         monthly_upload_limit: UNLIMITED,
         monthly_compute_gcu: 0,
         monthly_memory_gb_seconds: 0,
@@ -2045,6 +2044,7 @@ mod tests {
             },
             FilesystemStorageMode::ManagedXfs {
                 root: PathBuf::from("/data").into_boxed_path(),
+                xfs_quotad_socket: PathBuf::from("/data/xfs-quotad.sock").into_boxed_path(),
             },
         ] {
             let managed = matches!(mode, FilesystemStorageMode::ManagedXfs { .. });
