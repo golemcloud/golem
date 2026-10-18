@@ -175,14 +175,14 @@ pub struct LeaseBelief {
 }
 
 impl LeaseBelief {
-    fn new(deadline: Instant) -> Self {
+    fn new(deadline: Duration) -> Self {
         Self {
-            deadline: Arc::new(std::sync::Mutex::new(on_belief_clock(deadline))),
+            deadline: Arc::new(std::sync::Mutex::new(deadline)),
         }
     }
 
-    fn set(&self, deadline: Instant) {
-        *self.deadline.lock().unwrap_or_else(PoisonError::into_inner) = on_belief_clock(deadline);
+    fn set(&self, deadline: Duration) {
+        *self.deadline.lock().unwrap_or_else(PoisonError::into_inner) = deadline;
     }
 
     pub fn held(&self) -> bool {
@@ -205,14 +205,27 @@ impl LeaseBelief {
     /// A belief that ends at `deadline`. **Tests only.**
     #[doc(hidden)]
     pub fn until(deadline: Instant) -> Self {
-        Self::new(deadline)
+        Self::new(belief_clock::now() + deadline.saturating_duration_since(Instant::now()))
     }
 }
 
-/// The time on [`belief_clock`] at which the runtime's monotonic `deadline` falls, measured from
-/// now. A deadline in the past falls now.
-fn on_belief_clock(deadline: Instant) -> Duration {
-    belief_clock::now() + deadline.saturating_duration_since(Instant::now())
+/// The moment a request was sent, on both clocks. The lease etcd holds started when the request
+/// reached it, so the belief is dated from the send: read on the belief clock at the
+/// acknowledgement, a suspend between the send and the answer would not be counted. The watchdog
+/// still sleeps until the monotonic time.
+#[derive(Clone, Copy, Debug)]
+struct SentAt {
+    monotonic: Instant,
+    belief: Duration,
+}
+
+impl SentAt {
+    fn now() -> Self {
+        Self {
+            monotonic: Instant::now(),
+            belief: belief_clock::now(),
+        }
+    }
 }
 
 /// The clock that the lease belief is measured on. On Linux it is `CLOCK_BOOTTIME`, which counts
@@ -256,7 +269,7 @@ struct RenewalWatchdog {
     /// Send times of renewals not yet acknowledged, oldest first. etcd answers a stream in order,
     /// and the send is the earlier of the two instants, so a watchdog that errs gives the lease up
     /// sooner.
-    unacknowledged: VecDeque<Instant>,
+    unacknowledged: VecDeque<SentAt>,
     /// The same deadline, shared with the gate.
     belief: LeaseBelief,
 }
@@ -264,12 +277,12 @@ struct RenewalWatchdog {
 impl RenewalWatchdog {
     /// Starts the belief window at `sent_at`: the instant the handshake was sent, which etcd has
     /// since answered.
-    fn armed_at(sent_at: Instant, ttl: Duration) -> Self {
+    fn armed_at(sent_at: SentAt, ttl: Duration) -> Self {
         Self {
             ttl,
-            deadline: sent_at + ttl,
+            deadline: sent_at.monotonic + ttl,
             unacknowledged: VecDeque::new(),
-            belief: LeaseBelief::new(sent_at + ttl),
+            belief: LeaseBelief::new(sent_at.belief + ttl),
         }
     }
 
@@ -277,7 +290,7 @@ impl RenewalWatchdog {
         self.deadline.saturating_duration_since(Instant::now())
     }
 
-    fn record_send(&mut self, sent_at: Instant) {
+    fn record_send(&mut self, sent_at: SentAt) {
         self.unacknowledged.push_back(sent_at);
     }
 
@@ -287,8 +300,8 @@ impl RenewalWatchdog {
     /// handshake's own, which already armed the deadline.
     fn record_acknowledgement(&mut self) {
         if let Some(sent_at) = self.unacknowledged.pop_front() {
-            self.deadline = sent_at + self.ttl;
-            self.belief.set(self.deadline);
+            self.deadline = sent_at.monotonic + self.ttl;
+            self.belief.set(sent_at.belief + self.ttl);
         }
     }
 
@@ -300,9 +313,9 @@ impl RenewalWatchdog {
 
     /// Re-arms from a renewal acknowledged outside the response stream - the one `keep_alive`
     /// performs when a reconnect succeeds.
-    fn rearm_at(&mut self, sent_at: Instant) {
-        self.deadline = sent_at + self.ttl;
-        self.belief.set(self.deadline);
+    fn rearm_at(&mut self, sent_at: SentAt) {
+        self.deadline = sent_at.monotonic + self.ttl;
+        self.belief.set(sent_at.belief + self.ttl);
     }
 }
 
@@ -348,7 +361,7 @@ impl LeaseKeepAlive {
             let broken = tokio::select! {
                 biased;
                 _ = renew.tick() => {
-                    let sent_at = Instant::now();
+                    let sent_at = SentAt::now();
                     match self.keeper.keep_alive().await {
                         Ok(()) => {
                             self.watchdog.record_send(sent_at);
@@ -406,7 +419,7 @@ impl LeaseKeepAlive {
             }
 
             let attempt = std::cmp::min(self.request_timeout, remaining);
-            let attempt_sent = Instant::now();
+            let attempt_sent = SentAt::now();
             match timeout(attempt, self.lease_client.keep_alive(self.lease_id)).await {
                 Ok(Ok((keeper, stream))) => {
                     self.keeper = keeper;
@@ -816,7 +829,7 @@ impl LeaderElection {
         lease_id: i64,
         granted_ttl: Duration,
     ) -> Result<Elected, CampaignExit> {
-        let handshake_sent = Instant::now();
+        let handshake_sent = SentAt::now();
         let (keeper, stream) = self.bounded(lease_client.keep_alive(lease_id)).await?;
         let mut keepalive = LeaseKeepAlive {
             lease_id,
@@ -1643,10 +1656,10 @@ mod tests {
     #[test]
     // The lease etcd holds started when the renewal reached it, not when the answer was read.
     async fn the_watchdog_dates_a_renewal_by_when_it_was_sent() {
-        let armed_at = Instant::now();
+        let armed_at = SentAt::now();
         let mut watchdog = RenewalWatchdog::armed_at(armed_at, TTL);
 
-        let sent_at = Instant::now();
+        let sent_at = SentAt::now();
         watchdog.record_send(sent_at);
         sleep(LAG).await;
         watchdog.record_acknowledgement();
@@ -1654,12 +1667,12 @@ mod tests {
         let dated_from = watchdog.deadline - TTL;
         assert_eq!(
             dated_from,
-            sent_at,
+            sent_at.monotonic,
             "The deadline was dated {:?} after the renewal was sent, so it is being armed from the \
              moment the response was read rather than from the renewal etcd acknowledged. A \
              `drive()` entry that is dropped leaves its acknowledgement unread until the next one, \
              and the replica would then go on believing in a lease that much past its expiry.",
-            dated_from.saturating_duration_since(sent_at)
+            dated_from.saturating_duration_since(sent_at.monotonic)
         );
     }
 
@@ -1667,18 +1680,18 @@ mod tests {
     // etcd answers a stream in order, so the oldest outstanding send is what the next response is
     // for.
     async fn acknowledgements_are_matched_to_sends_in_order() {
-        let mut watchdog = RenewalWatchdog::armed_at(Instant::now(), TTL);
+        let mut watchdog = RenewalWatchdog::armed_at(SentAt::now(), TTL);
 
-        let first = Instant::now();
+        let first = SentAt::now();
         watchdog.record_send(first);
         sleep(LAG).await;
-        let second = Instant::now();
+        let second = SentAt::now();
         watchdog.record_send(second);
 
         watchdog.record_acknowledgement();
         assert_eq!(
             watchdog.deadline - TTL,
-            first,
+            first.monotonic,
             "The first response was dated to a later send, crediting the lease with a renewal etcd \
              has not answered yet"
         );
@@ -1686,7 +1699,7 @@ mod tests {
         watchdog.record_acknowledgement();
         assert_eq!(
             watchdog.deadline - TTL,
-            second,
+            second.monotonic,
             "The second response did not move the deadline on to the send it answers"
         );
     }
@@ -1695,7 +1708,7 @@ mod tests {
     // The keepalive handshake answers with a positive TTL too, and that response has no send of
     // its own to date it against.
     async fn a_response_with_nothing_to_date_it_leaves_the_deadline_alone() {
-        let armed_at = Instant::now();
+        let armed_at = SentAt::now();
         let mut watchdog = RenewalWatchdog::armed_at(armed_at, TTL);
 
         sleep(LAG).await;
@@ -1703,7 +1716,7 @@ mod tests {
 
         assert_eq!(
             watchdog.deadline - TTL,
-            armed_at,
+            armed_at.monotonic,
             "A response this replica cannot place in time moved the deadline, extending the belief \
              window on the strength of a renewal it never sent"
         );
@@ -1712,21 +1725,44 @@ mod tests {
     #[test]
     // A reconnect replaces the stream; nothing sent on its predecessor can be answered on it.
     async fn a_replaced_stream_does_not_date_its_first_response_to_an_old_send() {
-        let mut watchdog = RenewalWatchdog::armed_at(Instant::now(), TTL);
+        let mut watchdog = RenewalWatchdog::armed_at(SentAt::now(), TTL);
 
-        let on_the_old_stream = Instant::now();
+        let on_the_old_stream = SentAt::now();
         watchdog.record_send(on_the_old_stream);
         watchdog.forget_unacknowledged();
         sleep(LAG).await;
-        let on_the_new_stream = Instant::now();
+        let on_the_new_stream = SentAt::now();
         watchdog.record_send(on_the_new_stream);
         watchdog.record_acknowledgement();
 
         assert_eq!(
             watchdog.deadline - TTL,
-            on_the_new_stream,
+            on_the_new_stream.monotonic,
             "The new stream's first response was dated to a send made on the stream it replaced, \
              so every reconnect shortens the lease this replica believes it holds"
         );
+    }
+
+    #[test]
+    // A suspend between the send and the answer is time etcd's lease has run: the belief is dated
+    // from the send on the belief clock, not from the moment the answer is read.
+    async fn the_belief_is_dated_by_the_belief_clock_at_the_send() {
+        // The belief clock reads 100 s at the send, whatever it reads when the answer arrives: a
+        // suspend in between moves the later reading, not the send.
+        let send = Duration::from_secs(100);
+        let sent = SentAt {
+            monotonic: Instant::now(),
+            belief: send,
+        };
+        let mut watchdog = RenewalWatchdog::armed_at(SentAt::now(), TTL);
+        watchdog.record_send(sent);
+        watchdog.record_acknowledgement();
+
+        assert!(
+            watchdog
+                .belief
+                .held_at(send + TTL - Duration::from_millis(1))
+        );
+        assert!(!watchdog.belief.held_at(send + TTL));
     }
 }
