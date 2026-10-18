@@ -491,7 +491,10 @@ async fn recorded_entity_calls(
 ) -> Vec<RecordedEntityCall> {
     let oplog = active.execution().oplog();
     let tip = oplog.current_oplog_index().await;
-    let entries = oplog.read_exact(OplogIndex::INITIAL, u64::from(tip)).await;
+    let entries = oplog
+        .read_exact(OplogIndex::INITIAL, u64::from(tip))
+        .await
+        .unwrap();
     entries
         .iter()
         .filter_map(|(index, entry)| match entry {
@@ -545,6 +548,7 @@ async fn record_entity_call(
             request,
             durable_function_type,
             span_started: None,
+            denial: None,
         })
         .await?;
     oplog
