@@ -34,6 +34,12 @@ jobs:
 
   preflight:
     needs: validate
+    # GitHub checks permissions even for the called workflow's skipped publication jobs.
+    permissions:
+      contents: write
+      checks: write
+      pull-requests: write
+      actions: read
     uses: ./.github/workflows/ci.yaml
     secrets: inherit
 
