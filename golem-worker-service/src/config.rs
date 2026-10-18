@@ -1351,6 +1351,12 @@ mod tests {
             1024 * 1024
         );
         assert!(!config.http_server.http2_adaptive_window);
+        // hyper's defaults: a deployment behind a proxy sets its own.
+        assert_eq!(
+            config.http_server.http2_max_pending_accept_reset_streams,
+            20
+        );
+        assert_eq!(config.http_server.http2_max_local_error_reset_streams, 1024);
         for limits in [
             &config.invocation_session.websocket,
             &config.connect_websocket,
@@ -1377,6 +1383,8 @@ mod tests {
                 [http_server]
                 http2_max_header_list_size = 1000
                 http2_adaptive_window = true
+                http2_max_pending_accept_reset_streams = 6000
+                http2_max_local_error_reset_streams = 7000
 
                 [body_limits]
                 api = 2000
@@ -1394,6 +1402,11 @@ mod tests {
 
         assert_eq!(config.http_server.http2_max_header_list_size, 1000);
         assert!(config.http_server.http2_adaptive_window);
+        assert_eq!(
+            config.http_server.http2_max_pending_accept_reset_streams,
+            6000
+        );
+        assert_eq!(config.http_server.http2_max_local_error_reset_streams, 7000);
         assert_eq!(
             config.http_server.http2_initial_stream_window_size,
             1024 * 1024
