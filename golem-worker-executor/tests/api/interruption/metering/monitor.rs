@@ -558,9 +558,8 @@ mod retries {
             attempts.try_recv(),
             Err(tokio::sync::mpsc::error::TryRecvError::Empty)
         ));
-        // Monthly capacity is already applied at each rejection above. The whole batches
-        // also await filesystem-limit replies from the resident invocation loop, so join
-        // those unrelated replies only after the silent TCP invocation has unloaded.
+        // Monthly capacity is already applied at each rejection above. Batch completion is
+        // separate from the existing Worker filesystem reply and physical cleanup.
         tokio::time::timeout(Duration::from_secs(10), async {
             tokio::try_join!(first_refresh, second_refresh)
         })

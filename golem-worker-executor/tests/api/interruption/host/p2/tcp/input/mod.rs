@@ -1,5 +1,6 @@
 mod completion;
 mod cross_socket;
+mod periodic_refresh;
 mod repeated_stop;
 mod request_tasks;
 

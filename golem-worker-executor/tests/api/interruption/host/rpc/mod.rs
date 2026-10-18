@@ -705,7 +705,7 @@ async fn pending_rpc_scenario(
         }
         ensure!(!refreshes.is_empty(), "applied grant refresh missing");
         for refresh in refreshes.drain(..) {
-            tokio::time::timeout(Duration::from_secs(5), refresh).await.context("join applied policy filesystem callbacks after target completion")??;
+            tokio::time::timeout(Duration::from_secs(5), refresh).await.context("join applied policy refresh after target completion")??;
         }
         let target_entries = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
         ensure!(history::target(&target_entries, &original.target_key, true)? == Some(target_wait));

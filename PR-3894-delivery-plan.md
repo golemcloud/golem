@@ -140,6 +140,17 @@ The resolved `monthly_compute_gcu` allowance remains the only monthly compute ad
 This does not authorize a new lifecycle, timer, test gate, compatibility path or config-validation
 policy. The local feedback checklist records completion and verification limits.
 
+The final review found one more required integration. The existing batch timer waited for a
+filesystem-limit reply that an executing invocation could not send yet. A later owner-selected
+`hardLimit` revision could therefore remain unfetched. The user authorized that P1 correction and
+the stale walkthrough correction, not the optional grant-resolution or CLI rendering refactors.
+
+Keep one bounded latest-value filesystem queue per account. The refresh publishes policy and the
+desired cached limit without waiting for physical application. The existing serialized target
+callback, Worker command and filesystem lifecycle still own that application and its reply.
+Explicit awaited filesystem updates keep their completion/error contract. This separates policy
+delivery from physical update completion without adding a lifecycle or changing the timer.
+
 ### Approved grant rule
 
 After the code-review closeout, the user approved grants that can increase the permitted amount but

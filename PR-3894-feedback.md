@@ -84,6 +84,27 @@ declined the optional duplicated usage-drain refactor. Leave that accounting cod
   regenerated the affected TOML and environment references; their only changes remove the old key.
   This is contract cleanup, not another suspension mechanism or a new unknown-key validation policy.
 
+## Final whole-PR review follow-up
+
+The user requested the walkthrough correction and the policy-refresh P1 only. The optional grant
+baseline and CLI rendering refactors remain deferred, as does the earlier usage-drain duplication.
+
+- [x] Correct stale walkthrough claims about the removed stat gate and P2 HTTP, the frontend session
+  startup prerequisite, and result commit versus stop publication. The matching durable-execution
+  guide now states the same boundaries. Offline browser checks cover the corrected paragraphs.
+- [x] Keep periodic policy refresh live while a resident filesystem-limit reply is pending.
+  The unchanged production-timer regressions reproduced the failure for both unchanged and changed
+  filesystem limits, then passed after the correction. They require the later hard-limit revision
+  to reach two accounts before the held filesystem reply completes. The account now queues only
+  the latest desired filesystem limit; the existing serialized callback and Worker still own
+  physical application. Explicit awaited updates retain their completion/error contract. Library
+  checks also cover coalescing, the latest cache, ordinary-refresh retry and idle ownership. Real
+  durable and ephemeral Worker cases use only the periodic timer and retain exact history, raw
+  prefixes, accounting, physical cleanup and recovery or terminal failure. Selected monitor,
+  RPC/refund, completion, mixed-file and entered-End checks pass. Existing filesystem ownership
+  tests, strict worker/test-utility lint, normal production compilation, format and browser checks
+  pass. Full CI and native managed-XFS execution remain outside this scoped evidence.
+
 Before upstream integration, the completed executor scope passed the selected body/native checks, 593 affected library checks,
 278 integration checks, strict Clippy and the normal build without `test-utils`. The aligned
 walkthrough passed offline browser checks. The later CLI handler reorganization passes the same

@@ -272,6 +272,13 @@ application of an `allowOverage` revision. Subsequent demand uses the same admis
 reconstruction path, not a second recovery system. Mode changes reach running agents through
 refresh within five minutes. Idle refresh eligibility reserves one batch interval for the next
 scheduled tick, so an account initialized just after a tick does not wait an extra interval.
+The batch caches desired per-agent filesystem limits without awaiting a resident invocation's
+filesystem-command reply. Each account has one latest-value queue and a serialized consumer that
+uses the existing target callback. The Worker invocation loop still owns quota application and its
+reply. A pending physical update cannot stop later monthly-policy refreshes or other accounts.
+Queued newer limits cannot be overwritten in the cache by an older completion. Failures stay logged
+and a later ordinary refresh can retry the same limit. Batch completion does not prove physical
+quota application; explicit awaited filesystem-update callers retain their completion/error contract.
 Usage attributed to an applied `allowOverage` revision remains eligible for excess billing until
 `hardLimit` applies. Registry currently allocates the allowance in revision order rather than exact
 cross-executor accrual order during overlapping refreshes. That MVP limitation is tracked in
@@ -528,8 +535,8 @@ are released before asynchronous establishment. The invocation loop remains the 
 owner. Entity failure selection stays with the existing operation owner; a competing trap or
 infrastructure failure does not become a quota error or a fabricated stop-election failure.
 
-For the outer-Running acceptance guard, separate body/native claims and applied-capacity watch versus
-filesystem-tail joins, read [monthly acceptance proofs](reference/testing-patterns.md#monthly-acceptance-guard-and-applied-capacity).
+For the outer-Running acceptance guard, separate body/native claims and applied capacity versus
+physical filesystem completion, read [monthly acceptance proofs](reference/testing-patterns.md#monthly-acceptance-guard-and-applied-capacity).
 
 Ordinary nonterminal unload closes tool/entity admission and drains physical ownership without
 electing a synthetic lifecycle failure. The operation owner retains that closed admission separately
@@ -861,8 +868,10 @@ actual first `Poll::Pending` and return/drop fields across spawns without gating
 Tests keep the peer silent through monthly stop, physical unload and permit release. Durable
 cases retain 2 Started/1 Finished, then reach 2/2 after reconnect and one-byte input. The separate
 completion tests let native input finish, hold the actual selected terminal append, then accept
-a monthly stop. Commit and notification win before stop publication. They also reconstruct
-completed history and count the repeated native input before fresh work. Other TCP output and
+a monthly stop and join its establishment while the outcome append remains held. Releasing that
+append preserves the selected result; notification follows its normal commit receipt. The tests do
+not require commit before stop publication. They also reconstruct completed history and count the
+repeated native input before fresh work. Other TCP output and
 UDP waits are separate operations, not covered by these input tests.
 
 Raw P2 TCP `output.blocking_splice(&input, 1)` is a distinct export whose native provider first

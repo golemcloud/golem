@@ -36,7 +36,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 use tokio_util::sync::CancellationToken;
@@ -65,6 +65,7 @@ pub struct AtomicResourceEntry {
     // Current (cached) value of the account level per-worker disk space limit
     max_disk_space: AtomicU64,
     filesystem_limit_update: AsyncMutex<()>,
+    filesystem_limit_updates: OnceLock<tokio::sync::watch::Sender<u64>>,
     agent_filesystem_limit_targets: scc::HashMap<OwnedAgentId, Weak<AgentFilesystemLimitTarget>>,
     // Unix timestamp (seconds) of the last time fuel/memory were refreshed from
     // the server. Used by the background loop to detect idle accounts whose
@@ -935,6 +936,7 @@ impl AtomicResourceEntry {
             max_table_elements: AtomicUsize::new(max_table_elements),
             max_disk_space: AtomicU64::new(max_disk_space),
             filesystem_limit_update: AsyncMutex::new(()),
+            filesystem_limit_updates: OnceLock::new(),
             agent_filesystem_limit_targets: scc::HashMap::new(),
             last_refresh_secs: AtomicI64::new(Utc::now().timestamp()),
             per_invocation_http_call_limit: AtomicU64::new(per_invocation_http_call_limit),
@@ -1700,6 +1702,49 @@ impl AtomicResourceEntry {
         let _update = self.filesystem_limit_update.lock().await;
         self.max_disk_space
             .store(allocated_bytes, Ordering::Release);
+        self.apply_agent_filesystem_limit_to_targets(allocated_bytes)
+            .await
+    }
+
+    // Registry refresh publishes desired limits without waiting for an executing invocation to
+    // acknowledge its filesystem command. One consumer retains only the latest pending value.
+    fn queue_agent_filesystem_limit(self: &Arc<Self>, account_id: AccountId, allocated_bytes: u64) {
+        self.max_disk_space
+            .store(allocated_bytes, Ordering::Release);
+        self.filesystem_limit_updates
+            .get_or_init(|| {
+                let (sender, mut updates) = tokio::sync::watch::channel(allocated_bytes);
+                let entry = Arc::downgrade(self);
+                tokio::spawn(async move {
+                    while updates.changed().await.is_ok() {
+                        let Some(entry) = entry.upgrade() else {
+                            break;
+                        };
+                        let _update = entry.filesystem_limit_update.lock().await;
+                        let allocated_bytes = *updates.borrow_and_update();
+                        if let Err((owned_agent_id, error)) = entry
+                            .apply_agent_filesystem_limit_to_targets(allocated_bytes)
+                            .await
+                        {
+                            error!(
+                                account_id = %account_id,
+                                agent_id = %owned_agent_id,
+                                limit = allocated_bytes,
+                                error = %error,
+                                "Failed to apply managed agent filesystem limit"
+                            );
+                        }
+                    }
+                });
+                sender
+            })
+            .send_replace(allocated_bytes);
+    }
+
+    async fn apply_agent_filesystem_limit_to_targets(
+        &self,
+        allocated_bytes: u64,
+    ) -> Result<(), (OwnedAgentId, WorkerExecutorError)> {
         let mut targets = Vec::new();
         self.agent_filesystem_limit_targets
             .iter_sync(|owned_agent_id, target| {
@@ -3218,22 +3263,8 @@ impl ResourceLimitsGrpc {
                 updated_limits.max_table_elements_per_worker as usize,
                 Ordering::Release,
             );
-            let filesystem_limit_updated = match entry
-                .apply_agent_filesystem_limit(updated_limits.max_disk_space_per_worker)
-                .await
-            {
-                Ok(()) => true,
-                Err((owned_agent_id, error)) => {
-                    error!(
-                        account_id = %account_id,
-                        agent_id = %owned_agent_id,
-                        limit = updated_limits.max_disk_space_per_worker,
-                        error = %error,
-                        "Failed to apply managed agent filesystem limit"
-                    );
-                    false
-                }
-            };
+            entry
+                .queue_agent_filesystem_limit(account_id, updated_limits.max_disk_space_per_worker);
             entry.per_invocation_http_call_limit.store(
                 updated_limits.per_invocation_http_call_limit,
                 Ordering::Release,
@@ -3264,11 +3295,9 @@ impl ResourceLimitsGrpc {
             entry
                 .oplog_writes_per_second
                 .store(updated_limits.oplog_writes_per_second, Ordering::Release);
-            if filesystem_limit_updated {
-                entry
-                    .last_refresh_secs
-                    .store(Utc::now().timestamp(), Ordering::Release);
-            }
+            entry
+                .last_refresh_secs
+                .store(Utc::now().timestamp(), Ordering::Release);
         }
     }
 
@@ -3637,7 +3666,7 @@ mod tests {
     };
     use std::collections::VecDeque;
     use std::sync::Mutex;
-    use test_r::test;
+    use test_r::{test, timeout};
     use tokio::sync::Semaphore;
     use uuid::Uuid;
 
@@ -8527,6 +8556,153 @@ mod tests {
         assert_eq!(*observed_disk_limits.lock().unwrap(), vec![4_096]);
     }
 
+    async fn periodic_refresh_with_pending_filesystem_reply(changed_limit: bool) {
+        let id = account_id();
+        let other_id = account_id();
+        let mock = Arc::new(MockRegistryService::new(0, 8_192));
+        let overage = MonthlyResourcePolicy {
+            mode: MonthlyUsageMode::AllowOverage,
+            available_memory_gb_seconds: 0,
+            ..monthly_policy(0)
+        };
+        mock.set_get_limits_response(service_limits(overage.clone(), 0, 8_192, 16_384));
+        let first_disk_limit = if changed_limit { 8_192 } else { 16_384 };
+        mock.set_batch_update_response(AccountResourceLimits(HashMap::from([
+            (
+                id,
+                service_limits(overage.clone(), 1, 8_192, first_disk_limit),
+            ),
+            (other_id, service_limits(overage.clone(), 1, 8_192, 16_384)),
+        ])));
+        let shutdown = CancellationToken::new();
+        let svc = ResourceLimitsGrpc::new(
+            mock.clone(),
+            Duration::from_millis(20),
+            Duration::ZERO,
+            ResourceUsageMeteringConfig {
+                compute: false,
+                memory: true,
+                filesystem: false,
+            },
+            shutdown.clone(),
+        );
+        let entry = svc.initialize_account(id).await.unwrap();
+        let other = svc.initialize_account(other_id).await.unwrap();
+        let mut updates = entry.subscribe_capacity_updates();
+        let mut other_updates = other.subscribe_capacity_updates();
+        let entered = Arc::new(Semaphore::new(0));
+        let release = Arc::new(Semaphore::new(0));
+        let (completed_tx, mut completed_rx) = tokio::sync::mpsc::unbounded_channel();
+        let registration = entry.register_agent_filesystem_limit_target(
+            OwnedAgentId::new(
+                EnvironmentId(Uuid::new_v4()),
+                &AgentId {
+                    component_id: ComponentId(Uuid::new_v4()),
+                    agent_id: "periodic-refresh-pending-filesystem-reply".to_string(),
+                },
+            ),
+            {
+                let entered = entered.clone();
+                let release = release.clone();
+                move |limit| {
+                    let entered = entered.clone();
+                    let release = release.clone();
+                    let completed_tx = completed_tx.clone();
+                    Box::pin(async move {
+                        entered.add_permits(1);
+                        release.acquire().await.unwrap().forget();
+                        let _ = completed_tx.send(limit);
+                        Ok(())
+                    })
+                }
+            },
+        );
+        tokio::time::timeout(Duration::from_secs(2), entered.acquire())
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+        assert_monthly_resource_admission(
+            &entry,
+            MonthlyResourceAdmission::Admit,
+            MonthlyResourceAdmission::Admit,
+        );
+        let final_disk_limit = if changed_limit { 4_096 } else { 16_384 };
+        let hard_limit = MonthlyResourcePolicy {
+            mode: MonthlyUsageMode::HardLimit,
+            ..overage
+        };
+        mock.set_batch_update_response(AccountResourceLimits(HashMap::from([
+            (
+                id,
+                service_limits(hard_limit.clone(), 2, 4_096, final_disk_limit),
+            ),
+            (other_id, service_limits(hard_limit, 2, 4_096, 16_384)),
+        ])));
+        let refreshed = tokio::time::timeout(Duration::from_secs(2), async {
+            while entry
+                .usage_revision_state
+                .lock()
+                .unwrap()
+                .current_policy_revision
+                != 2
+            {
+                updates.changed().await.unwrap();
+            }
+            while other
+                .usage_revision_state
+                .lock()
+                .unwrap()
+                .current_policy_revision
+                != 2
+            {
+                other_updates.changed().await.unwrap();
+            }
+            assert_monthly_resource_admission(
+                &entry,
+                MonthlyResourceAdmission::Suspend,
+                MonthlyResourceAdmission::FailInvocation(MonthlyResourceExhaustion::Memory),
+            );
+            assert_monthly_resource_admission(
+                &other,
+                MonthlyResourceAdmission::Suspend,
+                MonthlyResourceAdmission::FailInvocation(MonthlyResourceExhaustion::Memory),
+            );
+            assert_eq!(entry.max_memory_limit(), 4_096);
+            assert_eq!(entry.max_disk_space_limit(), final_disk_limit);
+            assert!(matches!(
+                completed_rx.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+            ));
+        })
+        .await;
+        shutdown.cancel();
+        release.add_permits(8);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), completed_rx.recv())
+                .await
+                .unwrap(),
+            Some(first_disk_limit)
+        );
+        drop(registration);
+        assert!(
+            refreshed.is_ok(),
+            "the production periodic refresher must apply the next policy to both accounts before the filesystem reply completes"
+        );
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn periodic_policy_refresh_continues_while_unchanged_filesystem_reply_is_pending() {
+        periodic_refresh_with_pending_filesystem_reply(false).await;
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn periodic_policy_refresh_continues_while_changed_filesystem_reply_is_pending() {
+        periodic_refresh_with_pending_filesystem_reply(true).await;
+    }
+
     #[test]
     async fn production_refresh_updates_shared_entry_in_both_directions() {
         let account_id = account_id();
@@ -8577,6 +8753,7 @@ mod tests {
         let memory_target_dyn: Arc<dyn AgentMemoryLimitTarget> = memory_target.clone();
         entry.register_agent_memory_limit_target(Arc::downgrade(&memory_target_dyn));
         let observed_disk_limits = Arc::new(Mutex::new(Vec::new()));
+        let (applied, mut applied_limits) = tokio::sync::mpsc::unbounded_channel();
         let _filesystem_registration = entry.register_agent_filesystem_limit_target(
             OwnedAgentId::new(
                 EnvironmentId(Uuid::new_v4()),
@@ -8589,8 +8766,10 @@ mod tests {
                 let observed_disk_limits = Arc::clone(&observed_disk_limits);
                 move |limit| {
                     let observed_disk_limits = Arc::clone(&observed_disk_limits);
+                    let applied = applied.clone();
                     Box::pin(async move {
                         observed_disk_limits.lock().unwrap().push(limit);
+                        let _ = applied.send(limit);
                         Ok(())
                     })
                 }
@@ -8602,6 +8781,12 @@ mod tests {
         ));
 
         svc.send_batch(0).await;
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), applied_limits.recv())
+                .await
+                .unwrap(),
+            Some(8_192)
+        );
 
         assert_eq!(entry.max_memory_limit(), 4_096);
         assert_eq!(entry.max_disk_space_limit(), 8_192);
@@ -8611,7 +8796,7 @@ mod tests {
 
     #[cfg(feature = "test-utils")]
     #[test]
-    async fn applied_capacity_watch_precedes_pending_unchanged_filesystem_limit_target() {
+    async fn monthly_refresh_finishes_before_pending_filesystem_limit_target() {
         let account_id = account_id();
         let mock = Arc::new(MockRegistryService::new(1, 8_192));
         mock.set_get_limits_response(service_limits(monthly_policy(1), 0, 8_192, 16_384));
@@ -8628,6 +8813,7 @@ mod tests {
         assert_eq!(entry.monthly_observer_count_for_test(), 1);
         let entered = Arc::new(tokio::sync::Semaphore::new(0));
         let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let completed = Arc::new(tokio::sync::Semaphore::new(0));
         let _registration = entry.register_agent_filesystem_limit_target(
             OwnedAgentId::new(
                 EnvironmentId(Uuid::new_v4()),
@@ -8639,13 +8825,16 @@ mod tests {
             {
                 let entered = entered.clone();
                 let release = release.clone();
+                let completed = completed.clone();
                 move |limit| {
                     let entered = entered.clone();
                     let release = release.clone();
+                    let completed = completed.clone();
                     Box::pin(async move {
                         assert_eq!(limit, 16_384);
                         entered.add_permits(1);
                         release.acquire().await.unwrap().forget();
+                        completed.add_permits(1);
                         Ok(())
                     })
                 }
@@ -8665,14 +8854,123 @@ mod tests {
             monthly_resource_admission(&entry, AgentMode::Durable),
             MonthlyResourceAdmission::Suspend
         );
-        assert!(
-            !refresh.is_finished(),
-            "applied capacity is not the filesystem target's completion"
+        tokio::time::timeout(Duration::from_secs(2), refresh)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            completed.available_permits(),
+            0,
+            "batch completion must not claim filesystem completion"
         );
         drop(updates);
         assert_eq!(entry.monthly_observer_count_for_test(), 0);
         release.add_permits(1);
-        refresh.await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), completed.acquire())
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn queued_filesystem_limits_coalesce_without_overwriting_latest_cached_limit() {
+        let entry = Arc::new(AtomicResourceEntry::new(1, 8_192, usize::MAX, 16_384, 1));
+        let release = Arc::new(Semaphore::new(0));
+        let (entered, mut requests) = tokio::sync::mpsc::unbounded_channel();
+        let (completed, mut completions) = tokio::sync::mpsc::unbounded_channel();
+        let registration = entry.register_agent_filesystem_limit_target(
+            OwnedAgentId::new(
+                EnvironmentId(Uuid::new_v4()),
+                &AgentId {
+                    component_id: ComponentId(Uuid::new_v4()),
+                    agent_id: "coalesced-filesystem-limit".to_string(),
+                },
+            ),
+            {
+                let release = release.clone();
+                move |limit| {
+                    let release = release.clone();
+                    let entered = entered.clone();
+                    let completed = completed.clone();
+                    Box::pin(async move {
+                        let _ = entered.send(limit);
+                        release.acquire().await.unwrap().forget();
+                        let _ = completed.send(limit);
+                        Ok(())
+                    })
+                }
+            },
+        );
+        let id = account_id();
+        entry.queue_agent_filesystem_limit(id, 8_192);
+        assert_eq!(requests.recv().await, Some(8_192));
+        entry.queue_agent_filesystem_limit(id, 4_096);
+        entry.queue_agent_filesystem_limit(id, 2_048);
+        assert_eq!(entry.max_disk_space_limit(), 2_048);
+        assert!(matches!(
+            requests.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        release.add_permits(1);
+        assert_eq!(completions.recv().await, Some(8_192));
+        assert_eq!(requests.recv().await, Some(2_048));
+        assert_eq!(
+            entry.max_disk_space_limit(),
+            2_048,
+            "an older physical update cannot overwrite the desired cached limit"
+        );
+        release.add_permits(1);
+        assert_eq!(completions.recv().await, Some(2_048));
+        let weak = Arc::downgrade(&entry);
+        drop(registration);
+        drop(entry);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while weak.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn next_filesystem_refresh_retries_same_limit_after_target_failure() {
+        let entry = Arc::new(AtomicResourceEntry::new(1, 8_192, usize::MAX, 16_384, 1));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let (completed, mut completions) = tokio::sync::mpsc::unbounded_channel();
+        let _registration = entry.register_agent_filesystem_limit_target(
+            OwnedAgentId::new(
+                EnvironmentId(Uuid::new_v4()),
+                &AgentId {
+                    component_id: ComponentId(Uuid::new_v4()),
+                    agent_id: "retry-filesystem-limit-on-next-refresh".to_string(),
+                },
+            ),
+            move |limit| {
+                let completed = completed.clone();
+                let attempts = attempts.clone();
+                Box::pin(async move {
+                    let attempt = attempts.fetch_add(1, Ordering::AcqRel);
+                    let _ = completed.send((attempt, limit));
+                    if attempt == 0 {
+                        Err(WorkerExecutorError::runtime(
+                            "filesystem limit update failed",
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                })
+            },
+        );
+        let id = account_id();
+        entry.queue_agent_filesystem_limit(id, 8_192);
+        assert_eq!(completions.recv().await, Some((0, 8_192)));
+        entry.queue_agent_filesystem_limit(id, 8_192);
+        assert_eq!(completions.recv().await, Some((1, 8_192)));
+        assert_eq!(entry.max_disk_space_limit(), 8_192);
     }
 
     #[test]

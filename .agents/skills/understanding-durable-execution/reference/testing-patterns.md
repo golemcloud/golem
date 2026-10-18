@@ -343,10 +343,28 @@ proof; the native case proves applied-check rejection followed by real-timer ret
 terminal ownership, physical release and same-key recovery within its original timeout. It also
 retains the complete stored raw prefix and checks invocation counts independently of the result.
 
-Join full Registry refresh tasks after the silent invocation unloads. Monthly policy application
-precedes the batch's unrelated filesystem-limit reply, which requires the occupied invocation loop.
-The completed rejection diagnostic proves that the policy applied; joining the whole batch before
-allowing interruption deadlocks the test. Keep both full joins after physical cleanup.
+Join Registry refresh tasks without treating them as physical filesystem completion. A batch
+publishes policy and queues the desired limit; the existing Worker can still owe its reply while an
+invocation runs. The completed rejection diagnostic proves that policy applied. Keep physical
+unload and entered-work completion assertions separate from these batch joins.
+
+### Periodic policy refresh while filesystem application is pending
+
+Use `ResourceLimitsGrpc::new` with its ordinary configured timer, not overlapping manual batches.
+Hold an existing filesystem-target reply, then change the Registry from `allowOverage` to exhausted
+`hardLimit`. The later revision must reach both that account and another account before the reply
+is released. Cover unchanged and changed filesystem limits. This reproduces the actual blocked
+production await chain, not only first-snapshot publication.
+
+The bounded latest-value dispatch keeps the existing serialized target callbacks and Worker quota
+owner. Separate tests require coalescing to the newest limit, an unchanged desired cache through an
+older completion, retry on the next ordinary snapshot after a failure, and no idle strong ownership
+of the account entry. Explicit awaited filesystem-update tests retain their completion/error checks.
+
+The native `input/periodic_refresh.rs` cases use only real periodic refreshes while a TCP peer stays
+silent. Keep exact stop kind, durable/ephemeral terminals, original key, full committed prefix,
+accounting, physical cleanup and normal recovery. Their configured short batch interval is a test
+input to the production timer, not a new clock, scheduling sleep or forced tick.
 
 The prepaid-compute cases observe the ordinary timer through a test-owned weak usage flusher,
 registered before invocation. It reports the exact active window ID, so startup flushes cannot
@@ -591,8 +609,8 @@ configuration rather than adding a second tracing path.
 
 Monitor health tests use the existing owner-usage-flusher seam for panic faults, not a Worker panic
 setter or an extra select arm. The test adapter signals actual unwind, keeps no Worker/Store, and
-stays alive through cleanup. Apply an ordinary policy revision to wake capacity detection, then
-join the full refresh only after withheld idle/physical cleanup completes. Preserve initial/later
+stays alive through cleanup. Apply an ordinary policy revision to wake capacity detection. Joining
+the refresh is not a physical-cleanup receipt. Preserve initial/later
 idle, pending native I/O, exact retained error, generation and permit-acquisition assertions.
 
 Actor-loss tests use the existing oplog append-failure fixture, not an orderly shutdown API or a
@@ -765,16 +783,15 @@ not filtered to discard old events. Retirement cases retain first-cause/history/
 claiming particular late actor-message processing. The retry case remains a timer/rearm proof under
 its existing interrupt-lock hold, not a new watch or notification checkpoint.
 
-The service publishes applied monthly capacity before awaiting even an unchanged filesystem-limit
-reply. A replay, terminal append or deletion hold can block that tail. Subscribe and mark the existing
-capacity watch seen before each controlled refresh; await one changed version and check exact applied
-capacity, revision, period, fuel generation, exhaustion and runtime/target identity. Watch version is not policy revision
-or refresh generation. Do not drain pending events, infer completion from revision alone or join the
-whole batch under those holds. Drop the temporary reader before exact one-monitor/final-zero counts;
-two readers while it lives is explicit, not an at-least-one assertion. Release the corresponding replay
-or persistence/deletion hold and finish physical cleanup before joining every batch tail. Complete old
-exhaustion/credit tails before replacement replay begins. Pre-Worker credit has no filesystem target,
-so its full joins are safe. These are read-only dependency observations, not a new Worker interface.
+The service publishes applied monthly capacity and queues desired filesystem limits without waiting
+for physical application. A replay, terminal append or deletion hold can delay the existing Worker
+reply, but cannot hold the batch or later refresh cadence. Subscribe and mark the capacity watch
+seen before each controlled refresh; await a changed version and check exact capacity, revision,
+period, fuel generation, exhaustion and runtime/target identity. Watch version is not policy revision
+or refresh generation, and batch completion does not prove physical quota application. Drop the
+temporary reader before exact one-monitor/final-zero counts; two readers while it lives is explicit.
+Release real dependency holds and join physical cleanup separately. These are read-only dependency
+observations, not a new Worker interface.
 
 ### Filesystem observation without a pre-poll gate
 
@@ -822,8 +839,8 @@ and its absence from committed history while held. After exact caller acceptance
 cleanup, require restored capacity, release the append and drain the target's lifecycle mailbox.
 The target must remain live with no monthly stop. Complete its original promise, require the single
 logical increment, then use ordinary idle eviction to close its window before the same two-Store
-refund assertions. Full Registry refreshes wait for live filesystem-limit replies; join every tail
-after target completion, not inside the caller's unchanged physical-stop deadline. Keep the separate
+refund assertions. Registry refresh completion is separate from the target's physical filesystem
+reply; preserve its normal completion and cleanup owner. Keep the separate
 target-first scenario, which expects caller rejection after real refund. Neither case may accept
 either boolean result or retry a rejected proposal.
 
