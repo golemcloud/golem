@@ -21,9 +21,9 @@ use crate::durable_host::authorization::targets::tcp_target;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CallReplayOutcome, Cancellable, DemandDelivery, DemandDeliveryMode,
     DurableCallSession, DurableDemandItem, DurableDemandStream, InvocationIdSource,
-    ScopeReplayRecovery, authorize_live_permissions_at_serialized_access, closed_demand,
-    deliver_demand, demand_channel, reserve_access_invocation_id,
-    reserve_invocation_id_before_await, resolve_current_observational_owner,
+    ScopeReplayRecovery, closed_demand, deliver_demand, demand_channel,
+    reserve_access_invocation_id, reserve_invocation_id_before_await,
+    resolve_current_observational_owner,
 };
 use crate::durable_host::durability::{
     CustomInvocationContext, DurabilityHost, DurableCallTrapContext, mark_durable_call_trap_context,
@@ -1417,29 +1417,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                 "connect",
             )
         });
-        let live = store.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut())
-                .state
-                .is_live()
-        });
-        let denial = if live {
-            match socket_target(&remote_address) {
-                Some(target) => match authorize_live_permissions_at_serialized_access(
-                    store,
-                    durable_worker_ctx::<Ctx, U>,
-                    &[target],
-                )
-                .await
-                {
-                    Ok(Ok(_)) => None,
-                    Ok(Err(error)) => Some(error.to_string()),
-                    Err(error) => Some(error.to_string()),
-                },
-                None => Some(UNSUPPORTED_SOCKET_TARGET.to_string()),
-            }
-        } else {
-            None
-        };
+        let targets = socket_target(&remote_address)
+            .map(|target| vec![target])
+            .ok_or_else(|| UNSUPPORTED_SOCKET_TARGET.to_string());
         let request_address = remote_address;
         let response = run_deniable_access::<_, _, Ctx, P3SocketsTypesTcpSocketConnect, _>(
             store,
@@ -1447,7 +1427,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                 remote_address: request_address.into(),
             },
             DurableFunctionType::WriteRemote,
-            denial,
+            targets,
             || async {
                 let sockets = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
                 let result = <WasiSockets as types::HostTcpSocketWithStore<U>>::connect(

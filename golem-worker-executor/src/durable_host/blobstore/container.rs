@@ -35,7 +35,7 @@ use crate::durable_host::blobstore::{
 };
 use crate::durable_host::concurrent::{
     CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
-    authorize_live_permissions_at_serialized_access, reserve_invocation_id_before_await,
+    reserve_invocation_id_before_await,
 };
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::metrics::storage::{
@@ -69,24 +69,10 @@ async fn list_objects_durable_access<Ctx: WorkerCtx, T: 'static>(
         ))
     })?;
 
-    let target = accessor.with(|mut host| {
+    let targets = accessor.with(|mut host| {
         let ctx = host.get();
-        if ctx.state.is_live() {
-            Some(container_target(ctx, BlobVerb::List, &container_name))
-        } else {
-            None
-        }
+        container_target(ctx, BlobVerb::List, &container_name).map(|target| vec![target])
     });
-    let denial = match target {
-        Some(Ok(target)) => {
-            authorize_live_permissions_at_serialized_access(accessor, accessor.getter(), &[target])
-                .await?
-                .err()
-                .map(|err| err.to_string())
-        }
-        Some(Err(err)) => Some(err),
-        None => None,
-    };
 
     let request = HostRequestBlobStoreContainer {
         container: container_name.clone(),
@@ -97,7 +83,7 @@ async fn list_objects_durable_access<Ctx: WorkerCtx, T: 'static>(
             accessor.getter(),
             request,
             DurableFunctionType::ReadRemote,
-            denial,
+            targets,
             async || {
                 let result = blob_store_service
                     .list_objects(environment_id, container_name)
