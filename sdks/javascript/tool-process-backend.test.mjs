@@ -762,6 +762,30 @@ test(
     const observed = observe(child);
     await observed.closed;
     assert.equal(Buffer.from(observed.stdout).toString(), "h");
+    assert.deepEqual(observed.events[0], ["spawn"]);
     assert.deepEqual(f.calls, []);
+  },
+);
+
+test(
+  "an immediately completed async tool emits spawn before exit",
+  { timeout: 2000 },
+  async () => {
+    await Promise.resolve().then(async () => {
+      const f = asyncFixture();
+      f.prepared.input = () => ({
+        commandPath: ["run"],
+        input: {},
+        stdin: false,
+        stdout: false,
+        stderr: false,
+      });
+      f.complete();
+      const child = f.backend.spawn("tsc", []);
+      const observed = observe(child);
+      await observed.closed;
+      assert.deepEqual(observed.events[0], ["spawn"]);
+      assert.deepEqual(observed.events.at(-1), ["close", 7, null]);
+    });
   },
 );

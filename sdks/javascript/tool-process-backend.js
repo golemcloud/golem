@@ -404,10 +404,16 @@ function spawnTool(host, runtimeProcess, command, args, options) {
   }
   child.stdio = [child.stdin, child.stdout, child.stderr];
   if (admitted) child.pid = 1;
-  nextTick(() => {
-    if (admitted) child.emit("spawn");
+  const started = new Promise((resolve) => {
+    nextTick(() => {
+      if (admitted) child.emit("spawn");
+      resolve();
+    });
   });
-  Promise.resolve().then(async () => {
+  // Collection starts at dispatch. Observe failures until startup has delivered
+  // its event; the completion task still awaits the original result below.
+  collection?.catch(() => {});
+  started.then(async () => {
     try {
       if (collection) {
         const collected = await collection;
