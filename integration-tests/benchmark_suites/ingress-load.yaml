@@ -39,5 +39,5 @@ benchmarks:
   - name: ingress-load
     iterations: 1
     clusterSize: [2]
-    size: [100, 1000]
+    size: [100, 250, 500, 1000]
     length: [1000, 2000, 3000]
