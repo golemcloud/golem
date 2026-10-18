@@ -1020,44 +1020,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let is_self = agent_id == self.owned_agent_id.agent_id;
         let target: golem_common::model::worker::RevertWorkerTarget = revert_target.into();
 
-        let mut resolved_revert = if self.state.is_live() && !is_self {
-            match &target {
-                golem_common::model::worker::RevertWorkerTarget::RevertToOplogIndex(_) => None,
-                golem_common::model::worker::RevertWorkerTarget::RevertLastInvocations(target) => {
-                    let owned_agent_id =
-                        OwnedAgentId::new(self.owned_agent_id.environment_id, &agent_id);
-                    match Worker::<Ctx>::resolve_revert_last_invocations(
-                        &self.state,
-                        &owned_agent_id,
-                        target.number_of_invocations,
-                    )
-                    .await
-                    {
-                        Ok(resolved) => Some(resolved),
-                        Err(WorkerExecutorError::AgentNotFound { .. }) => {
-                            return Ok(Err(agent_operation_error(format!(
-                                "agent {owned_agent_id} does not exist"
-                            ))));
-                        }
-                        Err(error) => return Ok(Err(agent_operation_error(error.to_string()))),
-                    }
-                }
-            }
-        } else {
-            None
-        };
-        let resource = match (&target, &resolved_revert) {
-            (golem_common::model::worker::RevertWorkerTarget::RevertToOplogIndex(index), _) => {
-                AgentResourcePattern::OplogIndex(index.last_oplog_index.into())
-            }
-            (
-                golem_common::model::worker::RevertWorkerTarget::RevertLastInvocations(_),
-                Some(resolved),
-            ) => AgentResourcePattern::OplogIndex(resolved.last_oplog_index.into()),
-            (golem_common::model::worker::RevertWorkerTarget::RevertLastInvocations(_), None) => {
-                AgentResourcePattern::Empty
-            }
-        };
+        let mut resolved_revert = None;
         let begun =
             DurableCallSession::<GolemApiRevertWorker, NotCancellable>::begin_with_agent_authority(
                 self,
@@ -1068,6 +1031,38 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let result = 'result: {
             let mut handle = match begun.resolve(self).await? {
                 ResolvedCall::Live(begun) => {
+                    if !is_self
+                        && let golem_common::model::worker::RevertWorkerTarget::RevertLastInvocations(target) = &target {
+                            let owned_agent_id =
+                                OwnedAgentId::new(self.owned_agent_id.environment_id, &agent_id);
+                            resolved_revert = match Worker::<Ctx>::resolve_revert_last_invocations(
+                                &self.state,
+                                &owned_agent_id,
+                                target.number_of_invocations,
+                            )
+                            .await
+                            {
+                                Ok(resolved) => Some(resolved),
+                                Err(WorkerExecutorError::AgentNotFound { .. }) => {
+                                    return Ok(Err(agent_operation_error(format!(
+                                        "agent {owned_agent_id} does not exist"
+                                    ))));
+                                }
+                                Err(error) => return Ok(Err(agent_operation_error(error.to_string()))),
+                            };
+                        }
+                    let resource = match (&target, &resolved_revert) {
+                        (
+                            golem_common::model::worker::RevertWorkerTarget::RevertToOplogIndex(
+                                index,
+                            ),
+                            _,
+                        ) => AgentResourcePattern::OplogIndex(index.last_oplog_index.into()),
+                        (_, Some(resolved)) => {
+                            AgentResourcePattern::OplogIndex(resolved.last_oplog_index.into())
+                        }
+                        (_, None) => AgentResourcePattern::Empty,
+                    };
                     let denied = !is_self
                         && agent_operation_denied(self, &agent_id, AgentVerb::Revert, resource)
                             .await?;

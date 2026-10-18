@@ -198,10 +198,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-pub(crate) use concurrent::{
-    CallReplayOutcome, DurableCallSession, NotCancellable,
-    authorize_live_permissions_at_serialized_access,
-};
+pub(crate) use concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 pub use durability::*;
 use golem_common::base_model::oplog::QueuedCardEvent;
 use golem_common::model::TransactionId;

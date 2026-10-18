@@ -80,10 +80,10 @@ pub trait RdbmsDurabilityPairs {
     type ConnBeginTransaction: DeniablePair<Req = HostRequestNoInput, Resp = HostResponseGolemRdbmsRowCount>;
     type ConnExecute: DeniablePair<Req = HostRequestGolemRdbmsRequest, Resp = HostResponseGolemRdbmsRowCount>;
     type ConnQuery: DeniablePair<Req = HostRequestGolemRdbmsRequest, Resp = HostResponseGolemRdbmsResult>;
-    type ConnQueryStream: HostPayloadPair<Req = HostRequestNoInput, Resp = HostResponseGolemRdbmsRequest>;
-    type TxnExecute: HostPayloadPair<Req = HostRequestGolemRdbmsRequest, Resp = HostResponseGolemRdbmsRowCount>;
-    type TxnQuery: HostPayloadPair<Req = HostRequestGolemRdbmsRequest, Resp = HostResponseGolemRdbmsResult>;
-    type TxnQueryStream: HostPayloadPair<Req = HostRequestNoInput, Resp = HostResponseGolemRdbmsRequest>;
+    type ConnQueryStream: DeniablePair<Req = HostRequestNoInput, Resp = HostResponseGolemRdbmsRequest>;
+    type TxnExecute: DeniablePair<Req = HostRequestGolemRdbmsRequest, Resp = HostResponseGolemRdbmsRowCount>;
+    type TxnQuery: DeniablePair<Req = HostRequestGolemRdbmsRequest, Resp = HostResponseGolemRdbmsResult>;
+    type TxnQueryStream: DeniablePair<Req = HostRequestNoInput, Resp = HostResponseGolemRdbmsRequest>;
     type StreamGetColumns: HostPayloadPair<Req = HostRequestNoInput, Resp = HostResponseGolemRdbmsColumns>;
     type StreamGetNext: HostPayloadPair<Req = HostRequestNoInput, Resp = HostResponseGolemRdbmsResultChunk>;
 }
@@ -289,7 +289,7 @@ where
 
     match result {
         Ok((begin_oplog_idx, transaction_state)) => {
-            if ctx.state.is_live() {
+            if matches!(transaction_state, RdbmsTransactionState::Open(_)) {
                 ctx.as_wasi_view()
                     .table()
                     .get_mut::<RdbmsConnection<T>>(entry)?
@@ -580,24 +580,32 @@ where
     E: From<RdbmsError>,
 {
     let prepared = db_connection_query_stream(statement.clone(), params, ctx, entry);
-    let authorization = if ctx.state.is_live() {
-        match prepared.as_ref() {
-            Ok(request) => Some(authorize_sql::<Ctx, T>(ctx, &request.pool_key, &statement).await?),
-            Err(_) => None,
-        }
-    } else {
-        None
-    };
-    let mut handle = DurableCallSession::<T::ConnQueryStream, NotCancellable>::start_with_options(
-        ctx,
-        HostRequestNoInput {},
-        DurableFunctionType::WriteRemote,
-        AccessClaimOptions {
-            incomplete_repair_authorized_by_scope: true,
-            ..Default::default()
-        },
-    )
-    .await?;
+    let mut authorization = None;
+    let mut handle =
+        DurableCallSession::<T::ConnQueryStream, NotCancellable>::start_with_options_and_authorize(
+            ctx,
+            HostRequestNoInput {},
+            DurableFunctionType::WriteRemote,
+            AccessClaimOptions {
+                incomplete_repair_authorized_by_scope: true,
+                ..Default::default()
+            },
+            async |ctx| {
+                authorization = match prepared.as_ref() {
+                    Ok(request) => {
+                        Some(authorize_sql::<Ctx, T>(ctx, &request.pool_key, &statement).await?)
+                    }
+                    Err(_) => None,
+                };
+                Ok::<_, anyhow::Error>(
+                    authorization
+                        .as_ref()
+                        .and_then(|result| result.as_ref().err())
+                        .cloned(),
+                )
+            },
+        )
+        .await?;
     let begin_index = handle.start_index();
     let reconstructed = !handle.is_live();
     if handle.is_live()
@@ -980,26 +988,29 @@ where
         Err(error) => Err(RdbmsError::QueryParameterFailure(error)),
     };
 
-    let authorization = if ctx.state.is_live() {
-        match prepared.as_ref() {
-            Ok((pool_key, _, _)) => Some(authorize_sql::<Ctx, T>(ctx, pool_key, &statement).await?),
-            Err(_) => None,
-        }
-    } else {
-        None
-    };
-
-    let handle = DurableCallSession::<T::TxnQuery, NotCancellable>::start_with_options(
-        ctx,
-        request,
-        DurableFunctionType::WriteRemote,
-        AccessClaimOptions {
-            parent_start_index: Some(begin_oplog_idx),
-            incomplete_repair_authorized_by_scope: true,
-            ..Default::default()
-        },
-    )
-    .await?;
+    let mut authorization = None;
+    let handle =
+        DurableCallSession::<T::TxnQuery, NotCancellable>::start_with_options_and_authorize(
+            ctx,
+            request,
+            DurableFunctionType::WriteRemote,
+            AccessClaimOptions {
+                parent_start_index: Some(begin_oplog_idx),
+                incomplete_repair_authorized_by_scope: true,
+                ..Default::default()
+            },
+            async |ctx| {
+                let pool_key = ctx.table().get(entry)?.pool_key.clone();
+                authorization = Some(authorize_sql::<Ctx, T>(ctx, &pool_key, &statement).await?);
+                Ok::<_, anyhow::Error>(
+                    authorization
+                        .as_ref()
+                        .and_then(|result| result.as_ref().err())
+                        .cloned(),
+                )
+            },
+        )
+        .await?;
 
     let result = 'result: {
         if !handle.is_live() {
@@ -1086,26 +1097,29 @@ where
         Err(error) => Err(RdbmsError::QueryParameterFailure(error)),
     };
 
-    let authorization = if ctx.state.is_live() {
-        match prepared.as_ref() {
-            Ok((pool_key, _, _)) => Some(authorize_sql::<Ctx, T>(ctx, pool_key, &statement).await?),
-            Err(_) => None,
-        }
-    } else {
-        None
-    };
-
-    let handle = DurableCallSession::<T::TxnExecute, NotCancellable>::start_with_options(
-        ctx,
-        request,
-        DurableFunctionType::WriteRemote,
-        AccessClaimOptions {
-            parent_start_index: Some(begin_oplog_idx),
-            incomplete_repair_authorized_by_scope: true,
-            ..Default::default()
-        },
-    )
-    .await?;
+    let mut authorization = None;
+    let handle =
+        DurableCallSession::<T::TxnExecute, NotCancellable>::start_with_options_and_authorize(
+            ctx,
+            request,
+            DurableFunctionType::WriteRemote,
+            AccessClaimOptions {
+                parent_start_index: Some(begin_oplog_idx),
+                incomplete_repair_authorized_by_scope: true,
+                ..Default::default()
+            },
+            async |ctx| {
+                let pool_key = ctx.table().get(entry)?.pool_key.clone();
+                authorization = Some(authorize_sql::<Ctx, T>(ctx, &pool_key, &statement).await?);
+                Ok::<_, anyhow::Error>(
+                    authorization
+                        .as_ref()
+                        .and_then(|result| result.as_ref().err())
+                        .cloned(),
+                )
+            },
+        )
+        .await?;
 
     let result = 'result: {
         if !handle.is_live() {
@@ -1160,25 +1174,33 @@ where
     let entry_rep = entry.rep();
     let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
     let prepared = db_transaction_query_stream(statement.clone(), params, ctx, entry);
-    let authorization = if ctx.state.is_live() {
-        match prepared.as_ref() {
-            Ok(request) => Some(authorize_sql::<Ctx, T>(ctx, &request.pool_key, &statement).await?),
-            Err(_) => None,
-        }
-    } else {
-        None
-    };
-    let handle = DurableCallSession::<T::TxnQueryStream, NotCancellable>::start_with_options(
-        ctx,
-        HostRequestNoInput {},
-        DurableFunctionType::WriteRemote,
-        AccessClaimOptions {
-            parent_start_index: Some(begin_oplog_idx),
-            incomplete_repair_authorized_by_scope: true,
-            ..Default::default()
-        },
-    )
-    .await?;
+    let mut authorization = None;
+    let handle =
+        DurableCallSession::<T::TxnQueryStream, NotCancellable>::start_with_options_and_authorize(
+            ctx,
+            HostRequestNoInput {},
+            DurableFunctionType::WriteRemote,
+            AccessClaimOptions {
+                parent_start_index: Some(begin_oplog_idx),
+                incomplete_repair_authorized_by_scope: true,
+                ..Default::default()
+            },
+            async |ctx| {
+                authorization = match prepared.as_ref() {
+                    Ok(request) => {
+                        Some(authorize_sql::<Ctx, T>(ctx, &request.pool_key, &statement).await?)
+                    }
+                    Err(_) => None,
+                };
+                Ok::<_, anyhow::Error>(
+                    authorization
+                        .as_ref()
+                        .and_then(|result| result.as_ref().err())
+                        .cloned(),
+                )
+            },
+        )
+        .await?;
     let stream_parent = handle.start_index();
     let reconstructed = !handle.is_live();
 

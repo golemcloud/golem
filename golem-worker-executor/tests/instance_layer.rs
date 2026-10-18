@@ -480,6 +480,7 @@ type RecordedEntityCall = (
     DurableFunctionType,
     Option<OplogPayload<HostRequest>>,
     Option<OplogPayload<HostResponse>>,
+    Option<String>,
 );
 
 /// The completed calls of `functions` that the entity body started at `entity_start` recorded,
@@ -503,6 +504,7 @@ async fn recorded_entity_calls(
                 function_name,
                 durable_function_type,
                 request,
+                denial,
                 ..
             } if *parent == entity_start && functions.contains(function_name) => {
                 let response =
@@ -521,6 +523,7 @@ async fn recorded_entity_calls(
                     durable_function_type.clone(),
                     request.clone(),
                     response,
+                    denial.clone(),
                 ))
             }
             _ => None,
@@ -536,7 +539,7 @@ async fn record_entity_call(
     ordinal: u64,
     call: &RecordedEntityCall,
 ) -> Result<(), WorkerExecutorError> {
-    let (function_name, durable_function_type, request, response) = call.clone();
+    let (function_name, durable_function_type, request, response, denial) = call.clone();
     let oplog = active.execution().oplog();
     let start_index = oplog
         .add(OplogEntry::Start {
@@ -548,7 +551,7 @@ async fn record_entity_call(
             request,
             durable_function_type,
             span_started: None,
-            denial: None,
+            denial,
         })
         .await?;
     oplog
