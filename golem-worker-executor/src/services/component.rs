@@ -159,14 +159,17 @@ impl ComponentService for ComponentServiceDefault {
         let engine = engine.clone();
         let compiled_component_service = self.compiled_component_service.clone();
         let compilation_limiter = self.compilation_limiter.clone();
+        let registry_client = self.registry_client.clone();
         let metadata = self
             .get_metadata(component_id, Some(component_revision))
             .await?;
         let environment_id = metadata.environment_id;
 
+        // A cancelled entity must not abandon a shared cache miss. The loader owns
+        // only service handles, so it can finish independently of the caller.
         let component = self
             .component_cache
-            .get_or_insert_simple(&key.clone(), || {
+            .get_or_insert_simple_spawned(&key.clone(), move || {
                 Box::pin(async move {
                     let result = compiled_component_service
                         .get(environment_id, component_id, component_revision, &engine)
@@ -188,8 +191,7 @@ impl ComponentService for ComponentServiceDefault {
                             // store miss.
                             compilation_limiter
                                 .run(async move {
-                                    let bytes = self
-                                        .registry_client
+                                    let bytes = registry_client
                                         .download_component(component_id, component_revision)
                                         .await
                                         .map_err(|error| {
@@ -265,12 +267,12 @@ impl ComponentService for ComponentServiceDefault {
             Some(component_revision) => {
                 let client = self.registry_client.clone();
                 self.component_metadata_cache
-                    .get_or_insert_simple(
+                    .get_or_insert_simple_spawned(
                         &ComponentKey {
                             component_id,
                             component_revision,
                         },
-                        || {
+                        move || {
                             Box::pin(async move {
                                 let metadata = client
                                     .get_component_metadata(component_id, component_revision)
@@ -293,7 +295,7 @@ impl ComponentService for ComponentServiceDefault {
                 let client = self.registry_client.clone();
                 let metadata = self
                     .current_component_metadata_cache
-                    .get_or_insert_simple(&component_id, || {
+                    .get_or_insert_simple_spawned(&component_id, move || {
                         Box::pin(async move {
                             client
                                 .get_deployed_component_metadata(component_id)
@@ -310,16 +312,14 @@ impl ComponentService for ComponentServiceDefault {
                     })
                     .await?;
 
+                let cached_metadata = metadata.clone();
                 self.component_metadata_cache
-                    .get_or_insert_simple(
+                    .get_or_insert_simple_spawned(
                         &ComponentKey {
                             component_id,
                             component_revision: metadata.revision,
                         },
-                        || {
-                            let metadata = metadata.clone();
-                            Box::pin(async move { Ok(metadata) })
-                        },
+                        move || Box::pin(async move { Ok(cached_metadata) }),
                     )
                     .await?;
 
@@ -594,6 +594,7 @@ mod tests {
     struct MockRegistryService {
         components: HashMap<ComponentId, Component>,
         deployed_component_calls: Arc<std::sync::Mutex<HashMap<ComponentId, usize>>>,
+        metadata_gate: Option<Arc<ComponentLoadGate>>,
     }
 
     impl MockRegistryService {
@@ -604,6 +605,7 @@ mod tests {
                     .map(|component| (component.id, component))
                     .collect(),
                 deployed_component_calls: Arc::new(std::sync::Mutex::new(HashMap::new())),
+                metadata_gate: None,
             }
         }
 
@@ -682,6 +684,9 @@ mod tests {
             component_id: ComponentId,
             _component_revision: ComponentRevision,
         ) -> Result<Component, RegistryServiceError> {
+            if let Some(gate) = &self.metadata_gate {
+                gate.wait().await;
+            }
             self.components
                 .get(&component_id)
                 .cloned()
@@ -692,6 +697,9 @@ mod tests {
             &self,
             component_id: ComponentId,
         ) -> Result<Component, RegistryServiceError> {
+            if let Some(gate) = &self.metadata_gate {
+                gate.wait().await;
+            }
             let mut calls = self.deployed_component_calls.lock().unwrap();
             *calls.entry(component_id).or_default() += 1;
             drop(calls);
@@ -845,6 +853,131 @@ mod tests {
             created_at: chrono::Utc::now(),
             wasm_hash: golem_common::model::diff::Hash::new(blake3::hash(b"wasm-hash")),
             object_store_key: "test-object".to_string(),
+        }
+    }
+
+    struct ComponentLoadGate {
+        entered: tokio::sync::Semaphore,
+        release: tokio::sync::Semaphore,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl ComponentLoadGate {
+        fn new() -> Self {
+            Self {
+                entered: tokio::sync::Semaphore::new(0),
+                release: tokio::sync::Semaphore::new(0),
+                calls: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+
+        async fn wait(&self) {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.entered.add_permits(1);
+            self.release.acquire().await.unwrap().forget();
+        }
+    }
+
+    struct GatedCompiledComponent {
+        component: wasmtime::component::Component,
+        gate: Arc<ComponentLoadGate>,
+    }
+
+    #[async_trait]
+    impl CompiledComponentService for GatedCompiledComponent {
+        async fn get(
+            &self,
+            _: EnvironmentId,
+            _: ComponentId,
+            _: ComponentRevision,
+            _: &Engine,
+        ) -> Result<Option<wasmtime::component::Component>, WorkerExecutorError> {
+            self.gate.wait().await;
+            Ok(Some(self.component.clone()))
+        }
+
+        async fn put(
+            &self,
+            _: EnvironmentId,
+            _: ComponentId,
+            _: ComponentRevision,
+            _: &wasmtime::component::Component,
+        ) -> Result<(), WorkerExecutorError> {
+            panic!("a compiled cache hit must not upload another component")
+        }
+    }
+
+    #[test]
+    async fn cancelled_component_load_does_not_strand_the_shared_cache() {
+        let engine =
+            Engine::new(&golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache())
+                .unwrap();
+        let gate = Arc::new(ComponentLoadGate::new());
+        let compiled = Arc::new(GatedCompiledComponent {
+            component: wasmtime::component::Component::new(&engine, b"(component)").unwrap(),
+            gate: gate.clone(),
+        });
+        let metadata = make_component(ComponentId::new(), EnvironmentId::new());
+        let service = ComponentServiceDefault::new(
+            Arc::new(MockRegistryService::new([metadata.clone()])),
+            1,
+            8,
+            Duration::from_secs(60),
+            1,
+            compiled.clone(),
+        );
+        let mut first = Box::pin(service.get(&engine, metadata.id, metadata.revision));
+        tokio::select! {
+            _ = &mut first => panic!("component load completed before release"),
+            entered = gate.entered.acquire() => entered.unwrap().forget(),
+        }
+        drop(first);
+        gate.release.add_permits(1);
+
+        let (_, loaded) = tokio::time::timeout(
+            Duration::from_secs(5),
+            service.get(&engine, metadata.id, metadata.revision),
+        )
+        .await
+        .expect("a cancelled caller must not strand the pending component")
+        .unwrap();
+        assert_eq!(loaded.id, metadata.id);
+        assert_eq!(gate.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    async fn cancelled_metadata_load_does_not_strand_the_shared_cache() {
+        for pinned in [false, true] {
+            let metadata = make_component(ComponentId::new(), EnvironmentId::new());
+            let forced_revision = pinned.then_some(metadata.revision);
+            let gate = Arc::new(ComponentLoadGate::new());
+            let mut registry = MockRegistryService::new([metadata.clone()]);
+            registry.metadata_gate = Some(gate.clone());
+            let service = ComponentServiceDefault::new(
+                Arc::new(registry),
+                1,
+                8,
+                Duration::from_secs(60),
+                1,
+                Arc::new(CompiledComponentServiceDisabled::new()),
+            );
+            let mut first = Box::pin(service.get_metadata(metadata.id, forced_revision));
+            tokio::select! {
+                _ = &mut first => panic!("metadata load completed before release"),
+                entered = gate.entered.acquire() => entered.unwrap().forget(),
+            }
+            drop(first);
+            gate.release.add_permits(1);
+
+            let loaded = tokio::time::timeout(
+                Duration::from_secs(5),
+                service.get_metadata(metadata.id, forced_revision),
+            )
+            .await
+            .expect("a cancelled caller must not strand pending metadata")
+            .unwrap();
+            assert_eq!(loaded.id, metadata.id);
+            assert_eq!(gate.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
         }
     }
 
