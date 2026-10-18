@@ -1253,8 +1253,12 @@ impl LeaderLocator {
 
 /// The version of a campaigner queued behind this replica that is newer than this replica's own,
 /// if any (the newest of them). The head of the queue never moves: it is about to lead. A version
-/// is newer only when both parse as semantic versions: a development build, whose version is a
-/// `git describe` text, keeps today's order, and so does a replica that announces no version.
+/// is newer only when both parse as semantic versions, and then by semantic-version precedence
+/// (build metadata is ignored). A development build announces the `git describe` text of its
+/// last tag, such as `1.6.0-rc2-156-g2917a80d2`, which compares as a pre-release of that tag: it
+/// is older than the release, and two builds of one tag compare by their text, so a count of
+/// commits that gains a digit does not order as a number. A replica that announces nothing, or a
+/// text that is no semantic version, is never newer and never moves.
 pub(crate) fn newer_version_behind(
     view: &CampaignView,
     own_lease: i64,
@@ -1273,9 +1277,10 @@ pub(crate) fn newer_version_behind(
         .filter_map(|campaigner| {
             let version = &campaigner.value.as_ref()?.version;
             let parsed = semver::Version::parse(version).ok()?;
-            (parsed > own_version).then_some((parsed, version))
+            (parsed.cmp_precedence(&own_version) == std::cmp::Ordering::Greater)
+                .then_some((parsed, version))
         })
-        .max_by(|(left, _), (right, _)| left.cmp(right))
+        .max_by(|(left, _), (right, _)| left.cmp_precedence(right))
         .map(|(_, version)| version.clone())
 }
 
@@ -1445,21 +1450,54 @@ mod tests {
     }
 
     #[test]
-    fn a_version_that_does_not_parse_never_moves_anything() {
-        assert_eq!(
-            newer_version_behind(&queue_ending_in("v1.6.0-12-gabcdef"), 2, "1.5.0"),
-            None,
-            "a development build is never newer"
-        );
+    fn a_version_that_is_no_semantic_version_never_moves_anything() {
         assert_eq!(
             newer_version_behind(&queue_ending_in(""), 2, "1.5.0"),
             None,
             "a replica that announces no version is never newer"
         );
         assert_eq!(
-            newer_version_behind(&queue_ending_in("1.6.0"), 2, "v1.5.0-3-gabcdef"),
+            newer_version_behind(&queue_ending_in("not a version"), 2, "1.5.0"),
+            None
+        );
+        assert_eq!(
+            newer_version_behind(&queue_ending_in("1.6.0"), 2, ""),
             None,
-            "a replica that is a development build never moves"
+            "a replica that announces no version never moves"
+        );
+    }
+
+    #[test]
+    fn a_development_build_compares_as_a_pre_release_of_its_last_tag() {
+        // The form `golem_version()` has on a development build.
+        let dev = "1.6.0-rc2-156-g2917a80d2";
+        assert_eq!(
+            newer_version_behind(&queue_ending_in("1.6.0"), 2, dev),
+            Some("1.6.0".to_string()),
+            "the release is newer than a build after its release candidate"
+        );
+        assert_eq!(
+            newer_version_behind(&queue_ending_in(dev), 2, "1.6.0"),
+            None,
+            "a build after a release candidate is older than the release"
+        );
+        assert_eq!(
+            newer_version_behind(&queue_ending_in("1.6.0-rc2-157-g0123abcde"), 2, dev),
+            Some("1.6.0-rc2-157-g0123abcde".to_string()),
+            "a later build of the same tag is newer"
+        );
+        assert_eq!(
+            newer_version_behind(&queue_ending_in("1.5.9"), 2, dev),
+            None,
+            "an older release is older than a development build"
+        );
+    }
+
+    #[test]
+    fn build_metadata_is_ignored() {
+        assert_eq!(
+            newer_version_behind(&queue_ending_in("1.5.0+b"), 2, "1.5.0+a"),
+            None
         );
     }
 
