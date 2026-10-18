@@ -805,9 +805,10 @@ async fn a_retried_call_waits_out_a_failover_longer_than_the_default_retries() {
 async fn a_retried_call_waits_out_replicas_that_know_no_leader_yet() {
     let leader = run_replica(Mode::Leader).await;
     let standby = run_replica(Mode::Standby(None)).await;
-    // The first pass runs the client's default schedule, five asks over about two and a half
-    // seconds; each later pass asks once, at the failover backoff. The first ten answers last
-    // about four and a half seconds in all, and the one after names the leader.
+    // The first pass runs the client's default schedule: five asks, with pauses of 100, 200, 400
+    // and 800 ms. Each later pass asks once, after a pause of 100, 200, 400, 500, 500 and 500 ms.
+    // The first ten answers last about three and a half seconds in all, and the one after names
+    // the leader.
     standby.script(
         std::iter::repeat_n(Mode::Standby(None), 10)
             .chain(std::iter::once(Mode::Standby(Some(leader.address())))),
@@ -908,13 +909,13 @@ async fn a_schedule_longer_than_the_failover_budget_is_waited_out() {
 // total, plus the pass that is under way.
 async fn a_failover_is_waited_out_for_a_bounded_time_with_many_configured_attempts() {
     let standby = run_replica(Mode::Standby(None)).await;
-    // A thousand attempts of 10 ms: a schedule of about ten seconds.
+    // A hundred attempts of 100 ms: a schedule of about ten seconds.
     let client = client_with_schedule(
         standby.addr.port(),
         RetryConfig {
-            max_attempts: 1000,
-            min_delay: Duration::from_millis(10),
-            max_delay: Duration::from_millis(10),
+            max_attempts: 100,
+            min_delay: Duration::from_millis(100),
+            max_delay: Duration::from_millis(100),
             multiplier: 1.0,
             max_jitter_factor: None,
         },
@@ -962,6 +963,47 @@ async fn a_retried_call_waits_out_a_named_leader_that_refuses_connections() {
     assert_eq!(leader.calls(), 1);
     leader.stop().await;
     standby.stop().await;
+}
+
+#[test]
+// Once a failover has been seen, the wait goes on when the configured address stops answering
+// too: a service address may keep routing to the replica that went away, and connects to it fail
+// until the new leader is up.
+async fn a_failover_that_has_been_seen_is_waited_out_when_the_configured_address_goes_quiet() {
+    let dead = LeaderAddress {
+        host: "127.0.0.1".to_string(),
+        port: closed_port(),
+    };
+    let standby = run_replica(Mode::Standby(Some(dead))).await;
+    let client = Arc::new(client_with_default_config("127.0.0.1", standby.addr.port()));
+
+    let started = Instant::now();
+    let call = tokio::spawn({
+        let client = client.clone();
+        async move { client.get_routing_table().await }
+    });
+    // The standby has named the dead leader once: a failover has been seen. From here on, connects
+    // to the configured address are refused.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while standby.refusals() == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the standby is asked");
+    standby.stop().await;
+
+    tokio::time::timeout(Duration::from_secs(40), call)
+        .await
+        .expect("the call ends")
+        .expect("the task does not panic")
+        .expect_err("nothing answers any more");
+
+    assert!(
+        started.elapsed() >= Duration::from_secs(14),
+        "the call gave up after {:?}, before the failover budget",
+        started.elapsed()
+    );
 }
 
 #[test]

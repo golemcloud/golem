@@ -67,8 +67,9 @@ fn failover_backoff() -> RetryConfig {
 
 /// The time that the configured `retries_on_unavailable` schedule takes in all, without jitter.
 fn schedule_total(schedule: &RetryConfig) -> Duration {
-    // The delays settle at `max_delay` long before a schedule of any size ends, so the rest of a
-    // very long one is counted at that rate instead of one attempt at a time.
+    // The delays are those of `get_delay`, which counts a fractional multiplier as its integer
+    // part. The rest of a very long schedule is counted at `max_delay` instead of one attempt at a
+    // time, which overcounts it only if the delays have not reached `max_delay` by then.
     const COUNTED_ONE_BY_ONE: u32 = 10_000;
     let schedule = RetryConfig {
         max_jitter_factor: None,
@@ -124,6 +125,21 @@ fn leader_client_config(config: &GrpcShardManagerConfig) -> GrpcClientConfig {
             ..client.retries_on_unavailable.clone()
         },
         tls: leader_tls(&client.tls, &config.host),
+        ..client.clone()
+    }
+}
+
+/// One attempt with a short connect to the configured address: during a failover the router paces
+/// the passes itself, and a pass that ran the configured schedule again would last many times the
+/// time that a pass is meant to take.
+fn once_client_config(config: &GrpcShardManagerConfig) -> GrpcClientConfig {
+    let client = &config.client_config;
+    GrpcClientConfig {
+        connect_timeout: client.connect_timeout.min(LEADER_CONNECT_TIMEOUT),
+        retries_on_unavailable: RetryConfig {
+            max_attempts: 0,
+            ..client.retries_on_unavailable.clone()
+        },
         ..client.clone()
     }
 }
@@ -234,6 +250,9 @@ impl Attempts {
 pub(crate) struct LeaderRouter {
     /// The configured address, which reaches any replica.
     configured: GrpcClient<Client>,
+    /// The configured address with no retries of its own and a short connect, for the passes of a
+    /// failover, whose pace the router sets.
+    configured_once: GrpcClient<Client>,
     /// Direct connections to the leader that a replica named.
     leaders: MultiTargetGrpcClient<Client>,
     state: Arc<Mutex<LeaderState>>,
@@ -250,6 +269,13 @@ impl LeaderRouter {
                 new_client,
                 config.uri(),
                 config.client_config.clone(),
+            )
+            .with_redirect(is_not_leader),
+            configured_once: GrpcClient::new(
+                "shard_manager",
+                new_client,
+                config.uri(),
+                once_client_config(config),
             )
             .with_redirect(is_not_leader),
             leaders: MultiTargetGrpcClient::new(
@@ -329,7 +355,7 @@ impl LeaderRouter {
                 Routed::Done(Err(status))
                     if attempts.replayable()
                         && if deadline.is_some() {
-                            status.code() == Code::Unavailable
+                            requires_reconnect(&status)
                         } else {
                             peer_answered_unavailable(&status)
                                 && answered_unavailable.load(Ordering::Relaxed)
@@ -344,8 +370,14 @@ impl LeaderRouter {
             if !attempts.replayable() {
                 return Err(status);
             }
-            let deadline =
-                *deadline.get_or_insert(started + FAILOVER_BUDGET.max(self.configured_budget));
+            let deadline = *deadline.get_or_insert_with(|| {
+                let budget = FAILOVER_BUDGET.max(self.configured_budget);
+                // A schedule so long that the sum overflows is as good as one without an end.
+                started
+                    .checked_add(budget)
+                    .or_else(|| started.checked_add(Duration::from_secs(10 * 365 * 24 * 3600)))
+                    .unwrap_or(started)
+            });
             failover_passes += 1;
             let remaining = deadline.saturating_duration_since(Instant::now());
             match get_delay(&failover_backoff, failover_passes) {
@@ -378,6 +410,12 @@ impl LeaderRouter {
                 Err(status) => {
                     if let Some(next) = leader_of(&status) {
                         self.forget_leader(&leader, &status);
+                        if attempts.replayable() && skip == Some(&next) {
+                            return Routed::LeaderUnreachable {
+                                status,
+                                failed: None,
+                            };
+                        }
                         return self.follow(description, next, attempts, skip, f).await;
                     }
                     // The shard manager answers most refusals inside a successful response, but
@@ -396,7 +434,7 @@ impl LeaderRouter {
         }
 
         let status = match self
-            .send_to_configured(description, attempts.replayable() && !failover, f)
+            .send_to_configured(description, attempts, failover, f)
             .await
         {
             Ok(result) => return Routed::Done(Ok(result)),
@@ -488,14 +526,20 @@ impl LeaderRouter {
     async fn send_to_configured<F, R>(
         &self,
         description: &'static str,
-        retry_the_call: bool,
+        attempts: Attempts,
+        failover: bool,
         f: &F,
     ) -> Result<R, Status>
     where
         F: ClientCall<R>,
     {
-        self.configured
-            .call_with_retry(description, retry_the_call, f)
+        let client = if failover {
+            &self.configured_once
+        } else {
+            &self.configured
+        };
+        client
+            .call_with_retry(description, attempts.replayable(), f)
             .await
     }
 
