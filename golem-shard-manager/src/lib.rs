@@ -598,8 +598,10 @@ mod advertised_host_tests {
     use golem_service_base::clients::shard_manager_leader::LeaderAddress;
     use test_r::test;
 
+    /// A replica that listens on both families, so that the host alone decides what is valid.
     fn distributed(host: Option<&str>) -> ShardManagerConfig {
         ShardManagerConfig {
+            bind_address: "::".parse().unwrap(),
             persistence: PersistenceConfig::Etcd(EtcdConfig::default()),
             grpc: GrpcApiConfig {
                 advertised_host: host.map(str::to_string),
@@ -654,6 +656,28 @@ mod advertised_host_tests {
         ] {
             validate_advertised_host(&distributed(Some(host))).expect(host);
         }
+    }
+
+    #[test]
+    fn an_ipv6_host_is_refused_when_the_replica_binds_ipv4_only() {
+        let mut config = distributed(Some("fd00::7"));
+        config.bind_address = "0.0.0.0".parse().unwrap();
+        let error = validate_advertised_host(&config).expect_err("must be refused");
+        let message = error.to_string();
+        assert!(
+            message.contains("grpc.advertised_host") && message.contains("bind_address"),
+            "{message}"
+        );
+        config.grpc.advertised_host = Some("[fd00::7]".to_string());
+        validate_advertised_host(&config).expect_err("a bracketed literal is refused as well");
+
+        config.bind_address = "::".parse().unwrap();
+        validate_advertised_host(&config).expect("an IPv6 replica may advertise an IPv6 host");
+        config.bind_address = "0.0.0.0".parse().unwrap();
+        config.grpc.advertised_host = Some("10.0.3.7".to_string());
+        validate_advertised_host(&config).expect("an IPv4 host fits an IPv4 bind address");
+        config.grpc.advertised_host = Some("shard-manager.golem.svc".to_string());
+        validate_advertised_host(&config).expect("a name is not judged by its family");
     }
 
     #[test]
@@ -1120,6 +1144,14 @@ fn validate_advertised_host(config: &ShardManagerConfig) -> anyhow::Result<Optio
         "grpc.advertised_host is {host}, which names no single host. Set it to the address other \
          processes reach this replica at, such as its pod IP."
     );
+    if let Some(ip) = ip.map(|ip| ip.to_canonical()) {
+        let bind_address = config.bind_address.to_canonical();
+        anyhow::ensure!(
+            !(ip.is_ipv6() && bind_address.is_ipv4()),
+            "grpc.advertised_host {ip} is an IPv6 address, but bind_address {bind_address} \
+             accepts IPv4 only, so nothing could be reached at it; set bind_address to \"::\""
+        );
+    }
     anyhow::ensure!(
         valid_leader_address(
             host,
