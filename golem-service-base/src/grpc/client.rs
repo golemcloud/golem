@@ -678,16 +678,22 @@ where
         F: for<'a> Fn(&'a mut T) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
             + Send,
     {
-        self.inner
+        self.select()
             .call_with_retry(description, self.endpoint.clone(), retry_the_call, f)
             .await
     }
 
-    /// See [`MultiTargetGrpcClient::with_redirect`].
+    /// See [`MultiTargetGrpcClient::with_redirect`]. Applies to every connection of the pool.
     pub fn with_redirect(self, is_redirect: fn(&Status) -> bool) -> Self {
         Self {
             endpoint: self.endpoint,
-            inner: self.inner.with_redirect(is_redirect),
+            pool: self
+                .pool
+                .iter()
+                .cloned()
+                .map(|client| client.with_redirect(is_redirect))
+                .collect(),
+            next: self.next,
         }
     }
 }
