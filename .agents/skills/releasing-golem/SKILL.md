@@ -111,14 +111,20 @@ versions are separate: all eight use the Golem version without its leading `v`.
 ## 3. Tag and prepare Golem
 
 The source must be clean, the exact public tag must match the checked source, and
-its commit must be an ancestor of public `main`. A maintenance-only commit does
-not qualify. A shared tag on another history path does not fix snapshot selection.
+its commit must be the exact head of a PR merged into `golemcloud/golem`'s `main`.
+The PR's merge commit must remain reachable from public `main`. Validation uses
+the GitHub API and requires an authenticated `gh` session with pull requests read
+access. In CI, `GITHUB_TOKEN` supplies that read access independently of the
+contents-only publication token in `GH_TOKEN`.
+A maintenance-only PR does not qualify. A shared tag on another history path
+does not fix snapshot selection.
 The preparation workflow must be available on the default branch for dispatch and
 present at the selected tag. Do not dispatch on a branch or pass a separate tag input.
 Use a reviewed PR to merge the preparation branch into `main` without importing
-newer `main` changes into the release source. Use a merge commit, not a squash or
-rebase, so the approved release commit remains an ancestor of public `main`.
-Tag that preparation-branch commit, not the newer `main` merge commit.
+newer `main` changes into the release source. Use the repository's normal squash
+merge. Record the PR's exact head before merging, then tag that preparation-branch
+commit, not the squash commit on `main`. The tag preserves the frozen source and
+its first-parent shared snapshot; validation proves that this exact source was merged.
 Obtain explicit approval before merging. With authorization:
 
 ```shell

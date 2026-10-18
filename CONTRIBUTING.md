@@ -226,9 +226,10 @@ to `main`.
    crates, binaries, or Docker images.
 4. **Prepare Golem.** Push the immutable Golem tag after all pins and exported
    built-in tool versions are committed. First use a reviewed PR and obtain
-   explicit approval to merge the preparation branch into `main`. Use a merge
-   commit, not a squash or rebase, to preserve the release commit's ancestry.
-   Tag the preparation-branch commit, not the newer `main` merge commit. Run
+   explicit approval to squash merge the preparation branch into `main`.
+   Record the PR's exact head before merging. Tag that preparation-branch commit,
+   not the squash commit on `main`, to preserve the frozen release source and
+   its first-parent shared snapshot. Run
    the preparation workflow on that exact public tag (there is no separate
    tag input):
 
@@ -237,7 +238,9 @@ to `main`.
    ```
 
    `.github/workflows/prepare-golem-release.yaml` validates the exact public tag,
-   clean source, and main ancestry. It runs the full reusable CI preflight with
+   clean source, and the merged preparation PR. The PR must have the tagged commit
+   as its exact head, target `golemcloud/golem`'s `main`, and have a merge commit
+   reachable from public `main`. It runs the full reusable CI preflight with
    published SDK and shared-crate checks. Its protected `golem-release` job
    creates or resumes the draft, builds and publishes all eight built-in inventory
    entries, and uploads the verified manifest. It never publishes the Golem draft.
@@ -290,8 +293,8 @@ prereleases never become the default install.
 For each shipped `major.minor` line that still needs bug-fix releases, we keep a
 long-lived `<major>.<minor>.x` branch (e.g. `1.5.x`). Releases from this branch
 can use the SDK tag workflows. Golem preparation requires the tag commit to be
-an ancestor of public `main`; a maintenance-only commit does not qualify. Do not
-assume a branch name bypasses this check:
+the exact head of a PR merged into public `main`; a PR merged only into a
+maintenance branch does not qualify. Do not assume a branch name bypasses this check:
 
 ```shell
 # Prepare a 1.5.4 Golem patch release from the 1.5.x line
@@ -299,7 +302,7 @@ git checkout 1.5.x
 git pull
 git tag v1.5.4
 git push origin v1.5.4
-# Golem preparation is allowed only if this commit is also an ancestor of main.
+# Golem preparation also requires a PR with this exact head merged into main.
 
 # Or cut a 1.5.4 Rust SDK release from the same branch
 git tag golem-rust-v1.5.4
@@ -314,8 +317,9 @@ usual flow is: land the fix on `main` first, then cherry-pick the commit(s)
 onto the relevant maintenance branch(es) via a separate PR.
 
 **Docker `:latest`** is only updated when the tag's commit is reachable from
-`main`. This rule does not bypass the preparation ancestry check: a
-maintenance-only commit cannot use the preparation workflow.
+`main`. This separate rule does not recognize a frozen source commit through its
+squash merge. It does not bypass the preparation PR check: a maintenance-only
+PR cannot use the preparation workflow.
 
 ## Running Golem locally
 
