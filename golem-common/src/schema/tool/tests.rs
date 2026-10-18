@@ -70,6 +70,7 @@ fn middleware_bypass_wit_exposes_only_definition_discovery_and_runtime_owned_und
     assert_eq!(
         wit_functions(wit_interface(host, "host")),
         [
+            "admitted",
             "async-invoke-and-await",
             "cancel",
             "collect",

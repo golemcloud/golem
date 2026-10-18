@@ -146,6 +146,12 @@ declare module 'golem:tool/host@0.1.0' {
   }
   export class FutureInvokeResult {
     /**
+     * The immutable dispatch decision. True means an entity invocation was
+     * accepted, not that its body executed or succeeded. Replay retains the
+     * recorded decision. This does not wait for the body or inspect readiness.
+     */
+    admitted(): boolean;
+    /**
      * Sequential calls return the same immutable terminal. Only one call may
      * be outstanding at a time.
      * @throws ToolRpcError

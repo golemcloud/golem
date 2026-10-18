@@ -646,6 +646,12 @@ enum FutureToolInvokeState {
     Active(Arc<ToolExecution>),
 }
 
+impl FutureToolInvokeState {
+    fn admitted(&self) -> bool {
+        matches!(self, Self::Active(_))
+    }
+}
+
 enum FutureToolInvokeGet {
     Ready(Box<ToolInvokeResponse>),
     Failed(String),
@@ -7153,6 +7159,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
 }
 
 impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
+    async fn admitted(&mut self, self_: Resource<FutureInvokeResultEntry>) -> anyhow::Result<bool> {
+        self.observe_function_call("golem::tool::host::future-invoke-result", "admitted");
+        Ok(self.table().get(&self_)?.state.admitted())
+    }
+
     async fn cancel(&mut self, self_: Resource<FutureInvokeResultEntry>) -> anyhow::Result<()> {
         self.observe_function_call("golem::tool::host::future-invoke-result", "cancel");
         if let FutureToolInvokeState::Active(execution) = &self.table().get(&self_)?.state {

@@ -207,6 +207,10 @@ interface host {
   }
 
   resource future-invoke-result {
+    /// The immutable dispatch decision. True means an entity invocation was
+    /// accepted, not that its body executed or succeeded. Replay retains the
+    /// recorded decision. This does not wait for the body or inspect readiness.
+    admitted: func() -> bool;
     /// Sequential calls return the same immutable terminal. Only one call may
     /// be outstanding at a time.
     get: async func() -> result<invocation-result, tool-rpc-error>;

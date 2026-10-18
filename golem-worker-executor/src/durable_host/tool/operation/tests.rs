@@ -1,7 +1,7 @@
 use super::super::attachment::{AttachmentMemory, ToolAttachmentModeMetadata, attachment_pair};
 use super::super::{
-    FutureToolInvokeGet, ToolExecution, ToolExecutionState, ToolInvokeCompletion,
-    capable_result_await_cohort,
+    FutureToolInvokeGet, FutureToolInvokeState, ToolExecution, ToolExecutionState,
+    ToolInvokeCompletion, capable_result_await_cohort,
 };
 use super::*;
 use crate::preview2::golem::tool::host::ByteStreamFailure;
@@ -2091,6 +2091,8 @@ fn mixed_completed_and_current_futures_only_cohort_the_active_parent() {
     let current_parent = OwnerInvocationId::Agent(OplogIndex::from_u64(10));
     let old = tool_execution(old_operation, old_parent, 2);
     let current = tool_execution(current_operation, current_parent.clone(), 3);
+    let admitted = FutureToolInvokeState::Active(old.clone());
+    assert!(admitted.admitted());
     old.complete(Ok(ToolInvokeCompletion {
         response: Err(
             golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled,
@@ -2098,6 +2100,16 @@ fn mixed_completed_and_current_futures_only_cohort_the_active_parent() {
         body_executed: false,
     }));
     assert!(!old.body_executed().unwrap());
+    assert!(
+        admitted.admitted(),
+        "a skipped body does not undo accepted dispatch"
+    );
+    assert!(
+        !FutureToolInvokeState::Ready(Box::new(Err(
+            golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled,
+        )))
+        .admitted()
+    );
     assert!(current.body_executed().is_err());
 
     let cohort =
