@@ -32,10 +32,8 @@ Optional Rust argument encoding remains a separate requirement for the full 1.6 
 | Artifact size | 23,346,707 bytes (22.27 MiB) |
 | Artifact SHA-256 | `1cc1f740f94e448d5beeb29b8350eced6256e015fdb7dea0e9717f8af5a3ca5e` |
 
-`cargo make build-bash-tool` built the component in the pinned container the README describes
-(Build and verify), wrote it to `builtin-tools/bash.wasm` and passed
-`wasm-tools validate --features all`. The build is reproducible: rebuilding from any checkout gives
-the same SHA-256. The standalone workspace has
+`cargo make build-bash-tool` built the component, wrote it to `builtin-tools/bash.wasm` and
+passed `wasm-tools validate --features all`. The standalone workspace has
 a committed lockfile and immutable Brush/Coreutils git pins, with no local fork overrides.
 
 ## Results

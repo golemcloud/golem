@@ -1,4 +1,5 @@
 use super::*;
+use crate::services::oplog::UnreadableOplog;
 use crate::services::oplog::{CommitLevel, OplogAddReceipt, OrderedOplogStart, PendingUpload};
 use async_trait::async_trait;
 use golem_common::model::card::{
@@ -140,7 +141,7 @@ impl Oplog for InMemoryOplog {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         let entries = self.entries.lock().unwrap();
         let start: u64 = oplog_index.into();
         let mut result = BTreeMap::new();
@@ -154,11 +155,11 @@ impl Oplog for InMemoryOplog {
             result.insert(OplogIndex::from_u64(i), entry.clone());
             self.reads.lock().unwrap().push(OplogIndex::from_u64(i));
         }
-        result
+        Ok(result)
     }
 
-    async fn length(&self) -> u64 {
-        self.entries.lock().unwrap().len() as u64
+    async fn length(&self) -> Result<u64, UnreadableOplog> {
+        Ok(self.entries.lock().unwrap().len() as u64)
     }
 
     async fn upload_raw_payload(&self, _data: Vec<u8>) -> Result<RawOplogPayload, String> {
@@ -248,6 +249,7 @@ fn start_now() -> OplogEntry {
         )))),
         durable_function_type: DurableFunctionType::ReadLocal,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -289,6 +291,7 @@ fn rejected_tool_reconstruction_start(parent_start_index: OplogIndex) -> OplogEn
         request: Some(OplogPayload::Inline(Box::new(request))),
         durable_function_type: DurableFunctionType::WriteLocal,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -372,6 +375,7 @@ fn custom_start_with_request(
         request: Some(OplogPayload::Inline(Box::new(request))),
         durable_function_type: DurableFunctionType::ReadRemote,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -1011,6 +1015,7 @@ fn fork_start() -> OplogEntry {
         )))),
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -1196,7 +1201,7 @@ async fn primary_publication_requires_completed_reconstruction_validation() {
             let memory = memory.clone();
             move |state| async move {
                 state
-                    .with_tx(async |tx| Ok(tx.finish_primary_settling(target, &memory).await))
+                    .with_tx(async |tx| Ok(tx.finish_primary_settling(target, &memory).await?))
                     .await
             }
         })
@@ -1584,7 +1589,9 @@ async fn old_settler_cannot_publish_a_grown_target() {
             move |state| async move {
                 state
                     .with_tx(async |tx| {
-                        Ok(tx.finish_primary_settling(old_target, &stale_memory).await)
+                        Ok(tx
+                            .finish_primary_settling(old_target, &stale_memory)
+                            .await?)
                     })
                     .await
             }
@@ -1603,7 +1610,7 @@ async fn old_settler_cannot_publish_a_grown_target() {
                     .with_tx(async |tx| {
                         Ok(tx
                             .finish_primary_settling(second_target, &current_memory)
-                            .await)
+                            .await?)
                     })
                     .await
             }
@@ -2918,6 +2925,7 @@ async fn dropped_scan_ahead_claim_leaves_no_residue_once_cursor_passes() {
             )))),
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
+            denial: None,
         }
     }
 
@@ -3127,6 +3135,7 @@ fn start_with_parent(parent_start_index: u64) -> OplogEntry {
         )))),
         durable_function_type: DurableFunctionType::ReadLocal,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -3573,6 +3582,7 @@ async fn invocation_boundary_tolerates_abandoned_consume_body_scope_shape() {
             )))),
             durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,
+            denial: None,
         },
         OplogEntry::Start {
             timestamp: Timestamp::now_utc(),
@@ -3585,6 +3595,7 @@ async fn invocation_boundary_tolerates_abandoned_consume_body_scope_shape() {
             )))),
             durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,
+            denial: None,
         },
         OplogEntry::End {
             timestamp: Timestamp::now_utc(),
@@ -3864,15 +3875,28 @@ async fn replay_delivery_marker_holds_cursor_until_guest_boundary() {
 }
 
 fn consumer_observation(reader_slot: u32, guest: bool, terminal: bool) -> OplogEntry {
+    consumer_observation_with_parent(reader_slot, guest, terminal, None)
+}
+
+/// A guest consumer observation whose read was performed by the scope rooted at `parent`,
+/// such as a tool body reading its durable stdin.
+fn guest_consumer_observation_of(reader_slot: u32, parent: u64) -> OplogEntry {
+    consumer_observation_with_parent(reader_slot, true, false, Some(OplogIndex::from_u64(parent)))
+}
+
+fn consumer_observation_with_parent(
+    reader_slot: u32,
+    guest: bool,
+    terminal: bool,
+    parent_start_index: Option<OplogIndex>,
+) -> OplogEntry {
     use golem_common::model::durable_stream::{
         LocalStreamReaderId, STREAM_CONSUMER_RECORD_FORMAT_VERSION, StreamConsumerItemValueRecord,
         StreamConsumerObservation, StreamConsumerTerminal, StreamConsumerTerminalRecord,
         StreamEndResult, StreamOffset, StreamRegistrationInvocation, StreamSessionRecord,
     };
     let observation = if guest {
-        StreamConsumerObservation::Guest {
-            parent_start_index: None,
-        }
+        StreamConsumerObservation::Guest { parent_start_index }
     } else {
         StreamConsumerObservation::Host
     };
@@ -7991,7 +8015,9 @@ async fn visible_terminal_scan_crosses_multiple_chunks() {
     let rs = replay_state_over(entries).await;
 
     assert!(
-        rs.has_visible_terminal(OplogIndex::from_u64(2)).await,
+        rs.has_visible_terminal(OplogIndex::from_u64(2))
+            .await
+            .unwrap(),
         "entity execution mode classification must scan through the complete replay prefix"
     );
 }
@@ -8010,7 +8036,8 @@ async fn visible_scope_descendant_distinguishes_owned_work_from_siblings() {
     assert!(
         !only_sibling
             .has_visible_scope_descendant(OplogIndex::from_u64(2))
-            .await,
+            .await
+            .unwrap(),
         "a later sibling must not be mistaken for historical entity-body work"
     );
 
@@ -8026,8 +8053,41 @@ async fn visible_scope_descendant_distinguishes_owned_work_from_siblings() {
     assert!(
         owned_child
             .has_visible_scope_descendant(OplogIndex::from_u64(2))
-            .await,
+            .await
+            .unwrap(),
         "a nested Start proves the historical entity body began execution"
+    );
+
+    let owned_session_read = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start_now(),
+        guest_consumer_observation_of(0, 2),
+    ])
+    .await;
+    assert!(
+        owned_session_read
+            .has_visible_scope_descendant(OplogIndex::from_u64(2))
+            .await
+            .unwrap(),
+        "a guest session-input read attributed to the body proves it began execution"
+    );
+
+    let unowned_session_read = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start_now(),
+        consumer_observation(0, true, false),
+    ])
+    .await;
+    assert!(
+        !unowned_session_read
+            .has_visible_scope_descendant(OplogIndex::from_u64(2))
+            .await
+            .unwrap(),
+        "a guest session-input read of the invocation itself is not entity-body work"
     );
 }
 
@@ -8251,6 +8311,7 @@ fn transaction_scope_start(parent: Option<u64>) -> OplogEntry {
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -8446,6 +8507,7 @@ async fn rdbms_incomplete_stream_repair_reconstructs_typed_loss_at_original_star
             )))),
             durable_function_type: function_type.clone(),
             span_started: None,
+            denial: None,
         },
     ])
     .await;
@@ -9349,6 +9411,7 @@ fn batched_scope_start() -> OplogEntry {
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -9396,6 +9459,7 @@ fn batched_child_start(parent: u64) -> OplogEntry {
         )))),
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -9952,6 +10016,7 @@ async fn custom_claim_rejects_invocation_id_collision() {
         request: None,
         durable_function_type: DurableFunctionType::ReadLocal,
         span_started: None,
+        denial: None,
     };
     let rs = replay_state_over(vec![remove_retry_policy(), conflicting_start]).await;
 
@@ -9985,6 +10050,7 @@ async fn entity_owned_scope_claim_requires_the_recorded_parent() {
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
+        denial: None,
     };
     let rs = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
@@ -10028,6 +10094,7 @@ fn start_claim_requires_the_recorded_observational_owner() {
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
+        denial: None,
     };
 
     assert!(
@@ -10052,6 +10119,7 @@ fn start_claim_requires_the_recorded_observational_owner() {
         )))),
         durable_function_type: DurableFunctionType::ReadLocal,
         span_started: None,
+        denial: None,
     };
     assert!(
         StartClaim::unowned(
@@ -11574,6 +11642,7 @@ fn wait_for_start(duration_in_nanos: u64, invocation_id: Option<u64>) -> OplogEn
         ))),
         durable_function_type: DurableFunctionType::ReadLocal,
         span_started: None,
+        denial: None,
     }
 }
 
@@ -11940,6 +12009,7 @@ fn scope_claim_requires_the_recorded_invocation_id() {
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
+        denial: None,
     };
     let claim = |invocation_id: Option<u64>| {
         StartClaim::scope(&scope_name, &DurableFunctionType::WriteRemote, None)

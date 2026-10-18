@@ -50,7 +50,9 @@
 //! lock-free.
 
 use super::owner_wallet::{CardEventBoundary, OwnerWallet, WalletCommit, WalletPublicationFailure};
-use super::status::{StatusOplogReader, calculate_status_with_reader, fold_committed_status};
+use super::status::{
+    StatusError, StatusOplogReader, calculate_status_with_reader, fold_committed_status,
+};
 use super::status_flusher::{AgentStatusFlusher, FlushReason};
 use super::{
     PendingMemoryGrowth, RetirementReason, UnloadReason, Worker, WorkerCommand, WorkerInstance,
@@ -58,7 +60,7 @@ use super::{
 };
 use crate::services::agent_filesystem_snapshots::ConfirmOutcome;
 use crate::services::linear_memory::LinearMemoryTracker;
-use crate::services::oplog::{CommitLevel, Oplog, OplogError, OplogFence};
+use crate::services::oplog::{CommitLevel, Oplog, OplogError, OplogFence, OplogRefusal};
 use crate::services::{
     All, HasActiveAgents, HasConfig, HasSchedulerService, HasShardService, HasWorkerService,
 };
@@ -76,6 +78,7 @@ use golem_common::model::{
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::any::Any;
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -173,8 +176,8 @@ pub enum CommitReceipt {
     /// Signalled on a commit and dropped on a refusal, which its waiter reads as "nothing was
     /// committed".
     Plain(oneshot::Sender<()>),
-    /// Answered either way, so a refusal reaches the waiter as the fence itself.
-    Refusable(oneshot::Sender<Result<(), OplogFence>>),
+    /// Answered either way, so a refusal reaches the waiter as the refusal itself.
+    Refusable(oneshot::Sender<Result<(), OplogRefusal>>),
 }
 
 impl CommitReceipt {
@@ -189,9 +192,9 @@ impl CommitReceipt {
         }
     }
 
-    fn refused(self, fence: &OplogFence) {
+    fn refused(self, refusal: &OplogRefusal) {
         if let Self::Refusable(receipt) = self {
-            let _ = receipt.send(Err(fence.clone()));
+            let _ = receipt.send(Err(refusal.clone()));
         }
     }
 }
@@ -204,13 +207,13 @@ enum StatusJob {
     Stop,
     /// Commits the oplog and folds the newly committed entries into the published status.
     /// Replies with the current oplog index after the commit and whether the status changed, or
-    /// with the fence when the storage refused the commit.
+    /// with the refusal when the oplog refused the commit.
     /// The actor queues lifecycle notification without awaiting the lifecycle lock, even if the
     /// caller has cancelled its receipt or full-transaction waiter.
     CommitAndUpdateState {
         level: CommitLevel,
         committed: Option<CommitReceipt>,
-        done: oneshot::Sender<Result<(OplogIndex, bool), OplogFence>>,
+        done: oneshot::Sender<Result<(OplogIndex, bool), OplogRefusal>>,
     },
     /// Appends an entry and completes its commit + fold transaction even if the caller is
     /// cancelled. The caller-acquired guards remain owned by this job until the transaction ends.
@@ -236,6 +239,12 @@ enum StatusJob {
     /// Observes completed projection work in FIFO order without committing buffered entries.
     Status {
         done: oneshot::Sender<Arc<AgentStatusRecord>>,
+    },
+    /// Observes completed projection work in FIFO order like `Status`, but first rebuilds a status
+    /// that an earlier rebuild left detached. Replies with the refusal when the rebuild fails
+    /// again, so no decision is taken from a status that is not a fold of the oplog.
+    RepairedStatus {
+        done: oneshot::Sender<Result<Arc<AgentStatusRecord>, OplogRefusal>>,
     },
     /// Writes the confirmation record of a filesystem snapshot when the last automatic snapshot
     /// record still has the name. The check and the append run in this one job, so no other
@@ -316,14 +325,11 @@ impl<Ctx: WorkerCtx> Drop for WorkerStateActor<Ctx> {
     }
 }
 
-/// The error a refused append or commit replies with. The retirement is spawned inside the actor,
-/// so the caller only needs an error it will not mistake for a delivered entry.
-fn fenced_error(fence: &OplogFence) -> WorkerExecutorError {
-    WorkerExecutorError::oplog_fenced(
-        fence.agent_id.clone(),
-        fence.expected_epoch.0,
-        fence.actual_epoch.map(|epoch| epoch.0),
-    )
+/// The error a refused append or commit replies with. A fence has already spawned the retirement
+/// inside the actor, and a failed archive write refuses every later write of the agent, so the
+/// caller only needs an error it will not mistake for a delivered entry.
+fn refused_error(refusal: &OplogRefusal) -> WorkerExecutorError {
+    WorkerExecutorError::from(refusal.clone())
 }
 
 impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
@@ -375,8 +381,21 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     } => {
                         complete_status_job(
                             async {
-                                let changed =
-                                    state.commit_and_update_state(level, committed).await?;
+                                let changed = state
+                                    .commit_and_update_state(level, committed)
+                                    .await
+                                    .inspect_err(|refusal| {
+                                        // The entries are stored, but the status was not rebuilt.
+                                        // A caller that took the receipt may no longer wait for
+                                        // this reply, so the owner is woken to repair the detached
+                                        // status itself before it chooses more work.
+                                        if matches!(refusal, OplogRefusal::Unreadable(_)) {
+                                            queue_status_notification(
+                                                &status_lifecycle_jobs,
+                                                &status_notification_queued,
+                                            );
+                                        }
+                                    })?;
                                 let index = state.oplog.current_oplog_index().await;
                                 if changed {
                                     queue_status_notification(
@@ -413,7 +432,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                             wallet_commit.as_deref(),
                                         )
                                         .await
-                                        .map_err(|fence| fenced_error(&fence))?;
+                                        .map_err(|refusal| refused_error(&refusal))?;
                                     if let Err(failure) = outcome.wallet_publication {
                                         publication_failed = true;
                                         return Err(WorkerExecutorError::recovery_required(format!(
@@ -422,13 +441,10 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                     }
                                     Ok(())
                                 }
-                                // The shard has a new owner: give the agent up and leave no
-                                // further trace in an oplog that is no longer ours.
-                                Err(OplogError::Fenced(fence)) => {
-                                    state.retire_fenced_agent(fence.clone());
-                                    Err(fenced_error(&fence))
-                                }
-                                Err(error) => panic!("oplog write: {error}"),
+                                Err(error) => match error.into_refusal() {
+                                    Ok(refusal) => Err(refused_error(&state.refused(refusal))),
+                                    Err(error) => panic!("oplog write: {error}"),
+                                },
                             }
                         }
                         .await;
@@ -451,6 +467,13 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     } => {
                         complete_status_job(
                             async {
+                                // A detached status is not a fold of the oplog, so the key is
+                                // checked only against a repaired one.
+                                if state.detached.load(Ordering::Acquire) {
+                                    state
+                                        .commit_and_update_state(CommitLevel::Always, None)
+                                        .await?;
+                                }
                                 let status = state.last_known_status.load();
                                 if !can_append_invocation(
                                     &status,
@@ -473,11 +496,11 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                 // takeover is found. The key has not reached the status, so nothing
                                 // that fails pending invocations can answer its caller: the enqueue
                                 // itself has to be refused.
-                                if let Err(fence) = state
+                                if let Err(refusal) = state
                                     .commit_and_update_state(CommitLevel::Always, None)
                                     .await
                                 {
-                                    return Err(OplogError::Fenced(fence));
+                                    return Err(refusal.into());
                                 }
                                 if let WorkerInstance::Running(running) = &*instance_guard {
                                     running.sender.send(WorkerCommand::WorkAvailable).unwrap();
@@ -490,6 +513,25 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     }
                     StatusJob::Status { done } => {
                         let _ = done.send(state.last_known_status.load_full());
+                    }
+                    StatusJob::RepairedStatus { done } => {
+                        complete_status_job(
+                            async {
+                                if state.detached.load(Ordering::Acquire)
+                                    && state
+                                        .commit_and_update_state(CommitLevel::Always, None)
+                                        .await?
+                                {
+                                    queue_status_notification(
+                                        &status_lifecycle_jobs,
+                                        &status_notification_queued,
+                                    );
+                                }
+                                Ok(state.last_known_status.load_full())
+                            },
+                            done,
+                        )
+                        .await;
                     }
                     StatusJob::ConfirmFilesystemSnapshot {
                         name,
@@ -607,15 +649,15 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     }
 
     /// Commits the oplog and folds the new entries into the published status. Returns the
-    /// current oplog index after the commit and whether the status changed, or the fence when the
-    /// storage refused the commit; the refusal has already started the agent's retirement.
+    /// current oplog index after the commit and whether the status changed, or the refusal when the
+    /// oplog refused the commit; a fence has already started the agent's retirement.
     ///
     /// If the caller's future is dropped while awaiting the reply, the commit still runs to
     /// completion on the status task (the same semantics as the oplog actor's own jobs).
     pub async fn commit_and_update_state(
         &self,
         level: CommitLevel,
-    ) -> Result<(OplogIndex, bool), OplogFence> {
+    ) -> Result<(OplogIndex, bool), OplogRefusal> {
         self.commit
             .run_status_job(|done| StatusJob::CommitAndUpdateState {
                 level,
@@ -629,7 +671,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         &self,
         level: CommitLevel,
         committed: CommitReceipt,
-    ) -> Result<(OplogIndex, bool), OplogFence> {
+    ) -> Result<(OplogIndex, bool), OplogRefusal> {
         self.commit
             .run_status_job(|done| StatusJob::CommitAndUpdateState {
                 level,
@@ -644,7 +686,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     pub fn enqueue_commit_and_update_state_notifying(
         &self,
         level: CommitLevel,
-    ) -> oneshot::Receiver<Result<(), OplogFence>> {
+    ) -> oneshot::Receiver<Result<(), OplogRefusal>> {
         let (committed, committed_rx) = oneshot::channel();
         let (done, _done_rx) = oneshot::channel();
         if self
@@ -753,6 +795,15 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     pub async fn status(&self) -> Arc<AgentStatusRecord> {
         self.commit
             .run_status_job(|done| StatusJob::Status { done })
+            .await
+    }
+
+    /// The published status, rebuilt first when an earlier rebuild left it detached. Gives the
+    /// refusal of that rebuild instead of the detached status, so a caller that chooses work from
+    /// the status never chooses it from one that is not a fold of the oplog.
+    pub async fn repaired_status(&self) -> Result<Arc<AgentStatusRecord>, OplogRefusal> {
+        self.commit
+            .run_status_job(|done| StatusJob::RepairedStatus { done })
             .await
     }
 
@@ -888,7 +939,7 @@ impl OwnerCommitController {
     pub async fn commit_and_update_state(
         &self,
         level: CommitLevel,
-    ) -> Result<(OplogIndex, bool), OplogFence> {
+    ) -> Result<(OplogIndex, bool), OplogRefusal> {
         self.run_status_job(|done| StatusJob::CommitAndUpdateState {
             level,
             committed: None,
@@ -999,6 +1050,47 @@ fn queue_status_notification<Ctx: WorkerCtx>(
     }
 }
 
+/// The status a commit of the status task rebuilt from the oplog. The commit landed, but an oplog
+/// that does not read cannot give its status: that is returned as the refusal, and the caller that
+/// receives it fails the agent with the cause. Nothing is latched, so a later commit can succeed.
+/// Any other failure is fail-stop.
+pub(super) fn reconstructed_status(
+    status: Result<Option<AgentStatusRecord>, StatusError>,
+) -> Result<AgentStatusRecord, OplogRefusal> {
+    match status {
+        Ok(Some(status)) => Ok(status),
+        Ok(None) => panic!("worker oplog disappeared during status reconstruction"),
+        Err(StatusError::Unreadable(unreadable)) => Err(OplogRefusal::Unreadable(unreadable)),
+        Err(error) => panic!("oplog status reconstruction: {error}"),
+    }
+}
+
+/// Settles a commit of the status task: answers the receipt, and gives the committed entries or
+/// the refusal. A refused commit committed nothing, and the oplog refuses every later write. Any
+/// other write error is fail-stop.
+fn settle_commit(
+    result: Result<BTreeMap<OplogIndex, OplogEntry>, OplogError>,
+    committed: Option<CommitReceipt>,
+) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogRefusal> {
+    match result {
+        Ok(entries) => {
+            if let Some(committed) = committed {
+                committed.committed();
+            }
+            Ok(entries)
+        }
+        Err(error) => match error.into_refusal() {
+            Ok(refusal) => {
+                if let Some(committed) = committed {
+                    committed.refused(&refusal);
+                }
+                Err(refusal)
+            }
+            Err(error) => panic!("oplog write: {error}"),
+        },
+    }
+}
+
 async fn complete_status_job<R>(transaction: impl Future<Output = R>, done: oneshot::Sender<R>) {
     let result = transaction.await;
     let _ = done.send(result);
@@ -1009,9 +1101,10 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     /// attached and that the last automatic snapshot record has `name`, checks that this executor
     /// still admits work of the agent, appends the confirmation record, commits, and decides from
     /// the folded status. A commit or append the oplog refuses because the shard has a new owner
-    /// gives `Deferred`; the refusal has already started the retirement of the agent. An append
-    /// that fails for another cause also gives `Deferred`. A commit that fails for a cause other
-    /// than a fence panics in `commit_and_update_state`, as every commit of the status task does.
+    /// gives `Deferred`; the refusal has already started the retirement of the agent. A failed
+    /// archive write and an append that fails for another cause also give `Deferred`. A commit that
+    /// fails for a cause other than a refusal panics in `commit_and_update_state`, as every commit
+    /// of the status task does.
     async fn confirm_filesystem_snapshot(&self, name: FilesystemSnapshotName) -> ConfirmOutcome {
         if self
             .commit_and_update_state(CommitLevel::Always, None)
@@ -1044,15 +1137,16 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                     .await
                 {
                     Ok(_) => {}
-                    Err(OplogError::Fenced(fence)) => {
-                        self.retire_fenced_agent(fence);
-                        return ConfirmOutcome::Deferred;
-                    }
                     Err(error) => {
-                        warn!(
-                            error = %error,
-                            "Failed to append the confirmation of a filesystem snapshot"
-                        );
+                        match error.into_refusal() {
+                            Ok(refusal) => {
+                                self.refused(refusal);
+                            }
+                            Err(error) => warn!(
+                                error = %error,
+                                "Failed to append the confirmation of a filesystem snapshot"
+                            ),
+                        }
                         return ConfirmOutcome::Deferred;
                     }
                 }
@@ -1070,6 +1164,17 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                 )
             }
         }
+    }
+
+    /// Acts on a refusal of a commit and returns it. A fence retires the agent. A failed archive
+    /// write is left to the next write of the agent, which the oplog refuses with the same error:
+    /// that write fails the invocation, the start or the periodic work, and the agent stops with
+    /// the cause.
+    fn refused(&self, refusal: OplogRefusal) -> OplogRefusal {
+        if let Some(fence) = refusal.fence() {
+            self.retire_fenced_agent(fence.clone());
+        }
+        refusal
     }
 
     /// Retires the agent after a background oplog write was refused because its shard moved.
@@ -1106,14 +1211,17 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     /// Commits the oplog, acknowledges the persistence milestone, then folds or reconstructs
     /// the projection before another status job can run. Returns whether status was republished.
     ///
-    /// A commit the storage refused because the shard has a new owner is returned as the fence
-    /// rather than folded into "unchanged": a caller whose entry was only buffered until this
-    /// commit must not report it as written.
+    /// A commit the oplog refused, because the shard has a new owner or an archive layer did not
+    /// store the entries, is returned as the refusal rather than folded into "unchanged": a caller
+    /// whose entry was only buffered until this commit must not report it as written. A commit
+    /// whose status cannot be rebuilt because the oplog does not read is returned as
+    /// `OplogRefusal::Unreadable`: its entries were stored, but the agent cannot go on. The status
+    /// stays detached until a later fold or rebuild succeeds; the refusal itself is not latched.
     async fn commit_and_update_state(
         &self,
         commit_level: CommitLevel,
         committed: Option<CommitReceipt>,
-    ) -> Result<bool, OplogFence> {
+    ) -> Result<bool, OplogRefusal> {
         self.commit_and_update_state_with_wallet(commit_level, committed, None)
             .await
             .map(|outcome| outcome.changed)
@@ -1124,26 +1232,15 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         commit_level: CommitLevel,
         committed: Option<CommitReceipt>,
         wallet_commit: Option<&WalletCommit>,
-    ) -> Result<CommittedOutcome, OplogFence> {
+    ) -> Result<CommittedOutcome, OplogRefusal> {
         // Sample before committing: a later sample could include new, uncommitted appends.
         // Reading the index is not a write, so a fenced oplog still answers it; the sample is
         // only consumed on the path where the commit below succeeded.
         let appended_through = self.oplog.current_oplog_index().await;
-        let new_entries = match self.oplog.commit(commit_level).await {
-            Ok(entries) => entries,
-            Err(OplogError::Fenced(fence)) => {
-                // Nothing was committed and nothing more can be.
-                if let Some(committed) = committed {
-                    committed.refused(&fence);
-                }
-                self.retire_fenced_agent(fence.clone());
-                return Err(fence);
-            }
-            Err(error) => panic!("oplog write: {error}"),
-        };
-        if let Some(committed) = committed {
-            committed.committed();
-        }
+        // Only a failed rebuild leaves the status detached between status jobs.
+        let repairing = self.detached.load(Ordering::Acquire);
+        let new_entries = settle_commit(self.oplog.commit(commit_level).await, committed)
+            .map_err(|refusal| self.refused(refusal))?;
 
         let mut authority_change_count = new_entries
             .values()
@@ -1169,7 +1266,9 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         )
         .await;
         let (updated_status, reconstructed) = match updated_status {
-            Ok(Some(status)) => (status, false),
+            // A status that an earlier rebuild left detached is repaired by this fold: it is
+            // published, attached and flushed as a rebuilt one.
+            Ok(Some(status)) => (status, repairing),
             Ok(None) | Err(_) => {
                 // Suppress background cache writes until the replacement projection is installed.
                 self.detached.store(true, Ordering::Release);
@@ -1193,10 +1292,8 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                             debug!(agent_id = %self.owned_agent_id, %error, "Status checkpoint unavailable; rebuilding from oplog");
                             None
                         })
-                }).await
-                    .unwrap_or_else(|error| panic!("oplog status reconstruction: {error}"))
-                    .unwrap_or_else(|| panic!("worker oplog disappeared during status reconstruction"));
-                (status, true)
+                }).await;
+                (reconstructed_status(status)?, true)
             }
         };
         if receipt_gap || reconstructed {
@@ -1351,12 +1448,14 @@ fn can_append_invocation(
 #[cfg(test)]
 mod tests {
     use super::{
-        LifecycleJob, OwnerCommitController, StatusJob, WorkerStateActor, WorkerStateActorStop,
-        can_append_invocation, complete_status_job,
+        CommitReceipt, LifecycleJob, OwnerCommitController, StatusJob, WorkerStateActor,
+        WorkerStateActorStop, can_append_invocation, complete_status_job, settle_commit,
     };
+    use crate::services::oplog::{CommitLevel, Oplog, OplogRefusal, gated_ephemeral_fixture};
     use crate::workerctx::default::Context;
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::oplog::OplogEntry;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{
         AgentId, AgentStatusRecord, IdempotencyKey, OwnedAgentId, PendingInvocationRef, Timestamp,
@@ -1506,6 +1605,50 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A commit of the status task on an ephemeral oplog whose archive layer did not store the
+    /// entries answers the receipt and the caller with the latched archive write, and does not
+    /// panic: the agent stops with the cause, and the process stays up.
+    #[test]
+    #[timeout("30s")]
+    async fn a_commit_refused_by_a_failed_archive_write_answers_without_a_panic() {
+        let fixture = gated_ephemeral_fixture(100).await;
+        fixture
+            .oplog
+            .add(OplogEntry::suspend().rounded())
+            .await
+            .unwrap();
+        fixture.oplog.commit(CommitLevel::Deferred).await.unwrap();
+        fixture.archive.wait_for_appends(1).await;
+        fixture.archive.fail_appends();
+
+        let (receipt, answer) = oneshot::channel();
+        let settled = settle_commit(
+            fixture.oplog.commit(CommitLevel::Always).await,
+            Some(CommitReceipt::Refusable(receipt)),
+        );
+
+        let Err(
+            refusal @ OplogRefusal::ArchiveWrite(crate::services::oplog::ArchiveWriteFailure {
+                level: 0,
+                ..
+            }),
+        ) = settled
+        else {
+            panic!("the commit must be refused by the archive write: {settled:?}");
+        };
+        assert_eq!(answer.await.unwrap(), Err(refusal));
+        assert!(
+            fixture
+                .oplog
+                .commit(CommitLevel::Always)
+                .await
+                .is_err_and(|error| matches!(
+                    error,
+                    crate::services::oplog::OplogError::ArchiveWrite(_)
+                ))
+        );
     }
 
     fn pending_invocation(key: IdempotencyKey) -> PendingInvocationRef {

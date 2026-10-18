@@ -27,8 +27,7 @@ unsafe_op_in_unsafe_fn = "warn"
 [workspace.lints.clippy]
 all = "warn"
 
-# bash.wasm is built with this profile (build-bash-wasm.sh). Every setting that changes its bytes
-# is written out, defaults included, so the artifact does not depend on cargo's defaults.
+# bash.wasm is built with this profile (golem.yaml's release preset).
 [profile.release]
 opt-level = "s"
 lto = true

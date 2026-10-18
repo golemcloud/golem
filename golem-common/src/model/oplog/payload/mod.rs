@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod denied;
 pub mod external_durable_stream;
 pub mod tool_attachment;
 pub mod types;
@@ -35,9 +36,10 @@ use crate::model::oplog::payload::external_durable_stream::{
     DurableStreamTransport, DurableStreamWriterOptions,
 };
 use crate::model::oplog::payload::types::{
-    FileSystemError, ObjectMetadata, PermissionCardRevokeError, SecretRevealAudit,
-    SecretRevealError, SerializableDateTime, SerializableFileTimes, SerializableP3FileSystemError,
-    SerializableP3IpSocketAddress, SerializableP3SocketErrorCode, SerializableP3UdpDatagram,
+    FileSystemError, ObjectMetadata, PermissionCardDeriveError, PermissionCardRevokeError,
+    SecretRevealAudit, SecretRevealError, SerializableDateTime, SerializableFileTimes,
+    SerializableP3FileSystemError, SerializableP3IpSocketAddress, SerializableP3SocketErrorCode,
+    SerializableP3UdpDatagram, SerializablePermissionCardLiveness, SerializablePermissionError,
     SerializableSocketError, SerializableToolDiscoverySnapshot, SerializableWebsocketError,
     SerializableWebsocketMessage, SerializableWebsocketReconstructionPolicy,
 };
@@ -177,8 +179,6 @@ oplog_payload! {
             method_name: String,
             input: SchemaValue,
             #[schema(skip)]
-            local_denial: Option<String>,
-            #[schema(skip)]
             logical_streaming_origin: Option<StreamInvocationId>,
             #[schema(skip)]
             #[transient(None::<AgentTypeName>)]
@@ -269,6 +269,14 @@ oplog_payload! {
         },
         PermissionCardRevoke {
             card_id: Uuid,
+        },
+        PermissionCardLiveness {
+            card_id: Uuid,
+        },
+        /// The ids of the cards behind the handles that a card operation decides on, in argument
+        /// order.
+        PermissionCardDecision {
+            card_ids: Vec<Uuid>,
         },
         PermissionCardTransfer {
             transfer_id: Uuid,
@@ -376,7 +384,9 @@ oplog_payload! {
         ConfigGet {
             key: String,
         },
-        ConfigGetAll {},
+        ConfigGetAll {
+            entries: Vec<(String, String)>,
+        },
         P3SocketsConnect {
             remote_address: SerializableP3IpSocketAddress
         },
@@ -634,12 +644,22 @@ oplog_payload! {
             credit_after_at_ms: i64,
         },
         PermissionCardDerived {
-            card: Vec<u8>,
+            result: Result<Vec<u8>, PermissionCardDeriveError>,
+        },
+        PermissionCardLiveness {
+            liveness: SerializablePermissionCardLiveness,
+        },
+        /// The authorization decision of a card operation. `Ok` holds the serialized data that
+        /// the operation continues with, as the decision saw it.
+        PermissionCardDecision {
+            result: Result<Vec<u8>, SerializablePermissionError>,
         },
         PermissionCardsRevoked {
             result: Result<Vec<Uuid>, PermissionCardRevokeError>,
         },
-        PermissionCardTransferComplete {},
+        PermissionCardTransferComplete {
+            result: Result<(), PermissionCardDeriveError>,
+        },
         GolemRetryPolicies {
             policies: Vec<NamedRetryPolicy>
         },
@@ -772,6 +792,18 @@ oplog_payload! {
             /// `Err` holds the reason of a denial.
             result: Result<(), String>
         },
+        /// The wallet a `self-wallet` call observed: each listed persistent card serialized as a
+        /// `StoredCard`, in the order the guest received them, and the serialized `ScopeCard`
+        /// lent to the invocation when it was listed.
+        PermissionWallet {
+            cards: Vec<Vec<u8>>,
+            scope_card: Option<Vec<u8>>,
+        },
+        /// The wallet version a `self-version` call observed.
+        PermissionWalletVersion {
+            wallet_id_hash: Vec<u8>,
+            generation: u64,
+        },
     }
 }
 
@@ -815,7 +847,7 @@ impl TryFrom<HostResponse> for HostResponseGolemRpcScheduledInvocationCompat {
 }
 
 pub trait HostPayloadPair: Send + 'static {
-    type Req: Into<HostRequest> + Send + 'static;
+    type Req: Into<HostRequest> + TryFrom<HostRequest, Error = String> + Send + 'static;
     type Resp: Into<HostResponse> + TryFrom<HostResponse, Error = String> + Send + 'static;
 
     const INTERFACE: &'static str;
@@ -833,53 +865,67 @@ pub trait HostPayloadPair: Send + 'static {
             )
         })
     }
+
+    /// The response of a call that the host denied before it ran, built from the recorded
+    /// request and the recorded `Start` denial. `None` for a function the host never denies.
+    fn denied_response(_request: &Self::Req, _denial: &str) -> Option<Self::Resp> {
+        None
+    }
+}
+
+/// A host function the host can deny before it runs. A denied call records the denial in its
+/// `Start`, and its response depends only on the request and the denial, so recovery of an
+/// incomplete denied call produces the same response without running the operation.
+pub trait DeniablePair: HostPayloadPair {
+    fn denied(request: &Self::Req, denial: &str) -> Self::Resp;
 }
 
 pub mod host_functions {
+    use super::denied;
     use crate::host_payload_pairs;
 
     host_payload_pairs! {
-        (RdbmsMysqlDbConnectionExecute => "rdbms::mysql::db-connection", "execute", GolemRdbmsRequest, GolemRdbmsRowCount),
-        (RdbmsMysqlDbConnectionQuery => "rdbms::mysql::db-connection", "query", GolemRdbmsRequest, GolemRdbmsResult),
+        (RdbmsMysqlDbConnectionExecute => "rdbms::mysql::db-connection", "execute", GolemRdbmsRequest, GolemRdbmsRowCount, denied = denied::rdbms::row_count),
+        (RdbmsMysqlDbConnectionQuery => "rdbms::mysql::db-connection", "query", GolemRdbmsRequest, GolemRdbmsResult, denied = denied::rdbms::result),
         (RdbmsMysqlDbConnectionQueryStream => "rdbms::mysql::db-connection", "query-stream", NoInput, GolemRdbmsRequest),
         (RdbmsMysqlDbResultStreamGetColumns => "rdbms::mysql::db-result-stream", "get-columns", NoInput, GolemRdbmsColumns),
         (RdbmsMysqlDbResultStreamGetNext => "rdbms::mysql::db-result-stream", "get-next", NoInput, GolemRdbmsResultChunk),
         (RdbmsMysqlDbTransactionQuery => "rdbms::mysql::db-transaction", "query", GolemRdbmsRequest, GolemRdbmsResult),
         (RdbmsMysqlDbTransactionExecute => "rdbms::mysql::db-transaction", "execute", GolemRdbmsRequest, GolemRdbmsRowCount),
         (RdbmsMysqlDbTransactionQueryStream => "rdbms::mysql::db-transaction", "query-stream", NoInput, GolemRdbmsRequest),
-        (RdbmsPostgresDbConnectionExecute => "rdbms::postgres::db-connection", "execute", GolemRdbmsRequest, GolemRdbmsRowCount),
-        (RdbmsPostgresDbConnectionQuery => "rdbms::postgres::db-connection", "query", GolemRdbmsRequest, GolemRdbmsResult),
+        (RdbmsPostgresDbConnectionExecute => "rdbms::postgres::db-connection", "execute", GolemRdbmsRequest, GolemRdbmsRowCount, denied = denied::rdbms::row_count),
+        (RdbmsPostgresDbConnectionQuery => "rdbms::postgres::db-connection", "query", GolemRdbmsRequest, GolemRdbmsResult, denied = denied::rdbms::result),
         (RdbmsPostgresDbConnectionQueryStream => "rdbms::postgres::db-connection", "query-stream", NoInput, GolemRdbmsRequest),
         (RdbmsPostgresDbResultStreamGetColumns => "rdbms::postgres::db-result-stream", "get-columns", NoInput, GolemRdbmsColumns),
         (RdbmsPostgresDbResultStreamGetNext => "rdbms::postgres::db-result-stream", "get-next", NoInput, GolemRdbmsResultChunk),
         (RdbmsPostgresDbTransactionQuery => "rdbms::postgres::db-transaction", "query", GolemRdbmsRequest, GolemRdbmsResult),
         (RdbmsPostgresDbTransactionExecute => "rdbms::postgres::db-transaction", "execute", GolemRdbmsRequest, GolemRdbmsRowCount),
         (RdbmsPostgresDbTransactionQueryStream => "rdbms::postgres::db-transaction", "query-stream", NoInput, GolemRdbmsRequest),
-        (RdbmsIgnite2DbConnectionExecute => "rdbms::ignite2::db-connection", "execute", GolemRdbmsRequest, GolemRdbmsRowCount),
-        (RdbmsIgnite2DbConnectionQuery => "rdbms::ignite2::db-connection", "query", GolemRdbmsRequest, GolemRdbmsResult),
+        (RdbmsIgnite2DbConnectionExecute => "rdbms::ignite2::db-connection", "execute", GolemRdbmsRequest, GolemRdbmsRowCount, denied = denied::rdbms::row_count),
+        (RdbmsIgnite2DbConnectionQuery => "rdbms::ignite2::db-connection", "query", GolemRdbmsRequest, GolemRdbmsResult, denied = denied::rdbms::result),
         (RdbmsIgnite2DbConnectionQueryStream => "rdbms::ignite2::db-connection", "query-stream", NoInput, GolemRdbmsRequest),
         (RdbmsIgnite2DbResultStreamGetColumns => "rdbms::ignite2::db-result-stream", "get-columns", NoInput, GolemRdbmsColumns),
         (RdbmsIgnite2DbResultStreamGetNext => "rdbms::ignite2::db-result-stream", "get-next", NoInput, GolemRdbmsResultChunk),
         (RdbmsIgnite2DbTransactionQuery => "rdbms::ignite2::db-transaction", "query", GolemRdbmsRequest, GolemRdbmsResult),
         (RdbmsIgnite2DbTransactionExecute => "rdbms::ignite2::db-transaction", "execute", GolemRdbmsRequest, GolemRdbmsRowCount),
         (RdbmsIgnite2DbTransactionQueryStream => "rdbms::ignite2::db-transaction", "query-stream", NoInput, GolemRdbmsRequest),
-        (KeyvalueEventualGet => "keyvalue::eventual", "get", KVBucketAndKey, KVGet),
-        (KeyvalueEventualSet => "keyvalue::eventual", "set", KVBucketKeyAndSize, KVUnit),
-        (KeyvalueEventualDelete => "keyvalue::eventual", "delete", KVBucketAndKey, KVUnit),
-        (KeyvalueEventualExists => "keyvalue::eventual", "exists", KVBucketAndKey, KVDelete),
-        (KeyvalueEventualBatchGetMany => "keyvalue::eventual_batch", "get_many", KVBucketAndKeys, KVGetMany),
-        (KeyvalueEventualBatchGetKeys => "keyvalue::eventual_batch", "get_keys", KVBucket, KVKeys),
-        (KeyvalueEventualBatchSetMany => "keyvalue::eventual_batch", "set_many", KVBucketAndKeySizePairs, KVUnit),
-        (KeyvalueEventualBatchDeleteMany => "keyvalue::eventual_batch", "delete_many", KVBucketAndKeys, KVUnit),
+        (KeyvalueEventualGet => "keyvalue::eventual", "get", KVBucketAndKey, KVGet, denied = denied::keyvalue::kv_get),
+        (KeyvalueEventualSet => "keyvalue::eventual", "set", KVBucketKeyAndSize, KVUnit, denied = denied::keyvalue::kv_unit),
+        (KeyvalueEventualDelete => "keyvalue::eventual", "delete", KVBucketAndKey, KVUnit, denied = denied::keyvalue::kv_unit),
+        (KeyvalueEventualExists => "keyvalue::eventual", "exists", KVBucketAndKey, KVDelete, denied = denied::keyvalue::kv_delete),
+        (KeyvalueEventualBatchGetMany => "keyvalue::eventual_batch", "get_many", KVBucketAndKeys, KVGetMany, denied = denied::keyvalue::kv_get_many),
+        (KeyvalueEventualBatchGetKeys => "keyvalue::eventual_batch", "get_keys", KVBucket, KVKeys, denied = denied::keyvalue::kv_keys),
+        (KeyvalueEventualBatchSetMany => "keyvalue::eventual_batch", "set_many", KVBucketAndKeySizePairs, KVUnit, denied = denied::keyvalue::kv_unit),
+        (KeyvalueEventualBatchDeleteMany => "keyvalue::eventual_batch", "delete_many", KVBucketAndKeys, KVUnit, denied = denied::keyvalue::kv_unit),
         (RandomInsecureSeedInsecureSeed => "random::insecure_seed", "insecure_seed", NoInput, RandomSeed),
         (RandomInsecureGetInsecureRandomBytes => "random::insecure", "get_insecure_random_bytes", RandomBytes, RandomBytes),
         (RandomInsecureGetInsecureRandomU64 => "random::insecure", "get_insecure_random_u64", NoInput, RandomU64),
         (RandomGetRandomBytes => "random", "get_random_bytes", RandomBytes, RandomBytes),
         (RandomGetRandomU64 => "random", "get_random_u64", NoInput, RandomU64),
-        (GolemRpcFutureInvokeResultGet => "golem::rpc::future-invoke-result", "get", GolemRpcInvoke, GolemRpcInvokeGet),
-        (GolemRpcWasmRpcInvokeAndAwaitResult => "golem::rpc::wasm-rpc", "invoke_and_await", GolemRpcInvoke, GolemRpcInvokeAndAwait),
-        (GolemRpcWasmRpcInvoke => "golem::rpc::wasm-rpc", "invoke", GolemRpcInvoke, GolemRpcUnitOrFailure),
-        (GolemRpcWasmRpcScheduleInvocation => "golem::rpc::wasm-rpc", "schedule_invocation", GolemRpcScheduledInvocation, GolemRpcScheduledInvocationCompat),
+        (GolemRpcFutureInvokeResultGet => "golem::rpc::future-invoke-result", "get", GolemRpcInvoke, GolemRpcInvokeGet, denied = denied::rpc::future_invoke_result_get),
+        (GolemRpcWasmRpcInvokeAndAwaitResult => "golem::rpc::wasm-rpc", "invoke_and_await", GolemRpcInvoke, GolemRpcInvokeAndAwait, denied = denied::rpc::invoke_and_await),
+        (GolemRpcWasmRpcInvoke => "golem::rpc::wasm-rpc", "invoke", GolemRpcInvoke, GolemRpcUnitOrFailure, denied = denied::rpc::invoke),
+        (GolemRpcWasmRpcScheduleInvocation => "golem::rpc::wasm-rpc", "schedule_invocation", GolemRpcScheduledInvocation, GolemRpcScheduledInvocationCompat, denied = denied::rpc::schedule_invocation),
         (GolemRpcCancellationTokenCancel => "golem::rpc::cancellation-token", "cancel", GolemRpcScheduledInvocationCancellation, GolemRpcUnit),
         (GolemRpcFutureInvokeResultCancel => "golem::rpc::future-invoke-result", "cancel", GolemRpcInvoke, GolemRpcUnit),
         (IoPollReady => "io::poll::pollable", "ready", NoInput, PollReady),
@@ -890,27 +936,27 @@ pub mod host_functions {
         (MonotonicClockResolution => "monotonic_clock", "resolution", NoInput, MonotonicClockTimestamp),
         (MonotonicClockSubscribeDuration => "monotonic_clock", "subscribe_duration", MonotonicClockDuration, MonotonicClockTimestamp),
         (P3MonotonicClockWaitFor => "clocks::monotonic-clock", "wait-for", MonotonicClockDuration, P3MonotonicClockUnit),
-        (BlobstoreBlobstoreCreateContainer => "blobstore::blobstore", "create_container", BlobStoreContainer, BlobStoreTimestamp),
-        (BlobstoreBlobstoreGetContainer => "blobstore::blobstore", "get_container", BlobStoreContainer, BlobStoreOptionalTimestamp),
-        (BlobstoreBlobstoreDeleteContainer => "blobstore::blobstore", "delete_container", BlobStoreContainer, BlobStoreUnit),
-        (BlobstoreBlobstoreContainerExists => "blobstore::blobstore", "container_exists", BlobStoreContainer, BlobStoreContains),
-        (BlobstoreBlobstoreCopyObject => "blobstore::blobstore", "copy_object", BlobStoreCopyOrMove, BlobStoreUnit),
-        (BlobstoreBlobstoreMoveObject => "blobstore::blobstore", "move_object", BlobStoreCopyOrMove, BlobStoreUnit),
-        (BlobstoreContainerGetData => "blobstore::container", "get_data", BlobStoreGetData, BlobStoreGetData),
-        (BlobstoreContainerWriteData => "blobstore::container", "write_data", BlobStoreWriteData, BlobStoreUnit),
-        (BlobstoreContainerListObject => "blobstore::container", "list_object", BlobStoreContainer, BlobStoreListObjects),
-        (BlobstoreContainerDeleteObject => "blobstore::container", "delete_object", BlobStoreContainerAndObject, BlobStoreUnit),
-        (BlobstoreContainerDeleteObjects => "blobstore::container", "delete_objects", BlobStoreContainerAndObjects, BlobStoreUnit),
-        (BlobstoreContainerHasObject => "blobstore::container", "has_object", BlobStoreContainerAndObject, BlobStoreContains),
-        (BlobstoreContainerObjectInfo => "blobstore::container", "object_info", BlobStoreContainerAndObject, BlobStoreObjectMetadata),
-        (BlobstoreContainerClear => "blobstore::container", "clear", BlobStoreContainer, BlobStoreUnit),
-        (FilesystemTypesDescriptorStat => "filesystem::types::descriptor", "stat", FileSystemPath, FileSystemStat),
-        (FilesystemTypesDescriptorStatAt => "filesystem::types::descriptor", "stat_at", FileSystemPath, FileSystemStat),
-        (SocketsIpNameLookupResolveAddresses => "sockets::ip_name_lookup", "resolve_addresses", SocketsResolveName, SocketsResolveName),
-        (P3SocketsIpNameLookupResolveAddresses => "sockets::ip-name-lookup", "resolve-addresses", P3SocketsResolveName, P3SocketsResolveName),
+        (BlobstoreBlobstoreCreateContainer => "blobstore::blobstore", "create_container", BlobStoreContainer, BlobStoreTimestamp, denied = denied::blobstore::timestamp),
+        (BlobstoreBlobstoreGetContainer => "blobstore::blobstore", "get_container", BlobStoreContainer, BlobStoreOptionalTimestamp, denied = denied::blobstore::optional_timestamp),
+        (BlobstoreBlobstoreDeleteContainer => "blobstore::blobstore", "delete_container", BlobStoreContainer, BlobStoreUnit, denied = denied::blobstore::unit),
+        (BlobstoreBlobstoreContainerExists => "blobstore::blobstore", "container_exists", BlobStoreContainer, BlobStoreContains, denied = denied::blobstore::contains),
+        (BlobstoreBlobstoreCopyObject => "blobstore::blobstore", "copy_object", BlobStoreCopyOrMove, BlobStoreUnit, denied = denied::blobstore::unit),
+        (BlobstoreBlobstoreMoveObject => "blobstore::blobstore", "move_object", BlobStoreCopyOrMove, BlobStoreUnit, denied = denied::blobstore::unit),
+        (BlobstoreContainerGetData => "blobstore::container", "get_data", BlobStoreGetData, BlobStoreGetData, denied = denied::blobstore::get_data),
+        (BlobstoreContainerWriteData => "blobstore::container", "write_data", BlobStoreWriteData, BlobStoreUnit, denied = denied::blobstore::unit),
+        (BlobstoreContainerListObject => "blobstore::container", "list_object", BlobStoreContainer, BlobStoreListObjects, denied = denied::blobstore::list_objects),
+        (BlobstoreContainerDeleteObject => "blobstore::container", "delete_object", BlobStoreContainerAndObject, BlobStoreUnit, denied = denied::blobstore::unit),
+        (BlobstoreContainerDeleteObjects => "blobstore::container", "delete_objects", BlobStoreContainerAndObjects, BlobStoreUnit, denied = denied::blobstore::unit),
+        (BlobstoreContainerHasObject => "blobstore::container", "has_object", BlobStoreContainerAndObject, BlobStoreContains, denied = denied::blobstore::contains),
+        (BlobstoreContainerObjectInfo => "blobstore::container", "object_info", BlobStoreContainerAndObject, BlobStoreObjectMetadata, denied = denied::blobstore::object_metadata),
+        (BlobstoreContainerClear => "blobstore::container", "clear", BlobStoreContainer, BlobStoreUnit, denied = denied::blobstore::unit),
+        (FilesystemTypesDescriptorStat => "filesystem::types::descriptor", "stat", FileSystemPath, FileSystemStat, denied = denied::filesystem::stat),
+        (FilesystemTypesDescriptorStatAt => "filesystem::types::descriptor", "stat_at", FileSystemPath, FileSystemStat, denied = denied::filesystem::stat),
+        (SocketsIpNameLookupResolveAddresses => "sockets::ip_name_lookup", "resolve_addresses", SocketsResolveName, SocketsResolveName, denied = denied::sockets::resolve_name),
+        (P3SocketsIpNameLookupResolveAddresses => "sockets::ip-name-lookup", "resolve-addresses", P3SocketsResolveName, P3SocketsResolveName, denied = denied::sockets::p3_resolve_name),
         (GolemAgentGetAllAgentTypes => "golem::agent", "get_all_agent_types", NoInput, GolemAgentAgentTypes),
         (GolemAgentGetAgentType => "golem::agent", "get_agent_type", GolemAgentGetAgentType, GolemAgentAgentType),
-        (GolemAgentCreateWebhook => "golem::agent", "create_webhook", GolemApiPromiseId, GolemAgentWebhookUrl),
+        (GolemAgentCreateWebhook => "golem::agent", "create_webhook", GolemApiPromiseId, GolemAgentWebhookUrl, denied = denied::golem_api::webhook_url),
         (GolemAgentGetConfigValue => "golem::agent", "get_config_value", GolemAgentGetConfigValue, GolemAgentGetConfigValue),
         (GolemAgentDurableStreamReaderNew => "golem::agent::durable-streams::durable-stream-reader", "new", DurableStreamReaderNew, DurableStreamResource),
         (GolemAgentDurableStreamWriterNew => "golem::agent::durable-streams::durable-stream-writer", "new", DurableStreamWriterNew, DurableStreamResource),
@@ -919,15 +965,15 @@ pub mod host_functions {
         (GolemApiCreatePromise => "golem::api", "create_promise", NoInput, GolemApiPromiseId),
         (GolemApiCompletePromise => "golem::api", "complete_promise", GolemApiPromiseId, GolemApiPromiseCompletion),
         (GolemApiGenerateIdempotencyKey => "golem::api", "generate_idempotency-key", NoInput, GolemApiIdempotencyKey),
-        (GolemApiUpdateWorker => "golem::api", "update_worker", GolemApiUpdateAgent, GolemApiUnit),
-        (GolemApiGetSelfMetadata => "golem::api", "get_self_metadata", NoInput, GolemApiSelfAgentMetadata),
-        (GolemApiGetAgentMetadata => "golem::api", "get_agent_metadata", GolemApiAgentId, GolemApiAgentMetadata),
+        (GolemApiUpdateWorker => "golem::api", "update_worker", GolemApiUpdateAgent, GolemApiUnit, denied = denied::golem_api::unit),
+        (GolemApiGetSelfMetadata => "golem::api", "get_self_metadata", NoInput, GolemApiSelfAgentMetadata, denied = denied::golem_api::self_metadata),
+        (GolemApiGetAgentMetadata => "golem::api", "get_agent_metadata", GolemApiAgentId, GolemApiAgentMetadata, denied = denied::golem_api::agent_metadata),
         (GolemApiGetPromiseResult => "golem::api", "get_promise_result", NoInput, GolemApiPromiseResult),
-        (GolemApiForkWorker => "golem::api", "fork_worker", GolemApiForkAgent, GolemApiUnit),
-        (GolemApiRevertWorker => "golem::api", "revert_worker", GolemApiRevertAgent, GolemApiUnit),
+        (GolemApiForkWorker => "golem::api", "fork_worker", GolemApiForkAgent, GolemApiUnit, denied = denied::golem_api::unit),
+        (GolemApiRevertWorker => "golem::api", "revert_worker", GolemApiRevertAgent, GolemApiUnit, denied = denied::golem_api::unit),
         (GolemApiResolveComponentId => "golem::api", "resolve_component_id", GolemApiComponentSlug, GolemApiComponentId),
-        (GolemApiResolveAgentIdStrict => "golem::api", "resolve_agent_id_strict", GolemApiComponentSlugAndAgentName, GolemApiAgentId),
-        (GolemApiFork => "golem::api", "fork", NoInput, GolemApiFork),
+        (GolemApiResolveAgentIdStrict => "golem::api", "resolve_agent_id_strict", GolemApiComponentSlugAndAgentName, GolemApiAgentId, denied = denied::golem_api::agent_id_not_found),
+        (GolemApiFork => "golem::api", "fork", NoInput, GolemApiFork, denied = denied::golem_api::fork),
         (WebsocketClientConnect => "golem:websocket/client", "connect", WebsocketConnect, WebsocketConnectResponse),
         (WebsocketClientSend => "golem:websocket/client", "send", WebsocketSend, WebsocketSendResponse),
         (WebsocketClientReceive => "golem:websocket/client", "receive", WebsocketReceive, WebsocketReceiveResponse),
@@ -947,11 +993,11 @@ pub mod host_functions {
         (GolemContextSpanFinish => "golem::api::context::span", "finish", GolemContextSpanResource, GolemApiUnit),
         (GolemContextSpanDrop => "golem::api::context::span", "drop", GolemContextSpanResource, GolemApiUnit),
         (GolemContextSpanSetAttributes => "golem::api::context::span", "set-attributes", GolemContextSpanAttributes, GolemApiUnit),
-        (P3KeyvalueCacheGet => "keyvalue::cache", "get", KVCacheKey, KVGet),
-        (P3KeyvalueCacheExists => "keyvalue::cache", "exists", KVCacheKey, KVDelete),
-        (P3KeyvalueCacheSet => "keyvalue::cache", "set", KVCacheKeyValueAndTtl, KVUnit),
-        (P3KeyvalueCacheGetOrSet => "keyvalue::cache", "get-or-set", KVCacheKey, KVGet),
-        (P3KeyvalueCacheDelete => "keyvalue::cache", "delete", KVCacheKey, KVUnit),
+        (P3KeyvalueCacheGet => "keyvalue::cache", "get", KVCacheKey, KVGet, denied = denied::keyvalue::kv_get),
+        (P3KeyvalueCacheExists => "keyvalue::cache", "exists", KVCacheKey, KVDelete, denied = denied::keyvalue::kv_delete),
+        (P3KeyvalueCacheSet => "keyvalue::cache", "set", KVCacheKeyValueAndTtl, KVUnit, denied = denied::keyvalue::kv_unit),
+        (P3KeyvalueCacheGetOrSet => "keyvalue::cache", "get-or-set", KVCacheKey, KVGet, denied = denied::keyvalue::kv_get),
+        (P3KeyvalueCacheDelete => "keyvalue::cache", "delete", KVCacheKey, KVUnit, denied = denied::keyvalue::kv_unit),
         (P3KeyvalueCacheVacancyFill => "keyvalue::cache::vacancy", "vacancy-fill", KVCacheKeyAndTtl, KVUnit),
         (P3KeyvalueCacheVacancyDrop => "keyvalue::cache::vacancy", "drop", KVCacheKey, KVUnit),
         (P3KeyvalueTypesIncomingValueConsumeAsync => "keyvalue::types::incoming_value", "incoming_value_consume_async", NoInput, P3KeyvalueIncomingValueStream),
@@ -966,16 +1012,16 @@ pub mod host_functions {
         (P3RandomInsecureGetInsecureRandomBytes => "random::insecure", "get-insecure-random-bytes", RandomBytes, RandomBytes),
         (P3RandomInsecureGetInsecureRandomU64 => "random::insecure", "get-insecure-random-u64", NoInput, RandomU64),
         (P3RandomInsecureSeedGetInsecureSeed => "random::insecure-seed", "get-insecure-seed", NoInput, RandomSeed),
-        (P3FilesystemTypesDescriptorStat => "filesystem::types::descriptor", "stat-async", FileSystemPath, P3FileSystemStat),
-        (P3FilesystemTypesDescriptorStatAt => "filesystem::types::descriptor", "stat-at", FileSystemPath, P3FileSystemStat),
+        (P3FilesystemTypesDescriptorStat => "filesystem::types::descriptor", "stat-async", FileSystemPath, P3FileSystemStat, denied = denied::filesystem::p3_stat),
+        (P3FilesystemTypesDescriptorStatAt => "filesystem::types::descriptor", "stat-at", FileSystemPath, P3FileSystemStat, denied = denied::filesystem::p3_stat),
         (P3SocketsTypesTcpSocketSend => "sockets::types::tcp-socket", "send", NoInput, P3SocketsTcpSend),
         (P3SocketsTypesTcpSocketReceive => "sockets::types::tcp-socket", "receive", NoInput, P3SocketsTcpReceive),
         (P3SocketsTypesTcpSocketReceiveChunk => "sockets::types::tcp-socket", "receive-chunk", NoInput, P3SocketsTcpReceiveChunk),
         (P3SocketsTypesTcpSocketSendAcquire => "sockets::types::tcp-socket", "send-acquire", NoInput, P3SocketsTcpAcquire),
         (P3SocketsTypesTcpSocketReceiveAcquire => "sockets::types::tcp-socket", "receive-acquire", NoInput, P3SocketsTcpAcquire),
-        (P3SocketsTypesUdpSocketSend => "sockets::types::udp-socket", "send", P3SocketsUdpSend, P3SocketsUdpSend),
+        (P3SocketsTypesUdpSocketSend => "sockets::types::udp-socket", "send", P3SocketsUdpSend, P3SocketsUdpSend, denied = denied::sockets::p3_udp_send),
         (P3SocketsTypesUdpSocketReceive => "sockets::types::udp-socket", "receive", NoInput, P3SocketsUdpReceive),
-        (P3HttpClientSend => "http::client", "send", P3HttpClientSend, P3HttpClientSendResult),
+        (P3HttpClientSend => "http::client", "send", P3HttpClientSend, P3HttpClientSendResult, denied = denied::http::p3_send),
         (P3HttpSpanCleanup => "http::client", "span-cleanup", P3HttpSpanCleanup, GolemApiUnit),
         (P3HttpClientConsumeBody => "http::types::response", "consume-body", NoInput, P3HttpClientConsumeBodyResult),
         (P3HttpClientConsumeBodyChunk => "http::types::response", "consume-body-chunk", NoInput, P3HttpClientConsumeBodyChunk),
@@ -988,26 +1034,32 @@ pub mod host_functions {
         (FilesystemOutputStreamCheckWrite => "filesystem::output_stream", "check_write", NoInput, StreamCheckWrite),
         (GolemPermissionsDerivePersist => "golem::permissions::derive", "persist-derived-card", PermissionCardDerive, PermissionCardDerived),
         (GolemPermissionsRevokePersist => "golem::permissions::revoke", "persist-revoked-cards", PermissionCardRevoke, PermissionCardsRevoked),
+        (GolemPermissionsCardLiveness => "golem::permissions::types", "card-liveness", PermissionCardLiveness, PermissionCardLiveness),
         (GolemPermissionsInstallChildPersist => "golem::permissions::wallet", "persist-installed-child-card", PermissionCardDerive, PermissionCardDerived),
         (GolemPermissionsInstallTransfer => "golem::permissions::wallet", "install-card-transfer", PermissionCardTransfer, PermissionCardTransferComplete),
+        (GolemPermissionsInspectDecision => "golem::permissions::inspect", "inspect-card-decision", PermissionCardDecision, PermissionCardDecision),
+        (GolemPermissionsDeriveDecision => "golem::permissions::derive", "derive-decision", PermissionCardDecision, PermissionCardDecision),
+        (GolemPermissionsDeriveFromWalletDecision => "golem::permissions::derive", "derive-from-wallet-decision", PermissionCardDecision, PermissionCardDecision),
+        (GolemPermissionsDeriveScopeDecision => "golem::permissions::derive", "derive-scope-decision", PermissionCardDecision, PermissionCardDecision),
+        (GolemPermissionsInstallDecision => "golem::permissions::wallet", "install-card-decision", PermissionCardDecision, PermissionCardDecision),
         (GolemToolGetAllTools => "golem::tool::host", "get_all_tools", NoInput, GolemToolTools),
         (GolemToolGetTool => "golem::tool::host", "get_tool", GolemToolGetTool, GolemToolTool),
-        (RdbmsMysqlDbConnectionBeginTransaction => "rdbms::mysql::db-connection", "begin-transaction", NoInput, GolemRdbmsRowCount),
-        (RdbmsPostgresDbConnectionBeginTransaction => "rdbms::postgres::db-connection", "begin-transaction", NoInput, GolemRdbmsRowCount),
-        (RdbmsIgnite2DbConnectionBeginTransaction => "rdbms::ignite2::db-connection", "begin-transaction", NoInput, GolemRdbmsRowCount),
-        (GolemApiGetOplogNext => "golem::api::get-oplog", "get-next", GolemApiOplogRead, GolemApiOplogChunk),
-        (GolemApiSearchOplogNext => "golem::api::search-oplog", "get-next", GolemApiOplogRead, GolemApiOplogChunk),
-        (GolemApiEnrichOplogEntries => "golem::api::oplog", "enrich-oplog-entries", GolemApiOplogEnrich, GolemApiOplogEntries),
-        (WasiConfigGet => "wasi:config/store", "get", ConfigGet, ConfigGetResponse),
+        (RdbmsMysqlDbConnectionBeginTransaction => "rdbms::mysql::db-connection", "begin-transaction", NoInput, GolemRdbmsRowCount, denied = denied::rdbms::row_count),
+        (RdbmsPostgresDbConnectionBeginTransaction => "rdbms::postgres::db-connection", "begin-transaction", NoInput, GolemRdbmsRowCount, denied = denied::rdbms::row_count),
+        (RdbmsIgnite2DbConnectionBeginTransaction => "rdbms::ignite2::db-connection", "begin-transaction", NoInput, GolemRdbmsRowCount, denied = denied::rdbms::row_count),
+        (GolemApiGetOplogNext => "golem::api::get-oplog", "get-next", GolemApiOplogRead, GolemApiOplogChunk, denied = denied::golem_api::oplog_chunk),
+        (GolemApiSearchOplogNext => "golem::api::search-oplog", "get-next", GolemApiOplogRead, GolemApiOplogChunk, denied = denied::golem_api::oplog_chunk),
+        (GolemApiEnrichOplogEntries => "golem::api::oplog", "enrich-oplog-entries", GolemApiOplogEnrich, GolemApiOplogEntries, denied = denied::golem_api::oplog_entries),
+        (WasiConfigGet => "wasi:config/store", "get", ConfigGet, ConfigGetResponse, denied = denied::golem_api::config_get),
         (WasiConfigGetAll => "wasi:config/store", "get-all", ConfigGetAll, ConfigGetAllResponse),
-        (P3FilesystemTypesDescriptorWriteViaStream => "filesystem::types::descriptor", "write-via-stream", NoInput, P3FileSystemWriteAdmission),
-        (P3FilesystemTypesDescriptorAppendViaStream => "filesystem::types::descriptor", "append-via-stream", NoInput, P3FileSystemWriteAdmission),
-        (P3SocketsTypesTcpSocketConnect => "sockets::types::tcp-socket", "connect", P3SocketsConnect, P3SocketsConnect),
-        (P3SocketsTypesUdpSocketConnect => "sockets::types::udp-socket", "connect", P3SocketsConnect, P3SocketsConnect),
+        (P3FilesystemTypesDescriptorWriteViaStream => "filesystem::types::descriptor", "write-via-stream", NoInput, P3FileSystemWriteAdmission, denied = denied::filesystem::p3_write_admission),
+        (P3FilesystemTypesDescriptorAppendViaStream => "filesystem::types::descriptor", "append-via-stream", NoInput, P3FileSystemWriteAdmission, denied = denied::filesystem::p3_write_admission),
+        (P3SocketsTypesTcpSocketConnect => "sockets::types::tcp-socket", "connect", P3SocketsConnect, P3SocketsConnect, denied = denied::sockets::p3_connect),
+        (P3SocketsTypesUdpSocketConnect => "sockets::types::udp-socket", "connect", P3SocketsConnect, P3SocketsConnect, denied = denied::sockets::p3_connect),
         (GolemToolRpcInvokeAndAwait => "golem::tool::host::tool-rpc", "invoke-and-await", GolemToolInvoke, GolemToolInvokeResult),
         (GolemToolRpcInvoke => "golem::tool::host::tool-rpc", "invoke", GolemToolInvoke, GolemToolUnitOrFailure),
         (GolemToolRpcAsyncInvokeAndAwait => "golem::tool::host::tool-rpc", "async-invoke-and-await", GolemToolInvoke, GolemToolInvokeResult),
-        (GolemApiGetAgents => "golem::api::get-agents", "get-next", GolemApiGetAgents, GolemApiAgents),
+        (GolemApiGetAgents => "golem::api::get-agents", "get-next", GolemApiGetAgents, GolemApiAgents, denied = denied::golem_api::agents),
         (WasiCliEnvironmentGetEnvironment => "cli::environment", "get-environment", CliEnvironmentGetEnvironment, CliEnvironmentGetEnvironment),
         (GolemRpcWasmRpcActivate => "golem::rpc::wasm-rpc", "activate", GolemRpcActivate, GolemRpcActivate),
         (GolemToolResponseSecretHoldAdmission => "golem::tool::internal", "response-secret-hold-admission", GolemToolResponseSecretHoldAdmission, GolemToolResponseSecretHoldAdmission),
@@ -1025,8 +1077,10 @@ pub mod host_functions {
         (GolemToolOutputWrite => "golem::tool::streams::tool-output-writer", "write", ToolAttachmentWrite, ToolAttachmentWrite),
         (GolemToolOutputFinish => "golem::tool::streams::tool-output-writer", "finish", ToolAttachmentFinish, ToolAttachmentTerminalResult),
         (GolemToolOutputFail => "golem::tool::streams::tool-output-writer", "fail", ToolAttachmentFail, ToolAttachmentTerminalResult),
-        (FilesystemPermissionCheck => "filesystem::permissions", "check", FileSystemPermissionCheck, PermissionCheck),
-        (SocketsTcpConnectPermissionCheck => "sockets::tcp::permissions", "check-connect", SocketsTcpConnectPermissionCheck, PermissionCheck)
+        (FilesystemPermissionCheck => "filesystem::permissions", "check", FileSystemPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
+        (SocketsTcpConnectPermissionCheck => "sockets::tcp::permissions", "check-connect", SocketsTcpConnectPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
+        (GolemPermissionsSelfWallet => "golem::permissions::wallet", "self-wallet", NoInput, PermissionWallet),
+        (GolemPermissionsSelfVersion => "golem::permissions::wallet", "self-version", NoInput, PermissionWalletVersion)
     }
 }
 

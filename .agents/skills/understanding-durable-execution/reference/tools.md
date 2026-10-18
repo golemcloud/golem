@@ -110,8 +110,8 @@ latest canonical snapshot. Each outstanding entity retains a wallet-prefix recei
 its first committed body entry or Start, before trailing hints. Before that boundary exists, its
 claim-time prefix allows pre-Start body work to run without waiting for itself. Delivered events
 advance the local generation; later physical read-ahead cannot change the retained seed. Store
-construction uses this evidence, not the cursor's latest prefix. This does not record otherwise
-unrecorded wallet observations.
+construction uses this evidence, not the cursor's latest prefix. Guest wallet reads are recorded
+separately, as described below.
 Primary pins resolve definitions at their own physical index, even when a sibling consumed the
 install. Retained Starts preserve pending preparation; cancellation lets the next boundary help
 finish it. Completed bodies remain historical through validation; incomplete bodies adopt canonical
@@ -131,10 +131,20 @@ once; subsequent live commits cannot be overwritten by historical projection. Ta
 publication retires the generation for ordinary reconstruction rather than folding old history
 over live state. Live revocation and expiry checks remain part of authority synchronization.
 
-Wallet observation recording is unchanged. Adjacent unrecorded wallet reads can still diverge
-after reconstruction when a wallet event falls between the reads; canonical live ownership does
-not supply that missing historical observation association. Do not substitute current live state
-for recorded inputs or weaken replay checks to hide this limit.
+Card events are hints positioned after the entry that precedes them, so replay can apply an event
+before a guest read that observed the wallet without it. Guest wallet reads are therefore recorded
+(`permissions/mod.rs`): `self-wallet` is a `ReadLocal` call whose `End` (`PermissionWallet`)
+holds every listed `StoredCard` and the lent `ScopeCard` when it was listed, and `self-version`
+records its `PermissionWalletVersion` token. Replay of a completed read returns the recorded view
+and reads neither the wallet nor the card registry. A read whose `Start` has no committed `End`
+was never observed by the guest; repair completes it live at its own `Start`, after the live
+transition, against the canonical live wallet. A crash after a committed `End` replays the
+recorded view. The authorization decisions of `inspect-card`, `derive`, `derive-from-wallet`,
+`derive-scope` and `install-card` are recorded in the same way, in `ReadLocal` decision calls
+that hold the outcome and the wallet data it used (see "Card authorization decisions" in
+`SKILL.md`). Do not substitute current live state for recorded inputs or weaken replay checks.
+Tests: the `wallet_reads_survive_reconstruction` and `card_decisions_survive_reconstruction` cases
+in `tests/scope_cards.rs`.
 
 ### Structural tool authorization
 
@@ -458,8 +468,9 @@ not byte bodies. `AttachmentInputProducer` records consumed payloads through
 actual consumption; host pipe reads commit their observation before handing bytes to transport.
 The host boundary is the adapter take, not the downstream tool's later consumption. Direct component
 stdin uses the same producer adapter. `NativeAttachmentInput` records at the host return boundary.
-The raw session bridge retains its existing durable-stream journal rather than adding attachment
-read payloads. A plain
+The stdin of an external call has no attachment when the body is a component: the body reads the
+durable session input itself, and its guest reads are consumer journal records with the body as
+their observation parent (see the `SessionJournal` paragraphs under Fences and admission). A plain
 `AttachmentConsumer::read_next` or `AttachmentWriter` does not itself journal bytes or operations.
 
 Replay serves historical reads from their payloads and validates regenerated producer arguments
@@ -536,6 +547,23 @@ are independent of the guest lane, so stdin and stdout are configured live and E
 skipped; entity-slot registration, owner-lane acquisition and handoff are unchanged. This avoids
 deadlocking a filesystem-capable body behind a session stream whose progress does not use its
 lane.
+
+The stdin of a `SessionJournal` call has no attachment when the body is a component.
+`NativeToolTask::run` passes the `DurableInputEndpoint` on (`ToolCallStdin::Durable`), and
+`invoke_tool_sidecar` builds the body's stdin reader on it in the body's Store
+(`ToolBodyStdin::Durable`, `DurableToolStdinProducer`). What the body's guest takes is its own
+recorded guest observation, so stdin keeps its place among the body's other recorded calls in a
+replay; `streams.md` has the rules of that reader. There is no host task, no buffer, no
+attachment memory charge and no attachment metadata for this stdin, and `stdin_controller` is
+`None`. A body that forwards this stdin to another tool is read by the host there, with host
+records. A native body (`EntityActivationSource::Host`) keeps the attachment: after acceptance,
+`create_native_underlying_stdin` starts the host task that reads the durable input and fills it.
+That task's reader cancels the input when it is dropped, and a cancel that the client sends
+reaches the tool as `cancelled`, not as a clean end. The records of a component body's reads keep
+the session's attribution, so the scope projection in `has_visible_scope_descendant` does not see
+them; the cursor's decoded `stream_observations` do, and an incomplete body with a recorded read
+of this stdin is run as a started body, not through the empty-scope shortcut of
+`enter_incomplete_live_repair_before_body_access`.
 
 ### Scheduling
 

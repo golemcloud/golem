@@ -21,7 +21,7 @@ use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::{AgentId, ShardEpoch};
-use golem_common::serialization::{deserialize, serialize};
+use golem_common::serialization::{DecodeError, decode, serialize};
 use golem_service_base::repo::{RepoError, is_transient_sqlx_error};
 
 pub mod memory;
@@ -826,24 +826,26 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         start_id: u64,
         end_id: u64,
     ) -> Result<Vec<(u64, V)>, IndexedStorageError> {
-        self.record("read");
-        let values = self
-            .storage
-            .read(
-                self.svc_name,
-                self.api_name,
-                self.entity_name,
-                namespace,
-                key,
-                start_id,
-                end_id,
-            )
-            .await?;
-        values
+        self.read_try_decode(namespace, key, start_id, end_id)
+            .await?
             .into_iter()
-            .map(|(idx, bytes)| deserialize::<V>(&bytes).map(|v| (idx, v)))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(IndexedStorageError::Other)
+            .map(|(id, value)| Self::expect_decoded(value).map(|value| (id, value)))
+            .collect()
+    }
+
+    /// Reads a closed range, keeping each entry's decode result separate from storage errors.
+    pub async fn read_try_decode<V: BinaryDeserializer>(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        start_id: u64,
+        end_id: u64,
+    ) -> Result<Vec<(u64, Result<V, DecodeError>)>, IndexedStorageError> {
+        let values = self.read_raw(namespace, key, start_id, end_id).await?;
+        Ok(values
+            .into_iter()
+            .map(|(id, bytes)| (id, decode(&bytes)))
+            .collect())
     }
 
     /// Reads a closed range of entries from the index of the given key, returning the raw bytes
@@ -892,25 +894,22 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<Option<(u64, V)>, IndexedStorageError> {
-        self.record("first");
-        if let Some((id, bytes)) = self
-            .storage
-            .first(
-                self.svc_name,
-                self.api_name,
-                self.entity_name,
-                namespace,
-                key,
-            )
+        self.first_try_decode(namespace, key)
             .await?
-        {
-            Ok(Some((
-                id,
-                deserialize::<V>(&bytes).map_err(IndexedStorageError::Other)?,
-            )))
-        } else {
-            Ok(None)
-        }
+            .map(|(id, value)| Self::expect_decoded(value).map(|value| (id, value)))
+            .transpose()
+    }
+
+    /// Gets the first entry, keeping its decode result separate from storage errors.
+    pub async fn first_try_decode<V: BinaryDeserializer>(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<(u64, Result<V, DecodeError>)>, IndexedStorageError> {
+        Ok(self
+            .first_raw(namespace, key)
+            .await?
+            .map(|(id, bytes)| (id, decode(&bytes))))
     }
 
     /// Gets the first entry in the index of the given key, returning only its id
@@ -928,8 +927,20 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<Option<(u64, V)>, IndexedStorageError> {
+        self.last_try_decode(namespace, key)
+            .await?
+            .map(|(id, value)| Self::expect_decoded(value).map(|value| (id, value)))
+            .transpose()
+    }
+
+    /// Gets the last entry, keeping its decode result separate from storage errors.
+    pub async fn last_try_decode<V: BinaryDeserializer>(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<(u64, Result<V, DecodeError>)>, IndexedStorageError> {
         self.record("last");
-        if let Some((id, bytes)) = self
+        Ok(self
             .storage
             .last(
                 self.svc_name,
@@ -939,14 +950,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
                 key,
             )
             .await?
-        {
-            Ok(Some((
-                id,
-                deserialize::<V>(&bytes).map_err(IndexedStorageError::Other)?,
-            )))
-        } else {
-            Ok(None)
-        }
+            .map(|(id, bytes)| (id, decode(&bytes))))
     }
 
     /// Gets the last entry in the index of the given key, returning only its id
@@ -996,25 +1000,32 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         key: &str,
         id: u64,
     ) -> Result<Option<(u64, V)>, IndexedStorageError> {
-        self.record("closest");
-        if let Some((id, bytes)) = self
-            .storage
-            .closest(
-                self.svc_name,
-                self.api_name,
-                self.entity_name,
-                namespace,
-                key,
-                id,
-            )
+        self.closest_try_decode(namespace, key, id)
             .await?
-        {
-            Ok(Some((
-                id,
-                deserialize::<V>(&bytes).map_err(IndexedStorageError::Other)?,
-            )))
-        } else {
-            Ok(None)
+            .map(|(id, value)| Self::expect_decoded(value).map(|value| (id, value)))
+            .transpose()
+    }
+
+    /// Gets the closest entry, keeping its decode result separate from storage errors.
+    pub async fn closest_try_decode<V: BinaryDeserializer>(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        id: u64,
+    ) -> Result<Option<(u64, Result<V, DecodeError>)>, IndexedStorageError> {
+        Ok(self
+            .closest_raw(namespace, key, id)
+            .await?
+            .map(|(id, bytes)| (id, decode(&bytes))))
+    }
+
+    /// Strict reads require a known version; malformed data of a known version stays an error.
+    fn expect_decoded<V>(value: Result<V, DecodeError>) -> Result<V, IndexedStorageError> {
+        match &value {
+            Err(DecodeError::MissingVersion | DecodeError::UnknownVersion(_)) => {
+                Ok(value.expect("invalid serialization version"))
+            }
+            _ => value.map_err(|error| IndexedStorageError::Other(error.to_string())),
         }
     }
 
@@ -1085,11 +1096,115 @@ pub fn agent_mode_prefix(mode: AgentMode) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{IndexedStorageError, ScanResume, scan_prefix_upper_bound, stable_scan_key_bounds};
+    use super::{
+        IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageNamespace, ScanResume,
+        memory::InMemoryIndexedStorage, scan_prefix_upper_bound, stable_scan_key_bounds,
+    };
+    use futures::FutureExt;
+    use golem_common::model::AgentId;
+    use golem_common::model::agent::AgentMode;
+    use golem_common::model::component::ComponentId;
+    use golem_common::serialization::{DecodeError, serialize};
     use proptest::prelude::*;
+    use std::panic::AssertUnwindSafe;
     use test_r::test;
 
     test_r::enable!();
+
+    #[test]
+    async fn indexed_reads_expose_decode_errors_without_panicking() {
+        let storage = InMemoryIndexedStorage::new();
+        let labelled = storage.with_entity("test", "decode", "entry");
+        let namespace = IndexedStorageNamespace::OpLog {
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "decode-errors".to_string(),
+            },
+            agent_mode: AgentMode::Durable,
+        };
+        for (key, bytes, expected) in [
+            ("valid", serialize(&37u64).unwrap(), Ok(37u64)),
+            ("empty", vec![], Err(DecodeError::MissingVersion)),
+            ("unknown", vec![255], Err(DecodeError::UnknownVersion(255))),
+            (
+                "unsupported",
+                vec![1],
+                Err(DecodeError::UnsupportedVersion(1)),
+            ),
+        ] {
+            labelled
+                .append_raw(namespace.clone(), key, 7, bytes, None)
+                .await
+                .unwrap();
+            assert_eq!(
+                labelled
+                    .read_try_decode::<u64>(namespace.clone(), key, 2, 9)
+                    .await
+                    .unwrap(),
+                vec![(7, expected.clone())]
+            );
+            assert_eq!(
+                labelled
+                    .first_try_decode::<u64>(namespace.clone(), key)
+                    .await
+                    .unwrap(),
+                Some((7, expected.clone()))
+            );
+            assert_eq!(
+                labelled
+                    .last_try_decode::<u64>(namespace.clone(), key)
+                    .await
+                    .unwrap(),
+                Some((7, expected.clone()))
+            );
+            assert_eq!(
+                labelled
+                    .closest_try_decode::<u64>(namespace.clone(), key, 3)
+                    .await
+                    .unwrap(),
+                Some((7, expected))
+            );
+        }
+        assert!(
+            labelled
+                .closest_try_decode::<u64>(namespace.clone(), "valid", 8)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            labelled
+                .read::<u64>(namespace.clone(), "valid", 2, 9)
+                .await
+                .unwrap(),
+            vec![(7, 37)]
+        );
+        for key in ["empty", "unknown"] {
+            assert!(
+                AssertUnwindSafe(labelled.read::<u64>(namespace.clone(), key, 2, 9))
+                    .catch_unwind()
+                    .await
+                    .is_err()
+            );
+        }
+        labelled
+            .append_raw(namespace.clone(), "malformed", 7, vec![3], None)
+            .await
+            .unwrap();
+        assert!(matches!(
+            labelled
+                .closest_try_decode::<u64>(namespace.clone(), "malformed", 3)
+                .await
+                .unwrap(),
+            Some((7, Err(DecodeError::InvalidData(_))))
+        ));
+        for key in ["unsupported", "malformed"] {
+            assert!(matches!(
+                labelled.read::<u64>(namespace.clone(), key, 2, 9).await,
+                Err(IndexedStorageError::Other(_))
+            ));
+        }
+    }
 
     #[test]
     fn transient_indexed_storage_initialization_failure_is_retryable() {

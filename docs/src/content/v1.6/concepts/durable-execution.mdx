@@ -208,7 +208,7 @@ Golem retries transient failures automatically, such as network errors and inter
 
 - **Snapshots** are optional. Without them, recovery replays the agent's history from the beginning: recorded results are reused rather than performed again, but the agent's own code runs again. For agents with long histories, an agent type can save snapshots of its state, and recovery then loads the latest snapshot and replays only the entries after it. The oplog remains the source of truth.
 - **Updates** move existing agents to new code. Golem replays the agent's history against the new code and keeps the agent on the old version if they disagree. This is the one place where code must agree with recorded history; within one version, Golem records every nondeterministic input, so you follow no determinism rules. See [Agent lifecycle](/v1.6/concepts/agent-lifecycle).
-- **Transactions** group several operations. An atomic block re-runs as a whole if interrupted. For business-level rollback, sagas run compensating actions in reverse order.
+- **Transactions** use SDK sagas for business-level rollback. Sagas compensate successful steps in reverse order. A retry starts another guest-code attempt and appends new calls; it does not erase recorded effects.
 
 ## Next
 

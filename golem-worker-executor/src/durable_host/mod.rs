@@ -100,6 +100,34 @@ pub(crate) async fn without_entity_cancellation<F: Future>(future: F) -> F::Outp
     ENTITY_CANCELLATION_MASKED.scope((), future).await
 }
 
+/// How a refused write of the failure of an invocation, or of the status after it, ends that
+/// invocation. A refusal of the agent's own oplog takes the classification of its agent error:
+/// `OplogFailed` is terminal, and `RecoveryRequired` is an infrastructure recovery.
+#[derive(Debug)]
+pub(crate) enum TerminalEntryRefusal {
+    /// The oplog failed for good: an archive layer did not store it, or it does not read. The
+    /// invocation fails with its trap, and the agent stops with this error.
+    OplogFailed(WorkerExecutorError),
+    /// The oplog storage did not answer. The agent recovers with this error, and the invocation
+    /// stays pending.
+    RecoveryRequired(WorkerExecutorError),
+    /// A fence, or a refusal that says nothing of the oplog. Nothing is published: after a fence,
+    /// the new owner of the shard runs the invocation.
+    Unpublished,
+}
+
+pub(crate) fn terminal_entry_refusal(
+    error: &crate::services::oplog::OplogError,
+) -> TerminalEntryRefusal {
+    match error.agent_failure() {
+        Some(error @ WorkerExecutorError::RecoveryRequired { .. }) => {
+            TerminalEntryRefusal::RecoveryRequired(error)
+        }
+        Some(error) => TerminalEntryRefusal::OplogFailed(error),
+        None => TerminalEntryRefusal::Unpublished,
+    }
+}
+
 use crate::durable_host::durability::collect_named_retry_policies;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::{
@@ -129,6 +157,7 @@ use crate::services::linear_memory::{
 };
 use crate::services::oplog::{
     CommitLevel, Oplog, OplogError, OplogOps, OplogPayloadDownloadError, OplogService,
+    UnreadableOplog,
 };
 use crate::services::promise::PromiseService;
 use crate::services::quota::QuotaService;
@@ -159,8 +188,8 @@ use crate::worker::owner_wallet::{
     AuthorityScopeInputs, CardEventBoundary, OwnerAuthoritySnapshot, WalletSnapshot,
 };
 use crate::worker::start_outcome::{self, BaselineRole, SnapshotRecoveryResult};
-use crate::worker::status::calculate_last_known_status_with_checkpoint;
-use crate::worker::{RetryDecision, Worker};
+use crate::worker::status::{StatusError, calculate_last_known_status_with_checkpoint};
+use crate::worker::{InvocationFailureDecision, RetryDecision, Worker};
 use crate::workerctx::{
     ExternalOperations, FileSystemReading, InvocationContextManagement, InvocationHooks,
     InvocationManagement, PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx,
@@ -1898,6 +1927,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         targets: &[PermissionTarget],
     ) -> Result<Result<LiveAuthorizationPermit, AuthorizationError>, WorkerExecutorError> {
         self.process_pending_replay_events().await?;
+        if self.state.durability_is_suppressed() && !self.state.is_live() {
+            // In snapshotting mode a durable call resolves as live and records nothing, also while
+            // the Store still replays, as the load of a snapshot during recovery does. Such a call
+            // is not checked: no recorded decision exists for it, and replay must not decide one.
+            return Ok(Ok(LiveAuthorizationPermit { _private: () }));
+        }
         assert_live_authorization(self.state.is_live());
 
         if self.operator_authorizes_current_invocation() {
@@ -3426,6 +3461,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 request: None,
                 durable_function_type: DurableFunctionType::WriteRemote,
                 span_started: None,
+                denial: None,
             };
             let begin_index = self
                 .public_state
@@ -3981,13 +4017,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         debug!("Attempting snapshot-based recovery from oplog index {snapshot_index}");
 
-        let oplog_entry = store
+        let oplog_entry = match store
             .as_context()
             .data()
             .get_public_state()
             .oplog()
             .read(snapshot_index)
-            .await;
+            .await
+        {
+            Ok(oplog_entry) => oplog_entry,
+            Err(error) => return snapshot_entry_read_failure(error),
+        };
 
         let (data_payload, mime_type) = match oplog_entry {
             OplogEntry::Snapshot {
@@ -4700,6 +4740,46 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    /// Ends an invocation whose failure, or the status after it, the oplog refused to record.
+    async fn refused_terminal_entry(
+        &mut self,
+        error: &OplogError,
+        trap_type: &TrapType,
+        full_function_name: &str,
+    ) -> InvocationFailureDecision {
+        match terminal_entry_refusal(error) {
+            // The storage did not answer: the entry can be stored, but the status after it does
+            // not read. The invocation stays pending, and the agent recovers from its oplog when
+            // the storage answers again.
+            TerminalEntryRefusal::RecoveryRequired(error) => {
+                InvocationFailureDecision::Infrastructure(error)
+            }
+            // The oplog failed for good, so the invocation fails here with the trap, and the
+            // agent stops with the error, which reaches the other waiting callers.
+            TerminalEntryRefusal::OplogFailed(error) => {
+                if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
+                    self.public_state
+                        .worker()
+                        .store_invocation_failure(&idempotency_key, trap_type)
+                        .await;
+                    self.public_state.event_service().emit_invocation_finished(
+                        full_function_name,
+                        &idempotency_key,
+                        self.is_live(),
+                    );
+                }
+                InvocationFailureDecision::Infrastructure(error)
+            }
+            // Refused by a fence, the shard is lost: no failure is published for its invocation,
+            // which the shard's new owner runs.
+            TerminalEntryRefusal::Unpublished => {
+                InvocationFailureDecision::Retry(RetryDecision::None)
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     async fn on_agent_invocation_started(
@@ -4774,9 +4854,9 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
-                .map_err(|err| match err {
-                    OplogError::Fenced(fence) => self.public_state.worker().retired_by(fence),
-                    err => panic!(
+                .map_err(|err| match err.into_refusal() {
+                    Ok(refusal) => self.public_state.worker().refused_by(refusal),
+                    Err(err) => panic!(
                         "could not encode agent invocation on {}: {err}",
                         self.agent_id()
                     ),
@@ -4799,7 +4879,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         &mut self,
         full_function_name: &str,
         trap_type: &TrapType,
-    ) -> RetryDecision {
+    ) -> InvocationFailureDecision {
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
         // Deliberately above the dropped-call drain: that drain appends `Cancelled` entries, and a
@@ -4812,14 +4892,14 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .worker()
                 .retire_if_shard_lost(&WorkerExecutorError::Interrupted { kind: *kind })
         {
-            return RetryDecision::None;
+            return InvocationFailureDecision::Retry(RetryDecision::None);
         }
 
         // The abandoned runtime is torn down structurally by the owner loop. Do not perform the
         // ordinary semantic dropped-call close, which could await replay scopes or append
         // terminals into the suffix the accepted cut is about to erase.
         if matches!(trap_type, TrapType::Interrupt(InterruptKind::Jump)) {
-            return RetryDecision::Immediate;
+            return InvocationFailureDecision::Retry(RetryDecision::Immediate);
         }
 
         if self.state.is_live()
@@ -4833,8 +4913,17 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             // A `Cancelled` refused by a fence latched during the drain gives the agent up, so
             // the stop that follows drops this generation instead of leaving it cached to be
             // restarted in place.
-            self.public_state.worker().retire_if_shard_lost(&err.source);
-            return RetryDecision::None;
+            if self.public_state.worker().retire_if_shard_lost(&err.source) {
+                return InvocationFailureDecision::Retry(RetryDecision::None);
+            }
+            // A `Cancelled` the oplog refused: the agent recovers, or stops with the error.
+            return match err.source {
+                error @ (WorkerExecutorError::RecoveryRequired { .. }
+                | WorkerExecutorError::OplogFailed { .. }) => {
+                    InvocationFailureDecision::Infrastructure(error)
+                }
+                _ => InvocationFailureDecision::Retry(RetryDecision::None),
+            };
         }
 
         if let TrapType::Error { error, .. } = trap_type {
@@ -4892,29 +4981,33 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     }),
                 )
                 .await;
-            match denial_persisted {
-                Ok(_) => {}
-                Err(crate::services::oplog::OplogError::Fenced(fence)) => {
-                    // The shard moved while this failure was being recorded. Retire the agent
-                    // exactly as the `ShardLost` arm above does: nothing further may be written
-                    // to an oplog that belongs to another executor now.
-                    self.public_state.worker().record_retirement(
-                        InterruptKind::ShardLost,
-                        crate::worker::RetirementReason::Fenced(Some(fence)),
-                    );
-                    return RetryDecision::None;
+            if let Err(error) = denial_persisted {
+                if let OplogError::Fenced(fence) = error {
+                    // The shard moved while this failure was being recorded. The fence retires the
+                    // agent exactly as the `ShardLost` arm above does: nothing further may be
+                    // written to an oplog that belongs to another executor now.
+                    self.public_state
+                        .worker()
+                        .refused_by(crate::services::oplog::OplogRefusal::Fenced(fence));
+                    return InvocationFailureDecision::Retry(RetryDecision::None);
                 }
-                Err(error) => panic!("oplog write: {error}"),
+                if matches!(error, OplogError::Payload(_) | OplogError::Maintenance(_)) {
+                    panic!("oplog write: {error}");
+                }
+                return self
+                    .refused_terminal_entry(&error, trap_type, full_function_name)
+                    .await;
             }
-            // Refused, like the add above: the shard is lost.
-            if self
+            // Refused, like the add above.
+            if let Err(error) = self
                 .public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
                 .await
-                .is_err()
             {
-                return RetryDecision::None;
+                return self
+                    .refused_terminal_entry(&error, trap_type, full_function_name)
+                    .await;
             }
             true
         } else {
@@ -4947,17 +5040,12 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             )),
         };
 
-        // Refused, the shard is lost: no failure is published for its invocation, which
-        // the shard's new owner runs.
         if let Some(entry) = oplog_entry
-            && self
-                .public_state
-                .worker()
-                .add_and_commit_oplog(entry)
-                .await
-                .is_err()
+            && let Err(error) = self.public_state.worker().add_and_commit_oplog(entry).await
         {
-            return RetryDecision::None;
+            return self
+                .refused_terminal_entry(&error, trap_type, full_function_name)
+                .await;
         };
 
         let latest_status = self.public_state.worker().get_last_known_status().await;
@@ -4991,7 +5079,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             latest_status_before.current_retry_state, decision
         );
 
-        decision
+        InvocationFailureDecision::Retry(decision)
     }
 
     fn enter_read_only_mode(&mut self, method_name: String) {
@@ -5129,9 +5217,9 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     component_revision,
                 )
                 .await
-                .map_err(|err| match err {
-                    OplogError::Fenced(fence) => self.public_state.worker().retired_by(fence),
-                    err => {
+                .map_err(|err| match err.into_refusal() {
+                    Ok(refusal) => self.public_state.worker().refused_by(refusal),
+                    Err(err) => {
                         panic!("could not encode function result for {full_function_name}: {err}")
                     }
                 })?;
@@ -5605,13 +5693,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 continue;
                             }
                             _ => {
-                                if let Some(error) = selected_replay_recovery_error(
-                                    store
-                                        .as_context()
-                                        .data()
-                                        .durable_ctx()
-                                        .selected_tool_owner_failure()
-                                        .as_ref(),
+                                let owner_failure = store
+                                    .as_context()
+                                    .data()
+                                    .durable_ctx()
+                                    .selected_tool_owner_failure();
+                                if let Some(error) = selected_recovery_error(
+                                    owner_failure.as_ref(),
                                     store.as_context().data().agent_mode(),
                                     &invoke_result,
                                 ) {
@@ -5689,11 +5777,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                         }
                                     }
                                     Some(trap_type) => {
-                                        let decision = store
+                                        let decision = match store
                                             .as_context_mut()
                                             .data_mut()
                                             .on_invocation_failure(&full_function_name, &trap_type)
-                                            .await;
+                                            .await
+                                        {
+                                            InvocationFailureDecision::Retry(decision) => decision,
+                                            // The start retries the replay when the storage
+                                            // answers again.
+                                            InvocationFailureDecision::Infrastructure(error) => {
+                                                break Err(error);
+                                            }
+                                        };
 
                                         if decision == RetryDecision::None {
                                             // Like the invocation loop, permanently fail the
@@ -6529,14 +6625,26 @@ pub(crate) fn replace_wallet_cards(
 /// is visible and gets acted on, the quiet one is not. It is also the shape the oplog layers
 /// already have - a bounded storage retry, then a fatal failure - at a lower cost, since a failed
 /// assignment is one RPC rather than a process exit.
+///
+/// An oplog that does not read (`StatusError::Unreadable`) for good, because its data is corrupt or
+/// missing, is not that kind of failure: no retry of the assignment reads it, so failing the
+/// assignment would stop every other agent forever. That one agent is skipped and logged, and its
+/// oplog is left as it is. An oplog whose storage did not answer
+/// ([`UnreadableOplog::is_transient`]) is that kind of failure: a retry can read it.
 fn recovered_status(
     owned_agent_id: &OwnedAgentId,
-    computed: Result<Option<AgentStatusRecord>, String>,
+    computed: Result<Option<AgentStatusRecord>, StatusError>,
 ) -> Result<Option<AgentStatusRecord>, anyhow::Error> {
     match computed {
         Ok(Some(status)) => Ok(Some(status)),
         Ok(None) => {
             error!(agent_id = %owned_agent_id, "Worker oplog disappeared during shard-assignment recovery; skipping agent");
+            Ok(None)
+        }
+        // No retry reads the oplog, so failing the assignment would keep every other agent from
+        // being resumed. The agent is left as it is, with its oplog, for an operator to inspect.
+        Err(StatusError::Unreadable(error)) if !error.is_transient() => {
+            log_unreadable_recovered_agent(owned_agent_id, &error);
             Ok(None)
         }
         Err(error) => Err(anyhow!(
@@ -6552,8 +6660,10 @@ fn recovered_status(
 /// unfenced. `OplogFenced` means another executor claimed the agent's oplog at a newer epoch
 /// before this one wrote to it. Either way the agent belongs to the shard's new owner, which
 /// recovers it there. This is a skip, like an oplog that is gone. Failing the whole assignment for
-/// it would stop every other agent in the scan from being resumed. Any other restart failure still
-/// fails the assignment.
+/// it would stop every other agent in the scan from being resumed. An agent whose oplog does not
+/// read (`OplogFailed`, for example from rebuilding its stream session index) is skipped too:
+/// no retry of the assignment reads that oplog. Any other restart failure still fails the
+/// assignment.
 fn recovered_restart<W>(
     owned_agent_id: &OwnedAgentId,
     restarted: Result<W, WorkerExecutorError>,
@@ -6564,9 +6674,28 @@ fn recovered_restart<W>(
             debug!(agent_id = %owned_agent_id, "Worker's shard left the assignment during shard-assignment recovery; skipping agent");
             Ok(())
         }
+        // As for a status that does not fold: no retry of the assignment reads the oplog.
+        Err(error) if is_failed_oplog(&error) => {
+            log_unreadable_recovered_agent(owned_agent_id, &error);
+            Ok(())
+        }
         Err(error) => Err(anyhow!(
             "failed to restart {owned_agent_id} during shard-assignment recovery: {error}"
         )),
+    }
+}
+
+/// Logs an agent that shard-assignment recovery skips because its oplog does not read.
+fn log_unreadable_recovered_agent(owned_agent_id: &OwnedAgentId, error: &dyn std::fmt::Display) {
+    error!(agent_id = %owned_agent_id, error = %error, "Worker oplog is unreadable during shard-assignment recovery; skipping agent");
+}
+
+/// Whether `error` is an oplog that failed, also when a failed resume carries it.
+fn is_failed_oplog(error: &WorkerExecutorError) -> bool {
+    match error {
+        WorkerExecutorError::OplogFailed { .. } => true,
+        WorkerExecutorError::FailedToResumeAgent { reason, .. } => is_failed_oplog(reason),
+        _ => false,
     }
 }
 
@@ -6825,20 +6954,45 @@ async fn begin_local_live_continuation<Ctx: WorkerCtx>(
     })
 }
 
-fn selected_replay_recovery_error<'a>(
-    owner_failure: Option<&'a tool::operation::OwnerFailureWinner>,
+/// The infrastructure error that ends an invocation or a replay of a durable agent outside the
+/// guest's failure handling: a reconstruction that is required, or an oplog that failed.
+///
+/// The winner of the tool-owner arbitration comes first. An infrastructure winner is that error;
+/// a trap or a lifecycle winner keeps its own handling, so nothing is selected. Without a winner,
+/// the error is the one of the invocation.
+pub(crate) fn selected_recovery_error<'a>(
+    owner_failure: Option<&'a crate::durable_host::tool::operation::OwnerFailureWinner>,
     agent_mode: AgentMode,
     result: &'a Result<InvokeResult, WorkerExecutorError>,
 ) -> Option<&'a WorkerExecutorError> {
+    use crate::durable_host::tool::operation::OwnerFailureWinner;
     if agent_mode != AgentMode::Durable {
         return None;
     }
     let error = match owner_failure {
-        Some(tool::operation::OwnerFailureWinner::Infrastructure(error)) => error,
-        Some(_) => return None,
+        Some(OwnerFailureWinner::Infrastructure(error)) => error,
+        Some(OwnerFailureWinner::Trap(_) | OwnerFailureWinner::Lifecycle(_)) => return None,
         None => result.as_ref().err()?,
     };
-    matches!(error, WorkerExecutorError::RecoveryRequired { .. }).then_some(error)
+    matches!(
+        error,
+        WorkerExecutorError::RecoveryRequired { .. } | WorkerExecutorError::OplogFailed { .. }
+    )
+    .then_some(error)
+}
+
+/// What a start gets when the snapshot record itself does not read. A storage that did not answer
+/// is `Unavailable` with `RecoveryRequired`, which the start retries without a decision on the
+/// record; any other read failure is `OplogFailed`, which fails the start in every column. Neither
+/// is a snapshot that failed to load, so the record is never rejected for it.
+fn snapshot_entry_read_failure(error: UnreadableOplog) -> SnapshotRecoveryResult {
+    let transient = error.is_transient();
+    let error = WorkerExecutorError::from(error);
+    if transient {
+        SnapshotRecoveryResult::Unavailable(error)
+    } else {
+        SnapshotRecoveryResult::Failed(error)
+    }
 }
 
 /// What a start gets when the payload of the application snapshot of its baseline does not
@@ -7236,39 +7390,160 @@ mod tests {
         let result = Err(WorkerExecutorError::recovery_required(
             "payload backend unavailable",
         ));
-        assert!(selected_replay_recovery_error(None, AgentMode::Durable, &result).is_some());
-        assert!(selected_replay_recovery_error(None, AgentMode::Ephemeral, &result).is_none());
-        for winner in [
-            tool::operation::OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost),
-            tool::operation::OwnerFailureWinner::Trap(TrapType::Exit),
-            tool::operation::OwnerFailureWinner::Infrastructure(WorkerExecutorError::runtime(
-                "earlier failure",
-            )),
-        ] {
-            assert!(
-                selected_replay_recovery_error(Some(&winner), AgentMode::Durable, &result)
-                    .is_none()
-            );
-        }
-        let recovery = WorkerExecutorError::recovery_required("elected recovery failure");
-        let winner = tool::operation::OwnerFailureWinner::Infrastructure(recovery.clone());
-        let interrupted = Err(WorkerExecutorError::Interrupted {
-            kind: InterruptKind::Jump,
-        });
-        assert_eq!(
-            selected_replay_recovery_error(Some(&winner), AgentMode::Durable, &interrupted),
-            Some(&recovery)
-        );
+        assert!(selected_recovery_error(None, AgentMode::Durable, &result).is_some());
         assert!(
-            selected_replay_recovery_error(Some(&winner), AgentMode::Ephemeral, &interrupted)
+            selected_recovery_error(Some(&lifecycle_winner()), AgentMode::Durable, &result)
                 .is_none()
         );
+        assert!(selected_recovery_error(None, AgentMode::Ephemeral, &result).is_none());
+    }
+
+    fn lifecycle_winner() -> crate::durable_host::tool::operation::OwnerFailureWinner {
+        crate::durable_host::tool::operation::OwnerFailureWinner::Lifecycle(
+            InterruptKind::Interrupt(Timestamp::now_utc()),
+        )
+    }
+
+    /// A snapshot record whose storage did not answer is a recovery the start retries, not a
+    /// snapshot that failed to load; a snapshot record that does not read for good is the failed
+    /// oplog.
+    #[test]
+    fn a_snapshot_record_that_is_unavailable_is_a_recovery_not_a_failed_load() {
+        use crate::services::oplog::{OplogReadError, OplogReadSource};
+
+        let agent_id = recovered_agent().agent_id();
+        let unavailable = snapshot_entry_read_failure(UnreadableOplog::new(
+            &agent_id,
+            OplogReadError::source_unavailable(OplogReadSource::Archive(1), "outage"),
+        ));
+        assert!(matches!(
+            unavailable,
+            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. })
+        ));
+        let corrupt = snapshot_entry_read_failure(UnreadableOplog::new(
+            &agent_id,
+            OplogReadError::corruption(OplogReadSource::Archive(1), "bad chunk"),
+        ));
+        assert!(matches!(
+            corrupt,
+            SnapshotRecoveryResult::Failed(WorkerExecutorError::OplogFailed { .. })
+        ));
+    }
+
+    /// A tool failure that wins the owner arbitration as an infrastructure error keeps that
+    /// classification: a reconstruction that is required, or an oplog that failed, is selected
+    /// whatever the invocation itself returned. An ordinary infrastructure winner, a trap and a
+    /// lifecycle winner keep their own handling.
+    #[test]
+    fn a_winning_infrastructure_owner_failure_is_the_recovery_error() {
+        use crate::durable_host::tool::operation::OwnerFailureWinner;
+
+        let result = Err(WorkerExecutorError::runtime("guest trapped"));
+        let recovery = OwnerFailureWinner::Infrastructure(WorkerExecutorError::recovery_required(
+            "archive storage unavailable",
+        ));
+        assert_eq!(
+            selected_recovery_error(Some(&recovery), AgentMode::Durable, &result),
+            Some(&WorkerExecutorError::recovery_required(
+                "archive storage unavailable"
+            ))
+        );
+        let ordinary = OwnerFailureWinner::Infrastructure(WorkerExecutorError::runtime("host"));
+        assert!(selected_recovery_error(Some(&ordinary), AgentMode::Durable, &result).is_none());
+        assert!(selected_recovery_error(Some(&recovery), AgentMode::Ephemeral, &result).is_none());
+        let recovery_result = Err(WorkerExecutorError::recovery_required("payload"));
+        assert!(
+            selected_recovery_error(
+                Some(&lifecycle_winner()),
+                AgentMode::Durable,
+                &recovery_result
+            )
+            .is_none()
+        );
+    }
+
+    /// An oplog that does not read ends the replay with its error instead of failing the guest.
+    #[test]
+    fn replay_recovery_branch_selects_an_unreadable_oplog() {
+        let result = Err(WorkerExecutorError::oplog_failed(
+            AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: "unreadable".to_string(),
+            },
+            "corrupt oplog data from archive layer 1",
+        ));
+        assert_eq!(
+            selected_recovery_error(None, AgentMode::Durable, &result),
+            result.as_ref().err()
+        );
+        assert!(
+            selected_recovery_error(Some(&lifecycle_winner()), AgentMode::Durable, &result)
+                .is_none()
+        );
+    }
+
+    /// A refused write of the failure of an invocation takes the classification of its agent
+    /// error. A failed archive write, or an oplog that does not read for good, fails the invocation
+    /// with its cause. An oplog storage that did not answer is a recovery, so the invocation stays
+    /// pending. A fence publishes nothing, because the new owner of the shard runs the invocation.
+    #[test]
+    fn a_refused_invocation_failure_takes_the_classification_of_its_agent_error() {
+        use crate::services::oplog::{
+            OplogError, OplogFence, OplogReadError, OplogReadSource, UnreadableOplog,
+        };
+
+        let agent_id = AgentId {
+            component_id: ComponentId(Uuid::new_v4()),
+            agent_id: "terminal-entry".to_string(),
+        };
+        assert!(matches!(
+            terminal_entry_refusal(&OplogError::ArchiveWrite(
+                crate::services::oplog::ArchiveWriteFailure {
+                    agent_id: agent_id.clone(),
+                    level: 0,
+                    details: "injected archive failure".to_string(),
+                }
+            )),
+            TerminalEntryRefusal::OplogFailed(WorkerExecutorError::OplogFailed { .. })
+        ));
+        assert!(matches!(
+            terminal_entry_refusal(&OplogError::Unreadable(UnreadableOplog {
+                agent_id: agent_id.clone(),
+                error: OplogReadError::Gap {
+                    start: OplogIndex::INITIAL,
+                    end: OplogIndex::from_u64(2),
+                },
+            })),
+            TerminalEntryRefusal::OplogFailed(WorkerExecutorError::OplogFailed { .. })
+        ));
+        assert!(matches!(
+            terminal_entry_refusal(&OplogError::Unreadable(UnreadableOplog {
+                agent_id: agent_id.clone(),
+                error: OplogReadError::source_unavailable(
+                    OplogReadSource::Archive(0),
+                    "injected archive outage",
+                ),
+            })),
+            TerminalEntryRefusal::RecoveryRequired(WorkerExecutorError::RecoveryRequired { .. })
+        ));
+        assert!(matches!(
+            terminal_entry_refusal(&OplogError::Fenced(OplogFence {
+                agent_id,
+                expected_epoch: golem_common::model::ShardEpoch(1),
+                actual_epoch: Some(golem_common::model::ShardEpoch(2)),
+            })),
+            TerminalEntryRefusal::Unpublished
+        ));
+        assert!(matches!(
+            terminal_entry_refusal(&OplogError::Payload("payload".to_string())),
+            TerminalEntryRefusal::Unpublished
+        ));
     }
 
     #[test]
     fn replay_recovery_branch_rejects_ordinary_host_failure() {
         let result = Err(WorkerExecutorError::runtime("host task failed"));
-        assert!(selected_replay_recovery_error(None, AgentMode::Durable, &result).is_none());
+        assert!(selected_recovery_error(None, AgentMode::Durable, &result).is_none());
     }
 
     #[test]
@@ -8940,7 +9215,7 @@ mod tests {
     fn shard_assignment_recovery_fails_on_a_status_it_cannot_compute() {
         let error = recovered_status(
             &recovered_agent(),
-            Err("failed to load durable stream session payload: redis failover".to_string()),
+            Err("failed to load durable stream session payload: redis failover".into()),
         )
         .expect_err("an uncomputable status was skipped rather than failing the assignment");
 
@@ -8948,6 +9223,66 @@ mod tests {
             error.to_string().contains("cannot be resumed")
                 && error.to_string().contains("redis failover"),
             "{error}"
+        );
+    }
+
+    /// An agent whose oplog does not read is skipped and does not fail the assignment: no retry of
+    /// the assignment would read it, and failing it would keep every other agent from resuming.
+    #[test]
+    fn shard_assignment_recovery_skips_an_agent_whose_oplog_does_not_read() {
+        let unreadable = crate::services::oplog::UnreadableOplog {
+            agent_id: recovered_agent().agent_id(),
+            error: crate::services::oplog::OplogReadError::Gap {
+                start: OplogIndex::INITIAL,
+                end: OplogIndex::from_u64(2),
+            },
+        };
+        assert!(matches!(
+            recovered_status(&recovered_agent(), Err(StatusError::Unreadable(unreadable))),
+            Ok(None)
+        ));
+    }
+
+    /// An oplog whose storage did not answer can be read by a retry, so it fails the assignment,
+    /// which is retried, instead of leaving the agent out of the recovery for good.
+    #[test]
+    fn shard_assignment_recovery_fails_on_an_oplog_that_is_unavailable() {
+        let unavailable = crate::services::oplog::UnreadableOplog {
+            agent_id: recovered_agent().agent_id(),
+            error: crate::services::oplog::OplogReadError::source_unavailable(
+                crate::services::oplog::OplogReadSource::Archive(1),
+                "injected archive outage",
+            ),
+        };
+        let error = recovered_status(
+            &recovered_agent(),
+            Err(StatusError::Unreadable(unavailable)),
+        )
+        .expect_err("an unavailable oplog was skipped rather than failing the assignment");
+        assert!(
+            error.to_string().contains("injected archive outage"),
+            "{error}"
+        );
+    }
+
+    /// An agent whose restart finds its oplog unreadable, for example while rebuilding its stream
+    /// session index, is skipped: the other agents of the scan are still resumed.
+    #[test]
+    fn shard_assignment_recovery_skips_a_restart_that_finds_the_oplog_failed() {
+        let unreadable = WorkerExecutorError::oplog_failed(
+            recovered_agent().agent_id(),
+            "corrupt oplog data from archive layer 1",
+        );
+        assert!(recovered_restart::<()>(&recovered_agent(), Err(unreadable.clone())).is_ok());
+        assert!(
+            recovered_restart::<()>(
+                &recovered_agent(),
+                Err(WorkerExecutorError::failed_to_resume_worker(
+                    recovered_agent().agent_id(),
+                    unreadable,
+                )),
+            )
+            .is_ok()
         );
     }
 
@@ -9231,7 +9566,7 @@ fn backward_scan_window_start(end: OplogIndex) -> OplogIndex {
 ///
 /// A possible future optimization is to maintain the relevant indices (last error, last invocation
 /// start) directly in the [`AgentStatusRecord`] so that no backward oplog scan is needed at all.
-async fn last_error<T: HasOplogService + HasConfig>(
+pub(crate) async fn last_error<T: HasOplogService + HasConfig>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
@@ -9250,10 +9585,14 @@ async fn last_error<T: HasOplogService + HasConfig>(
         return None;
     }
 
-    let last_index = this
+    let last_index = match this
         .oplog_service()
         .get_last_index(owned_agent_id, agent_mode)
-        .await;
+        .await
+    {
+        Ok(last_index) => last_index,
+        Err(error) => return Some(unreadable_last_error(error)),
+    };
     if last_index == OplogIndex::NONE {
         return None;
     }
@@ -9267,7 +9606,7 @@ async fn last_error<T: HasOplogService + HasConfig>(
     let mut window_end = last_index;
     'scan: loop {
         let window_start = backward_scan_window_start(window_end);
-        let entries = this
+        let entries = match this
             .oplog_service()
             .read_exact(
                 owned_agent_id,
@@ -9275,7 +9614,11 @@ async fn last_error<T: HasOplogService + HasConfig>(
                 window_start,
                 window_end.as_u64() - window_start.as_u64() + 1,
             )
-            .await;
+            .await
+        {
+            Ok(entries) => entries,
+            Err(error) => return Some(unreadable_last_error(error)),
+        };
 
         let mut idx = window_end;
         loop {
@@ -9346,6 +9689,15 @@ async fn last_error<T: HasOplogService + HasConfig>(
     }
 }
 
+/// The last error of an agent whose oplog does not read back to it: the read failure itself.
+fn unreadable_last_error(error: UnreadableOplog) -> LastError {
+    LastError {
+        error: AgentError::InternalError(WorkerExecutorError::from(error).to_string()),
+        stderr: String::new(),
+        retry_from: OplogIndex::NONE,
+    }
+}
+
 /// Reads back oplog entries starting from `last_oplog_idx` and collects stderr logs, with a maximum
 /// number of entries, and at most until the beginning of the last invocation.
 pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
@@ -9368,7 +9720,8 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
     let mut window_end = last_oplog_idx;
     'scan: loop {
         let window_start = backward_scan_window_start(window_end);
-        let entries = this
+        // The stderr is the context of an error, so a window that does not read ends it.
+        let Ok(entries) = this
             .oplog_service()
             .read_exact(
                 owned_agent_id,
@@ -9376,7 +9729,10 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
                 window_start,
                 window_end.as_u64() - window_start.as_u64() + 1,
             )
-            .await;
+            .await
+        else {
+            break 'scan;
+        };
 
         let mut idx = window_end;
         loop {

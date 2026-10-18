@@ -492,7 +492,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 public_session_id,
             )
             .await
-            .map_err(WorkerExecutorError::runtime)
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
     }
 
     async fn expire_stream_session_transition(

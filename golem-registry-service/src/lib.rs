@@ -31,6 +31,8 @@ use anyhow::Context;
 use golem_common::poem::{
     CliClientInfoMiddleware, LazyEndpointExt, OpenTelemetryTracing, PrometheusExporter,
 };
+use golem_service_base::body_limit::RequestBodyLimit;
+use golem_service_base::http_server;
 use opentelemetry_sdk::trace::SdkTracer;
 use poem::endpoint::BoxEndpoint;
 use poem::listener::Acceptor;
@@ -100,12 +102,19 @@ impl RegistryService {
         let services = Services::new(&self.config, join_set, &self.startup_progress).await?;
 
         let grpc_port = self.start_grpc_server(join_set, &services).await?;
-        let endpoint = api::make_open_api_service(&services).boxed();
+        let endpoint = api::make_open_api_service(&services)
+            .with(self.body_limit())
+            .boxed();
 
         Ok(SingleExecutableRunDetails {
             grpc_port,
             endpoint,
         })
+    }
+
+    fn body_limit(&self) -> RequestBodyLimit {
+        let limits = &self.config.body_limits;
+        RequestBodyLimit::new(limits.api).with_multipart_limit(limits.upload)
     }
 
     async fn start_grpc_server(
@@ -149,6 +158,7 @@ impl RegistryService {
             .nest("/docs", ui)
             .nest("/specs", spec)
             .nest("/metrics", metrics)
+            .with(self.body_limit())
             .with(CookieJarManager::new())
             .with(cors)
             .with(CliClientInfoMiddleware::new())
@@ -162,10 +172,10 @@ impl RegistryService {
             .expect("socket address")
             .port();
 
+        let http_server_config = self.config.http_server.clone();
         join_set.spawn(
             async move {
-                poem::Server::new_with_acceptor(acceptor)
-                    .run(app)
+                http_server::run(acceptor, app, http_server_config)
                     .await
                     .map_err(|e| e.into())
             }

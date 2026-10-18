@@ -15,7 +15,9 @@
 use crate::services::oplog::fenced_stream::{
     FencedIndexedStream, StreamLabels, scan_component_streams,
 };
-use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveResult, OplogArchiveService};
+use crate::services::oplog::multilayer::{
+    OplogArchive, OplogArchiveError, OplogArchiveResult, OplogArchiveService,
+};
 use crate::services::oplog::reader::{OplogReadError, OplogReadSource, verify_persisted_entries};
 use crate::services::oplog::{OplogError, OplogFence};
 use crate::storage::indexed::{
@@ -30,7 +32,7 @@ use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId; // used in scan_for_component
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AgentId, OwnedAgentId, RetryConfig, ScanCursor, ShardEpoch};
-use golem_common::serialization::{deserialize, serialize};
+use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -86,8 +88,8 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn OplogArchive + Send + Sync> {
-        Arc::new(
+    ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
+        Ok(Arc::new(
             CompressedOplogArchive::opened(
                 owned_agent_id.agent_id(),
                 agent_mode,
@@ -96,8 +98,8 @@ impl OplogArchiveService for CompressedOplogArchiveService {
                 self.retry_config.clone(),
                 shard_epoch,
             )
-            .await,
-        )
+            .await?,
+        ))
     }
 
     async fn open_fresh(
@@ -105,7 +107,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Arc<dyn OplogArchive + Send + Sync> {
+    ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
         self.open(owned_agent_id, agent_mode, shard_epoch).await
     }
 
@@ -123,22 +125,17 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
-        let archive = self.open(owned_agent_id, agent_mode, None).await;
-        archive.read_source(idx, n).await.unwrap_or_else(|error| {
-            panic!("Oplog archive read failed for {owned_agent_id}: {error}")
-        })
-    }
-
-    async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
-        self.try_exists(owned_agent_id, agent_mode)
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+        let archive = self
+            .open(owned_agent_id, agent_mode, None)
             .await
-            .unwrap_or_else(|error| {
-                panic!("Failed to check compressed oplog archive existence: {error}")
-            })
+            .map_err(|error| {
+                OplogReadError::of_archive(OplogReadSource::Archive(self.level), error)
+            })?;
+        archive.read_source(idx, n).await
     }
 
-    async fn try_exists(
+    async fn exists(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
@@ -170,18 +167,6 @@ impl OplogArchiveService for CompressedOplogArchiveService {
     }
 
     async fn get_last_index(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-    ) -> OplogIndex {
-        self.try_get_last_index(owned_agent_id, agent_mode)
-            .await
-            .unwrap_or_else(|error| {
-                panic!("Failed to read compressed oplog archive index: {error}")
-            })
-    }
-
-    async fn try_get_last_index(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
@@ -252,6 +237,7 @@ impl CompressedOplogArchive {
     /// A handle that writes as the owner of `shard_epoch`: records it on this level's key (a
     /// monotonic compare-and-set, as the primary oplog does at open) and asserts it on every
     /// write. A newer owner's record refuses the open, and the handle is returned already fenced.
+    /// A record that fails for another reason fails the open.
     pub async fn opened(
         agent_id: AgentId,
         agent_mode: AgentMode,
@@ -259,7 +245,7 @@ impl CompressedOplogArchive {
         level: usize,
         retry_config: RetryConfig,
         shard_epoch: Option<ShardEpoch>,
-    ) -> Self {
+    ) -> OplogArchiveResult<Self> {
         let stream = FencedIndexedStream::opened(
             agent_id.clone(),
             Self::namespace(agent_id.clone(), agent_mode, level),
@@ -268,15 +254,23 @@ impl CompressedOplogArchive {
             retry_config.clone(),
             shard_epoch,
         )
-        .await;
-        Self::with_stream(
+        .await
+        .map_err(|error| {
+            OplogArchiveError::of_indexed(
+                &error,
+                format!(
+                    "failed to record the owning epoch of the compressed oplog of {agent_id} at level {level}: {error}"
+                ),
+            )
+        })?;
+        Ok(Self::with_stream(
             agent_id,
             agent_mode,
             indexed_storage,
             level,
             retry_config,
             stream,
-        )
+        ))
     }
 
     fn with_stream(
@@ -324,12 +318,14 @@ impl CompressedOplogArchive {
             .closest::<CompressedOplogChunk>(end_of_range)
             .await
             .map_err(|error| {
-                OplogReadError::source_failure(
+                OplogReadError::of_archive(
                     source,
-                    format!(
-                        "failed to read compressed oplog for worker {} in indexed storage: {error}",
-                        self.agent_id
-                    ),
+                    error.map_details(|error| {
+                        format!(
+                            "failed to read compressed oplog for worker {} in indexed storage: {error}",
+                            self.agent_id
+                        )
+                    }),
                 )
             })?
         else {
@@ -367,7 +363,7 @@ impl OplogArchive for CompressedOplogArchive {
         &self,
         idx: OplogIndex,
         n: u64,
-    ) -> OplogArchiveResult<BTreeMap<golem_common::model::oplog::OplogIndex, OplogEntry>> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
         if n == 0 {
             return Ok(BTreeMap::new());
         }
@@ -397,11 +393,7 @@ impl OplogArchive for CompressedOplogArchive {
 
             // we encountered an entry that is not in our cache. fetch the chunk that contains the entry and use as much as we can from it.
             // after the end of the chunk
-            if let Some(chunk) = self
-                .fetch_and_cache_range(idx, last_idx)
-                .await
-                .map_err(|error| error.to_string())?
-            {
+            if let Some(chunk) = self.fetch_and_cache_range(idx, last_idx).await? {
                 last_idx = last_idx.subtract(chunk.len() as u64);
                 for (index, entry) in chunk {
                     result.insert(index, entry);
@@ -493,9 +485,12 @@ impl OplogArchive for CompressedOplogArchive {
             self.level,
             self.retry_config.clone(),
         );
-        let actual = uncached.read_source(*start, entries.len() as u64).await?;
+        let actual = uncached
+            .read_source(*start, entries.len() as u64)
+            .await
+            .map_err(OplogArchiveError::from)?;
         verify_persisted_entries(OplogReadSource::Archive(self.level), entries, actual)
-            .map_err(|error| error.to_string())
+            .map_err(OplogArchiveError::from)
     }
 
     async fn current_oplog_index(&self) -> OplogArchiveResult<OplogIndex> {
@@ -504,7 +499,10 @@ impl OplogArchive for CompressedOplogArchive {
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, OplogError> {
         self.stream.refuse_if_fenced()?;
-        let before = self.length().await.map_err(OplogError::Maintenance)?;
+        let before = self
+            .length()
+            .await
+            .map_err(|error| OplogError::Maintenance(error.to_string()))?;
         let remaining = self.stream.drop_prefix(last_dropped_id).await?;
         // Ephemeral writers may append newer chunks while this maintenance operation is in flight.
         Ok(before.saturating_sub(remaining))
@@ -549,7 +547,7 @@ impl CompressedOplogChunk {
     pub fn decompress(&self) -> anyhow::Result<Vec<OplogEntry>> {
         let uncompressed_data = zstd::decode_all(&*self.compressed_data)
             .map_err(|err| anyhow!("failed to decompress oplog chunk: {err}"))?;
-        deserialize(&uncompressed_data)
+        golem_common::serialization::decode(&uncompressed_data)
             .map_err(|err| anyhow!("failed to deserialize oplog chunk: {err}"))
     }
 

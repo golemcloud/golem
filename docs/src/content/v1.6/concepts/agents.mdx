@@ -248,6 +248,8 @@ A method marked **read-only**, such as `getCount` above, can be answered from a 
 
 The mode is set on the agent type. A durable counter called three times returns 1, 2, 3; the same counter as an ephemeral agent returns 1, 1, 1.
 
+Only durable agents can take [snapshots](/v1.6/develop/snapshotting). An ephemeral agent has no state to save, so the SDKs refuse an ephemeral agent definition that enables snapshotting.
+
 A caller can also create a **phantom** agent: a separate agent with the same constructor arguments, distinguished by a generated ID. Phantoms are useful for running several independent copies of the same job.
 
 ## How agents are isolated
@@ -263,7 +265,7 @@ Each agent runs as its own WebAssembly instance. Many agents share one Golem ser
   height={1024}
 />
 
-WebAssembly gives each agent its own memory, and an agent can reach files, the network, other agents, or tools only through calls to the Golem host. The host checks each of those calls against the agent's permissions. Per-agent memory and disk limits apply.
+WebAssembly gives each agent its own memory, and an agent can reach files, the network, other agents, or tools only through calls to the Golem host. The host checks each of those calls against the agent's permissions. Per-agent memory limits apply. Per-agent disk quota enforcement requires the `ManagedXfs` filesystem backend. The `ReflinkXfs` and APFS backends do not account for or enforce per-agent disk quotas. See [Filesystem snapshots](/v1.6/operate/filesystem_snapshots) for backend requirements and operational limits.
 
 TypeScript and Effect agents, and Scala agents compiled with Scala.js, run on a JavaScript runtime built on QuickJS and compiled to WebAssembly, not on Node.js. It provides `fetch`, web streams, and Node-compatible core modules, so most plain-JavaScript npm packages work; packages with native addons do not. Rust, MoonBit, and Go agents compile directly to WebAssembly.
 

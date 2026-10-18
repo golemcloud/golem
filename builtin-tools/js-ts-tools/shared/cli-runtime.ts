@@ -35,6 +35,8 @@ function outputBridge(stream: WritableStream<Uint8Array>) {
         throw error;
       },
     );
+    // A CLI can keep running before its final drain attaches a rejection handler.
+    void pending.catch(() => {});
     return true;
   };
 
@@ -58,6 +60,7 @@ export async function runCli(
     directories?: string[];
     stopOnExit?: boolean;
     waitForRuntimeIdle?: boolean;
+    npmExit?: boolean;
   },
   streams: {
     stdout: WritableStream<Uint8Array>;
@@ -76,11 +79,13 @@ export async function runCli(
     exitCode: process.exitCode,
     stdoutWrite: process.stdout.write,
     stderrWrite: process.stderr.write,
-    env: Object.fromEntries(
-      Object.keys(environment).map((key) => [key, process.env[key]]),
-    ) as Record<string, string | undefined>,
+    // npm exports its configuration to the environment for lifecycle scripts, so restore the
+    // complete environment rather than only the variables set here.
+    env: { ...process.env },
   };
   const capturedExit = new CapturedExit();
+  let exitRequested = false;
+  let executeFailed = false;
 
   try {
     try {
@@ -93,6 +98,10 @@ export async function runCli(
       process.chdir(cwd);
       process.exit = ((code?: string | number | null) => {
         if (code !== undefined && code !== null) process.exitCode = Number(code);
+        if (options.npmExit && !exitRequested) {
+          exitRequested = true;
+          process.emit('exit', Number(process.exitCode ?? 0));
+        }
         if (options.stopOnExit) throw capturedExit;
         return undefined as never;
       }) as typeof process.exit;
@@ -127,13 +136,29 @@ export async function runCli(
       }
     } catch (error) {
       if (error !== capturedExit) {
+        executeFailed = true;
         process.exitCode = Number(process.exitCode || 1);
         process.stderr.write(
           `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
         );
       }
     }
-    await Promise.all([stdout.drain(), stderr.drain()]);
+    // Write callbacks can enqueue more output on either stream, including npm's
+    // final exit callback. Settle both queues before restoring the process state.
+    let failure: PromiseRejectedResult | undefined;
+    for (;;) {
+      const out = stdout.drain();
+      const err = stderr.drain();
+      const results = await Promise.allSettled([out, err]);
+      for (const result of results) {
+        if (result.status === 'rejected') failure ??= result;
+      }
+      if (out === stdout.drain() && err === stderr.drain()) break;
+    }
+    if (failure) throw failure.reason;
+    if (options.npmExit && !exitRequested && !executeFailed) {
+      throw new Error('npm CLI returned without an exit request');
+    }
     let status = Number(process.exitCode ?? 0);
     if (!Number.isFinite(status) || !Number.isInteger(status)) {
       process.stderr.write('Process exit status must be a finite integer\n');
@@ -149,10 +174,10 @@ export async function runCli(
     process.exit = original.exit;
     process.argv = original.argv;
     process.exitCode = original.exitCode;
-    for (const [key, value] of Object.entries(original.env)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
+    for (const key of Object.keys(process.env)) {
+      if (!Object.hasOwn(original.env, key)) delete process.env[key];
     }
+    Object.assign(process.env, original.env);
     process.chdir(original.cwd);
   }
 }

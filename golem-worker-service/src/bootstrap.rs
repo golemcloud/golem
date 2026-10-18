@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::{SessionStoreConfig, WorkerServiceConfig};
+use crate::config::{SessionStoreConfig, WebSocketTransportLimits, WorkerServiceConfig};
 use crate::custom_api::api_definition_lookup::{
     HttpApiDefinitionsLookup, RegistryServiceApiDefinitionsLookup,
 };
@@ -55,6 +55,7 @@ pub struct Services {
     pub limit_service: Arc<dyn LimitService>,
     pub component_service: Arc<dyn ComponentService>,
     pub worker_service: Arc<WorkerService>,
+    pub connect_websocket: WebSocketTransportLimits,
     pub request_handler: Arc<RequestHandler>,
     pub openapi_service: Arc<crate::custom_api::openapi::OpenApiService>,
     pub mcp_capability_lookup: Arc<dyn McpCapabilityLookup + Sync + Send + 'static>,
@@ -64,11 +65,14 @@ pub struct Services {
     pub identity_provider: Arc<dyn IdentityProvider>,
     pub session_store: Arc<dyn SessionStore>,
     pub invocation_session_token_keyring: Arc<InvocationSessionTokenKeyring>,
+    pub invocation_session_config: crate::config::InvocationSessionConfig,
+    pub mcp_config: crate::config::McpConfig,
 }
 
 impl Services {
     pub async fn new(config: &WorkerServiceConfig) -> anyhow::Result<Self> {
         config.http_session.validate().map_err(anyhow::Error::msg)?;
+        config.validate_keep_alive().map_err(anyhow::Error::msg)?;
         config
             .worker_executor
             .validate()
@@ -225,6 +229,7 @@ impl Services {
             limit_service,
             component_service,
             worker_service,
+            connect_websocket: config.connect_websocket.clone(),
             request_handler,
             openapi_service,
             mcp_capability_lookup,
@@ -234,6 +239,8 @@ impl Services {
             identity_provider,
             session_store,
             invocation_session_token_keyring,
+            invocation_session_config: config.invocation_session.clone(),
+            mcp_config: config.mcp.clone(),
         })
     }
 }

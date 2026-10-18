@@ -57,8 +57,8 @@ async fn filesystem_artifact_exports_five_closed_world_tools_requiring_filesyste
         ("read-file", "0.4.1"),
         ("write-file", "0.4.1"),
         ("edit-file", "0.4.1"),
-        ("ls", "0.1.1"),
-        ("grep", "0.1.1"),
+        ("ls", "0.1.2"),
+        ("grep", "0.1.2"),
     ];
 
     assert_eq!(metadata.tools.len(), expected.len());
@@ -409,7 +409,7 @@ async fn changed_component_creates_a_revision_without_repointing_the_old_release
         b"6.1.0",
     );
     let existing_replacements = replace_embedded_tool_versions(&mut first_wasm, b"0.4.1", b"7.2.0");
-    let new_replacements = replace_embedded_tool_versions(&mut first_wasm, b"0.1.1", b"7.2.0");
+    let new_replacements = replace_embedded_tool_versions(&mut first_wasm, b"0.1.2", b"7.2.0");
     assert!(existing_replacements > 0);
     assert!(new_replacements > 0);
     assert_filesystem_export_versions(&first_wasm, "7.2.0", "6.1.0").await;
@@ -499,7 +499,7 @@ async fn same_artifact_adds_missing_middleware_with_complete_metadata_and_is_ret
         b"8.1.0",
     );
     let existing_replacements = replace_embedded_tool_versions(&mut wasm, b"0.4.1", b"8.2.0");
-    let new_replacements = replace_embedded_tool_versions(&mut wasm, b"0.1.1", b"8.2.0");
+    let new_replacements = replace_embedded_tool_versions(&mut wasm, b"0.1.2", b"8.2.0");
     assert!(existing_replacements > 0);
     assert!(new_replacements > 0);
     assert_filesystem_export_versions(&wasm, "8.2.0", "8.1.0").await;

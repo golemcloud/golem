@@ -255,6 +255,12 @@ finalization, joins Store destruction and retained callbacks, then joins those c
 layers. These distinctions prevent an old owner from removing, reopening, or writing lifecycle
 state for its replacement without adding a second recovery path.
 
+On executor shutdown, the active-agent cache task removes its cached workers regardless of TTL.
+Each worker owns the service graph that owns the cache, so leaving the entries cached would
+retain the graph and its storage pools after task cancellation. This drops cache references only;
+it does not record an interruption or delete persisted agents. In-process replacement still waits
+for the previous executor's invocation loops and oplog generations to drain.
+
 Explicit interruption retires the cached owner and fences its replacement startup. Automatic
 shard-assignment recovery leaves `Interrupted` workers stopped, even with queued invocations or
 updates; an executor restart or shard move is not a request to resume them. If the worker
@@ -305,7 +311,74 @@ Archive transfers append and verify the destination before dropping the source. 
 failures therefore fail only that maintenance attempt: they are logged, never fail the agent,
 the authoritative source remains intact, and threshold, scheduled or sweep maintenance retries
 with per-agent backoff. A scheduled retry remains valid when later commits advance the oplog tip.
-An archive read needed for replay still fails recovery rather than being treated as absent data.
+An oplog read that does not give the requested entries (an archive chunk that does not decode, a
+blob or indexed storage failure of an archive level, a gap) is never treated as absent data. It
+returns `UnreadableOplog` (`services/oplog/reader.rs`: the agent id and the `OplogReadError` with
+its source, such as `archive layer 1`), and the read paths of replay, status folding and recovery
+carry it up. The read error is classified: a storage that did not answer after its retries
+(`OplogReadError::SourceUnavailable`, from `OplogArchiveError::Unavailable`: an indexed storage
+`Transient` or `Indeterminate` error, or a blob error that `BlobFailure` calls transient or
+refused) becomes `RecoveryRequired`, which the start and the invocation retry with backoff and
+shard-assignment recovery retries by failing the assignment. Corrupt data, a gap, an invalid range
+or any other storage error becomes `WorkerExecutorError::OplogFailed`. Every rule below that names
+`OplogFailed` is about that terminal kind; the same read through storage that did not answer
+gives `RecoveryRequired` instead. `OplogFailed` fails that agent only, fail-stop: the start ends
+through `StartProblem::OplogFailed`, which passes the error in every column of the
+outcome table (no skipped or rejected record, no failed update), and the recovery path records it
+as a terminal `Error` entry, so the agent is `Failed` with the cause. Shard-assignment recovery
+(`get_running_workers_in_shards`, `recovered_status`, `recovered_restart`) logs and skips an agent
+whose oplog failed instead of failing the assignment, so the other agents recover. Nothing deletes
+or rewrites the unreadable data. The `try_*` reads of `Oplog` and `OplogService` stay the
+maintenance reads: they return every storage failure as text for the transfer and the sweep to
+retry.
+
+Opening an oplog can fail (`OplogService::open`/`create`, `OplogConstructor::create_oplog`): an
+archive level whose last index does not read, or whose owning-epoch record fails after its
+retries, fails the open, and the open-oplog cache keeps nothing. The open fails with
+`OplogFailed`, or with `RecoveryRequired` when the storage did not answer. A stream session index
+rebuilt over an unreadable oplog returns `SessionError::Unreadable`, which keeps the
+`UnreadableOplog` up to the boundary, where it becomes `OplogFailed` or `RecoveryRequired` by its
+kind. An invocation session attachment records a failed session terminal (`fail_protocol`) only
+for a violation of the session protocol (`grpc/invocation_session/mod.rs::end_attachment_on_failure`).
+When a read of the session history meets storage that did not answer (including a stream payload
+download), the attachment ends without a terminal frame, and the client reattaches from its
+durable cursors. A fence or an oplog that failed for good goes out as its worker error and
+records nothing. An ephemeral oplog whose writer task cannot store a batch in the first
+archive layer latches `OplogError::ArchiveWrite` like the fence: every later add and commit is
+refused, so the agent stops. Every caller that handles a fence handles both as `OplogRefusal`
+(`services/oplog/mod.rs`): the status actor answers its receipts with the refusal, and a write
+that cannot report it (`Worker::add_to_oplog_or_retire`, the log policy, the oplog processor
+checkpoint) leaves it to the next write that can. Only the fence records a retirement: a failed
+terminal entry of an interrupt that is not a fence fails the waiters with its cause, not as a lost
+shard. A commit whose status the status task must rebuild from an oplog that does not read (when
+the incremental fold of the commit fails) is refused with
+`OplogRefusal::Unreadable`, so the start fails with `OplogFailed` (or `RecoveryRequired` when the
+storage did not answer); unlike the fence and the archive
+write, it is not latched on the oplog, and the caller that receives it fails the agent. The
+status stays detached until a later fold or rebuild succeeds. A caller that took the early receipt
+of `commit_oplog_before_status_update` does not wait for the refusal, so the owner finds it
+itself: the invocation loop chooses work only from `Worker::get_repaired_status`, which rebuilds a
+detached status first, and a rebuild that fails again is recorded like a failed recovery and
+ends in infrastructure recovery or in a stop with `OplogFailed` (`unreadable_oplog_outcome`). A
+pending invocation whose entry or payload does not hydrate takes the same path:
+`hydrate_pending_invocation` classifies the failure as `RecoveryRequired` or `OplogFailed`, and the
+loop does not retry it immediately.
+`AppendInvocationIfVersion` also rebuilds a detached status before it checks the key. A detached
+status can still name an invocation whose completion was committed and published as current, so
+the hydrated result cache keeps the keys of committed completions that the status has not folded
+yet, apart from the evictable payloads, and the terminal stop (`fail_pending_invocations`) does not
+fail those keys. When
+`on_invocation_failure` cannot record the failure of an invocation, the refusal takes the
+classification of its agent error (`terminal_entry_refusal` in `durable_host/mod.rs`). An oplog
+that failed for good fails the invocation with its cause. A storage that did not answer returns
+`InvocationFailureDecision::RecoveryRequired`: the invocation stays pending, and the agent goes to
+infrastructure recovery. When a latched archive write keeps the terminal entry of an ephemeral
+invocation out of the oplog, the terminal stop gives the waiters `OplogFailed` instead of the
+ordinary end of an ephemeral agent. Any other `OplogError` on those paths stays
+fail-stop. Entries committed with `CommitLevel::Deferred` before the failure
+were already acknowledged and are missing from the archived history; an ephemeral agent is never
+resumed from that history, so the agent stops instead of the process. The storage failures of the
+primary oplog are outside this rule and still stop the executor.
 A write the shard-epoch fence refuses is not a storage failure: it ends the transfer as
 `OplogError::Fenced`, latches the oplog's fence and is never retried, because the oplog now
 belongs to the shard's new owner (see "Resharding, revocation and the oplog epoch fence").
@@ -715,6 +788,16 @@ for failure (`authoritative_replay_failure`), not publication over sibling histo
 or discard another task's history. A typed-loss End belongs to the original Start: HTTP without
 resend returns `http-response-incomplete`, RDBMS `resource-lost`, and TCP `connection-broken`.
 UDP `ReadRemote` instead re-executes receive after rebind.
+
+**A denied call records its denial.** When the host denies a live call before it runs, the call
+writes its `Start` with `denial` and an `End` that holds the pair's denied response
+(`BegunCall::start_live_denied`, `DurableCallSession::invoke_deniable_access`, or
+`AccessClaimOptions::denial`). The operation never runs. A pair declares its denied response with
+`denied = ...` in `host_payload_pairs!` (`DeniablePair::denied`); the response depends only on the
+recorded request and the denial, so live execution and recovery produce the same value. Replay of
+a denied `Start` without a terminal does not return `Incomplete`: the session appends the denied
+`End` and returns `Replayed`. A crash between the two entries therefore cannot run the denied
+operation. Call sites keep their replay branch free of authorization.
 
 **P3 HTTP recovery is call-local.** `client::send` records `WriteRemote` for all methods
 (`p3/http/send.rs`). Every method uses `Cancellable`: a guest drop records `Cancelled` and
@@ -1227,7 +1310,8 @@ Other tasks whose handles nothing aborts are joined through
 durable call and tool terminal encoding, and the detached stream session index tasks. Only the
 shutdown of the runtime cancels such a task, for example during the final status flush sweep, so
 a cancelled join parks the caller until the runtime drops it instead of failing it as a storage
-error. A panicked join still fails, and a fail-fast read still panics on a corrupt entry.
+error. A panicked join still fails, and a fail-fast read of the primary oplog still panics on a corrupt
+entry; an archive read returns `UnreadableOplog` instead.
 
 `worker/filesystem_snapshots.rs::UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS` is the code of a manual update
 that cannot take its snapshot on an executor without filesystem snapshots, because the files of the
@@ -1557,16 +1641,21 @@ guest paths, and its response is `Ok(())` or `Err(reason)`. A recorded denial re
 denial as their `not-permitted` result; their immutable initial-file fast path records a separate
 check. P3 `write-via-stream` and `append-via-stream` record the decision in their admission call
 (`admit_stream_write`). The live check (`live_permission_decision`,
-`p3_live_permission_decision`) runs only while the Store is live: when an incomplete check `Start`
-is repaired during replay, the repair completes it as allowed, because live authorization cannot
-run then. A new check in the replay tail has no recorded `Start`, so the call switches to live and
-checks the policy. P3 imports that await before their check reserve their invocation id first
+`p3_live_permission_decision`) runs only while the Store is live, before the call writes its
+`Start`. A denied check records the denial in its `Start` (`start_live_denied`, or
+`AccessClaimOptions::denial` in `run_deniable_filesystem_access`), so recovery of an incomplete
+denied `Start` completes it with the same denied response and the protected effect does not run.
+An incomplete `Start` without a denial was allowed, so its repair completes it as allowed without a
+new check. A new check in the replay tail has no recorded `Start`, so the call switches to live and
+checks the policy; a P3 call that becomes live after its Store replayed at the call checks after
+its `Start`. P3 imports that await before their check reserve their invocation id first
 (`reserve_invocation_id_before_await`). Test:
 `tests/scope_cards.rs::denied_filesystem_imports_are_recorded_and_replayed_after_restart`.
 
 P2 TCP `start-connect` records its decision in the same way, in a
 `sockets::tcp::permissions::check-connect` call (the request holds the remote address). A recorded
-denial returns `access-denied`, and its replay does not connect. Test:
+denial returns `access-denied`, and its replay does not connect. A denial is recorded in the check
+`Start`, so the recovery of an incomplete denied check does not connect either. Test:
 `tests/scope_cards.rs::p2_tcp_connect_denial_is_recorded_and_does_not_reach_the_backend_on_replay`.
 
 Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic
@@ -1827,11 +1916,13 @@ cursor (`OwnerExecution`, `worker/instance.rs`).
   scopes and derived surfaces, not independent live membership. Accepted wallet commits publish
   through the status actor even if their producer is cancelled; owner-wide interest is the union
   of wallet, scope and admission-candidate contributions. Historical bodies retain recorded wallets
-  and pins until their own live transition, never borrowing the latest live snapshot. Adjacent
-  unrecorded wallet observations still lack an exact historical association; this ownership model
-  does not change observation recording. The root `Start` records the pinned
-  chain plan; descendants record root plus position, and every occurrence retains the original
-  calling principal and typed static installation parameters. Component and host leaves use the
+  and pins until their own live transition, never borrowing the latest live snapshot. Guest
+  `self-wallet` and `self-version` reads are `ReadLocal` calls whose `End` records the exact
+  observed view, so replay returns each read's own observation whatever card events it applies
+  around it; an incomplete read completes live at its own `Start`. Card authorization decisions
+  are recorded in the same way (see "Card authorization decisions"). The root `Start` records the
+  pinned chain plan; descendants record root plus position, and every occurrence retains the
+  original calling principal and typed static installation parameters. Component and host leaves use the
   same dispatch path.
 - Middleware can start its next layer repeatedly and concurrently. Each result has independent
   `get`/`cancel`; dropping the observer does not cancel execution. Handler return revokes new
@@ -1892,6 +1983,67 @@ exactly-once (each `StreamOffset` consumed once per consumer session, owned by
 stream, protocol terminal fencing guest terminals). A change that
 satisfies one does not imply the others.
 
+## Permission-card handles
+
+Persistent `derive` and `derive-from-wallet` return the host-tagged `persistent-card` sum:
+`concrete` or `template`. Child slots name the eventual installed holder, not the caller.
+A template parent must be in the caller's wallet and is resolved for that caller. Every possible
+child instantiation must attenuate against that resolved parent. The stored card keeps its original
+slots; the universal envelope is proof only. Explicit derivation inherits the exact parent
+negatives and adds requested denials; wallet derivation takes complete bounds. Slot-bearing denials
+cannot supply universal proof evidence; concrete inherited denials remain. `derive-scope` stays
+concrete and rejects requested slots with `InvalidPattern` and an explicit message. A slot-bearing
+tool owner does not resolve aliases against caller metadata; metadata-dependent short flags are
+rejected instead.
+
+A persistent permission-card handle (from `self-wallet`, `derive`, `derive-from-wallet`, or a
+received value) caches no liveness. Every guest operation that resolves one — the `id`, `parents`
+and `expires-at` accessors, `inspect-card`, `derive`, `derive-scope` and `install-card` — first
+runs a `ReadRemote` durable call, `golem::permissions::types::card-liveness`
+(`durable_host/permissions/mod.rs::resolve_permission_card`). Live, it asks the card service and
+records `Live(card)`, `Revoked` or `Expired`; replay returns the recorded answer and never asks
+the card service again. A failed lookup, or an answer that omits the card, traps and leaves the
+`Start` incomplete, so recovery asks again; no error is recorded. The answer never depends on
+wallet membership; the operation's recorded authorization decision holds the wallet data that the
+operation uses. A revoked or expired card gives `card-revoked` or `card-expired`; the accessors
+trap. `revoke-card` resolves its handle inside
+its own recorded call. Runtime-card creation (`persist_runtime_card`) records a typed refusal in
+its `End` when the card service refuses a child because a parent is no longer live. The card
+service reports an expired card as revoked, so the parent's expiry decides between
+`card-expired` and `card-revoked`. Creation repairs an interrupted call only while its repair
+authorization still holds. Otherwise it revokes the card the interrupted attempt may have
+created and records the refusal; the guest has not observed an incomplete call, so either
+outcome is a valid first observation. The registry never creates a revoked runtime card id
+again (`RuntimeCardCreation::Revoked`), so a later repair of a refused repair that failed before
+its `End` records `card-revoked` instead of retrying. `install-card` of a template card records
+the same typed refusals in its `install-card-transfer` `End`. Tests: `tests/scope_cards.rs::{cached_child_handle_reports_its_self_revoked_card_before_and_after_replay,
+received_card_replays_its_recorded_liveness_after_an_external_revocation,
+externally_revoked_cached_handle_returns_typed_errors_and_its_accessors_trap,
+cached_handle_reports_card_expired_after_its_lifespan,
+derive_from_a_card_that_expires_before_its_creation_records_card_expired,
+a_refused_repair_that_fails_after_revoking_its_card_settles_with_card_revoked}`.
+
+### Card authorization decisions
+
+Card events are hints. When replay commits a recorded entry, `skip_forward` publishes every card
+event up to the next recorded entry, and the next authority boundary applies them. A decision that
+records nothing therefore sees on replay the card events that live execution applied only to a
+later call. So `inspect-card`, `derive`, `derive-from-wallet`, `derive-scope` and `install-card`
+each make their authorization decision in a `ReadLocal` call
+(`permissions/mod.rs::record_card_decision`): `golem::permissions::inspect::inspect-card-decision`,
+`golem::permissions::derive::{derive-decision, derive-from-wallet-decision,
+derive-scope-decision}` and `golem::permissions::wallet::install-card-decision`. The request holds
+the card ids of the handles. The `End` (`PermissionCardDecision`) records the outcome, allowed or
+the typed permission error, and on success the serialized data the operation continues with: the
+wallet copy of the `derive` parent, the selected `derive-from-wallet` parent, each `derive-scope`
+parent (a valid scope card, the wallet copy of a persistent parent, or the refusal of an unusable
+parent), and the `install-card` target with its holder identity. Replay returns the recorded
+decision; the rest of the operation is deterministic from it and from the recorded `card-liveness`
+answers. Each decision keeps its place relative to the handle's liveness call: `inspect-card`,
+`derive` and `derive-scope` decide first, `install-card` resolves its handle first. A repaired
+incomplete decision decides at its own `Start`. Tests:
+`tests/scope_cards.rs::card_decisions_survive_reconstruction` and its cases.
+
 ## Wrong model → right model
 | Wrong | Right | Fails under wrong model |
 |---|---|---|
@@ -1900,6 +2052,7 @@ satisfies one does not imply the others.
 | "The voluntary-suspension predicate gates interruption or recovery." | It only defers proactive yielding while live work progresses; explicit interruption and arbitrary Store loss still use ordinary reconstruction. | Simulated-crash tests at arbitrary points (`simulated_crash`, `interrupt`) |
 | "Restart differs from suspend." | Both discard the `Store` and reconstruct. | `counter_resource_test_2_with_restart` (state continues across an executor restart), `reacquire_permits_restart_preserves_accepted_queued_live_invocation` |
 | "Losing a shard reconstructs the agent, like a restart." | It is retired instead: that generation is stopped without writing its status, dropped and never restarted. Only the executor now holding the shard reconstructs it — the new owner, or this one if the shard came back at a higher epoch. | `worker/mod.rs::a_failure_that_is_a_lost_shard_is_given_up_on_every_path`, `services/oplog/tests.rs::a_fenced_oplog_refuses_new_adds_and_keeps_the_indices_it_handed_out_readable`, the fence tests in `tests/indexed_storage.rs` |
+| "A card handle can answer from its cached card, or from wallet membership." | A held handle outlives revocation and expiry, and wallet membership at an arbitrary point is not a recorded input. Each use records the card service's answer as `card-liveness`. | `received_card_replays_its_recorded_liveness_after_an_external_revocation` |
 | "A retried RPC attempt executed the target again." | Same key ⇒ same target invocation; count target mutations, not attempts. | Provider-side counter tests in `tests/rpc.rs` |
 | "Repair should generate a fresh RPC key." | Repair retains the call's own `Start` and derived key. A new saga attempt appends new calls. | RPC crash-recovery tests |
 | "Equal return values prove deduplication." | Deterministic echoes are equal even with duplicate execution; count side effects. | Counter-based RPC tests |

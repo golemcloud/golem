@@ -73,6 +73,7 @@ include_dir = { workspace = true }
 jsonschema = { workspace = true }
 mime = { workspace = true }
 mime_guess = { workspace = true }
+mimalloc = { workspace = true }
 openidconnect = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry-prometheus-text-exporter = { workspace = true }
@@ -112,6 +113,7 @@ uuid = { workspace = true }
 
 
 [dev-dependencies]
+golem-client = { workspace = true }
 golem-common = { workspace = true, features = ["proptest"] }
 golem-test-framework.workspace = true
 
@@ -132,4 +134,5 @@ rustls-pemfile = { workspace = true }
 tempfile.workspace = true
 test-r = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
+tokio-tungstenite = { workspace = true }
 tryhard = { workspace = true }

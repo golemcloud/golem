@@ -44,10 +44,15 @@ use golem_common::model::entity::{
 };
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
+use golem_common::model::oplog::payload::types::SerializablePermissionCardLiveness;
 use golem_common::model::oplog::payload::{
-    HostRequest, HostRequestEntityInvocation, HostResponse, HostResponseEntityInvocation,
+    HostRequest, HostRequestEntityInvocation, HostRequestNoInput,
+    HostRequestPermissionCardLiveness, HostResponse, HostResponseEntityInvocation,
+    HostResponsePermissionCardLiveness, HostResponsePermissionWallet,
 };
-use golem_common::model::oplog::{DurableFunctionType, OplogEntry, OplogIndex, OplogPayload};
+use golem_common::model::oplog::{
+    DurableFunctionType, DurableInvocationId, OplogEntry, OplogIndex, OplogPayload,
+};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::tool::{
@@ -72,7 +77,7 @@ use golem_worker_executor::preview2::golem_api_1_x::host::Host as GolemApiHost;
 use golem_worker_executor::preview2::golem_api_1_x::retry::Host as RetryHost;
 use golem_worker_executor::services::HasComponentService;
 use golem_worker_executor::services::active_agents::ActiveAgent;
-use golem_worker_executor::services::card::{CardService, CardState};
+use golem_worker_executor::services::card::{CardService, CardState, RuntimeCardCreation};
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::oplog::CommitLevel;
 use golem_worker_executor::worker::EvictionClass;
@@ -171,7 +176,7 @@ impl CardService for FailingCheckCardService {
         &self,
         card: StoredCard,
         provenance: CardManagedByRuntimeDerived,
-    ) -> Result<StoredCard, WorkerExecutorError> {
+    ) -> Result<RuntimeCardCreation, WorkerExecutorError> {
         TestCardService.create_runtime_card(card, provenance).await
     }
 
@@ -282,6 +287,7 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
     // Deliberately distinct dispatch metadata models a retained entity pin. These synthetic
     // scopes test namespace selection only; genuine reconstruction is covered separately.
     let wallet_cards = active.primary().get_wallet_cards().await?;
+    let mut live_decisions = Vec::new();
     for historical in [false, true] {
         let parent_start = active.execution().oplog().current_oplog_index().await;
         let parent_id = OwnerInvocationId::Agent(parent_start);
@@ -316,6 +322,24 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
         .with_authority_wallet(wallet_cards.clone());
         stage_entity_boundary(&active, &scope).await?;
         let claim = if historical {
+            // The body reads its wallet once. Each of its two scope derivations records its
+            // authorization decision and then checks the liveness of every wallet parent, and
+            // the refused wallet derivation records its decision. The decisions are copied from
+            // the live body, which decided on the same wallet cards.
+            record_entity_self_wallet(&active, parent_start.next(), &wallet_cards).await?;
+            let mut decisions = live_decisions.iter();
+            let mut ordinal = 1u64;
+            for _ in 0..2 {
+                let decision = decisions.next().expect("a live scope-derivation decision");
+                record_entity_call(&active, parent_start.next(), ordinal, decision).await?;
+                ordinal += 1;
+                for card in &wallet_cards {
+                    record_live_card_liveness(&active, parent_start.next(), ordinal, card).await?;
+                    ordinal += 1;
+                }
+            }
+            let decision = decisions.next().expect("a live wallet-derivation decision");
+            record_entity_call(&active, parent_start.next(), ordinal, decision).await?;
             finish_entity_boundary(&active, parent_start.next()).await?;
             active
                 .execution()
@@ -391,7 +415,8 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
                         matches!(wrong, Err(types::PermissionError::LowerBoundTooBroad(_))),
                         "other namespace scope must be refused: historical={historical}, {wrong:?}"
                     );
-                    // A wrong namespace must be refused before persistent creation, including replay.
+                    // A wrong namespace must be refused before persistent creation. Replay returns
+                    // the recorded refusal.
                     let wrong = derive::Host::derive_from_wallet(
                         ctx,
                         vec![unexpected],
@@ -433,9 +458,109 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
                 .await?;
         } else {
             finish_entity_boundary(&active, parent_start.next()).await?;
+            live_decisions = recorded_entity_calls(
+                &active,
+                parent_start.next(),
+                &[
+                    HostFunctionName::GolemPermissionsDeriveScopeDecision,
+                    HostFunctionName::GolemPermissionsDeriveFromWalletDecision,
+                ],
+            )
+            .await;
         }
         drop(parent);
     }
+    Ok(())
+}
+
+/// A completed durable call of an entity body: its function, function type, request and
+/// response.
+type RecordedEntityCall = (
+    HostFunctionName,
+    DurableFunctionType,
+    Option<OplogPayload<HostRequest>>,
+    Option<OplogPayload<HostResponse>>,
+);
+
+/// The completed calls of `functions` that the entity body started at `entity_start` recorded,
+/// in oplog order.
+async fn recorded_entity_calls(
+    active: &ActiveAgent<TestWorkerCtx>,
+    entity_start: OplogIndex,
+    functions: &[HostFunctionName],
+) -> Vec<RecordedEntityCall> {
+    let oplog = active.execution().oplog();
+    let tip = oplog.current_oplog_index().await;
+    let entries = oplog
+        .read_exact(OplogIndex::INITIAL, u64::from(tip))
+        .await
+        .unwrap();
+    entries
+        .iter()
+        .filter_map(|(index, entry)| match entry {
+            OplogEntry::Start {
+                parent_start_index: Some(parent),
+                function_name,
+                durable_function_type,
+                request,
+                ..
+            } if *parent == entity_start && functions.contains(function_name) => {
+                let response =
+                    entries
+                        .range(index.next()..)
+                        .find_map(|(_, entry)| match entry {
+                            OplogEntry::End {
+                                start_index,
+                                response,
+                                ..
+                            } if start_index == index => Some(response.clone()),
+                            _ => None,
+                        })?;
+                Some((
+                    function_name.clone(),
+                    durable_function_type.clone(),
+                    request.clone(),
+                    response,
+                ))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Records `call` again as the `ordinal`-th durable call of the entity body started at
+/// `entity_start`.
+async fn record_entity_call(
+    active: &ActiveAgent<TestWorkerCtx>,
+    entity_start: OplogIndex,
+    ordinal: u64,
+    call: &RecordedEntityCall,
+) -> Result<(), WorkerExecutorError> {
+    let (function_name, durable_function_type, request, response) = call.clone();
+    let oplog = active.execution().oplog();
+    let start_index = oplog
+        .add(OplogEntry::Start {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            parent_start_index: Some(entity_start),
+            function_name,
+            invocation_id: Some(DurableInvocationId::new(entity_start, ordinal)),
+            observational_owner: None,
+            request,
+            durable_function_type,
+            span_started: None,
+            denial: None,
+        })
+        .await?;
+    oplog
+        .add(OplogEntry::End {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            start_index,
+            response,
+            forced_commit: false,
+            span_finished: None,
+            span_attributes: None,
+        })
+        .await?;
     Ok(())
 }
 
@@ -761,7 +886,10 @@ async fn cross_store_wallet_change(
     }
     let oplog = active.execution().oplog();
     let tip = oplog.current_oplog_index().await;
-    let entries = oplog.read_exact(OplogIndex::INITIAL, u64::from(tip)).await;
+    let entries = oplog
+        .read_exact(OplogIndex::INITIAL, u64::from(tip))
+        .await
+        .unwrap();
     if matches!(change, WalletChange::Transfer) {
         assert!(
             entries.values().any(|entry| matches!(entry,
@@ -1421,9 +1549,98 @@ async fn stage_entity_boundary(
             ))),
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: None,
+            denial: None,
         })
         .await?;
     assert_eq!(index, scope.invocation_id().start_index());
+    Ok(())
+}
+
+async fn record_entity_self_wallet(
+    active: &ActiveAgent<TestWorkerCtx>,
+    entity_start_index: OplogIndex,
+    cards: &[StoredCard],
+) -> Result<(), WorkerExecutorError> {
+    let oplog = active.execution().oplog();
+    let start_index = oplog
+        .add(OplogEntry::Start {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            parent_start_index: Some(entity_start_index),
+            function_name: HostFunctionName::GolemPermissionsSelfWallet,
+            invocation_id: Some(DurableInvocationId::new(entity_start_index, 0)),
+            observational_owner: None,
+            request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
+                HostRequestNoInput {},
+            )))),
+            durable_function_type: DurableFunctionType::ReadLocal,
+            span_started: None,
+            denial: None,
+        })
+        .await?;
+    oplog
+        .add(OplogEntry::End {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            start_index,
+            response: Some(OplogPayload::Inline(Box::new(
+                HostResponse::PermissionWallet(HostResponsePermissionWallet {
+                    cards: cards
+                        .iter()
+                        .map(|card| golem_common::serialization::serialize(card).unwrap())
+                        .collect(),
+                    scope_card: None,
+                }),
+            ))),
+            forced_commit: false,
+            span_finished: None,
+            span_attributes: None,
+        })
+        .await?;
+    Ok(())
+}
+
+async fn record_live_card_liveness(
+    active: &ActiveAgent<TestWorkerCtx>,
+    entity_start: OplogIndex,
+    ordinal: u64,
+    card: &StoredCard,
+) -> Result<(), WorkerExecutorError> {
+    let start_index = active
+        .execution()
+        .oplog()
+        .add(OplogEntry::Start {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            parent_start_index: Some(entity_start),
+            function_name: HostFunctionName::GolemPermissionsCardLiveness,
+            invocation_id: Some(DurableInvocationId::new(entity_start, ordinal)),
+            observational_owner: None,
+            request: Some(OplogPayload::Inline(Box::new(
+                HostRequest::PermissionCardLiveness(HostRequestPermissionCardLiveness {
+                    card_id: card.card_id().0,
+                }),
+            ))),
+            durable_function_type: DurableFunctionType::ReadRemote,
+            span_started: None,
+            denial: None,
+        })
+        .await?;
+    active
+        .execution()
+        .oplog()
+        .add(OplogEntry::End {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            start_index,
+            response: Some(OplogPayload::Inline(Box::new(
+                HostResponse::PermissionCardLiveness(HostResponsePermissionCardLiveness {
+                    liveness: SerializablePermissionCardLiveness::Live(
+                        golem_common::serialization::serialize(card).unwrap(),
+                    ),
+                }),
+            ))),
+            forced_commit: false,
+            span_finished: None,
+            span_attributes: None,
+        })
+        .await?;
     Ok(())
 }
 
@@ -2088,7 +2305,8 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
             parent_start.next(),
             u64::from(live_tip) - u64::from(parent_start),
         )
-        .await;
+        .await
+        .unwrap();
     let config_start = live_entries
         .iter()
         .find_map(|(index, entry)| match entry {
@@ -2350,7 +2568,8 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
             parent_start.next(),
             u64::from(live_tip) - u64::from(parent_start),
         )
-        .await;
+        .await
+        .unwrap();
     let reveal_start = entries
         .iter()
         .find_map(|(index, entry)| match entry {
@@ -2750,7 +2969,8 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
     assert!(after > before);
     let appended = owner_oplog
         .read_exact(before.next(), u64::from(after) - u64::from(before))
-        .await;
+        .await
+        .unwrap();
     assert!(
         appended
             .values()
@@ -2874,7 +3094,8 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
                         before_sleep.next(),
                         u64::from(latest) - u64::from(before_sleep),
                     )
-                    .await;
+                    .await
+                    .unwrap();
                 if entries
                     .values()
                     .any(|entry| matches!(entry, OplogEntry::Start { .. }))
@@ -4328,7 +4549,8 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
             before_denial.next(),
             u64::from(after_denial) - u64::from(before_denial),
         )
-        .await;
+        .await
+        .unwrap();
     let config_start = denial_entries
         .iter()
         .find_map(|(index, entry)| match entry {
@@ -4517,7 +4739,8 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
             before_reveal_denial.next(),
             u64::from(after_reveal_denial) - u64::from(before_reveal_denial),
         )
-        .await;
+        .await
+        .unwrap();
     let reveal_start = reveal_entries
         .iter()
         .find_map(|(index, entry)| match entry {

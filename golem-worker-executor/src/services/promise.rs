@@ -609,7 +609,7 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
                 last_known_status,
             )
             .await
-            .map_err(WorkerExecutorError::runtime)?
+            .map_err(WorkerExecutorError::from)?
             .ok_or_else(|| {
                 WorkerExecutorError::runtime(
                     "worker oplog disappeared while activating worker for promise",

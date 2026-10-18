@@ -12,6 +12,16 @@ npx pnpm run test # or per package: Ex: cd packages/golem-ts-sdk && pnpm run tes
 
 `pnpm run test` within packages will run tests without forgetting console logs, and will be more faster.
 
+## Permission derivation
+
+`permissions.deriveFromWallet` and persistent-card `.derive` return
+`PermissionCard | PolymorphicPermissionCard`. The SDK preserves the host's result tag;
+use `instanceof permissions.PermissionCard` or `instanceof permissions.PolymorphicPermissionCard`
+before sending a child through a kind-specific schema. Child slots name the eventual
+holder and the host validates them universally. Parent templates resolve in the caller's
+wallet. Slot tool owners do not resolve aliases using caller metadata.
+`permissions.deriveScope` remains concrete and rejects slots with `invalid-pattern`.
+
 ## Self metadata and restrictive permissions
 
 `getSelfMetadata()` requires view permission on the running agent:

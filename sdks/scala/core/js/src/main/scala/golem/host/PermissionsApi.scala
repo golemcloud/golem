@@ -54,7 +54,9 @@ import scala.scalajs.js.annotation.JSImport
  *
  * Expected failures are returned as `Left(PermissionError)`. Host traps are not
  * converted: the card accessors [[Card.id]], [[Card.parents]] and
- * [[Card.expiresAt]] trap when the host does not know the handle.
+ * [[Card.expiresAt]] trap when the host does not know the handle, or when its
+ * card is revoked or expired. The other operations on such a card return
+ * `Left(PermissionError.CardRevoked)` or `Left(PermissionError.CardExpired)`.
  *
  * A card is affine. `revoke`, `install`, [[Card.release]] and sending the card
  * as an RPC argument or result move it; every later use throws
@@ -433,7 +435,7 @@ object PermissionsApi {
      * `bounds` are the grants of this card to retain, the negative lists are
      * the denials to add. Requires `card:derive`. This card stays usable.
      */
-    def derive(bounds: Bounds, lifespan: Option[Lifespan] = None): Either[PermissionError, PermissionCard] =
+    def derive(bounds: Bounds, lifespan: Option[Lifespan] = None): Either[PermissionError, PersistentCard] =
       borrow(deriveChild(_, bounds, lifespan))
 
     /**
@@ -488,22 +490,23 @@ object PermissionsApi {
    * for each holder.
    *
    * It offers the same operations as a [[PermissionCard]];
-   * [[PolymorphicPermissionCard.derive]] returns a concrete [[PermissionCard]],
-   * because the host resolves the template parent for the holder. Its schema is
-   * `permission-card { polymorphic: true }`. The non-forgeability rules of
-   * [[PermissionCard]] apply unchanged. The SDK offers no conversion between
-   * the two types; a decoded card takes the type that the decoder declares.
+   * [[PolymorphicPermissionCard.derive]] returns a host-labelled
+   * [[PersistentCard]]. The host resolves the template parent for the caller.
+   * Its schema is `permission-card { polymorphic: true }`. The non-forgeability
+   * rules of [[PermissionCard]] apply unchanged. The SDK offers no conversion
+   * between the two types; a decoded card takes the type that the decoder
+   * declares.
    */
   final class PolymorphicPermissionCard private[golem] (handle0: GuestPermissionCardHandle) extends Card {
     private[golem] val handle: GuestPermissionCardHandle = claimed(this, handle0)
 
     /**
-     * Derive a concrete child card with a narrower lattice. The positive lists
-     * of `bounds` are the grants of this card to retain, the negative lists are
-     * the denials to add. The host resolves the slot variables of this card for
-     * the holder. Requires `card:derive`. This card stays usable.
+     * Derive a persistent child card with a narrower lattice. The positive
+     * lists of `bounds` are the grants of this card to retain, the negative
+     * lists are the denials to add. The host resolves the slot variables of
+     * this card for the holder. Requires `card:derive`. This card stays usable.
      */
-    def derive(bounds: Bounds, lifespan: Option[Lifespan] = None): Either[PermissionError, PermissionCard] =
+    def derive(bounds: Bounds, lifespan: Option[Lifespan] = None): Either[PermissionError, PersistentCard] =
       borrow(deriveChild(_, bounds, lifespan))
 
     /**
@@ -589,9 +592,9 @@ object PermissionsApi {
     raw: JsPermissionCardResource,
     bounds: Bounds,
     lifespan: Option[Lifespan]
-  ): Either[PermissionError, PermissionCard] =
+  ): Either[PermissionError, PersistentCard] =
     hostCall(
-      PermissionCard.fromRaw(
+      PersistentCard.fromJs(
         DeriveModule.derive(
           raw,
           PatternGrantJs.toJsArray(bounds.lowerPositive),
@@ -641,6 +644,101 @@ object PermissionsApi {
     private[golem] val handle: GuestPermissionCardHandle = claimed(this, handle0)
 
     override def toString: String = "ScopeCard(<opaque>)"
+  }
+
+  /**
+   * A persistent derivation result. The host, not the request, selects its
+   * kind.
+   */
+  sealed trait PersistentCard extends Card {
+    def card: Card
+    private[golem] final def handle: GuestPermissionCardHandle = card.handle
+
+    final def derive(bounds: Bounds, lifespan: Option[Lifespan] = None): Either[PermissionError, PersistentCard] =
+      borrow(deriveChild(_, bounds, lifespan))
+
+    final def revoke(): Either[PermissionError, Long]                = revokeCard(handle)
+    final def install(target: Holder): Either[PermissionError, Unit] = installCard(handle, target)
+  }
+
+  object PersistentCard {
+    final case class Concrete(card: PermissionCard)            extends PersistentCard
+    final case class Template(card: PolymorphicPermissionCard) extends PersistentCard
+
+    private[PermissionsApi] def fromJs(raw: JsPersistentCard): PersistentCard =
+      try
+        raw.tag match {
+          case "concrete" => Concrete(PermissionCard.fromRaw(raw.card))
+          case "template" => Template(PolymorphicPermissionCard.fromRaw(raw.card))
+          case other      => throw new IllegalStateException(s"unknown persistent-card case: $other")
+        }
+      catch {
+        case NonFatal(error) =>
+          disposeUnheld(List(raw.card))
+          throw error
+      }
+
+    implicit val intoSchema: IntoSchema[PersistentCard] = new IntoSchema[PersistentCard] {
+      lazy val graph: SchemaGraph = SchemaGraph(
+        ListMap.empty,
+        SchemaType(
+          SchemaTypeBody.VariantType(
+            List(
+              golem.schema.VariantCaseType("concrete", Some(PermissionCard.intoSchema.graph.root)),
+              golem.schema.VariantCaseType("template", Some(PolymorphicPermissionCard.intoSchema.graph.root))
+            )
+          )
+        )
+      )
+      def toValue(value: PersistentCard): SchemaValue = value match {
+        case Concrete(card) => SchemaValue.VariantValue(0, Some(PermissionCard.intoSchema.toValue(card)))
+        case Template(card) => SchemaValue.VariantValue(1, Some(PolymorphicPermissionCard.intoSchema.toValue(card)))
+      }
+    }
+
+    implicit val fromSchema: FromSchema[PersistentCard] = new FromSchema[PersistentCard] {
+      def fromValue(value: SchemaValue): Either[FromSchemaError, PersistentCard] = value match {
+        case SchemaValue.VariantValue(0, Some(payload)) => PermissionCard.fromSchema.fromValue(payload).map(Concrete(_))
+        case SchemaValue.VariantValue(1, Some(payload)) =>
+          PolymorphicPermissionCard.fromSchema.fromValue(payload).map(Template(_))
+        case _ => Left(FromSchemaError("expected concrete or template persistent-card"))
+      }
+    }
+
+    implicit val concreteCodec: ConcreteCodec[PersistentCard] = new ConcreteCodec[PersistentCard] {
+      def describe(out: golem.schema.wire.WireTypes): Int = {
+        import golem.schema.wire.WitVariantCaseType
+        out.add(
+          WitSchemaTypeBody.VariantType(
+            Vector(
+              WitVariantCaseType(
+                "concrete",
+                Some(PermissionCard.concreteCodec.describe(out)),
+                golem.schema.MetadataEnvelope.empty
+              ),
+              WitVariantCaseType(
+                "template",
+                Some(PolymorphicPermissionCard.concreteCodec.describe(out)),
+                golem.schema.MetadataEnvelope.empty
+              )
+            )
+          )
+        )
+      }
+      def write(value: PersistentCard, out: golem.schema.wire.WireValues): Int = {
+        val (tag, payload) = value match {
+          case Concrete(card) => (0, PermissionCard.concreteCodec.write(card, out))
+          case Template(card) => (1, PolymorphicPermissionCard.concreteCodec.write(card, out))
+        }
+        out.add(WitSchemaValueNode.VariantValue(golem.schema.wire.WitVariantValuePayload(tag, Some(payload))))
+      }
+      def read(in: golem.schema.wire.WireValuesReader, index: Int): PersistentCard = in.at(index) {
+        case WitSchemaValueNode.VariantValue(golem.schema.wire.WitVariantValuePayload(0, Some(payload))) =>
+          Concrete(PermissionCard.concreteCodec.read(in, payload))
+        case WitSchemaValueNode.VariantValue(golem.schema.wire.WitVariantValuePayload(1, Some(payload))) =>
+          Template(PolymorphicPermissionCard.concreteCodec.read(in, payload))
+      }
+    }
   }
 
   // --- WIT: wallet-card ---
@@ -752,9 +850,9 @@ object PermissionsApi {
    * Derive a card from the caller's wallet. `bounds` is the complete requested
    * lattice. Requires `card:derive`.
    */
-  def deriveFromWallet(bounds: Bounds, lifespan: Option[Lifespan] = None): Either[PermissionError, PermissionCard] =
+  def deriveFromWallet(bounds: Bounds, lifespan: Option[Lifespan] = None): Either[PermissionError, PersistentCard] =
     hostCall(
-      PermissionCard.fromRaw(
+      PersistentCard.fromJs(
         DeriveModule.deriveFromWallet(
           PatternGrantJs.toJsArray(bounds.lowerPositive),
           PatternGrantJs.toJsArray(bounds.lowerNegative),
@@ -769,6 +867,8 @@ object PermissionsApi {
    * Derive an invocation-local [[ScopeCard]] from one or more parents, which
    * can be persistent cards and scope cards. `bounds` is the complete requested
    * lattice. The parents are borrowed and stay usable. Requires `card:derive`.
+   * Bounds must be concrete; the host rejects slots with
+   * [[PermissionError.InvalidPattern]].
    */
   def deriveScope(parents: List[Card], bounds: Bounds): Either[PermissionError, ScopeCard] = {
     val rawParents = js.Array[JsPermissionCardResource]()
@@ -846,7 +946,7 @@ object PermissionsApi {
       upperPositiveToRetain: js.Array[JsPatternGrant],
       upperNegativeToAdd: js.Array[JsPatternGrant],
       lifespan: js.UndefOr[JsPermissionDuration]
-    ): JsPermissionCardResource = js.native
+    ): JsPersistentCard = js.native
 
     def deriveFromWallet(
       lowerPositive: js.Array[JsPatternGrant],
@@ -854,7 +954,7 @@ object PermissionsApi {
       upperPositive: js.Array[JsPatternGrant],
       upperNegative: js.Array[JsPatternGrant],
       lifespan: js.UndefOr[JsPermissionDuration]
-    ): JsPermissionCardResource = js.native
+    ): JsPersistentCard = js.native
 
     def deriveScope(
       parents: js.Array[JsPermissionCardResource],

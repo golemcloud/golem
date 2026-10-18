@@ -111,14 +111,14 @@ static BUILTIN_EXPORTS: &[BuiltinExportDescriptor] = &[
         component_name: "filesystem-tools",
         artifact_id: "filesystem_tools",
         export_name: "ls",
-        release_version: "0.1.1",
+        release_version: "0.1.2",
         kind: BuiltinExportKind::Tool,
     },
     BuiltinExportDescriptor {
         component_name: "filesystem-tools",
         artifact_id: "filesystem_tools",
         export_name: "grep",
-        release_version: "0.1.1",
+        release_version: "0.1.2",
         kind: BuiltinExportKind::Tool,
     },
     BuiltinExportDescriptor {

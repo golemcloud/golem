@@ -617,6 +617,7 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                 request,
                 durable_function_type: wrapped_function_type,
                 span_started,
+                denial,
             }) => Self::Start(oplog::StartParameters {
                 timestamp: timestamp.into(),
                 parent_start_index: parent_start_index.map(|c| c.into()),
@@ -626,6 +627,7 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                 request: request.map(encode_public_typed_schema_value).transpose()?,
                 durable_function_type: wrapped_function_type.into(),
                 span_started: span_started.map(public_span_started_to_wit),
+                denial,
             }),
             PublicOplogEntry::End(EndParams {
                 timestamp,
@@ -1620,6 +1622,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 request: params.request.map(oplog_payload_from_wit),
                 durable_function_type: params.durable_function_type.into(),
                 span_started: params.span_started.map(|span| raw_span_started_from_wit(span).map(Box::new)).transpose()?,
+                denial: params.denial,
             }),
             oplog::OplogEntry::End(params) => Ok(Self::End {
                 timestamp: timestamp_from_datetime(params.timestamp),
@@ -2448,6 +2451,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 request,
                 durable_function_type,
                 span_started,
+                denial,
             } => Ok(Self::Start(oplog::RawStartParameters {
                 timestamp: timestamp.into(),
                 parent_start_index: parent_start_index.map(|i| i.into()),
@@ -2457,6 +2461,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 request: request.map(oplog_payload_to_wit).transpose()?,
                 durable_function_type: durable_function_type.into(),
                 span_started: span_started.map(|span| raw_span_started_to_wit(*span)),
+                denial,
             })),
             M::End {
                 timestamp,
@@ -3096,6 +3101,7 @@ mod tests {
                 request: None,
                 durable_function_type: DurableFunctionType::ReadLocal,
                 span_started: Some(Box::new(started.clone())),
+                denial: None,
             },
             OplogEntry::End {
                 timestamp: finished_at,
@@ -3138,6 +3144,7 @@ mod tests {
                 request: None,
                 durable_function_type: DurableFunctionType::ReadLocal.into(),
                 span_started: Some(public_started),
+                denial: None,
             }),
             PublicOplogEntry::End(EndParams {
                 timestamp: finished_at,

@@ -336,7 +336,11 @@ golem agent oplog 'CounterAgent("my-counter")'
 
 The counter's state survived between calls. This second example shows Golem recovering a method that is still running. A `WorkflowAgent` starts a workflow, asks a `HumanAgent` for approval, and then waits inside its `start` method until the human decides. You restart the server while it waits, approve the workflow afterwards, and the method continues from the line where it stopped.
 
-The example uses the `human-in-the-loop` template. The waiting is ordinary code: the method creates a promise, sends its ID to the human agent, and awaits it. In **Terminal 2**, leave the `agent-examples` directory, then follow the tab for your language. The idempotency key `report-q3` identifies the waiting invocation, so you can ask for its result later.
+The example uses the `human-in-the-loop` template, or a manual setup for Effect. The waiting is ordinary code: the method creates a promise, sends its ID to the human agent, and awaits it. In **Terminal 2**, leave the `agent-examples` directory, then follow the tab for your language. The idempotency key `report-q3` identifies the waiting invocation, so you can ask for its result later.
+
+`--trigger` returns before the workflow finishes registering its request. If the pending list is
+empty, repeat the list command. Restart only after the list contains the workflow ID and
+`golem agent get` reports `Suspended`. Always restart without `--clean`.
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
@@ -390,7 +394,111 @@ Invocation result in TypeScript syntax:
 ```
   </Tabs.Tab>
   <Tabs.Tab>
-The Effect SDK has no `human-in-the-loop` template yet. The TypeScript tab runs the same example, with the same commands.
+Effect has no `human-in-the-loop` template. Create an Effect application instead:
+
+```shell copy
+cd ..
+golem new --template effect --yes approvals
+cd approvals
+```
+
+Replace `src/counter-agent.ts` with the following complete implementation. Keep the generated
+`src/main.ts` import of `./counter-agent.js`. The human agent stores the full promise identity;
+the workflow waits on the host promise, not an in-memory JavaScript promise.
+
+```typescript
+import { Effect, Ref, Schema } from "effect"
+import { Agents, WitTypes, defineAgent, method } from "@golemcloud/effect-golem"
+
+const PromiseIdentity = Schema.Struct({
+  agentId: Schema.Struct({
+    componentId: Schema.Struct({
+      uuid: Schema.Struct({ highBits: WitTypes.Uint64, lowBits: WitTypes.Uint64 }),
+    }),
+    agentId: Schema.String,
+  }),
+  oplogIdx: WitTypes.Uint64,
+})
+
+const HumanAgent = defineAgent({
+  name: "HumanAgent",
+  mode: "durable",
+  id: { username: Schema.String },
+  methods: {
+    requestApproval: method({
+      input: { workflowId: Schema.String, promiseId: PromiseIdentity },
+      success: Schema.String,
+    }),
+    listPendingApprovals: method({ input: {}, success: Schema.Array(Schema.String) }),
+    decide: method({
+      input: { workflowId: Schema.String, decision: Schema.String },
+      success: Schema.String,
+    }),
+  },
+}).implement<Ref.Ref<Map<string, typeof PromiseIdentity.Type>>>({
+  init: () => Ref.make(new Map()),
+  methods: (pending) => ({
+    requestApproval: ({ workflowId, promiseId }) =>
+      Ref.update(pending, (entries) => new Map(entries).set(workflowId, promiseId)).pipe(
+        Effect.as("Approval requested"),
+      ),
+    listPendingApprovals: () => Ref.get(pending).pipe(Effect.map((entries) => [...entries.keys()])),
+    decide: ({ workflowId, decision }) => Effect.gen(function* () {
+      if (decision !== "approved" && decision !== "rejected") return "Invalid decision"
+      const promiseId = (yield* Ref.get(pending)).get(workflowId)
+      if (!promiseId) return "No pending request"
+      yield* Agents.Promises.complete(promiseId, new TextEncoder().encode(decision)).pipe(Effect.orDie)
+      yield* Ref.update(pending, (entries) => {
+        const next = new Map(entries)
+        next.delete(workflowId)
+        return next
+      })
+      return `Workflow ${workflowId} was ${decision}`
+    }),
+  }),
+})
+
+export const WorkflowAgent = defineAgent({
+  name: "WorkflowAgent",
+  mode: "durable",
+  id: { workflowId: Schema.String },
+  methods: {
+    start: method({ input: { approver: Schema.String }, success: Schema.String }),
+  },
+}).implement<{ workflowId: string }>({
+  init: ({ workflowId }) => Effect.succeed({ workflowId }),
+  methods: (state) => ({
+    start: ({ approver }) => Effect.gen(function* () {
+      const promiseId = yield* Agents.Promises.create
+      const human = yield* HumanAgent.client.get({ username: approver })
+      yield* human.requestApproval({ workflowId: state.workflowId, promiseId })
+      const bytes = yield* Agents.Promises.await(promiseId)
+      return `Workflow ${state.workflowId} was ${new TextDecoder().decode(bytes)}`
+    }).pipe(Effect.scoped, Effect.orDie),
+  }),
+})
+```
+
+```shell copy
+golem build
+golem deploy --yes
+golem agent invoke --trigger --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
+golem agent invoke 'HumanAgent("alice")' listPendingApprovals
+golem agent get 'WorkflowAgent("report-q3")'
+```
+
+Wait for `listPendingApprovals` to contain `report-q3` and for the workflow status to be
+`Suspended`. In **Terminal 1**, stop the server with `Ctrl+C` and restart it with
+`golem server run` (without `--clean`). In **Terminal 2**:
+
+```shell copy
+golem agent invoke 'HumanAgent("alice")' decide '"report-q3"' '"approved"'
+golem agent invoke --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
+```
+
+The original invocation returns `"Workflow report-q3 was approved"`. This minimal example uses
+oplog recovery, not snapshots. It turns host/RPC failures into defects with `Effect.orDie`;
+production code should define its application error handling.
   </Tabs.Tab>
   <Tabs.Tab>
 ```rust
@@ -449,10 +557,58 @@ Invocation result in Rust syntax:
 ```
   </Tabs.Tab>
   <Tabs.Tab>
-The Scala `human-in-the-loop` template is organized differently and does not demonstrate a method waiting across a restart. The TypeScript, Rust, and Go tabs show the example.
+The Scala template's `start(approver)` creates a host promise, calls
+`HumanAgentClient.get(approver).requestApproval(...)`, then waits with
+`HostApi.awaitPromise(promiseId)` inside the same method.
+
+```shell copy
+cd ..
+golem new --template scala/human-in-the-loop --yes approvals
+cd approvals
+golem build
+golem deploy --yes
+golem agent invoke --trigger --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
+golem agent invoke 'HumanAgent("alice")' listPendingApprovals
+golem agent get 'WorkflowAgent("report-q3")'
+```
+
+Wait for the pending list to contain `report-q3` and the workflow status to be `Suspended`.
+In **Terminal 1**, stop the server with `Ctrl+C` and restart it with `golem server run`
+(without `--clean`). In **Terminal 2**, complete the promise and retrieve the original result:
+
+```shell copy
+golem agent invoke 'HumanAgent("alice")' decide '"report-q3"' '"approved"'
+golem agent invoke --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
+```
+
+The original invocation returns `"Workflow report-q3 was approved ✅"`.
   </Tabs.Tab>
   <Tabs.Tab>
-The MoonBit `human-in-the-loop` template is organized differently and does not demonstrate a method waiting across a restart. The TypeScript, Rust, and Go tabs show the example.
+The MoonBit template's async `WorkflowAgent::start` creates a host promise, sends its full
+identity to the human agent, and waits with `@api.await_promise(promise_id)`. Its public
+method names use snake case.
+
+```shell copy
+cd ..
+golem new --template moonbit/human-in-the-loop --yes approvals
+cd approvals
+golem build
+golem deploy --yes
+golem agent invoke --trigger --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
+golem agent invoke 'HumanAgent("alice")' list_pending_approvals
+golem agent get 'WorkflowAgent("report-q3")'
+```
+
+Wait for the pending list to contain `report-q3` and the workflow status to be `Suspended`.
+In **Terminal 1**, stop the server with `Ctrl+C` and restart it with `golem server run`
+(without `--clean`). In **Terminal 2**:
+
+```shell copy
+golem agent invoke 'HumanAgent("alice")' decide '"report-q3"' '"approved"'
+golem agent invoke --idempotency-key report-q3 'WorkflowAgent("report-q3")' start '"alice"'
+```
+
+The original invocation returns `"Workflow report-q3 was approved ✅"`.
   </Tabs.Tab>
   <Tabs.Tab>
 ```go
@@ -462,8 +618,8 @@ agent.Handle(workflow.Start, func(ctx *golem.Context[state], in workflow.StartIn
 
 	approver := human.Agent.Get(human.ID{Username: in.Approver})
 	human.RequestApproval.MustCall(approver, human.RequestApprovalIn{
-		WorkflowId: ctx.State.workflowID,
-		PromiseId:  approval.ID(),
+		WorkflowID: ctx.State.workflowID,
+		PromiseID:  approval.ID(),
 	})
 
 	// The agent is suspended here until the promise is completed.

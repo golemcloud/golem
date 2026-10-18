@@ -255,6 +255,41 @@ func MakePermissionErrorInvalidRecipient(value string) PermissionError {
 }
 
 const (
+	PersistentCardConcrete uint8 = 0
+	PersistentCardTemplate uint8 = 1
+)
+
+// A persistent derivation result, labelled with its kind.
+type PersistentCard struct {
+	tag   uint8
+	value any
+}
+
+func (self PersistentCard) Tag() uint8 {
+	return self.tag
+}
+
+func (self PersistentCard) Concrete() *golem_core_types.PermissionCard {
+	if self.tag != PersistentCardConcrete {
+		panic("tag mismatch")
+	}
+	return self.value.(*golem_core_types.PermissionCard)
+}
+func (self PersistentCard) Template() *golem_core_types.PermissionCard {
+	if self.tag != PersistentCardTemplate {
+		panic("tag mismatch")
+	}
+	return self.value.(*golem_core_types.PermissionCard)
+}
+
+func MakePersistentCardConcrete(value *golem_core_types.PermissionCard) PersistentCard {
+	return PersistentCard{PersistentCardConcrete, value}
+}
+func MakePersistentCardTemplate(value *golem_core_types.PermissionCard) PersistentCard {
+	return PersistentCard{PersistentCardTemplate, value}
+}
+
+const (
 	// A concrete card: every grant names concrete owners and resources.
 	WalletCardConcrete uint8 = 0
 	// A template card: its grants may contain slot variables (`?agent`,

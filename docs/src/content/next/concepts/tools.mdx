@@ -83,9 +83,12 @@ Tool calls are part of the agent's durable execution. Every tool call executes e
 | `node` | A Node.js-compatible JavaScript runtime |
 | `npm`, `npx` | The npm package manager |
 | `tsc` | The TypeScript compiler |
-| `git` | Local git repositories (no remotes) |
+| `python` | Python scripts and modules in RustPython, with a frozen standard library. Native extensions, subprocesses, and sockets are unavailable. |
+| `git` | Local repositories and HTTP(S) remotes: clone, fetch, push, pull, merge, and linear rebase. SSH, repository hooks, and external credential helpers are unavailable. |
 | `web-fetch` | Read-only HTTP GET of a web page |
 | `path-policy` | Middleware with per-directory read, write, and delete rules for the file tools |
+
+The Git tool supports HTTP(S) remote workflows, not the SSH or `git://` transports. For an authenticated remote, bind an invocation-scoped opaque secret named `authentication` with the fields `origin`, and optional `username`, `password`, `bearer`, or `headers`. The origin limits which server can receive those credentials; the tool does not store them in repository configuration or forward them across an origin-changing redirect. A failed push can have succeeded on the server before its response was lost. Inspect the remote refs and reconcile the result before retrying; external Git servers do not provide Golem's exactly-once invocation guarantee. See the [Git tool contract](https://github.com/golemcloud/golem/blob/main/builtin-tools/README.md) for supported commands and limitations.
 
 To call an existing built-in tool from an agent, follow [Generate typed clients for existing tools](/next/how-to-guides/common/golem-generating-tool-clients). It shows release selection, generation, consumer imports, and the deployment binding. The same guide covers MCP imported tools without copying their schemas.
 
@@ -284,15 +287,15 @@ For example, suppose the environment wraps `search` with an adapter that present
 <ThemedImage
   lightSrc="/images/getting-started/execution-ladder-light.webp"
   darkSrc="/images/getting-started/execution-ladder-dark.webp"
-  alt="Three rungs for running code, from the bottom. Rung 1: the agent's own code, in TypeScript, Effect, Rust, Scala, MoonBit, or Go, durable and under the agent's cards. Rung 2: tools in WebAssembly, such as bash, node, npm, tsc, git, web-fetch, and your own tools, a fresh instance per call on the agent's disk when allowed, with durable host calls recorded in the agent's oplog. Rung 3: a VM or remote sandbox driven as a tool through an MCP import or HTTP, for Python, apt, Docker, real browsers, GPUs, and native binaries; egress limited by cards; state inside the remote machine not journaled. An arrow says to move up a rung only when needed."
+  alt="Three rungs for running code, from the bottom. Rung 1: the agent's own code, in TypeScript, Effect, Rust, Scala, MoonBit, or Go, durable and under the agent's cards. Rung 2: tools in WebAssembly, such as bash, node, npm, tsc, git, web-fetch, python, and your own tools, a fresh instance per call on the agent's disk when allowed, with durable host calls recorded in the agent's oplog. Rung 3: a VM or remote sandbox driven as a tool through an MCP import or HTTP, for native extensions, apt, Docker, real browsers, or GPUs; egress limited by cards; state inside the remote machine not journaled. An arrow says to move up a rung only when needed."
   caption="Move up a rung only when the work needs it."
   width={1536}
   height={1024}
 />
 
 1. **The agent's own code** handles logic, state, and model calls.
-2. **Golem tools** handle shell scripts, files, Node.js, npm, TypeScript, and git. The work happens on the agent's durable filesystem, and no separate machine has to stay running between calls.
-3. **A remote sandbox or VM** handles native binaries, Python, system packages, Docker, real browsers, or GPUs. The agent calls it over HTTP or MCP, and its permissions must allow the connection. Golem records the calls and their results, but not the state of the remote machine.
+2. **Golem tools** handle shell scripts, files, Node.js, npm, TypeScript, git, and Python through RustPython. The work happens on the agent's durable filesystem, and no separate machine has to stay running between calls. The Python tool does not support native extensions, subprocesses, or sockets.
+3. **A remote sandbox or VM** handles native binaries and extensions, system packages, Docker, real browsers, or GPUs. Use it for Python workloads that require capabilities the built-in tool does not provide. The agent calls it over HTTP or MCP, and its permissions must allow the connection. Golem records the calls and their results, but not the state of the remote machine.
 
 ## MCP and sharing tools
 

@@ -12,6 +12,10 @@ type = "LocalFileSystem"
 [blob_storage.config]
 root = "../data/blob_storage"
 
+[body_limits]
+api = 33554432
+upload = 2147483648
+
 [builtin_artifacts.source_overrides]
 
 [builtin_plugins]
@@ -24,6 +28,7 @@ type = "Enabled"
 
 [component_compilation.config]
 connect_timeout = "10s"
+enqueue_timeout = "1s"
 host = "localhost"
 http2_keep_alive_interval = "10s"
 http2_keep_alive_timeout = "10s"
@@ -75,6 +80,12 @@ port = 9090
 type = "Disabled"
 
 [grpc.tls.config]
+
+[http_server]
+http2_adaptive_window = false
+http2_initial_connection_window_size = 1048576
+http2_initial_stream_window_size = 1048576
+http2_max_header_list_size = 65536
 
 [initial_accounts.builtin_plugin_owner]
 email = "builtin-plugin-owner@golem.cloud"

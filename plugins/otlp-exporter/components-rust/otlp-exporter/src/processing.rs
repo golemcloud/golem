@@ -1193,6 +1193,7 @@ mod tests {
             request: Some(OplogPayload::Inline(Vec::new())),
             durable_function_type: WrappedFunctionType::ReadLocal,
             span_started: span,
+            denial: None,
         })
     }
 
@@ -1629,6 +1630,7 @@ mod tests {
                     request: Some(OplogPayload::Inline(Vec::new())),
                     durable_function_type: WrappedFunctionType::ReadLocal,
                     span_started: Some(opening("reverted")),
+                    denial: None,
                 }),
                 OplogEntry::Revert(RevertParameters {
                     timestamp: instant(12, 0),
@@ -1688,6 +1690,7 @@ mod tests {
                     request: None,
                     durable_function_type: WrappedFunctionType::ReadLocal,
                     span_started: Some(opening("explicit-a")),
+                    denial: None,
                 }),
                 invocation_started(
                     "trace-b",

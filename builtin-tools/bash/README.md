@@ -602,33 +602,19 @@ pipe. What a call returns is bounded lower, by what Golem can carry (see Output)
 Build it from the repository root:
 
 ```shell
-cargo make build-bash-tool   # or builtin-tools/bash/build-bash-wasm.sh
+cargo make build-bash-tool
 ```
 
-The build is reproducible: any checkout, target directory, machine or operating system gives the
-same bytes. It runs in a Linux x86-64 container, `reproducible/Dockerfile`, with Rust 1.98.0 as
-`rust-toolchain.toml` pins and wasm-tools 1.251.0, both pinned by digest, so it needs Docker. On
-another platform Docker emulates x86-64 (about five minutes on an Apple M-series laptop). In the
-container it runs the same Cargo build as `golem.yaml`'s release preset, with the profile
-`Cargo.toml` pins. It then names the component `golem:bash` as golem-cli does, checks it with
-`wasm-tools validate --features all` and writes `builtin-tools/bash.wasm`. That file is not
+It runs `golem.yaml`'s release preset with golem-cli: a Cargo build with the Rust toolchain
+`rust-toolchain.toml` pins and the profile `Cargo.toml` pins. The component is named
+`golem:bash`, and the `copy` command writes it to `builtin-tools/bash.wasm`. That file is not
 committed: built-in artifacts are published as immutable releases of `golemcloud/golem-builtins`
 as part of tagged Golem releases and pinned by SHA-256 in the generated
 `builtin-artifacts.release.json`. Development uses `cargo make ensure-builtin-artifacts` to
-rebuild changed inputs locally. A rebuild of unchanged sources gives the published bytes, so a
-rebuilt `bash.wasm` differs only where a change reached it. The Golem SDK is a path dependency:
-changes to it or to this workspace require a local rebuild, not a publication or lock update.
-See [the release procedure](../../BUILTIN_ARTIFACTS.md) for publication.
-
-A native build cannot be reproducible, for two reasons. Cargo mixes the host platform into the
-hashes that name every crate (through the proc macros and build scripts it depends on). It also
-hashes path dependencies outside the workspace, such as the Golem SDK, by their absolute path.
-Both reach the component's bytes. In the container the checkout is always `/golem` and the host
-is always the same; the source paths that end up in panic messages are written as `/golem`,
-`/cargo` (dependencies) and `/rustc/<commit>` (the standard library).
-`golem-cli -A builtin-tools/bash/golem.yaml build` stays the development loop, but only
-the container's output is published. A new Rust release means updating `rust-toolchain.toml` and
-the Dockerfile's image together, then publishing a new artifact version.
+rebuild changed inputs locally. The Golem SDK is a path dependency: changes to it or to this
+workspace require a local rebuild, not a publication or lock update. See
+[the release procedure](../../BUILTIN_ARTIFACTS.md) for publication. A new Rust release means
+updating `rust-toolchain.toml`, then publishing a new artifact version.
 
 A published artifact is immutable: any change to the component's bytes needs a new artifact
 version, and a change to the exported tool metadata a new tool version

@@ -239,9 +239,13 @@ Golem provides special data types that map naturally to MCP content types:
 
 These types allow agents to exchange rich content with MCP clients beyond simple JSON values.
 
-<Callout type="warning">
-MoonBit currently supports schema-native multimodal values through `@multimodal.Multimodal[T]` and `#derive.multimodal`, but does not yet provide user-facing `UnstructuredText`, `UnstructuredBinary`, or multipart wrappers. Use supported structured schemas or multimodal values instead; the removed `#derive.text_languages` and `#derive.mime_types` annotations are not available.
-</Callout>
+MoonBit exposes `@schema.UnstructuredText[L]` and `@schema.UnstructuredBinary[M]`
+from `golemcloud/golem_sdk/schema`, including inline and URL constructors.
+See [unstructured text and binary values](/next/type-mapping#unstructured-text)
+for construction examples. For mixed content, MoonBit uses
+`@multimodal.Multimodal[T]` and `#derive.multimodal`; it does not expose a
+separate public `Multipart` wrapper. The removed `#derive.text_languages` and
+`#derive.mime_types` annotations are not available.
 
 ## Testing with MCP Inspector
 

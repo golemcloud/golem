@@ -16,7 +16,6 @@ pub mod api;
 pub mod bootstrap;
 pub mod config;
 pub mod custom_api;
-pub mod gateway_server;
 pub mod grpcapi;
 pub mod ingress;
 pub mod invocation_session_token;
@@ -38,6 +37,8 @@ use golem_common::poem::{
     CliClientInfoMiddleware, LazyEndpointExt, OpenTelemetryMetrics, OpenTelemetryTracing,
     PrometheusExporter,
 };
+use golem_service_base::body_limit::RequestBodyLimit;
+use golem_service_base::http_server;
 use opentelemetry_sdk::trace::SdkTracer;
 use poem::endpoint::BoxEndpoint;
 use poem::listener::Acceptor;
@@ -50,6 +51,9 @@ use tracing::{Instrument, info};
 
 #[cfg(test)]
 test_r::enable!();
+
+#[cfg(test)]
+mod transport_test_support;
 
 pub struct RunDetails {
     pub http_port: u16,
@@ -82,6 +86,7 @@ impl WorkerService {
         config: WorkerServiceConfig,
         prometheus_registry: Registry,
     ) -> anyhow::Result<Self> {
+        config.validate_http_limits().map_err(anyhow::Error::msg)?;
         let services: Services = Services::new(&config).await?;
 
         Ok(Self {
@@ -167,7 +172,9 @@ impl WorkerService {
             .start_api_gateway_server(join_set, tracer.clone())
             .await?;
         let mcp_port = self.start_mcp_server(join_set, tracer).await?;
-        let api_endpoint = api::make_open_api_service(&self.services).boxed();
+        let api_endpoint = api::make_open_api_service(&self.services)
+            .with(self.api_body_limit())
+            .boxed();
 
         Ok(TrafficReadyEndpoints {
             grpc_port,
@@ -213,6 +220,7 @@ impl WorkerService {
             .nest("/docs", ui)
             .nest("/specs", spec)
             .nest("/metrics", metrics)
+            .with(self.api_body_limit())
             .with(CookieJarManager::new())
             .with(cors)
             .with(CliClientInfoMiddleware::new())
@@ -227,10 +235,10 @@ impl WorkerService {
             .expect("socket address")
             .port();
 
+        let http_server_config = self.config.http_server.clone();
         join_set.spawn(
             async move {
-                poem::Server::new_with_acceptor(acceptor)
-                    .run(app)
+                http_server::run(acceptor, app, http_server_config)
                     .await
                     .map_err(|e| e.into())
             }
@@ -242,6 +250,14 @@ impl WorkerService {
 
     fn trusted_ingress(&self) -> TrustedIngress {
         TrustedIngress::new(&self.config.route_resolver.trusted_ingress_addresses)
+    }
+
+    fn api_body_limit(&self) -> RequestBodyLimit {
+        RequestBodyLimit::new(self.config.body_limits.api)
+    }
+
+    fn mcp_endpoint(&self) -> BoxEndpoint<'static> {
+        make_mcp_endpoint(&self.services, self.config.body_limits.mcp)
     }
 
     async fn start_api_gateway_server(
@@ -256,7 +272,7 @@ impl WorkerService {
             Route::new()
                 .nest("/", custom_api::make_custom_api_endpoint(&self.services))
                 .boxed(),
-            make_mcp_endpoint(&self.services),
+            self.mcp_endpoint(),
         );
         let route: Arc<BoxEndpoint<'static>> = Arc::new(
             public_endpoint
@@ -276,9 +292,10 @@ impl WorkerService {
             .expect("socket address")
             .port();
 
+        let http_server_config = self.config.http_server.clone();
         join_set.spawn(
             async move {
-                gateway_server::run(acceptor, served_route)
+                http_server::run(acceptor, served_route, http_server_config)
                     .await
                     .map_err(|err| anyhow!(err).context("API Gateway server failed"))
             }
@@ -305,17 +322,17 @@ impl WorkerService {
         let route = McpOnlyEndpoint::new(
             self.trusted_ingress(),
             self.services.mcp_capability_lookup.clone(),
-            make_mcp_endpoint(&self.services),
+            self.mcp_endpoint(),
         )
         .with(OpenTelemetryMetrics::new())
         .with_if_lazy(tracer.is_some(), || {
             OpenTelemetryTracing::new(tracer.unwrap())
         });
 
+        let http_server_config = self.config.http_server.clone();
         join_set.spawn(
             async move {
-                poem::Server::new_with_acceptor(acceptor)
-                    .run(route)
+                http_server::run(acceptor, route, http_server_config)
                     .await
                     .map_err(|err| anyhow!(err).context("MCP server gateway failed"))
             }
@@ -323,55 +340,5 @@ impl WorkerService {
         );
 
         Ok(port)
-    }
-}
-
-#[cfg(test)]
-mod mcp_transport_tests {
-    use crate::mcp::mcp_http_transport_config;
-    use poem::endpoint::TowerCompatExt;
-    use poem::{
-        Body, Endpoint, Request,
-        http::{Method, StatusCode},
-    };
-    use rmcp::transport::StreamableHttpService;
-    use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
-    use serde_json::json;
-    use test_r::test;
-
-    #[derive(Clone)]
-    struct Server;
-    impl rmcp::ServerHandler for Server {}
-
-    #[test]
-    #[test_r::timeout("10s")]
-    async fn mcp_export_transport_accepts_deployment_domain_hosts() {
-        let endpoint = StreamableHttpService::new(
-            || Ok(Server),
-            LocalSessionManager::default().into(),
-            mcp_http_transport_config(),
-        )
-        .compat();
-        let response = endpoint
-            .call(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri("https://customer.example/mcp".parse().unwrap())
-                    .header("Host", "customer.example")
-                    .header("Content-Type", "application/json")
-                    .header("Accept", "application/json, text/event-stream")
-                    .body(
-                        Body::from_json(json!({
-                            "jsonrpc":"2.0", "id":1, "method":"initialize", "params":{
-                                "protocolVersion":"2025-03-26", "capabilities":{},
-                                "clientInfo":{"name":"test", "version":"1"}
-                            }
-                        }))
-                        .unwrap(),
-                    ),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
     }
 }

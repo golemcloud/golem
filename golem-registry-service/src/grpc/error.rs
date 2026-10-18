@@ -143,13 +143,16 @@ impl From<CardError> for GrpcApiError {
                 code: api::error_code::AUTH_FORBIDDEN.to_string(),
                 cause: None,
             }),
-            CardError::RuntimeCardConflict(_) | CardError::RuntimeCardRevoked(_) => {
-                Self::AlreadyExists(ErrorBody {
-                    error,
-                    code: api::error_code::CONCURRENT_UPDATE.to_string(),
-                    cause: None,
-                })
-            }
+            CardError::RuntimeCardConflict(_) => Self::AlreadyExists(ErrorBody {
+                error,
+                code: api::error_code::CONCURRENT_UPDATE.to_string(),
+                cause: None,
+            }),
+            CardError::RuntimeCardRevoked(_) => Self::AlreadyExists(ErrorBody {
+                error,
+                code: api::error_code::RUNTIME_CARD_REVOKED.to_string(),
+                cause: None,
+            }),
             CardError::RuntimeCardCannotBeSystemCard => Self::BadRequest(ErrorsBody {
                 errors: vec![error],
                 code: api::error_code::INVALID_RUNTIME_CARD.to_string(),
