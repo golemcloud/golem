@@ -1041,9 +1041,13 @@ impl LeaderElection {
                         let read = self.read_lease(other.lease).await;
                         let received = Instant::now();
                         match read {
-                            LeaseRead::Alive { remaining, granted } => {
+                            LeaseRead::Alive {
+                                remaining,
+                                granted,
+                                term,
+                            } => {
                                 seen.other_granted_ttl = Some(granted);
-                                if seen.evidence.observe(sent, received, remaining) {
+                                if seen.evidence.observe(sent, received, remaining, term) {
                                     return CampaignInterrupt::DuplicateAddress {
                                         address: own.to_string(),
                                         other: other
@@ -1086,7 +1090,8 @@ impl LeaderElection {
                 LeaseRead::Gone
             }
             Ok(response) => {
-                let read = LeaseRead::of_answer(response.ttl(), response.granted_ttl());
+                let term = response.header().map_or(0, |header| header.raft_term());
+                let read = LeaseRead::of_answer(response.ttl(), response.granted_ttl(), term);
                 if matches!(read, LeaseRead::Unknown) {
                     warn!(
                         lease,
@@ -1323,7 +1328,12 @@ struct SeenDuplicate {
 
 /// One read of another campaigner's lease.
 enum LeaseRead {
-    Alive { remaining: i64, granted: Duration },
+    Alive {
+        remaining: i64,
+        granted: Duration,
+        /// The raft term of etcd's answer, 0 when the answer carried no header.
+        term: u64,
+    },
     Gone,
     Unknown,
 }
@@ -1336,7 +1346,7 @@ impl LeaseRead {
     /// An answer with more time left than the lease was granted, such as etcd's "no expiry"
     /// value, says nothing about a renewal and would hold the evidence beyond every later read, so
     /// it is treated like a failed read.
-    fn of_answer(remaining: i64, granted: i64) -> Self {
+    fn of_answer(remaining: i64, granted: i64, term: u64) -> Self {
         let granted = Duration::from_secs(granted.max(0) as u64);
         let remaining = Duration::from_secs(remaining.max(0) as u64);
         if remaining > granted + Self::SLACK {
@@ -1345,6 +1355,7 @@ impl LeaseRead {
         Self::Alive {
             remaining: remaining.as_secs() as i64,
             granted,
+            term,
         }
     }
 }
@@ -1357,13 +1368,21 @@ impl LeaseRead {
 /// `sent + ttl` and no later than `received + ttl + 1 s`. The end of an abandoned lease is fixed,
 /// so the earliest end that a later read allows can never pass the latest end that an earlier
 /// read allowed. When it does, someone extended the lease: its owner renewed it, or etcd's raft
-/// leader changed, which extends every lease once. One extension therefore proves nothing and two
-/// prove that someone renews.
+/// leader changed, which extends every lease once.
+///
+/// Every answer carries the raft term of the etcd member that gave it, and each change of leader
+/// starts a new term, so extensions are only compared between two reads of one term. A read of a
+/// new term starts the count again from that read: however many leader changes an abandoned lease
+/// lives through, each can only give it one extension, and none of them is counted. A live owner
+/// renews many times in one term, so two extensions within one term still prove it. One
+/// extension within a term proves nothing and two prove that someone renews.
 #[derive(Debug, Default)]
 pub(crate) struct RenewalEvidence {
     /// The latest the lease can end with no further extension, as of the read after the last
     /// extension that was counted.
     unextended_end: Option<Instant>,
+    /// The raft term of the read that set `unextended_end`.
+    term: u64,
     extensions: u32,
 }
 
@@ -1371,8 +1390,18 @@ impl RenewalEvidence {
     const EXTENSIONS_THAT_PROVE_A_RENEWAL: u32 = 2;
 
     /// Records a read that was sent at `sent` and answered at `received` with the whole seconds
-    /// `ttl`. Returns whether the evidence now proves that the lease is renewed.
-    pub(crate) fn observe(&mut self, sent: Instant, received: Instant, ttl: i64) -> bool {
+    /// `ttl`, in raft term `term`. A term of zero is an answer without a header and, like a failed
+    /// read, changes nothing. Returns whether the evidence now proves that the lease is renewed.
+    pub(crate) fn observe(
+        &mut self,
+        sent: Instant,
+        received: Instant,
+        ttl: i64,
+        term: u64,
+    ) -> bool {
+        if term == 0 {
+            return self.proven();
+        }
         let ttl = Duration::from_secs(ttl.max(0) as u64);
         // An answer too large for an instant is no answer that a lease can give.
         let (Some(earliest_end), Some(latest_end)) = (
@@ -1381,10 +1410,20 @@ impl RenewalEvidence {
                 .checked_add(ttl)
                 .and_then(|end| end.checked_add(Duration::from_secs(1))),
         ) else {
-            return self.extensions >= Self::EXTENSIONS_THAT_PROVE_A_RENEWAL;
+            return self.proven();
         };
         match self.unextended_end {
-            None => self.unextended_end = Some(latest_end),
+            None => {
+                self.unextended_end = Some(latest_end);
+                self.term = term;
+            }
+            // Extensions of an earlier term, and a leader change that happened since the anchor,
+            // are not a renewal: start again from this read.
+            Some(_) if term != self.term => {
+                self.unextended_end = Some(latest_end);
+                self.term = term;
+                self.extensions = 0;
+            }
             // An answer of zero is a lease that ran out and is not yet revoked: it proves nothing.
             Some(end) if !ttl.is_zero() && earliest_end > end => {
                 self.extensions += 1;
@@ -1392,6 +1431,10 @@ impl RenewalEvidence {
             }
             Some(_) => {}
         }
+        self.proven()
+    }
+
+    fn proven(&self) -> bool {
         self.extensions >= Self::EXTENSIONS_THAT_PROVE_A_RENEWAL
     }
 }
@@ -1633,7 +1676,7 @@ mod tests {
         reads.iter().find_map(|(at, ttl)| {
             let at_instant = start + Duration::from_secs_f64(*at);
             evidence
-                .observe(at_instant, at_instant, *ttl)
+                .observe(at_instant, at_instant, *ttl, 1)
                 .then_some(*at)
         })
     }
@@ -1648,6 +1691,7 @@ mod tests {
                     start + Duration::from_secs_f64(*sent),
                     start + Duration::from_secs_f64(*received),
                     *ttl,
+                    1,
                 )
                 .then_some(*received)
         })
@@ -1656,29 +1700,33 @@ mod tests {
     #[test]
     fn an_implausible_answer_is_ignored_and_cannot_panic() {
         assert!(matches!(
-            LeaseRead::of_answer(9_223_372_036, 10),
+            LeaseRead::of_answer(9_223_372_036, 10, 1),
             LeaseRead::Unknown
         ));
         assert!(matches!(
-            LeaseRead::of_answer(i64::MAX, 10),
+            LeaseRead::of_answer(i64::MAX, 10, 1),
             LeaseRead::Unknown
         ));
         assert!(matches!(
-            LeaseRead::of_answer(12, 10),
+            LeaseRead::of_answer(12, 10, 1),
             LeaseRead::Alive { remaining: 12, .. }
         ));
-        assert!(matches!(LeaseRead::of_answer(13, 10), LeaseRead::Unknown));
+        assert!(matches!(
+            LeaseRead::of_answer(13, 10, 1),
+            LeaseRead::Unknown
+        ));
 
         // Even an answer that reaches `observe` cannot panic or move the evidence.
         let start = Instant::now();
         let mut evidence = RenewalEvidence::default();
-        assert!(!evidence.observe(start, start, i64::MAX));
-        assert!(!evidence.observe(start, start, 5));
-        assert!(!evidence.observe(start, start, i64::MAX));
+        assert!(!evidence.observe(start, start, i64::MAX, 1));
+        assert!(!evidence.observe(start, start, 5, 1));
+        assert!(!evidence.observe(start, start, i64::MAX, 1));
         assert!(!evidence.observe(
             start + Duration::from_secs(1),
             start + Duration::from_secs(1),
-            3
+            3,
+            1
         ));
     }
 
@@ -1747,6 +1795,70 @@ mod tests {
             proven_at(&[(0.0, 5), (2.0, 10), (3.0, 3), (3.1, 9), (3.2, 8)]),
             None
         );
+    }
+
+    /// Like [`proven_at`], for reads of `(seconds since the start, whole-second answer, raft term)`.
+    fn proven_with_terms(reads: &[(f64, i64, u64)]) -> Option<f64> {
+        let start = Instant::now();
+        let mut evidence = RenewalEvidence::default();
+        reads.iter().find_map(|(at, ttl, term)| {
+            let at_instant = start + Duration::from_secs_f64(*at);
+            evidence
+                .observe(at_instant, at_instant, *ttl, *term)
+                .then_some(*at)
+        })
+    }
+
+    #[test]
+    fn leader_changes_of_etcd_never_prove_a_renewal_however_many() {
+        // An abandoned eight second lease that every new etcd leader extends once.
+        assert_eq!(
+            proven_with_terms(&[
+                (0.0, 7, 1),
+                (2.0, 5, 1),
+                (3.0, 7, 2),
+                (5.0, 5, 2),
+                (6.0, 7, 3)
+            ]),
+            None
+        );
+        let many: Vec<(f64, i64, u64)> = (0..12)
+            .flat_map(|i| {
+                let at = i as f64 * 3.0;
+                [(at, 4, i as u64 + 1), (at + 1.0, 3, i as u64 + 1)]
+            })
+            .collect();
+        assert_eq!(proven_with_terms(&many), None);
+    }
+
+    #[test]
+    fn extensions_within_one_term_still_prove_a_renewal() {
+        let reads: Vec<(f64, i64, u64)> = (0..20).map(|i| (i as f64 * 0.5, 1, 4)).collect();
+        let proven = proven_with_terms(&reads).expect("a renewed lease is proven");
+        assert!(proven <= 3.0, "{proven}");
+    }
+
+    #[test]
+    fn a_term_change_between_two_extensions_of_a_live_renewer_delays_the_proof() {
+        // A lease with one second left, renewed all the time, read every half second. It is
+        // proven by 3 s in one term; the term changes at 2.5 s, one extension in, and the proof
+        // then needs two extensions of the new term.
+        let reads: Vec<(f64, i64, u64)> = (0..20)
+            .map(|i| i as f64 * 0.5)
+            .map(|at| (at, 1, if at < 2.5 { 1 } else { 2 }))
+            .collect();
+        let proven = proven_with_terms(&reads).expect("proven in the new term");
+        assert!(proven >= 5.0, "{proven}");
+    }
+
+    #[test]
+    fn a_read_without_a_term_changes_nothing() {
+        let start = Instant::now();
+        let mut evidence = RenewalEvidence::default();
+        assert!(!evidence.observe(start, start, 5, 1));
+        let later = start + Duration::from_secs(1);
+        assert!(!evidence.observe(later, later, 1, 0));
+        assert!(!evidence.observe(later, later, 9, 0));
     }
 
     #[test]
